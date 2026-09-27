@@ -2278,7 +2278,7 @@ let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
 class JRenderNode extends JObj {
   w = 0; h = 0; left = 0; top = 0;
-  alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0;
+  alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0; camera = 8;
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)
   clip = true;
   clipOutline = false; outline: JOutline | null = null;
@@ -2441,7 +2441,10 @@ rt.register({
     "resetPivot()Z": function (this: JRenderNode) { this.px = this.py = Number.NaN; return 1; },
     "setRotationZ(F)Z": function (this: JRenderNode, v: number) { this.rot = asF(v); return 1; },
     "setRotationX(F)Z": rn1, "setRotationY(F)Z": rn1,
-    "setCameraDistance(F)Z": rn1,
+    "setCameraDistance(F)Z": function (this: JRenderNode, d: number) {
+      if (!Number.isFinite(d) || d < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", `distance must be finite & positive, given=${d}`);
+      this.camera = asF(d); return 1;
+    },
     "setClipToBounds(Z)Z": function (this: JRenderNode, c: number) { this.clip = !!c; return 1; },
     "setClipToOutline(Z)Z": function (this: JRenderNode, c: number) { this.clipOutline = !!c; return 1; },
     "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
@@ -2469,7 +2472,7 @@ rt.register({
     "getScaleY()F": function (this: JRenderNode) { return this.sy; },
     "getRotationZ()F": function (this: JRenderNode) { return this.rot; },
     "getElevation()F": () => 0,
-    "getCameraDistance()F": () => 8000,
+    "getCameraDistance()F": function (this: JRenderNode) { return this.camera; },
     "getClipToBounds()Z": function (this: JRenderNode) { return this.clip ? 1 : 0; },
     "getClipToOutline()Z": function (this: JRenderNode) { return this.clipOutline ? 1 : 0; },
   },

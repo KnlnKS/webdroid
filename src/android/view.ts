@@ -12,6 +12,7 @@ import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rv
 import { mainHandler, reportUncaught, uptimeMillis } from "./os";
 import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "./text";
+import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
 import { mkVPA } from "./viewanimator";
@@ -446,6 +447,8 @@ export class JView extends JObj {
   /** the running android.view.animation.Animation and the transformation it last produced */
   jAnim: unknown = null;
   animTf: { alpha: number; matrix: { m: number[] } } | null = null;
+  /** properties few views ever set, allocated on the first write */
+  rare: ViewRare | null = null;
 
   width(): number { return this.right - this.left; }
   height(): number { return this.bottom - this.top; }
@@ -479,6 +482,31 @@ export class JView extends JObj {
     invalidate();
   }
 }
+
+/** AOSP keeps these in ListenerInfo, the ScrollabilityCache or the RenderNode */
+class ViewRare {
+  nextFocus = [-1, -1, -1, -1, -1];
+  scrollBarSize = -1;
+  /** the RenderNode's camera distance in inches; View scales it by the density */
+  cameraDistance = 8;
+  exclusionRects: unknown = null;
+}
+const rare = (v: JView) => v.rare ??= new ViewRare();
+const densityDpi = () => device.density * 160;
+const rareMethods: NativeSpec["methods"] = {
+  ...Object.fromEntries(["Left", "Right", "Up", "Down", "Forward"].flatMap((dir, i) => [
+    [`setNextFocus${dir}Id(I)V`, function (this: JView, id: number) { rare(this).nextFocus[i] = id; }],
+    [`getNextFocus${dir}Id()I`, function (this: JView) { return this.rare?.nextFocus[i] ?? -1; }],
+  ])),
+  "setScrollBarSize(I)V": function (this: JView, size: number) { rare(this).scrollBarSize = size; },
+  "getScrollBarSize()I": function (this: JView) { const s = this.rare?.scrollBarSize ?? -1; return s >= 0 ? s : Math.round(device.dp(4)); },
+  "setCameraDistance(F)V": function (this: JView, d: number) { rare(this).cameraDistance = Math.abs(d) / densityDpi(); },
+  "getCameraDistance()F": function (this: JView) { return Math.fround((this.rare?.cameraDistance ?? 8) * densityDpi()); },
+  "setSystemGestureExclusionRects(Ljava/util/List;)V": function (this: JView, rects: unknown) {
+    return after(toJsArray(rects), (a) => { if (a.length || this.rare) rare(this).exclusionRects = a.length ? newArrayList([...a]) : null; });
+  },
+  "getSystemGestureExclusionRects()Ljava/util/List;": function (this: JView) { return this.rare?.exclusionRects ?? newArrayList(); },
+};
 
 export class JLayoutParams extends JObj { width = WRAP_CONTENT; height = WRAP_CONTENT; }
 export class JMarginLP extends JLayoutParams {
@@ -929,6 +957,7 @@ export const viewConstructors: NativeSpec["methods"] = {
 };
 const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
+  ...rareMethods,
   "getContext()Landroid/content/Context;": function (this: JView) { return this.ctx; },
   "getResources()Landroid/content/res/Resources;": function (this: JView) { return this.resources ?? this.jres?.jobj ?? null; },
   "getId()I": function (this: JView) { return this.idNum; },
@@ -1629,8 +1658,7 @@ const viewMethods: NativeSpec["methods"] = {
     "setRotationY(F)V", "setTransitionAlpha(F)V", "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setOnGenericMotionListener(Landroid/view/View$OnGenericMotionListener;)V",
     "setVerticalFadingEdgeEnabled(Z)V", "setHorizontalFadingEdgeEnabled(Z)V",
-    "setScrollbarFadingEnabled(Z)V", "setFadingEdgeLength(I)V", "setScrollIndicators(II)V", "setNextFocusLeftId(I)V", "setNextFocusRightId(I)V",
-    "setSystemGestureExclusionRects(Ljava/util/List;)V", "setFrameContentVelocity(F)V",
+    "setScrollbarFadingEnabled(Z)V", "setFadingEdgeLength(I)V", "setScrollIndicators(II)V", "setFrameContentVelocity(F)V",
     "setAnimationMatrix(Landroid/graphics/Matrix;)V", "onScrollChanged(IIII)V",
     "onVisibilityChanged(Landroid/view/View;I)V", "onVisibilityAggregated(Z)V", "onWindowVisibilityChanged(I)V",
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
