@@ -465,7 +465,7 @@ const measureListView = driven(function* measureListView(this: JListView, wSpec:
     this.measuredW = w;
     this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSize(totalH, hSpec);
 });
-const listViewMethods: NonNullable<NativeSpec["methods"]> = {
+export const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JListView, c: unknown, set: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, set);
     if (set && this.jres) {
@@ -779,16 +779,6 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
     yield vcall(this.popup, "showAsDropDown", "(Landroid/view/View;II)V", this.anchor, this.xoff, this.yoff);
   }),
 } });
-rt.register({
-  name: "android/widget/ExpandableListView", ctor: class extends JListView {}, sup: "android/widget/ListView",
-  methods: {
-    "static getPackedPositionForChild(II)J": (group: number, child: number) => (1n << 63n) | (BigInt(group >>> 0) << 32n) | BigInt(child >>> 0),
-    "static getPackedPositionForGroup(I)J": (group: number) => BigInt(group >>> 0) << 32n,
-    "static getPackedPositionType(J)I": (p: bigint) => p === -1n ? 2 : p < 0n ? 1 : 0,
-    "static getPackedPositionGroup(J)I": (p: bigint) => p === -1n ? -1 : Number((p >> 32n) & 0x7fffffffn),
-    "static getPackedPositionChild(J)I": (p: bigint) => p < 0n && p !== -1n ? Number(p & 0xffffffffn) : -1,
-  },
-});
 rt.register({
   name: "android/widget/AbsListView$LayoutParams", ctor: class extends JLayoutParams {}, sup: "android/view/ViewGroup$LayoutParams",
   methods: {

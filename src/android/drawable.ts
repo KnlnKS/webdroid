@@ -16,7 +16,7 @@ import { guestNow, setGuestTimeout } from "../guest-clock";
 export const ST = {
   pressed: 0x010100a7, enabled: 0x0101009e, selected: 0x010100a1, checked: 0x010100a0,
   focused: 0x0101009c, activated: 0x010102fe, window_focused: 0x0101009d, checkable: 0x0101009f,
-  hovered: 0x01010367,
+  hovered: 0x01010367, last: 0x010100a6, expanded: 0x010100a8, empty: 0x010100a9,
 };
 const ST_IDS = new Set(Object.values(ST));
 

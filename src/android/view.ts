@@ -1960,7 +1960,7 @@ const addViewFunnel = driven(function* addViewFunnel(vg: JViewGroup, c: JView, i
   yield addView3.call(vg, c, i, lp);
 });
 
-const vgMethods: NativeSpec["methods"] = {
+export const vgMethods: NativeSpec["methods"] = {
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": driven(function* (this: JViewGroup, ins: JWindowInsets): Gen {
     let cur = yield viewDispatchInsets.call(this, ins);
     for (const c of this.children) {
