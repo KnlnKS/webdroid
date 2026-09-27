@@ -76,6 +76,8 @@ export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US"
 mkEnumSet("java/util/Locale$Category", ["DISPLAY", "FORMAT"]);
 export let defaultLocale = usLocale;
 const categoryLocales = new Map<string, JLocale>();
+/** Locale.getDefault(Category.DISPLAY): what the no-argument display names are written in */
+const displayLocale = () => categoryLocales.get("DISPLAY") ?? defaultLocale;
 const localeNames = new Map<string, Intl.DisplayNames>();
 function displayPart(value: string, type: "language" | "script" | "region", tag: string): string {
   if (!value) return "";
@@ -135,14 +137,14 @@ rt.register({
       if (!category || !locale) throw rt.mkThrowable("java/lang/NullPointerException", null);
       categoryLocales.set(category.ename, locale);
     },
-    "getDisplayName()Ljava/lang/String;": function (this: JLocale) { return displayName.call(this, usLocale); },
+    "getDisplayName()Ljava/lang/String;": function (this: JLocale) { return displayName.call(this, displayLocale()); },
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": displayName,
-    "getDisplayLanguage()Ljava/lang/String;": function (this: JLocale) { return displayPart(this.lang, "language", localeTag(usLocale)); },
+    "getDisplayLanguage()Ljava/lang/String;": function (this: JLocale) { return displayPart(this.lang, "language", localeTag(displayLocale())); },
     "getDisplayLanguage(Ljava/util/Locale;)Ljava/lang/String;": function (this: JLocale, locale: JLocale) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "displayLocale");
       return displayPart(this.lang, "language", localeTag(locale));
     },
-    "getDisplayCountry()Ljava/lang/String;": function (this: JLocale) { return displayPart(this.country, "region", localeTag(usLocale)); },
+    "getDisplayCountry()Ljava/lang/String;": function (this: JLocale) { return displayPart(this.country, "region", localeTag(displayLocale())); },
     "getDisplayCountry(Ljava/util/Locale;)Ljava/lang/String;": function (this: JLocale, locale: JLocale) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "displayLocale");
       return displayPart(this.country, "region", localeTag(locale));
@@ -219,8 +221,8 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function (this: JULocale, id: string) { Object.assign(this, ulocaleFromId(id)); },
     "static forLanguageTag(Ljava/lang/String;)Landroid/icu/util/ULocale;": (tag: string) => ulocaleFromId(tag),
     "static forLocale(Ljava/util/Locale;)Landroid/icu/util/ULocale;": ulocaleFromLocale,
-    "static getDefault()Landroid/icu/util/ULocale;": () => usULocale,
-    "static getDefault(Landroid/icu/util/ULocale$Category;)Landroid/icu/util/ULocale;": () => usULocale,
+    "static getDefault()Landroid/icu/util/ULocale;": () => ulocaleFromLocale(defaultLocale),
+    "static getDefault(Landroid/icu/util/ULocale$Category;)Landroid/icu/util/ULocale;": (c: JSimpleEnum) => ulocaleFromLocale(categoryLocales.get(c?.ename) ?? defaultLocale),
     "static getAvailableLocales()[Landroid/icu/util/ULocale;": () => jarray(availableULocales.slice(), "Landroid/icu/util/ULocale;"),
     "getLanguage()Ljava/lang/String;": function (this: JULocale) { return this.locale.lang; },
     "getCountry()Ljava/lang/String;": function (this: JULocale) { return this.locale.country; },
@@ -232,7 +234,7 @@ rt.register({
       if (!display) throw rt.mkThrowable("java/lang/NullPointerException", "displayLocale");
       return displayPart(this.locale.country, "region", localeTag(display.locale));
     },
-    "getDisplayName()Ljava/lang/String;": function (this: JULocale) { return displayName.call(this.locale, usLocale); },
+    "getDisplayName()Ljava/lang/String;": function (this: JULocale) { return displayName.call(this.locale, displayLocale()); },
     "getDisplayName(Landroid/icu/util/ULocale;)Ljava/lang/String;": function (this: JULocale, display: JULocale) {
       if (!display) throw rt.mkThrowable("java/lang/NullPointerException", "displayLocale");
       return displayName.call(this.locale, display.locale);
@@ -308,12 +310,12 @@ rt.register({
     "static getInstance(Ljava/util/Locale;)Ljava/util/Currency;": () => new JCurrency(),
     "getCurrencyCode()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
     "toString()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
-    "getDisplayName()Ljava/lang/String;": function (this: JCurrency) { return currencyDisplayName(this.code, usLocale); },
+    "getDisplayName()Ljava/lang/String;": function (this: JCurrency) { return currencyDisplayName(this.code, displayLocale()); },
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": function (this: JCurrency, locale: JLocale) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
       return currencyDisplayName(this.code, locale);
     },
-    "getSymbol()Ljava/lang/String;": function (this: JCurrency) { return currencySymbol(this.code, usLocale); },
+    "getSymbol()Ljava/lang/String;": function (this: JCurrency) { return currencySymbol(this.code, displayLocale()); },
     "getSymbol(Ljava/util/Locale;)Ljava/lang/String;": function (this: JCurrency, locale: JLocale) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
       return currencySymbol(this.code, locale);
@@ -337,7 +339,7 @@ rt.register({
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
       return currencyDisplayName(this.code, locale);
     },
-    "getSymbol()Ljava/lang/String;": function (this: JICUCurrency) { return currencySymbol(this.code, usLocale); },
+    "getSymbol()Ljava/lang/String;": function (this: JICUCurrency) { return currencySymbol(this.code, displayLocale()); },
     "getName(Landroid/icu/util/ULocale;I[Z)Ljava/lang/String;": function (this: JICUCurrency, locale: JULocale, style: number, isChoiceFormat: Int8Array | null) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
       if (isChoiceFormat?.length) isChoiceFormat[0] = 0;
