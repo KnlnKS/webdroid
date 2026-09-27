@@ -59,6 +59,7 @@ import "./android/imagedecoder";
 import "./android/fonts";
 import "./android/path";
 import "./android/text";
+import "./android/html";
 import "./android/linkify";
 import "./android/dateutils";
 import "./android/bidiformatter";

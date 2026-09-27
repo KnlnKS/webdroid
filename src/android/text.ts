@@ -5,7 +5,7 @@ import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreat
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor, COLOR_NAMES } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
 import { AID, JTypedArray } from "./res";
 import { TV } from "./axml";
 import { fontResource } from "./fonts";
@@ -1070,25 +1070,7 @@ rt.register({
 });
 mkEnumSet("android/text/TextUtils$TruncateAt", ["START", "MIDDLE", "END", "MARQUEE"]);
 
-class JHtml extends JObj {}
-rt.register({
-  name: "android/text/Html", ctor: JHtml,
-  methods: {
-    "static fromHtml(Ljava/lang/String;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    "static fromHtml(Ljava/lang/String;I)Landroid/text/Spanned;": (s: string, flags: number) => htmlToSpan(s, flags),
-    // the image getter and tag handler are the app's hooks for <img> and unknown tags; the
-    // stripping converter below has neither, so they are accepted and ignored
-    "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string, flags: number) => htmlToSpan(s, flags),
-    "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
-    "static toHtml(Landroid/text/Spanned;I)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
-    // AOSP withinStyle: the five markup characters and every non-ASCII code point as entities
-    "static escapeHtml(Ljava/lang/CharSequence;)Ljava/lang/String;": (cs: unknown) =>
-      String(cs).replace(/[<>&'"]|[^\x00-\x7f]/gu, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c === "'" ? "&#39;" : c === "\"" ? "&quot;" : "&#" + c.codePointAt(0) + ";"),
-  },
-});
-for (const n of ["android/text/Html$ImageGetter", "android/text/Html$TagHandler",
-  "org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
+for (const n of ["org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }
 type SaxAttr = { uri: string; local: string; qname: string; value: string };
@@ -1126,93 +1108,6 @@ rt.register({
     }),
   },
 });
-/**
- * AOSP HtmlToSpannedConverter into a SpannableStringBuilder, with the browser's parser as the
- * tokenizer. Whitespace collapses as characters() does, block elements separate with their
- * mode's newlines (FROM_HTML_SEPARATOR_LINE_BREAK_* makes one of two), and every span covers
- * exactly the text its element produced; nothing is trimmed afterwards.
- */
-const HEADING_SIZES = [1.5, 1.4, 1.3, 1.2, 1.1, 1];
-/** block tags and the FROM_HTML_SEPARATOR_LINE_BREAK_* bit each one's margin answers to */
-const HTML_BLOCKS: Record<string, number> = { P: 1, H1: 2, H2: 2, H3: 2, H4: 2, H5: 2, H6: 2, LI: 4, UL: 8, DIV: 16, BLOCKQUOTE: 32 };
-function htmlToSpan(s: string, flags = 0): JSpannable {
-  const sp = rt.make("android/text/SpannableStringBuilder") as JSpannable;
-  if (typeof DOMParser === "undefined") { sp.text = s.replace(/<[^>]+>/g, ""); return sp; }
-  const make = (n: string, fields: Record<string, unknown> = {}) => Object.assign(rt.make(n), fields);
-  const newlines = (min: number) => {
-    let n = 0;
-    for (let i = sp.text.length - 1; i >= 0 && sp.text[i] === "\n"; i--) n++;
-    if (sp.text) sp.text += "\n".repeat(Math.max(0, min - n));
-  };
-  // Color.getHtmlColor: a colour name, else XmlUtils.convertValueToInt's #hex/0x/decimal; -1 is none
-  const color = (value: string | null | undefined) => {
-    if (!value) return null;
-    const named = COLOR_NAMES[value.toLowerCase()];
-    if (named !== undefined) return named;
-    const m = /^(-?)(#|0x|0X)?([\da-fA-F]+)$/.exec(value);
-    const v = m ? (m[1] ? -1 : 1) * parseInt(m[3], m[2] ? 16 : 10) | 0 : -1;
-    return v === -1 ? null : (v | 0xff000000) | 0;
-  };
-  const css = (el: Element, re: RegExp) => re.exec(el.getAttribute("style") ?? "")?.[1];
-  const walk = (node: Node) => {
-    for (const c of node.childNodes) {
-      if (c.nodeType === 3) {
-        let out = "";
-        for (const ch of c.nodeValue ?? "") {
-          if (ch !== " " && ch !== "\n") { out += ch; continue; }
-          const pred = out ? out[out.length - 1] : sp.text ? sp.text[sp.text.length - 1] : "\n";
-          if (pred !== " " && pred !== "\n") out += " ";
-        }
-        sp.text += out;
-        continue;
-      }
-      if (c.nodeType !== 1) continue;
-      const el = c as Element, tag = el.tagName;
-      if (tag === "BR") { sp.text += "\n"; continue; }
-      const bit = HTML_BLOCKS[tag], margin = bit ? (flags & bit ? 1 : 2) : 0;
-      if (margin) newlines(margin);
-      const start = sp.text.length;
-      walk(el);
-      const spans: unknown[] = [];
-      if (tag === "B" || tag === "STRONG") spans.push(make("android/text/style/StyleSpan", { style: 1 }));
-      else if (tag === "I" || tag === "EM" || tag === "CITE" || tag === "DFN") spans.push(make("android/text/style/StyleSpan", { style: 2 }));
-      else if (tag === "U") spans.push(make("android/text/style/UnderlineSpan"));
-      else if (tag === "DEL" || tag === "S" || tag === "STRIKE") spans.push(make("android/text/style/StrikethroughSpan"));
-      else if (tag === "BIG" || tag === "SMALL") spans.push(make("android/text/style/RelativeSizeSpan", { size: tag === "BIG" ? 1.25 : 0.8 }));
-      else if (tag === "TT") spans.push(make("android/text/style/TypefaceSpan", { family: "monospace" }));
-      else if (tag === "SUP") spans.push(make("android/text/style/SuperscriptSpan"));
-      else if (tag === "BLOCKQUOTE") spans.push(make("android/text/style/QuoteSpan"));
-      else if (tag === "LI") spans.push(make("android/text/style/BulletSpan"));
-      else if (tag === "A" && el.hasAttribute("href")) spans.push(make("android/text/style/URLSpan", { url: el.getAttribute("href") }));
-      else if (/^H[1-6]$/.test(tag)) spans.push(make("android/text/style/RelativeSizeSpan", { size: HEADING_SIZES[+tag[1] - 1] }), make("android/text/style/StyleSpan", { style: 1 }));
-      else if (tag === "FONT") {
-        const fg = color(el.getAttribute("color")), face = el.getAttribute("face");
-        if (fg !== null) spans.push(make("android/text/style/ForegroundColorSpan", { color: fg }));
-        if (face) spans.push(make("android/text/style/TypefaceSpan", { family: face }));
-      }
-      // startCssStyle: a paragraph's, list item's or span's style attribute, read with AOSP's patterns
-      if (tag === "P" || tag === "LI" || tag === "SPAN") {
-        const fg = color(css(el, /(?:\s+|^)color\s*:\s*(\S*)\b/)), bg = color(css(el, /(?:\s+|^)background(?:-color)?\s*:\s*(\S*)\b/));
-        if (fg !== null) spans.push(make("android/text/style/ForegroundColorSpan", { color: fg }));
-        if (bg !== null) spans.push(make("android/text/style/BackgroundColorSpan", { color: bg }));
-        if (css(el, /(?:\s+|^)text-decoration\s*:\s*(\S*)\b/)?.toLowerCase() === "line-through") spans.push(make("android/text/style/StrikethroughSpan"));
-      }
-      // a quote or bullet ends after its block's newlines, every other span before them
-      const inner = sp.text.length;
-      if (margin) newlines(margin);
-      for (const span of spans) sp.spans.push({ span, start, end: tag === "BLOCKQUOTE" || tag === "LI" ? sp.text.length : inner, flags: 33 });
-    }
-  };
-  walk(new DOMParser().parseFromString(s, "text/html").body);
-  // convert(): a paragraph style's range backs off one blank trailing line and becomes SPAN_PARAGRAPH
-  for (const r of sp.spans) {
-    if (!rt.iof(r.span, "android/text/style/ParagraphStyle")) continue;
-    if (r.end - 2 >= 0 && sp.text[r.end - 1] === "\n" && sp.text[r.end - 2] === "\n") r.end--;
-    r.flags = 51;
-  }
-  sp.spans = sp.spans.filter((r) => r.end > r.start);
-  return sp;
-}
 
 rt.register({
   name: "android/text/InputType", ctor: class extends JObj {},
