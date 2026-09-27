@@ -689,8 +689,8 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
 // and computeLineBreaks' own bytecode, off the register moves into each range invoke.
 //
 // The breaking itself is linebreak.ts's breakLines, the body JLayout uses, so AOSP's Layout and
-// ours agree by construction rather than by two implementations happening to match. AOSP's
-// balanced and optimal strategies are a later, separate change; this is the greedy one.
+// ours agree by construction rather than by two implementations happening to match. Only the
+// greedy strategy exists; AOSP's balanced and optimal ones are not implemented.
 interface Run { start: number; end: number; paint: JTextPaint }
 interface Meas { text: string; runs: Run[] }
 interface Breaks { lines: TLine[]; asc: number; desc: number }
