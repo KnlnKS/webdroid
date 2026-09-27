@@ -389,6 +389,7 @@ rt.register({
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
   methods: {
     "static myPid()I": () => PROCESS_PID,
+    "static myProcessName()Ljava/lang/String;": () => PROCESS_NAME,
     "static is64Bit()Z": () => is64BitProcess() ? 1 : 0,
     "static killProcess(I)V": (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); },
     // androidx's startup tracing asks how long ago this process began; there is no earlier
