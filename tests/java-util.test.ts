@@ -432,7 +432,7 @@ describe("enumset-clone", () => {
   });
 });
 
-describe("java-time-duration", () => {
+describe("java-time", () => {
   rt.linkNatives();
 
   test("Instant adds a Duration through TemporalAmount", async () => {
@@ -442,10 +442,7 @@ describe("java-time-duration", () => {
     expect(await vcall(result, "toEpochMilli", "()J")).toBe(3500n);
     expect(await vcall(instant, "toEpochMilli", "()J")).toBe(1000n);
   });
-});
 
-describe("java-time-zone", () => {
-  rt.linkNatives();
   test("offset date-time extracts calendar fields in its own offset", async () => {
     const offset = await vcall(rt.link("java/time/ZoneOffset").ctor, "ofTotalSeconds", "(I)Ljava/time/ZoneOffset;", -5 * 3600);
     const epoch = await vcall(rt.link("java/time/Instant").ctor, "ofEpochMilli", "(J)Ljava/time/Instant;", 0n);
@@ -453,11 +450,26 @@ describe("java-time-zone", () => {
     const date = await vcall(dateTime, "toLocalDate", "()Ljava/time/LocalDate;");
     const time = await vcall(dateTime, "toLocalTime", "()Ljava/time/LocalTime;");
     expect(await vcall(date, "toString", "()Ljava/lang/String;")).toBe("1969-12-31");
-    expect(await vcall(time, "toString", "()Ljava/lang/String;")).toBe("19:00:00");
+    expect(await vcall(time, "toString", "()Ljava/lang/String;")).toBe("19:00");
     expect(await vcall(dateTime, "getHour", "()I")).toBe(19);
     const formatter = rt.link("java/time/format/DateTimeFormatter").ctor.s$ISO_OFFSET_DATE_TIME;
     expect(await vcall(dateTime, "format", "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;", formatter))
-      .toBe("1969-12-31T19:00-05:00");
+      .toBe("1969-12-31T19:00:00-05:00");
+  });
+
+  test("patterns format and parse through one engine, in the formatter's zone", async () => {
+    const T = "java/time/";
+    const pattern = (p: string) => scall(T + "format/DateTimeFormatter", "ofPattern", `(Ljava/lang/String;)L${T}format/DateTimeFormatter;`, p);
+    const date = await scall(T + "LocalDate", "parse", `(Ljava/lang/CharSequence;L${T}format/DateTimeFormatter;)L${T}LocalDate;`, "31/01/2024", await pattern("dd/MM/yyyy"));
+    const next = await vcall(date, "plusMonths", `(J)L${T}LocalDate;`, 1n);
+    expect(await vcall(next, "format", `(L${T}format/DateTimeFormatter;)Ljava/lang/String;`, await pattern("EEE MMM d ''yy"))).toBe("Thu Feb 29 '24");
+    const paris = await scall(T + "ZonedDateTime", "parse", `(Ljava/lang/CharSequence;)L${T}ZonedDateTime;`, "2024-03-31T01:30+01:00[Europe/Paris]");
+    expect(await vcall(await vcall(paris, "plusHours", `(J)L${T}ZonedDateTime;`, 1n), "toString", "()Ljava/lang/String;")).toBe("2024-03-31T03:30+02:00[Europe/Paris]");
+    const sdf = await newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "EEE, dd MMM yyyy HH:mm:ss Z");
+    await vcall(sdf, "setTimeZone", "(Ljava/util/TimeZone;)V", await scall("java/util/TimeZone", "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;", "Asia/Kolkata"));
+    const parsed = await vcall(sdf, "parse", "(Ljava/lang/String;)Ljava/util/Date;", "Tue, 03 Jun 2008 11:05:30 GMT");
+    expect(await vcall(parsed, "getTime", "()J")).toBe(1212491130000n);
+    expect(await vcall(sdf, "format", "(Ljava/util/Date;)Ljava/lang/String;", parsed)).toBe("Tue, 03 Jun 2008 16:35:30 +0530");
   });
 });
 
