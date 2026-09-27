@@ -4,6 +4,7 @@ import { openDb, txDone } from "./idb";
 type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "directory" };
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
 const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
+const FLUSH_SETTLE_MS = 100, FLUSH_MAX_MS = 2000;
 const sharedPath = (path: string) => path.startsWith("/sdcard/") && !appPath.test(path);
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
@@ -13,6 +14,7 @@ export class PrivateFiles {
   private database: Promise<IDBDatabase> | null = null;
   private writes: Promise<void> = Promise.resolve();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private pendingSince = 0;
 
   attach(pid: number, view: typeof vfs): void {
     if (this.views.get(pid) === view) return;
@@ -28,10 +30,20 @@ export class PrivateFiles {
       this.update(path, value);
       if (relative && /^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "")) return;
       this.pending.set(path, value);
-      this.timer ??= setTimeout(() => { this.timer = null; void this.flush().catch((error) => console.error("[private files]", error)); }, 0);
+      this.schedule();
     };
   }
   detach(pid: number): void { this.views.delete(pid); }
+  /** A burst of writes (a download's chunks) settles into one transaction, and a steady stream
+   *  still persists every FLUSH_MAX_MS: each flush stores whole files, so per-write flushing is
+   *  quadratic in a growing file's size. */
+  private schedule(): void {
+    const now = Date.now();
+    if (this.timer === null) this.pendingSince = now;
+    else clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.timer = null; void this.flush().catch((error) => console.error("[private files]", error)); },
+      now - this.pendingSince >= FLUSH_MAX_MS ? 0 : FLUSH_SETTLE_MS);
+  }
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
     view.dirs.delete(path);
     if (value?.kind === "file") view.write(path, value.bytes, false);
@@ -80,7 +92,11 @@ export class PrivateFiles {
     const pending = this.pending; this.pending = new Map();
     const write = this.writes.then(async () => {
       const transaction = (await this.db()).transaction("files", "readwrite"), store = transaction.objectStore("files");
-      for (const [path, value] of pending) { if (value) store.put(value, path); else store.delete(path); }
+      // a view into a larger growing buffer would otherwise clone the whole buffer
+      for (const [path, value] of pending) {
+        if (!value) store.delete(path);
+        else store.put(value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength ? { kind: "file", bytes: value.bytes.slice() } : value, path);
+      }
       await txDone(transaction);
     });
     this.writes = write.catch(() => {
