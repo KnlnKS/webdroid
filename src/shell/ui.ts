@@ -5,7 +5,7 @@ type SessionState =
   | { kind: "running"; file: string; label: string }
   | { kind: "failed"; file: string; error: unknown; retry: (() => void) | null };
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   if (typeof error === "object" && error !== null) {
     if ("msg" in error) return String(error.msg);
     if ("message" in error) return String(error.message);
@@ -29,7 +29,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   const status = document.querySelector<HTMLElement>("#status")!;
   const retry = document.querySelector<HTMLButtonElement>("#retry")!;
   const reload = document.querySelector<HTMLButtonElement>("#reload")!;
-  const diagnostic = document.querySelector<HTMLDetailsElement>("#diagnostics")!;
   let session: SessionState | null = null;
 
   function updateAvailability() {
@@ -133,19 +132,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
         resizeDisplay();
         window.scrollTo(0, 0);
       }
-    },
-    reportError(error: unknown) {
-      diagnostic.hidden = false;
-      document.querySelector<HTMLElement>("#runtime-error")!.textContent = errorText(error);
-    },
-    setMissing(items: string[]) {
-      diagnostic.hidden = items.length === 0 && !document.querySelector<HTMLElement>("#runtime-error")!.textContent && !document.querySelector<HTMLElement>("#native")!.textContent;
-      document.querySelector<HTMLElement>("#diagnostic-count")!.textContent = items.length ? String(items.length) : "";
-      document.querySelector<HTMLElement>("#missing")!.textContent = `Missing APIs (${items.length}):\n${items.slice(-60).join("\n")}`;
-    },
-    setNative(lib: string, abi: string) {
-      diagnostic.hidden = false;
-      document.querySelector<HTMLElement>("#native")!.textContent = `Native code required: ${lib} (${abi})`;
     },
     addPackage(file: string) {
       const button = document.createElement("button");

@@ -161,7 +161,10 @@ export class Runtime {
     (e as any).$javaClass = cls;
     return e;
   };
+  /** report listeners: the reports reach the console either way */
   onMissing: (what: string) => void = () => {};
+  onNativeRequired: (lib: string, abi: string) => void = () => {};
+  onUncaught: (throwable: unknown) => void = () => {};
   /** current-thread hooks (set by jlang): a compiled frame pins its thread after every await
    *  (st) and releases it when it suspends (su), so a parked worker never leaves its identity
    *  behind for the native main-thread drivers that resume next */
@@ -204,7 +207,6 @@ export class Runtime {
       return resume.call(self, F);
     });
   }
-  onUncaught: ((e: unknown) => void) | null = null;
   fuel = 4096;
 
   hotSourceBytes = 0;
@@ -351,7 +353,6 @@ export class Runtime {
   claimNativeLib(name: string) { this.nativeLibs.add(name); }
   /** .so files the app tried to load that only exist as machine code: file → abi */
   nativeRequired = new Map<string, string>();
-  onNativeRequired: (lib: string, abi: string) => void = () => {};
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary consults it before giving up) */
   /** `thread` is the Java thread that asked: its Cpu runs the initialisers, whichever thread is current by then */
   loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime, thread?: unknown) => Promise<void>) | null = null;
@@ -370,6 +371,13 @@ export class Runtime {
       console.warn("[webdroid missing]", what);
       this.onMissing(what);
     }
+  }
+
+  /** the app is about to get an UnsatisfiedLinkError for a library that exists only as `abi` machine code */
+  noteNativeRequired(lib: string, abi: string) {
+    this.nativeRequired.set(lib, abi);
+    console.warn("[webdroid native required]", lib, abi);
+    this.onNativeRequired(lib, abi);
   }
 
   /** placeholder for a missing super method: logs + returns a thrower for .call() */

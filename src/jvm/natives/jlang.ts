@@ -559,7 +559,7 @@ rt.register({
   },
 });
 
-/** log a throwable that escaped every handler and tell the shell (status line) */
+/** log a throwable that escaped every handler and tell the development shell */
 export function reportUncaught(e: unknown) {
   const je = rt.jx(e);
   // the cause chain travels with the throwable and is usually where the real failure is named
@@ -569,7 +569,7 @@ export function reportUncaught(e: unknown) {
   }
   const jframes = (je as { jframes?: string[] } | null)?.jframes;
   console.error("[uncaught]", (je?.constructor as any)?.$i?.name ?? "?", (je?.msg ?? "") + causes + (jframes ? "\n  at " + jframes.join("\n  at ") : ""), (je as any)?.jsStack ?? (e as any)?.stack ?? "");
-  rt.onUncaught?.(je);
+  rt.onUncaught(je);
 }
 
 const excCtors = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
@@ -1581,12 +1581,6 @@ function pickAbi(has: (abi: string) => boolean): string | null {
   return rt.nativeAbis.find(has) ?? ABIS.find(has) ?? null;
 }
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
-/** every way this ends without the library loaded: the app is going to get an
- *  UnsatisfiedLinkError, and the shell says which machine code it would have taken. */
-function needsNative(lib: string, abi: string): void {
-  rt.nativeRequired.set(lib, abi);
-  rt.onNativeRequired(lib, abi);
-}
 async function dlopen(owner: Runtime, lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null>): Promise<void> {
   if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return;
   const have = loadedLibs.get(lib);
@@ -1600,9 +1594,9 @@ async function dlopen(owner: Runtime, lib: string, abi: () => string | null, byt
     const a = abi(), b = a && owner.loadNativeLib ? await bytes(a) : null;
     if (a && b && owner.loadNativeLib) {
       try { return await owner.loadNativeLib(lib, b, a, owner, thread); }
-      catch (e) { needsNative(lib, a); throw e; }
+      catch (e) { rt.noteNativeRequired(lib, a); throw e; }
     }
-    if (a) needsNative(lib, a);
+    if (a) rt.noteNativeRequired(lib, a);
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
   })();
   loadedLibs.set(lib, { owner, thread, pending });

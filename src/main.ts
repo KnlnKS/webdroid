@@ -25,7 +25,7 @@ import { overlays } from "./android/popup";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
-import { nativeRequirements } from "./shell/diagnostics";
+import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics";
 import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
 import { activateLocalAssets, localAsset } from "./shell/localassets";
@@ -49,19 +49,10 @@ setScreenCanvas(canvas);
 setWebLayer(shell.webLayer);
 setDisplayChangeHandler(shell.resizeDisplay);
 
-let missingDirty = false;
-rt.onMissing = () => { missingDirty = true; };
-setInterval(() => {
-  if (!missingDirty) return;
-  missingDirty = false;
-  shell.setMissing([...rt.missing]);
-}, 800);
-rt.onUncaught = shell.reportError;
-rt.onNativeRequired = shell.setNative;
-
 void loadFramework();
 
 if (process.env.NODE_ENV !== "production") {
+  mountDiagnostics(document.querySelector<HTMLElement>("#side")!);
   void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
     for (const file of files) shell.addPackage(file);
     const auto = params.get("apk");
