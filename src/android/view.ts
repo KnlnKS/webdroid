@@ -2425,11 +2425,11 @@ rt.register({
 });
 
 /** View's FloatProperty constants, each over the view's own accessor pair */
-class JViewProperty extends JProperty { accessor = ""; }
+class JViewProperty extends JProperty { getter = ""; setter = ""; }
 rt.register({ name: "webdroid/ViewProperty", ctor: JViewProperty, sup: "android/util/FloatProperty", methods: {
-  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return box(JFloat, yield vcall(view, "get" + this.accessor, "()F")); }),
-  "setValue(Ljava/lang/Object;F)V": function (this: JViewProperty, view: unknown, v: number) { return vcall(view, "set" + this.accessor, "(F)V", v); },
-  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: JFloat) { return vcall(view, "set" + this.accessor, "(F)V", Math.fround(v?.v ?? 0)); },
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return box(JFloat, yield vcall(view, this.getter, "()F")); }),
+  "setValue(Ljava/lang/Object;F)V": function (this: JViewProperty, view: unknown, v: number) { return vcall(view, this.setter, "(F)V", v); },
+  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: JFloat) { return vcall(view, this.setter, "(F)V", Math.fround(v?.v ?? 0)); },
 } });
 const VIEW_PROPERTIES = ["ALPHA", "TRANSLATION_X", "TRANSLATION_Y", "TRANSLATION_Z", "X", "Y", "Z", "ROTATION", "ROTATION_X", "ROTATION_Y", "SCALE_X", "SCALE_Y"];
 /** View's protected *_STATE_SET arrays: every combination of these five, named in this order */
@@ -2447,7 +2447,7 @@ rt.register({
     for (const constant of VIEW_PROPERTIES) {
       // TRANSLATION_X names translationX, read through getTranslationX
       const accessor = constant.split("_").map((w) => w[0] + w.slice(1).toLowerCase()).join("");
-      view[mangleStaticField(constant)] = Object.assign(rt.make("webdroid/ViewProperty"), { name: accessor[0].toLowerCase() + accessor.slice(1), type: float, accessor });
+      view[mangleStaticField(constant)] = Object.assign(rt.make("webdroid/ViewProperty"), { name: accessor[0].toLowerCase() + accessor.slice(1), type: float, getter: "get" + accessor, setter: "set" + accessor });
     }
     stateSets().forEach((set, m) => { view[mangleStaticField(stateSetName(m))] = set; });
   },
