@@ -1898,6 +1898,14 @@ const addView3 = driven(function* addView3(this: JViewGroup, c: JView, i: number
   yield resolveLp(c.lp!);
   yield attachView(this, c, i, true, thread);
 });
+/** PhoneWindow.setContentView: one view replaces the content parent's children through its
+ *  addView, which converts foreign params; a view given no params fills the parent. */
+export const setWindowContent = driven(function* setWindowContent(parent: JViewGroup, v: JView | null, lp: JLayoutParams | null): Gen {
+  for (const child of [...parent.children]) yield detachView(parent, child);
+  if (!v) return;
+  if (!lp) { lp = new JLayoutParams(); lp.width = lp.height = MATCH_PARENT; }
+  yield vcall(parent, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
+});
 const M_hasTransientState = mangleMethod("hasTransientState", "()Z");
 const M_childTransientChanged = mangleMethod("childHasTransientStateChanged", "(Landroid/view/View;Z)V");
 const noteTransientChild = driven(function* noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread: JThread = curThread): Gen {
