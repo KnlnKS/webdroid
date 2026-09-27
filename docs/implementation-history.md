@@ -279,12 +279,35 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   Chromium fatal in `libtelemetry` (it treats any pending exception as fatal);
   `allocateDirect` buffers lacked ART's accessible array (still absent for a
   buffer allocated before any native library sizes guest memory). The GC-finalizer
-  deadlock was the sigreturn race fixed for Among Us. Open: first frames take
-  about a minute and the scene runs far below 60 fps (unprofiled); Unity logs
-  "custom render path shader needs N passes" every frame (compare the emulator);
-  the ~30 GB resource download, account login and gameplay are unexercised; the
-  guest's 4 GiB wasm address space is below the game's device RAM. The API-33
-  emulator runs the same XAPK as an oracle (`webdroid_genshin` AVD, 4 GiB).
+  deadlock was the sigreturn race fixed for Among Us. At launch its bundled
+  Play Games v2 client opens microG's Google sign-in, as an account-less device
+  does; cancelling it continues. The HoYoverse login panel then shows over the
+  dimmed scene after four fixes: `NinePatch`/runtime `NinePatchDrawable` and
+  `Drawable.createFromResourceStream` (the SDK activity finished on
+  `NoClassDefFoundError`); `setContentView(View)` filling the content parent and
+  converting foreign params; occlusion from the manifest `Theme.Dialog` rather
+  than the `setTheme` in `onCreate`; and a window background set before the
+  decor exists. Signing in needs a real account and is unexercised.
+- **Genshin performance (login scene, 1920×1080, headless hardware Chromium on
+  Apple M4 Pro):** 19.4 GL frames/s at first. The texture-swizzle emulation read
+  sampler units back with `getUniform` after every `glUniform1i`, 20% of the
+  main thread; tracking units from the writes gave 26–27 frames/s. The thread is
+  then saturated: JIT-compiled guest code is 76%, about 290M guest instructions/s
+  and 200K host calls/s (`clock_gettime` about 1,700 per frame). The JIT enters
+  a region about 14.8M times/s for 20 instructions each; fitting a run with
+  regions capped at 4 blocks gives about 2.3 ns per instruction and 21 ns per
+  transition, so transitions cost about 30%. Exits are 42% direct branches to
+  another page, 30% `ret` and 22% `br`/`blr`. Emitted wasm averages 103 bytes per
+  compiled guest instruction (213 MB over 43K regions by the login scene).
+  `--no-liftoff` raised throughput 11%, so V8 tier-up lag is a minor share.
+  A Unity job-system spin (`ldar` poll, up to 1,000 iterations) took 20% of
+  slice samples, yet reporting 1 core dropped to 21 frames/s and 2 cores was
+  within noise. Letting A64 regions take blocks from up to three other pages
+  (epoch-checked at entry) halved transitions but fell to 166M instructions/s:
+  the callee code duplicated into many regions multiplies compiled wasm and V8
+  tier-up work. Uncontended rwlocks no longer park in JS but were not frequent
+  in this scene. 60 fps needs roughly 2.3× on this scene alone; gameplay is
+  heavier, and every guest thread shares one browser thread.
 
 - **Play Integrity:** SPIC v1.4.0 renders unchanged Compose UI and reaches
   microG FakeStore, DroidGuard and Google's endpoint with `?attestation=1`.
