@@ -2,7 +2,7 @@ import { AID, resString } from "./res";
 import { guestNow } from "../guest-clock";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
-  type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
+  type JColorStateList, mkCsl, type JDrawable, rvCsl, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize
 } from "./drawable";
 import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, textSelection, setTextSelection } from "./text";
@@ -21,7 +21,7 @@ import {
 import { TV } from "./axml";
 import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { jarray, mangleMethod } from "../jvm/abi";
+import { jarray, mangleMethod, jmethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
 import { TextViewLayouts, drawTextViewLayout, layoutHeight } from "./textview-layout";
 
@@ -147,13 +147,10 @@ const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, 
   const ts = look("textSize");
   if (ts) tv.paintT.textSize = rvDimen(res, ts, tv.paintT.textSize);
   const tc = look("textColor");
-  if (tc) {
-    if (tc.t === TV.REFERENCE) tv.colors = yield loadColorStateList(res, tc.d, tv.theme);
-    else tv.colors = mkCsl(rvColor(res, tc, -16777216));
-  }
+  if (tc) tv.colors = yield rvCsl(res, tc, tv.theme, -16777216);
   const link = look("textColorLink");
   if (link) {
-    tv.linkColors = link.t === TV.REFERENCE ? yield loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
+    tv.linkColors = yield rvCsl(res, link, tv.theme, tv.paintT.linkColor);
     tv.updateLinkColor();
   }
   const st = look("textStyle");
@@ -174,7 +171,7 @@ const applyFontFamily = driven(function* applyFontFamily(tv: JTextView, res: Res
   const fam = rvString(res, v);
   if (fam) tv.paintT.tf = typefaceFor(fam);
 });
-export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number): Gen {
+export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number = 0): Gen {
   const res = tv.jres;
   if (!res) return;
   const ids = [
@@ -187,16 +184,12 @@ export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JA
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
     tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink, tvAttr.textCursorDrawable,
   ];
-  const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
+  const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, defStyleRes);
   const g = (i: number) => ta.vals[i];
   const taRef = g(4);
   if (taRef && taRef.t === TV.REFERENCE) yield applyTextAppearance(tv, res, taRef.d);
   if (g(1)) tv.paintT.textSize = rvDimen(res, g(1), tv.paintT.textSize);
-  if (g(2)) {
-    const v = g(2)!;
-    if (v.t === TV.REFERENCE) tv.colors = yield loadColorStateList(res, v.d, tv.theme);
-    else tv.colors = mkCsl(rvColor(res, v, -16777216));
-  }
+  if (g(2)) tv.colors = yield rvCsl(res, g(2)!, tv.theme, -16777216);
   if (g(3)) tv.styleBits = rvInt(res, g(3), tv.styleBits);
   if (g(0)) {
     const v = g(0)!;
@@ -224,10 +217,7 @@ export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JA
   if (g(14)) tv.drawablePad = Math.round(rvDimen(res, g(14), 0));
   yield applyFontFamily(tv, res, g(15));
   if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
-  if (g(17)) {
-    const v = g(17)!;
-    tv.hintColors = v.t === TV.REFERENCE ? yield loadColorStateList(res, v.d, tv.theme) : mkCsl(rvColor(res, v, 1627389952));
-  }
+  if (g(17)) tv.hintColors = yield rvCsl(res, g(17)!, tv.theme, 1627389952);
   if (g(18)) tv.inputTypeV = rvInt(res, g(18), 1);
   if (g(19)) tv.lineSpacingExtra = rvDimen(res, g(19), 0);
   if (g(20)) tv.lineSpacingMult = g(20)!.t === TV.FLOAT ? g(20)!.d : 1;
@@ -237,7 +227,7 @@ export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JA
   if (g(30) || g(31) || g(32) || g(33)) yield setTextShadow.call(tv, rvFloat(res, g(33), tv.shadowRadius), rvFloat(res, g(31), tv.shadowDx), rvFloat(res, g(32), tv.shadowDy), rvColor(res, g(30), tv.shadowColor));
   const link = g(34);
   if (link) {
-    tv.linkColors = link.t === TV.REFERENCE ? yield loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
+    tv.linkColors = yield rvCsl(res, link, tv.theme, tv.paintT.linkColor);
     tv.updateLinkColor();
   }
   const cursor = g(35);
@@ -262,14 +252,22 @@ function setTextAppearance(this: JTextView, id: number) {
 function setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null) {
   this.drawableL = l; this.drawableT = t; this.drawableR = r; this.drawableB = b;
   invalidate(this); requestLayout(this);
+  return syncCompoundStates(this);
 }
+/** AOSP hands the compound drawables the view's state when they arrive and on every change:
+ *  a single-choice row's radio is a drawableStart that shows state_checked */
+const syncCompoundStates = driven(function* syncCompoundStates(tv: JTextView): Gen {
+  if (!tv.drawableL && !tv.drawableT && !tv.drawableR && !tv.drawableB) return;
+  const thread = curThread, state = Int32Array.from(tv.drawableState());
+  for (const d of [tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
+});
 const setIntrinsicDrawables = driven(function* setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
   const thread = curThread;
   for (const d of [l, t, r, b]) if (d) {
     const width = yield drawableSize(d, false, thread), height = yield drawableSize(d, true, thread);
     yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, width, height);
   }
-  setCompoundDrawables.call(this, l, t, r, b);
+  yield setCompoundDrawables.call(this, l, t, r, b);
 });
 const compoundWidth = (d: JDrawable | null) => d ? Math.max(0, d.bounds.right - d.bounds.left) : 0;
 const compoundHeight = (d: JDrawable | null) => d ? Math.max(0, d.bounds.bottom - d.bounds.top) : 0;
@@ -304,10 +302,29 @@ function applyTypeface(tv: JTextView, tf: JTypeface, fakeBold: boolean) {
 function compoundDrawables(this: JTextView) {
   return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
 }
-function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0); }
-function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0); }
+export function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0); }
+export function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0); }
 function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0); }
 function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0); }
+const M_padL = mangleMethod("getCompoundPaddingLeft", "()I"), M_padR = mangleMethod("getCompoundPaddingRight", "()I");
+const M_padT = mangleMethod("getCompoundPaddingTop", "()I"), M_padB = mangleMethod("getCompoundPaddingBottom", "()I");
+/** native getCompoundPadding* bodies that answer synchronously from fields */
+export const syncCompoundPads = new WeakSet<Function>([compoundPadL, compoundPadT, compoundPadR, compoundPadB]);
+/** reused by the synchronous path; callers read it before they can suspend */
+const padScratch = [0, 0, 0, 0];
+/**
+ * AOSP measures and draws text within the virtual compound paddings: Switch and SwitchCompat
+ * reserve their track there. Only a Java override pays for the calls.
+ */
+function compoundPads(tv: JTextView): number[] | Promise<number[]> {
+  const l = jmethod(tv, M_padL)!, t = jmethod(tv, M_padT)!, r = jmethod(tv, M_padR)!, b = jmethod(tv, M_padB)!;
+  if (syncCompoundPads.has(l) && syncCompoundPads.has(t) && syncCompoundPads.has(r) && syncCompoundPads.has(b)) {
+    padScratch[0] = l.call(tv) as number; padScratch[1] = t.call(tv) as number;
+    padScratch[2] = r.call(tv) as number; padScratch[3] = b.call(tv) as number;
+    return padScratch;
+  }
+  return Promise.all([l, t, r, b].map((f) => f.call(tv) as number | Promise<number>)).then((a) => a.map(Number));
+}
 function compoundPadRelative(view: JTextView, start: boolean) {
   const thread = curThread;
   return after(vcallOn(thread, view, "getLayoutDirection", "()I"), direction =>
@@ -375,7 +392,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setLinkTextColor(I)V": function (this: JTextView, color: number) { this.linkColors = mkCsl(color); this.updateLinkColor(); },
   "setLinkTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, colors: JColorStateList | null) { this.linkColors = colors; this.updateLinkColor(); },
   "getLinkTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.linkColors; },
-  "drawableStateChanged()V": function (this: JTextView) { this.updateLinkColor(); },
+  "drawableStateChanged()V": function (this: JTextView) { this.updateLinkColor(); return syncCompoundStates(this); },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
   "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
   "setHintTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList | null) { this.hintColors = c; invalidate(this); },
@@ -588,16 +605,15 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "onMeasure(II)V": driven(function* (this: JTextView, wSpec: number, hSpec: number): Gen {
     const thread = curThread;
     const wMode = specMode(wSpec), wSize = specSize(wSpec);
-    const dlW = (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0)
-      + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0);
-    const dtH = (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0)
-      + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0);
-    const availText = Math.min(wMode === MS_UNSPEC ? 100000 : wSize, this.maxW) - this.padL - this.padR - dlW;
+    const pads = compoundPads(this);
+    const [padL, padT, padR, padB] = pads instanceof Promise ? yield pads : pads;
+    const hPad = padL + padR, vPad = padT + padB;
+    const availText = Math.min(wMode === MS_UNSPEC ? 100000 : wSize, this.maxW) - hPad;
     let w: number;
     const display = this.displayText() || "";
     if (wMode === MS_EXACTLY) {
       w = wSize;
-      const measured = this.measuredLines(w - this.padL - this.padR - dlW);
+      const measured = this.measuredLines(w - hPad);
       this.layout = measured instanceof Promise ? yield measured : measured;
     } else {
       const measured = this.measuredLines(availText);
@@ -605,14 +621,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       let tw = 0;
       for (const line of lay.lines) tw = Math.max(tw, line.width);
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
-      w = Math.max(Math.ceil(tw) + dlW, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + this.padL + this.padR;
+      w = Math.max(Math.ceil(tw), compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + hPad;
       const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
       w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? yield min : min));
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
       // AOSP rebuilds the layout at the width the view actually got. Without this the lines
       // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
       // and the draw (a line wider than the view, silently clipped) wrong.
-      const finalAvail = w - this.padL - this.padR - dlW;
+      const finalAvail = w - hPad;
       if (finalAvail !== availText) {
         const measured = this.measuredLines(finalAvail);
         lay = measured instanceof Promise ? yield measured : measured;
@@ -620,11 +636,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.layout = lay;
     }
     const lineCount = Math.max(this.layout?.lines.length ?? 0, display || this.hint ? 1 : 0, this.minLinesV);
-    const vPad = this.padT + this.padB;
-    let h = this.textHeight(lineCount) + vPad + dtH;
-    if (this.layout) h = Math.max(h, layoutHeight(this.layout) + vPad + dtH);
+    let h = this.textHeight(lineCount) + vPad;
+    if (this.layout) h = Math.max(h, layoutHeight(this.layout) + vPad);
     h = Math.min(h, this.maxH);
-    h = Math.max(h, this.minH, (this.drawableL ? compoundHeight(this.drawableL) : 0) + vPad, (this.drawableR ? compoundHeight(this.drawableR) : 0) + vPad);
+    const sidePad = this.padT + this.padB;
+    h = Math.max(h, this.minH, compoundHeight(this.drawableL) + sidePad, compoundHeight(this.drawableR) + sidePad);
     if (specMode(hSpec) !== MS_EXACTLY) {
       const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
       h = Math.max(h, Number(min instanceof Promise ? yield min : min));
@@ -643,11 +659,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const layoutDirection = Number(direction instanceof Promise ? yield direction : direction);
     const hg = this.horizontalGravity(display || this.hint, alignment, layoutDirection);
     const showHint = !display && this.hint;
-    const dlW = this.drawableL ? compoundWidth(this.drawableL) : 0;
-    const drW = this.drawableR ? compoundWidth(this.drawableR) : 0;
-    const contentL = this.padL + (dlW ? dlW + this.drawablePad : 0);
-    const contentR = this.width() - this.padR - (drW ? drW + this.drawablePad : 0);
-    const avail = contentR - contentL;
+    const pads = compoundPads(this);
+    const [contentL, padT, padR, padB] = pads instanceof Promise ? yield pads : pads;
+    const avail = this.width() - padR - contentL, contentT = padT, contentB = this.height() - padB;
     if (this.layoutWidthFor !== this.width()) {
       const measured = this.measuredLines(avail);
       if (measured instanceof Promise) return measured.then(lay => {
@@ -656,7 +670,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       });
       this.layout = measured; this.layoutWidthFor = this.width();
     }
-    const contentT = compoundPadT.call(this), contentB = this.height() - compoundPadB.call(this);
     const draw = async (d: JDrawable | null, x: number, y: number) => {
       if (!d) return;
       ctx.save(); ctx.translate(Math.trunc(x), Math.trunc(y));
@@ -664,7 +677,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       finally { ctx.restore(); }
     };
     if (this.drawableL) yield draw(this.drawableL, this.padL, contentT + (contentB - contentT - compoundHeight(this.drawableL)) / 2);
-    if (this.drawableR) yield draw(this.drawableR, this.width() - this.padR - drW, contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
+    if (this.drawableR) yield draw(this.drawableR, this.width() - this.padR - compoundWidth(this.drawableR), contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
     if (this.drawableT) yield draw(this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
     if (this.drawableB) yield draw(this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
     const pending = showHint ? (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail) : this.layout;
