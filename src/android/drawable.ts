@@ -364,22 +364,25 @@ rt.register({
       },
   },
 });
-/** AOSP Drawable.createFromResourceStream: a bitmap with a valid 9-patch chunk becomes a NinePatchDrawable */
-const createFromResourceStream = driven(function* createFromResourceStream(res: unknown, value: JTypedValue | null, is: unknown, name: string | null, opts: JBFOptions | null): Gen {
-  if (!is) return null;
-  opts ??= new JBFOptions();
-  opts.inScreenDensity = resDensity(res);
-  const pad = new JRect();
-  const bmp: JBitmap | null = yield decodeResourceStream(res, value, is, pad, opts);
-  if (!bmp) return null;
+/** AOSP Drawable.drawableFromBitmap: a decoded 9-patch chunk, not the file name, makes a
+ *  NinePatchDrawable, padded as the chunk says */
+function drawableFromBitmap(bmp: JBitmap, targetDensity: number, name: string | null): JDrawable {
   if (isNinePatchChunk(bmp.ninePatchChunk)) {
-    const d = new JNinePatchDrawable();
-    d.set(newNinePatch(bmp, bmp.ninePatchChunk, name), pad, resDensity(res));
+    const d = new JNinePatchDrawable(), patch = newNinePatch(bmp, bmp.ninePatchChunk, name), pad = new JRect();
+    [pad.left, pad.top, pad.right, pad.bottom] = patch.chunk.padding;
+    d.set(patch, pad, targetDensity);
     return d;
   }
   const d = new JBitmapDrawable();
   d.bmp = bmp;
   return d;
+}
+const createFromResourceStream = driven(function* createFromResourceStream(res: unknown, value: JTypedValue | null, is: unknown, name: string | null, opts: JBFOptions | null): Gen {
+  if (!is) return null;
+  opts ??= new JBFOptions();
+  opts.inScreenDensity = resDensity(res);
+  const bmp: JBitmap | null = yield decodeResourceStream(res, value, is, null, opts);
+  return bmp && drawableFromBitmap(bmp, resDensity(res), name);
 });
 function drawNinePatch(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, img: CanvasImageSource,
@@ -1911,17 +1914,9 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
 const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
   if (path.endsWith(".xml")) return yield loadDrawableXml(res, bytes, theme);
   const bmp: JBitmap | null = yield decodeBytes(bytes, null);
-  if (bmp) bmp.density = densityOfPath(path);
-  // Drawable.createFromResourceStream: a decoded 9-patch chunk, not the file name, makes a NinePatchDrawable
-  if (bmp?.ninePatchChunk) {
-    const d = new JNinePatchDrawable(), patch = newNinePatch(bmp, bmp.ninePatchChunk, null), pad = new JRect();
-    [pad.left, pad.top, pad.right, pad.bottom] = patch.chunk.padding;
-    d.set(patch, pad, device.densityDpi);
-    return d;
-  }
-  const d = new JBitmapDrawable();
-  d.bmp = bmp;
-  return d;
+  if (!bmp) return new JBitmapDrawable();
+  bmp.density = densityOfPath(path);
+  return drawableFromBitmap(bmp, device.densityDpi, null);
 });
 
 // ── ColorStateList loading (color/*.xml selectors)
