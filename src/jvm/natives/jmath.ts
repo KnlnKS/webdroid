@@ -212,13 +212,13 @@ function layout(b: JBigDecimal, sci: boolean, eng = false): string {
   if (adjusted !== 0) out += "E" + (adjusted > 0 ? "+" : "") + adjusted;
   return neg + out;
 }
+/** floor(sqrt(n)): Newton's iteration falls monotonically from a power of two above the root */
 function isqrt(n: bigint): bigint {
   if (n < 2n) return n;
-  let x = BigInt(Math.floor(Math.sqrt(Number(n))));
-  if (x === 0n) x = 1n;
+  let x = 1n << BigInt((n.toString(2).length + 1) >> 1);
   for (;;) {
     const y = (x + n / x) >> 1n;
-    if (y >= x) { while (x * x > n) x--; while ((x + 1n) * (x + 1n) <= n) x++; return x; }
+    if (y >= x) return x;
     x = y;
   }
 }
@@ -281,6 +281,11 @@ const withMC = (fn: (this: JBigDecimal, o: JBigDecimal) => JBigDecimal) =>
 const add = bd(function (o: JBigDecimal) { const [x, y, s] = align(this, o); return mkBD(x + y, s); });
 const sub = bd(function (o: JBigDecimal) { const [x, y, s] = align(this, o); return mkBD(x - y, s); });
 const mul = bd(function (o: JBigDecimal) { return mkBD(this.u * o.u, checkScale(this.sc + o.sc)); });
+/** [divideToIntegralValue, remainder]: the remainder is this - quotient * divisor */
+function quotRem(x: JBigDecimal, o: JBigDecimal, mc: JMathContext | null): JBigDecimal[] {
+  const q = mc ? withMC(divInt).call(x, o, mc) : divInt.call(x, o);
+  return jarray([q, sub.call(x, mul.call(q, o))], "Ljava/math/BigDecimal;") as JBigDecimal[];
+}
 const divInt = bd(function (o: JBigDecimal) {
   if (o.u === 0n) arith(this.u === 0n ? "Division undefined" : "Division by zero");
   const pref = this.sc - o.sc;
@@ -348,15 +353,10 @@ rt.register({
     },
     "divideToIntegralValue(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;": divInt,
     "divideToIntegralValue(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;": withMC(divInt),
-    "remainder(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;": function (this: JBigDecimal, o: JBigDecimal) {
-      return sub.call(this, mul.call(divInt.call(this, o), o));
-    },
-    "divideAndRemainder(Ljava/math/BigDecimal;)[Ljava/math/BigDecimal;": function (this: JBigDecimal, o: JBigDecimal) {
-      const q = divInt.call(this, o);
-      const arr = [q, sub.call(this, mul.call(q, o))] as unknown[] & { $t?: string };
-      arr.$t = "[Ljava/math/BigDecimal;";
-      return arr;
-    },
+    "remainder(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;": function (this: JBigDecimal, o: JBigDecimal) { return quotRem(this, o, null)[1]; },
+    "remainder(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;": function (this: JBigDecimal, o: JBigDecimal, mc: JMathContext) { return quotRem(this, o, mc)[1]; },
+    "divideAndRemainder(Ljava/math/BigDecimal;)[Ljava/math/BigDecimal;": function (this: JBigDecimal, o: JBigDecimal) { return quotRem(this, o, null); },
+    "divideAndRemainder(Ljava/math/BigDecimal;Ljava/math/MathContext;)[Ljava/math/BigDecimal;": function (this: JBigDecimal, o: JBigDecimal, mc: JMathContext) { return quotRem(this, o, mc); },
     "pow(I)Ljava/math/BigDecimal;": function (this: JBigDecimal, n: number) { return pow(this, n); },
     "pow(ILjava/math/MathContext;)Ljava/math/BigDecimal;": function (this: JBigDecimal, n: number, mc: JMathContext) { return powMC(this, n, mc); },
     "sqrt(Ljava/math/MathContext;)Ljava/math/BigDecimal;": function (this: JBigDecimal, mc: JMathContext) { return sqrt(this, mc); },
@@ -554,6 +554,7 @@ rt.register({
     "clearBit(I)Ljava/math/BigInteger;": function (this: JBigInteger, n: number) { return mkBI(this.v & ~(1n << BigInt(n))); },
     "testBit(I)Z": function (this: JBigInteger, n: number) { return (this.v >> BigInt(n)) & 1n ? 1 : 0; },
     "bitLength()I": function (this: JBigInteger) { return bitLength(this.v); },
+    "getLowestSetBit()I": function (this: JBigInteger) { const n = this.v < 0n ? -this.v : this.v; return n ? bitLength(n & -n) - 1 : -1; },
     "bitCount()I": function (this: JBigInteger) {
       let n = 0;
       for (let m = this.v < 0n ? ~this.v : this.v; m !== 0n; m >>= 1n) n += Number(m & 1n);

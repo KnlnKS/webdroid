@@ -1112,7 +1112,11 @@ class JNumber extends JObj {}
 rt.register({
   name: "java/lang/Number", ctor: JNumber, ifaces: ["java/io/Serializable"],
   serialization: { uid: -8742448824652078965n, fields: [] },
-  methods: { "<init>()V": function () {} },
+  methods: {
+    "<init>()V": function () {},
+    "byteValue()B": function (this: JNumber) { return after(vcall(this, "intValue", "()I"), (v: number) => (v << 24) >> 24); },
+    "shortValue()S": function (this: JNumber) { return after(vcall(this, "intValue", "()I"), (v: number) => (v << 16) >> 16); },
+  },
 });
 
 export class JInt extends JNumber { v = 0; }
