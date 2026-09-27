@@ -348,7 +348,7 @@ rt.register({
     MODEL: "webdroid", MANUFACTURER: "webdroid", BRAND: "google", DEVICE: "webdroid",
     PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0", SOC_MANUFACTURER: "unknown", SOC_MODEL: "unknown", SKU: "unknown", ODM_SKU: "unknown",
     SERIAL: "unknown", RADIO: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
-    BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n,
+    BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n, UNKNOWN: "unknown",
     SUPPORTED_ABIS: jarray([...abi64, ...abi32], "Ljava/lang/String;"),
     SUPPORTED_32_BIT_ABIS: abi32,
     SUPPORTED_64_BIT_ABIS: abi64,
@@ -360,7 +360,10 @@ rt.register({
 class JBuildVersion extends JObj {}
 rt.register({
   name: "android/os/Build$VERSION", ctor: JBuildVersion,
-  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0, MEDIA_PERFORMANCE_CLASS: 0 },
+  // a release build: the codename is REL, so every RELEASE_OR_* name reads the release
+  statics: { SDK_INT: device.sdk, RELEASE: device.release, RELEASE_OR_CODENAME: device.release, RELEASE_OR_PREVIEW_DISPLAY: device.release,
+    CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0,
+    PREVIEW_SDK_FINGERPRINT: "REL", DEVICE_INITIAL_SDK_INT: device.sdk, MEDIA_PERFORMANCE_CLASS: 0 },
 });
 rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {},
   statics: Object.fromEntries([
@@ -503,8 +506,12 @@ rt.register({
     }
     rt.register({ name, ctor: C, methods: m });
   };
-  rt.register({ name: "android/os/StrictMode$ThreadPolicy", ctor: class extends JObj {} });
-  rt.register({ name: "android/os/StrictMode$VmPolicy", ctor: class extends JObj {} });
+  // Nothing is enforced, so a policy is only what was last set, and LAX until then.
+  const THREAD = "android/os/StrictMode$ThreadPolicy", VM = "android/os/StrictMode$VmPolicy";
+  const lax: Record<string, JObj> = {}, current: Record<string, unknown> = {};
+  const laxPolicy = (cls: string) => lax[cls] ??= rt.make(cls);
+  const policy = (cls: string) => () => current[cls] ?? laxPolicy(cls);
+  for (const cls of [THREAD, VM]) rt.register({ name: cls, ctor: class extends JObj {}, statics: { get LAX() { return laxPolicy(cls); } } });
   // every detect*/permit*/penalty* of the API-34 builders: nothing is enforced, so each returns the builder
   const TB = "Landroid/os/StrictMode$ThreadPolicy$Builder;", VB = "Landroid/os/StrictMode$VmPolicy$Builder;";
   const flags = (ret: string, kinds: string[], extra: string[]) => [...kinds.map((k) => `${k}()${ret}`), ...extra.map((e) => e + ret)];
@@ -519,16 +526,15 @@ rt.register({
       ["permitNonSdkApiUsage()", "permitUnsafeIntentLaunch()", "penaltyDeath()", "penaltyDeathOnCleartextNetwork()", "penaltyDeathOnFileUriExposure()", "penaltyDropBox()", "penaltyLog()",
         "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnVmViolationListener;)", "setClassInstanceLimit(Ljava/lang/Class;I)"]),
     "android/os/StrictMode$VmPolicy");
-  const threadPolicy = () => rt.make("android/os/StrictMode$ThreadPolicy");
   rt.register({
     name: "android/os/StrictMode", ctor: class extends JObj {},
     methods: {
-      ...noops("static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V",
-        "static noteSlowCall(Ljava/lang/String;)V", "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V"),
-      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": () => rt.make("android/os/StrictMode$VmPolicy"),
-      "static getThreadPolicy()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
-      "static allowThreadDiskReads()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
-      "static allowThreadDiskWrites()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
+      ...noops("static noteSlowCall(Ljava/lang/String;)V"),
+      "static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V": (p: unknown) => { current[THREAD] = p; },
+      "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V": (p: unknown) => { current[VM] = p; },
+      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": policy(VM),
+      // the allow* calls hand back the policy to restore, which nothing here changed
+      ...Object.fromEntries(["getThreadPolicy", "allowThreadDiskReads", "allowThreadDiskWrites"].map((m) => [`static ${m}()L${THREAD};`, policy(THREAD)])),
     },
   });
 }
