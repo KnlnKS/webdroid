@@ -242,6 +242,8 @@ rt.register({
 
 export class JBitmapDrawable extends JDrawable {
   bmp: JBitmap | null = null;
+  /** the density the bitmap is scaled to for its intrinsic size (Bitmap.getScaledWidth) */
+  targetDensity = device.densityDpi;
   /** the Paint getPaint() hands out: flags an app sets on it (filter, dither) have no effect on the 2D path */
   bpaint: JPaint | null = null;
   paint(cv: JCanvas) {
@@ -254,7 +256,11 @@ export class JBitmapDrawable extends JDrawable {
       Math.max(1, this.bounds.right - this.bounds.left), Math.max(1, this.bounds.bottom - this.bounds.top));
     ctx.restore();
   }
-  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * device.densityDpi / this.bmp.density) : -1; }
+  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * this.targetDensity / this.bmp.density) : -1; }
+}
+function setTargetDensity(this: JBitmapDrawable, density: number) {
+  const next = density || 160;   // DisplayMetrics.DENSITY_DEFAULT stands in for "no density"
+  if (next !== this.targetDensity) { this.targetDensity = next; void vcall(this, "invalidateSelf", "()V"); }
 }
 rt.register({
   name: "android/graphics/drawable/BitmapDrawable", ctor: JBitmapDrawable, sup: "android/graphics/drawable/Drawable",
@@ -263,7 +269,10 @@ rt.register({
     "<init>(Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, b: JBitmap) { this.bmp = b; },
     "getBitmap()Landroid/graphics/Bitmap;": function (this: JBitmapDrawable) { return this.bmp; },
     "getPaint()Landroid/graphics/Paint;": function (this: JBitmapDrawable) { return this.bpaint ??= new JPaint(); },
-    ...noops("<init>()V", "setAntiAlias(Z)V",
+    "setTargetDensity(I)V": setTargetDensity,
+    "setTargetDensity(Landroid/util/DisplayMetrics;)V": function (this: JBitmapDrawable, m: { densityDpi: number }) { setTargetDensity.call(this, m.densityDpi); },
+    "setTargetDensity(Landroid/graphics/Canvas;)V": function (this: JBitmapDrawable) { setTargetDensity.call(this, device.densityDpi); },
+    ...noops("<init>()V", "setAntiAlias(Z)V", "setMipMap(Z)V", "setTileModeX(Landroid/graphics/Shader$TileMode;)V", "setTileModeY(Landroid/graphics/Shader$TileMode;)V",
       "setTileModeXY(Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", "setGravity(I)V"),
   },
 });
