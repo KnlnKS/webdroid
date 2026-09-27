@@ -273,18 +273,23 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label, activities };
     if (!processName && mainActivity) {
       onStatus("Opening app…");
-      const intent = new JIntent();
-      intent.action = "android.intent.action.MAIN";
-      intent.categories.add("android.intent.category.LAUNCHER");
-      intent.component = mainActivity.replaceAll("/", ".");
-      intent.componentPkg = pkg;
-      intent.flags = 0x10000000;
-      await launchActivity(mainActivity, intent);
+      await launchMain();
     }
     return booted;
   });
 }
 
+/** what the launcher sends when the app's icon is tapped */
+function launchMain(): Promise<void> {
+  if (!booted?.mainActivityCls) return Promise.resolve();
+  const intent = new JIntent();
+  intent.action = "android.intent.action.MAIN";
+  intent.categories.add("android.intent.category.LAUNCHER");
+  intent.component = booted.mainActivityCls.replaceAll("/", ".");
+  intent.componentPkg = booted.host.pkg;
+  intent.flags = 0x10000000;
+  return launchActivity(booted.mainActivityCls, intent);
+}
 function launchActivity(cls: string, intent: JIntent | null, options?: ActivityLaunch): Promise<void> {
   // Startup and Java callbacks already hold the main queue; queuing again would deadlock.
   const run = async () => {
@@ -555,7 +560,8 @@ export function finishTask(taskId: number, resume: boolean): Promise<void> {
 export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
   return onMain(async () => {
     const act = booted?.host.currentActivity();
-    if (!act) return;
+    // returning to an app whose last activity finished starts it again, as its icon would
+    if (!act) { if (phase === "resume") await launchMain(); return; }
     if (phase === "pause") {
       if (act.resumed) await pauseActivity(act);
       await windowFocus(act, false);
@@ -660,6 +666,12 @@ const tick0 = driven(function* tick0(): Gen {
       if (startWin && uiState.needsDraw) {
         uiState.needsDraw = false;
         yield drawStartWin(startWin);
+      } else if (booted?.mainActivityCls && !booted.stack.length && uiState.needsDraw) {
+        // the last activity finished: the home screen, not its final frame, is what shows
+        uiState.needsDraw = false;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        present();
       }
       return;
     }
