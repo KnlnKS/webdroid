@@ -2,10 +2,10 @@
 // CharacterIterator, BreakIterator, Normalizer. Formatting is en-only and pattern-driven.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { vcall, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
+import { vcall, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble, stringHash, type JSB } from "./jlang";
 import { strArray, jarray, utf8, slashName, dotName, charsToString } from "../abi";
 import { mkIter, toJsArray } from "./jutil";
-import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
+import { JDate, JCalendar, localTz, formatPattern, parsePattern, checkSdfPattern, displayNames, localizedDatePattern, type JTimeZone } from "./jtime";
 import { directionality } from "../bidi";
 import bidiFactory from "bidi-js";
 import { defaultLocale, localeTag, type JLocale } from "./jvalues";
@@ -109,80 +109,68 @@ rt.register({
   },
 });
 
-export function formatDate(pattern: string, t: number): string {
-  const d = new Date(t);
-  return pattern.replace(/'([^']*)'|([GyYMLdEaHhKkmsSzZX])\2*/g, (m, quoted) => {
-    if (quoted !== undefined) return quoted || "'";
-    const c = m[0], n = m.length;
-    switch (c) {
-      case "y": case "Y": return n === 2 ? pad(d.getFullYear() % 100) : String(d.getFullYear());
-      case "M": case "L":
-        if (n >= 4) return MONTHS[d.getMonth()];
-        if (n === 3) return MONTHS[d.getMonth()].slice(0, 3);
-        return n === 2 ? pad(d.getMonth() + 1) : String(d.getMonth() + 1);
-      case "d": return n === 2 ? pad(d.getDate()) : String(d.getDate());
-      case "E": return n >= 4 ? DAYS[d.getDay()] : DAYS[d.getDay()].slice(0, 3);
-      case "a": return d.getHours() < 12 ? "AM" : "PM";
-      case "H": return n === 2 ? pad(d.getHours()) : String(d.getHours());
-      case "h": { const h = d.getHours() % 12 || 12; return n === 2 ? pad(h) : String(h); }
-      case "K": return String(d.getHours() % 12);
-      case "k": return String(d.getHours() || 24);
-      case "m": return n === 2 ? pad(d.getMinutes()) : String(d.getMinutes());
-      case "s": return n === 2 ? pad(d.getSeconds()) : String(d.getSeconds());
-      case "S": return String(d.getMilliseconds()).padStart(3, "0").slice(0, n);
-      case "z": case "Z": case "X": return "";
-      case "G": return "AD";
-      default: return m;
-    }
-  });
+/** android.text.format.DateFormat's patterns print through the same engine as SimpleDateFormat */
+export const formatDate = (pattern: string, t: number): string => formatPattern(pattern, t);
+class JDateFormat extends JObj { pattern = ""; tz: JTimeZone | null = null; locale: JLocale | null = null; century: number | null = null; }
+function withPattern(p: string, locale: JLocale | null = null): JDateFormat {
+  checkSdfPattern(p);
+  const f = new (rt.link("java/text/SimpleDateFormat").ctor as typeof JDateFormat)();
+  f.pattern = p;
+  f.locale = locale;
+  return f;
 }
-function parseDate(s: string): number | null {
-  // pragmatic: try common patterns then Date.parse
-  const ymd = /(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (ymd) {
-    const hm = /(\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
-    return new Date(+ymd[1], +ymd[2] - 1, +ymd[3], +(hm?.[1] ?? 0), +(hm?.[2] ?? 0), +(hm?.[3] ?? 0)).getTime();
-  }
-  const t = Date.parse(s);
-  return Number.isNaN(t) ? null : t;
+// DateFormat.FULL, LONG, MEDIUM, SHORT → the locale's CLDR patterns
+const STYLE_NAMES = ["FULL", "LONG", "MEDIUM", "SHORT"];
+const styled = (date: number | null, time: number | null, locale: JLocale | null = null) =>
+  withPattern(localizedDatePattern(date === null ? null : STYLE_NAMES[date] ?? "MEDIUM", time === null ? null : STYLE_NAMES[time] ?? "MEDIUM", locale), locale);
+const formatAt = (f: JDateFormat, t: number) => formatPattern(f.pattern, t, (f.tz ?? localTz).id, f.locale);
+function parseAt(f: JDateFormat, s: string, pos: JParsePosition): JDate | null {
+  const t = parsePattern(f.pattern, s, pos, (f.tz ?? localTz).id, f.locale, f.century);
+  if (t === null) return null;
+  const d = new JDate();
+  d.t = t;
+  return d;
 }
-class JDateFormat extends JObj { pattern = "MMM d, yyyy"; }
-function withPattern(p: string): JDateFormat { const f = new JDateFormat(); f.pattern = p; return f; }
-// DateFormat.FULL, LONG, MEDIUM, SHORT
-const DATE_STYLES = ["EEEE, MMMM d, yyyy", "MMMM d, yyyy", "MMM d, yyyy", "M/d/yy"];
-function dateInstance(style: number): JDateFormat { return withPattern(DATE_STYLES[style] ?? DATE_STYLES[2]); }
 const dateFormatMethods: NativeSpec["methods"] = {
-  "format(Ljava/util/Date;)Ljava/lang/String;": function (this: JDateFormat, d: JDate) {
-    return formatDate(this.pattern, d.t);
-  },
+  "format(Ljava/util/Date;)Ljava/lang/String;": function (this: JDateFormat, d: JDate) { return formatAt(this, d.t); },
   "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JDateFormat, o: unknown) {
     const t = o instanceof JDate ? o.t : o instanceof JCalendar ? o.d.getTime() : typeof o === "bigint" ? Number(o) : Number((o as any)?.v ?? 0);
-    return formatDate(this.pattern, t);
+    return formatAt(this, t);
+  },
+  "format(Ljava/util/Date;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;": function (this: JDateFormat, d: JDate, sb: JSB) {
+    sb.s += formatAt(this, d.t);
+    return sb;
   },
   "parse(Ljava/lang/String;)Ljava/util/Date;": function (this: JDateFormat, s: string) {
-    const t = parseDate(s);
-    if (t === null) throw rt.mkThrowable("java/text/ParseException", "Unparseable date: " + s);
-    const d = new JDate();
-    d.t = t;
+    const pos = new JParsePosition(), d = parseAt(this, s, pos);
+    if (!d) throw Object.assign(rt.mkThrowable("java/text/ParseException", `Unparseable date: "${s}"`), { errorOffset: pos.errorIndex });
     return d;
   },
   // the non-throwing form: on failure AOSP returns null and sets errorIndex rather than raising
-  "parse(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/util/Date;": function (this: JDateFormat, s: string, pos: JParsePosition) {
-    const t = parseDate(s);
-    if (t === null) { pos.errorIndex = pos.index; return null; }
-    pos.index = s.length;
-    const d = new JDate();
-    d.t = t;
+  "parse(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/util/Date;": function (this: JDateFormat, s: string, pos: JParsePosition) { return parseAt(this, s, pos); },
+  "parseObject(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Object;": function (this: JDateFormat, s: string, pos: JParsePosition) { return parseAt(this, s, pos); },
+  "setTimeZone(Ljava/util/TimeZone;)V": function (this: JDateFormat, tz: JTimeZone) { this.tz = tz; },
+  "getTimeZone()Ljava/util/TimeZone;": function (this: JDateFormat) { return this.tz ?? localTz; },
+  "setCalendar(Ljava/util/Calendar;)V": function (this: JDateFormat, c: JCalendar) { this.tz = (c ?? rt.npe()).tz; },
+  "getCalendar()Ljava/util/Calendar;": function (this: JDateFormat) {
+    return vcall(rt.link("java/util/Calendar").ctor, "getInstance", "(Ljava/util/TimeZone;)Ljava/util/Calendar;", this.tz ?? localTz);
+  },
+  "set2DigitYearStart(Ljava/util/Date;)V": function (this: JDateFormat, d: JDate) { this.century = (d ?? rt.npe()).t; },
+  "get2DigitYearStart()Ljava/util/Date;": function (this: JDateFormat) {
+    const d = new JDate(), start = new Date();
+    start.setFullYear(start.getFullYear() - 80);
+    d.t = this.century ?? start.getTime();
     return d;
   },
-  "setTimeZone(Ljava/util/TimeZone;)V": () => {},
-  "setCalendar(Ljava/util/Calendar;)V": () => {},
-  "getTimeZone()Ljava/util/TimeZone;": () => localTz,
   "setLenient(Z)V": () => {},
+  "isLenient()Z": () => 1,
   "toPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
   "toLocalizedPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
-  "applyPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
-  "applyLocalizedPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
+  "applyPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
+  "applyLocalizedPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
+  "clone()Ljava/lang/Object;": function (this: JDateFormat) { return Object.assign(new (this.constructor as typeof JDateFormat)(), this); },
+  "equals(Ljava/lang/Object;)Z": function (this: JDateFormat, o: unknown) { return +(o instanceof JDateFormat && o.pattern === this.pattern); },
+  "hashCode()I": function (this: JDateFormat) { return stringHash(this.pattern); },
 };
 // the abstract base DateFormat and NumberFormat share, so a cast through Format holds; each
 // concrete formatter carries its own format(Object)
@@ -228,43 +216,52 @@ rt.register({
     "toPattern()Ljava/lang/String;": function (this: JMessageFormat) { return this.pattern; },
   },
 });
+const locale = (l: JLocale | undefined) => l ?? null;
 rt.register({
   name: "java/text/DateFormat", ctor: JDateFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
-  statics: { FULL: 0, LONG: 1, MEDIUM: 2, SHORT: 3 },
+  statics: { FULL: 0, LONG: 1, MEDIUM: 2, SHORT: 3, DEFAULT: 2 },
   methods: {
     ...dateFormatMethods,
-    "static getDateInstance()Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy"),
-    "static getDateInstance(I)Ljava/text/DateFormat;": dateInstance,
-    "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": dateInstance,
-    ...Object.fromEntries((["", "I", "ILjava/util/Locale;"]).flatMap((a) => [[`static getTimeInstance(${a})Ljava/text/DateFormat;`, () => withPattern("h:mm a")],
-      [`static getDateTimeInstance(${a.replace("I", "II")})Ljava/text/DateFormat;`, () => withPattern("MMM d, yyyy h:mm a")]])),
+    "<init>()V": function () {},
+    "static getInstance()Ljava/text/DateFormat;": () => styled(3, 3),
+    "static getDateInstance()Ljava/text/DateFormat;": () => styled(2, null),
+    "static getDateInstance(I)Ljava/text/DateFormat;": (d: number) => styled(d, null),
+    "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, l: JLocale) => styled(d, null, locale(l)),
+    "static getTimeInstance()Ljava/text/DateFormat;": () => styled(null, 2),
+    "static getTimeInstance(I)Ljava/text/DateFormat;": (t: number) => styled(null, t),
+    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (t: number, l: JLocale) => styled(null, t, locale(l)),
+    "static getDateTimeInstance()Ljava/text/DateFormat;": () => styled(2, 2),
+    "static getDateTimeInstance(II)Ljava/text/DateFormat;": (d: number, t: number) => styled(d, t),
+    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, t: number, l: JLocale) => styled(d, t, locale(l)),
   },
 });
 rt.register({
   name: "java/text/SimpleDateFormat", ctor: class extends JDateFormat {}, sup: "java/text/DateFormat",
   methods: {
-    ...dateFormatMethods,
-    "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
-    "<init>(Ljava/lang/String;Ljava/util/Locale;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
-    "toLocalizedPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
+    "<init>()V": function (this: JDateFormat) { this.pattern = localizedDatePattern("SHORT", "SHORT", null); },
+    "<init>(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
+    "<init>(Ljava/lang/String;Ljava/util/Locale;)V": function (this: JDateFormat, p: string, l: JLocale) { checkSdfPattern(p); this.pattern = p; this.locale = l; },
+    "<init>(Ljava/lang/String;Ljava/text/DateFormatSymbols;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
   },
 });
 defineException("java/text/ParseException", "java/lang/Exception");
-class JDateFormatSymbols extends JObj {}
+class JDateFormatSymbols extends JObj { tag = localeTag(defaultLocale); }
+const symbols = (l?: JLocale) => Object.assign(new JDateFormatSymbols(), { tag: localeTag(l ?? defaultLocale) });
+/** Calendar-indexed weekday names: an unused slot 0, then Sunday first */
+const weekdays = (tag: string, style: "long" | "short") => { const w = displayNames(tag, "weekday", style); return strArray(["", w[6], ...w.slice(0, 6)]); };
 rt.register({
-  name: "java/text/DateFormatSymbols", ctor: JDateFormatSymbols,
+  name: "java/text/DateFormatSymbols", ctor: JDateFormatSymbols, ifaces: ["java/io/Serializable", "java/lang/Cloneable"],
   methods: {
     "<init>()V": function () {},
-    "<init>(Ljava/util/Locale;)V": function () {},
-    "static getInstance()Ljava/text/DateFormatSymbols;": () => new JDateFormatSymbols(),
-    "static getInstance(Ljava/util/Locale;)Ljava/text/DateFormatSymbols;": () => new JDateFormatSymbols(),
-    "getMonths()[Ljava/lang/String;": () => strArray([...MONTHS, ""]),
-    "getShortMonths()[Ljava/lang/String;": () => strArray([...MONTHS.map((m) => m.slice(0, 3)), ""]),
-    "getWeekdays()[Ljava/lang/String;": () => strArray(["", ...DAYS]),
-    "getShortWeekdays()[Ljava/lang/String;": () => strArray(["", ...DAYS.map((d) => d.slice(0, 3))]),
-    "getAmPmStrings()[Ljava/lang/String;": () => strArray(["AM", "PM"]),
-    "getEras()[Ljava/lang/String;": () => strArray(["BC", "AD"]),
+    "<init>(Ljava/util/Locale;)V": function (this: JDateFormatSymbols, l: JLocale) { this.tag = localeTag(l); },
+    "static getInstance()Ljava/text/DateFormatSymbols;": () => symbols(),
+    "static getInstance(Ljava/util/Locale;)Ljava/text/DateFormatSymbols;": symbols,
+    "getMonths()[Ljava/lang/String;": function (this: JDateFormatSymbols) { return strArray([...displayNames(this.tag, "month", "long"), ""]); },
+    "getShortMonths()[Ljava/lang/String;": function (this: JDateFormatSymbols) { return strArray([...displayNames(this.tag, "month", "short"), ""]); },
+    "getWeekdays()[Ljava/lang/String;": function (this: JDateFormatSymbols) { return weekdays(this.tag, "long"); },
+    "getShortWeekdays()[Ljava/lang/String;": function (this: JDateFormatSymbols) { return weekdays(this.tag, "short"); },
+    "getAmPmStrings()[Ljava/lang/String;": function (this: JDateFormatSymbols) { return strArray(displayNames(this.tag, "dayPeriod", "short")); },
+    "getEras()[Ljava/lang/String;": function (this: JDateFormatSymbols) { return strArray(displayNames(this.tag, "era", "short")); },
     // the per-zone display names a formatter would look up; none is offered, as on a device
     // whose locale data carries no zone strings
     "getZoneStrings()[[Ljava/lang/String;": () => jarray([], "[Ljava/lang/String;"),

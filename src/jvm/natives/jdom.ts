@@ -8,6 +8,7 @@ class JDomDocument extends JDomNode { declare node: Document; }
 class JDomElement extends JDomNode { declare node: Element; }
 class JDomAttr extends JDomNode { declare node: Attr; }
 class JDomText extends JDomNode { declare node: Text; }
+class JDomDocType extends JDomNode { declare node: DocumentType; }
 class JDomList extends JObj { nodes!: NodeList | HTMLCollection; }
 class JDomAttributes extends JObj { attrs!: NamedNodeMap; }
 const domTypes: Record<number, [string, new () => JDomNode]> = {
@@ -15,6 +16,7 @@ const domTypes: Record<number, [string, new () => JDomNode]> = {
   2: ["webdroid/DOMAttr", JDomAttr],
   3: ["webdroid/DOMText", JDomText],
   9: ["webdroid/DOMDocument", JDomDocument],
+  10: ["webdroid/DOMDocumentType", JDomDocType],
 };
 const nodeCache = new WeakMap<Node, JDomNode>();
 function domNode(node: Node | null): JDomNode | null {
@@ -75,6 +77,36 @@ const documentMethods = {
   "createElementNS(Ljava/lang/String;Ljava/lang/String;)Lorg/w3c/dom/Element;": function (this: JDomDocument, namespace: string | null, name: string) { return domNode(this.node.createElementNS(namespace, name)); },
   "createAttribute(Ljava/lang/String;)Lorg/w3c/dom/Attr;": function (this: JDomDocument, name: string) { return domNode(this.node.createAttribute(name)); },
   "createTextNode(Ljava/lang/String;)Lorg/w3c/dom/Text;": function (this: JDomDocument, text: string) { return domNode(this.node.createTextNode(text)); },
+  "getDoctype()Lorg/w3c/dom/DocumentType;": function (this: JDomDocument) { return domNode(this.node.doctype); },
+  "getImplementation()Lorg/w3c/dom/DOMImplementation;": () => domImplementation(),
+};
+const docTypeMethods = {
+  "getName()Ljava/lang/String;": function (this: JDomDocType) { return this.node.name; },
+  "getPublicId()Ljava/lang/String;": function (this: JDomDocType) { return this.node.publicId; },
+  "getSystemId()Ljava/lang/String;": function (this: JDomDocType) { return this.node.systemId; },
+  "getInternalSubset()Ljava/lang/String;": () => null,
+};
+// libcore DOMImplementationImpl: DOM Core/XML levels 1-3 and XML 1.0/1.1, a leading "+" ignored
+function hasFeature(feature: string, version: string | null): number {
+  const f = feature.replace(/^\+/, "").toLowerCase();
+  const versions = f === "core" || f === "xml" ? ["1.0", "2.0", "3.0"] : f === "xmlversion" ? ["1.0", "1.1"] : null;
+  return versions && (!version || versions.includes(version)) ? 1 : 0;
+}
+class JDomImplementation extends JObj {}
+let domImpl: JDomImplementation | undefined;
+function domImplementation(): JDomImplementation {
+  rt.link("webdroid/DOMImplementation");
+  return domImpl ??= new JDomImplementation();
+}
+const implementationMethods = {
+  "hasFeature(Ljava/lang/String;Ljava/lang/String;)Z": (feature: string, version: string | null) => hasFeature(feature, version),
+  "getFeature(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;": function (this: JDomImplementation, feature: string, version: string | null) {
+    return hasFeature(feature, version) ? this : null;
+  },
+  "createDocumentType(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/w3c/dom/DocumentType;": (name: string, publicId: string | null, systemId: string | null) =>
+    domNode(document.implementation.createDocumentType(name, publicId ?? "", systemId ?? "")),
+  "createDocument(Ljava/lang/String;Ljava/lang/String;Lorg/w3c/dom/DocumentType;)Lorg/w3c/dom/Document;": (ns: string | null, name: string | null, doctype: JDomDocType | null) =>
+    domNode(document.implementation.createDocument(ns, name ?? "", doctype?.node ?? null)),
 };
 const elementMethods = {
   "getTagName()Ljava/lang/String;": function (this: JDomElement) { return this.node.tagName; },
@@ -109,6 +141,8 @@ rt.register({ name: "org/w3c/dom/NodeList", ctor: class extends JObj {}, methods
 rt.register({ name: "org/w3c/dom/Attr", ctor: class extends JObj {}, ifaces: ["org/w3c/dom/Node"], methods: attrMethods });
 rt.register({ name: "org/w3c/dom/Text", ctor: class extends JObj {}, ifaces: ["org/w3c/dom/Node"] });
 rt.register({ name: "org/w3c/dom/NamedNodeMap", ctor: class extends JObj {}, methods: attributeMethods });
+rt.register({ name: "org/w3c/dom/DocumentType", ctor: class extends JObj {}, ifaces: ["org/w3c/dom/Node"], methods: docTypeMethods });
+rt.register({ name: "org/w3c/dom/DOMImplementation", ctor: class extends JObj {}, methods: implementationMethods });
 rt.register({ name: "webdroid/DOMNode", ctor: JDomNode, ifaces: ["org/w3c/dom/Node"], methods: nodeMethods });
 rt.register({ name: "webdroid/DOMDocument", ctor: JDomDocument, ifaces: ["org/w3c/dom/Document"], methods: { ...nodeMethods, ...documentMethods } });
 rt.register({ name: "webdroid/DOMElement", ctor: JDomElement, ifaces: ["org/w3c/dom/Element"], methods: { ...nodeMethods, ...elementMethods } });
@@ -116,6 +150,8 @@ rt.register({ name: "webdroid/DOMNodeList", ctor: JDomList, ifaces: ["org/w3c/do
 rt.register({ name: "webdroid/DOMAttr", ctor: JDomAttr, ifaces: ["org/w3c/dom/Attr"], methods: { ...nodeMethods, ...attrMethods } });
 rt.register({ name: "webdroid/DOMText", ctor: JDomText, ifaces: ["org/w3c/dom/Text"], methods: nodeMethods });
 rt.register({ name: "webdroid/DOMAttributes", ctor: JDomAttributes, ifaces: ["org/w3c/dom/NamedNodeMap"], methods: attributeMethods });
+rt.register({ name: "webdroid/DOMDocumentType", ctor: JDomDocType, ifaces: ["org/w3c/dom/DocumentType"], methods: { ...nodeMethods, ...docTypeMethods } });
+rt.register({ name: "webdroid/DOMImplementation", ctor: JDomImplementation, ifaces: ["org/w3c/dom/DOMImplementation"], methods: implementationMethods });
 
 class JDocumentBuilder extends JObj { namespaceAware = false; validating = false; }
 function parseDocument(text: string): JDomNode {
@@ -135,6 +171,7 @@ rt.register({ name: "javax/xml/parsers/DocumentBuilder", ctor: JDocumentBuilder,
     throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
   }),
   "newDocument()Lorg/w3c/dom/Document;": () => domNode(document.implementation.createDocument(null, "")),
+  "getDOMImplementation()Lorg/w3c/dom/DOMImplementation;": () => domImplementation(),
   "isNamespaceAware()Z": function (this: JDocumentBuilder) { return this.namespaceAware ? 1 : 0; },
   "isValidating()Z": function (this: JDocumentBuilder) { return this.validating ? 1 : 0; },
 } });
