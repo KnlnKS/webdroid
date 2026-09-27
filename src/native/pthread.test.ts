@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
 import { Cpu, cpus, setA64 } from "./cpu";
-import { lookupHost } from "./host";
+import { core, CORE_LIBC } from "./core";
+import { Args64, hostFn, lookupHost } from "./host";
 import { mem } from "./mem";
 import { pthreadInit, startThread } from "./pthread";
 
@@ -46,5 +47,33 @@ test("joinable pthread handles remain distinct after their routines exit", async
     expect(mem.ld64(result)).toBe(7n);
   } finally {
     mem.free(result); parent.dispose(); setA64(false);
+  }
+});
+
+test("rwlock words are shared by the core's uncontended calls and the host's waiters", async () => {
+  setA64(true); pthreadInit();
+  const lock = mem.malloc(64), reader = new Cpu(new JThread(), "reader"), writer = new Cpu(new JThread(), "writer");
+  mem.memset(lock, 0, 64);
+  const served = (cpu: Cpu, name: string) => { cpu.w[0] = lock; cpu.w[1] = 0; return core.libc_call(cpu.base, CORE_LIBC[name]); };
+  const host = (cpu: Cpu, name: string) => { cpu.w[0] = lock; cpu.w[1] = 0; return hostFn("libc.so", name)!(cpu, new Args64(cpu)); };
+  const settled = async (p: unknown) => { let done = false; void (p as Promise<unknown>).then(() => { done = true; }); for (let i = 0; i < 5; i++) await Promise.resolve(); return done; };
+  try {
+    expect(served(reader, "pthread_rwlock_rdlock")).toBe(0);
+    expect(served(reader, "pthread_rwlock_rdlock")).toBe(0);
+    expect(served(writer, "pthread_rwlock_wrlock")).toBe(2);
+    const blocked = host(writer, "pthread_rwlock_wrlock");
+    expect(blocked).toBeInstanceOf(Promise);
+    expect(served(reader, "pthread_rwlock_unlock")).toBe(2);
+    expect(host(reader, "pthread_rwlock_unlock")).toBe(0);
+    expect(await settled(blocked)).toBe(false);
+    expect(host(reader, "pthread_rwlock_unlock")).toBe(0);
+    expect(await blocked).toBe(0);
+    expect([mem.ld32(lock) >>> 0, mem.ld32(lock + 4), mem.ld32(lock + 8)]).toEqual([0x80000000, writer.tid, 0]);
+    expect(served(reader, "pthread_rwlock_tryrdlock")).toBe(0);
+    expect(reader.w[0]).toBe(16);
+    expect(served(writer, "pthread_rwlock_unlock")).toBe(0);
+    expect(mem.ld32(lock)).toBe(0);
+  } finally {
+    mem.free(lock); reader.dispose(); writer.dispose(); setA64(false);
   }
 });

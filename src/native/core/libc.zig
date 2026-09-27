@@ -53,8 +53,14 @@ pub const Fn = enum(u8) {
     crc32,
     adler32,
     __memcpy_chk,
+    pthread_rwlock_rdlock,
+    pthread_rwlock_tryrdlock,
+    pthread_rwlock_wrlock,
+    pthread_rwlock_trywrlock,
+    pthread_rwlock_unlock,
 };
 pub const Result = enum(u32) { done, fault, host };
+const RW_WRITER: u32 = 0x8000_0000;
 export fn libc_call(cp: u32, id: u32) u32 {
     abi.require(id != 0 and id < @typeInfo(Fn).@"enum".fields.len, "libc_call: unknown id");
     return @intFromEnum(call(@ptrFromInt(cp), @intCast(id)));
@@ -232,6 +238,27 @@ pub fn call(c: *Cpu, id: u8) Result {
             const kind = w & 0xc000;
             if (w & 3 != 1 or (kind != 0 and w >> 16 != c.tid)) return .host;
             if (!cpu.st(u32, c, a, if (kind != 0 and w & 0x3ffc != 0) w - 4 else w & 0xe000)) return .fault;
+            ret(c, 0);
+        },
+        // the words and waiter rule src/native/pthread.ts keeps; anything that must wait or wake goes to the host
+        .pthread_rwlock_rdlock, .pthread_rwlock_tryrdlock, .pthread_rwlock_wrlock, .pthread_rwlock_trywrlock => {
+            const a = ptr(c, 0) orelse return .fault;
+            const s = mem.ld(u32, a);
+            const write = f == .pthread_rwlock_wrlock or f == .pthread_rwlock_trywrlock;
+            if (if (write) s != 0 else s & RW_WRITER != 0) {
+                if (f == .pthread_rwlock_rdlock or f == .pthread_rwlock_wrlock) return .host;
+                ret(c, 16);
+                return .done;
+            }
+            if (!cpu.st(u32, c, a, if (write) RW_WRITER else s + 1)) return .fault;
+            if (write and !cpu.st(u32, c, a + 4, c.tid)) return .fault;
+            ret(c, 0);
+        },
+        .pthread_rwlock_unlock => {
+            const a = ptr(c, 0) orelse return .fault;
+            const s = mem.ld(u32, a);
+            if (mem.ld(u32, a + 8) != 0 or s == 0 or (s & RW_WRITER != 0 and mem.ld(u32, a + 4) != c.tid)) return .host;
+            if (!cpu.st(u32, c, a, if (s & RW_WRITER != 0) 0 else s - 1)) return .fault;
             ret(c, 0);
         },
         .memcpy, .memmove, .__memcpy_chk => {

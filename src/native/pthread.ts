@@ -19,19 +19,39 @@ const ERRORCHECK = 0x8000;
 const mutexWaiters = new AddrMap<(() => void)[]>();
 const conds = new AddrMap<((timedOut: boolean) => void)[]>();
 const sems = new AddrMap<{ count: number; waiters: (() => void)[] }>();
-/** readers share, one writer excludes; a blocked acquirer parks and every unlock wakes them all to retry */
-interface RwLock { readers: number; writer: number; waiters: (() => void)[] }
-const rwlocks = new AddrMap<RwLock>();
-function rwOf(a: number): RwLock { let l = rwlocks.get(a); if (!l) rwlocks.set(a, (l = { readers: 0, writer: 0, waiters: [] })); return l; }
-async function rwAcquire(cpu: Cpu, l: RwLock, write: boolean): Promise<number> {
-  for (;;) {
-    if (write ? l.writer === 0 && l.readers === 0 : l.writer === 0) { if (write) l.writer = cpu.tid; else l.readers++; return 0; }
-    await new Promise<void>((r) => l.waiters.push(r));
-  }
+/** A rwlock lives in its own words, zero when unlocked as PTHREAD_RWLOCK_INITIALIZER leaves it:
+ *  the reader count or RW_WRITER, the writer's tid, and how many threads wait. The core serves
+ *  uncontended calls on the same words (libc.zig); a blocked acquirer parks here, and an unlock
+ *  that finds waiters wakes them all to retry. */
+const RW_WRITER = 0x80000000;
+const rwWaiters = new AddrMap<(() => void)[]>();
+function rwTry(cpu: Cpu, a: number, write: boolean): boolean {
+  const state = mem.ld32(a) >>> 0;
+  if (write ? state !== 0 : (state & RW_WRITER) !== 0) return false;
+  if (write) { mem.st32(a, RW_WRITER); mem.st32(a + 4, cpu.tid); } else mem.st32(a, state + 1);
+  return true;
 }
-function rwRelease(cpu: Cpu, l: RwLock): number {
-  if (l.writer === cpu.tid) l.writer = 0; else if (l.readers > 0) l.readers--; else return E.PERM;
-  for (const w of l.waiters.splice(0)) w();
+function rwAcquire(cpu: Cpu, a: number, write: boolean): number | Promise<number> {
+  if (rwTry(cpu, a, write)) return 0;
+  return (async () => {
+    do {
+      mem.st32(a + 8, mem.ld32(a + 8) + 1);
+      let q = rwWaiters.get(a);
+      if (!q) rwWaiters.set(a, (q = []));
+      await new Promise<void>((r) => q.push(r));
+      mem.st32(a + 8, mem.ld32(a + 8) - 1);
+    } while (!rwTry(cpu, a, write));
+    return 0;
+  })();
+}
+function rwRelease(cpu: Cpu, a: number): number {
+  const state = mem.ld32(a) >>> 0;
+  if (state & RW_WRITER) {
+    if (mem.ld32(a + 4) !== cpu.tid) return E.PERM;
+    mem.st32(a, 0); mem.st32(a + 4, 0);
+  } else if (state) mem.st32(a, state - 1);
+  else return E.PERM;
+  if (mem.ld32(a + 8)) for (const w of rwWaiters.get(a)?.splice(0) ?? []) w();
   return 0;
 }
 const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean; storage: number }>();
@@ -366,15 +386,15 @@ export function pthreadInit(): void {
     pthread_cond_broadcast: (_c, a) => { const l = conds.get(a.p()); if (l) for (const w of l.splice(0)) w(false); return 0; },
     pthread_condattr_init: () => 0, pthread_condattr_destroy: () => 0, pthread_condattr_setclock: () => 0, pthread_condattr_setpshared: () => 0,
     pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (keySeq >= TLS_KEYS) return E.AGAIN; if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
-    pthread_rwlock_init: (_c, a) => { rwlocks.set(a.p(), { readers: 0, writer: 0, waiters: [] }); return 0; },
-    pthread_rwlock_destroy: (_c, a) => { rwlocks.delete(a.p()); return 0; },
-    pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
-    pthread_rwlock_wrlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), true),
-    pthread_rwlock_timedrdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
-    pthread_rwlock_timedwrlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), true),
-    pthread_rwlock_tryrdlock: (_c, a) => { const l = rwOf(a.p()); if (l.writer) return EBUSY; l.readers++; return 0; },
-    pthread_rwlock_trywrlock: (cpu, a) => { const l = rwOf(a.p()); if (l.writer || l.readers) return EBUSY; l.writer = cpu.tid; return 0; },
-    pthread_rwlock_unlock: (cpu, a) => rwRelease(cpu, rwOf(a.p())),
+    pthread_rwlock_init: (_c, a) => { mem.memset(a.p(), 0, 12); return 0; },
+    pthread_rwlock_destroy: (_c, a) => { rwWaiters.delete(a.p()); return 0; },
+    pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, a.p(), false),
+    pthread_rwlock_wrlock: (cpu, a) => rwAcquire(cpu, a.p(), true),
+    pthread_rwlock_timedrdlock: (cpu, a) => rwAcquire(cpu, a.p(), false),
+    pthread_rwlock_timedwrlock: (cpu, a) => rwAcquire(cpu, a.p(), true),
+    pthread_rwlock_tryrdlock: (cpu, a) => rwTry(cpu, a.p(), false) ? 0 : EBUSY,
+    pthread_rwlock_trywrlock: (cpu, a) => rwTry(cpu, a.p(), true) ? 0 : EBUSY,
+    pthread_rwlock_unlock: (cpu, a) => rwRelease(cpu, a.p()),
     pthread_rwlockattr_init: () => 0, pthread_rwlockattr_destroy: () => 0, pthread_rwlockattr_setpshared: () => 0,
     pthread_atfork: () => 0,
     pthread_mutexattr_gettype: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr) & 0xf); return 0; },
