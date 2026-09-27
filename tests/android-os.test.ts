@@ -1,6 +1,10 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { JActivity } from "../src/android/app";
+import { JActivity, JApplication, JService } from "../src/android/app";
+import { appHost, setAppHost } from "../src/android/apphost";
+import { packages, PackageRecord } from "../src/android/packages";
+import { Resources } from "../src/android/res";
+import { TV, type XmlAttr } from "../src/android/axml";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { vcall, newObj, vcallAsync, JThread, curThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -293,6 +297,48 @@ describe("handler-thread-dispatch", () => {
     await done;
     expect(events.map(([name]) => name)).toEqual(logged ? ["before", "callback", "handler", "after"] : ["callback", "handler"]);
     expect(events.map(([, observed]) => observed === thread)).toEqual(logged ? [true, true, true, true] : [true, true]);
+  });
+});
+
+describe("job-scheduler", () => {
+  rt.linkNatives();
+  test("enqueued work reaches a bound service's JobServiceEngine and finishing unbinds it", async () => {
+    const pkg = "test.jobs", events: string[] = [];
+    const attr = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
+    packages.set(pkg, new PackageRecord({ name: "manifest", attrs: [attr("package", pkg)], children: [
+      { name: "application", attrs: [], children: [{ name: "service", attrs: [attr("name", ".Worker")], children: [] }] },
+    ] }, new Resources(null, {}), "/t.apk", 12345, async () => []));
+    rt.register({ name: "test/jobs/Engine", ctor: class extends (rt.link("android/app/job/JobServiceEngine").ctor as new () => JObj) {},
+      sup: "android/app/job/JobServiceEngine", methods: {
+        "onStartJob(Landroid/app/job/JobParameters;)Z": async (params: JObj) => {
+          for (let item; (item = await vcall(params, "dequeueWork", "()Landroid/app/job/JobWorkItem;"));) {
+            events.push((await vcall(item, "getIntent", "()Landroid/content/Intent;")).action);
+            await vcall(params, "completeWork", "(Landroid/app/job/JobWorkItem;)V", item);
+          }
+          return 1;
+        },
+      } });
+    rt.register({ name: "test/jobs/Worker", ctor: class extends JService {}, sup: "android/app/Service", methods: {
+      "<init>()V": function () {},
+      "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": async function (this: JService) {
+        return vcall(await newObj("test/jobs/Engine", "(Landroid/app/Service;)V", this), "getBinder", "()Landroid/os/IBinder;");
+      },
+      "onDestroy()V": () => { events.push("destroy"); },
+    } });
+    const previous = appHost, app = new JApplication(), host = { pkg, application: app } as never;
+    Reflect.set(app, "$host", host); setAppHost(host);
+    try {
+      const scheduler = rt.make("android/app/job/JobScheduler");
+      const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, pkg + ".Worker");
+      const info = await vcall(await newObj("android/app/job/JobInfo$Builder", "(ILandroid/content/ComponentName;)V", 7, component), "build", "()Landroid/app/job/JobInfo;");
+      for (const action of ["a", "b"]) {
+        const item = await newObj("android/app/job/JobWorkItem", "(Landroid/content/Intent;)V", await newObj("android/content/Intent", "(Ljava/lang/String;)V", action));
+        await vcall(scheduler, "enqueue", "(Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I", info, item);
+      }
+      for (let i = 0; i < 50 && !events.includes("destroy"); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(events).toEqual(["a", "b", "destroy"]);
+      expect(await vcall(scheduler, "getPendingJob", "(I)Landroid/app/job/JobInfo;", 7)).toBeNull();
+    } finally { setAppHost(previous); packages.delete(pkg); }
   });
 });
 

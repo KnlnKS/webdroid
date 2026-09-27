@@ -778,14 +778,6 @@ rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatab
   }
 }
 rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
-rt.register({ name: "android/database/ContentObserver", ctor: class extends JObj {},
-  methods: {
-    "<init>(Landroid/os/Handler;)V": function () {},
-    "deliverSelfNotifications()Z": () => 0,
-    "onChange(Z)V": () => {},
-    "onChange(ZLandroid/net/Uri;)V": function (this: JObj, self: number) { return vcall(this, "onChange", "(Z)V", self); },
-  } });
-rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V", "onChanged()V", "onInvalidated()V") } });
 rt.register({
   name: "android/database/DatabaseUtils", ctor: class extends JObj {},
   methods: {

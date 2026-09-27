@@ -1,7 +1,7 @@
 import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
-  JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
+  JIntent, activityTransport, launchIntent, mkComponentName, registerSystemActivity,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -26,7 +26,7 @@ import { runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
-import { JConfigurationInfo } from "./pm";
+import { JConfigurationInfo, getPM } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
@@ -260,6 +260,20 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
   },
+  // AOSP: the manifest's parentActivityName, as a main-activity intent when that parent has no parent of its own
+  "getParentActivityIntent()Landroid/content/Intent;": driven(function* (this: JActivity): Gen {
+    const pm = getPM(), info = "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;";
+    const parent: string | null = (yield vcall(pm, "getActivityInfo", info, mkComponentName(this.$host.pkg, jclsNameOf(this)), 0)).parentActivityName;
+    if (!parent) return null;
+    const target = mkComponentName(this.$host.pkg, parent);
+    let grandparent: string | null;
+    try { grandparent = (yield vcall(pm, "getActivityInfo", info, target, 0)).parentActivityName; }
+    catch (error) { if (rt.iof(error, "android/content/pm/PackageManager$NameNotFoundException")) return null; throw error; }
+    if (!grandparent) return vcall(rt.link("android/content/Intent").ctor, "makeMainActivity", "(Landroid/content/ComponentName;)Landroid/content/Intent;", target);
+    const intent: JIntent = rt.make("android/content/Intent");
+    intent.component = target.cls; intent.componentPkg = target.pkg;
+    return intent;
+  }),
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
   "onConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JActivity, cfg: unknown) {
     return this.window.decor ? dispatchConfigurationChanged(this.window.decor, cfg) : undefined;
@@ -309,19 +323,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
-  // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
-  // queue for as long as its (native, modal) UI is up, which reads as a wedge.
-  "startActivityForResult(Landroid/content/Intent;I)V": driven(function* (this: JActivity, intent: JIntent, code: number): Gen {
-    const sys = intent?.component ? null : systemActivities[intent?.action ?? ""];
-    if (sys) {
-      void sys(intent).then(
-        (data) => deliverActivityResult(this, code, data ? RESULT_OK : RESULT_CANCELED, data),
-        (e) => { reportUncaught(e); deliverActivityResult(this, code, RESULT_CANCELED, null); },
-      );
-      return;
-    }
-    yield launchIntent(this.$host, intent, { act: this, code });
-  }),
+  // onActivityResult, which launchIntent arranges without waiting on a system activity's UI.
+  "startActivityForResult(Landroid/content/Intent;I)V": function (this: JActivity, intent: JIntent, code: number) {
+    return launchIntent(this.$host, intent, { act: this, code });
+  },
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
@@ -523,20 +528,41 @@ rt.register({
 });
 
 let audioCapturePolicy = 1;
-class JVibrationEffect extends JObj {
-  timings: bigint[] = [];
-  repeat = -1;
+// A vibration is Android's alternating off/on durations (starting with off) and the index it
+// repeats from; navigator.vibrate is an on/off motor that takes on/off durations and never loops.
+class JVibrationEffect extends JObj { timings: number[] = []; repeat = -1; }
+function waveform(timings: ArrayLike<bigint>, repeat: number, amplitudes?: ArrayLike<number>): JVibrationEffect {
+  if (repeat < -1 || repeat >= timings.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "repeat " + repeat);
+  const effect: JVibrationEffect = rt.make("android/os/VibrationEffect");
+  for (let i = 0; i < timings.length; i++) {
+    // a segment of the other kind than the pattern expects next is preceded by an empty one
+    if ((effect.timings.length % 2 === 1) !== (amplitudes ? amplitudes[i] !== 0 : i % 2 === 1)) effect.timings.push(0);
+    if (i === repeat) effect.repeat = effect.timings.length;
+    effect.timings.push(Number(timings[i]));
+  }
+  return effect;
+}
+let vibration: ReturnType<typeof setTimeout> | undefined;
+function vibrate(effect: JVibrationEffect): void {
+  clearTimeout(vibration);
+  const play = (from: number) => {
+    const part = effect.timings.slice(from), total = part.reduce((a, b) => a + b, 0);
+    globalThis.navigator?.vibrate?.(from % 2 ? part : [0, ...part]);
+    if (effect.repeat >= 0 && total > 0) vibration = setTimeout(() => play(effect.repeat), total);
+  };
+  play(0);
 }
 rt.register({
   name: "android/os/VibrationEffect", ctor: JVibrationEffect, ifaces: ["android/os/Parcelable"],
   statics: { DEFAULT_AMPLITUDE: -1 },
   methods: {
-    "static createPredefined(I)Landroid/os/VibrationEffect;": () => Object.assign(new JVibrationEffect(), { timings: [30n] }),
-    "static createOneShot(JI)Landroid/os/VibrationEffect;": (ms: bigint) => Object.assign(new JVibrationEffect(), { timings: [ms] }),
-    "static createWaveform([JI)Landroid/os/VibrationEffect;": (timings: BigInt64Array | bigint[], repeat: number) =>
-      Object.assign(new JVibrationEffect(), { timings: Array.from(timings), repeat }),
-    "static createWaveform([J[II)Landroid/os/VibrationEffect;": (timings: BigInt64Array | bigint[], _amplitudes: Int32Array, repeat: number) =>
-      Object.assign(new JVibrationEffect(), { timings: Array.from(timings), repeat }),
+    "static createPredefined(I)Landroid/os/VibrationEffect;": () => waveform([0n, 30n], -1),
+    "static createOneShot(JI)Landroid/os/VibrationEffect;": (ms: bigint) => waveform([0n, ms], -1),
+    "static createWaveform([JI)Landroid/os/VibrationEffect;": (timings: BigInt64Array, repeat: number) => waveform(timings, repeat),
+    "static createWaveform([J[II)Landroid/os/VibrationEffect;": (timings: BigInt64Array, amplitudes: Int32Array, repeat: number) => {
+      if (timings.length !== amplitudes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timing and amplitude arrays must be of equal length");
+      return waveform(timings, repeat, amplitudes);
+    },
   },
 });
 class JAccessibilityServiceInfo extends JObj {
@@ -571,6 +597,17 @@ rt.register({
     "getTimers(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
     "getMeasurements(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
   },
+});
+// The system's "let this app run in the background?" dialog, answered by the grant policy runtime
+// permissions follow (context.ts). AOSP's activity ignores an app that did not declare the
+// permission to ask, which reads as the user declining.
+const DOZE_EXEMPTION = "__system_power";
+registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
+  const pkg = intent.dataUri?.startsWith("package:") ? intent.dataUri.slice(8) : null;
+  if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
+  const prefs = getPrefs(pkg, DOZE_EXEMPTION);
+  prefs.map.set("exempt", 1); prefs.persist();
+  return rt.make("android/content/Intent");
 });
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
@@ -609,35 +646,52 @@ for (const [name, methods, statics] of [
       const info = rt.link("android/os/PowerManager$WakeLock");
       return new info.ctor();
     },
-    // the screen is on and this app was never exempted from doze, which is the state an app
-    // offering a "disable battery optimisation" prompt is asking about
+    // the screen is on, so the device is never dozing
     "isDeviceIdleMode()Z": () => 0,
+    "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z": (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1),
     "getCurrentThermalStatus()I": () => 0,                                       // THERMAL_STATUS_NONE
     ...noops("addThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
       "addThermalStatusListener(Ljava/util/concurrent/Executor;Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
       "removeThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V"),
-    ...stubs(1, "isInteractive()Z"),
+    ...stubs(1, "isInteractive()Z", "isScreenOn()Z"),
     ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
-      "isLowPowerStandbyEnabled()Z", "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z"),
+      "isLowPowerStandbyEnabled()Z"),
   }],
   ["android/os/PowerManager$WakeLock", {
     "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},
     "isHeld()Z": () => 0, "setReferenceCounted(Z)V": () => {},
   }],
-  // no radio here: getDefaultAdapter() is null, which is what a device without Bluetooth reports
+  // No Bluetooth or NFC radio: the managers exist, as AOSP always registers them, and report no
+  // adapter, which is what a device without the feature answers.
   ["android/bluetooth/BluetoothAdapter", {
     "static getDefaultAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
     "isEnabled()Z": () => 0,
+  }],
+  ["android/bluetooth/BluetoothManager", {
+    "getAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
+    "getConnectedDevices(I)Ljava/util/List;": () => newArrayList(),
+    "getDevicesMatchingConnectionStates(I[I)Ljava/util/List;": () => newArrayList(),
+    "getConnectionState(Landroid/bluetooth/BluetoothDevice;I)I": () => 0, // STATE_DISCONNECTED
+  }],
+  ["android/nfc/NfcManager", { "getDefaultAdapter()Landroid/nfc/NfcAdapter;": () => null }],
+  ["android/nfc/NfcAdapter", { "static getDefaultAdapter(Landroid/content/Context;)Landroid/nfc/NfcAdapter;": () => null }],
+  // a single-user device with no managed profile: nothing to reach across
+  ["android/content/pm/CrossProfileApps", {
+    "getTargetUserProfiles()Ljava/util/List;": () => newArrayList(),
+    ...stubs(0, "canInteractAcrossProfiles()Z", "canRequestInteractAcrossProfiles()Z"),
   }],
   ["android/os/VibratorManager", {
     "getDefaultVibrator()Landroid/os/Vibrator;": () => systemService(null, "vibrator"),
   }],
   ["android/os/Vibrator", {
-    "vibrate(J)V": (ms: bigint) => globalThis.navigator?.vibrate?.(Number(ms)),
-    "vibrate(Landroid/os/VibrationEffect;)V": (effect: JVibrationEffect) =>
-      globalThis.navigator?.vibrate?.(effect.timings.map(Number)),
+    ...Object.fromEntries(["", "Landroid/media/AudioAttributes;"].flatMap((attrs) => [
+      [`vibrate(J${attrs})V`, (ms: bigint) => vibrate(waveform([0n, ms], -1))],
+      [`vibrate([JI${attrs})V`, (pattern: BigInt64Array, repeat: number) => vibrate(waveform(pattern, repeat))],
+      [`vibrate(Landroid/os/VibrationEffect;${attrs})V`, vibrate],
+    ])),
+    "vibrate(Landroid/os/VibrationEffect;Landroid/os/VibrationAttributes;)V": vibrate,
     "hasVibrator()Z": () => 1,
-    "cancel()V": () => {},
+    "cancel()V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
     // navigator.vibrate is a bare on/off motor: no amplitude, no composed primitives
     "hasAmplitudeControl()Z": () => 0,
     "areAllPrimitivesSupported([I)Z": () => 0,

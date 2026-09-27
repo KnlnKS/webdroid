@@ -17,7 +17,7 @@ import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
 import { packages } from "./packages";
-import { isMediaUri, mediaMime, mediaPath, mediaQuery } from "./mediastore";
+import { isMediaUri, mediaDelete, mediaMime, mediaPath, mediaQuery } from "./mediastore";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -192,13 +192,13 @@ const openAfd = async (u: JUri, mode: string) => {
   return mkAssetFd(pfd.bytes, pfd);
 };
 const contentObservers = new Set<{ uri: string; descendants: boolean; observer: unknown }>();
-async function notifyContentObservers(uri: JUri, origin: unknown): Promise<void> {
+async function notifyContentObservers(uri: JUri, origin: unknown, flags: number | boolean = 0): Promise<void> {
   if (!uri) rt.npe();
   for (const entry of [...contentObservers]) {
     if (entry.uri !== uri.uri && !(entry.descendants && uri.uri.startsWith(entry.uri.replace(/\/$/, "") + "/"))) continue;
     const self = entry.observer === origin;
     if (self && !await vcall(entry.observer, "deliverSelfNotifications", "()Z")) continue;
-    await vcall(entry.observer, "onChange", "(ZLandroid/net/Uri;)V", self ? 1 : 0, uri);
+    await vcall(entry.observer, "dispatchChange", "(ZLandroid/net/Uri;I)V", self ? 1 : 0, uri, +flags);
   }
 }
 const resolverMethods: NativeSpec["methods"] = {
@@ -323,6 +323,7 @@ const resolverMethods: NativeSpec["methods"] = {
   }),
   "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, where: string | null, args: string[] | null): Gen {
     if (isDocsUri(u)) return (yield docDelete(documentId(u, true))) ? 1 : 0;
+    if (isMediaUri(u)) return mediaDelete(u, where, args);
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
   }),
@@ -395,7 +396,9 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
   rt.register({
     name: `android/provider/Settings$${cls}`, ctor: class extends JObj {},
     statics: {
-      ...(cls === "System" ? { SCREEN_BRIGHTNESS: "screen_brightness" } : {}),
+      ...(cls === "System" ? { SCREEN_BRIGHTNESS: "screen_brightness", RINGTONE: "ringtone", NOTIFICATION_SOUND: "notification_sound", ALARM_ALERT: "alarm_alert",
+        DEFAULT_RINGTONE_URI: settingsUri(table, "ringtone"), DEFAULT_NOTIFICATION_URI: settingsUri(table, "notification_sound"),
+        DEFAULT_ALARM_ALERT_URI: settingsUri(table, "alarm_alert") } : {}),
       ...(cls === "Global" ? { ADB_ENABLED: "adb_enabled", ADB_WIFI_ENABLED: "adb_wifi_enabled" } : {}),
       ANIMATOR_DURATION_SCALE: "animator_duration_scale",
       TRANSITION_ANIMATION_SCALE: "transition_animation_scale",

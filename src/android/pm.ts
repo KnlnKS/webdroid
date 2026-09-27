@@ -16,7 +16,7 @@ import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { apkPath, vfs } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
 import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { JIntent, type JComponentName, componentState, mkComponentName } from "./intent";
+import { JIntent, type JComponentName, componentState, mkComponentName, systemActivity, SYSTEM_ACTIVITY } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
 import { csText } from "./text";
 import type { JActivity } from "./app";
@@ -306,7 +306,7 @@ class JApplicationInfo extends JPackageItemInfo {
   // is a reference, the literal otherwise. Code that names the app reads whichever is set.
   nonLocalizedLabel: string | null = null;
   className: string | null = null; publicSourceDir = ""; uid = 10001; processName = "";
-  enabled = 1; metaData: JBundle | null = null;
+  enabled = 1; metaData: JBundle | null = null; profileableByShell = false;
   category = -1;
   // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
   splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
@@ -329,6 +329,7 @@ rt.register({
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JApplicationInfo, parcel: JParcel, flags: number) {
       return writeApplicationInfo(parcel, this as unknown as Record<string, unknown>, flags);
     },
+    "isProfileableByShell()Z": function (this: JApplicationInfo) { return +this.profileableByShell; },
   },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
@@ -356,7 +357,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
-    fillManifestGameInfo(cachedAppInfo, node);
+    fillManifestAppInfo(cachedAppInfo, node);
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;
@@ -631,6 +632,14 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
     }
   }
   result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
+  if (kind === "activity" && systemActivity(intent) && (!intent.pkg || intent.pkg === "android")) {
+    const info = rt.make("android/content/pm/ResolveInfo"), activity: JActivityInfo = rt.make("android/content/pm/ActivityInfo");
+    const platform = packages.get("android");
+    activity.name = SYSTEM_ACTIVITY; activity.packageName = "android"; activity.processName = "system"; activity.exported = activity.enabled = 1;
+    activity.applicationInfo = platform ? recordAppInfo(platform) : null;
+    info.activityInfo = activity;
+    result.a.push(info);
+  }
   return result;
 }
 
@@ -956,9 +965,10 @@ function mkActivityInfo(cls: string, flags: number, owner = currentPackage): JAc
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
   a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
-  a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
-  const target = node && attrStr(node, "targetActivity");
-  a.targetActivity = target ? qualifyComponent(target, owner?.pkg ?? "") : null;
+  // the package parser stores both as fully qualified class names
+  const qualified = (name: string) => { const cls = node && attrStr(node, name); return cls ? qualifyComponent(cls, owner?.pkg ?? "") : null; };
+  a.parentActivityName = qualified("parentActivityName");
+  a.targetActivity = qualified("targetActivity");
   return a;
 }
 
@@ -1025,40 +1035,73 @@ rt.register({
     },
   },
 });
+// There is no launcher here to pin a shortcut, so the pinned set is always empty.
 class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
-async function dynamicShortcuts(list: unknown, pkg: string): Promise<Map<string, JShortcutInfo>> {
-  const shortcuts = new Map<string, JShortcutInfo>();
-  for (const info of await toJsArray(list)) {
-    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
-    const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
-  }
+const MAX_SHORTCUTS = 15;
+function ownShortcuts(manager: JShortcutManager): Map<string, JShortcutInfo> {
+  const pkg = appHost?.pkg ?? "";
+  let shortcuts = manager.packages.get(pkg);
+  if (!shortcuts) manager.packages.set(pkg, shortcuts = new Map());
   return shortcuts;
 }
+function commitShortcuts(manager: JShortcutManager, shortcuts: Iterable<JShortcutInfo>): number {
+  const next = new Map([...shortcuts].map((info) => [info.id, info]));
+  if (next.size > MAX_SHORTCUTS) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Max number of dynamic shortcuts exceeded");
+  manager.packages.set(appHost?.pkg ?? "", next);
+  return 1;
+}
+async function dynamicCopies(list: unknown): Promise<JShortcutInfo[]> {
+  const pkg = appHost?.pkg ?? "";
+  return Promise.all((await toJsArray(list)).map(async (info) => {
+    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
+    const copy = await copyShortcut(info); copy.dynamic = true; return copy;
+  }));
+}
+const removeShortcuts = driven(function* (this: JShortcutManager, ids: unknown): Gen {
+  const shortcuts = ownShortcuts(this);
+  for (const id of (yield toJsArray(ids)) as string[]) shortcuts.delete(id);
+});
+const shortcutList = driven(function* (manager: JShortcutManager): Gen {
+  const list = newArrayList(); list.a = yield Promise.all([...ownShortcuts(manager).values()].map(copyShortcut)); return list;
+});
 rt.register({
   name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
+  statics: { FLAG_MATCH_MANIFEST: 1, FLAG_MATCH_DYNAMIC: 2, FLAG_MATCH_PINNED: 4, FLAG_MATCH_CACHED: 8 },
   methods: {
     "setDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const pkg = appHost?.pkg ?? "";
-      this.packages.set(pkg, yield dynamicShortcuts(list, pkg)); return 1;
+      return commitShortcuts(this, yield dynamicCopies(list));
     }),
     "addDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const pkg = appHost?.pkg ?? "";
-      const additions = yield dynamicShortcuts(list, pkg);
-      const shortcuts = this.packages.get(pkg) ?? new Map<string, JShortcutInfo>();
-      for (const [id, info] of additions) shortcuts.set(id, info);
-      this.packages.set(pkg, shortcuts); return 1;
+      return commitShortcuts(this, [...ownShortcuts(this).values(), ...(yield dynamicCopies(list)) as JShortcutInfo[]]);
     }),
-    "getDynamicShortcuts()Ljava/util/List;": driven(function* (this: JShortcutManager): Gen {
-      const list = newArrayList(); list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
+    // API 30: a full set drops its lowest-ranked shortcut to make room
+    "pushDynamicShortcut(Landroid/content/pm/ShortcutInfo;)V": driven(function* (this: JShortcutManager, info: unknown): Gen {
+      const shortcuts = ownShortcuts(this), [copy] = (yield dynamicCopies(newArrayList([info]))) as JShortcutInfo[];
+      if (!shortcuts.has(copy.id) && shortcuts.size >= MAX_SHORTCUTS) {
+        const last = [...shortcuts.values()].reduce((a, b) => b.rank >= a.rank ? b : a);
+        shortcuts.delete(last.id);
+      }
+      shortcuts.set(copy.id, copy);
     }),
+    // updates only shortcuts that exist, leaving the rest of each one as it was
+    "updateShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
+      const shortcuts = ownShortcuts(this);
+      for (const copy of (yield dynamicCopies(list)) as JShortcutInfo[]) if (shortcuts.has(copy.id)) shortcuts.set(copy.id, copy);
+      return 1;
+    }),
+    "removeDynamicShortcuts(Ljava/util/List;)V": removeShortcuts,
+    "removeLongLivedShortcuts(Ljava/util/List;)V": removeShortcuts,
+    // disabling a shortcut removes its dynamic entry; only pinned ones would stay, disabled
+    "disableShortcuts(Ljava/util/List;)V": removeShortcuts,
+    "disableShortcuts(Ljava/util/List;Ljava/lang/CharSequence;)V": removeShortcuts,
+    "enableShortcuts(Ljava/util/List;)V": () => {},
+    "getDynamicShortcuts()Ljava/util/List;": function (this: JShortcutManager) { return shortcutList(this); },
+    "getShortcuts(I)Ljava/util/List;": function (this: JShortcutManager, flags: number) { return flags & 2 ? shortcutList(this) : newArrayList(); },
     "getPinnedShortcuts()Ljava/util/List;": () => newArrayList(),
-    "getShortcuts(I)Ljava/util/List;": driven(function* (this: JShortcutManager, flags: number): Gen {
-      const list = newArrayList();
-      if (flags & 2) list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut));
-      return list;
-    }),
-    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
-    "getMaxShortcutCountPerActivity()I": () => 15,
+    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { ownShortcuts(this).clear(); },
+    "requestPinShortcut(Landroid/content/pm/ShortcutInfo;Landroid/content/IntentSender;)Z": () => 0,
+    "createShortcutResultIntent(Landroid/content/pm/ShortcutInfo;)Landroid/content/Intent;": () => null,
+    "getMaxShortcutCountPerActivity()I": () => MAX_SHORTCUTS,
     "getIconMaxHeight()I": () => Math.round(device.dp(96)),
     "getIconMaxWidth()I": () => Math.round(device.dp(96)),
     "isRateLimitingActive()Z": () => 0,
@@ -1115,7 +1158,7 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   ai.deviceProtectedDataDir = `/data/user_de/0/${pkg}`;
-  fillManifestGameInfo(ai, app);
+  fillManifestAppInfo(ai, app);
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
@@ -1126,9 +1169,11 @@ function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resou
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }
-function fillManifestGameInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
+function fillManifestAppInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
   ai.category = app ? attr(app, "appCategory")?.data ?? -1 : -1;
   if (app && attr(app, "isGame")?.data) ai.flags |= FLAG_IS_GAME;
+  // the package parser makes a debuggable app profileable by the shell too
+  ai.profileableByShell = !!app && !!(attr(app, "debuggable")?.data || app.children.some((n) => n.name === "profileable" && attr(n, "shell")?.data));
 }
 function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
   info.sharedUserId = attrStr(root, "sharedUserId");

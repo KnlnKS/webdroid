@@ -40,7 +40,9 @@ rt.register({
 });
 
 // ── WebSettings: the app reads back what it wrote, so every setter has its value and getter
-const UA = "Mozilla/5.0 (Linux; Android 13; webdroid) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36";
+// the provider is AOSP's config_webview_packages default, versioned as the Chrome the UA names
+const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
+const UA = `Mozilla/5.0 (Linux; Android 13; webdroid) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${WEBVIEW_VERSION} Mobile Safari/537.36`;
 const pluginStates = mkEnumSet("android/webkit/WebSettings$PluginState", ["ON", "ON_DEMAND", "OFF"]);
 const layoutAlgs = mkEnumSet("android/webkit/WebSettings$LayoutAlgorithm", ["NORMAL", "SINGLE_COLUMN", "NARROW_COLUMNS", "TEXT_AUTOSIZING"]);
 mkEnumSet("android/webkit/WebSettings$RenderPriority", ["NORMAL", "HIGH", "LOW"]);
@@ -665,7 +667,14 @@ rt.register({
       "static disableWebView()V"),
     ...stubs(0, "isPrivateBrowsingEnabled()Z"),
     ...stubs(1, "requestFocusFromTouch()Z"),
-    "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": () => null,
+    "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": () => {
+      const pi = inst<{ packageName: string; versionName: string; applicationInfo: unknown }>("android/content/pm/PackageInfo");
+      const ai = inst<{ packageName: string; processName: string; flags: number }>("android/content/pm/ApplicationInfo");
+      pi.packageName = ai.packageName = ai.processName = WEBVIEW_PACKAGE;
+      ai.flags = 1; // FLAG_SYSTEM
+      pi.versionName = WEBVIEW_VERSION; pi.applicationInfo = ai;
+      return pi;
+    },
     "static getWebViewClassLoader()Ljava/lang/ClassLoader;": () => rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")](),
   },
 });

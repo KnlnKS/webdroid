@@ -336,11 +336,13 @@ describe("text-platform", () => {
     expect(await vcall(rules, "select", "(D)Ljava/lang/String;", 2)).toBe("other");
   });
 
-  test("storage stats is a known unavailable device service", async () => {
+  test("storage stats resolves by class to its named service", async () => {
     const context = await newObj("android/content/Context");
     const cls = rt.classFor("android/app/usage/StorageStatsManager");
     expect(await vcall(context, "getSystemServiceName", "(Ljava/lang/Class;)Ljava/lang/String;", cls)).toBe("storagestats");
-    expect(await vcall(context, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", cls)).toBeNull();
+    const manager = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "storagestats");
+    expect(manager).not.toBeNull();
+    expect(await vcall(context, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", cls)).toBe(manager);
   });
 });
 

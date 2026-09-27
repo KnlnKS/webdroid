@@ -10,7 +10,8 @@ import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
-import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
+import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, type JLocaleList } from "../android/resnative";
+import { localeTag } from "../jvm/natives/jvalues";
 import { setAppHost, jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
@@ -220,12 +221,15 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     recreateActivity: (a) => { recreateActivity(a); },
     setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
     setApplicationNightMode: (mode) => { setApplicationNightMode(pkg, mode); },
+    setApplicationLocales: (locales) => { setApplicationLocales(pkg, locales); },
     currentActivity: () => booted?.stack.at(-1) ?? null,
     activities: () => booted?.stack.slice() ?? [],
     finishTask: (taskId) => { void finishTask(taskId, true); },
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
   };
   setAppHost(host);
+  const savedLocales = getPrefs(pkg, "__system_locales").map.get("tags");
+  if (typeof savedLocales === "string" && savedLocales) applyApplicationLocales(await localesFromTags(savedLocales));
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
@@ -430,18 +434,27 @@ function changeActivityOrientation(act: JActivity, request: number): void {
   } else recreateActivity(act);
 }
 
-/** A night-mode change reaches the top activity as any configuration change does: through
- *  onConfigurationChanged if it declared uiMode, through a relaunch otherwise. */
-function applyNightMode(night: boolean): void {
-  if (!setDeviceNight(night) || !booted) return;
+/** A configuration change reaches the top activity through onConfigurationChanged if it
+ *  declared every changed bit, through a relaunch otherwise. */
+function applyConfigChange(bits: number): void {
+  if (!booted) return;
   requestLayoutAll();
   const act = booted.stack.at(-1);
   if (!act) return;
-  if (activityHandlesConfig(act, CONFIG_UI_MODE)) {
+  if (activityHandlesConfig(act, bits)) {
     void onMain(async () => {
       await vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration());
     }).catch(reportUncaught);
   } else recreateActivity(act);
+}
+function applyNightMode(night: boolean): void {
+  if (setDeviceNight(night)) applyConfigChange(CONFIG_UI_MODE);
+}
+function setApplicationLocales(pkg: string, locales: JLocaleList): void {
+  const prefs = getPrefs(pkg, "__system_locales");
+  prefs.map.set("tags", locales.values.map(localeTag).join(","));
+  prefs.persist();
+  if (applyApplicationLocales(locales)) applyConfigChange(0x0004 | 0x2000); // CONFIG_LOCALE | CONFIG_LAYOUT_DIRECTION
 }
 function setApplicationNightMode(pkg: string, mode: number): void {
   const prefs = getPrefs(pkg, "__system_uimode");

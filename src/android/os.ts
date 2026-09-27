@@ -3,8 +3,8 @@ import { processEnv } from "../shell/environment";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import type { JMessenger } from "./messenger";
-import { procIdentity, processTid, sysconf } from "../shell/procfs";
-import { parcelCreator, type JParcel } from "./parcel";
+import { procIdentity, processTid, sysconf, SYSCONF } from "../shell/procfs";
+import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
@@ -14,16 +14,17 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, vcallUncaught } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
-import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
+import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor, type JFile } from "../jvm/natives/jio";
+import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdWriteBack } from "../native/stdio";
-import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { newArrayList, newStringSet, toJsArray } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { unavailableClock } from "../jvm/natives/jtime";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
@@ -348,7 +349,7 @@ rt.register({
     MODEL: "webdroid", MANUFACTURER: "webdroid", BRAND: "google", DEVICE: "webdroid",
     PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0", SOC_MANUFACTURER: "unknown", SOC_MODEL: "unknown", SKU: "unknown", ODM_SKU: "unknown",
     SERIAL: "unknown", RADIO: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
-    BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n,
+    BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n, UNKNOWN: "unknown",
     SUPPORTED_ABIS: jarray([...abi64, ...abi32], "Ljava/lang/String;"),
     SUPPORTED_32_BIT_ABIS: abi32,
     SUPPORTED_64_BIT_ABIS: abi64,
@@ -360,7 +361,10 @@ rt.register({
 class JBuildVersion extends JObj {}
 rt.register({
   name: "android/os/Build$VERSION", ctor: JBuildVersion,
-  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0, MEDIA_PERFORMANCE_CLASS: 0 },
+  // a release build: the codename is REL, so every RELEASE_OR_* name reads the release
+  statics: { SDK_INT: device.sdk, RELEASE: device.release, RELEASE_OR_CODENAME: device.release, RELEASE_OR_PREVIEW_DISPLAY: device.release,
+    CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0,
+    PREVIEW_SDK_FINGERPRINT: "REL", DEVICE_INITIAL_SDK_INT: device.sdk, MEDIA_PERFORMANCE_CLASS: 0 },
 });
 rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {},
   statics: Object.fromEntries([
@@ -503,8 +507,12 @@ rt.register({
     }
     rt.register({ name, ctor: C, methods: m });
   };
-  rt.register({ name: "android/os/StrictMode$ThreadPolicy", ctor: class extends JObj {} });
-  rt.register({ name: "android/os/StrictMode$VmPolicy", ctor: class extends JObj {} });
+  // Nothing is enforced, so a policy is only what was last set, and LAX until then.
+  const THREAD = "android/os/StrictMode$ThreadPolicy", VM = "android/os/StrictMode$VmPolicy";
+  const lax: Record<string, JObj> = {}, current: Record<string, unknown> = {};
+  const laxPolicy = (cls: string) => lax[cls] ??= rt.make(cls);
+  const policy = (cls: string) => () => current[cls] ?? laxPolicy(cls);
+  for (const cls of [THREAD, VM]) rt.register({ name: cls, ctor: class extends JObj {}, statics: { get LAX() { return laxPolicy(cls); } } });
   // every detect*/permit*/penalty* of the API-34 builders: nothing is enforced, so each returns the builder
   const TB = "Landroid/os/StrictMode$ThreadPolicy$Builder;", VB = "Landroid/os/StrictMode$VmPolicy$Builder;";
   const flags = (ret: string, kinds: string[], extra: string[]) => [...kinds.map((k) => `${k}()${ret}`), ...extra.map((e) => e + ret)];
@@ -519,16 +527,15 @@ rt.register({
       ["permitNonSdkApiUsage()", "permitUnsafeIntentLaunch()", "penaltyDeath()", "penaltyDeathOnCleartextNetwork()", "penaltyDeathOnFileUriExposure()", "penaltyDropBox()", "penaltyLog()",
         "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnVmViolationListener;)", "setClassInstanceLimit(Ljava/lang/Class;I)"]),
     "android/os/StrictMode$VmPolicy");
-  const threadPolicy = () => rt.make("android/os/StrictMode$ThreadPolicy");
   rt.register({
     name: "android/os/StrictMode", ctor: class extends JObj {},
     methods: {
-      ...noops("static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V",
-        "static noteSlowCall(Ljava/lang/String;)V", "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V"),
-      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": () => rt.make("android/os/StrictMode$VmPolicy"),
-      "static getThreadPolicy()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
-      "static allowThreadDiskReads()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
-      "static allowThreadDiskWrites()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
+      ...noops("static noteSlowCall(Ljava/lang/String;)V"),
+      "static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V": (p: unknown) => { current[THREAD] = p; },
+      "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V": (p: unknown) => { current[VM] = p; },
+      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": policy(VM),
+      // the allow* calls hand back the policy to restore, which nothing here changed
+      ...Object.fromEntries(["getThreadPolicy", "allowThreadDiskReads", "allowThreadDiskWrites"].map((m) => [`static ${m}()L${THREAD};`, policy(THREAD)])),
     },
   });
 }
@@ -541,23 +548,46 @@ export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
-const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | typeof JDouble | typeof JBool | typeof JChar> = {
-  I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool, C: JChar,
-};
+const bundleBoxes: Record<string, new () => { v: unknown }> = { I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool, C: JChar, B: JByte, S: JShort };
 export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
   if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
   return value instanceof bundleBoxes[descriptor] ? value.v : fallback;
 }
+/** What put<Type> stores: I and J stay bare (their JS type names them); the other primitives
+ *  keep their declared width in a box, as a Parcel round trip will too. */
 export function bundleBox(value: unknown, descriptor: string): unknown {
-  if (typeof value !== "number") return value;
-  if (descriptor === "C") return box(JChar, value);
-  if (descriptor === "Z") return box(JBool, value);
-  if (descriptor === "F") return box(JFloat, value);
-  if (descriptor === "D") return box(JDouble, value);
-  return value;
+  return typeof value === "number" && descriptor !== "I" && descriptor.length === 1 ? box(bundleBoxes[descriptor], value) : value;
 }
+export function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallback: unknown): unknown {
+  const v = b.map.get(k);
+  return descriptor.length === 1 ? bundlePrimitive(v, descriptor, fallback) : v ?? fallback;
+}
+/** Every typed value a Bundle carries, by accessor stem: Bundle get/put<stem>, and for the ones
+ *  Intent carries, get<stem>Extra with putExtra (put<stem>Extra for the ArrayLists). */
+export const BUNDLE_TYPES: readonly (readonly [string, string])[] = [
+  ...["Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"].flatMap((t, i) => [[t, "ZBCSIJFD"[i]], [t + "Array", "[" + "ZBCSIJFD"[i]]] as const),
+  ["String", "Ljava/lang/String;"], ["CharSequence", "Ljava/lang/CharSequence;"], ["Parcelable", "Landroid/os/Parcelable;"],
+  ["Serializable", "Ljava/io/Serializable;"], ["Bundle", "Landroid/os/Bundle;"], ["IBinder", "Landroid/os/IBinder;"],
+  ["StringArray", "[Ljava/lang/String;"], ["CharSequenceArray", "[Ljava/lang/CharSequence;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
+  ...["Integer", "String", "CharSequence", "Parcelable"].map((t) => [t + "ArrayList", "Ljava/util/ArrayList;"] as const),
+  // Bundle only
+  ["Binder", "Landroid/os/IBinder;"], ["PersistableBundle", "Landroid/os/PersistableBundle;"], ["Size", "Landroid/util/Size;"],
+  ["SizeF", "Landroid/util/SizeF;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"],
+];
+export const INTENT_TYPES = BUNDLE_TYPES.slice(0, BUNDLE_TYPES.findIndex(([t]) => t === "Binder"));
+/** API 33's class-checked getters, [stem, return]. The class narrows a single value, which a
+ *  mismatch reads as null; arrays and lists hold what was put. */
+export const BUNDLE_TYPED = [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/io/Serializable;"],
+  ["ParcelableArray", "[Ljava/lang/Object;"], ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
+export function bundleTyped(b: JBaseBundle, k: string, cls: unknown, single: boolean): unknown {
+  const v = boxObject(b.map.get(k) ?? null);
+  return single && v !== null && !vcall(cls, "isInstance", "(Ljava/lang/Object;)Z", v) ? null : v;
+}
+function copyBundle(this: JBaseBundle, b: JBaseBundle | null) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } }
+function putAll(this: JBaseBundle, b: JBaseBundle) { for (const [k, v] of b.map) this.map.set(k, v); }
 const bundleMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } },
+  "<init>(Landroid/os/Bundle;)V": copyBundle,
+  "<init>(Landroid/os/PersistableBundle;)V": copyBundle,
   "<init>(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
   "clone()Ljava/lang/Object;": function (this: JBundle) {
     const copy = new (this.constructor as typeof JBundle)();
@@ -567,6 +597,9 @@ const bundleMethods: NativeSpec["methods"] = {
   ...noops("<init>()V", "<init>(I)V"),
   ...stubs(0, "describeContents()I"),
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBundle, parcel: JParcel): Gen { yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this); }),
+  "readFromParcel(Landroid/os/Parcel;)V": driven(function* (this: JBundle, parcel: JParcel): Gen {
+    this.map = (yield vcall(parcel, "readBundle", "(Ljava/lang/ClassLoader;)Landroid/os/Bundle;", this.loader))?.map ?? new Map();
+  }),
   "size()I": function (this: JBundle) { return this.map.size; },
   // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
   // caller that reaches for Object then calls toString()/instanceof Number needs the box.
@@ -575,51 +608,26 @@ const bundleMethods: NativeSpec["methods"] = {
   "containsKey(Ljava/lang/String;)Z": function (this: JBundle, k: string) { return this.map.has(k) ? 1 : 0; },
   "remove(Ljava/lang/String;)V": function (this: JBundle, k: string) { this.map.delete(k); },
   "clear()V": function (this: JBundle) { this.map.clear(); },
-  "keySet()Ljava/util/Set;": function (this: JBundle) {
-    return newStringSet(this.map.keys());
-  },
-  "putAll(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { for (const [k, v] of b.map) this.map.set(k, v); },
+  "keySet()Ljava/util/Set;": function (this: JBundle) { return newStringSet(this.map.keys()); },
+  "putAll(Landroid/os/Bundle;)V": putAll,
+  "putAll(Landroid/os/PersistableBundle;)V": putAll,
   "setClassLoader(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
   "getClassLoader()Ljava/lang/ClassLoader;": function (this: JBundle) { return this.loader; },
-  "getParcelable(Ljava/lang/String;)Landroid/os/Parcelable;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
-  "putParcelable(Ljava/lang/String;Landroid/os/Parcelable;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
   "getSerializable(Ljava/lang/String;)Ljava/io/Serializable;": function (this: JBundle, k: string) { return boxObject(this.map.get(k) ?? null); },
-  "putSerializable(Ljava/lang/String;Ljava/io/Serializable;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
-  "getStringArrayList(Ljava/lang/String;)Ljava/util/ArrayList;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
-  "putStringArrayList(Ljava/lang/String;Ljava/util/ArrayList;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
-  "getParcelableArrayList(Ljava/lang/String;)Ljava/util/ArrayList;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
-  "putParcelableArrayList(Ljava/lang/String;Ljava/util/ArrayList;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
-  "getBundle(Ljava/lang/String;)Landroid/os/Bundle;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
-  "putBundle(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
 };
-for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Byte", "B"], ["Short", "S"], ["Boolean", "Z"], ["Char", "C"],
-  ["Float", "F"], ["Double", "D"], ["CharSequence", "Ljava/lang/CharSequence;"], ["ByteArray", "[B"],
-  ["IntArray", "[I"], ["LongArray", "[J"], ["StringArray", "[Ljava/lang/String;"],
-  ["IntegerArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
-  ["SparseParcelableArray", "Landroid/util/SparseArray;"], ["Binder", "Landroid/os/IBinder;"]] as const) {
+for (const [t, d] of BUNDLE_TYPES) {
+  const zero = d.length > 1 ? null : d === "J" ? 0n : 0;
   bundleMethods[`put${t}(Ljava/lang/String;${d})V`] = function (this: JBundle, k: string, v: unknown) { this.map.set(k, bundleBox(v, d)); };
-  bundleMethods[`get${t}(Ljava/lang/String;)${d}`] = function (this: JBundle, k: string) {
-    const v = this.map.get(k);
-    if (d.length === 1) return bundlePrimitive(v, d, d === "J" ? 0n : 0);
-    if (v !== undefined) return v;
-    return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
-  };
-  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D" || d === "Ljava/lang/String;" || d === "Ljava/lang/CharSequence;") {
-    bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
-      const v = this.map.get(k);
-      if (d.length === 1) return bundlePrimitive(v, d, dflt);
-      return v !== undefined ? v : dflt;
-    };
+  bundleMethods[`get${t}(Ljava/lang/String;)${d}`] ??= function (this: JBundle, k: string) { return bundleGet(this, k, d, zero); };
+  // AOSP boxes getByte's default; the reference types with a default overload are the two strings
+  if (d === "B") bundleMethods["getByte(Ljava/lang/String;B)Ljava/lang/Byte;"] = function (this: JBundle, k: string, dv: number) { return box(JByte, bundleGet(this, k, d, dv) as number); };
+  else if (zero !== null || t === "String" || t === "CharSequence") {
+    bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dv: unknown) { return bundleGet(this, k, d, dv); };
   }
 }
-// The API 33 type-checked getters. The class argument only narrows the return type, so they read
-// the same slot; androidx reaches for them from SDK_INT 34 up.
-for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/lang/Object;"],
-  ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Ljava/lang/Object;"],
-  ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const) {
-  bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string) {
-    return boxObject(this.map.get(k) ?? null);
-  };
+for (const [t, d] of BUNDLE_TYPED) {
+  const single = d === "Ljava/lang/Object;" || d === "Ljava/io/Serializable;";
+  bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string, cls: unknown) { return bundleTyped(this, k, cls, single); };
 }
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
@@ -806,6 +814,7 @@ rt.register({
   statics: {
     MODE_READ_ONLY: 0x10000000, MODE_WRITE_ONLY: 0x20000000, MODE_READ_WRITE: 0x30000000,
     MODE_CREATE: 0x08000000, MODE_TRUNCATE: 0x04000000, MODE_APPEND: 0x02000000,
+    get CREATOR() { return parcelCreator("android/os/ParcelFileDescriptor", async (parcel) => readObject(parcel)); },
   },
   methods: {
     "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: { path: string }, mode: number): Gen {
@@ -854,6 +863,13 @@ rt.register({
       return p;
     },
     "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.backing ? vfs.stat(this.backing.path)?.size ?? 0 : this.bytes.length); },
+    // A parcel carries a duplicate of the descriptor, as the kernel does; it stays within this
+    // process, since binder IPC here moves no descriptors (provider files travel as bytes).
+    "describeContents()I": () => 1, // CONTENTS_FILE_DESCRIPTOR
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JParcelFileDescriptor, parcel: JParcel, flags: number): Gen {
+      writeObject(parcel, yield vcall(this, "dup", "()Landroid/os/ParcelFileDescriptor;"));
+      if (flags & 1) yield vcall(this, "close", "()V"); // PARCELABLE_WRITE_RETURN_VALUE
+    }),
     "close()V": driven(function* (this: JParcelFileDescriptor): Gen {
       if (this.closed) return;
       if (this.fd >= 0) javaCloseFd(this.fd);
@@ -925,12 +941,17 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
 } });
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
-const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
-const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
+export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   const s = new JStatFs();
   yield statFs.call(s, "/data");
   return s;
 });
+// the emulated primary volume that is shared storage: it has no UUID of its own, and its
+// storage UUID is the internal one it lives on
+const SHARED = "/sdcard";
+let primary: JObj | null = null;
+const primaryVolume = () => primary ??= rt.make("android/os/storage/StorageVolume");
 rt.register({
   name: "android/os/storage/StorageManager", ctor: class extends JObj {},
   statics: { get UUID_DEFAULT() { return uuidDefault(); } },
@@ -941,9 +962,26 @@ rt.register({
     "getCacheSizeBytes(Ljava/util/UUID;)J": () => 0n,
     "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
     "isEncrypted(Ljava/io/File;)Z": () => 0,
-    "getStorageVolumes()Ljava/util/List;": () => newArrayList(),
-    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": () => null,
-    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": () => null,
+    "getStorageVolumes()Ljava/util/List;": () => newArrayList([primaryVolume()]),
+    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": primaryVolume,
+    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": (file: JFile | null) => {
+      if (!file) rt.npe();
+      return file!.path === SHARED || file!.path.startsWith(SHARED + "/") ? primaryVolume() : null;
+    },
+  },
+});
+rt.register({
+  name: "android/os/storage/StorageVolume", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getDirectory()Ljava/io/File;": () => mkFile(SHARED),
+    "getDescription(Landroid/content/Context;)Ljava/lang/String;": () => frameworkString("storage_internal") ?? "",
+    "getState()Ljava/lang/String;": () => "mounted",
+    "getMediaStoreVolumeName()Ljava/lang/String;": () => "external_primary",
+    "getStorageUuid()Ljava/util/UUID;": () => uuidDefault(),
+    "getUuid()Ljava/lang/String;": () => null,
+    ...stubs(1, "isPrimary()Z", "isEmulated()Z"),
+    ...stubs(0, "isRemovable()Z", "describeContents()I"),
+    "createOpenDocumentTreeIntent()Landroid/content/Intent;": () => newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.OPEN_DOCUMENT_TREE"),
   },
 });
 rt.register({
@@ -1156,20 +1194,64 @@ rt.register({
     "unregisterAll()V": function (this: JObservable) { this.observers.length = 0; },
   },
 });
+const notifyObservers = driven(function* (observable: JObservable, name: string, desc: string, ...args: unknown[]): Gen {
+  for (const o of [...observable.observers]) yield vcall(o, name, desc, ...args);
+});
 rt.register({
   name: "android/database/DataSetObservable", ctor: class extends JObservable {}, sup: "android/database/Observable",
   methods: {
     "<init>()V": function () {},
-    "notifyChanged()V": driven(function* (this: JObservable): Gen {
+    "notifyChanged()V": function (this: JObservable) { return notifyObservers(this, "onChanged", "()V"); },
+    "notifyInvalidated()V": function (this: JObservable) { return notifyObservers(this, "onInvalidated", "()V"); },
+  },
+});
+rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V", "onChanged()V", "onInvalidated()V") } });
+rt.register({
+  name: "android/database/ContentObservable", ctor: class extends JObservable {}, sup: "android/database/Observable",
+  methods: {
+    "<init>()V": function () {},
+    "registerObserver(Landroid/database/ContentObserver;)V": function (this: JObservable, o: unknown) {
+      return vcall(this, "registerObserver", "(Ljava/lang/Object;)V", o);
+    },
+    "dispatchChange(Z)V": function (this: JObservable, self: number) {
+      return vcall(this, "dispatchChange", "(ZLandroid/net/Uri;)V", self, null);
+    },
+    "dispatchChange(ZLandroid/net/Uri;)V": driven(function* (this: JObservable, self: number, uri: unknown): Gen {
       for (const o of [...this.observers]) {
-        try { yield vcall(o, "onChanged", "()V"); } catch (e) { console.warn("[dataset]", e); }
+        if (!self || (yield vcall(o, "deliverSelfNotifications", "()Z"))) yield vcall(o, "dispatchChange", "(ZLandroid/net/Uri;)V", self, uri);
       }
     }),
-    "notifyInvalidated()V": driven(function* (this: JObservable): Gen {
-      for (const o of [...this.observers]) {
-        try { yield vcall(o, "onInvalidated", "()V"); } catch (e) { console.warn("[dataset]", e); }
-      }
+    "notifyChange(Z)V": function (this: JObservable, self: number) { return notifyObservers(this, "onChange", "(ZLandroid/net/Uri;)V", self, null); },
+  },
+});
+// AOSP's dispatch chain: every dispatchChange overload lands on the Collection one, which runs
+// onChange on the observer's Handler (inline without one); each onChange overload falls back
+// to the next older one, so an override at any API level sees the change.
+class JContentObserver extends JObj { handler: JHandler | null = null; }
+const ON_CHANGE_URI = "(ZLandroid/net/Uri;I)V", URIS = "(ZLjava/util/Collection;I)V";
+rt.register({
+  name: "android/database/ContentObserver", ctor: JContentObserver,
+  methods: {
+    "<init>(Landroid/os/Handler;)V": function (this: JContentObserver, h: JHandler | null) { this.handler = h; },
+    "deliverSelfNotifications()Z": () => 0,
+    "onChange(Z)V": () => {},
+    "onChange(ZLandroid/net/Uri;)V": function (this: JObj, self: number) { return vcall(this, "onChange", "(Z)V", self); },
+    "onChange(ZLandroid/net/Uri;I)V": function (this: JObj, self: number, uri: unknown) { return vcall(this, "onChange", "(ZLandroid/net/Uri;)V", self, uri); },
+    "onChange(ZLjava/util/Collection;I)V": driven(function* (this: JObj, self: number, uris: unknown, flags: number): Gen {
+      for (const uri of (yield toJsArray(uris)) as unknown[]) yield vcall(this, "onChange", ON_CHANGE_URI, self, uri, flags);
     }),
+    "dispatchChange(Z)V": function (this: JObj, self: number) { return vcall(this, "dispatchChange", ON_CHANGE_URI, self, null, 0); },
+    "dispatchChange(ZLandroid/net/Uri;)V": function (this: JObj, self: number, uri: unknown) { return vcall(this, "dispatchChange", ON_CHANGE_URI, self, uri, 0); },
+    "dispatchChange(ZLandroid/net/Uri;I)V": function (this: JObj, self: number, uri: unknown, flags: number) {
+      const uris = newArrayList(); uris.a.push(uri);
+      return vcall(this, "dispatchChange", URIS, self, uris, flags);
+    },
+    "dispatchChange(ZLjava/util/Collection;I)V": function (this: JContentObserver, self: number, uris: unknown, flags: number) {
+      const change = () => vcall(this, "onChange", URIS, self, uris, flags);
+      if (!this.handler) return change();
+      const runnable: JFnRunnable = rt.make("webdroid/FnRunnable"); runnable.fn = change;
+      this.handler.post(runnable, 0);
+    },
   },
 });
 
@@ -1340,8 +1422,7 @@ rt.register({
   },
 });
 // android.system.OsConstants: static int fields naming POSIX/bionic constants.
-// Only the fields real APKs have actually asked for are implemented (checked via
-// scripts/audit.ts-style field scan of the dex) — not the full table AOSP ships.
+// Only the fields real APKs have asked for are implemented, not the full table AOSP ships.
 rt.register({
   name: "android/system/OsConstants", ctor: class extends JObj {},
   statics: {
@@ -1354,6 +1435,7 @@ rt.register({
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,
     S_IFMT: 0o170000, S_IFREG: 0o100000, S_IFDIR: 0o40000,
+    ...Object.fromEntries(Object.entries(SYSCONF).map(([name, [value]]) => [name, value])),
   },
 });
 

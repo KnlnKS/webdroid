@@ -159,11 +159,11 @@ export class Resources {
 
   /** the archive path a file resource names, the package that owns it, and the id the
    *  reference chain ended on — everything but the bytes, which cost an inflate */
-  pathOf(resId: number, depth = 0, selected?: { density: number }): { path: string; id: number; arsc: Arsc } | null {
+  pathOf(resId: number, depth = 0, selected?: { density: number }, density?: number): { path: string; id: number; arsc: Arsc } | null {
     const a = this.tbl(resId);
-    const e = a?.entry(resId, selected);
+    const e = a?.entry(resId, selected, density);
     if (!e?.value) return null;
-    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected);
+    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected, density);
     if (e.value.type !== TV.STRING) return null;
     return { path: a!.values.get(e.value.data), id: resId, arsc: a! };
   }
@@ -403,6 +403,11 @@ export function resolveStyleValue(res: Resources, theme: JTheme | null | undefin
 
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
+/** a com.android.internal string, as the platform's own UI labels things */
+export function frameworkString(name: string): string | null {
+  const res = currentResources(), id = res?.idFor("string", name, "android");
+  return id ? rvString(res!, res!.ref(id)) : null;
+}
 export function bagStrings(res: Resources, id: number): string[] {
   const bag = res.bag(id);
   return bag ? [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "") : [];
