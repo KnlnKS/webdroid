@@ -3,7 +3,7 @@
 // (each member a FontFace with its own weight/style, which is exactly how CSS selects within a
 // family); a Typeface names that family (plus fallbacks) with a weight and slant.
 
-import { rt, JObj, type NativeSpec, fieldGetters, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, fieldGetters } from "../jvm/runtime";
 import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
@@ -75,8 +75,7 @@ rt.register({
       if (s !== UPRIGHT && s !== ITALIC) throw rt.mkThrowable("java/lang/IllegalArgumentException", "slant value must be FONT_SLANT_UPRIGHT or FONT_SLANT_ITALIC");
       this.weight = w; this.slant = s;
     },
-    "getWeight()I": function (this: JFontStyle) { return this.weight; },
-    "getSlant()I": function (this: JFontStyle) { return this.slant; },
+    ...fieldGetters({ "getWeight()I": "weight", "getSlant()I": "slant" }),
     "equals(Ljava/lang/Object;)Z": function (this: JFontStyle, o: unknown) { return o instanceof JFontStyle && o.weight === this.weight && o.slant === this.slant ? 1 : 0; },
     "hashCode()I": function (this: JFontStyle) { return this.weight * 31 + this.slant; },
     "toString()Ljava/lang/String;": function (this: JFontStyle) { return `FontStyle { weight=${this.weight}, slant=${this.slant} }`; },
@@ -104,8 +103,7 @@ rt.register({
   name: "android/graphics/fonts/FontVariationAxis", ctor: JFontVariationAxis,
   methods: {
     "<init>(Ljava/lang/String;F)V": function (this: JFontVariationAxis, tag: string, v: number) { const a = mkAxis(tag, v); this.tag = a.tag; this.value = a.value; },
-    "getTag()Ljava/lang/String;": function (this: JFontVariationAxis) { return this.tag; },
-    "getStyleValue()F": function (this: JFontVariationAxis) { return this.value; },
+    ...fieldGetters({ "getTag()Ljava/lang/String;": "tag", "getStyleValue()F": "value" }),
     "getOpenTypeTagValue()I": function (this: JFontVariationAxis) {
       return ((this.tag.charCodeAt(0) << 24) | (this.tag.charCodeAt(1) << 16) | (this.tag.charCodeAt(2) << 8) | this.tag.charCodeAt(3)) | 0;
     },
@@ -168,6 +166,9 @@ class JFontBuilder extends JObj {
 function fromBytes(this: JFontBuilder, b: Uint8Array | null, what: string) {
   if (b) this.bytes = b; else this.err = what;
 }
+function fromAsset(this: JFontBuilder, am: JAssetManager, p: string) {
+  fromBytes.call(this, am.host.zip["assets/" + p] ?? null, "Failed to read asset " + p);
+}
 function resourceBytes(res: Resources, id: number): Uint8Array | null {
   return res.fileOf(id)?.bytes ?? null;
 }
@@ -192,12 +193,8 @@ rt.register({
       const p = pfd?.path ?? pfd?.fd?.path;
       fromBytes.call(this, p ? vfs.read(p) : null, "Failed to read file descriptor");
     },
-    "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JFontBuilder, am: JAssetManager, p: string) {
-      fromBytes.call(this, am.host.zip["assets/" + p] ?? null, "Failed to read asset " + p);
-    },
-    "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": function (this: JFontBuilder, am: JAssetManager, p: string) {
-      fromBytes.call(this, am.host.zip["assets/" + p] ?? null, "Failed to read asset " + p);
-    },
+    "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": fromAsset,
+    "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": fromAsset,
     "<init>(Ljava/nio/ByteBuffer;)V": function (this: JFontBuilder, bb: JBuffer) {
       const v = bufferView(bb);
       this.bytes = new Uint8Array(v.ab, v.byteOffset, bb.lim);
@@ -247,6 +244,14 @@ rt.register({
 });
 
 class JFontFamily extends JObj { fonts: JFont[] = []; css = ""; }
+/** a family of these faces under a fresh CSS family name, every face loaded before it is used */
+async function mkFamily(fonts: JFont[]): Promise<JFontFamily> {
+  const fam = new JFontFamily();
+  fam.fonts = fonts;
+  fam.css = "wd-font-" + (++fontSeq);
+  for (const f of fonts) await registerFace(f, fam.css);
+  return fam;
+}
 class JFontFamilyBuilder extends JObj { fonts: JFont[] = []; }
 rt.register({
   name: "android/graphics/fonts/FontFamily$Builder", ctor: JFontFamilyBuilder,
@@ -264,13 +269,7 @@ rt.register({
       this.fonts.push(f);
       return this;
     },
-    "build()Landroid/graphics/fonts/FontFamily;": driven(function* (this: JFontFamilyBuilder): Gen {
-      const fam = new JFontFamily();
-      fam.fonts = this.fonts.slice();
-      fam.css = "wd-font-" + (++fontSeq);
-      for (const f of fam.fonts) yield registerFace(f, fam.css);
-      return fam;
-    }),
+    "build()Landroid/graphics/fonts/FontFamily;": function (this: JFontFamilyBuilder) { return mkFamily(this.fonts.slice()); },
   },
 });
 rt.register({
@@ -332,9 +331,7 @@ const tfbMethods: NonNullable<NativeSpec["methods"]> = {
   "setFontVariationSettings([Landroid/graphics/fonts/FontVariationAxis;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, a: JFontVariationAxis[] | null) { this.axes = a ? [...a] : null; return this; },
   "setFallback(Ljava/lang/String;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, s: string | null) { this.fallback = s; return this; },
   // AOSP returns null when the font cannot be read (rather than throwing)
-  "build()Landroid/graphics/Typeface;": function (this: JTypefaceBuilder) {
-    return buildTypeface(this.bytes, this);
-  },
+  "build()Landroid/graphics/Typeface;": function (this: JTypefaceBuilder) { return buildTypeface(this.bytes, this); },
 };
 /** font bytes → a registered Typeface, null when they are not a font this can read */
 async function buildTypeface(bytes: Uint8Array | null, o: Partial<JTypefaceBuilder> = {}): Promise<JTypeface | null> {
@@ -345,11 +342,7 @@ async function buildTypeface(bytes: Uint8Array | null, o: Partial<JTypefaceBuild
   const f = new JFont();
   f.bytes = bytes; f.ttcIndex = ttcIndex; f.axes = axes;
   f.style = mkFontStyle(weight !== -1 ? weight : st.weight || 400, italic !== -1 ? italic : st.italic ? ITALIC : UPRIGHT);
-  const fam = new JFontFamily();
-  fam.fonts = [f];
-  fam.css = "wd-font-" + (++fontSeq);
-  await registerFace(f, fam.css);
-  return typefaceOver([fam], fallback, f.style);
+  return typefaceOver([await mkFamily([f])], fallback, f.style);
 }
 setTypefaceLoader(buildTypeface);
 rt.register({ name: "android/graphics/Typeface$Builder", ctor: JTypefaceBuilder, methods: tfbMethods });
@@ -394,10 +387,7 @@ async function loadFontResource(res: Resources, id: number): Promise<JTypeface |
     }
   } else add(res.zip[path] ?? null, 0, -1, id);
   if (!fonts.length) return null;
-  const fam = new JFontFamily();
-  fam.fonts = fonts;
-  fam.css = "wd-font-" + (++fontSeq);
-  for (const f of fonts) await registerFace(f, fam.css);
+  const fam = await mkFamily(fonts);
   const regular = fonts.find((f) => f.style.weight === 400 && f.style.slant === UPRIGHT) ?? fonts[0];
   return typefaceOver([fam], null, regular.style);
 }
