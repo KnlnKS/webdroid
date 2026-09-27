@@ -1443,6 +1443,7 @@ rt.register({
     [`static ofEpochSecond(JJ)L${T}Instant;`]: (s: bigint, ns: bigint) => { addUnits(Number(s), 0, Number(ns), U.NANOS); return mkInstant(outS, outNs); },
     "toEpochMilli()J": function (this: JInstant) { return BigInt(this.s) * 1000n + BigInt(floorDiv(this.ns, 1e6)); },
     "getEpochSecond()J": function (this: JInstant) { return BigInt(this.s); },
+    "getNano()I": function (this: JInstant) { return this.ns; },
     [`atOffset(L${T}ZoneOffset;)L${T}OffsetDateTime;`]: function (this: JInstant, o: JZoneOffset) { return odtOfEpoch(this.s, this.ns, o ?? npe("offset")); },
     [`atZone(L${T}ZoneId;)L${T}ZonedDateTime;`]: function (this: JInstant, z: JZoneId) { return zdtOfEpoch(this.s, this.ns, z ?? npe("zone")); },
     ...adjustIntoMethod,
