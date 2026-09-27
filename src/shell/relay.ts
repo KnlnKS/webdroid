@@ -48,30 +48,27 @@ export function dialName(host: string): string {
   return (numeric && syntheticHost(numeric)) || host;
 }
 
-const relayUrl = (host: string, port: number, tls: boolean, alpn: string[]) => {
-  const page = typeof location === "undefined" ? { protocol: "http:", host: "localhost" } : location;
-  return `${page.protocol === "https:" ? "wss" : "ws"}://${page.host}` +
-    `/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
-};
+const pageOrigin = () => typeof location === "undefined" ? "http://localhost" : `${location.protocol}//${location.host}`;
+const relayUrl = (host: string, port: number, tls: boolean, alpn: string[]) =>
+  `${pageOrigin().replace(/^http/, "ws")}/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
 
 export class DatagramRelay {
-  private readonly transport: WebSocket;
-  readonly ready: Promise<void>;
-  constructor(onPacket: (data: Uint8Array, source: Ipv4, port: number) => void) {
-    const page = typeof location === "undefined" ? { protocol: "http:", host: "localhost" } : location;
-    const protocol = page.protocol === "https:" ? "wss" : "ws";
-    const transport = this.transport = new WebSocket(`${protocol}://${page.host}/udp`);
+  private transport: Promise<WebSocket> | null = null;
+  private closed = false;
+  constructor(private readonly onPacket: (data: Uint8Array, source: Ipv4, port: number) => void) {}
+  private open(): Promise<WebSocket> {
+    const transport = new WebSocket(`${pageOrigin().replace(/^http/, "ws")}/udp`);
     transport.binaryType = "arraybuffer";
-    this.ready = new Promise<void>((resolve, reject) => {
+    return new Promise<WebSocket>((resolve, reject) => {
       let opened = false;
       transport.onmessage = (event) => {
         if (typeof event.data === "string") {
-          if (!opened) { opened = true; resolve(); }
+          if (!opened) { opened = true; resolve(transport); }
           return;
         }
         const frame = new Uint8Array(event.data as ArrayBuffer);
         if (frame.length < 6) return;
-        onPacket(frame.subarray(6), [frame[0], frame[1], frame[2], frame[3]], frame[4] << 8 | frame[5]);
+        this.onPacket(frame.subarray(6), [frame[0], frame[1], frame[2], frame[3]], frame[4] << 8 | frame[5]);
       };
       const failed = () => { if (!opened) { opened = true; reject(new Error("UDP relay unavailable")); } };
       transport.onclose = failed;
@@ -79,15 +76,27 @@ export class DatagramRelay {
     });
   }
   async send(host: string, port: number, bytes: Uint8Array): Promise<void> {
-    await this.ready;
+    if (port === 53) return void this.resolve(host, bytes);
+    const transport = await (this.transport ??= this.open());
     const name = new TextEncoder().encode(dialName(host));
     if (name.length > 253 || bytes.length > 65507) throw new Error("UDP datagram is too large");
     const frame = new Uint8Array(3 + name.length + bytes.length);
     frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
     frame.set(name, 3); frame.set(bytes, 3 + name.length);
-    this.transport.send(frame);
+    transport.send(frame);
   }
-  close(): void { this.transport.close(); }
+  /** A guest's own resolver is answered over DNS-over-HTTPS, which needs no UDP relay (the deployed
+   *  Worker has none). A failed query is a lost datagram: the resolver's retry and timeout apply. */
+  private async resolve(host: string, query: Uint8Array): Promise<void> {
+    try {
+      const r = await fetch(`${pageOrigin()}/dns-query`, { method: "POST", body: query.slice(), headers: { "content-type": "application/dns-message" } });
+      if (r.ok && !this.closed) this.onPacket(new Uint8Array(await r.arrayBuffer()), parseIpv4(host) ?? syntheticAddress(host), 53);
+    } catch { /* lost */ }
+  }
+  close(): void {
+    this.closed = true;
+    void this.transport?.then((transport) => transport.close(), () => {});
+  }
 }
 
 interface RelayEndpoint {

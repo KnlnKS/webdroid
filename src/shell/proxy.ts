@@ -98,3 +98,16 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
     return new Response(`proxy error: ${error}`, { status: 502, headers: { "x-wd-error": failureKind(error) } });
   }
 }
+
+/** One wire-format DNS message (RFC 8484) for guests that run their own resolver. */
+export async function forwardDnsMessage(request: Request): Promise<Response> {
+  const body = request.method === "POST" ? await request.arrayBuffer() : null;
+  if (!body || body.byteLength < 12 || body.byteLength > 65535) return new Response("bad DNS message", { status: 400 });
+  try {
+    const answer = await fetch("https://cloudflare-dns.com/dns-query", {
+      method: "POST", body, headers: { "content-type": "application/dns-message", accept: "application/dns-message" },
+    });
+    if (answer.ok) return new Response(answer.body, { headers: { "content-type": "application/dns-message" } });
+  } catch { /* reported below */ }
+  return new Response("DNS unavailable", { status: 502 });
+}
