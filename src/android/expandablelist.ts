@@ -1,7 +1,7 @@
 // ExpandableListView over ListView's rows. As in AOSP, an ExpandableListConnector flattens the
 // groups and the children of expanded groups into the positions the list lays out.
 
-import { rt, JObj, type NativeSpec, fieldSetters, callSelf, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, fieldSetters, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import { type JView, vgMethods } from "./view";
@@ -123,6 +123,9 @@ const initExpandable = driven(function* initExpandable(v: JExpandableListView, c
   if (a.vals[0]) yield* v.setGroupIndicator$(yield loadDrawableRV(res, a.vals[0], v.theme));
 });
 const defStyle = () => AID("expandableListViewStyle");
+function expandGroup(this: JExpandableListView, g: number) { return this.expand(g, true); }
+function setIndicatorBounds(this: JExpandableListView, l: number, r: number) { this.indicatorLeft = l; this.indicatorRight = r; }
+function setChildIndicatorBounds(this: JExpandableListView, l: number, r: number) { this.childIndicatorLeft = l; this.childIndicatorRight = r; }
 /** AOSP handleItemClick: a group's click expands or collapses it unless its listener consumed it;
  *  a child's goes to OnChildClickListener; neither reaches OnItemClickListener */
 const performItemClick = driven(function* (this: JExpandableListView, v: JView, position: number, id: bigint): Gen {
@@ -159,16 +162,16 @@ rt.register({
       yield callSelf(listViewMethods, "setAdapter(Landroid/widget/ListAdapter;)V", this, connector);
     }),
     "getExpandableListAdapter()Landroid/widget/ExpandableListAdapter;": function (this: JExpandableListView) { return this.connector?.adapter ?? null; },
-    "expandGroup(I)Z": function (this: JExpandableListView, g: number) { return this.expand(g, true); },
-    "expandGroup(IZ)Z": function (this: JExpandableListView, g: number) { return this.expand(g, true); },
+    "expandGroup(I)Z": expandGroup,
+    "expandGroup(IZ)Z": expandGroup,
     "collapseGroup(I)Z": function (this: JExpandableListView, g: number) { return this.expand(g, false); },
     "isGroupExpanded(I)Z": function (this: JExpandableListView, g: number) { return +!!this.connector?.expanded.has(g); },
     "performItemClick(Landroid/view/View;IJ)Z": performItemClick,
     "setGroupIndicator(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JExpandableListView, d: JDrawable | null): Gen { yield* this.setGroupIndicator$(d); }),
-    "setIndicatorBounds(II)V": function (this: JExpandableListView, l: number, r: number) { this.indicatorLeft = l; this.indicatorRight = r; },
-    "setIndicatorBoundsRelative(II)V": function (this: JExpandableListView, l: number, r: number) { this.indicatorLeft = l; this.indicatorRight = r; },
-    "setChildIndicatorBounds(II)V": function (this: JExpandableListView, l: number, r: number) { this.childIndicatorLeft = l; this.childIndicatorRight = r; },
-    "setChildIndicatorBoundsRelative(II)V": function (this: JExpandableListView, l: number, r: number) { this.childIndicatorLeft = l; this.childIndicatorRight = r; },
+    "setIndicatorBounds(II)V": setIndicatorBounds,
+    "setIndicatorBoundsRelative(II)V": setIndicatorBounds,
+    "setChildIndicatorBounds(II)V": setChildIndicatorBounds,
+    "setChildIndicatorBoundsRelative(II)V": setChildIndicatorBounds,
     ...fieldSetters({ "setChildIndicator(Landroid/graphics/drawable/Drawable;)V": "childIndicator", "setChildDivider(Landroid/graphics/drawable/Drawable;)V": "childDivider",
       [`setOnGroupClickListener(Landroid/widget/ExpandableListView$OnGroupClickListener;)V`]: "groupClickL",
       [`setOnChildClickListener(Landroid/widget/ExpandableListView$OnChildClickListener;)V`]: "childClickL",
@@ -235,8 +238,8 @@ const combinedGroupId = (id: bigint) => (BigInt.asUintN(64, id) & 0x7fffffffn) <
 const baseExpandableMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["<init>()V", "registerDataSetObserver(Landroid/database/DataSetObserver;)V", "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
     "notifyDataSetChanged()V", "notifyDataSetInvalidated()V"].map((s) => [s, baseAdapterMethods[s]])),
-  "areAllItemsEnabled()Z": () => 1,
-  "onGroupExpanded(I)V": () => {}, "onGroupCollapsed(I)V": () => {},
+  ...stubs(1, "areAllItemsEnabled()Z"),
+  ...noops("onGroupExpanded(I)V", "onGroupCollapsed(I)V"),
   "getCombinedGroupId(J)J": combinedGroupId,
   "getCombinedChildId(JJ)J": (g: bigint, c: bigint) => BigInt.asIntN(64, (1n << 63n) | combinedGroupId(g) | (BigInt.asUintN(64, c) & 0xffffffffn)),
   "isEmpty()Z": driven(function* (this: JBaseAdapter): Gen { return +((yield vcall(this, "getGroupCount", "()I")) === 0); }),
