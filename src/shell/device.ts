@@ -270,8 +270,9 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       reportUncaught(e);
     }
 
-    booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label, activities };
-    if (!processName && mainActivity) {
+    // only the app's own process answers the launcher; a child process runs components
+    booted = { host, mainActivityCls: processName ? "" : mainActivity ?? "", stack: [], label, activities };
+    if (booted.mainActivityCls) {
       onStatus("Opening app…");
       await launchMain();
     }
