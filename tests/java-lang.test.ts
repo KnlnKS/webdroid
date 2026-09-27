@@ -251,6 +251,17 @@ describe("pattern-split", () => {
     expect(await vcall(path, "groupCount", "()I")).toBe(0);
     expect(await vcall(path, "group", "()Ljava/lang/String;")).toBe("/.././");
   });
+
+  test("named groups report text and bounds and reject unknown names", async () => {
+    const m = await vcall(compile("(?<k>[a-z]+)=(?<v>\\d+)?"), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", " ab=");
+    expect(await vcall(m, "groupCount", "()I")).toBe(2);
+    expect(await vcall(m, "find", "()Z")).toBe(1);
+    expect(await vcall(m, "group", "(Ljava/lang/String;)Ljava/lang/String;", "k")).toBe("ab");
+    expect([await vcall(m, "start", "(Ljava/lang/String;)I", "k"), await vcall(m, "end", "(Ljava/lang/String;)I", "k")]).toEqual([1, 3]);
+    expect(await vcall(m, "group", "(Ljava/lang/String;)Ljava/lang/String;", "v")).toBeNull();
+    expect(await vcall(m, "start", "(Ljava/lang/String;)I", "v")).toBe(-1);
+    expect(() => vcall(m, "end", "(Ljava/lang/String;)I", "x")).toThrow();
+  });
 });
 
 describe("reference", () => {

@@ -312,11 +312,28 @@ class JMatcher extends JObj {
   /** both ends anchored, so the engine backtracks into another alternative instead of settling
    *  for the first branch that matched a prefix */
   anchored(): RegExp { return javaRegex("(?:" + this.re.source + ")$", this.re.flags.replace(/[gy]/g, "") + "y"); }
-  groupCount(): number { return this.re.source.includes("(?<__wdAtomic") ? 0 : (this.m?.length ?? 1) - 1; }
-  checkGroup(i: number): void {
-    if (i < 0 || i > this.groupCount()) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `No group ${i}`);
+  groupCount(): number {
+    if (this.re.source.includes("(?<__wdAtomic")) return 0;
+    // an empty alternative always matches, so the result's length counts the pattern's groups
+    return (this.m ?? new RegExp(`(?:${this.re.source})|`, this.re.flags.replace(/[gyd]/g, "")).exec("")!).length - 1;
+  }
+  cur(): RegExpExecArray {
+    if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
+    return this.m;
+  }
+  /** [start, end] of group g, or undefined when it did not participate */
+  span(g: number): number[] | undefined {
+    const m = this.cur();
+    if (g < 0 || g > this.groupCount()) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `No group ${g}`);
+    return g ? m.indices?.[g] : [m.index, m.index + m[0].length];
+  }
+  named(n: string): number[] | undefined {
+    const m = this.cur();
+    if (!m.groups || !(n in m.groups) || n.startsWith("__wdAtomic")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `No group with name <${n}>`);
+    return m.indices?.groups?.[n];
   }
 }
+const spanText = (m: JMatcher, s: number[] | undefined) => s ? m.input.slice(s[0], s[1]) : null;
 function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
   if (!m.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
   let out = "";
@@ -327,7 +344,7 @@ function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
       if (r[i + 1] === "{") {
         const j = r.indexOf("}", i);
         if (j < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "named capturing group is missing trailing '}'");
-        out += m.m.groups?.[r.slice(i + 2, j)] ?? ""; i = j; continue;
+        out += spanText(m, m.named(r.slice(i + 2, j))) ?? ""; i = j; continue;
       }
       let j = i + 1, num = "";
       while (j < r.length && /[0-9]/.test(r[j]) && Number(num + r[j]) <= m.groupCount()) num += r[j++];
@@ -434,26 +451,16 @@ rt.register({
       this.m = re.exec(this.input);
       return this.m ? 1 : 0;
     },
-    "group()Ljava/lang/String;": function (this: JMatcher) { return this.m?.[0] ?? null; },
-    "group(I)Ljava/lang/String;": function (this: JMatcher, i: number) { this.checkGroup(i); return this.m?.[i] ?? null; },
+    "group()Ljava/lang/String;": function (this: JMatcher) { return this.cur()[0]; },
+    "group(I)Ljava/lang/String;": function (this: JMatcher, g: number) { return spanText(this, this.span(g)); },
+    "group(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, n: string) { return spanText(this, this.named(n)); },
     "groupCount()I": function (this: JMatcher) { return this.groupCount(); },
-    "start()I": function (this: JMatcher) { return this.m?.index ?? -1; },
-    "end()I": function (this: JMatcher) { return this.m ? this.m.index + this.m[0].length : -1; },
-    "start(I)I": function (this: JMatcher, g: number) {
-      if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
-      this.checkGroup(g);
-      if (g === 0) return this.m.index;
-      const ix = (this.m as unknown as { indices?: (number[] | undefined)[] }).indices?.[g];
-      return ix ? ix[0] : -1;
-    },
-    "end(I)I": function (this: JMatcher, g: number) {
-      if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
-      this.checkGroup(g);
-      if (g === 0) return this.m.index + this.m[0].length;
-      const ix = (this.m as unknown as { indices?: (number[] | undefined)[] }).indices?.[g];
-      return ix ? ix[1] : -1;
-    },
-    "group(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, n: string) { return n.startsWith("__wdAtomic") ? null : this.m?.groups?.[n] ?? null; },
+    "start()I": function (this: JMatcher) { return this.cur().index; },
+    "end()I": function (this: JMatcher) { const m = this.cur(); return m.index + m[0].length; },
+    "start(I)I": function (this: JMatcher, g: number) { return this.span(g)?.[0] ?? -1; },
+    "end(I)I": function (this: JMatcher, g: number) { return this.span(g)?.[1] ?? -1; },
+    "start(Ljava/lang/String;)I": function (this: JMatcher, n: string) { return this.named(n)?.[0] ?? -1; },
+    "end(Ljava/lang/String;)I": function (this: JMatcher, n: string) { return this.named(n)?.[1] ?? -1; },
     "toMatchResult()Ljava/util/regex/MatchResult;": function (this: JMatcher) {
       const c = new JMatcher(); c.re = this.re; c.input = this.input; c.m = this.m; c.lastEnd = this.lastEnd; return c;
     },
