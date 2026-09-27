@@ -339,7 +339,7 @@ export class Runtime {
       const field = findStaticOwner(start, fr.name, dex.type(fr.type));
       if (field) { prop = field.prop; return { prop, typeIdx: field.info === start ? fr.cls : -1 }; }
       // a native class declares every static it has (a <clinit> hook may still be adding some)
-      if (start.native && start.state === 2) this.noteMissing(`field ${start.name}.${fr.name}`);
+      if (start.native && start.state === 2 && !start.stub) this.noteMissing(`field ${start.name}.${fr.name}`);
     } catch { /* class missing */ }
     return { prop, typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
   }
