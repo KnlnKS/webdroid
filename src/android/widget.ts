@@ -42,7 +42,8 @@ const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): 
 const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JCanvas, d: JDrawable): Gen {
   const thread = curThread;
   yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, pb.width() - pb.padL - pb.padR, pb.height() - pb.padT - pb.padB);
-  for (const [id, v] of [[SECONDARY_ID, pb.secondary], [PROGRESS_ID, pb.progress]]) {
+  for (let primary = 0; primary < 2; primary++) {
+    const id = primary ? PROGRESS_ID : SECONDARY_ID, v = primary ? pb.progress : pb.secondary;
     const layer = d instanceof JLayerDrawable ? yield vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
     yield vcallOn(thread, layer ?? d, "setLevel", "(I)Z", Math.trunc(pb.fraction(v) * 10000));
   }
