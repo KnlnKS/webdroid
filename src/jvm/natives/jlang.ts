@@ -1582,9 +1582,10 @@ function pickAbi(has: (abi: string) => boolean): string | null {
 }
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
 /** every way this ends without the library loaded: the app is going to get an
- *  UnsatisfiedLinkError, and the shell says which machine code it would have taken. */
+ *  UnsatisfiedLinkError, and the console says which machine code it would have taken. */
 function needsNative(lib: string, abi: string): void {
   rt.nativeRequired.set(lib, abi);
+  console.warn("[webdroid native required]", lib, abi);
   rt.onNativeRequired(lib, abi);
 }
 async function dlopen(owner: Runtime, lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null>): Promise<void> {
