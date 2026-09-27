@@ -150,6 +150,15 @@ export function requestLayout(v: JView) {
 }
 /** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
  *  measurement stale, and no single view names that: the next pass re-measures every window. */
+/** A window's token is a Binder (ViewRootImpl's W): apps hand it across IPC, to Play Games for one */
+const windowTokens = new WeakMap<JView, JObj>();
+function windowToken(view: JView): JObj {
+  let root = view;
+  while (root.parent) root = root.parent;
+  let token = windowTokens.get(root);
+  if (!token) windowTokens.set(root, token = rt.make("android/os/Binder") as JObj);
+  return token;
+}
 export function requestLayoutAll() {
   uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true;
   perf.layoutRequestsAll++;
@@ -1191,8 +1200,8 @@ const viewMethods: NativeSpec["methods"] = {
     return dispatchConfigurationChanged(this, cfg);
   },
   "isAttachedToWindow()Z": function (this: JView) { return this.attached ? 1 : 0; },
-  "getWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? this : null; },
-  "getApplicationWindowToken()Landroid/os/IBinder;": function (this: JView) { return this; },
+  "getWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? windowToken(this) : null; },
+  "getApplicationWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? windowToken(this) : null; },
   "getRootView()Landroid/view/View;": function (this: JView) {
     let v: JView = this;
     while (v.parent) v = v.parent;

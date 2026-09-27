@@ -1561,30 +1561,62 @@ for (const t of ["I", "J", "F", "D"]) {
   mm[`static max(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a > b ? a : b) : (a: number, b: number) => Math.max(a, b);
   mm[`static min(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a < b ? a : b) : (a: number, b: number) => Math.min(a, b);
 }
-for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log1p", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
+for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "expm1", "log", "log1p", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
   mm[`static ${f}(D)D`] = (v: number) => Math[f](v);
 }
-rt.register({
-  name: "java/lang/Math", ctor: JMath,
-  statics: { PI: Math.PI, E: Math.E },
-  methods: {
+// the *Exact family throws on overflow where plain arithmetic wraps
+const overflow = (what: string) => { throw rt.mkThrowable("java/lang/ArithmeticException", `${what} overflow`); };
+const exactI = (v: number) => (v === (v | 0) ? v : overflow("integer"));
+const exactJ = (v: bigint) => (v === BigInt.asIntN(64, v) ? v : overflow("long"));
+for (const [name, op] of [["add", (a: number, b: number) => a + b], ["subtract", (a: number, b: number) => a - b]] as const) {
+  mm[`static ${name}Exact(II)I`] = (a: number, b: number) => exactI(op(a, b));
+  mm[`static ${name}Exact(JJ)J`] = (a: bigint, b: bigint) => exactJ(name === "add" ? a + b : a - b);
+}
+Object.assign(mm, {
+  "static multiplyExact(II)I": (a: number, b: number) => exactI(a * b),
+  "static multiplyExact(JJ)J": (a: bigint, b: bigint) => exactJ(a * b),
+  "static multiplyExact(JI)J": (a: bigint, b: number) => exactJ(a * BigInt(b)),
+  "static incrementExact(I)I": (a: number) => exactI(a + 1), "static incrementExact(J)J": (a: bigint) => exactJ(a + 1n),
+  "static decrementExact(I)I": (a: number) => exactI(a - 1), "static decrementExact(J)J": (a: bigint) => exactJ(a - 1n),
+  "static negateExact(I)I": (a: number) => exactI(-a), "static negateExact(J)J": (a: bigint) => exactJ(-a),
+  "static absExact(I)I": (a: number) => exactI(Math.abs(a)), "static absExact(J)J": (a: bigint) => exactJ(a < 0n ? -a : a),
+  "static toIntExact(J)I": (a: bigint) => exactI(Number(a)),
+  "static multiplyHigh(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, (a * b) >> 64n),
+  "static multiplyFull(II)J": (a: number, b: number) => BigInt(a) * BigInt(b),
+});
+const floorDivJ = (a: bigint, b: bigint) => { if (b === 0n) overflow("/ by zero"); const q = a / b; return a % b !== 0n && (a < 0n) !== (b < 0n) ? q - 1n : q; };
+const floorModJ = (a: bigint, b: bigint) => a - floorDivJ(a, b) * b;
+const floorDivI = (a: number, b: number) => { if (!b) throw rt.mkThrowable("java/lang/ArithmeticException", "/ by zero"); return Math.floor(a / b) | 0; };
+const floorModI = (a: number, b: number) => (a - floorDivI(a, b) * b) | 0;
+Object.assign(mm, {
+  "static floorDiv(II)I": floorDivI, "static floorMod(II)I": floorModI,
+  "static floorDiv(JJ)J": floorDivJ, "static floorMod(JJ)J": floorModJ,
+  "static floorDiv(JI)J": (a: bigint, b: number) => floorDivJ(a, BigInt(b)),
+  "static floorMod(JI)I": (a: bigint, b: number) => Number(floorModJ(a, BigInt(b))),
+});
+const ulpD = (v: number) => { if (!Number.isFinite(v)) return Number.isNaN(v) ? v : Infinity; const e = Math.max(Number((doubleToLongBits(Math.abs(v)) >> 52n) & 0x7ffn), 1); return Math.pow(2, e - 1075); };
+const nextD = (v: number, up: boolean) => {
+  if (Number.isNaN(v) || v === (up ? Infinity : -Infinity)) return v;
+  if (v === 0) return up ? 5e-324 : -5e-324;
+  const bits = doubleToLongBits(v);
+  return longBitsToDouble((v > 0) === up ? bits + 1n : bits - 1n);
+};
+const nextF = (v: number, up: boolean) => {
+  if (Number.isNaN(v) || v === (up ? Infinity : -Infinity)) return v;
+  if (v === 0) return up ? intBitsToFloat(1) : -intBitsToFloat(1);
+  const bits = floatToIntBits(v);
+  return intBitsToFloat((v > 0) === up ? bits + 1 : bits - 1);
+};
+/** round half to even, as rint and IEEEremainder's quotient do */
+const rint = (v: number) => { const r = Math.round(v); return Math.abs(v - Math.trunc(v)) === 0.5 && r % 2 !== 0 ? r - 1 : r; };
+const mathMethods: NativeSpec["methods"] = {
     ...mm,
     "static pow(DD)D": (a: number, b: number) => Math.pow(a, b),
-    "static multiplyExact(II)I": (a: number, b: number) => Math.imul(a, b),
-    "static multiplyExact(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, a * b),
-    "static multiplyExact(JI)J": (a: bigint, b: number) => BigInt.asIntN(64, a * BigInt(b)),
-    "static addExact(II)I": (a: number, b: number) => (a + b) | 0,
-    "static addExact(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, a + b),
-    "static subtractExact(II)I": (a: number, b: number) => (a - b) | 0,
-    "static subtractExact(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, a - b),
-    "static toIntExact(J)I": (a: bigint) => Number(BigInt.asIntN(32, a)),
-    "static floorDiv(II)I": (a: number, b: number) => Math.floor(a / b) | 0,
-    "static floorDiv(JJ)J": (a: bigint, b: bigint) => { let q = a / b; if ((a % b !== 0n) && ((a < 0n) !== (b < 0n))) q -= 1n; return q; },
-    "static floorMod(II)I": (a: number, b: number) => ((a % b) + b) % b | 0,
-    "static floorMod(JJ)J": (a: bigint, b: bigint) => ((a % b) + b) % b,
     "static atan2(DD)D": (a: number, b: number) => Math.atan2(a, b),
     "static hypot(DD)D": (a: number, b: number) => Math.hypot(a, b),
-    "static log1p(D)D": (value: number) => Math.log1p(value),
+    "static IEEEremainder(DD)D": (a: number, b: number) => a - b * rint(a / b),
+    "static fma(DDD)D": (a: number, b: number, c: number) => a * b + c,
+    "static fma(FFF)F": (a: number, b: number, c: number) => Math.fround(a * b + c),
     "static copySign(DD)D": (magnitude: number, sign: number) => longBitsToDouble(
       doubleToLongBits(magnitude) & 0x7fffffffffffffffn | doubleToLongBits(sign) & -0x8000000000000000n),
     "static copySign(FF)F": (magnitude: number, sign: number) => intBitsToFloat(
@@ -1593,19 +1625,27 @@ rt.register({
     "static getExponent(F)I": (v: number) => ((floatToIntBits(v) >>> 23) & 0xff) - 127,
     "static scalb(DI)D": (v: number, n: number) => v * Math.pow(2, n),
     "static scalb(FI)F": (v: number, n: number) => Math.fround(v * Math.pow(2, n)),
+    "static ulp(D)D": ulpD,
+    "static ulp(F)F": (v: number) => Math.fround(Math.abs(nextF(Math.abs(v), true) - Math.abs(v))),
+    "static nextUp(D)D": (v: number) => nextD(v, true), "static nextDown(D)D": (v: number) => nextD(v, false),
+    "static nextUp(F)F": (v: number) => nextF(v, true), "static nextDown(F)F": (v: number) => nextF(v, false),
+    "static nextAfter(DD)D": (v: number, d: number) => d > v ? nextD(v, true) : d < v ? nextD(v, false) : d,
+    "static nextAfter(FD)F": (v: number, d: number) => d > v ? nextF(v, true) : d < v ? nextF(v, false) : Math.fround(d),
     "static random()D": () => Math.random(),
     // Math.round SATURATES at the type's bounds and maps NaN to 0 (JLS 15.1.4); `|0` wraps,
     // and BigInt(NaN) throws. Compose reaches these through Dp.roundToPx on infinite
     // constraints, where the difference is a wrapped negative padding instead of a clamp.
     "static round(D)J": (v: number) => rt.f2l(Math.round(v)),
     "static round(F)I": (v: number) => rt.f2i(Math.round(v)),
-    "static rint(D)D": (v: number) => { const r = Math.round(v); return Math.abs(v - Math.trunc(v)) === 0.5 && r % 2 !== 0 ? r - 1 : r; },
+    "static rint(D)D": rint,
     "static signum(D)D": (v: number) => Math.sign(v),
     "static signum(F)F": (v: number) => Math.sign(v),
     "static toRadians(D)D": (v: number) => (v * Math.PI) / 180,
     "static toDegrees(D)D": (v: number) => (v * 180) / Math.PI,
-  },
-});
+};
+rt.register({ name: "java/lang/Math", ctor: JMath, statics: { PI: Math.PI, E: Math.E, TAU: 2 * Math.PI }, methods: mathMethods });
+// StrictMath's results are Math's here: both are the host's IEEE operations
+rt.register({ name: "java/lang/StrictMath", ctor: class extends JObj {}, statics: { PI: Math.PI, E: Math.E }, methods: mathMethods });
 
 class JSystem extends JObj {}
 function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
