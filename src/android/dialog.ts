@@ -236,7 +236,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getContext()Landroid/content/Context;": function (this: JDialog) { return this.jctx; },
   "setContentView(I)V": driven(function* (this: JDialog, layoutId: number): Gen {
     const root = this.ensureRoot();
-    yield setWindowContent(root.content, null, null);
+    yield vcall(root.content, "removeAllViews", "()V");
     yield inflateLayout(this.jctx, layoutId, root.content, true);
     requestLayout(root.content);
   }),

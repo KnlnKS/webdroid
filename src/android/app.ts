@@ -10,7 +10,7 @@ import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
-import { requestLayout, type JView, type JLayoutParams, detachView, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
+import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
 import { vcall, vcallOn, curThread, mainThread, vcallUncaught } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
@@ -191,7 +191,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(I)V": driven(function* (this: JActivity, layoutId: number): Gen {
     yield ensureDecor(this);
-    for (const child of [...this.window.contentParent!.children]) yield detachView(this.window.contentParent!, child);
+    yield vcall(this.window.contentParent!, "removeAllViews", "()V");
     yield inflateLayout(this, layoutId, this.window.contentParent, true);
     requestLayout(this.window.contentParent!);
   }),
@@ -199,7 +199,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JActivity, v: JView, lp: JLayoutParams) {
     return setActivityContent(this, v, lp);
   },
-  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: unknown): Gen {
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: JLayoutParams): Gen {
     yield ensureDecor(this);
     yield vcall(this.window.contentParent!, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
   }),
