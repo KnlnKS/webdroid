@@ -17,7 +17,7 @@ import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
 import { packages } from "./packages";
-import { isMediaUri, mediaMime, mediaPath, mediaQuery } from "./mediastore";
+import { isMediaUri, mediaDelete, mediaMime, mediaPath, mediaQuery } from "./mediastore";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -323,6 +323,7 @@ const resolverMethods: NativeSpec["methods"] = {
   }),
   "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, where: string | null, args: string[] | null): Gen {
     if (isDocsUri(u)) return (yield docDelete(documentId(u, true))) ? 1 : 0;
+    if (isMediaUri(u)) return mediaDelete(u, where, args);
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
   }),

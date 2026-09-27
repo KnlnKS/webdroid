@@ -92,6 +92,13 @@ export async function mediaMime(uri: JUri): Promise<string | null> {
   const path = await mediaPath(uri);
   return path ? mimeOf(path) : null;
 }
+/** A media row is its file: deleting the row deletes the file, and the index follows the VFS. */
+export async function mediaDelete(uri: JUri, selection: string | null, args: string[] | null): Promise<number> {
+  const cursor = await mediaQuery(uri, ["_data"], selection, args, null);
+  let count = 0;
+  for (const [path] of cursor?.rows ?? []) if (vfs.delete(path as string)) count++;
+  return count;
+}
 export async function scannedMediaUri(path: string): Promise<JUri | null> {
   if (!path.startsWith("/sdcard/") || !vfs.stat(path)) return null;
   await index();

@@ -8,7 +8,10 @@ import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { isDocumentsProvider } from "./pm";
 import { registerSystemActivity, systemActivities, mkResultIntent, type JIntent } from "./intent";
-import { mkUri } from "./net";
+import { mkUri, type JUri } from "./net";
+import { isMediaUri, mediaDelete } from "./mediastore";
+import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
@@ -189,6 +192,24 @@ for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "v
     },
   });
 }
+// MediaProvider's consent screen for a create*Request PendingIntent. It is answered by the grant
+// policy runtime permissions follow here (context.ts): the user allows, and the operation runs.
+const MEDIA_REQUEST = "webdroid.provider.action.MEDIA_REQUEST";
+let mediaRequests = 0;
+registerSystemActivity(MEDIA_REQUEST, async (intent) => {
+  if (intent.extras.map.get("op") === "delete") for (const uri of await toJsArray(intent.extras.map.get("uris"))) await mediaDelete(uri as JUri, null, null);
+  return rt.make("android/content/Intent");
+});
+const mediaRequest = (del: boolean) => driven(function* (resolver: unknown, uris: unknown): Gen {
+  if (!resolver || !uris) rt.npe();
+  const items = (yield toJsArray(uris)) as JUri[];
+  if (items.some((uri) => !isMediaUri(uri) || !/\/\d+$/.test(uri.uri))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "All requested items must be referenced by specific ID");
+  const intent: JIntent = rt.make("android/content/Intent");
+  intent.action = MEDIA_REQUEST; intent.identifier = String(++mediaRequests);
+  intent.extras.map.set("uris", newArrayList(items)); intent.extras.map.set("op", del ? "delete" : "write");
+  return vcall(rt.link("android/app/PendingIntent").ctor, "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+    appHost?.application, 0, intent, 0x4000000); // FLAG_IMMUTABLE
+});
 rt.register({
   name: "android/provider/MediaStore", ctor: class extends JObj {},
   statics: {
@@ -197,6 +218,8 @@ rt.register({
   },
   methods: {
     "static getPickImagesMaxLimit()I": () => 150,
+    "static createDeleteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest(true),
+    "static createWriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest(false),
     "static canManageMedia(Landroid/content/Context;)Z": (ctx: { $host: { pkg: string } } | null) => {
       if (!ctx) rt.npe();
       return packages.get(ctx!.$host.pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;
