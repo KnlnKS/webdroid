@@ -1300,7 +1300,6 @@ fn importFn(b: *Buf, name: []const u8, ty: u8) void {
 }
 export fn jit_emit(out: u32, cap: u32) u32 {
     if (in_flight) return 0;
-    var b = Buf.init(out, cap);
     nregions = 0;
     var q: u32 = 0;
     while (q < nrequests) : (q += 1) {
@@ -1312,7 +1311,22 @@ export fn jit_emit(out: u32, cap: u32) u32 {
         if (discover(r, page)) nregions += 1;
     }
     nrequests = 0;
-    if (nregions == 0) return 0;
+    // A batch too large for the buffer is halved until it fits; the regions left out go back on
+    // the queue rather than waiting for their entries' heat to wrap around.
+    var n = nregions;
+    while (n != 0) : (n /= 2) {
+        var b = Buf.init(out, cap);
+        emitModule(&b, n);
+        if (b.overflow) continue;
+        for (regions[n..nregions]) |r| _ = request(r.entry, r.isa);
+        nregions = n;
+        in_flight = true;
+        return b.len;
+    }
+    nregions = 0;
+    return 0;
+}
+fn emitModule(b: *Buf, n: u32) void {
     b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0, 1 });
     const type_len = b.reserve();
     const type_start = b.len;
@@ -1331,23 +1345,23 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     b.u(25);
     b.bytes("__indirect_function_table");
     b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
-    importFn(&b, "exec", 1);
-    importFn(&b, "store", 1);
-    importFn(&b, "exec32", 0);
-    inline for ([_][]const u8{ "32", "64" }, 2..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(&b, nm ++ sfx, ty);
-    importFn(&b, "fma64", 4);
-    importFn(&b, "it32", 1);
-    importFn(&b, "tx", 0);
+    importFn(b, "exec", 1);
+    importFn(b, "store", 1);
+    importFn(b, "exec32", 0);
+    inline for ([_][]const u8{ "32", "64" }, 2..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(b, nm ++ sfx, ty);
+    importFn(b, "fma64", 4);
+    importFn(b, "it32", 1);
+    importFn(b, "tx", 0);
     b.patch(imp_len, b.len - imp_start);
     b.byte(3);
-    b.u(1 + nregions);
-    b.u(nregions);
-    for (0..nregions) |_| b.byte(0);
+    b.u(1 + n);
+    b.u(n);
+    for (0..n) |_| b.byte(0);
     b.byte(7);
     const exp_len = b.reserve();
     const exp_start = b.len;
-    b.u(nregions);
-    for (0..nregions) |i| {
+    b.u(n);
+    for (0..n) |i| {
         var name: [8]u8 = undefined;
         name[0] = 'r';
         const len = 1 + std.fmt.printInt(name[1..], i, 10, .lower, .{});
@@ -1360,18 +1374,12 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     b.byte(10);
     const code_len = b.reserve();
     const code_start = b.len;
-    b.u(nregions);
-    for (regions[0..nregions]) |*r| {
+    b.u(n);
+    for (regions[0..n]) |*r| {
         const body_len = b.reserve();
         const body_start = b.len;
-        emitRegion(&b, r, cpu.decodedPage(r.page) orelse unreachable);
+        emitRegion(b, r, cpu.decodedPage(r.page) orelse unreachable);
         b.patch(body_len, b.len - body_start);
     }
     b.patch(code_len, b.len - code_start);
-    if (b.overflow) {
-        nregions = 0;
-        return 0;
-    }
-    in_flight = true;
-    return b.len;
 }

@@ -1,4 +1,4 @@
-import { AID, rvInt, rvColor, themeOf, type JTheme } from "./res";
+import { AID, rvInt, rvColor, rvFloat, themeOf, type JTheme } from "./res";
 import { rt, JObj, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
@@ -62,10 +62,17 @@ export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
 export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault = -16777216) {
   window.statusBarColor ??= rvColor(theme.res, theme.lookup(AID("statusBarColor")), statusDefault);
   window.navBarColor ??= rvColor(theme.res, theme.lookup(AID("navigationBarColor")), -16777216);
-  window.translucent = !!rvInt(theme.res, theme.lookup(AID("windowIsTranslucent")), 0);
   if (rvInt(theme.res, theme.lookup(AID("windowFullscreen")), 0)) window.flags |= 1024;
-
+  // PhoneWindow: backgroundDimEnabled defaults to windowIsFloating, and an amount the app set stays
+  const floating = rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0);
+  if (rvInt(theme.res, theme.lookup(AID("backgroundDimEnabled")), floating)) {
+    window.flags |= FLAG_DIM_BEHIND;
+    if (Number.isNaN(window.dimAmount)) window.dimAmount = rvFloat(theme.res, theme.lookup(AID("backgroundDimAmount")), 0.5);
+  }
 }
+const FLAG_DIM_BEHIND = 2;
+/** how much a window darkens what lies behind it */
+export const windowDim = (w: JWindow): number => (w.flags & FLAG_DIM_BEHIND ? w.dimAmount : 0);
 class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
  *  dialog's frame. A window not built yet lays out fresh when it is. */

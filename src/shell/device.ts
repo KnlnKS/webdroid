@@ -15,6 +15,7 @@ import { setAppHost, type AppHost, type ActivityLaunch } from "../android/apphos
 import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
+import { windowDim } from "../android/window";
 import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle, dispatchSplashExit } from "../android/app";
 import { getPrefs } from "../android/sharedprefs";
@@ -716,6 +717,8 @@ const tick0 = driven(function* tick0(): Gen {
           for (const activity of activities) {
             const root = activity.window.decor;
             if (!root) continue;
+            const dim = windowDim(activity.window);
+            if (dim) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
             mainDbg.phase = "preDraw";
             yield fireDrawPass(root);
             mainDbg.phase = "draw";

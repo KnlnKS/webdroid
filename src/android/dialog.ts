@@ -5,7 +5,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } f
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import {
-  JView, JFrameLP, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
+  JView, JFrameLP, JLinearLP, attachView, addUnattachedView, setWindowContent, type JLayoutParams, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
   specSize, findById, guardCall, dispatchAttached, dispatchDetached
 } from "./view";
 import { JFrameLayout, JLinearLayout } from "./layouts";
@@ -15,12 +15,12 @@ import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvInt, rvFloat, rvDimen, askTheme, themeOf } from "./res";
+import { rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
-import { applyWindowTheme, type JWindow } from "./window";
+import { applyWindowTheme, windowDim, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 import { JMotionEvent } from "./motionevent";
 
@@ -43,13 +43,6 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
   const rv = root.theme.lookup(AID("windowBackground"));
   if (rv) root.cardBg = await loadDrawableRV(root.jres, rv, root.theme);
   root.cardRadius = rvDimen(root.jres, root.theme.lookup(AID("dialogCornerRadius")), 0);
-  // PhoneWindow: backgroundDimEnabled defaults to windowIsFloating (attrs.xml), so an
-  // edge-to-edge sheet theme that only unfloats its window loses the platform dim and
-  // draws its own scrim; backgroundDimAmount says how much.
-  const en = root.theme.lookup(AID("backgroundDimEnabled"));
-  const floating = root.theme.lookup(AID("windowIsFloating"));
-  const dimOn = en ? !!rvInt(root.jres, en, 0) : !!rvInt(root.jres, floating, 1);
-  root.themeDim = dimOn ? rvFloat(root.jres, root.theme.lookup(AID("backgroundDimAmount")), 0.6) : 0;
 }
 
 /** The dialog's decor; the shell owns its placement and dimming behind the window. */
@@ -74,14 +67,8 @@ class DialogRoot extends JFrameLayout {
   /** the window's android.R.id.content FrameLayout — appcompat finds it by id, reparents its
    *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
   content!: JFrameLayout;
-  setContent(v: JView | null): unknown { return rt.drive(this.setContent$(v)); }
-  *setContent$(v: JView | null): Gen {
-    for (const child of [...this.content.children]) yield detachView(this.content, child);
-    if (v) yield attachView(this.content, v);
-  }
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
-  themeDim = 0.6;
   /** the theme's dialogCornerRadius: the frame's shape, and so the shadow's */
   cardRadius = 0;
 }
@@ -246,27 +233,16 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getContext()Landroid/content/Context;": function (this: JDialog) { return this.jctx; },
   "setContentView(I)V": driven(function* (this: JDialog, layoutId: number): Gen {
     const root = this.ensureRoot();
-    yield root.setContent(null);
+    yield vcall(root.content, "removeAllViews", "()V");
     yield inflateLayout(this.jctx, layoutId, root.content, true);
     requestLayout(root.content);
   }),
-  "setContentView(Landroid/view/View;)V": driven(function* (this: JDialog, v: JView): Gen {
-    const root = this.ensureRoot();
-    if (!v.lp) {
-      const lp = new JFrameLP();
-      lp.width = -1; lp.height = -1;
-      v.lp = lp;
-    }
-    yield root.setContent(v);
-    requestLayout(root.content);
-  }),
-  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
-    v.lp = lp;
-    return callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
+  "setContentView(Landroid/view/View;)V": function (this: JDialog, v: JView) { return setWindowContent(this.ensureRoot().content, v, null); },
+  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: JLayoutParams) {
+    return setWindowContent(this.ensureRoot().content, v, lp);
   },
-  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
-    v.lp = lp;
-    return attachView(this.ensureRoot().content, v);
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: JLayoutParams) {
+    return vcall(this.ensureRoot().content, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
   },
   "show()V": driven(function* (this: JDialog): Gen {
     // AOSP: showing again after hide() only makes the decor visible again
@@ -274,9 +250,9 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     this.showing = true;
     const root = this.ensureRoot();
     yield loadCardBg(root);
-    yield vcall(this, "getWindow", "()Landroid/view/Window;");
+    const win: JWindow = yield vcall(this, "getWindow", "()Landroid/view/Window;");
     const overlay = addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"), () => this.cancel());
-    overlay.dim = () => this.win && !Number.isNaN(this.win.dimAmount) ? this.win.dimAmount : root.themeDim;
+    overlay.dim = () => windowDim(win);
     overlay.modal = true;
     const f = jmethod(this, M_onCreate);
     if (f && !(this as any).$created) {
@@ -476,10 +452,9 @@ async function buildAlertContent(d: JAlertDialog) {
     if (d.posText) mkBtn(d.posText, -1, d.posL);
     addUnattachedView(col, row);
   }
-  col.lp = new JFrameLP();
-  (col.lp as JFrameLP).width = -1;
-  (col.lp as JFrameLP).height = -2;
-  await d.ensureRoot().setContent(col);
+  const lp = new JFrameLP();
+  lp.width = -1; lp.height = -2;
+  await setWindowContent(d.ensureRoot().content, col, lp);
 }
 const alertMethods: NativeSpec["methods"] = {
   ...dialogMethods,

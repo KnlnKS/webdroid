@@ -10,7 +10,7 @@ import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
-import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
+import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
 import { vcall, vcallOn, curThread, mainThread, vcallUncaught } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
@@ -157,6 +157,10 @@ rt.register({
   methods: Object.fromEntries(["Created", "Started", "Resumed", "Paused", "Stopped", "SaveInstanceState", "Destroyed"].flatMap((phase) => ["Pre", "Post"].map((when) =>
     [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
 });
+const setActivityContent = driven(function* setActivityContent(act: JActivity, v: JView, lp: JLayoutParams | null): Gen {
+  yield ensureDecor(act);
+  yield setWindowContent(act.window.contentParent!, v, lp);
+});
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...wrapperMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
@@ -187,29 +191,17 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(I)V": driven(function* (this: JActivity, layoutId: number): Gen {
     yield ensureDecor(this);
-    for (const child of [...this.window.contentParent!.children]) yield detachView(this.window.contentParent!, child);
+    yield vcall(this.window.contentParent!, "removeAllViews", "()V");
     yield inflateLayout(this, layoutId, this.window.contentParent, true);
     requestLayout(this.window.contentParent!);
   }),
-  "setContentView(Landroid/view/View;)V": driven(function* (this: JActivity, v: JView): Gen {
+  "setContentView(Landroid/view/View;)V": function (this: JActivity, v: JView) { return setActivityContent(this, v, null); },
+  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JActivity, v: JView, lp: JLayoutParams) {
+    return setActivityContent(this, v, lp);
+  },
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: JLayoutParams): Gen {
     yield ensureDecor(this);
-    for (const child of [...this.window.contentParent!.children]) yield detachView(this.window.contentParent!, child);
-    if (!v.lp) {
-      const lp = rt.make("android/widget/FrameLayout$LayoutParams");
-      lp.width = -1; lp.height = -1;
-      v.lp = lp;
-    }
-    yield attachView(this.window.contentParent!, v);
-    requestLayout(this.window.contentParent!);
-  }),
-  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: any): Gen {
-    v.lp = lp;
-    yield callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this, v);
-  }),
-  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: any): Gen {
-    yield ensureDecor(this);
-    v.lp = lp;
-    yield attachView(this.window.contentParent!, v);
+    yield vcall(this.window.contentParent!, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
   }),
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return vcall(this.window, "findViewById", "(I)Landroid/view/View;", id);
