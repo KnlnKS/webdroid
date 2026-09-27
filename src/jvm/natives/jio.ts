@@ -591,7 +591,7 @@ rt.register({
 // ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
 // buffers, size probes) swap the array and read the count directly, so the bytes live in the
 // Int8Array itself rather than in the base stream's chunk list.
-class JBAOS extends JOutputStream {
+export class JBAOS extends JOutputStream {
   buf = new Int8Array(32);
   count = 0;
   grow(min: number) {
@@ -643,15 +643,17 @@ class JFOS extends JOutputStream {
   /** bytes written since the last publish to the file */
   pend = new Uint8Array(0);
   plen = 0;
-  put(b: Uint8Array) {
-    if (this.plen + b.length > this.pend.length) {
-      const grown = new Uint8Array(Math.max(this.plen + b.length, this.pend.length * 2, 8192));
+  /** the pending buffer, with room for n more bytes */
+  private room(n: number): Uint8Array {
+    if (this.plen + n > this.pend.length) {
+      const grown = new Uint8Array(Math.max(this.plen + n, this.pend.length * 2, 8192));
       grown.set(this.pend.subarray(0, this.plen));
       this.pend = grown;
     }
-    this.pend.set(b, this.plen);
-    this.plen += b.length;
+    return this.pend;
   }
+  put(b: Uint8Array) { this.room(b.length).set(b, this.plen); this.plen += b.length; }
+  putByte(b: number) { this.room(1)[this.plen++] = b; }
   get pos() {
     const raf = this.shared?.owner;
     if (raf instanceof JRAF) return raf.pos + this.plen;
@@ -698,7 +700,7 @@ rt.register({
     "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
     "<init>(Ljava/lang/String;)V": openWrite,
     "<init>(Ljava/lang/String;Z)V": openWrite,
-    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.put(Uint8Array.of(b)); if (this.shared) flushFOS(this); },
+    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this); },
     "write([BII)V": function (this: JFOS, b: Int8Array, off: number, len: number) {
       checkFileOpen(this);
       if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
@@ -990,7 +992,10 @@ function pushbackInit(this: JPushbackIn, s: unknown, size = 1) {
   this.pbuf = new Int8Array(size);
   this.ppos = size;
 }
-const pushbackOpen = (p: JPushbackIn): Int8Array => p.pbuf ?? (() => { throw rt.mkThrowable("java/io/IOException", "Stream closed"); })();
+function pushbackOpen(p: JPushbackIn): Int8Array {
+  if (!p.pbuf) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+  return p.pbuf;
+}
 function unread(this: JPushbackIn, b: Int8Array, off: number, len: number) {
   const buf = pushbackOpen(this);
   if (len > this.ppos) throw rt.mkThrowable("java/io/IOException", "Push back buffer is full");
