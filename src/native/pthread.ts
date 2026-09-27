@@ -311,6 +311,7 @@ export function pthreadInit(): void {
     },
     pthread_attr_getdetachstate: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr) & 1); return 0; },
     pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
+    pthread_attr_getschedparam: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
     pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,

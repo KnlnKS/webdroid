@@ -166,6 +166,8 @@ interface AssetSet { zip: Record<string, Uint8Array>; lazyEntries: Map<string, F
 const zips: AssetSet[] = [{ zip: {}, lazyEntries: new Map() }];
 const assets: (Asset | null)[] = [null];
 const A = (a: ArgReader) => assets[a.i()];
+/** an open AAssetDir: the file names directly under it, and the one getNextFileName last returned */
+const assetDirs: ({ names: string[]; next: number; name: number } | null)[] = [null];
 const seek = (s: Asset, off: number, whence: number): number => {
   const p = whence === 0 ? off : whence === 1 ? s.pos + off : s.source.size + off;
   return p < 0 || p > s.source.size ? -1 : (s.pos = p);
@@ -241,6 +243,26 @@ export function ndkInit(): void {
       assets.push({ source, data, pos: 0, buf: 0 });
       return assets.length - 1;
     },
+    AAssetManager_openDir: (_c, a) => {
+      const set = zips[a.i()], dir = a.str().replace(/\/+$/, ""), prefix = dir ? `assets/${dir}/` : "assets/";
+      if (!set) return 0;
+      const names = [...new Set([...Object.keys(set.zip), ...set.lazyEntries.keys()])]
+        .filter((p) => p.startsWith(prefix) && !p.includes("/", prefix.length)).map((p) => p.slice(prefix.length));
+      assetDirs.push({ names, next: 0, name: 0 });
+      return assetDirs.length - 1;
+    },
+    AAssetDir_getNextFileName: (_c, a) => {
+      const d = assetDirs[a.i()];
+      if (!d) return 0;
+      mem.free(d.name);
+      return (d.name = d.next < d.names.length ? mem.strdup(d.names[d.next++]) : 0);
+    },
+    AAssetDir_rewind: (_c, a) => { const d = assetDirs[a.i()]; if (d) d.next = 0; },
+    AAssetDir_close: (_c, a) => { const h = a.i(), d = assetDirs[h]; if (d) { mem.free(d.name); assetDirs[h] = null; } },
+    // there is no thermal service: no manager, and the headroom is the documented NaN
+    AThermal_acquireManager: () => 0, AThermal_releaseManager: () => {},
+    AThermal_getCurrentThermalStatus: () => -1,
+    AThermal_getThermalHeadroom: (cpu) => retF(cpu, NaN),
     AAsset_read: (_c, a) => {
       const s = A(a); if (!s) return -1;
       const buf = a.p(), n = Math.min(a.i(), s.source.size - s.pos);
