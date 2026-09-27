@@ -3,8 +3,8 @@ import { processEnv } from "../shell/environment";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import type { JMessenger } from "./messenger";
-import { procIdentity, processTid, sysconf } from "../shell/procfs";
-import { parcelCreator, type JParcel } from "./parcel";
+import { procIdentity, processTid, sysconf, SYSCONF } from "../shell/procfs";
+import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
@@ -814,6 +814,7 @@ rt.register({
   statics: {
     MODE_READ_ONLY: 0x10000000, MODE_WRITE_ONLY: 0x20000000, MODE_READ_WRITE: 0x30000000,
     MODE_CREATE: 0x08000000, MODE_TRUNCATE: 0x04000000, MODE_APPEND: 0x02000000,
+    get CREATOR() { return parcelCreator("android/os/ParcelFileDescriptor", async (parcel) => readObject(parcel)); },
   },
   methods: {
     "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: { path: string }, mode: number): Gen {
@@ -862,6 +863,13 @@ rt.register({
       return p;
     },
     "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.backing ? vfs.stat(this.backing.path)?.size ?? 0 : this.bytes.length); },
+    // A parcel carries a duplicate of the descriptor, as the kernel does; it stays within this
+    // process, since binder IPC here moves no descriptors (provider files travel as bytes).
+    "describeContents()I": () => 1, // CONTENTS_FILE_DESCRIPTOR
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JParcelFileDescriptor, parcel: JParcel, flags: number): Gen {
+      writeObject(parcel, yield vcall(this, "dup", "()Landroid/os/ParcelFileDescriptor;"));
+      if (flags & 1) yield vcall(this, "close", "()V"); // PARCELABLE_WRITE_RETURN_VALUE
+    }),
     "close()V": driven(function* (this: JParcelFileDescriptor): Gen {
       if (this.closed) return;
       if (this.fd >= 0) javaCloseFd(this.fd);
@@ -1414,8 +1422,7 @@ rt.register({
   },
 });
 // android.system.OsConstants: static int fields naming POSIX/bionic constants.
-// Only the fields real APKs have actually asked for are implemented (checked via
-// scripts/audit.ts-style field scan of the dex) — not the full table AOSP ships.
+// Only the fields real APKs have asked for are implemented, not the full table AOSP ships.
 rt.register({
   name: "android/system/OsConstants", ctor: class extends JObj {},
   statics: {
@@ -1428,6 +1435,7 @@ rt.register({
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,
     S_IFMT: 0o170000, S_IFREG: 0o100000, S_IFDIR: 0o40000,
+    ...Object.fromEntries(Object.entries(SYSCONF).map(([name, [value]]) => [name, value])),
   },
 });
 

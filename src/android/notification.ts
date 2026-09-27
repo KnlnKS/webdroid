@@ -10,6 +10,7 @@ import { rt, JObj, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } 
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
 import { PARCELABLE } from "./os";
+import { type JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
 import type { JBundle } from "./os";
 import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";
@@ -86,11 +87,34 @@ const rvMethods: Record<string, Impl> = {
   "<init>(Ljava/lang/String;II)V": function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; },
   "<init>(Landroid/widget/RemoteViews;Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { this.pkg = a?.pkg ?? null; this.layoutId = a?.layoutId ?? 0; },
   "<init>(Ljava/util/Map;)V": function () {},
-  "<init>(Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { this.pkg = a?.pkg ?? null; this.layoutId = a?.layoutId ?? 0; },
+  "<init>(Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { copyRemoteViews(this, a); },
   "getLayoutId()I": function (this: JRemoteViews) { return this.layoutId; },
   "getPackage()Ljava/lang/String;": function (this: JRemoteViews) { return this.pkg; },
-  "clone()Landroid/widget/RemoteViews;": function (this: JRemoteViews) { const r = new JRemoteViews(); r.pkg = this.pkg; r.layoutId = this.layoutId; return r; },
-  ...PARCELABLE,
+  "clone()Landroid/widget/RemoteViews;": function (this: JRemoteViews) { return copyRemoteViews(new JRemoteViews(), this); },
+  "describeContents()I": () => 0,
+  // the recorded actions travel as values; nothing here inflates them yet
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JRemoteViews, parcel: JParcel): Gen {
+    writeString(parcel, this.pkg); writeInt(parcel, this.layoutId); writeInt(parcel, this.ops.length);
+    for (const [name, ...args] of this.ops) {
+      writeString(parcel, name as string); writeInt(parcel, args.length);
+      for (const arg of args) yield vcall(parcel, "writeValue", "(Ljava/lang/Object;)V", arg);
+    }
+  }),
+};
+function copyRemoteViews(to: JRemoteViews, from: JRemoteViews | null): JRemoteViews {
+  to.pkg = from?.pkg ?? null; to.layoutId = from?.layoutId ?? 0; to.ops = from?.ops.map((op) => [...op]) ?? [];
+  return to;
+}
+const readRemoteViews = async (parcel: JParcel): Promise<JRemoteViews> => {
+  rt.link("android/widget/RemoteViews");
+  const views = new JRemoteViews();
+  views.pkg = readString(parcel); views.layoutId = readInt(parcel);
+  for (let n = readInt(parcel); n > 0; n--) {
+    const op: unknown[] = [readString(parcel)];
+    for (let argc = readInt(parcel); argc > 0; argc--) op.push(await vcall(parcel, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
+    views.ops.push(op);
+  }
+  return views;
 };
 for (const sig of [
   "addStableView(ILandroid/widget/RemoteViews;I)", "addView(ILandroid/widget/RemoteViews;)", "removeAllViews(I)",
@@ -126,7 +150,8 @@ for (const sig of [
   const name = sig.slice(0, sig.indexOf("("));
   rvMethods[sig + "V"] = function (this: JRemoteViews, ...a: unknown[]) { this.ops.push([name, ...a]); };
 }
-rt.register({ name: "android/widget/RemoteViews", ctor: JRemoteViews, ifaces: ["android/os/Parcelable"], methods: rvMethods });
+rt.register({ name: "android/widget/RemoteViews", ctor: JRemoteViews, ifaces: ["android/os/Parcelable"], methods: rvMethods,
+  statics: { get CREATOR() { return parcelCreator("android/widget/RemoteViews", readRemoteViews); } } });
 // Apps subclass RemoteViewsService, so its JS ctor has to really extend Service's — a
 // plain JObj shell would drop every inherited Service method off the prototype chain.
 rt.register({

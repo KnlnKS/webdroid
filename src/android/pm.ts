@@ -306,7 +306,7 @@ class JApplicationInfo extends JPackageItemInfo {
   // is a reference, the literal otherwise. Code that names the app reads whichever is set.
   nonLocalizedLabel: string | null = null;
   className: string | null = null; publicSourceDir = ""; uid = 10001; processName = "";
-  enabled = 1; metaData: JBundle | null = null;
+  enabled = 1; metaData: JBundle | null = null; profileableByShell = false;
   category = -1;
   // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
   splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
@@ -329,6 +329,7 @@ rt.register({
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JApplicationInfo, parcel: JParcel, flags: number) {
       return writeApplicationInfo(parcel, this as unknown as Record<string, unknown>, flags);
     },
+    "isProfileableByShell()Z": function (this: JApplicationInfo) { return +this.profileableByShell; },
   },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
@@ -356,7 +357,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
-    fillManifestGameInfo(cachedAppInfo, node);
+    fillManifestAppInfo(cachedAppInfo, node);
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;
@@ -1157,7 +1158,7 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   ai.deviceProtectedDataDir = `/data/user_de/0/${pkg}`;
-  fillManifestGameInfo(ai, app);
+  fillManifestAppInfo(ai, app);
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
@@ -1168,9 +1169,11 @@ function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resou
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }
-function fillManifestGameInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
+function fillManifestAppInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
   ai.category = app ? attr(app, "appCategory")?.data ?? -1 : -1;
   if (app && attr(app, "isGame")?.data) ai.flags |= FLAG_IS_GAME;
+  // the package parser makes a debuggable app profileable by the shell too
+  ai.profileableByShell = !!app && !!(attr(app, "debuggable")?.data || app.children.some((n) => n.name === "profileable" && attr(n, "shell")?.data));
 }
 function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
   info.sharedUserId = attrStr(root, "sharedUserId");

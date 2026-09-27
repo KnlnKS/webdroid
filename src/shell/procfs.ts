@@ -11,10 +11,16 @@ export function processTid(thread: object, main: boolean): number {
   return procIdentity.pid + offset;
 }
 
-/** Bionic's sysconf names: _SC_PAGESIZE/_SC_PAGE_SIZE 0x27/0x28, _SC_NPROCESSORS_CONF/ONLN 0x60/0x61, _SC_PHYS_PAGES 0x62 */
-export function sysconf(name: number): number {
-  return name === 0x27 || name === 0x28 ? 4096 : name === 0x60 || name === 0x61 ? device.cpu.cores : name === 0x62 ? device.cpu.memKb / 4 : -1;
-}
+/** The sysconf names this device answers, by Bionic's number (bits/sysconf.h); the rest are -1.
+ *  AVPHYS_PAGES agrees with /proc/meminfo's MemFree, and CLK_TCK is the kernel's USER_HZ. */
+export const SYSCONF: Record<string, [number, () => number]> = {
+  _SC_CLK_TCK: [0x06, () => 100], _SC_OPEN_MAX: [0x0b, () => 32768],
+  _SC_PAGESIZE: [0x27, () => 4096], _SC_PAGE_SIZE: [0x28, () => 4096],
+  _SC_NPROCESSORS_CONF: [0x60, () => device.cpu.cores], _SC_NPROCESSORS_ONLN: [0x61, () => device.cpu.cores],
+  _SC_PHYS_PAGES: [0x62, () => device.cpu.memKb / 4], _SC_AVPHYS_PAGES: [0x63, () => device.cpu.memKb / 8],
+};
+const sysconfByName = new Map(Object.values(SYSCONF));
+export function sysconf(name: number): number { return sysconfByName.get(name)?.() ?? -1; }
 
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 

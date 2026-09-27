@@ -111,8 +111,8 @@ function readBytes(p: JParcel): Int8Array | null {
   return new Int8Array(p.buf.slice(at, at + len).buffer);
 }
 /** an opaque object: its slot holds a tag, the side table holds the value */
-function writeObject(p: JParcel, o: unknown) { p.objects.set(p.pos, o); writeInt(p, 0); }
-function readObject(p: JParcel) { const at = p.pos; readInt(p); return p.objects.get(at) ?? null; }
+export function writeObject(p: JParcel, o: unknown) { p.objects.set(p.pos, o); writeInt(p, 0); }
+export function readObject(p: JParcel) { const at = p.pos; readInt(p); return p.objects.get(at) ?? null; }
 async function writeSerializable(p: JParcel, o: unknown): Promise<void> {
   const thread = curThread;
   if (o === null) return writeString(p, null);
