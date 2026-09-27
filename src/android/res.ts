@@ -13,7 +13,12 @@ const aidMemo = new Map<string, number>();
 /** framework attr id by name, e.g. AID("textColor") */
 export const AID = (name: string): number => {
   let v = aidMemo.get(name);
-  if (v === undefined) { aidMemo.set(name, v = fwPkg?.findId("attr", name) ?? 0); if (v) askedAttrs.add(v); }
+  if (v === undefined) {
+    v = fwPkg?.findId("attr", name) ?? 0;
+    // a lookup before the framework package loads is not an answer, so it is not remembered
+    if (fwPkg) aidMemo.set(name, v);
+    if (v) askedAttrs.add(v);
+  }
   return v;
 };
 
