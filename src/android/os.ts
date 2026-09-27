@@ -23,7 +23,7 @@ import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdWriteBack } from "../native/stdio";
-import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { newArrayList, newStringSet, toJsArray } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { unavailableClock } from "../jvm/natives/jtime";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
@@ -1156,20 +1156,64 @@ rt.register({
     "unregisterAll()V": function (this: JObservable) { this.observers.length = 0; },
   },
 });
+const notifyObservers = driven(function* (observable: JObservable, name: string, desc: string, ...args: unknown[]): Gen {
+  for (const o of [...observable.observers]) yield vcall(o, name, desc, ...args);
+});
 rt.register({
   name: "android/database/DataSetObservable", ctor: class extends JObservable {}, sup: "android/database/Observable",
   methods: {
     "<init>()V": function () {},
-    "notifyChanged()V": driven(function* (this: JObservable): Gen {
+    "notifyChanged()V": function (this: JObservable) { return notifyObservers(this, "onChanged", "()V"); },
+    "notifyInvalidated()V": function (this: JObservable) { return notifyObservers(this, "onInvalidated", "()V"); },
+  },
+});
+rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V", "onChanged()V", "onInvalidated()V") } });
+rt.register({
+  name: "android/database/ContentObservable", ctor: class extends JObservable {}, sup: "android/database/Observable",
+  methods: {
+    "<init>()V": function () {},
+    "registerObserver(Landroid/database/ContentObserver;)V": function (this: JObservable, o: unknown) {
+      return vcall(this, "registerObserver", "(Ljava/lang/Object;)V", o);
+    },
+    "dispatchChange(Z)V": function (this: JObservable, self: number) {
+      return vcall(this, "dispatchChange", "(ZLandroid/net/Uri;)V", self, null);
+    },
+    "dispatchChange(ZLandroid/net/Uri;)V": driven(function* (this: JObservable, self: number, uri: unknown): Gen {
       for (const o of [...this.observers]) {
-        try { yield vcall(o, "onChanged", "()V"); } catch (e) { console.warn("[dataset]", e); }
+        if (!self || (yield vcall(o, "deliverSelfNotifications", "()Z"))) yield vcall(o, "dispatchChange", "(ZLandroid/net/Uri;)V", self, uri);
       }
     }),
-    "notifyInvalidated()V": driven(function* (this: JObservable): Gen {
-      for (const o of [...this.observers]) {
-        try { yield vcall(o, "onInvalidated", "()V"); } catch (e) { console.warn("[dataset]", e); }
-      }
+    "notifyChange(Z)V": function (this: JObservable, self: number) { return notifyObservers(this, "onChange", "(ZLandroid/net/Uri;)V", self, null); },
+  },
+});
+// AOSP's dispatch chain: every dispatchChange overload lands on the Collection one, which runs
+// onChange on the observer's Handler (inline without one); each onChange overload falls back
+// to the next older one, so an override at any API level sees the change.
+class JContentObserver extends JObj { handler: JHandler | null = null; }
+const ON_CHANGE_URI = "(ZLandroid/net/Uri;I)V", URIS = "(ZLjava/util/Collection;I)V";
+rt.register({
+  name: "android/database/ContentObserver", ctor: JContentObserver,
+  methods: {
+    "<init>(Landroid/os/Handler;)V": function (this: JContentObserver, h: JHandler | null) { this.handler = h; },
+    "deliverSelfNotifications()Z": () => 0,
+    "onChange(Z)V": () => {},
+    "onChange(ZLandroid/net/Uri;)V": function (this: JObj, self: number) { return vcall(this, "onChange", "(Z)V", self); },
+    "onChange(ZLandroid/net/Uri;I)V": function (this: JObj, self: number, uri: unknown) { return vcall(this, "onChange", "(ZLandroid/net/Uri;)V", self, uri); },
+    "onChange(ZLjava/util/Collection;I)V": driven(function* (this: JObj, self: number, uris: unknown, flags: number): Gen {
+      for (const uri of (yield toJsArray(uris)) as unknown[]) yield vcall(this, "onChange", ON_CHANGE_URI, self, uri, flags);
     }),
+    "dispatchChange(Z)V": function (this: JObj, self: number) { return vcall(this, "dispatchChange", ON_CHANGE_URI, self, null, 0); },
+    "dispatchChange(ZLandroid/net/Uri;)V": function (this: JObj, self: number, uri: unknown) { return vcall(this, "dispatchChange", ON_CHANGE_URI, self, uri, 0); },
+    "dispatchChange(ZLandroid/net/Uri;I)V": function (this: JObj, self: number, uri: unknown, flags: number) {
+      const uris = newArrayList(); uris.a.push(uri);
+      return vcall(this, "dispatchChange", URIS, self, uris, flags);
+    },
+    "dispatchChange(ZLjava/util/Collection;I)V": function (this: JContentObserver, self: number, uris: unknown, flags: number) {
+      const change = () => vcall(this, "onChange", URIS, self, uris, flags);
+      if (!this.handler) return change();
+      const runnable: JFnRunnable = rt.make("webdroid/FnRunnable"); runnable.fn = change;
+      this.handler.post(runnable, 0);
+    },
   },
 });
 
