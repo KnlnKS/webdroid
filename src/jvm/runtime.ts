@@ -523,6 +523,7 @@ export class Runtime {
     const info = new ClassInfo(desc);
     this.classes.set(desc, info);
     info.types.add(desc).add("java/lang/Object").add("java/lang/Cloneable").add("java/io/Serializable");
+    info.superInfo = this.link("java/lang/Object");
     info.ctor = null;
     info.state = 2;
     return info;
