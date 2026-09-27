@@ -7,6 +7,9 @@ export const komikku: Flow = {
   apk: "Komikku-arm64-v8a-v1.14.1.apk",
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "pinned",
+  // The bundled requery SQLite logs SQLITE_WARNING (28), SQLITE_NOTICE_RECOVER_WAL (283) and
+  // SQLITE_WARNING_AUTOINDEX (284) at error level, on a device as here.
+  expectedErrors: ["[logcat] E/SQLiteLog: (28) ", "[logcat] E/SQLiteLog: (283) ", "[logcat] E/SQLiteLog: (284) "],
   privateStorage: {
     files: [{ path: "storage/local/Compatibility sample/Chapter 1/001.png", fixture: "komikku-page.png" }],
     expectedFiles: [{ pathPrefix: "files/", suffix: ".tachibk", minBytes: 100 }],
