@@ -8,7 +8,7 @@ import { locateDrawnText, SYSTEM_FONT, SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
-import { loadFramework } from "./android/framework";
+import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
@@ -51,6 +51,7 @@ setWebLayer(shell.webLayer);
 setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();
+void fetchPlatformJars();
 
 if (process.env.NODE_ENV !== "production") {
   mountDiagnostics(document.querySelector<HTMLElement>("#side")!);

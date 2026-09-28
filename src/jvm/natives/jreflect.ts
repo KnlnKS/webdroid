@@ -4,6 +4,7 @@ import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type G
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
 import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
+import type { Cells } from "../compiler";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -578,6 +579,8 @@ export function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] 
   if (!c) methodsCache.set(info, (c = [undefined, undefined]));
   return (c[declaredOnly ? 1 : 0] ??= collectMethods(info, declaredOnly)).slice();
 }
+/** a platform body a native class could not run is not a method it has */
+const runnable = (fn: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !(fn as Cells).$unsafe?.();
 function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   rt.ensureCompiled(info);
   const out: JMethod[] = [];
@@ -601,8 +604,8 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
       const mangled = mangleMethod(name, desc);
       const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled];
-      if (typeof fn === "function") { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
-      else if (typeof sfn === "function") { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
+      if (runnable(fn)) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
+      else if (runnable(sfn)) { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
     }
   };
   const collect = (ci: ClassInfo) => {
@@ -1163,23 +1166,12 @@ rt.register({
 // InvocationHandler and unboxes what comes back.
 rt.markers("java/lang/reflect/InvocationHandler");
 class JProxy extends JObj { h: unknown = null; }
-const proxyClasses = new Map<string, Promise<ClassInfo>>();
+const proxyClasses = new Map<string, ClassInfo>();
 let nextProxyId = 0;
 const D_INVOKE = "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;";
 type Decl = [ClassInfo, string, string, number];
-/** framework.jar's class defs by name, fetched once a proxy needs a marker interface's declaration */
-let declIndex: Map<string, [DexFile, number]> | null = null;
-let declLoading: Promise<void> | null = null;
-function ensureDecls(): Promise<void> {
-  return declLoading ??= (async () => {
-    const { frameworkDecls } = await import("../../android/framework");
-    const idx = new Map<string, [DexFile, number]>();
-    for (const dex of await frameworkDecls()) for (let i = 0; i < dex.classDefCount; i++) idx.set(descToName(dex.type(dex.classDef2Type(i))), [dex, i]);
-    declIndex = idx;
-  })().catch((error) => { declLoading = null; throw error; });
-}
 /** what an interface declares, as the proxy sees it: bytecode when there is any, else the
- *  hand-written spec plus the app's own references plus AOSP's declaration of the same name */
+ *  hand-written spec plus the app's own references plus the platform's declaration of the same name */
 function interfaceMethods(ci: ClassInfo, out: Map<string, Decl>): void {
   if (ci.def && ci.dex) {
     for (const m of ci.def.virtualMethods) { const n = ci.dex.method(m.methodIdx).name, d = ci.dex.methodDesc(m.methodIdx); out.set(n + d, [ci, n, d, m.flags]); }
@@ -1188,9 +1180,9 @@ function interfaceMethods(ci: ClassInfo, out: Map<string, Decl>): void {
   }
   for (const k of Object.keys(rt.natives.get(ci.name)?.methods ?? {})) if (!k.startsWith("static ")) out.set(k, [ci, ...splitSig(k), 0x401]);
   for (const [k, d] of rt.methodRefs(ci.name)) out.set(k, [ci, k.slice(0, k.length - d.length), d, 0x401]);
-  const loc = declIndex?.get(ci.name);
-  if (loc) {
-    const [dex, i] = loc, def = dex.classDef(i);
+  const decl = rt.classDefOf(ci.name);
+  if (decl) {
+    const { dex, def } = decl;
     for (const m of def.virtualMethods) { const n = dex.method(m.methodIdx).name, d = dex.methodDesc(m.methodIdx); out.set(n + d, [ci, n, d, m.flags]); }
     for (const t of def.interfaces) interfaceMethods(rt.link(descToName(dex.type(t))), out);
   }
@@ -1206,17 +1198,12 @@ function proxyMethod(info: ClassInfo, owner: ClassInfo, n: string, desc: string,
   return fn;
 }
 const proxyIfaces = new WeakMap<ClassInfo, ClassInfo[]>();
-function proxyClass(ifaces: ClassInfo[]): Promise<ClassInfo> {
+/** one class per interface set: a proxy over the same interfaces shares it */
+function proxyClass(ifaces: ClassInfo[]): ClassInfo {
   const key = ifaces.map((i) => i.name).join(";");
   const cached = proxyClasses.get(key);
   if (cached) return cached;
-  const pending = (async () => buildProxy(ifaces))().catch((error: unknown) => { proxyClasses.delete(key); throw error; });
-  proxyClasses.set(key, pending);
-  return pending;
-}
-const buildProxy = driven(function* buildProxy(ifaces: ClassInfo[]): Gen<ClassInfo> {
   const name = "java/lang/reflect/$Proxy" + nextProxyId++;
-  if (ifaces.some((i) => !i.dex)) yield ensureDecls();
   rt.register({ name, ctor: class extends JProxy {}, ifaces: ifaces.map((i) => i.name) });
   const info = rt.link(name);
   proxyIfaces.set(info, ifaces);
@@ -1225,8 +1212,9 @@ const buildProxy = driven(function* buildProxy(ifaces: ClassInfo[]): Gen<ClassIn
   for (const [n, d] of [["equals", "(Ljava/lang/Object;)Z"], ["hashCode", "()I"], ["toString", "()Ljava/lang/String;"]]) methods.set(n + d, [object, n, d, 0x1]);
   for (const i of ifaces) interfaceMethods(i, methods);
   for (const [owner, n, desc, mods] of methods.values()) proxyMethod(info, owner, n, desc, mods);
+  proxyClasses.set(key, info);
   return info;
-});
+}
 // a method no declaration named: the first call names it, and the proxy materialises it then,
 // owned by the interface that declares it if any of them does, else the first
 lateMethod.find = (obj, n, desc) => {
@@ -1240,12 +1228,12 @@ lateMethod.find = (obj, n, desc) => {
 rt.register({
   name: "java/lang/reflect/Proxy", ctor: JProxy,
   methods: {
-    "static newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": driven(function* (_l: unknown, ifaces: JClass[], h: unknown): Gen {
-      const p = new ((yield proxyClass(ifaces.map((c) => c.ci!))).ctor)() as JProxy;
+    "static newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": (_l: unknown, ifaces: JClass[], h: unknown) => {
+      const p = new (proxyClass(ifaces.map((c) => c.ci!)).ctor)() as JProxy;
       p.h = h;
       return p;
-    }),
-    "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": driven(function* (_l: unknown, ifaces: JClass[]): Gen { return rt.classFor((yield proxyClass(ifaces.map((c) => c.ci!))).name); }),
+    },
+    "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": (_l: unknown, ifaces: JClass[]) => rt.classFor(proxyClass(ifaces.map((c) => c.ci!)).name),
     "static isProxyClass(Ljava/lang/Class;)Z": (c: JClass) => (c.ci?.ctor.prototype instanceof JProxy ? 1 : 0),
     "static getInvocationHandler(Ljava/lang/Object;)Ljava/lang/reflect/InvocationHandler;": (o: unknown) => (o instanceof JProxy ? o.h : null),
   },

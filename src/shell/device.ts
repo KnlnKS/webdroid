@@ -8,7 +8,7 @@ import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
 import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
-import { loadFramework, loadFrameworkDex } from "../android/framework";
+import { loadFramework, loadPlatformDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, type JLocaleList } from "../android/resnative";
@@ -131,7 +131,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   for (const name of Object.keys(zip)) {
     if (isDex(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
-  await loadFrameworkDex();
+  await loadPlatformDex();
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.

@@ -2,14 +2,12 @@ import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ensureFrameworkRes } from "./gen-framework-res";
 import { prepareSystemPackages } from "./system-packages";
+import { PLATFORM_JARS } from "../src/jvm/provenance";
 
 const out = "dist";
 const partSize = 24 * 1024 * 1024;
-const aospFiles = ["framework.jar", "framework-res.apk"];
-const includeAosp = process.env.WEBDROID_INCLUDE_AOSP === "1";
-if (process.env.WEBDROID_INCLUDE_AOSP && !includeAosp)
-  throw new Error("WEBDROID_INCLUDE_AOSP must be 1 when set");
-if (includeAosp) for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp/${name}`).exists()))
+const aospFiles = [...PLATFORM_JARS, "framework-res.apk"];
+for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp/${name}`).exists()))
   throw new Error(`Missing vendor/aosp/${name}; run bun run gen-framework`);
 
 await Promise.all([ensureFrameworkRes(), prepareSystemPackages()]);
@@ -37,7 +35,7 @@ await Promise.all([
 ]);
 
 const large: Record<string, { parts: number }> = {};
-if (includeAosp) for (const name of aospFiles) {
+for (const name of aospFiles) {
   const path = `vendor/aosp/${name}`;
   const size = (await stat(path)).size;
   if (size <= partSize) { await copyFile(path); continue; }

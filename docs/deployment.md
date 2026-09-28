@@ -12,7 +12,7 @@ bun run typecheck
 bun run worker:check
 ```
 
-The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. AOSP bytecode provenance assets are excluded by default. To include them, run `bun run gen-framework` and set `WEBDROID_INCLUDE_AOSP=1` for the build and Worker check. The build fails if either requested AOSP file is missing. Files over Cloudflare's static asset size limit are split and streamed by the Worker. The generated `dist/` directory is disposable.
+The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. It includes the platform class path under `vendor/aosp` (`bun run gen-framework`) and fails if any of its files is missing. Files over Cloudflare's static asset size limit are split and streamed by the Worker. The generated `dist/` directory is disposable.
 
 For local Worker testing, use `bun run worker:dev`. To deploy after configuring the sites below, run `bun run build:prod` followed by `bunx wrangler deploy --env=""`. The Pages project deploys from Git automatically.
 

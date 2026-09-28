@@ -10,13 +10,14 @@ import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
-import { compileClass, compileLazyMethod, methodKey, type Cells, type CompiledCtor, type ResumeBody } from "./compiler";
+import { compileClass, compileLazyMethod, installLazy, methodKey, type Cells, type CompiledCtor, type ResumeBody } from "./compiler";
+import { insnLen } from "./opcodes";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
 import { Monitors } from "./monitor";
 
-export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
+export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
 // DEX type IDs cap distinct class definitions at 65,535 per file.
 const CLASS_INDEX_BASE = 0x10000;
 
@@ -92,7 +93,7 @@ export class ClassInfo {
   jclass: any = null;                 // java.lang.Class instance (lazy, made by jlang)
   compiled = false;
   /** method bodies not yet generated (see compiler installLazy); undefined when eager */
-  lazy?: { m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string; stub: Cells & ((...a: unknown[]) => unknown) }[];
+  lazy?: { dex: DexFile; m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string; stub: Cells & ((...a: unknown[]) => unknown); fallthrough: boolean }[];
   defaultsCopied = false;         // interface default methods already copied down
   constructor(public name: string, public owner?: Runtime) {}
   get isInterface(): boolean { return (this.flags & ACC.INTERFACE) !== 0; }
@@ -238,6 +239,13 @@ export class Runtime {
   }
 
   dexAtClassLocation(location: number): DexFile { return this.dexes[Math.floor(location / CLASS_INDEX_BASE)]; }
+  /** the first dex definition of `name`, whether or not a native spec answers for it */
+  classDefOf(name: string): { dex: DexFile; def: ClassDef } | null {
+    const loc = this.dexIndex.get(name);
+    if (loc === undefined) return null;
+    const dex = this.dexAtClassLocation(loc);
+    return { dex, def: dex.classDef(loc & (CLASS_INDEX_BASE - 1)) };
+  }
 
   private ifaceNames: Set<string> | null = null;
   /** Which registered natives are interfaces: an `ifaces` entry names one by definition, and an
@@ -321,12 +329,8 @@ export class Runtime {
     const fr = dex.field(fieldIdx);
     const clsName = descToName(dex.type(fr.cls));
     try {
-      let info: ClassInfo | null = this.link(clsName);
-      while (info) {
-        const m = info.fieldTable.get(fr.name);
-        if (m) return m;
-        info = info.superInfo;
-      }
+      const prop = instanceFieldOf(this.link(clsName), fr.name);
+      if (prop) return prop;
     } catch { /* class missing — fall through */ }
     this.noteMissing(`field ${clsName}.${fr.name}`);
     return mangleField(clsName, fr.name);
@@ -373,10 +377,16 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + dotName(cls) + "." + name + desc);
   }
 
+  /** the Java frames calling into the runtime here, innermost first (set by jlang) */
+  javaFrames: () => string[] = () => [];
+  /** where each missing entry was first reached */
+  missingAt = new Map<string, string[]>();
   noteMissing(what: string) {
     if (!this.missing.has(what)) {
       this.missing.add(what);
-      console.warn("[webdroid missing]", what);
+      const at = this.javaFrames().slice(0, 12);
+      this.missingAt.set(what, at);
+      console.warn("[webdroid missing]", what, at.length ? "\n  at " + at.join("\n  at ") : "");
       this.onMissing(what);
     }
   }
@@ -444,8 +454,7 @@ export class Runtime {
       info.compiled = true;
       return info;
     }
-    const dex = this.dexAtClassLocation(loc), defIdx = loc & (CLASS_INDEX_BASE - 1);
-    const def = dex.classDef(defIdx);
+    const { dex, def } = this.classDefOf(name)!;
     info.dex = dex;
     info.def = def;
     info.flags = def.flags;
@@ -535,6 +544,50 @@ export class Runtime {
     ctorAny.$i = info;
     info.state = spec.clinit ? 0 : 2;
     info.compiled = true;
+    if (this.platformClasses.has(info.name)) this.fallThrough(info);
+  }
+
+  /**
+   * A native spec that leaves out a method the platform class declares answers with the
+   * platform's: its body, compiled against the native object on first call, or its JNI binding
+   * when the platform declares it native. Only gaps are filled: a virtual method or constructor
+   * the prototype chain already reaches keeps its native implementation.
+   */
+  private fallThrough(info: ClassInfo) {
+    const { dex, def } = this.classDefOf(info.name)!;
+    const proto = info.ctor.prototype;
+    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
+      if (m.flags & ACC.ABSTRACT) continue;
+      const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+      const isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
+      // statics and private methods belong to their class; the rest may be inherited
+      const own = isStatic || list === def.directMethods && name !== "<init>";
+      if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target)) continue;
+      if (!isStatic) info.ownMethods.push(mangled);
+      if (!(m.flags & ACC.NATIVE)) { installLazy(this, dex, info, m, true); continue; }
+      const R = this, cls = info.name;
+      target[mangled] = function (this: unknown, ...args: unknown[]) {
+        const fn = R.jniFn(cls, name + desc);
+        if (!fn) throw R.ulink(cls, name, desc);
+        return (target[mangled] = fn).apply(this, args as never[]);
+      };
+    }
+  }
+
+  /** the fields `m` reads or writes on native classes that those classes do not have: a
+   *  platform body touching them would read undefined, or leave its write unseen */
+  absentFields(dex: DexFile, m: EncodedMethod): string[] {
+    const absent = new Set<string>(), insns = dex.code(m.codeOff).insns;
+    for (let pc = 0; pc < insns.length; pc += insnLen(insns, pc)) {
+      const op = insns[pc] & 0xff;
+      if (op < 0x52 || op > 0x6d) continue;
+      const fr = dex.field(insns[pc + 1]), owner = descToName(dex.type(fr.cls));
+      let info: ClassInfo;
+      try { info = this.link(owner); } catch { continue; }
+      if (!info.native || info.stub) continue;
+      if (op < 0x60 ? !instanceFieldOf(info, fr.name) : !findStaticOwner(info, fr.name, dex.type(fr.type))) absent.add(`${owner}.${fr.name}`);
+    }
+    return [...absent];
   }
 
   private linkArray(desc: string): ClassInfo {
@@ -916,6 +969,14 @@ export class Runtime {
       for (let i = 0; i < vals.length; i++) a[i] = vals[i];
     }
   }
+}
+
+function instanceFieldOf(start: ClassInfo, name: string): string | undefined {
+  for (let info: ClassInfo | null = start; info; info = info.superInfo) {
+    const prop = info.fieldTable.get(name);
+    if (prop) return prop;
+  }
+  return undefined;
 }
 
 function findStaticOwner(start: ClassInfo, name: string, desc: string): { info: ClassInfo; prop: string } | null {

@@ -203,3 +203,17 @@ test("JVM profiling follows installed hot methods through suspension", async () 
     jvmProfiler.reset();
   }
 });
+
+test("a native spec's missing methods fall through to platform bodies that only touch its fields", async () => {
+  const R = new Runtime();
+  R.register({ name: "java/lang/Object", ctor: class extends JObj {}, methods: { "<init>()V"() {} } });
+  R.mkThrowable = (name, message) => Object.assign(new Error(message ?? ""), { $javaClass: name });
+  R.register({ name: "JvmTierProbe$Host", ctor: class extends JObj {}, methods: { "static call(II)I": (_: number, v: number) => v } });
+  R.register({ name: "JvmTierProbe$Worker", ctor: class extends JObj {}, methods: { "<init>()V"() {} } });
+  R.register({ name: "JvmTierProbe$Late", ctor: class extends JObj {} });
+  R.loadDex(new DexFile(bytes), true);
+  const worker = R.make("JvmTierProbe$Worker");
+  expect(worker[mangleMethod("apply", "(I)I")](20)).toBe(41);
+  const late = R.link("JvmTierProbe$Late").ctor;
+  expect(() => late[mangleMethod("get", "(I)I")](1)).toThrow("unsafe-fallthrough JvmTierProbe$Late.get(I)I JvmTierProbe$Late.value");
+});

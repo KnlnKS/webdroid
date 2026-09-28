@@ -532,6 +532,7 @@ function throwableTrace(t: JThrowable): unknown[] {
   return stackTrace(frames.slice(skip));
 }
 const framesHere = () => javaFrames(jsStackHere().stack, coldStack);
+rt.javaFrames = () => framesHere().map(([cls, method]) => dotName(cls) + "." + method);
 /** Thread.getStackTrace: ART's trace names the natives that took it */
 const threadTrace = () => stackTrace([["dalvik/system/VMStack", "getThreadStackTrace"], ["java/lang/Thread", "getStackTrace"], ...framesHere()]);
 /** VMStack.getStackClassN: the class `n` frames out from the native's caller */

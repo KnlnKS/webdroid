@@ -16,7 +16,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { dexesIn, type DexFile } from "../jvm/dex";
 import { mangleStaticField } from "../jvm/abi";
 import { Resources, setFramework } from "./res";
-import { needsFramework } from "../jvm/provenance";
+import { needsFramework, PLATFORM_JARS } from "../jvm/provenance";
 import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
@@ -24,33 +24,28 @@ import { apkCertificates } from "./packagearchive";
 let pending: Promise<Arsc> | null = null;
 let pendingDex: Promise<void> | null = null;
 
-/** framework.jar's classes*.dex, in load order */
-function jarDexes(jar: Uint8Array): DexFile[] {
+/** a jar's classes*.dex, in load order */
+export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
   const dir = centralDir(jar);
-  return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`));
+  return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
 }
 
-/** AOSP's own android.* and com.android.internal.*, for whatever provenance cut over to it.
- *  43MB of dex across five files; indexing all 32,713 classes costs ~30ms and compiling is
- *  lazy per class, so an apk that touches ten of them pays for ten. */
-export function loadFrameworkDex(): Promise<void> {
-  if (!needsFramework()) return Promise.resolve();
-  return pendingDex ??= (async () => {
-    const res = await fetch("/vendor/aosp/framework.jar");
-    if (!res.ok) throw new Error(`no framework bytecode (${res.status}) — run: bun run gen-framework`);
-    for (const d of jarDexes(new Uint8Array(await res.arrayBuffer()))) rt.loadDex(d, true);
-  })();
+let jars: Promise<Uint8Array[]> | null = null;
+/** start fetching the platform jars, ahead of the app they are indexed behind */
+export function fetchPlatformJars(): Promise<Uint8Array[]> {
+  return jars ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
+    const res = await fetch(`/vendor/aosp/${jar}`);
+    if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: bun run gen-framework`);
+    return new Uint8Array(await res.arrayBuffer());
+  }));
 }
 
-/** AOSP's declarations without running any of it: the dexes of framework.jar, parsed but never
- *  loaded into the runtime, for what a framework interface declares (a reflect.Proxy over an
- *  interface the hand-written framework only marks needs the method list and its owner) */
-let decls: Promise<DexFile[]> | null = null;
-export function frameworkDecls(): Promise<DexFile[]> {
-  return decls ??= (async () => {
-    const res = await fetch("/vendor/aosp/framework.jar");
-    return res.ok ? jarDexes(new Uint8Array(await res.arrayBuffer())) : [];
-  })();
+/** Index every platform class after the app's own, which loadDex's first-wins keeps ahead.
+ *  Indexing 40,860 classes costs ~20ms and compiling is lazy per class. */
+export function loadPlatformDex(): Promise<void> {
+  return pendingDex ??= fetchPlatformJars().then((bytes) => bytes.forEach((jar, i) => {
+    for (const d of jarDexes(jar, PLATFORM_JARS[i])) rt.loadDex(d, true);
+  }));
 }
 
 export function loadFramework(): Promise<Arsc> {

@@ -28,3 +28,8 @@ export function isBytecode(name: string): boolean {
 
 /** the framework jar is only worth fetching when something is actually cut over to it */
 export const needsFramework = (): boolean => BYTECODE.length > 0;
+
+/** The reference build's BOOTCLASSPATH under vendor/aosp, in class-path order: every class with
+ *  neither a native spec nor a definition in the app resolves through it. */
+export const PLATFORM_JARS = ["boot/core-oj.jar", "boot/core-libart.jar", "boot/okhttp.jar", "boot/bouncycastle.jar",
+  "boot/apache-xml.jar", "framework.jar", "boot/core-icu4j.jar"];

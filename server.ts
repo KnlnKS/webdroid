@@ -110,6 +110,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
     "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/fonts/:file": (req) => serveFile("vendor/fonts", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),
+    "/vendor/aosp/boot/:file": (req) => serveFile("vendor/aosp/boot", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/microg/:file": (req) => {
       const file = req.params.file;
       const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };

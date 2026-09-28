@@ -77,11 +77,12 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
   return out.join("\n");
 }
 
-/** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body. */
-function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): void {
+/** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body.
+ *  `fallthrough` marks a platform body installed on a native class, compiled only if safe. */
+export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, fallthrough = false): void {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
-  const i = info.lazy!.length;
+  const i = (info.lazy ??= []).length;
   const C: CompiledCtor = info.ctor;
   let entry: JvmFunction | undefined;
   const stub: JvmFunction & Cells = function (this: unknown, ...args: unknown[]) {
@@ -89,7 +90,8 @@ function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod
     return entry.apply(this, args);
   };
   stub.$c = [];
-  info.lazy!.push({ m, mangled, isStatic, name, desc, stub });
+  if (fallthrough) stub.$unsafe = () => R.absentFields(dex, m).length > 0;
+  info.lazy.push({ dex, m, mangled, isStatic, name, desc, stub, fallthrough });
   (isStatic ? C : C.prototype)[mangled] = stub;
 }
 
@@ -97,8 +99,9 @@ export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> }
 type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
 /** Re-enters a suspended frame (Runtime.dfr) or an on-stack-replaced cold frame. */
 export type ResumeBody = (this: unknown, frame: object) => unknown;
-/** Direct-call caches (`D.dp`) holding an interim entry, as flat [cache, index] pairs. */
-export type Cells = { $c?: unknown[] };
+/** Direct-call caches (`D.dp`) holding an interim entry, as flat [cache, index] pairs; a platform
+ *  fallthrough entry also says whether its body touches fields its native class lacks. */
+export type Cells = { $c?: unknown[]; $unsafe?: () => boolean };
 
 /** Point the direct-call caches holding `from` at `to`, so they stop paying for the indirection. */
 function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
@@ -110,9 +113,22 @@ function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
 }
 
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
-  const info = C.$i, rec = info.lazy![i], dex = info.dex!;
+  const info = C.$i, rec = info.lazy![i], dex = rec.dex;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
+  if (rec.fallthrough) {
+    const absent = R.absentFields(dex, rec.m);
+    if (absent.length) {
+      const what = `unsafe-fallthrough ${profileName} ${absent.join(",")}`;
+      const fail: JvmFunction & Cells = () => {
+        R.noteMissing(what);
+        throw R.mkThrowable("java/lang/NoSuchMethodError", what);
+      };
+      fail.$unsafe = () => true;
+      retarget(rec.stub, fail);
+      return target[rec.mangled] = fail;
+    }
+  }
   const code = dex.code(rec.m.codeOff);
   const prepare = () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName);
   const source = (prepared: PreparedMethod, count: boolean) =>

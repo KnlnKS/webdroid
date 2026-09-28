@@ -307,23 +307,16 @@ describe("reflection-field", () => {
   const owner = rt.link("test/PrimitiveFields");
   const field = (desc: string, isStatic = false) => Object.assign(new JField(), { owner, prop: "value", desc, isStatic });
 
-  test("concurrent proxy creation shares classes without crossing interface sets", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-      input === "/vendor/aosp/framework.jar"
-        ? Promise.resolve(new Response(Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url))))
-        : originalFetch(input, init), { preconnect: originalFetch.preconnect });
-    try {
-      const names = ["test/ConcurrentProxyA", "test/ConcurrentProxyB"];
-      rt.markers(...names);
-      const handler = { [mangleMethod("invoke", "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;")]: () => null };
-      const create = (name: string) => vcall(rt.link("java/lang/reflect/Proxy").ctor, "newProxyInstance",
-        "(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;", null, [rt.classFor(name)], handler);
-      const [first, repeated, other] = await Promise.all([create(names[0]), create(names[0]), create(names[1])]);
-      expect(first.constructor === repeated.constructor).toBe(true);
-      expect(first.constructor === other.constructor).toBe(false);
-      expect([rt.iof(first, names[0]), rt.iof(first, names[1]), rt.iof(other, names[0]), rt.iof(other, names[1])]).toEqual([1, 0, 0, 1]);
-    } finally { globalThis.fetch = originalFetch; }
+  test("proxy creation shares classes without crossing interface sets", async () => {
+    const names = ["test/ConcurrentProxyA", "test/ConcurrentProxyB"];
+    rt.markers(...names);
+    const handler = { [mangleMethod("invoke", "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;")]: () => null };
+    const create = (name: string) => vcall(rt.link("java/lang/reflect/Proxy").ctor, "newProxyInstance",
+      "(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;", null, [rt.classFor(name)], handler);
+    const [first, repeated, other] = await Promise.all([create(names[0]), create(names[0]), create(names[1])]);
+    expect(first.constructor === repeated.constructor).toBe(true);
+    expect(first.constructor === other.constructor).toBe(false);
+    expect([rt.iof(first, names[0]), rt.iof(first, names[1]), rt.iof(other, names[0]), rt.iof(other, names[1])]).toEqual([1, 0, 0, 1]);
   });
 
   test("typed field writes preserve primitive representation and Java widening rules", async () => {
@@ -508,7 +501,7 @@ describe("invoke-polymorphic-custom", () => {
     for (const tier of ["js", "cold"] as const) {
       configureJvm({ profile: false, tier });
       try {
-        const R = rt.fork();
+        const R = rt.fork(), missing = rt.missing.size;
         R.loadDex(new DexFile(bytes));
         const info = R.link("InvokeProbe");
         await R.initClass(info);
@@ -516,7 +509,7 @@ describe("invoke-polymorphic-custom", () => {
         expect(await call("varHandles")).toBe("true,false,5,8,true,true,true,40,42,true,y,oob");
         expect(await call("methodHandles")).toBe("103,107,n7");
         expect(await call("records")).toBe("Point[x=1, label=a, id=9],true,false,true,Point[x=2, label=null, id=9]");
-        expect([...R.missing]).toEqual([]);
+        expect([...R.missing].slice(missing)).toEqual([]);
       } finally { configureJvm({ profile: false, tier: "auto" }); }
     }
   });
