@@ -279,21 +279,22 @@ const executorMethods: NativeSpec["methods"] = {
     return submitTask(this, "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, null);
   },
   "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
-    return submitTask(this, "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
+    return submitTask(this, TASK_FOR_CALLABLE, c);
   },
-  "invokeAll(Ljava/util/Collection;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: JList): Gen {
+  // the JDK's bodies wrap each task with newTaskFor and hand it to execute, both overridable
+  "invokeAll(Ljava/util/Collection;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: unknown): Gen {
     if (tasks == null) rt.npe();
     const futures = newArrayList();
-    for (const task of tasks.a) futures.a.push(yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
+    for (const task of yield toJsArray(tasks)) futures.a.push(yield submitTask(this, TASK_FOR_CALLABLE, task));
     for (const future of futures.a) {
       try { yield vcall(future, "get", "()Ljava/lang/Object;"); } catch {}
     }
     return futures;
   }),
-  "invokeAll(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: JList, timeout: bigint, unit: JTimeUnit): Gen {
+  "invokeAll(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: unknown, timeout: bigint, unit: JTimeUnit): Gen {
     if (tasks == null || unit == null) rt.npe();
     const futures = newArrayList();
-    for (const task of tasks.a) futures.a.push(yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
+    for (const task of yield toJsArray(tasks)) futures.a.push(yield submitTask(this, TASK_FOR_CALLABLE, task));
     const deadline = guestNow() + Number(timeout) * unit.ms;
     for (let i = 0; i < futures.a.length; i++) {
       const remaining = Math.max(0, deadline - guestNow());
@@ -346,7 +347,7 @@ const executorMethods: NativeSpec["methods"] = {
     if (!list.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
     let failure: unknown;
     for (const task of list) {
-      const future = yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task);
+      const future = yield submitTask(this, TASK_FOR_CALLABLE, task);
       try { return yield vcall(future, "get", "()Ljava/lang/Object;"); } catch (e) { failure = e; }
     }
     throw failure;
@@ -368,6 +369,7 @@ function taskForCallable(callable: unknown): JFutureTask {
   rt.link("java/util/concurrent/FutureTask");
   const task = new JFutureTask(); armTask(task, callable); return task;
 }
+const TASK_FOR_CALLABLE = "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;";
 function submitTask(ex: JExecutor, desc: string, task: unknown, ...args: unknown[]): unknown {
   if (task == null) rt.npe();
   const thread = curThread;
@@ -403,6 +405,9 @@ function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
     },
   };
 }
+const RUNNABLE = "Ljava/lang/Runnable;", CALLABLE = "Ljava/util/concurrent/Callable;";
+const scheduleNow = (ex: JExecutor, task: string, value: unknown) =>
+  vcall(ex, "schedule", `(${task}JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;`, value, 0n, TUS.NANOSECONDS);
 function cancelDelayed(ex: JExecutor): void {
   for (const f of ex.jobs.keys()) if (f.delayed) cancelFuture(f, 0);
 }
@@ -445,6 +450,16 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
         "getRemoveOnCancelPolicy()Z": function (this: JExecutor) { return this.removeOnCancel; },
       } : {}),
       ...(n === "java/util/concurrent/ScheduledThreadPoolExecutor" ? {
+        // the JDK's bodies: each a zero-delay schedule, which a subclass may override
+        "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
+          if (r == null) rt.npe();
+          return this.shut ? reject(this, r) : after(scheduleNow(this, RUNNABLE, r), () => {});
+        },
+        "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) { return scheduleNow(this, RUNNABLE, r); },
+        "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown, result: unknown) {
+          return scheduleNow(this, CALLABLE, runnableCallable(r, result));
+        },
+        "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) { return scheduleNow(this, CALLABLE, c); },
         "setExecuteExistingDelayedTasksAfterShutdownPolicy(Z)V": function (this: JExecutor, value: number) {
           this.executeDelayedAfterShutdown = !!value;
           if (this.shut && !value) cancelDelayed(this);
@@ -501,8 +516,11 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       },
       "remove(Ljava/lang/Runnable;)Z": removeQueued,
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function (this: JExecutor, time: bigint, unit: JTimeUnit) {
-        if (time < 0n || (time === 0n && this.coreTimeout)) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-        this.keepAliveNs = time * unit.ns;
+        if (time < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+        return after(time === 0n ? vcall(this, "allowsCoreThreadTimeOut", "()Z") : 0, (timeout) => {
+          if (timeout) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Core threads must have nonzero keep alive times");
+          this.keepAliveNs = time * unit.ns;
+        });
       },
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
         if (!this.queue) { const queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; queue.a = this.tasks.map((t) => t.task); this.queue = queue; }
@@ -647,6 +665,12 @@ function armTask(t: JFutureTask, callable: unknown) {
   t.callable = callable;
   t.promise = new Promise((r) => (t.wake = r));
 }
+function completeTask(t: JFutureTask, value: unknown, error: unknown): unknown {
+  if (t.done) return;
+  t.value = value; t.error = error; t.done = 1;
+  t.wake(null);
+  return vcall(t, "done", "()V");
+}
 rt.register({
   name: "java/util/concurrent/FutureTask", ctor: JFutureTask,
   ifaces: ["java/util/concurrent/Future", "java/lang/Runnable", "java/util/concurrent/RunnableFuture"],
@@ -658,14 +682,16 @@ rt.register({
     "run()V": driven(function* (this: JFutureTask): Gen {
       if (this.done || this.thread) return;
       const thread = this.thread = curThread;
-      try {
-        const value = yield vcall(this.callable, "call", "()Ljava/lang/Object;");
-        if (!this.cancelled) this.value = value;
-      } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
-      this.done = 1; this.thread = null;
-      this.wake(null);
-      if (!this.cancelled) yield vcallOn(thread, this, "done", "()V");
+      let value: unknown = null, error: unknown = null;
+      try { value = yield vcall(this.callable, "call", "()Ljava/lang/Object;"); } catch (e) { error = rt.jx(e); }
+      this.thread = null;
+      // set/setException are protected hooks a subclass overrides
+      if (error !== null) yield vcallOn(thread, this, "setException", "(Ljava/lang/Throwable;)V", error);
+      else yield vcallOn(thread, this, "set", "(Ljava/lang/Object;)V", value);
     }),
+    "set(Ljava/lang/Object;)V": function (this: JFutureTask, value: unknown) { return completeTask(this, value, null); },
+    // surfaces from get() wrapped in an ExecutionException
+    "setException(Ljava/lang/Throwable;)V": function (this: JFutureTask, error: unknown) { return completeTask(this, null, error); },
     "done()V": function () {},
     ...futureAccessors,
     "cancel(Z)Z": driven(function* (this: JFutureTask, interrupt: number): Gen {

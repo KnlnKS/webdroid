@@ -349,6 +349,9 @@ function removeHead(this: JList): unknown {
 }
 function listStream(this: JList) { return mkStream(this.a.slice()); }
 function listAppend(this: JList, v: unknown) { this.a.push(v); return 1; }
+function listContains(this: JList, v: unknown) {
+  return after(vcall(this, "indexOf", "(Ljava/lang/Object;)I", v) as number | Promise<number>, (i) => (i >= 0 ? 1 : 0));
+}
 function listPeek(this: JList) { return this.a.length ? this.a[0] : null; }
 function listPoll(this: JList) { return this.a.length ? this.a.shift() : null; }
 /** listMethods() entries only List declares, those only Queue or Deque declare, the SequencedCollection
@@ -690,6 +693,19 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
       yield vcall(stream, "readInt", "()I");
       for (let i = 0; i < this.a.length; i++) this.a[i] = yield vcall(stream, "readObject", "()Ljava/lang/Object;");
     }),
+    "contains(Ljava/lang/Object;)Z": listContains,
+    "addFirst(Ljava/lang/Object;)V": function (this: JList, v: unknown) { return vcall(this, "add", "(ILjava/lang/Object;)V", 0, v); },
+    "addLast(Ljava/lang/Object;)V": function (this: JList, v: unknown) { return after(vcall(this, "add", "(Ljava/lang/Object;)Z", v), () => {}); },
+  }),
+  // LinkedList's JDK bodies route through these overridable methods
+  "java/util/LinkedList": () => ({
+    "contains(Ljava/lang/Object;)Z": listContains,
+    "addAll(Ljava/util/Collection;)Z": function (this: JList, c: unknown) { return vcall(this, "addAll", "(ILjava/util/Collection;)Z", this.a.length, c); },
+    "offer(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return vcall(this, "add", "(Ljava/lang/Object;)Z", v); },
+    "offerFirst(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return after(vcall(this, "addFirst", "(Ljava/lang/Object;)V", v), () => 1); },
+    "offerLast(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return after(vcall(this, "addLast", "(Ljava/lang/Object;)V", v), () => 1); },
+    "push(Ljava/lang/Object;)V": function (this: JList, v: unknown) { return vcall(this, "addFirst", "(Ljava/lang/Object;)V", v); },
+    "removeFirstOccurrence(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return vcall(this, "remove", "(Ljava/lang/Object;)Z", v); },
   }),
   "java/util/Vector": (base) => ({ "<init>(II)V": function () {}, ...vectorMethods(base) }),
   "java/util/Stack": (base) => ({ ...vectorMethods(base), ...stackMethods }),
@@ -1149,6 +1165,9 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
     "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": newKeySet,
     "contains(Ljava/lang/Object;)Z": hashtableContains,
     "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements,
+    "containsKey(Ljava/lang/Object;)Z": function (this: JMap, k: unknown) {
+      return after(vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k), (v) => (v != null ? 1 : 0));
+    },
   },
   // Properties keeps its own map and builds its Hashtable part through this package-private constructor
   "java/util/Hashtable": { "<init>(Ljava/lang/Void;)V": function () {}, "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
@@ -1666,6 +1685,12 @@ const cowExtras: Methods = {
   "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
   "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
   "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
+  "contains(Ljava/lang/Object;)Z": listContains,
+  "isEmpty()Z": function (this: JList) { return after(vcall(this, "size", "()I") as number | Promise<number>, (n) => (n === 0 ? 1 : 0)); },
+  ...Object.fromEntries(([["removeFirst", 0], ["removeLast", -1]] as const).map(([name, end]) => [`${name}()Ljava/lang/Object;`, function (this: JList) {
+    if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+    return vcall(this, "remove", "(I)Ljava/lang/Object;", end < 0 ? this.a.length - 1 : 0);
+  }])),
   "addIfAbsent(Ljava/lang/Object;)Z": driven(function* (this: JList, v: unknown): Gen {
     if ((yield indexIn(this.a, v)) >= 0) return 0;
     this.a.push(v);
@@ -1999,8 +2024,10 @@ const absCollection: Methods = {
     const it = yield iterOf(this);
     while (yield vcall(it, "hasNext", "()Z")) { yield vcall(it, "next", "()Ljava/lang/Object;"); yield vcall(it, "remove", "()V"); }
   }),
-  "toArray()[Ljava/lang/Object;": driven(function* (this: JObj): Gen { return jarray((yield toJsArray(this)).slice()); }),
+  // size() only presizes the JDK's array, but an app's override still sees the call
+  "toArray()[Ljava/lang/Object;": driven(function* (this: JObj): Gen { yield size(this); return jarray((yield toJsArray(this)).slice()); }),
   "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": driven(function* (this: JObj, out: unknown[]): Gen {
+    yield size(this);
     return fillToArray(yield toJsArray(this), out);
   }),
   "toString()Ljava/lang/String;": function (this: JObj) { return after(toJsArray(this), (items) => seqText(this, items)); },
@@ -2064,10 +2091,12 @@ const absList: Methods = {
   "equals(Ljava/lang/Object;)Z": driven(function* (this: JAbstractList, o: unknown): Gen {
     if (o === this) return 1;
     if (!(o instanceof JObj) || !rt.iof(o, "java/util/List")) return 0;
-    const a = yield toJsArray(this), b = yield toJsArray(o);
-    if (a.length !== b.length) return 0;
-    for (let i = 0; i < a.length; i++) if (!(yield aeq(a[i], b[i]))) return 0;
-    return 1;
+    const a = yield vcall(this, "listIterator", "()Ljava/util/ListIterator;"), b = yield vcall(o, "listIterator", "()Ljava/util/ListIterator;");
+    let more;
+    while ((more = yield vcall(a, "hasNext", "()Z")) && (yield vcall(b, "hasNext", "()Z"))) {
+      if (!(yield aeq(yield vcall(a, "next", "()Ljava/lang/Object;"), yield vcall(b, "next", "()Ljava/lang/Object;")))) return 0;
+    }
+    return more || (yield vcall(b, "hasNext", "()Z")) ? 0 : 1;
   }),
   "hashCode()I": driven(function* (this: JAbstractList): Gen { return hashSeq(yield toJsArray(this)); }),
 };
@@ -3056,7 +3085,7 @@ rt.register({
       this.toks = s.split(re).filter(Boolean);
     },
     "hasMoreTokens()Z": tokensLeft,
-    "hasMoreElements()Z": tokensLeft,
+    "hasMoreElements()Z": function (this: JStringTokenizer) { return vcall(this, "hasMoreTokens", "()Z"); },
     "nextToken()Ljava/lang/String;": function (this: JStringTokenizer) {
       if (this.i >= this.toks.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
       return this.toks[this.i++];

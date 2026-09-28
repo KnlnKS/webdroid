@@ -1,7 +1,7 @@
 // java.security — MessageDigest (sync MD5/SHA-1/SHA-256: fingerprint checks at boot, cache keys), SecureRandom, AccessController.
 import { rt, JObj, driven, type Gen } from "../runtime";
-import { vcall, defineException, stringHash } from "./jlang";
-import { jarray, concat, u8 } from "../abi";
+import { vcall, after, defineException, stringHash } from "./jlang";
+import { jarray, concat, u8, mangleMethod } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
 import { JProps } from "./jutil";
 import { JFilterInputStream, JFilterOutputStream } from "./jio";
@@ -82,6 +82,8 @@ const DIGESTS = new Map<string, [Digest, number]>([
 export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | Promise<Uint8Array> | null {
   return DIGESTS.get(algorithm.toUpperCase())?.[0](data) ?? null;
 }
+const ENGINE_UPDATE_B = mangleMethod("engineUpdate", "(B)V");
+const ENGINE_UPDATE = mangleMethod("engineUpdate", "([BII)V");
 class JMessageDigest extends JObj {
   algo = "";
   fn: Digest = sha256;
@@ -108,21 +110,33 @@ rt.register({
     },
     "static isEqual([B[B)Z": (a: Int8Array | null, b: Int8Array | null) =>
       a === b || (a != null && b != null && a.length === b.length && a.every((v, i) => v === b[i])) ? 1 : 0,
-    "update(B)V": function (this: JMessageDigest, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
-    "update([B)V": function (this: JMessageDigest, b: Int8Array) { mdUpdate(this, b); },
-    "update([BII)V": function (this: JMessageDigest, b: Int8Array, off: number, len: number) { mdUpdate(this, b, off, len); },
+    "<init>(Ljava/lang/String;)V": function (this: JMessageDigest, algo: string) { this.algo = algo; },
+    // the public operations run the engine methods a provider subclass implements
+    "update(B)V": function (this: JMessageDigest, b: number) { return (this as any)[ENGINE_UPDATE_B](b); },
+    "update([B)V": function (this: JMessageDigest, b: Int8Array) { return (this as any)[ENGINE_UPDATE](b, 0, b.length); },
+    "update([BII)V": function (this: JMessageDigest, b: Int8Array, off: number, len: number) {
+      if (b === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No input buffer given");
+      if (b.length - off < len) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Input buffer too short");
+      return (this as any)[ENGINE_UPDATE](b, off, len);
+    },
     "update(Ljava/nio/ByteBuffer;)V": driven(function* (this: JMessageDigest, input: unknown): Gen {
       if (input === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       const remaining: number = yield vcall(input, "remaining", "()I");
       const bytes = new Int8Array(remaining);
       yield vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes);
-      mdUpdate(this, bytes);
+      yield (this as any)[ENGINE_UPDATE](bytes, 0, remaining);
     }),
-    "digest()[B": function (this: JMessageDigest) { return mdDigest(this); },
-    "digest([B)[B": function (this: JMessageDigest, b: Int8Array) { mdUpdate(this, b); return mdDigest(this); },
-    "reset()V": function (this: JMessageDigest) { this.parts = []; },
+    "digest()[B": function (this: JMessageDigest) { return vcall(this, "engineDigest", "()[B"); },
+    "digest([B)[B": function (this: JMessageDigest, b: Int8Array) { return after(vcall(this, "update", "([B)V", b), () => vcall(this, "digest", "()[B")); },
+    "reset()V": function (this: JMessageDigest) { return vcall(this, "engineReset", "()V"); },
+    "engineUpdate(B)V": function (this: JMessageDigest, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
+    "engineUpdate([BII)V": function (this: JMessageDigest, b: Int8Array, off: number, len: number) { mdUpdate(this, b, off, len); },
+    "engineDigest()[B": function (this: JMessageDigest) { return mdDigest(this); },
+    "engineReset()V": function (this: JMessageDigest) { this.parts = []; },
+    "engineGetDigestLength()I": function (this: JMessageDigest) { return this.len; },
     "getAlgorithm()Ljava/lang/String;": function (this: JMessageDigest) { return this.algo; },
-    "getDigestLength()I": function (this: JMessageDigest) { return this.len; },
+    // AOSP measures a provider that reports 0 by digesting a clone; that fallback is left out
+    "getDigestLength()I": function (this: JMessageDigest) { return vcall(this, "engineGetDigestLength", "()I"); },
   },
 });
 

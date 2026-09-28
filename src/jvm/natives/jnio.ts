@@ -1,9 +1,9 @@
 // java.nio.* buffers backed by a shared ArrayBuffer. position/limit/capacity semantics.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { defineException, vcall, checkFromIndexSize } from "./jlang";
+import { defineException, vcall, after, checkFromIndexSize } from "./jlang";
 import { mem } from "../../native/mem";
-import { charsToString } from "../abi";
+import { charsToString, mangleMethod } from "../abi";
 import { charsetName, decodeString, encodeString } from "../charset";
 
 /** A native buffer's array is ART's accessible one for allocateDirect (a view over its own guest
@@ -604,10 +604,13 @@ function mkCoder(n: string, cs: JCharset) {
   c.cs = cs;
   return c;
 }
-class JCharsetCoder extends JObj { cs: JCharset = utf8; malformed = "REPORT"; unmappable = "REPORT"; }
+class JCharsetCoder extends JObj { cs: JCharset = utf8; malformed = "REPORT"; unmappable = "REPORT"; replacementBytes = Int8Array.of(63); }
 const coderChain = (ret: string): NativeSpec["methods"] => ({
   [`charset()Ljava/nio/charset/Charset;`]: function (this: JCharsetCoder) { return this.cs; },
-  [`reset()${ret}`]: function (this: JCharsetCoder) { return this; },
+  // implReset/implFlush: the protected hooks a coding subclass overrides
+  [`reset()${ret}`]: function (this: JCharsetCoder) { if (this instanceof JCharsetDecoder) this.endian = null; return after(vcall(this, "implReset", "()V"), () => this); },
+  "implReset()V": () => {},
+  [`implFlush(${ret === "Ljava/nio/charset/CharsetEncoder;" ? "Ljava/nio/ByteBuffer;" : "Ljava/nio/CharBuffer;"})Ljava/nio/charset/CoderResult;`]: () => CODER_UNDERFLOW,
   [`onMalformedInput(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.malformed = action.name; return this; },
   [`onUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.unmappable = action.name; return this; },
 });
@@ -619,7 +622,24 @@ rt.register({
   name: "java/nio/charset/CharsetEncoder", ctor: JCharsetCoder,
   methods: {
     ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
-    "replaceWith([B)Ljava/nio/charset/CharsetEncoder;": function (this: JCharsetCoder) { return this; },
+    "replaceWith([B)Ljava/nio/charset/CharsetEncoder;": driven(function* (this: JCharsetCoder, replacement: Int8Array | null): Gen {
+      if (replacement === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Null replacement");
+      if (!replacement.length || replacement.length > maxBytesPerChar(this.cs)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal replacement length");
+      if (!(yield vcall(this, "isLegalReplacement", "([B)Z", replacement))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal replacement");
+      this.replacementBytes = replacement.slice();
+      yield vcall(this, "implReplaceWith", "([B)V", replacement);
+      return this;
+    }),
+    "implReplaceWith([B)V": () => {},
+    "replacement()[B": function (this: JCharsetCoder) { return this.replacementBytes.slice(); },
+    // legal when this charset decodes it without error, as AOSP's default
+    "isLegalReplacement([B)Z": function (this: JCharsetCoder, replacement: Int8Array) {
+      const decoder = mkCoder("CharsetDecoder", this.cs) as JCharsetDecoder;
+      return decodeBuffer(decoder, wrapArray(JByteBuffer, replacement, 0), allocCharBuffer(replacement.length * 2), 1).length ? 0 : 1;
+    },
+    "flush(Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;": function (this: JCharsetCoder, out: JBuffer) {
+      return vcall(this, "implFlush", "(Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;", out);
+    },
     "maxBytesPerChar()F": function (this: JCharsetCoder) { return maxBytesPerChar(this.cs); },
     "encode(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;": driven(function* (this: JCharsetCoder, src: JCharBuffer): Gen {
       const text = yield charText(src); let from = 0, cleaned = "";
@@ -638,7 +658,14 @@ rt.register({
     }),
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
     "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
-      driven(function* (this: JCharsetCoder, src: JCharBuffer, dst: JBuffer): Gen {
+      driven(function* (this: JCharsetCoder, src: JCharBuffer, dst: JBuffer, end: number): Gen {
+        if (typeof (this as any)[ENCODE_LOOP] === "function") {
+          return codeVia(this, "encodeLoop", "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;", src, dst, end, (out) => {
+            if (out.lim - out.pos < this.replacementBytes.length) return false;
+            for (const b of this.replacementBytes) out.dv.setInt8(out.pos++, b);
+            return true;
+          });
+        }
         const text = yield charText(src);
         const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
         for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
@@ -720,7 +747,6 @@ rt.register({
   name: "java/nio/charset/CharsetDecoder", ctor: JCharsetDecoder,
   methods: {
     ...coderChain("Ljava/nio/charset/CharsetDecoder;"),
-    "reset()Ljava/nio/charset/CharsetDecoder;": function (this: JCharsetDecoder) { this.endian = null; return this; },
     "maxCharsPerByte()F": () => 1,
     "replacement()Ljava/lang/String;": function (this: JCharsetDecoder) { return this.replacement; },
     "replaceWith(Ljava/lang/String;)Ljava/nio/charset/CharsetDecoder;": driven(function* (this: JCharsetDecoder, replacement: string | null): Gen {
@@ -738,20 +764,54 @@ rt.register({
       out.lim = out.pos; out.pos = 0;
       return out;
     }),
-    "flush(Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;": () => CODER_UNDERFLOW,
+    "flush(Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;": function (this: JCharsetDecoder, out: JBuffer) {
+      return vcall(this, "implFlush", "(Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;", out);
+    },
+    // a subclass's own decodeLoop does the decoding, the error actions stay here
     "decode(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;":
-      function (this: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) { return decodeBuffer(this, src, dst, end); },
+      function (this: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) {
+        if (typeof (this as any)[DECODE_LOOP] !== "function") return decodeBuffer(this, src, dst, end);
+        return codeVia(this, "decodeLoop", "(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;", src, dst, end, (out) => {
+          if (out.lim - out.pos < this.replacement.length) return false;
+          for (let i = 0; i < this.replacement.length; i++) out.dv.setUint16(out.pos++ << 1, this.replacement.charCodeAt(i), out.little);
+          return true;
+        });
+      },
   },
+});
+const DECODE_LOOP = mangleMethod("decodeLoop", "(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;");
+const ENCODE_LOOP = mangleMethod("encodeLoop", "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;");
+/** AOSP's decode/encode(in, out, endOfInput) over a subclass's coding loop: an error result is
+ *  reported, or skipped after `replace` writes the replacement, as the coder's actions say */
+const codeVia = driven(function* codeVia(coder: JCharsetCoder, loop: string, desc: string, src: JBuffer, dst: JBuffer, end: number, replace: (out: JBuffer) => boolean): Gen {
+  for (;;) {
+    let result: JCoderResult = yield vcall(coder, loop, desc, src, dst);
+    if (result.kind === "overflow") return result;
+    if (result.kind === "underflow") {
+      if (!end || src.pos >= src.lim) return result;
+      result = new JCoderResult("malformed", src.lim - src.pos);
+    }
+    const action = result.kind === "malformed" ? coder.malformed : coder.unmappable;
+    if (action === "REPORT") return result;
+    if (action === "REPLACE" && !replace(dst)) return CODER_OVERFLOW;
+    src.pos += result.length;
+  }
 });
 class JCoderResult extends JObj {
   constructor(public kind: "underflow" | "overflow" | "malformed" | "unmappable" = "underflow", public length = 0) { super(); }
 }
 const CODER_UNDERFLOW = new JCoderResult();
 const CODER_OVERFLOW = new JCoderResult("overflow");
+function coderError(kind: "malformed" | "unmappable", length: number): JCoderResult {
+  if (length <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Non-positive length");
+  return new JCoderResult(kind, length);
+}
 rt.register({
   name: "java/nio/charset/CoderResult", ctor: JCoderResult,
   statics: { UNDERFLOW: CODER_UNDERFLOW, OVERFLOW: CODER_OVERFLOW },
   methods: {
+    "static malformedForLength(I)Ljava/nio/charset/CoderResult;": (n: number) => coderError("malformed", n),
+    "static unmappableForLength(I)Ljava/nio/charset/CoderResult;": (n: number) => coderError("unmappable", n),
     "isUnderflow()Z": function (this: JCoderResult) { return +(this.kind === "underflow"); },
     "isOverflow()Z": function (this: JCoderResult) { return +(this.kind === "overflow"); },
     "isError()Z": function (this: JCoderResult) { return +(this.length > 0); },

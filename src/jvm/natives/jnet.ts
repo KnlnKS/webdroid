@@ -10,9 +10,9 @@
 import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException, sysProps, checkFromIndexSize } from "./jlang";
+import { JThrowable, stringHash, mkEnumSet, newObj, vcall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, dotName, i8, u8, sameBytes } from "../abi";
+import { jarray, strArray, dotName, i8, u8, sameBytes, mangleMethod } from "../abi";
 import { type JBAOS, noMark } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
@@ -498,7 +498,7 @@ const socketMethods: NativeSpec["methods"] = {
   "<init>(Ljava/lang/String;I)V": driven(function* (this: JSocket, h: string, p: number): Gen {
     this.host = h ?? ""; this.port = p; yield this.open();
   }),
-  "connect(Ljava/net/SocketAddress;)V": socketConnect,
+  "connect(Ljava/net/SocketAddress;)V": function (this: JSocket, a: unknown) { return vcall(this, "connect", "(Ljava/net/SocketAddress;I)V", a, 0); },
   "connect(Ljava/net/SocketAddress;I)V": socketConnect,
   "getInputStream()Ljava/io/InputStream;": function (this: JSocket) {
     const o = rt.make("webdroid/SocketInputStream") as JSocketIn; o.s = this; return o;
@@ -519,7 +519,12 @@ const socketMethods: NativeSpec["methods"] = {
     const local = this.activeRelay()?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
   },
   "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) { return inetAddr(this.host); },
-  "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) { return inetSock(this.host, this.port); },
+  // the connection-state checks around these are left out: opening is deferred (see JSocket.open)
+  "getRemoteSocketAddress()Ljava/net/SocketAddress;": driven(function* (this: JSocket): Gen {
+    const addr: JInetAddress | null = yield vcall(this, "getInetAddress", "()Ljava/net/InetAddress;");
+    const port: number = yield vcall(this, "getPort", "()I");
+    return addr === null ? null : Object.assign(inetSock(addr.host, port), { addr });
+  }),
   "setTcpNoDelay(Z)V": () => {}, "setKeepAlive(Z)V": () => {},
   "setReuseAddress(Z)V": () => {}, "setSoLinger(ZI)V": () => {},
   "setSendBufferSize(I)V": () => {}, "setReceiveBufferSize(I)V": () => {},
@@ -1066,6 +1071,8 @@ class JURLConnection extends JObj {
 function withRes<A extends unknown[], C extends JURLConnection = JURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
   return async function (this: C, ...a: A) { return f.call(this, await this.connect(), ...a); };
 }
+const header = (c: JURLConnection, name: string): string | null | Promise<string | null> =>
+  vcall(c, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", name);
 const asLong = (v: string | null, d: bigint) => v && /^\s*-?\d+\s*$/.test(v) ? BigInt(v.trim()) : d;
 // a jar: URL names an entry of an archive on the class path; the stream is the URL's own openStream
 rt.register({
@@ -1142,25 +1149,44 @@ rt.register({
     "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[1] ?? null),
     "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[0] ?? null),
     "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
-    "getHeaderFieldInt(Ljava/lang/String;I)I": withRes(function (_r, k: string, d: number) {
-      const n = parseInt(this.hdr(k) ?? "", 10);
-      return Number.isNaN(n) ? d : n;
-    }),
-    "getHeaderFieldLong(Ljava/lang/String;J)J": withRes(function (_r, k: string, d: bigint) { return asLong(this.hdr(k), d); }),
-    "getHeaderFieldDate(Ljava/lang/String;J)J": withRes(function (_r, k: string, d: bigint) {
-      const t = Date.parse(this.hdr(k) ?? "");
-      return Number.isNaN(t) ? d : BigInt(t);
-    }),
-    "getContentType()Ljava/lang/String;": withRes(function () { return this.hdr("content-type"); }),
-    "getContentEncoding()Ljava/lang/String;": withRes(function () { return this.hdr("content-encoding"); }),
-    "getContentLength()I": withRes(function () { const n = asLong(this.hdr("content-length"), -1n); return n > 0x7fffffffn ? -1 : Number(n); }),
-    "getContentLengthLong()J": withRes(function () { return asLong(this.hdr("content-length"), -1n); }),
+    // the typed accessors read through getHeaderField(String), which a subclass's transport overrides
+    "getHeaderFieldInt(Ljava/lang/String;I)I": function (this: JURLConnection, k: string, d: number) {
+      return after(header(this, k), (v) => { const n = parseInt(v ?? "", 10); return Number.isNaN(n) ? d : n; });
+    },
+    "getHeaderFieldLong(Ljava/lang/String;J)J": function (this: JURLConnection, k: string, d: bigint) { return after(header(this, k), (v) => asLong(v, d)); },
+    "getHeaderFieldDate(Ljava/lang/String;J)J": function (this: JURLConnection, k: string, d: bigint) {
+      return after(header(this, k), (v) => { const t = Date.parse(v ?? ""); return Number.isNaN(t) ? d : BigInt(t); });
+    },
+    "getContentType()Ljava/lang/String;": function (this: JURLConnection) { return header(this, "content-type"); },
+    "getContentEncoding()Ljava/lang/String;": function (this: JURLConnection) { return header(this, "content-encoding"); },
+    "getContentLength()I": function (this: JURLConnection) {
+      return after(vcall(this, "getContentLengthLong", "()J") as bigint | Promise<bigint>, (n) => (n > 0x7fffffffn ? -1 : Number(n)));
+    },
+    "getContentLengthLong()J": function (this: JURLConnection) { return vcall(this, "getHeaderFieldLong", "(Ljava/lang/String;J)J", "content-length", -1n); },
     "toString()Ljava/lang/String;": function (this: JURLConnection) {
       return dotName((this.constructor as typeof JObj).$i.name) + ":" + this.url.spec;
     },
   },
 });
 const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE", "PATCH"]);
+const GET_INPUT = mangleMethod("getInputStream", "()Ljava/io/InputStream;");
+const HEADER_AT = mangleMethod("getHeaderField", "(I)Ljava/lang/String;");
+/** AOSP's getResponseCode over a subclass's transport: its getInputStream, then the status line as header 0 */
+const statusFromHeader = driven(function* (this: JHttpURLConnection): Gen {
+  if (this.responseCode !== -1) return this.responseCode;
+  let failure: unknown = null;
+  try { yield vcall(this, "getInputStream", "()Ljava/io/InputStream;"); } catch (e) { failure = e; }
+  const line: string | null = yield vcall(this, "getHeaderField", "(I)Ljava/lang/String;", 0);
+  if (line === null) { if (failure !== null) throw failure; return -1; }
+  if (!line.startsWith("HTTP/1.")) return -1;
+  const codeAt = line.indexOf(" ");
+  if (codeAt <= 0) return -1;
+  let phraseAt = line.indexOf(" ", codeAt + 1);
+  if (phraseAt > 0 && phraseAt < line.length) this.responseMessage = line.slice(phraseAt + 1);
+  if (phraseAt < 0) phraseAt = line.length;
+  const code = line.slice(codeAt + 1, phraseAt);
+  return /^[+-]?\d+$/.test(code) ? this.responseCode = parseInt(code, 10) : -1;
+});
 class JHttpURLConnection extends JURLConnection { responseCode = -1; responseMessage: string | null = null; chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n; }
 rt.register({
   name: "java/net/HttpURLConnection", ctor: JHttpURLConnection, sup: "java/net/URLConnection",
@@ -1190,8 +1216,13 @@ rt.register({
     "setChunkedStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.chunkLength = n <= 0 ? 4096 : n; },
     "setFixedLengthStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.fixedContentLength = n; this.fixedContentLengthLong = BigInt(n); },
     "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
-    "getResponseCode()I": withRes(function (this: JHttpURLConnection, r) { this.responseMessage = r.msg || null; return this.responseCode = r.status; }),
-    "getResponseMessage()Ljava/lang/String;": withRes(function (this: JHttpURLConnection, r) { this.responseCode = r.status; return this.responseMessage = r.msg || null; }),
+    "getResponseCode()I": function (this: JHttpURLConnection) {
+      if ((this as any)[GET_INPUT] !== (JURLConnection.prototype as any)[GET_INPUT] || (this as any)[HEADER_AT] !== (JURLConnection.prototype as any)[HEADER_AT]) return statusFromHeader.call(this);
+      return after(this.connect(), (r) => { this.responseMessage = r.msg || null; return this.responseCode = r.status; });
+    },
+    "getResponseMessage()Ljava/lang/String;": function (this: JHttpURLConnection) {
+      return after(vcall(this, "getResponseCode", "()I"), () => this.responseMessage);
+    },
     "getErrorStream()Ljava/io/InputStream;": driven(function* (this: JHttpURLConnection): Gen {
       // AOSP connects here too, and answers null for any failure rather than throwing
       try { return (yield this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }
@@ -1207,6 +1238,7 @@ class JHttpsURLConnection extends JHttpURLConnection {
   hostnameVerifier: unknown = null;
 }
 class JDefaultHostnameVerifier extends JObj {}
+const subjectOf = (certs: unknown[]) => vcall(certs[0], "getSubjectX500Principal", "()Ljavax/security/auth/x500/X500Principal;");
 const hostName = (host: string) => host.toLowerCase().replace(/\.$/, "");
 const platformHostnameVerifier = new JDefaultHostnameVerifier();
 rt.register({
@@ -1246,13 +1278,18 @@ rt.register({
     "static getDefaultSSLSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => defaultHttpsFactory,
     "getCipherSuite()Ljava/lang/String;": () => CIPHERS[0],
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
-    "getLocalPrincipal()Ljava/security/Principal;": () => null,
+    // both principals are the first certificate's subject, from the overridable certificate accessors
+    "getLocalPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
+      return after(vcall(this, "getLocalCertificates", "()[Ljava/security/cert/Certificate;") as unknown[] | null, (certs) => certs === null ? null : subjectOf(certs));
+    },
     "getServerCertificates()[Ljava/security/cert/Certificate;": function (this: JHttpsURLConnection) {
       const cert = rt.make("java/security/cert/X509Certificate") as JX509;
       cert.host = this.url.u.hostname; cert.relayPeer = true;
       return jarray([cert], "Ljava/security/cert/Certificate;");
     },
-    "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) { return mkPrincipal("CN=" + this.url.u.hostname); },
+    "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
+      return after(vcall(this, "getServerCertificates", "()[Ljava/security/cert/Certificate;") as unknown[], subjectOf);
+    },
   },
 });
 

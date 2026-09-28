@@ -1,5 +1,6 @@
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
+import { mangleMethod } from "../abi";
 
 // ── Random (faithful java.util.Random LCG)
 /** a 48-bit seed from the platform CSPRNG, for the Random subclasses that must not be predictable */
@@ -27,13 +28,47 @@ export class JRandom extends JObj {
   unitDouble(): number { return ((this.next(26) * 134217728) + this.next(27)) / 9007199254740992; }
   /** nextInt(bound)'s uniform draw in [0, bound), bound > 0 */
   bounded(bound: number): number {
-    // bound is a power of two here, so the product is exact
     if ((bound & -bound) === bound) return Math.floor(bound * this.next(31) / 0x80000000);
     let bits: number, val: number;
-    // Java's rejection test relies on the int sum overflowing
     do { bits = this.next(31); val = bits % bound; } while (((bits - val + (bound - 1)) | 0) < 0);
     return val;
   }
+}
+/** Random's JDK bodies for a subclass overriding next(bits): each yields the bit counts it draws */
+function* unitDouble(): Generator<number, number, number> { return ((yield 26) * 134217728 + (yield 27)) / 9007199254740992; }
+function* bounded(bound: number): Generator<number, number, number> {
+  if (bound <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "bound must be positive");
+  // bound is a power of two here, so the product is exact
+  if ((bound & -bound) === bound) return Math.floor(bound * (yield 31) / 0x80000000);
+  let bits: number, val: number;
+  // Java's rejection test relies on the int sum overflowing
+  do { bits = yield 31; val = bits % bound; } while (((bits - val + (bound - 1)) | 0) < 0);
+  return val;
+}
+const NEXT = mangleMethod("next", "(I)I");
+const NEXT_DOUBLE = mangleMethod("nextDouble", "()D");
+function nextBits(this: JRandom, bits: number) { return this.next(bits); }
+/** `direct` while the class keeps our next(bits); `body` fed by an app's override of it otherwise */
+function viaNext<A extends unknown[]>(direct: (this: JRandom, ...a: A) => unknown, body: (...a: A) => Generator<number, unknown, number>) {
+  const overridden = driven(function* (this: JRandom, ...a: A): Gen {
+    const g = body(...a);
+    for (let r = g.next(0); ; r = g.next(yield vcall(this, "next", "(I)I", r.value))) if (r.done) return r.value;
+  });
+  return function (this: JRandom, ...a: A) { return (this as any)[NEXT] === nextBits ? direct.apply(this, a) : overridden.apply(this, a); };
+}
+const nextDouble = viaNext(function () { return this.unitDouble(); }, unitDouble);
+const gaussianOverridden = driven(function* (this: JRandom): Gen {
+  for (;;) {
+    const g = gaussian(this, 2 * (yield vcall(this, "nextDouble", "()D")) - 1, 2 * (yield vcall(this, "nextDouble", "()D")) - 1);
+    if (g !== null) return g;
+  }
+});
+function gaussian(r: JRandom, v1: number, v2: number): number | null {
+  const s = v1 * v1 + v2 * v2;
+  if (s >= 1 || s === 0) return null;
+  const mul = Math.sqrt(-2 * Math.log(s) / s);
+  r.nextG = v2 * mul; r.haveNextG = true;
+  return v1 * mul;
 }
 rt.register({
   name: "java/util/Random", ctor: JRandom, ifaces: ["java/util/random/RandomGenerator", "java/io/Serializable"],
@@ -47,28 +82,21 @@ rt.register({
         for (let n = Math.min(bytes.length - i, 4); n-- > 0; value >>= 8) bytes[i++] = value;
       }
     }),
-    "nextInt()I": function (this: JRandom) { return this.next(32); },
-    "nextInt(I)I": function (this: JRandom, bound: number) {
+    "next(I)I": nextBits,
+    "nextInt()I": viaNext(function () { return this.next(32); }, function* () { return yield 32; }),
+    "nextInt(I)I": viaNext(function (bound: number) {
       if (bound <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "bound must be positive");
       return this.bounded(bound);
-    },
-    "nextLong()J": function (this: JRandom) {
-      return BigInt.asIntN(64, (BigInt(this.next(32)) << 32n) + BigInt(this.next(32)));
-    },
-    "nextBoolean()Z": function (this: JRandom) { return this.next(1) ? 1 : 0; },
-    "nextFloat()F": function (this: JRandom) { return this.next(24) / (1 << 24); },
-    "nextDouble()D": function (this: JRandom) { return this.unitDouble(); },
+    }, bounded),
+    "nextLong()J": viaNext(function () { return BigInt.asIntN(64, (BigInt(this.next(32)) << 32n) + BigInt(this.next(32))); },
+      function* () { return BigInt.asIntN(64, (BigInt(yield 32) << 32n) + BigInt(yield 32)); }),
+    "nextBoolean()Z": viaNext(function () { return this.next(1) ? 1 : 0; }, function* () { return (yield 1) ? 1 : 0; }),
+    "nextFloat()F": viaNext(function () { return this.next(24) / (1 << 24); }, function* () { return (yield 24) / (1 << 24); }),
+    "nextDouble()D": nextDouble,
     "nextGaussian()D": function (this: JRandom) {
       if (this.haveNextG) { this.haveNextG = false; return this.nextG; }
-      let v1: number, v2: number, s: number;
-      do {
-        v1 = 2 * this.unitDouble() - 1;
-        v2 = 2 * this.unitDouble() - 1;
-        s = v1 * v1 + v2 * v2;
-      } while (s >= 1 || s === 0);
-      const mul = Math.sqrt(-2 * Math.log(s) / s);
-      this.nextG = v2 * mul; this.haveNextG = true;
-      return v1 * mul;
+      if ((this as any)[NEXT_DOUBLE] !== nextDouble || (this as any)[NEXT] !== nextBits) return gaussianOverridden.call(this);
+      for (;;) { const g = gaussian(this, 2 * (nextDouble.call(this) as number) - 1, 2 * (nextDouble.call(this) as number) - 1); if (g !== null) return g; }
     },
   },
 });

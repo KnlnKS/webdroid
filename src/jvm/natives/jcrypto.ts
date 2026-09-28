@@ -2,7 +2,7 @@
 // Mac (HMAC), KeyStore, KeyGenerator, KeyPairGenerator — over WebCrypto, which is one-shot and async:
 // update() buffers, doFinal() awaits the whole operation.
 import { rt, JObj, driven, type Gen } from "../runtime";
-import { vcall, defineException, checkFromIndexSize } from "./jlang";
+import { vcall, after, newObj, defineException, checkFromIndexSize } from "./jlang";
 import { mkIter } from "./jutil";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
@@ -606,6 +606,9 @@ rt.register({
     "getCertificateChain()[Ljava/security/cert/Certificate;": function (this: JPrivateKeyEntry) { return this.key && rsaChain(this.key); },
   },
 });
+let secureRandom: unknown = null;
+/** JCAUtil.getSecureRandom: one generator for the defaults */
+const sharedRandom = (): unknown => secureRandom ?? after(newObj("java/security/SecureRandom"), (random: unknown) => (secureRandom = random));
 class JKeyPairGenerator extends JObj { bits = 2048; store = false; spec: JKeyGenSpec | null = null; curve: string | null = null; }
 function keyPairGenerator(algorithm: string, provider: string | null = null) {
   const algo = algorithm?.toUpperCase();
@@ -641,14 +644,20 @@ rt.register({
     "static getInstance(Ljava/lang/String;)Ljava/security/KeyPairGenerator;": keyPairGenerator,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyPairGenerator;": keyPairGenerator,
     "getAlgorithm()Ljava/lang/String;": function (this: JKeyPairGenerator) { return this.curve ? "EC" : "RSA"; },
+    // the one-argument forms pass the shared SecureRandom to the two-argument ones, which a subclass overrides
     "initialize(I)V": function (this: JKeyPairGenerator, bits: number) {
+      return after(sharedRandom(), (random) => vcall(this, "initialize", "(ILjava/security/SecureRandom;)V", bits, random));
+    },
+    "initialize(ILjava/security/SecureRandom;)V": function (this: JKeyPairGenerator, bits: number) {
       if (this.curve) { if (!isEcCurve(String(bits))) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid EC key size"); this.curve = String(bits); return; }
       if (this.store || bits < 512 || bits > 8192 || bits % 8) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid RSA key size");
       this.bits = bits;
     },
-    "initialize(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) { initializeKeyPair(this, spec); },
+    "initialize(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) {
+      return after(sharedRandom(), (random) => vcall(this, "initialize", "(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V", spec, random));
+    },
     "initialize(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) { initializeKeyPair(this, spec); },
     "generateKeyPair()Ljava/security/KeyPair;": generateKeyPair,
-    "genKeyPair()Ljava/security/KeyPair;": generateKeyPair,
+    "genKeyPair()Ljava/security/KeyPair;": function (this: JKeyPairGenerator) { return vcall(this, "generateKeyPair", "()Ljava/security/KeyPair;"); },
   },
 });

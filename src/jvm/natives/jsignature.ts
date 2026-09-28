@@ -2,7 +2,7 @@
 // digests WebCrypto signs with. Keys are the RSA (SPKI/PKCS#8) and EC (curve point/scalar)
 // objects KeyFactory and KeyPairGenerator hand out.
 import { JObj, rt, driven, type Gen } from "../runtime";
-import { vcall } from "./jlang";
+import { vcall, after } from "./jlang";
 import { concat, u8 } from "../abi";
 import { JRsaPublicKey, JRsaPrivateKey, JPSSSpec } from "./jrsa";
 import { JEcPublicKey, JEcPrivateKey, type Curve, be, tlv, invalidKey } from "./jec";
@@ -14,7 +14,7 @@ const webHash = (name: string) => HASHES[name.toUpperCase().replace("-", "")];
 
 class JSignature extends JObj {
   algo = ""; scheme: Scheme = "RSASSA-PKCS1-v1_5"; hash: string | null = null; salt: number | null = null;
-  key: unknown = null; signing = false; parts: Uint8Array[] = [];
+  key: unknown = null; signing = false; parts: Uint8Array[] = []; state = 0;
   imported: { key: CryptoKey; hash: string } | null = null;
 }
 function signature(algo: string): JSignature {
@@ -92,6 +92,13 @@ function init(s: JSignature, key: unknown, signing: boolean) {
   s.key = key; s.signing = signing; s.parts = []; s.imported = null;
 }
 function initSign(this: JSignature, key: unknown) { init(this, key, true); }
+const SIGN = 2, VERIFY = 3;
+function initEngine(s: JSignature, engine: string, desc: string, state: number, ...args: unknown[]) {
+  return after(vcall(s, engine, desc, ...args), () => { s.state = state; });
+}
+function updating(s: JSignature) {
+  if (s.state !== SIGN && s.state !== VERIFY) throw rt.mkThrowable("java/security/SignatureException", "object not initialized for signature or verification");
+}
 function ready(s: JSignature, signing: boolean) {
   if (!s.key || s.signing !== signing) throw rt.mkThrowable("java/security/SignatureException", "object not initialized for " + (signing ? "signing" : "verification"));
 }
@@ -106,13 +113,40 @@ rt.register({
     },
     "getAlgorithm()Ljava/lang/String;": function (this: JSignature) { return this.algo; },
     "toString()Ljava/lang/String;": function (this: JSignature) { return "Signature object: " + this.algo + (this.key ? this.signing ? "<initialized for signing>" : "<initialized for verifying>" : "<not initialized>"); },
-    "initVerify(Ljava/security/PublicKey;)V": function (this: JSignature, key: unknown) { init(this, key, false); },
+    "<init>(Ljava/lang/String;)V": function (this: JSignature, algo: string) { this.algo = algo; },
+    // the public operations check the state and run the engine methods a provider subclass implements
+    "initVerify(Ljava/security/PublicKey;)V": function (this: JSignature, key: unknown) { return initEngine(this, "engineInitVerify", "(Ljava/security/PublicKey;)V", VERIFY, key); },
     "initVerify(Ljava/security/cert/Certificate;)V": driven(function* (this: JSignature, cert: unknown): Gen {
-      init(this, cert && (yield vcall(cert, "getPublicKey", "()Ljava/security/PublicKey;")), false);
+      if (cert == null) throw invalidKey("key == null");
+      yield initEngine(this, "engineInitVerify", "(Ljava/security/PublicKey;)V", VERIFY, yield vcall(cert, "getPublicKey", "()Ljava/security/PublicKey;"));
     }),
-    "initSign(Ljava/security/PrivateKey;)V": initSign,
-    "initSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": initSign,
+    "initSign(Ljava/security/PrivateKey;)V": function (this: JSignature, key: unknown) { return initEngine(this, "engineInitSign", "(Ljava/security/PrivateKey;)V", SIGN, key); },
+    "initSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": function (this: JSignature, key: unknown, random: unknown) {
+      return initEngine(this, "engineInitSign", "(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V", SIGN, key, random);
+    },
     "setParameter(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JSignature, spec: unknown) {
+      return vcall(this, "engineSetParameter", "(Ljava/security/spec/AlgorithmParameterSpec;)V", spec);
+    },
+    "update(B)V": function (this: JSignature, b: number) { updating(this); return vcall(this, "engineUpdate", "(B)V", b); },
+    "update([B)V": function (this: JSignature, b: Int8Array) { updating(this); return vcall(this, "engineUpdate", "([BII)V", b, 0, b.length); },
+    "update([BII)V": function (this: JSignature, b: Int8Array, off: number, len: number) {
+      updating(this);
+      if (b == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "data is null");
+      if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad arguments");
+      return vcall(this, "engineUpdate", "([BII)V", b, off, len);
+    },
+    "sign()[B": function (this: JSignature) {
+      if (this.state !== SIGN) throw rt.mkThrowable("java/security/SignatureException", "object not initialized for signing");
+      return vcall(this, "engineSign", "()[B");
+    },
+    "verify([B)Z": function (this: JSignature, sig: Int8Array) {
+      if (this.state !== VERIFY) throw rt.mkThrowable("java/security/SignatureException", "object not initialized for verification");
+      return vcall(this, "engineVerify", "([B)Z", sig);
+    },
+    "engineInitVerify(Ljava/security/PublicKey;)V": function (this: JSignature, key: unknown) { init(this, key, false); },
+    "engineInitSign(Ljava/security/PrivateKey;)V": initSign,
+    "engineInitSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": initSign,
+    "engineSetParameter(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JSignature, spec: unknown) {
       const bad = (msg: string) => rt.mkThrowable("java/security/InvalidAlgorithmParameterException", msg);
       if (this.scheme !== "RSA-PSS" || !(spec instanceof JPSSSpec)) throw bad("unsupported parameters for " + this.algo);
       const hash = webHash(spec.digest), mgfHash = spec.mgfSpec ? webHash(spec.mgfSpec.digest) : hash;
@@ -122,20 +156,15 @@ rt.register({
       this.hash = hash; this.salt = spec.salt; this.imported = null;
     },
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
-    "update(B)V": function (this: JSignature, b: number) { ready(this, this.signing); this.parts.push(new Uint8Array([b & 0xff])); },
-    "update([B)V": function (this: JSignature, b: Int8Array) { ready(this, this.signing); this.parts.push(u8(b).slice()); },
-    "update([BII)V": function (this: JSignature, b: Int8Array, off: number, len: number) {
-      ready(this, this.signing);
-      if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad arguments");
-      this.parts.push(u8(b, off, len).slice());
-    },
-    "sign()[B": driven(function* (this: JSignature): Gen {
+    "engineUpdate(B)V": function (this: JSignature, b: number) { ready(this, this.signing); this.parts.push(new Uint8Array([b & 0xff])); },
+    "engineUpdate([BII)V": function (this: JSignature, b: Int8Array, off: number, len: number) { ready(this, this.signing); this.parts.push(u8(b, off, len).slice()); },
+    "engineSign()[B": driven(function* (this: JSignature): Gen {
       ready(this, true);
       const { key } = yield importKey(this);
       const raw = new Uint8Array(yield crypto.subtle.sign(params(this), key, message(this)));
       return this.scheme === "ECDSA" ? derFromRaw(raw, curveOf(this).bytes) : new Int8Array(raw.buffer);
     }),
-    "verify([B)Z": driven(function* (this: JSignature, sig: Int8Array): Gen {
+    "engineVerify([B)Z": driven(function* (this: JSignature, sig: Int8Array): Gen {
       ready(this, false);
       if (sig == null) throw rt.mkThrowable("java/lang/NullPointerException", "signature == null");
       const { key } = yield importKey(this), data = message(this);

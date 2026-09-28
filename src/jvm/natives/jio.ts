@@ -96,6 +96,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
+const writeI = mangleMethod("write", "(I)V");
 async function skipThroughRead(stream: JInputStream, count: bigint): Promise<bigint> {
   const scratch = new Int8Array(Number(count < 2048n ? count : 2048n));
   let remaining = count;
@@ -198,8 +199,9 @@ rt.register({
     "<init>(Ljava/lang/String;)V": openRead,
     "<init>(Ljava/io/FileDescriptor;)V": adoptFd,
     "<init>(Ljava/io/FileDescriptor;Z)V": adoptFd,
-    "read()I": function (this: JFileInputStream) { const b = new Int8Array(1); return after(readFile.call(this, b, 0, 1), n => n < 0 ? -1 : b[0] & 255); },
-    "read([B)I": function (this: JFileInputStream, out: Int8Array) { if (!out) return rt.npe(); return readFile.call(this, out, 0, out.length); },
+    // both through read(byte[], int, int), which a subclass may override
+    "read()I": function (this: JFileInputStream) { const b = new Int8Array(1); return after((this as any)[readBII](b, 0, 1), n => n < 0 ? -1 : b[0] & 255); },
+    "read([B)I": function (this: JFileInputStream, out: Int8Array) { if (!out) return rt.npe(); return (this as any)[readBII](out, 0, out.length); },
     "read([BII)I": readFile,
     "available()I": function (this: JFileInputStream) { checkFileOpen(this); return Math.min(0x7fffffff, checkedFdResult(javaAvailableFd(this.fd.fd))); },
     "skip(J)J": function (this: JFileInputStream, n: bigint) {
@@ -396,7 +398,7 @@ rt.register({
       this.buf.set(b.subarray(off, off + len), this.count);
       this.count += len;
     },
-    "writeBytes([B)V": function (this: JBAOS, b: Int8Array) { this.grow(this.count + b.length); this.buf.set(b, this.count); this.count += b.length; },
+    "writeBytes([B)V": function (this: JBAOS, b: Int8Array) { return (this as any)[writeBII](b, 0, b.length); },
     "toByteArray()[B": function (this: JBAOS) { return this.buf.slice(0, this.count); },
     "size()I": function (this: JBAOS) { return this.count; },
     "reset()V": function (this: JBAOS) { this.count = 0; },
@@ -455,6 +457,12 @@ function openWrite(this: JFOS, path: string, append = 0, truncate = true) {
   if (size === undefined || (!this.append && truncate)) vfs.write(this.fpath, new Uint8Array(0));
   this.offset = this.append ? size ?? 0 : 0;
 }
+function fosWrite(this: JFOS, b: Int8Array, off: number, len: number) {
+  checkFileOpen(this);
+  checkFromIndexSize(off, len, b.length);
+  this.put(u8(b, off, len));
+  if (this.shared) flushFOS(this);
+}
 rt.register({
   name: "java/io/FileOutputStream", ctor: JFOS, sup: "java/io/OutputStream",
   methods: {
@@ -474,13 +482,12 @@ rt.register({
     "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JObj, app: number) { openWrite.call(this, pathOf(f), app); },
     "<init>(Ljava/lang/String;)V": openWrite,
     "<init>(Ljava/lang/String;Z)V": openWrite,
-    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this); },
-    "write([BII)V": function (this: JFOS, b: Int8Array, off: number, len: number) {
-      checkFileOpen(this);
-      checkFromIndexSize(off, len, b.length);
-      this.put(u8(b, off, len));
-      if (this.shared) flushFOS(this);
+    // write(byte[], int, int) of one byte, unless a subclass leaves that ours
+    "write(I)V": function (this: JFOS, b: number) {
+      if ((this as any)[writeBII] !== fosWrite) return (this as any)[writeBII](Int8Array.of(b), 0, 1);
+      checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this);
     },
+    "write([BII)V": fosWrite,
     "flush()V": function (this: JFOS) { checkFileOpen(this); flushFOS(this); },
     "close()V": function (this: JFOS) {
       if (closedFiles.has(this)) return;
@@ -521,6 +528,27 @@ const rafOpen = function (this: JRAF, p: string, mode: string) {
   this.file = vfs.open(this.path)!;
   if (this.write && this.file.source && !writable(this.file.source)) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
 };
+// AOSP's single-byte read and write are the ranged ones of one byte, which a subclass may override
+const rafReadByte = driven(function* (this: JRAF): Gen {
+  if ((this as any)[readBII] !== rafReadRange) {
+    const b = new Int8Array(1);
+    return (yield (this as any)[readBII](b, 0, 1)) < 0 ? -1 : b[0] & 255;
+  }
+  checkFileOpen(this);
+  vfs.sync(this.file);
+  if (!this.source) return this.pos < this.file.len ? this.file.data[this.pos++] : -1;
+  const bytes = yield this.source.read(this.pos, 1);
+  if (!bytes.length) return -1;
+  this.pos++;
+  return bytes[0];
+});
+function rafReadRange(this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); }
+function rafWriteRange(this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); }
+function rafWriteByte(this: JRAF, v: number) {
+  if ((this as any)[writeBII] !== rafWriteRange) return (this as any)[writeBII](Int8Array.of(v), 0, 1);
+  rafWrite(this, Int8Array.of(v), 0, 1);
+}
+const rafWriteEach = driven(function* (this: JRAF, b: Int8Array): Gen { for (const v of b) yield vcall(this, "write", "(I)V", v); });
 rt.register({
   name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
   methods: {
@@ -536,17 +564,9 @@ rt.register({
       return step;
     },
     "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
-    "read()I": driven(function* (this: JRAF): Gen {
-      checkFileOpen(this);
-      vfs.sync(this.file);
-      if (!this.source) return this.pos < this.file.len ? this.file.data[this.pos++] : -1;
-      const bytes = yield this.source.read(this.pos, 1);
-      if (!bytes.length) return -1;
-      this.pos++;
-      return bytes[0];
-    }),
+    "read()I": rafReadByte,
     "read([B)I": function(this: JRAF, b: Int8Array) { return rafRead(this, b, 0, b.length); },
-    "read([BII)I": function(this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); },
+    "read([BII)I": rafReadRange,
     "readLine()Ljava/lang/String;": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
       vfs.sync(this.file);
@@ -570,11 +590,21 @@ rt.register({
     }),
     "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
-    ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),
-    "write(I)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v), 0, 1); },
+    // the DataInput/DataOutput primitives go byte by byte through a read()/write(int) a subclass overrides
+    ...readers((n, get) => async function (this: JRAF) {
+      const b = new Int8Array(n);
+      if ((this as any)[readI] === rafReadByte) await rafReadFully(this, b, 0, n);
+      else for (let i = 0; i < n; i++) { const v = await vcall(this, "read", "()I"); if (v < 0) throw rt.mkThrowable("java/io/EOFException", null); b[i] = v; }
+      return get(new DataView(b.buffer));
+    }),
+    "write(I)V": rafWriteByte,
     "write([B)V": function (this: JRAF, b: Int8Array) { rafWrite(this, b, 0, b.length); },
-    "write([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); },
-    ...writers((n, put) => function (this: JRAF, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); rafWrite(this, b, 0, n); }),
+    "write([BII)V": rafWriteRange,
+    ...writers((n, put) => function (this: JRAF, x: never) {
+      const b = new Int8Array(n); put(new DataView(b.buffer), x);
+      if ((this as any)[writeI] === rafWriteByte) return rafWrite(this, b, 0, n);
+      return rafWriteEach.call(this, b);
+    }),
     "setLength(J)V": function (this: JRAF, n: bigint) {
       checkFileOpen(this);
       const len = Number(n);
@@ -605,7 +635,7 @@ function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Prom
 async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Promise<void> {
   let read = 0;
   while (read < len) {
-    const n = await rafRead(f, b, off + read, len - read);
+    const n = await (f as any)[readBII](b, off + read, len - read);
     if (n <= 0) throw rt.mkThrowable("java/io/EOFException", null);
     read += n;
   }
@@ -616,7 +646,7 @@ function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   f.pos += len;
 }
 
-export class JFilterOutputStream extends JOutputStream { out: unknown = null; }
+export class JFilterOutputStream extends JOutputStream { out: unknown = null; closed = false; }
 rt.register({
   name: "java/io/FilterOutputStream", ctor: JFilterOutputStream, sup: "java/io/OutputStream",
   fields: { out: "out" },
@@ -625,7 +655,12 @@ rt.register({
     "write(I)V": function (this: any, b: number) { return vcall(this.out, "write", "(I)V", b); },
     "write([BII)V": function (this: any, b: Int8Array, o: number, l: number) { return vcall(this.out, "write", "([BII)V", b, o, l); },
     "flush()V": function (this: any) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
-    "close()V": function (this: any) { return this.out ? vcall(this.out, "close", "()V") : undefined; },
+    "close()V": driven(function* (this: JFilterOutputStream): Gen {
+      if (this.closed) return;
+      this.closed = true;
+      const t = rt.th();
+      try { yield vcall(this, "flush", "()V"); } finally { rt.st(t); if (this.out) yield vcall(this.out, "close", "()V"); }
+    }),
   },
 });
 export async function skipStream(this: unknown, count: bigint): Promise<bigint> {
@@ -1156,9 +1191,14 @@ function writerAppend(ret: string): NonNullable<NativeSpec["methods"]> {
     [`append(Ljava/lang/CharSequence;II)L${ret};`]: driven(function* (this: JWriter, cs: unknown, start: number, end: number): Gen {
       const thread = curThread, text = cs == null ? "null" : yield csText(cs);
       if (start < 0 || end < start || end > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-      yield vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text.slice(start, end)); return this;
+      return vcallOn(thread, this, "append", `(Ljava/lang/CharSequence;)L${ret};`, text.slice(start, end));
     }),
   };
+}
+/** javac's covariant bridges: each calls the append returning `to`, which a subclass may override */
+function appendBridges(from: string, to: string): NonNullable<NativeSpec["methods"]> {
+  return Object.fromEntries(["C", "Ljava/lang/CharSequence;", "Ljava/lang/CharSequence;II"].map((args) => [`append(${args})L${from};`,
+    function (this: JWriter, ...a: unknown[]) { return vcall(this, "append", `(${args})L${to};`, ...a); }]));
 }
 rt.register({
   name: "java/io/Writer", ctor: JWriter, fields: { lock: "lock" },
@@ -1173,7 +1213,7 @@ rt.register({
       if (s == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       return vcall(this, "write", "(Ljava/lang/String;II)V", s, 0, s.length);
     },
-    ...writerAppend("java/io/Writer"), ...writerAppend("java/lang/Appendable"),
+    ...writerAppend("java/io/Writer"), ...appendBridges("java/lang/Appendable", "java/io/Writer"),
     "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) {
       writerRange(s, off, len);
       const chars = new Uint16Array(len);
@@ -1259,6 +1299,8 @@ rt.register({
       return vcall(this.target, "write", "(Ljava/lang/String;)V", s);
     },
     ...printMethods(pw, "java/io/PrintWriter"), ...writerAppend("java/io/PrintWriter"),
+    ...appendBridges("java/io/Writer", "java/io/PrintWriter"), ...appendBridges("java/lang/Appendable", "java/io/PrintWriter"),
+    "print(C)V": function (this: JPrintWriter, c: number) { return vcall(this, "write", "(I)V", c); },
     "flush()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "flush", "()V"); },
     "close()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "close", "()V"); },
     "checkError()Z": function () { return 0; },
@@ -1477,7 +1519,7 @@ rt.register({
 });
 rt.register({
   name: "java/nio/channels/FileLock", ctor: class extends JObj {},
-  methods: { "release()V": () => {}, "close()V": () => {}, "isValid()Z": () => 1 },
+  methods: { "release()V": () => {}, "close()V": function (this: JObj) { return vcall(this, "release", "()V"); }, "isValid()Z": () => 1 },
 });
 
 mkEnumSet("java/nio/channels/FileChannel$MapMode", ["READ_ONLY", "READ_WRITE", "PRIVATE"]);
@@ -1574,11 +1616,10 @@ rt.register({
       vfs.mkdir(path.p);
     },
     "delete(Ljava/nio/file/Path;)V": (path: JNioPath) => { requireNioFile(path); removeNioEntry(path); },
-    "deleteIfExists(Ljava/nio/file/Path;)Z": (path: JNioPath) => {
-      if (!vfs.exists(path.p)) return 0;
-      removeNioEntry(path);
-      return 1;
-    },
+    "deleteIfExists(Ljava/nio/file/Path;)Z": driven(function* (this: JNioFileSystemProvider, path: JNioPath): Gen {
+      try { yield vcall(this, "delete", "(Ljava/nio/file/Path;)V", path); return 1; }
+      catch (e) { if (rt.iof(e, "java/nio/file/NoSuchFileException")) return 0; throw e; }
+    }),
     "copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": driven(function* (source: JNioPath, target: JNioPath, options: unknown[] | null): Gen {
       requireNioFile(source);
       if (vfs.exists(target.p) && !replaceExisting(options)) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", target.p);
