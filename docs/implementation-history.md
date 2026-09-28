@@ -182,6 +182,21 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   `?jvmProfile=1`, V8 compilation was about 45% of compile time, cold-handler building 35% and
   constant typing 17%.
 
+- 2026-09-28, Stage A continued. The pulled core-oj differs from the one vendored before (Java 17
+  APIs such as `ClassValue`, which needs `jdk.internal.misc.Unsafe` natives and ART's `ClassExt`).
+  The reference device's Monet overlay replaces 140 framework-res `system_*` colors; without it,
+  Mihon's dynamic-theme tile and Calculator M's keys drew the defaults at SDK 35. Advertising SDK 35
+  exposed API 34/35 calls (`JobInfo.Builder.setTraceTag`, `UiModeManager.getContrast`,
+  `createDeviceContext`, `setShareIdentityEnabled`, `LoudnessCodecController`) and a parcel bug:
+  an `Account[]` was written as an object array, which AndroidX's typed `getParcelableArray` (used
+  from API 34) rejected, so YouTube finished at launch. Persisting compiled bodies across launches
+  brought Mihon's failing theme-switch tap from 180 ms to 75 ms and warm taps to near zero cold
+  calls; rewriting a package's whole script every 15 s stalled YouTube, so saves append chunks
+  from idle time. Registering the service worker at page start routed the shell's own
+  `/proxy` requests through the WebView context lookup, which timed out; shell pages pass through.
+  Under five or more parallel live flows, TikTok wedged and YouTube, ChatGPT and Komikku timed out
+  intermittently; each passes alone, as on the starting commit.
+
 ## Java, storage and framework semantics
 
 - Collection views remain live. Copying `subList` or map views broke Compose
