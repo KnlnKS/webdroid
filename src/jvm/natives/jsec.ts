@@ -254,7 +254,7 @@ rt.register({
 });
 
 for (const n of ["java/security/spec/AlgorithmParameterSpec", "java/security/AlgorithmParameters"]) {
-  rt.register({ name: n, ctor: class extends JObj {}, methods: { "<init>(Ljava/lang/String;)V": () => {}, "<init>()V": () => {} } });
+  rt.register({ name: n, ctor: class extends JObj {} });
 }
 
 // java.security.spec's value classes: plain data an app's own key math hands around

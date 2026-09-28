@@ -218,8 +218,6 @@ rt.register({
     "<init>()V": function () {},
     "hashCode()I": function () { return idHash(this); },
     "equals(Ljava/lang/Object;)Z": function (o: unknown) { return this === o ? 1 : 0; },
-    // AccessibleObject semantics are moot here; harmless on any receiver
-    "setAccessible(Z)V": () => {},
     "toString()Ljava/lang/String;": function () {
       return dotName(jclsName(this)) + "@" + idHash(this).toString(16);
     },

@@ -268,7 +268,6 @@ function register(cls: string, icu: boolean): void {
     "<init>(Ljava/lang/String;)V": init,
     "<init>(Ljava/lang/String;Ljava/util/Locale;)V": init,
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": formatStatic,
-    "format([Ljava/lang/Object;)Ljava/lang/String;": formatText,
     "format(Ljava/lang/Object;)Ljava/lang/String;": formatText,
     "format(Ljava/lang/Object;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;": formatInto,
     "format([Ljava/lang/Object;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;": formatInto,
@@ -285,7 +284,6 @@ function register(cls: string, icu: boolean): void {
   };
   if (icu) Object.assign(methods, {
     "static format(Ljava/lang/String;Ljava/util/Map;)Ljava/lang/String;": formatStatic,
-    "format(Ljava/util/Map;)Ljava/lang/String;": formatText,
     "usesNamedArguments()Z": function (this: JMessageFormat) { return +this.ids().some((id) => typeof id === "string"); },
     "getArgumentNames()Ljava/util/Set;": function (this: JMessageFormat) { return newStringSet(this.ids().map(String)); },
   });

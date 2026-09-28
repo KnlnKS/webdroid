@@ -72,10 +72,11 @@ const accessibleMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setAccessible(Z)V": function (this: JAccessibleObject, value: number) { this.accessible = value ? 1 : 0; },
   "isAccessible()Z": function (this: JAccessibleObject) { return this.accessible; },
-  "trySetAccessible()Z": function (this: JAccessibleObject) { this.accessible = 1; return 1; },
-  "canAccess(Ljava/lang/Object;)Z": function (this: JAccessibleObject) { return this.accessible; },
 };
-rt.register({ name: "java/lang/reflect/AccessibleObject", ctor: JAccessibleObject, methods: accessibleMethods });
+rt.register({ name: "java/lang/reflect/AccessibleObject", ctor: JAccessibleObject, methods: {
+  ...accessibleMethods,
+  "trySetAccessible()Z": function (this: JAccessibleObject) { this.accessible = 1; return 1; },
+} });
 
 export class JMethod extends JAccessibleObject {
   owner!: ClassInfo;
@@ -507,8 +508,6 @@ rt.register({
       [`get${n}(Ljava/lang/Object;J)${d}`, (o: any, off: bigint) => { const view = uView(o); return view ? get(view, Number(off)) : (d === "Z" ? (o[uKey(o, off)] ? 1 : 0) : o[uKey(o, off)] ?? 0); }],
       [`put${n}(Ljava/lang/Object;J${d})V`, (o: any, off: bigint, v: number) => { const view = uView(o); if (view) put(view, Number(off), v); else o[uKey(o, off)] = v; }],
     ])),
-    "staticFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
-    "staticFieldBase(Ljava/lang/reflect/Field;)Ljava/lang/Object;": (f: JField) => f.owner.ctor,
     "getLongVolatile(Ljava/lang/Object;J)J": uGetLong,
     "getIntVolatile(Ljava/lang/Object;J)I": uGetInt,
     "putIntVolatile(Ljava/lang/Object;JI)V": uPutInt,

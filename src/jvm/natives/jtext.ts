@@ -160,19 +160,8 @@ const dateFormatMethods: NativeSpec["methods"] = {
   "getCalendar()Ljava/util/Calendar;": function (this: JDateFormat) {
     return vcall(rt.link("java/util/Calendar").ctor, "getInstance", "(Ljava/util/TimeZone;)Ljava/util/Calendar;", this.tz ?? localTz);
   },
-  "set2DigitYearStart(Ljava/util/Date;)V": function (this: JDateFormat, d: JDate) { this.century = (d ?? rt.npe()).t; },
-  "get2DigitYearStart()Ljava/util/Date;": function (this: JDateFormat) {
-    const d = new JDate(), start = new Date();
-    start.setFullYear(start.getFullYear() - 80);
-    d.t = this.century ?? start.getTime();
-    return d;
-  },
   "setLenient(Z)V": () => {},
   "isLenient()Z": () => 1,
-  "toPattern()Ljava/lang/String;": sdfPattern,
-  "toLocalizedPattern()Ljava/lang/String;": sdfPattern,
-  "applyPattern(Ljava/lang/String;)V": applySdfPattern,
-  "applyLocalizedPattern(Ljava/lang/String;)V": applySdfPattern,
   "clone()Ljava/lang/Object;": function (this: JDateFormat) { return Object.assign(new (this.constructor as typeof JDateFormat)(), this); },
   "equals(Ljava/lang/Object;)Z": function (this: JDateFormat, o: unknown) { return +(o instanceof JDateFormat && o.pattern === this.pattern); },
   "hashCode()I": function (this: JDateFormat) { return stringHash(this.pattern); },
@@ -212,6 +201,17 @@ rt.register({
     "getDateFormatSymbols()Ljava/text/DateFormatSymbols;": function (this: JDateFormat) {
       return Object.assign(symbols(this.locale ?? undefined), { amPm: this.ampm && [...this.ampm] });
     },
+    "set2DigitYearStart(Ljava/util/Date;)V": function (this: JDateFormat, d: JDate) { this.century = (d ?? rt.npe()).t; },
+    "get2DigitYearStart()Ljava/util/Date;": function (this: JDateFormat) {
+      const d = new JDate(), start = new Date();
+      start.setFullYear(start.getFullYear() - 80);
+      d.t = this.century ?? start.getTime();
+      return d;
+    },
+    "toPattern()Ljava/lang/String;": sdfPattern,
+    "toLocalizedPattern()Ljava/lang/String;": sdfPattern,
+    "applyPattern(Ljava/lang/String;)V": applySdfPattern,
+    "applyLocalizedPattern(Ljava/lang/String;)V": applySdfPattern,
   },
 });
 defineException("java/text/ParseException", "java/lang/Exception", [], {
