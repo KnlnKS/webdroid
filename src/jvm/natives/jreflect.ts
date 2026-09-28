@@ -742,6 +742,8 @@ export class JCtor extends JAccessibleObject {
   owner!: ClassInfo;
   desc = "()V";
   flags = 1;
+  /** a serialization constructor allocates this class and runs owner's constructor on it */
+  alloc: ClassInfo | null = null;
 }
 const ctorCache = new WeakMap<ClassInfo, JCtor[]>();
 /** constructors declared by this class (dex direct <init>s / native <init>(...) keys), memoized */
@@ -783,6 +785,12 @@ rt.register({
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return types(genericMethodTypes(this.owner, "<init>", this.desc).params); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
     ...annotatedElement(function (this: JCtor) { return classAnno(this.owner).methodsByRef.get("<init>" + this.desc) ?? []; }),
+    // ObjectStreamClass: deserialization allocates the serializable class and runs its first
+    // non-serializable superclass's constructor
+    "serializationCopy(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/reflect/Constructor;": function (this: JCtor, _ctor: JClass, cls: JClass) {
+      const copy = Object.assign(new JCtor(), { owner: this.owner, desc: this.desc, flags: this.flags, alloc: cls.ci });
+      return copy;
+    },
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JCtor, args: unknown[] | null): Gen {
       const info = this.owner;
       const p = rt.initClass(info); if (p) yield p;
@@ -790,7 +798,7 @@ rt.register({
       if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
       const a = (args ?? []).map((v, i) => ("IJFDZBCS".includes(ps[i] ?? "L") ? unboxArg(v) : v));
-      const o = new info.ctor();
+      const o = new (this.alloc ?? info).ctor();
       try {
         const r = fn.apply(o, a);
         if (r instanceof Promise) yield r;

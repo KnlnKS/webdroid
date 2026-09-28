@@ -743,23 +743,6 @@ function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   f.pos += len;
 }
 
-// serialPersistentFields is a static array a serializable class declares; serialization does not
-// consult it, but the <clinit> that builds the array has to be able to construct one.
-rt.markers("java/io/ObjectStreamClass");
-class JObjectStreamField extends JObj { fname = ""; ftype: unknown = null; }
-function initStreamField(this: JObjectStreamField, n: string, t: unknown) { this.fname = n; this.ftype = t; }
-function streamFieldName(this: JObjectStreamField) { return this.fname; }
-rt.register({
-  name: "java/io/ObjectStreamField", ctor: JObjectStreamField, ifaces: ["java/lang/Comparable"],
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/Class;)V": initStreamField,
-    "<init>(Ljava/lang/String;Ljava/lang/Class;Z)V": initStreamField,
-    "getName()Ljava/lang/String;": streamFieldName,
-    "getType()Ljava/lang/Class;": function (this: JObjectStreamField) { return this.ftype; },
-    "toString()Ljava/lang/String;": streamFieldName,
-  },
-});
-
 export class JFilterOutputStream extends JOutputStream { out: unknown = null; }
 rt.register({
   name: "java/io/FilterOutputStream", ctor: JFilterOutputStream, sup: "java/io/OutputStream",
