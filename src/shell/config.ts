@@ -87,6 +87,8 @@ export const device = {
   release: "15",
   lang: "en",
   region: "US",
+  /** the host's zone, which the device's persist.sys.timezone names */
+  get timezone(): string { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; },
   /** the browser's dark-mode preference, live as a device's is (see setDeviceNight) */
   get night(): boolean { return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false; },
   /** PackageManager.hasSystemFeature: what this device can back — touch, both orientations,

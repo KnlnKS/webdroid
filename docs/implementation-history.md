@@ -208,6 +208,25 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   `localeID`. The java.time flip therefore waits on the ICU flip (plan step B.2). A 4217 server
   started before the `/vendor/aosp/icu` route existed served 404s, and Komikku then failed twice in
   the parallel gate. After a restart the gate passed repeatedly, with no ICU requests.
+- 2026-09-28, Stage B flip of java.time, java.text, ICU, and java.util's TimeZone, Calendar,
+  GregorianCalendar, Date and Currency, along with java.sql and android.text.format (103 TS classes,
+  about 4,400 lines). libcore and core-icu4j now answer through natives: libcore.io.Linux (the old TS
+  Os bodies, plus open and fstat), Memory, the ICU4C natives answered by ICU4J, OsConstants from the
+  device's recorded values, and the boot jars' resources (calendars.properties, the Hijrah
+  configuration). The default zone follows persist.sys.timezone through the RuntimeHooks supplier,
+  as RuntimeInit installs it; without it, libcore falls back to GMT. ojluni-time rose from 16,698 to
+  26,163 passes. java.util.Locale stays TS, because Paint, LocaleList, TextView and Configuration read
+  its fields synchronously; flipping it too cost 3x the suite time. Loading the real zone took apps
+  down paths that exposed two latent faults:
+  - HashMap.computeIfAbsent's platform body could not run on the TS map. A body that cannot run now
+    yields to the spec's interface default.
+  - The TS Properties extends JMap, not the registered HashMap class, so its put was the platform's.
+    A spec now inherits its declared superclass's methods before the platform's bodies.
+  Service callbacks awaited in runningservices resumed under a worker's thread identity, which
+  produced Komikku's "handleLifecycleEvent must be called on the main thread"; each call now names the
+  main thread. Apps that format dates read the whole 28 MB ICU file into memory (FitNotes does), where
+  a device maps it lazily. SystemClock.currentGnssTimeClock is libcore's, whose reads fail with an NPE
+  while no location service is hosted.
 
 ## Java, storage and framework semantics
 

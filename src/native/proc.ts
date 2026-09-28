@@ -8,8 +8,7 @@ import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, 
 import { E } from "./abi";
 import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
 import { tidOf } from "./pthread";
-import { fail, fillSysinfo, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
-import { MONTHS, DAYS } from "../jvm/natives/jtime";
+import { fail, fillSysinfo, logLine, LAYOUT, strncpy, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
 import { appUserName, procIdentity } from "../shell/procfs";

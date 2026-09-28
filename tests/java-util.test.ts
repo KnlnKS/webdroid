@@ -196,22 +196,6 @@ describe("bidi-formatter", () => {
   });
 });
 
-describe("bidi-required", () => {
-  const chars = (s: string) => Uint16Array.from({ length: s.length }, (_, i) => s.charCodeAt(i));
-  const requires = (s: string, start = 0, limit = s.length) => vcall(rt.link("java/text/Bidi").ctor, "requiresBidi", "([CII)Z", chars(s), start, limit);
-  test("bidi analysis detects RTL scripts, numbers, embeddings and supplementary characters", async () => {
-    for (const text of ["Ferry Building", "", "東京 123", "A😀B"]) expect(await requires(text)).toBe(0);
-    for (const text of ["AאB", "العربية", "١", "\u202b", "\u202e", "𞤀"]) expect(await requires(text)).toBe(1);
-    expect(await requires("אabcא", 1, 4)).toBe(0);
-    expect(await requires("𞤀", 0, 1)).toBe(0);
-  });
-  test("bidi analysis validates the requested range", async () => {
-    await expect((async () => requires("abc", -1, 2))()).rejects.toMatchObject({ msg: "Invalid text range" });
-    await expect((async () => requires("abc", 2, 1))()).rejects.toMatchObject({ msg: "Invalid text range" });
-    await expect((async () => requires("abc", 0, 4))()).rejects.toMatchObject({ msg: "Invalid text range" });
-  });
-});
-
 describe("collection-clone", () => {
   const O = "Ljava/lang/Object;";
 
@@ -384,37 +368,9 @@ describe("collections-disjoint", () => {
   });
 });
 
-describe("date-range", () => {
-  const cases = [
-  ['2025-01-02T17:05:00Z','2025-01-02T17:05:00Z',65,'America/New_York'],
-  ['2025-01-02T17:05:00Z','2025-01-02T17:05:00Z',129,'UTC'],
-  ['2025-01-02T17:00:00Z','2025-01-02T19:00:00Z',16449,'UTC'],
-  ['2025-01-02T17:00:00Z','2025-01-02T17:00:00Z',65558,'UTC'],
-  ['2025-01-02T17:00:00Z','2025-01-04T17:00:00Z',65556,'UTC'],
-  ['2025-01-02T17:00:00Z','2025-01-04T17:00:00Z',131092,'UTC'],
-  ['2025-01-02T00:00:00Z','2025-01-03T00:00:00Z',20,'UTC'],
-  ['2025-01-02T21:00:00Z','2025-01-03T00:00:00Z',65,'UTC'],
-  ['2025-01-02T00:00:00Z','2025-01-03T00:00:00Z',65,'UTC'],
-  ['2025-01-02T17:05:00Z','2025-01-02T17:05:00Z',8257,'America/New_York'],
-  ] as const;
-  const expected = ["12:05 PM", "17:05", "5 – 7 PM", "Thursday, Jan 2, 2025", "Jan 2 – 4, 2025", "1/2/2025 – 1/4/2025", "January 2, 2025", "9:00 PM – 12:00 AM", "January 2, 2025 at 12:00 AM – January 3, 2025 at 12:00 AM", "5:05 PM"];
-  test("DateUtils matches Android date-range fields, zones and exclusive midnight ends", async () => {
-    for (const [i, [a, b, flags, zone]] of cases.entries()) {
-      const buffer = await newObj("java/lang/StringBuilder", "(Ljava/lang/String;)V", "prefix:");
-      const formatter = await newObj("java/util/Formatter", "(Ljava/lang/Appendable;)V", buffer);
-      const result = await vcall(rt.link("android/text/format/DateUtils").ctor, "formatDateRange", "(Landroid/content/Context;Ljava/util/Formatter;JJILjava/lang/String;)Ljava/util/Formatter;", null, formatter, BigInt(Date.parse(a)), BigInt(Date.parse(b)), flags, zone);
-      expect(result).toBe(formatter);
-      const text = await vcall(formatter, "toString", "()Ljava/lang/String;");
-      if (typeof text !== "string") throw new Error("Formatter did not return text");
-      // Android 35 fixtures; ICU versions differ in narrow versus ordinary spaces.
-      expect(text.replace(/\s/g, " ")).toBe("prefix:" + expected[i]);
-    }
-  });
-});
-
 describe("enumset", () => {
   test("EnumSet factories and both clone descriptors keep class identity and independent membership", async () => {
-    const days = await scall("java/time/DayOfWeek", "values", "()[Ljava/time/DayOfWeek;");
+    const days = await scall("java/util/concurrent/TimeUnit", "values", "()[Ljava/util/concurrent/TimeUnit;");
     const single = await scall("java/util/EnumSet", "of", "(Ljava/lang/Enum;)Ljava/util/EnumSet;", days[0]);
     expect(await vcall(single, "contains", "(Ljava/lang/Object;)Z", days[0])).toBe(1);
     const set = await scall("java/util/EnumSet", "of", "(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;", days[0], days.slice(0, 4));
@@ -427,67 +383,6 @@ describe("enumset", () => {
     }
     const copy = await scall("java/util/EnumSet", "copyOf", "(Ljava/util/Collection;)Ljava/util/EnumSet;", set);
     expect(await vcall(copy, "equals", "(Ljava/lang/Object;)Z", set)).toBe(1);
-  });
-});
-
-describe("java-time", () => {
-  test("Instant adds a Duration through TemporalAmount", async () => {
-    const instant = await vcall(rt.link("java/time/Instant").ctor, "ofEpochMilli", "(J)Ljava/time/Instant;", 1000n);
-    const duration = await vcall(rt.link("java/time/Duration").ctor, "ofMillis", "(J)Ljava/time/Duration;", 2500n);
-    const result = await vcall(instant, "plus", "(Ljava/time/temporal/TemporalAmount;)Ljava/time/Instant;", duration);
-    expect(await vcall(result, "toEpochMilli", "()J")).toBe(3500n);
-    expect(await vcall(instant, "toEpochMilli", "()J")).toBe(1000n);
-  });
-
-  test("offset date-time extracts calendar fields in its own offset", async () => {
-    const offset = await vcall(rt.link("java/time/ZoneOffset").ctor, "ofTotalSeconds", "(I)Ljava/time/ZoneOffset;", -5 * 3600);
-    const epoch = await vcall(rt.link("java/time/Instant").ctor, "ofEpochMilli", "(J)Ljava/time/Instant;", 0n);
-    const dateTime = await vcall(epoch, "atOffset", "(Ljava/time/ZoneOffset;)Ljava/time/OffsetDateTime;", offset);
-    const date = await vcall(dateTime, "toLocalDate", "()Ljava/time/LocalDate;");
-    const time = await vcall(dateTime, "toLocalTime", "()Ljava/time/LocalTime;");
-    expect(await vcall(date, "toString", "()Ljava/lang/String;")).toBe("1969-12-31");
-    expect(await vcall(time, "toString", "()Ljava/lang/String;")).toBe("19:00");
-    expect(await vcall(dateTime, "getHour", "()I")).toBe(19);
-    const formatter = rt.link("java/time/format/DateTimeFormatter").ctor.s$ISO_OFFSET_DATE_TIME;
-    expect(await vcall(dateTime, "format", "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;", formatter))
-      .toBe("1969-12-31T19:00:00-05:00");
-  });
-
-  test("patterns format and parse through one engine, in the formatter's zone", async () => {
-    const T = "java/time/";
-    const pattern = (p: string) => scall(T + "format/DateTimeFormatter", "ofPattern", `(Ljava/lang/String;)L${T}format/DateTimeFormatter;`, p);
-    const date = await scall(T + "LocalDate", "parse", `(Ljava/lang/CharSequence;L${T}format/DateTimeFormatter;)L${T}LocalDate;`, "31/01/2024", await pattern("dd/MM/yyyy"));
-    const next = await vcall(date, "plusMonths", `(J)L${T}LocalDate;`, 1n);
-    expect(await vcall(next, "format", `(L${T}format/DateTimeFormatter;)Ljava/lang/String;`, await pattern("EEE MMM d ''yy"))).toBe("Thu Feb 29 '24");
-    const paris = await scall(T + "ZonedDateTime", "parse", `(Ljava/lang/CharSequence;)L${T}ZonedDateTime;`, "2024-03-31T01:30+01:00[Europe/Paris]");
-    expect(await vcall(await vcall(paris, "plusHours", `(J)L${T}ZonedDateTime;`, 1n), "toString", "()Ljava/lang/String;")).toBe("2024-03-31T03:30+02:00[Europe/Paris]");
-    const sdf = await newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "EEE, dd MMM yyyy HH:mm:ss Z");
-    await vcall(sdf, "setTimeZone", "(Ljava/util/TimeZone;)V", await scall("java/util/TimeZone", "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;", "Asia/Kolkata"));
-    const parsed = await vcall(sdf, "parse", "(Ljava/lang/String;)Ljava/util/Date;", "Tue, 03 Jun 2008 11:05:30 GMT");
-    expect(await vcall(parsed, "getTime", "()J")).toBe(1212491130000n);
-    expect(await vcall(sdf, "format", "(Ljava/util/Date;)Ljava/lang/String;", parsed)).toBe("Tue, 03 Jun 2008 16:35:30 +0530");
-  });
-});
-
-describe("list-formatter", () => {
-  const instance = async (language: string) => vcall(rt.link("android/icu/text/ListFormatter").ctor, "getInstance",
-    "(Ljava/util/Locale;)Landroid/icu/text/ListFormatter;", await newObj("java/util/Locale", "(Ljava/lang/String;)V", language));
-  test("ICU list formatting handles empty, single and locale-sensitive conjunctions", async () => {
-    const en = await instance("en");
-    for (const [items, text] of [[[], ""], [["one"], "one"], [["one", "two"], "one and two"], [["one", "two", "three"], "one, two, and three"]] as const) {
-      expect(await vcall(en, "format", "(Ljava/util/Collection;)Ljava/lang/String;", newArrayList([...items]))).toBe(text);
-    }
-    expect(await vcall(await instance("es"), "format", "([Ljava/lang/Object;)Ljava/lang/String;", ["España", "Italia"])).toBe("España e Italia");
-    expect(await vcall(await instance("de"), "format", "([Ljava/lang/Object;)Ljava/lang/String;", ["A", "B", "C"])).toBe("A, B und C");
-  });
-  test("ICU list formatting invokes object strings on the caller thread and rejects nulls", async () => {
-    const formatter = await instance("en"), thread = new JThread(), observed: JThread[] = [];
-    const objects = ["first", "second"].map(text => ({
-      [mangleMethod("toString", "()Ljava/lang/String;")]: async () => { observed.push(curThread); await Promise.resolve(); return text; },
-    }));
-    expect(await vcallOn(thread, formatter, "format", "([Ljava/lang/Object;)Ljava/lang/String;", objects)).toBe("first and second");
-    expect(observed).toEqual([thread, thread]);
-    for (const items of [null, [null]]) await expect(vcallAsync(formatter, "format", "([Ljava/lang/Object;)Ljava/lang/String;", items)).rejects.toBeInstanceOf(rt.link("java/lang/NullPointerException").ctor);
   });
 });
 
@@ -650,38 +545,6 @@ describe("map-interfaces", () => {
       expect(rt.iof(map, "java/util/concurrent/ConcurrentMap")).toBe(name.endsWith("/ConcurrentHashMap") ? 1 : 0);
     }
     expect(rt.iof(rt.make("java/util/TreeMap"), "java/util/SortedMap")).toBe(1);
-  });
-});
-
-describe("number-percent", () => {
-  for (const cls of ["java/text/NumberFormat", "android/icu/text/NumberFormat"]) {
-    test(`${cls} scales percentages, rounds ties evenly and updates cached options`, async () => {
-      const locale = await newObj("java/util/Locale", "(Ljava/lang/String;Ljava/lang/String;)V", "en", "US");
-      const f = await vcall(rt.link(cls).ctor, "getPercentInstance", `(Ljava/util/Locale;)L${cls};`, locale);
-      expect(rt.iof(f, cls)).toBe(1);
-      if (cls === "java/text/NumberFormat") expect(rt.iof(f, "java/text/DecimalFormat")).toBe(1);
-      for (const [value, text] of [[0.14, "14%"], [0.025, "2%"], [0.035, "4%"], [-0.025, "-2%"]]) {
-        expect(await vcall(f, "format", "(D)Ljava/lang/String;", value)).toBe(text);
-      }
-      await vcall(f, "setMinimumFractionDigits", "(I)V", 2);
-      expect(await vcall(f, "format", "(D)Ljava/lang/String;", 0.125)).toBe("12.50%");
-      await vcall(f, "setMaximumFractionDigits", "(I)V", 0);
-      expect(await vcall(f, "getMinimumFractionDigits", "()I")).toBe(0);
-      expect(await vcall(f, "format", "(D)Ljava/lang/String;", 0.125)).toBe("12%");
-      const german = await newObj("java/util/Locale", "(Ljava/lang/String;Ljava/lang/String;)V", "de", "DE");
-      const de = await vcall(rt.link(cls).ctor, "getPercentInstance", `(Ljava/util/Locale;)L${cls};`, german);
-      expect(await vcall(de, "format", "(D)Ljava/lang/String;", 0.25)).toBe("25\u00a0%");
-    });
-  }
-  test("DecimalFormat.applyPattern replaces a percent instance's style", async () => {
-    const f = await vcall(rt.link("java/text/NumberFormat").ctor, "getPercentInstance", "()Ljava/text/NumberFormat;");
-    await vcall(f, "applyPattern", "(Ljava/lang/String;)V", "#0.0%");
-    expect(await vcall(f, "format", "(D)Ljava/lang/String;", 0.5)).toBe("50.0%");
-  });
-  test("NumberFormat preserves all long integer digits", async () => {
-    const f = await vcall(rt.link("java/text/NumberFormat").ctor, "getInstance", "()Ljava/text/NumberFormat;");
-    expect(rt.iof(f, "java/text/DecimalFormat")).toBe(1);
-    expect(await vcall(f, "format", "(J)Ljava/lang/String;", 9007199254740993n)).toBe("9,007,199,254,740,993");
   });
 });
 

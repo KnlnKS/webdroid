@@ -1,6 +1,6 @@
 import { readStreamFully } from "./jio";
 import { mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
-import { jarray, mangleMethod, charsToString, dotName } from "../abi";
+import { jarray, mangleMethod, charsToString, dotName, slashName, utf8 } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo, driven, without, type Gen } from "../runtime";
 import { defaultLocale, JLocale } from "./jvalues";
@@ -3035,5 +3035,58 @@ rt.register({
     "start()Ljava/lang/Process;": function (this: JProcessBuilder) {
       throw rt.mkThrowable("java/io/IOException", `Cannot run program "${this.cmd[0] ?? ""}": error=2, No such file or directory`);
     },
+  },
+});
+
+class JStringTokenizer extends JObj { toks: string[] = []; i = 0; }
+function tokensLeft(this: JStringTokenizer) { return this.i < this.toks.length ? 1 : 0; }
+rt.register({
+  name: "java/util/StringTokenizer", ctor: JStringTokenizer,
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JStringTokenizer, s: string) {
+      this.toks = s.split(/[ \t\n\r\f]+/).filter(Boolean);
+    },
+    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JStringTokenizer, s: string, delims: string) {
+      const re = new RegExp("[" + delims.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&") + "]+");
+      this.toks = s.split(re).filter(Boolean);
+    },
+    "hasMoreTokens()Z": tokensLeft,
+    "hasMoreElements()Z": tokensLeft,
+    "nextToken()Ljava/lang/String;": function (this: JStringTokenizer) {
+      if (this.i >= this.toks.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+      return this.toks[this.i++];
+    },
+    "countTokens()I": function (this: JStringTokenizer) { return this.toks.length - this.i; },
+  },
+});
+
+// ── ServiceLoader: META-INF/services entries from the APK
+class JServiceLoader extends JObj { svcName = ""; }
+async function serviceInstances(svcName: string): Promise<unknown[]> {
+  const bytes = rt.classpath["META-INF/services/" + svcName];
+  if (!bytes) return [];
+  const out: unknown[] = [];
+  for (const line of utf8.dec.decode(bytes).split(/\r?\n/)) {
+    const cls = line.split("#")[0].trim();
+    if (!cls) continue;
+    try {
+      const name = slashName(cls);
+      if (!rt.link(name).stub) out.push(await newObj(name));
+    } catch (e) { console.warn("[ServiceLoader]", cls, e); }
+  }
+  return out;
+}
+const serviceLoader = (cls: { ci?: { name: string } } | null) => {
+  const l = new JServiceLoader(); l.svcName = dotName(cls?.ci?.name ?? ""); return l;
+};
+rt.register({
+  name: "java/util/ServiceLoader", ctor: JServiceLoader,
+  ifaces: ["java/lang/Iterable"],
+  methods: {
+    "static load(Ljava/lang/Class;)Ljava/util/ServiceLoader;": serviceLoader,
+    "static load(Ljava/lang/Class;Ljava/lang/ClassLoader;)Ljava/util/ServiceLoader;": serviceLoader,
+    "iterator()Ljava/util/Iterator;": driven(function* (this: JServiceLoader): Gen {
+      return mkIter(yield serviceInstances(this.svcName));
+    }),
   },
 });

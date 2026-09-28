@@ -14,13 +14,15 @@ import { libmInit } from "./libm";
 import { localeInit } from "./locale";
 import { procInit, abortMessageOr } from "./proc";
 import { netInit } from "./net";
-import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
 import { procIdentity, sysconf } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
 import { isShared, syncShared, trackSharedMap } from "./mappings";
+/** the C locale's month and weekday names (strftime, asctime) */
+export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {

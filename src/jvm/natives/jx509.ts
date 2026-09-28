@@ -4,10 +4,9 @@
 import type { asn1 } from "node-forge";
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, i8 } from "../abi";
-import { boxInt, defineException, newObj, stringHash } from "./jlang";
+import { boxInt, defineException, newObj, stringHash, vcall, after } from "./jlang";
 import { newArrayList, mkIter, newStringSet } from "./jutil";
 import { JRsaPublicKey, forge, binary, array as bytes } from "./jrsa";
-import { JDate } from "./jtime";
 import { readStreamFully } from "./jio";
 
 type Node = asn1.Asn1;
@@ -169,7 +168,7 @@ rt.register({
   name: "java/security/cert/Certificate", ctor: class extends JObj {},
   methods: { "getType()Ljava/lang/String;": () => "X.509" },
 });
-const date = (ms: number) => { const d = rt.make("java/util/Date") as JDate; d.t = ms; return d; };
+const date = (ms: number) => newObj("java/util/Date", "(J)V", BigInt(ms));
 rt.register({
   name: "java/security/cert/X509Certificate", ctor: JX509, sup: "java/security/cert/Certificate",
   methods: {
@@ -195,7 +194,9 @@ rt.register({
     "getNotBefore()Ljava/util/Date;": function (this: JX509) { return date(this.notBefore); },
     "getNotAfter()Ljava/util/Date;": function (this: JX509) { return date(this.notAfter); },
     "checkValidity()V": function (this: JX509) { if (this.der.length) checkValidity(this); },
-    "checkValidity(Ljava/util/Date;)V": function (this: JX509, d: JDate) { if (this.der.length) checkValidity(this, d.t); },
+    "checkValidity(Ljava/util/Date;)V": function (this: JX509, d: unknown) {
+      if (this.der.length) return after(vcall(d ?? rt.npe(), "getTime", "()J"), (t: bigint) => checkValidity(this, Number(t)));
+    },
     "getSigAlgOID()Ljava/lang/String;": function (this: JX509) { return this.sigOid; },
     "getSigAlgName()Ljava/lang/String;": function (this: JX509) { const a = SIG[this.sigOid]; return a ? `${SIG_NAME[a.hash]}with${a.name === "ECDSA" ? "ECDSA" : "RSA"}` : this.sigOid; },
     "getSignature()[B": function (this: JX509) { return i8(this.sig); },

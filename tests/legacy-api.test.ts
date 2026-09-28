@@ -461,12 +461,6 @@ test("List.containsAll, CharBuffer.wrap and EventObject", async () => {
   await expect((async () => newObj("java/util/EventObject", "(Ljava/lang/Object;)V", null))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
 });
 
-test("DateUtils formats elapsed time and knows today", async () => {
-  expect(await scall("android/text/format/DateUtils", "formatElapsedTime", "(J)Ljava/lang/String;", 65n)).toBe("1:05");
-  expect(await scall("android/text/format/DateUtils", "formatElapsedTime", "(J)Ljava/lang/String;", 3725n)).toBe("1:02:05");
-  expect(await scall("android/text/format/DateUtils", "isToday", "(J)Z", BigInt(Date.now()))).toBe(1);
-  expect(await scall("android/text/format/DateUtils", "isToday", "(J)Z", BigInt(Date.now() - 2 * 86400000))).toBe(0);
-});
 
 test("ColorMatrix saturation, scale and concat feed a ColorMatrixColorFilter", async () => {
   const m = await newObj("android/graphics/ColorMatrix");
@@ -578,32 +572,7 @@ test("ContextWrapper.getResources reaches a base context's overriding getResourc
   expect(await vcall(direct, "getResources", "()Landroid/content/res/Resources;")).toBe(plain);
 });
 
-test("ULocale bridges ICU locale ids and java.util.Locale", async () => {
-  const locale = await scall("android/icu/util/ULocale", "forLanguageTag", "(Ljava/lang/String;)Landroid/icu/util/ULocale;", "ar-EG");
-  expect(await vcall(locale, "getLanguage", "()Ljava/lang/String;")).toBe("ar");
-  expect(await vcall(locale, "getCountry", "()Ljava/lang/String;")).toBe("EG");
-  expect(await vcall(locale, "isRightToLeft", "()Z")).toBe(1);
-  const javaLocale = await vcall(locale, "toLocale", "()Ljava/util/Locale;");
-  expect(await vcall(javaLocale, "toLanguageTag", "()Ljava/lang/String;")).toBe("ar-EG");
-  expect(await vcall(javaLocale, "equals", "(Ljava/lang/Object;)Z", await scall("java/util/Locale", "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", "ar-EG"))).toBe(1);
 
-  const builder = await newObj("android/icu/util/ULocale$Builder");
-  await vcall(builder, "setLanguageTag", "(Ljava/lang/String;)Landroid/icu/util/ULocale$Builder;", "en-US");
-  await vcall(builder, "setUnicodeLocaleKeyword", "(Ljava/lang/String;Ljava/lang/String;)Landroid/icu/util/ULocale$Builder;", "calendar", "gregorian");
-  const built = await vcall(builder, "build", "()Landroid/icu/util/ULocale;");
-  expect(await vcall(built, "getKeywordValue", "(Ljava/lang/String;)Ljava/lang/String;", "calendar")).toBe("gregorian");
-});
-
-test("ICU Currency exposes ISO codes, symbols, names, and fraction digits", async () => {
-  const currency = await scall("android/icu/util/Currency", "getInstance", "(Ljava/lang/String;)Landroid/icu/util/Currency;", "usd");
-  expect(await vcall(currency, "getCurrencyCode", "()Ljava/lang/String;")).toBe("USD");
-  expect(await vcall(currency, "getSymbol", "()Ljava/lang/String;")).toBe("$");
-  expect(await vcall(currency, "getDefaultFractionDigits", "()I")).toBe(2);
-  const locale = await scall("android/icu/util/ULocale", "forLanguageTag", "(Ljava/lang/String;)Landroid/icu/util/ULocale;", "en-US");
-  const choice = new Int8Array([1]);
-  expect(await vcall(currency, "getName", "(Landroid/icu/util/ULocale;I[Z)Ljava/lang/String;", locale, 1, choice)).toContain("US");
-  expect(choice[0]).toBe(0);
-});
 
 test("modern Java helpers preserve their public contracts", async () => {
   const hex = await scall("java/lang/Long", "valueOf", "(Ljava/lang/String;I)Ljava/lang/Long;", "7fffffffffffffff", 16);
@@ -635,9 +604,6 @@ test("modern Java helpers preserve their public contracts", async () => {
   expect(rt.iof(constructors[0], "java/lang/reflect/AccessibleObject")).toBe(1);
   expect(await vcall(constructors[0], "trySetAccessible", "()Z")).toBe(1);
 
-  const instant = await scall("java/time/Instant", "ofEpochSecond", "(J)Ljava/time/Instant;", 10n);
-  const earlier = await vcall(instant, "minusSeconds", "(J)Ljava/time/Instant;", 3n);
-  expect(await vcall(earlier, "getEpochSecond", "()J")).toBe(7n);
   const uri = await scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://user%20name@example.com:8443/path");
   expect(await vcall(uri, "getAuthority", "()Ljava/lang/String;")).toBe("user name@example.com:8443");
   expect(await vcall(uri, "getRawAuthority", "()Ljava/lang/String;")).toBe("user%20name@example.com:8443");
@@ -651,8 +617,6 @@ test("modern Java helpers preserve their public contracts", async () => {
   const encoded = await vcall(utf8, "encode", "(Ljava/lang/String;)Ljava/nio/ByteBuffer;", "A£");
   expect(await vcall(encoded, "remaining", "()I")).toBe(3);
   expect([...await vcall(encoded, "array", "()[B")]).toEqual([65, -62, -93]);
-  const gnssClock = await scall("android/os/SystemClock", "currentGnssTimeClock", "()Ljava/time/Clock;");
-  await expect(vcallAsync(gnssClock, "millis", "()J")).rejects.toMatchObject({ msg: "Gnss based time is not available." });
 });
 
 test("concrete maps, EnumSet factories, and primitive streams preserve Java dispatch", async () => {
@@ -687,29 +651,8 @@ test("CharArrayReader supports its initial and explicit marks", async () => {
   expect(await vcall(reader, "read", "()I")).toBe("b".charCodeAt(0));
 });
 
-test("MessageFormat substitutes arguments and honors apostrophe quoting", async () => {
-  const args = Object.assign(["world", 3], { $t: "Ljava/lang/Object;" });
-  expect(await scall("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "Hello {0}: {1}", args)).toBe("Hello world: 3");
-  expect(await scall("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "'{0}' ''{1}''", args)).toBe("{0} '3'");
-});
 
-test("MessageFormat number subformats keep pattern affixes and format any Number", async () => {
-  // a DEX Number subclass (Gson's LazilyParsedNumber) carries no boxed value
-  class LazyNumber extends rt.link("java/lang/Number").ctor {}
-  rt.register({ name: "test/LazyNumber", ctor: LazyNumber, sup: "java/lang/Number", methods: { "doubleValue()D": () => 2.5 } });
-  rt.linkNatives();
-  const args = Object.assign([new LazyNumber(), 1234.5], { $t: "Ljava/lang/Object;" });
-  expect(await scall("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "{0} {1,number,'$'#,##0.00}", args))
-    .toBe("2.5 $1,234.50");
-});
 
-test("SimpleDateFormat parses the AM/PM strings its symbols replace", async () => {
-  const symbols = await newObj("java/text/DateFormatSymbols", "()V");
-  await vcall(symbols, "setAmPmStrings", "([Ljava/lang/String;)V", Object.assign(["vorm.", "nachm."], { $t: "Ljava/lang/String;" }));
-  const sdf = await newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;Ljava/text/DateFormatSymbols;)V", "h:mm a", symbols);
-  const date = await vcall(sdf, "parse", "(Ljava/lang/String;)Ljava/util/Date;", "3:04 nachm.");
-  expect(await vcall(sdf, "format", "(Ljava/util/Date;)Ljava/lang/String;", date)).toBe("3:04 nachm.");
-});
 
 test("String.split preserves the unsplit tail for a positive limit", async () => {
   const arn = "arn:aws:remote-config:us-west-2:455205533140:appConfig:apiz0o87";

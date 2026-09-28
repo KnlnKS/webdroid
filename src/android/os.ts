@@ -12,7 +12,7 @@ import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught, after } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
@@ -25,7 +25,6 @@ import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdFile } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
-import { clockIn, offsetOf, unavailableClock } from "../jvm/natives/jtime";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
@@ -301,9 +300,11 @@ rt.register({
     "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static uptimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
-    "static currentGnssTimeClock()Ljava/time/Clock;": () => unavailableClock("Gnss based time is not available."),
     // the host's wall clock is network-synchronized
-    "static currentNetworkTimeClock()Ljava/time/Clock;": () => clockIn(offsetOf(0)),
+    "static currentNetworkTimeClock()Ljava/time/Clock;": () => {
+      const clock = rt.link("java/time/Clock");
+      return after(rt.initClass(clock), () => vcall(clock.ctor, "systemUTC", "()Ljava/time/Clock;"));
+    },
     "static sleep(J)V": (ms: bigint) => guestSleep(Number(ms)),
   },
 });

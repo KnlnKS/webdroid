@@ -4,17 +4,14 @@ import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreat
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, stringOf, type JSimpleEnum } from "../jvm/natives/jlang";
-import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, cssColor, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
 import { AID, JTypedArray } from "./res";
 import { TV } from "./axml";
 import { jarray } from "../jvm/abi";
 import { fontResource } from "./fonts";
 import { device } from "../shell/config";
-import { formatPattern } from "../jvm/natives/jtime-pattern";
 import { toJsArray } from "../jvm/natives/jutil";
-import { localeDirection, localeTag } from "../jvm/natives/jvalues";
-import { bestDateTimePattern } from "./icu";
+import { localeDirection } from "../jvm/natives/jvalues";
 import { JPersistableBundle, bundleBox } from "./os";
 import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
@@ -1642,98 +1639,6 @@ rt.register({
     "setLineBreakStyle(I)Landroid/graphics/text/LineBreakConfig$Builder;": function (this: JObj) { return this; },
     "setLineBreakWordStyle(I)Landroid/graphics/text/LineBreakConfig$Builder;": function (this: JObj) { return this; },
     "build()Landroid/graphics/text/LineBreakConfig;": () => rt.make("android/graphics/text/LineBreakConfig"),
-  },
-});
-
-rt.register({
-  name: "android/text/format/DateFormat", ctor: class extends JObj {},
-  methods: {
-    "static is24HourFormat(Landroid/content/Context;)Z": () => 0,
-    "static getBestDateTimePattern(Ljava/util/Locale;Ljava/lang/String;)Ljava/lang/String;": (locale: JLocale, skeleton: string) =>
-      bestDateTimePattern(localeTag(locale), skeleton),
-    "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
-    "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
-    "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatPattern(spannedString(fmt), Number(t)),
-    "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatPattern(spannedString(fmt), d ? d.t : rt.npe()),
-    "static format(Ljava/lang/CharSequence;Ljava/util/Calendar;)Ljava/lang/CharSequence;": (fmt: unknown, c: JCalendar) => formatPattern(spannedString(fmt), c.ms, c.tz.id),
-  },
-});
-
-// ── android.text.format.Formatter: SI units and the 900 roll-over, as API 26+ formats them
-const BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"];
-const fmtBytes = (n: bigint, short: boolean) => {
-  const units = BYTE_UNITS;
-  let v = Math.abs(Number(n)), i = 0;
-  while (v > 900 && i < units.length - 1) { v /= 1000; i++; }
-  const dec = i === 0 ? 0 : v < 1 ? 2 : v < 10 ? (short ? 1 : 2) : v < 100 ? (short ? 0 : 2) : 0;
-  return (n < 0n ? "-" : "") + v.toFixed(dec) + " " + units[i];
-};
-rt.register({
-  name: "android/text/format/Formatter", ctor: class extends JObj {},
-  methods: {
-    "static formatFileSize(Landroid/content/Context;J)Ljava/lang/String;": (_c: unknown, n: bigint) => fmtBytes(n, false),
-    "static formatShortFileSize(Landroid/content/Context;J)Ljava/lang/String;": (_c: unknown, n: bigint) => fmtBytes(n, true),
-    // the address in network byte order, as WifiInfo.getIpAddress stores it: lowest byte first
-    "static formatIpAddress(I)Ljava/lang/String;": (a: number) => [0, 8, 16, 24].map((shift) => (a >>> shift) & 255).join("."),
-  },
-});
-
-// ── android.text.format.Time (deprecated since API 22, still what 2013-era crash reporters stamp
-// reports with). Fields are the public broken-down ints; the zone is always UTC here.
-class JTime extends JObj {
-  year = 1970; month = 0; monthDay = 1; hour = 0; minute = 0; second = 0; weekDay = 4; yearDay = 0; isDst = 0;
-  gmtoff = 0n; timezone = "UTC"; allDay = 0;
-  set(ms: number) {
-    const d = new Date(ms);
-    this.year = d.getUTCFullYear(); this.month = d.getUTCMonth(); this.monthDay = d.getUTCDate();
-    this.hour = d.getUTCHours(); this.minute = d.getUTCMinutes(); this.second = d.getUTCSeconds();
-    this.weekDay = d.getUTCDay();
-    this.yearDay = Math.floor((ms - Date.UTC(this.year, 0, 1)) / 86400000);
-  }
-  millis(): number { return Date.UTC(this.year, this.month, this.monthDay, this.hour, this.minute, this.second); }
-}
-const p2 = (n: number) => String(n).padStart(2, "0");
-rt.register({
-  name: "android/text/format/Time", ctor: JTime,
-  fields: ["year", "month", "monthDay", "hour", "minute", "second", "weekDay", "yearDay", "isDst", "gmtoff",
-    "timezone", "allDay"],
-  statics: { TIMEZONE_UTC: "UTC", EPOCH_JULIAN_DAY: 2440588, MONDAY_BEFORE_JULIAN_EPOCH: 2440585 },
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: JTime, tz: string) { this.timezone = tz ?? "UTC"; },
-    "setToNow()V": function (this: JTime) { this.set(Date.now()); },
-    "set(J)V": function (this: JTime, ms: bigint) { this.set(Number(ms)); },
-    "set(IIIIII)V": function (this: JTime, s: number, mi: number, h: number, d: number, mo: number, y: number) {
-      this.second = s; this.minute = mi; this.hour = h; this.monthDay = d; this.month = mo; this.year = y;
-    },
-    "toMillis(Z)J": function (this: JTime) { return BigInt(this.millis()); },
-    "normalize(Z)J": function (this: JTime) { const ms = this.millis(); this.set(ms); return BigInt(ms); },
-    "format3339(Z)Ljava/lang/String;": function (this: JTime, allDay: number) {
-      const date = `${this.year}-${p2(this.month + 1)}-${p2(this.monthDay)}`;
-      return allDay ? date : `${date}T${p2(this.hour)}:${p2(this.minute)}:${p2(this.second)}.000+00:00`;
-    },
-    "format2445()Ljava/lang/String;": function (this: JTime) {
-      return `${this.year}${p2(this.month + 1)}${p2(this.monthDay)}T${p2(this.hour)}${p2(this.minute)}${p2(this.second)}Z`;
-    },
-    "format(Ljava/lang/String;)Ljava/lang/String;": function (this: JTime, fmt: string) {
-      const m: Record<string, string> = { Y: String(this.year), m: p2(this.month + 1), d: p2(this.monthDay), H: p2(this.hour),
-        M: p2(this.minute), S: p2(this.second), y: p2(this.year % 100), e: String(this.monthDay).padStart(2, " "), "%": "%" };
-      return fmt.replace(/%(.)/g, (all, c) => m[c] ?? all);
-    },
-    "toString()Ljava/lang/String;": function (this: JTime) {
-      return `${this.year}${p2(this.month + 1)}${p2(this.monthDay)}T${p2(this.hour)}${p2(this.minute)}${p2(this.second)}UTC(0,0,0,0,${this.millis() / 1000 | 0})`;
-    },
-    "parse(Ljava/lang/String;)Z": function (this: JTime, s: string) {
-      const r = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z?))?$/.exec(s ?? "");
-      if (!r) throw rt.mkThrowable("android/util/TimeFormatException", "Parse error at " + s);
-      this.year = +r[1]; this.month = +r[2] - 1; this.monthDay = +r[3];
-      this.hour = +(r[4] ?? 0); this.minute = +(r[5] ?? 0); this.second = +(r[6] ?? 0);
-      return r[7] ? 1 : 0;
-    },
-    "switchTimezone(Ljava/lang/String;)V": () => {},
-    "clear(Ljava/lang/String;)V": function (this: JTime) { Object.assign(this, new JTime()); },
-    "static isEpoch(Landroid/text/format/Time;)Z": (t: JTime) => (t.millis() === 0 ? 1 : 0),
-    "static compare(Landroid/text/format/Time;Landroid/text/format/Time;)I": (a: JTime, b: JTime) => Math.sign(a.millis() - b.millis()),
   },
 });
 

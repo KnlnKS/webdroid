@@ -20,7 +20,8 @@ import {
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, after } from "../jvm/natives/jlang";
+import { lambda } from "../jvm/natives/jstream";
 import { charsToString, floatToIntBits, i8, u8, jarray } from "../jvm/abi";
 import { JPath, appendPath, copyPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
 import type { JTextPaint, TLine } from "./text";
@@ -744,14 +745,14 @@ delegate("android/graphics/text/LineBreaker", {
 });
 
 // ── android.os.SystemProperties ────────────────────────────────────────────────────────
-// Every property is ABSENT here, so every read gets the caller's own default — which is what a
-// device that has not set one reports, and is the difference between "this device does not do
-// that" and a made-up answer a library will branch on. A property that turns out to need a real
-// value belongs in the one device profile (src/shell/config.ts), not in a table here. An app
-// process may not set properties, and a change report runs the registered callbacks, as the
-// property service's own notification does.
+// A property is ABSENT unless the device profile (src/shell/config.ts) answers it, so other reads
+// get the caller's own default — which is what a device that has not set one reports, and is the
+// difference between "this device does not do that" and a made-up answer a library will branch
+// on. An app process may not set properties, and a change report runs the registered callbacks,
+// as the property service's own notification does.
+const deviceProperties: Record<string, () => string> = { "persist.sys.timezone": () => device.timezone };
 delegate("android/os/SystemProperties", {
-  "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_k: string, def: string | null) => def ?? "",
+  "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (key: string, def: string | null) => deviceProperties[key]?.() ?? def ?? "",
   "native_get_boolean(Ljava/lang/String;Z)Z": (_k: string, def: number) => def,
   "native_get_int(Ljava/lang/String;I)I": (_k: string, def: number) => def,
   "native_get_long(Ljava/lang/String;J)J": (_k: string, def: bigint) => def,
@@ -762,6 +763,14 @@ delegate("android/os/SystemProperties", {
   // reached only from SystemProperties itself, which is therefore initialized
   "native_report_sysprop_change()V": () => vcall(rt.link("android/os/SystemProperties").ctor, "callChangeCallbacks", "()V"),
 });
+
+/** What RuntimeInit.commonInit sets up in a zygote-forked process before app code runs: the
+ *  default time zone follows persist.sys.timezone. */
+export function zygoteInit(): unknown {
+  const hooks = rt.link("dalvik/system/RuntimeHooks");
+  return after(rt.initClass(hooks), () => vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V",
+    lambda("Supplier", deviceProperties["persist.sys.timezone"])));
+}
 
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────
 // The handle is a JBitmap. Several of these build the Java object rather than returning a

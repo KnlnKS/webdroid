@@ -18,6 +18,7 @@ import { PLATFORM_JARS } from "../jvm/provenance";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
 import { BytesFile } from "../shell/lazyfile";
+import { zygoteInit } from "./delegates";
 import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
@@ -56,7 +57,10 @@ export function fetchPlatformJars(): Promise<Uint8Array[]> {
 /** Index every platform class after the app's own, which loadDex's first-wins keeps ahead.
  *  Indexing 40,860 classes costs ~20ms and compiling is lazy per class. */
 export function loadPlatformDex(): Promise<void> {
-  return pendingDex ??= fetchPlatformJars().then((bytes) => bytes.forEach(loadPlatformJar));
+  return pendingDex ??= fetchPlatformJars().then(async (bytes) => {
+    bytes.forEach(loadPlatformJar);
+    await zygoteInit();
+  });
 }
 
 export function loadFramework(): Promise<Arsc> {

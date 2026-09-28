@@ -10,7 +10,6 @@ import { TV } from "../src/android/axml";
 import { mkCsl } from "../src/android/drawable";
 import { JTextView, JEditText } from "../src/android/textview";
 import { perf } from "../src/perf";
-import { scall } from "./java";
 
 describe("linkify", () => {
   rt.linkNatives();
@@ -352,13 +351,6 @@ describe("text-platform", () => {
     expect(paint.tf).toBe(typeface);
   });
 
-  test("PluralRules uses locale cardinal categories", async () => {
-    const Locale = rt.link("java/util/Locale").ctor as unknown as Record<string, unknown>;
-    const english = Locale[mangleStaticField("ENGLISH")];
-    const rules = scall("android/icu/text/PluralRules", "forLocale", "(Ljava/util/Locale;)Landroid/icu/text/PluralRules;", english);
-    expect(await vcall(rules, "select", "(D)Ljava/lang/String;", 1)).toBe("one");
-    expect(await vcall(rules, "select", "(D)Ljava/lang/String;", 2)).toBe("other");
-  });
 
   test("storage stats resolves by class to its named service", async () => {
     const context = await newObj("android/content/Context");
