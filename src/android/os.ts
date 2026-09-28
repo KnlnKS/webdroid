@@ -6,7 +6,7 @@ import { procIdentity, processTid, sysconf, SYSCONF } from "../shell/procfs";
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
-import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
@@ -635,13 +635,22 @@ for (const [t, d] of BUNDLE_TYPES) {
 for (const [t, d] of BUNDLE_TYPED) {
   bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string, cls: unknown) { return bundleTyped(this, k, cls, d); };
 }
-rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
+/** what only Bundle holds (PersistableBundle keeps to strings, numbers and nested PersistableBundles) */
+const PARCEL_STEMS = new Set(["Binder", "Bundle", "IBinder", "Parcelable", "ParcelableArray", "ParcelableArrayList", "Size", "SizeF", "SparseParcelableArray"]);
+const bundleOnly = [
+  ...BUNDLE_TYPES.filter(([t]) => PARCEL_STEMS.has(t)).flatMap(([t, d]) => [`put${t}(Ljava/lang/String;${d})V`, `get${t}(Ljava/lang/String;)${d}`]),
+  ...BUNDLE_TYPED.filter(([t]) => PARCEL_STEMS.has(t)).map(([t, d]) => `get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`),
+  "putAll(Landroid/os/Bundle;)V", "readFromParcel(Landroid/os/Parcel;)V",
+];
+const persistableOnly = ["putPersistableBundle(Ljava/lang/String;Landroid/os/PersistableBundle;)V", "getPersistableBundle(Ljava/lang/String;)Landroid/os/PersistableBundle;"];
+rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: without(bundleMethods, bundleOnly, persistableOnly,
+  ["<init>(Landroid/os/Bundle;)V", "<init>(Landroid/os/PersistableBundle;)V", "describeContents()I", "writeToParcel(Landroid/os/Parcel;I)V"]) });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } },
-  methods: { ...bundleMethods, "deepCopy()Landroid/os/Bundle;": deepCopy } });
+  methods: { ...without(bundleMethods, persistableOnly), "deepCopy()Landroid/os/Bundle;": deepCopy } });
 rt.register({ name: "android/os/PersistableBundle", ctor: JPersistableBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JPersistableBundle(); } },
-  methods: { ...bundleMethods, "deepCopy()Landroid/os/PersistableBundle;": deepCopy } });
+  methods: { ...without(bundleMethods, bundleOnly, ["<init>(Ljava/lang/ClassLoader;)V"]), "deepCopy()Landroid/os/PersistableBundle;": deepCopy } });
 
 export const PARCELABLE = {
   "describeContents()I": () => 0,

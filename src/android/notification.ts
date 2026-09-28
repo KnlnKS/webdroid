@@ -367,7 +367,6 @@ for (const [sig, key] of Object.entries({
   "setSubText(Ljava/lang/CharSequence;)": "android.subText",
   "setContentInfo(Ljava/lang/CharSequence;)": "android.infoText",
   "setSettingsText(Ljava/lang/CharSequence;)": "android.settingsText",
-  "setShortCriticalText(Ljava/lang/String;)": "android.shortCriticalText",
   "setRemoteInputHistory([Ljava/lang/CharSequence;)": "android.remoteInputHistory",
   "setShowWhen(Z)": "android.showWhen",
   "setUsesChronometer(Z)": "android.showChronometer",
@@ -421,7 +420,6 @@ for (const [name, extra] of Object.entries({
     "bigLargeIcon(Landroid/graphics/Bitmap;)", "bigLargeIcon(Landroid/graphics/drawable/Icon;)",
     "setContentDescription(Ljava/lang/CharSequence;)", "showBigPictureWhenCollapsed(Z)"],
   InboxStyle: ["addLine(Ljava/lang/CharSequence;)"],
-  DecoratedCustomViewStyle: [],
 })) {
   const cls = "android/app/Notification$" + name;
   const ms: Record<string, Impl> = {
@@ -431,6 +429,8 @@ for (const [name, extra] of Object.entries({
   self(ms, ["setBigContentTitle(Ljava/lang/CharSequence;)", "setSummaryText(Ljava/lang/CharSequence;)", ...extra], "L" + cls + ";");
   rt.register({ name: cls, ctor: class extends JNStyle {}, sup: "android/app/Notification$Style", methods: ms });
 }
+rt.register({ name: "android/app/Notification$DecoratedCustomViewStyle", ctor: class extends JNStyle {}, sup: "android/app/Notification$Style",
+  methods: { "<init>()V": function () {} } });
 
 // ── Notification.Action (+ its Builder)
 class JNAction extends JObj {
@@ -451,9 +451,7 @@ rt.register({
     "getRemoteInputs()[Landroid/app/RemoteInput;": () => null,
     "getDataOnlyRemoteInputs()[Landroid/app/RemoteInput;": () => null,
     "getAllowGeneratedReplies()Z": () => 1,
-    ...fieldGetters({ "getTitle()Ljava/lang/CharSequence;": "title",
-      "getActionIntent()Landroid/app/PendingIntent;": "actionIntent", "getExtras()Landroid/os/Bundle;": "extras",
-      "getSemanticAction()I": "semantic", "isContextual()Z": "contextual" }),
+    ...fieldGetters({ "getExtras()Landroid/os/Bundle;": "extras", "getSemanticAction()I": "semantic", "isContextual()Z": "contextual" }),
     "isAuthenticationRequired()Z": () => 0,
     "clone()Landroid/app/Notification$Action;": function (this: JNAction) { return Object.assign(new JNAction(), this); },
     ...PARCELABLE,
@@ -479,7 +477,7 @@ const abMethods: Record<string, Impl> = {
   ["setContextual(Z)" + AB]: function (this: JNActionBuilder, v: number) { this.a.contextual = v; return this; },
 };
 self(abMethods, ["addRemoteInput(Landroid/app/RemoteInput;)", "setAllowGeneratedReplies(Z)",
-  "setAuthenticationRequired(Z)", "setEmphasisHint(I)", "setStyleHint(I)",
+  "setAuthenticationRequired(Z)",
   "extend(Landroid/app/Notification$Action$Extender;)"], AB);
 rt.register({ name: "android/app/Notification$Action$Builder", ctor: JNActionBuilder, methods: abMethods });
 

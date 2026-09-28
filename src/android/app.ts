@@ -284,7 +284,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // the rest of Window.Callback, as Activity's no-op defaults
   "onContentChanged()V": function () {},
   "invalidateOptionsMenu()V": invalidateOptionsMenu,
-  "supportInvalidateOptionsMenu()V": invalidateOptionsMenu,
   "openOptionsMenu()V": function (this: JActivity) {
     const bar = this.window.actionBarView;
     if (!bar) return;
@@ -444,7 +443,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
     "onCreateView(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
     "getCurrentFocus()Landroid/view/View;", "onRetainNonConfigurationInstance()Ljava/lang/Object;",
-    "onRetainCustomNonConfigurationInstance()Ljava/lang/Object;", "getReferrer()Landroid/net/Uri;"),
+    "getReferrer()Landroid/net/Uri;"),
 };
 rt.register({
   name: "android/app/Activity", ctor: JActivity, sup: "android/view/ContextThemeWrapper",
@@ -567,7 +566,7 @@ rt.register({
   ifaces: ["android/content/ComponentCallbacks"],
 });
 
-let audioCapturePolicy = 1, appNightMode = -1;
+let audioCapturePolicy = 1;
 class JAccessibilityServiceInfo extends JObj {
   eventTypes = 0;
   feedbackType = 0;
@@ -871,13 +870,8 @@ for (const [name, methods, statics] of [
   ["android/app/UiModeManager", {
     "getNightMode()I": () => device.night ? 2 : 1,
     "setNightMode(I)V": () => {},
-    "getApplicationNightMode()I": () => {
-      const saved = appHost ? getPrefs(appHost.pkg, "__system_uimode").map.get("mode") : null;
-      return typeof saved === "number" ? saved : appNightMode;
-    },
     "setApplicationNightMode(I)V": (mode: number) => {
       if (mode < 0 || mode > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unknown mode: ${mode}`);
-      appNightMode = mode;
       appHost?.setApplicationNightMode(mode);
     },
     "getCurrentModeType()I": () => 1,

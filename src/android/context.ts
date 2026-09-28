@@ -1,7 +1,7 @@
 import type { JIntentFilter } from "./intent-filter";
 import { type JFile, mkFile } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
-import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, type JAttrSet } from "./res";
 import { newObj, vcall, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
@@ -384,7 +384,6 @@ const contextMethods: NativeSpec["methods"] = {
     checkUriPermission(uri, PROCESS_PID, PROCESS_UID, modes),
   "grantUriPermission(Ljava/lang/String;Landroid/net/Uri;I)V": grantUriPermission,
   "revokeUriPermission(Landroid/net/Uri;I)V": revokeUriPermission,
-  "checkPermission(Ljava/lang/String;)I": permissionState,
   "checkPermission(Ljava/lang/String;II)I": permissionState,
   "checkCallingPermission(Ljava/lang/String;)I": permissionState,
   "checkCallingOrSelfPermission(Ljava/lang/String;)I": permissionState,
@@ -488,7 +487,7 @@ export const wrapperMethods: NativeSpec["methods"] = {
 };
 rt.register({
   name: "android/content/ContextWrapper", ctor: JContextWrapper, sup: "android/content/Context",
-  methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase },
+  methods: { ...without(wrapperMethods, ["<init>()V"]), "<init>(Landroid/content/Context;)V": attachBase },
 });
 rt.register({ name: "webdroid/AttributionContext", ctor: JAttributionContext, sup: "android/content/ContextWrapper", methods: {
   ...wrapperMethods,
@@ -499,7 +498,7 @@ rt.register({ name: "webdroid/AttributionContext", ctor: JAttributionContext, su
 } });
 rt.register({
   name: "android/content/MutableContextWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
-  methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase, "setBaseContext(Landroid/content/Context;)V": attachBase },
+  methods: { ...without(wrapperMethods, ["<init>()V"]), "<init>(Landroid/content/Context;)V": attachBase, "setBaseContext(Landroid/content/Context;)V": attachBase },
 });
 export class JContextThemeWrapper extends JContextWrapper { overrideResources: unknown = null; }
 const resourcesViaBase = wrapperMethods["getResources()Landroid/content/res/Resources;"] as (this: JContextWrapper) => unknown;
@@ -516,7 +515,6 @@ rt.register({
   name: "android/view/ContextThemeWrapper", ctor: JContextThemeWrapper, sup: "android/content/ContextWrapper",
   methods: {
     ...themeWrapperMethods,
-    "<init>(Landroid/content/Context;)V": attachBase,
     "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
       if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);

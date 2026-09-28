@@ -581,7 +581,7 @@ test("ContextWrapper.getResources reaches a base context's overriding getResourc
   base.$host = { res: host, jresources: plain, pkg: "test" };
   const proxy = await newObj("test/ProxyContext", "(Landroid/content/Context;)V", base) as JObj & { store: unknown };
   proxy.store = store;
-  const outer = await newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;)V", proxy);
+  const outer = await newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;I)V", proxy, 0);
   expect(await vcall(outer, "getResources", "()Landroid/content/res/Resources;")).toBe(store);
   expect(await vcall(outer, "getString", "(I)Ljava/lang/String;", 0x7f1143e8)).toBe("store:7f1143e8");
   // a wrapper over the platform context still answers the platform's own Resources directly
