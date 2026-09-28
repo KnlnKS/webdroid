@@ -367,74 +367,34 @@ function cloneAnimator(this: JValueAnimator): JValueAnimator {
   };
   return clone(this);
 }
-const vaMethods: NativeSpec["methods"] = {
-  "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
+function getCurrentPlayTime(this: JValueAnimator) { return BigInt(Math.max(0, Math.round(guestNow() - this.startT))); }
+const animatorMethods: NativeSpec["methods"] = {
   "setDuration(J)Landroid/animation/Animator;": setDur,
   "getDuration()J": function (this: JValueAnimator) { return BigInt(this.durationMs); },
   "getTotalDuration()J": function (this: JValueAnimator) { return this.repeat < 0 ? -1n : BigInt(this.delayMs + this.durationMs * (this.repeat + 1)); },
-  "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
-  "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
-  "setObjectValues([Ljava/lang/Object;)V": function (this: JValueAnimator, v: unknown[]) { this.objKeys = [...v]; },
   "removeListener(Landroid/animation/Animator$AnimatorListener;)V": function (this: JValueAnimator, l: unknown) {
     const i = this.animLs.indexOf(l); if (i >= 0) this.animLs.splice(i, 1);
-  },
-  "removeUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
-    const i = this.updateLs.indexOf(l); if (i >= 0) this.updateLs.splice(i, 1);
   },
   "getListeners()Ljava/util/ArrayList;": function (this: JValueAnimator) { return this.animLs.length ? newArrayList([...this.animLs]) : null; },
   "pause()V": function (this: JValueAnimator) { if (this.running && !this.paused) { this.paused = true; this.pausedAt = guestNow(); } },
   "resume()V": function (this: JValueAnimator) { if (this.paused) { this.paused = false; this.startT += guestNow() - this.pausedAt; } },
-  ...fieldSetters({ "setInterpolator(Landroid/animation/TimeInterpolator;)V": "interp",
-    "setInterpolator(Landroid/view/animation/Interpolator;)V": "interp",
-    "setEvaluator(Landroid/animation/TypeEvaluator;)V": "evaluator" }),
-  ...fieldGetters({ "getInterpolator()Landroid/animation/TimeInterpolator;": "interp", "getRepeatCount()I": "repeat",
-    "getRepeatMode()I": "repeatMode" }),
+  ...fieldSetters({ "setInterpolator(Landroid/animation/TimeInterpolator;)V": "interp" }),
+  ...fieldGetters({ "getInterpolator()Landroid/animation/TimeInterpolator;": "interp" }),
   ...flagGetters({ "isPaused()Z": "paused" }),
   "reverse()V": driven(function* (this: JValueAnimator): Gen {
     if (this.running) { this.reversed = !this.reversed; this.startT = guestNow() - (this.durationMs - (guestNow() - this.startT)); return; }
     this.startReversed = true;
     yield guardCall(this, M_start);
   }),
-  "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = guestNow() - Number(t); },
-  "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(guestNow() - this.startT))); },
-  "setCurrentFraction(F)V": function (this: JValueAnimator, f: number) { this.startT = guestNow() - f * this.durationMs; },
-  "getValues()[Landroid/animation/PropertyValuesHolder;": function (this: JValueAnimator) {
-    if (!this.holders.length) { const h = new JPVH(); h.name = this.propName; h.keys = this.keys ?? [this.from, this.to]; h.isInt = this.isInt; h.objKeys = this.objKeys; h.evaluator = this.evaluator; this.holders = [h]; }
-    return jarray([...this.holders], "Landroid/animation/PropertyValuesHolder;");
-  },
-  "getAnimatedValue(Ljava/lang/String;)Ljava/lang/Object;": function (this: JValueAnimator, name: string) {
-    const h = this.holders.find((h) => h.name === name);
-    return h ? boxedCur(h) : boxedCur(this);
-  },
-  "static getFrameDelay()J": () => 10n,
-  ...noops("<init>()V", "addPauseListener(Landroid/animation/Animator$AnimatorPauseListener;)V",
-    "static setDurationScale(F)V", "static setFrameDelay(J)V"),
-  ...stubs(1, "static areAnimatorsEnabled()Z", "static getDurationScale()F",
-    "static registerDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z",
-    "static unregisterDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z"),
-  "static ofObject(Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ValueAnimator;": (ev: unknown, vals: unknown[]) => {
-    const a = new JValueAnimator();
-    a.evaluator = ev; a.objKeys = [...(vals ?? [])];
-    return a;
-  },
-  "static ofPropertyValuesHolder([Landroid/animation/PropertyValuesHolder;)Landroid/animation/ValueAnimator;": (hs: JPVH[]) => {
-    const a = new JValueAnimator();
-    a.holders = [...(hs ?? [])];
-    return a;
-  },
+  ...noops("<init>()V", "addPauseListener(Landroid/animation/Animator$AnimatorPauseListener;)V"),
   "clone()Landroid/animation/Animator;": cloneAnimator,
-  "clone()Landroid/animation/ValueAnimator;": cloneAnimator,
   "setStartDelay(J)V": function (this: JValueAnimator, d: bigint) { this.delayMs = Number(d); },
   "getStartDelay()J": function (this: JValueAnimator) { return BigInt(this.delayMs); },
   "setTarget(Ljava/lang/Object;)V": function (this: JValueAnimator, t: unknown) { setTargetDeep(this, t); },
-  "addUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
-    this.updateLs.push(l);
-  },
   "addListener(Landroid/animation/Animator$AnimatorListener;)V": function (this: JValueAnimator, l: unknown) {
     this.animLs.push(l);
   },
   "removeAllListeners()V": function (this: JValueAnimator) { this.animLs.length = 0; },
-  "removeAllUpdateListeners()V": function (this: JValueAnimator) { this.updateLs.length = 0; },
   "start()V": driven(function* (this: JValueAnimator): Gen {
     if (Number.isNaN(this.from) || Number.isNaN(this.to)) {
       // a single value animates from the property's current value (ValueAnimator: from 0)
@@ -472,9 +432,52 @@ const vaMethods: NativeSpec["methods"] = {
     }
   }),
   "end()V": function (this: JValueAnimator) { this.running = false; },
+  ...flagGetters({ "isRunning()Z": "running", "isStarted()Z": "running" }),
+};
+const vaMethods: NativeSpec["methods"] = {
+  ...animatorMethods,
+  "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
+  "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
+  "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
+  "setObjectValues([Ljava/lang/Object;)V": function (this: JValueAnimator, v: unknown[]) { this.objKeys = [...v]; },
+  "removeUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
+    const i = this.updateLs.indexOf(l); if (i >= 0) this.updateLs.splice(i, 1);
+  },
+  ...fieldSetters({ "setEvaluator(Landroid/animation/TypeEvaluator;)V": "evaluator" }),
+  ...fieldGetters({ "getRepeatCount()I": "repeat", "getRepeatMode()I": "repeatMode" }),
+  "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = guestNow() - Number(t); },
+  "getCurrentPlayTime()J": getCurrentPlayTime,
+  "setCurrentFraction(F)V": function (this: JValueAnimator, f: number) { this.startT = guestNow() - f * this.durationMs; },
+  "getValues()[Landroid/animation/PropertyValuesHolder;": function (this: JValueAnimator) {
+    if (!this.holders.length) { const h = new JPVH(); h.name = this.propName; h.keys = this.keys ?? [this.from, this.to]; h.isInt = this.isInt; h.objKeys = this.objKeys; h.evaluator = this.evaluator; this.holders = [h]; }
+    return jarray([...this.holders], "Landroid/animation/PropertyValuesHolder;");
+  },
+  "getAnimatedValue(Ljava/lang/String;)Ljava/lang/Object;": function (this: JValueAnimator, name: string) {
+    const h = this.holders.find((h) => h.name === name);
+    return h ? boxedCur(h) : boxedCur(this);
+  },
+  "static getFrameDelay()J": () => 10n,
+  ...noops("static setDurationScale(F)V", "static setFrameDelay(J)V"),
+  ...stubs(1, "static areAnimatorsEnabled()Z", "static getDurationScale()F",
+    "static registerDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z",
+    "static unregisterDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z"),
+  "static ofObject(Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ValueAnimator;": (ev: unknown, vals: unknown[]) => {
+    const a = new JValueAnimator();
+    a.evaluator = ev; a.objKeys = [...(vals ?? [])];
+    return a;
+  },
+  "static ofPropertyValuesHolder([Landroid/animation/PropertyValuesHolder;)Landroid/animation/ValueAnimator;": (hs: JPVH[]) => {
+    const a = new JValueAnimator();
+    a.holders = [...(hs ?? [])];
+    return a;
+  },
+  "clone()Landroid/animation/ValueAnimator;": cloneAnimator,
+  "addUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
+    this.updateLs.push(l);
+  },
+  "removeAllUpdateListeners()V": function (this: JValueAnimator) { this.updateLs.length = 0; },
   "getAnimatedValue()Ljava/lang/Object;": function (this: JValueAnimator) { return boxedCur(this); },
   ...fieldSetters({ "setRepeatCount(I)V": "repeat", "setRepeatMode(I)V": "repeatMode" }),
-  ...flagGetters({ "isRunning()Z": "running", "isStarted()Z": "running" }),
   ...fieldGetters({ "getAnimatedFraction()F": "frac" }),
   "static ofFloat([F)Landroid/animation/ValueAnimator;": (vals: Float32Array) => { const a = new JValueAnimator(); setNumKeys(a, vals, false); return a; },
   "static ofInt([I)Landroid/animation/ValueAnimator;": (vals: Int32Array) => { const a = new JValueAnimator(); setNumKeys(a, vals, true); return a; },
@@ -484,7 +487,7 @@ const vaMethods: NativeSpec["methods"] = {
     return a;
   },
 };
-rt.register({ name: "android/animation/Animator", ctor: class extends JValueAnimator {}, methods: vaMethods });
+rt.register({ name: "android/animation/Animator", ctor: class extends JValueAnimator {}, methods: animatorMethods });
 rt.register({ name: "android/animation/ValueAnimator", ctor: JValueAnimator, sup: "android/animation/Animator", methods: vaMethods });
 class JTimeAnimator extends JValueAnimator { timeListener: unknown = null; lastTime = -1; timeStarted = false; }
 rt.markers("android/animation/TimeAnimator$TimeListener");
@@ -536,7 +539,8 @@ function setTargetDeep(a: JValueAnimator, t: unknown) {
 rt.register({
   name: "android/animation/AnimatorSet", ctor: JAnimatorSet, sup: "android/animation/Animator",
   methods: {
-    ...vaMethods,
+    ...animatorMethods,
+    "getCurrentPlayTime()J": getCurrentPlayTime,
     "setDuration(J)Landroid/animation/AnimatorSet;": setDur,
     "clone()Landroid/animation/AnimatorSet;": cloneAnimator,
     "playTogether([Landroid/animation/Animator;)V": function (this: JAnimatorSet, arr: JValueAnimator[]) { this.anims = [...(arr ?? [])]; },

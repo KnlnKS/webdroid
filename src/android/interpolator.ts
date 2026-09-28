@@ -83,22 +83,33 @@ function init(it: JInterpolator, name: string, a?: number, b?: number): JInterpo
   return it;
 }
 const interpolatorOf = (name: string, a?: number, b?: number) => init(rt.make("android/view/animation/" + name) as JInterpolator, name, a, b);
+/** the numeric and Path constructors each interpolator declares */
+const CTORS: Record<string, string[]> = {
+  LinearInterpolator: ["()V"], AccelerateDecelerateInterpolator: ["()V"], BounceInterpolator: ["()V"],
+  AccelerateInterpolator: ["()V", "(F)V"], DecelerateInterpolator: ["()V", "(F)V"],
+  OvershootInterpolator: ["()V", "(F)V"], AnticipateInterpolator: ["()V", "(F)V"],
+  AnticipateOvershootInterpolator: ["()V", "(F)V", "(FF)V"], CycleInterpolator: ["(F)V"],
+  PathInterpolator: ["(FF)V", "(FFFF)V", "(Landroid/graphics/Path;)V"],
+};
 for (const name of Object.keys(CURVES)) {
   const curve = (f: (t: number) => number) => function (this: JInterpolator) { this.f = f; };
+  const ctors: Record<string, (this: JInterpolator, ...a: never[]) => void> = {
+    "()V": function (this: JInterpolator) { init(this, name); },
+    "(F)V": function (this: JInterpolator, a: number) { init(this, name, a); },
+    "(FF)V": name === "PathInterpolator"
+      ? function (this: JInterpolator, x: number, y: number) { curve(quadCurve(x, y)).call(this); }
+      : function (this: JInterpolator, a: number, b: number) { init(this, name, a, b); },
+    "(FFFF)V": function (this: JInterpolator, x1: number, y1: number, x2: number, y2: number) { curve(bezierCurve(x1, y1, x2, y2)).call(this); },
+    "(Landroid/graphics/Path;)V": function (this: JInterpolator, path: JPath) {
+      const data = pathKeyframeData(path);
+      curve(pathCurve(data.filter((_, i) => i % 3 !== 0))).call(this);
+    },
+  };
   rt.register({
     name: "android/view/animation/" + name, ctor: class extends JInterpolator {},
     ifaces: ["android/view/animation/Interpolator", "android/animation/TimeInterpolator"],
     methods: {
-      "<init>()V": function (this: JInterpolator) { init(this, name); },
-      "<init>(F)V": function (this: JInterpolator, a: number) { init(this, name, a); },
-      "<init>(FF)V": name === "PathInterpolator"
-        ? function (this: JInterpolator, x: number, y: number) { curve(quadCurve(x, y)).call(this); }
-        : function (this: JInterpolator, a: number, b: number) { init(this, name, a, b); },
-      "<init>(FFFF)V": function (this: JInterpolator, x1: number, y1: number, x2: number, y2: number) { curve(bezierCurve(x1, y1, x2, y2)).call(this); },
-      "<init>(Landroid/graphics/Path;)V": function (this: JInterpolator, path: JPath) {
-        const data = pathKeyframeData(path);
-        curve(pathCurve(data.filter((_, i) => i % 3 !== 0))).call(this);
-      },
+      ...Object.fromEntries(CTORS[name].map((desc) => ["<init>" + desc, ctors[desc]])),
       "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JInterpolator) { init(this, name); },
       "getInterpolation(F)F": function (this: JInterpolator, t: number) { return Math.fround(this.f(t)); },
     },

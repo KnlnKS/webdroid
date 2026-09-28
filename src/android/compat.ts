@@ -368,7 +368,7 @@ const animMethods: NativeSpec["methods"] = {
   "initialize(IIII)V": function (this: JAnimation) { this.initialized = true; },
   "isInitialized()Z": function (this: JAnimation) { return this.initialized ? 1 : 0; },
   "getScaleFactor()F": function (this: JAnimation) { return this.scale; },
-  ...noops("<init>()V", "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", "setZAdjustment(I)V",
+  ...noops("<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", "setZAdjustment(I)V",
     "setDetachWallpaper(Z)V", "setBackgroundColor(I)V",
     "applyTransformation(FLandroid/view/animation/Transformation;)V"),
   ...stubs(1, "willChangeBounds()Z", "willChangeTransformationMatrix()Z"),
@@ -382,7 +382,7 @@ const animMethods: NativeSpec["methods"] = {
     return await vcall(this, "getTransformation", "(JLandroid/view/animation/Transformation;)Z", now, t);
   },
 };
-rt.register({ name: "android/view/animation/Animation", ctor: JAnimation, methods: animMethods });
+rt.register({ name: "android/view/animation/Animation", ctor: JAnimation, methods: { ...animMethods, ...noops("<init>()V") } });
 
 /** `p` holds from/to (and pivots) as Description pairs; `pt` their types */
 function setDesc(a: JAnimation, vals: number[], types?: number[]) {

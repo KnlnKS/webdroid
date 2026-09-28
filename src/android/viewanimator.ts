@@ -106,7 +106,6 @@ const vpaMethods: NonNullable<NativeSpec["methods"]> = {
   [`setStartDelay(J)${VPA}`]: function (this: JVPA, d: bigint) { this.delayMs = Number(d); return this; },
   "getStartDelay()J": function (this: JVPA) { return BigInt(this.delayMs); },
   [`setInterpolator(Landroid/animation/TimeInterpolator;)${VPA}`]: function (this: JVPA, i: unknown) { this.interp = i; return this; },
-  [`setInterpolator(Landroid/view/animation/Interpolator;)${VPA}`]: function (this: JVPA, i: unknown) { this.interp = i; return this; },
   "getInterpolator()Landroid/animation/TimeInterpolator;": function (this: JVPA) { return this.interp; },
   [`setListener(Landroid/animation/Animator$AnimatorListener;)${VPA}`]: function (this: JVPA, l: unknown) { this.listener = l; return this; },
   [`setUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)${VPA}`]: function (this: JVPA, l: unknown) { this.updateL = l; return this; },
