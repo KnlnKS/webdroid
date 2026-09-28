@@ -74,7 +74,8 @@ const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/Spars
   [`keyAt(I)${key}`]: function (this: JSparseArray, i: number) { return this.keys()[i]; },
   [`valueAt(I)${valDesc}`]: function (this: JSparseArray, i: number) { return this.m.get(this.keys()[i]) ?? dflt; },
   [`delete(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
-  [`remove(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
+  // only the object-valued arrays name remove(key) besides delete(key)
+  ...valDesc === "Ljava/lang/Object;" ? { [`remove(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); } } : {},
   "removeAt(I)V": function (this: JSparseArray, i: number) { this.del(this.keys()[i]); },
   "clear()V": function (this: JSparseArray) { this.reset(); },
   [`indexOfKey(${key})I`]: function (this: JSparseArray, k: number | bigint) { const keys = this.keys(); let lo = 0, hi = keys.length; while (lo < hi) { const mid = (lo + hi) >>> 1; if (keys[mid] < k) lo = mid + 1; else hi = mid; } return keys[lo] === k ? lo : ~lo; },
@@ -648,7 +649,6 @@ rt.register({
     [`nullValue()${JW}`]: function (this: JJsonWriter) { return jsonEmit(this, "null"); },
     [`value(Ljava/lang/String;)${JW}`]: jsonValue((v) => v === null ? "null" : JSON.stringify(v)),
     [`value(Z)${JW}`]: jsonValue((v) => v ? "true" : "false"),
-    [`value(Ljava/lang/Boolean;)${JW}`]: jsonValue((v) => v === null ? "null" : v.v ? "true" : "false"),
     [`value(D)${JW}`]: jsonValue((v) => String(v)),
     [`value(J)${JW}`]: jsonValue((v) => String(v)),
     [`value(Ljava/lang/Number;)${JW}`]: jsonValue((v) => v === null ? "null" : String(v.v ?? v)),

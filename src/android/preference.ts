@@ -4,7 +4,7 @@
 // existing SharedPreferences plumbing in sharedprefs.ts. No per-app special-casing:
 // any app's res/xml/*.xml preference screen renders through this same path.
 
-import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, without, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { vcall, newObj, vcallUncaught, after } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
@@ -284,9 +284,11 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
 };
 
 rt.register({ name: "android/preference/Preference", ctor: JPreference, methods: preferenceMethods });
-rt.register({ name: "android/preference/PreferenceGroup", ctor: JPreferenceGroup, sup: "android/preference/Preference", methods: preferenceGroupMethods });
+rt.register({ name: "android/preference/PreferenceGroup", ctor: JPreferenceGroup, sup: "android/preference/Preference",
+  methods: without(preferenceGroupMethods, ["<init>(Landroid/content/Context;)V"]) });
 rt.register({ name: "android/preference/PreferenceCategory", ctor: JPreferenceCategory, sup: "android/preference/PreferenceGroup", methods: preferenceGroupMethods });
-rt.register({ name: "android/preference/PreferenceScreen", ctor: JPreferenceScreen, sup: "android/preference/PreferenceGroup", methods: preferenceGroupMethods });
+rt.register({ name: "android/preference/PreferenceScreen", ctor: JPreferenceScreen, sup: "android/preference/PreferenceGroup",
+  methods: without(preferenceGroupMethods, ["<init>(Landroid/content/Context;)V"]) });
 rt.register({ name: "android/preference/CheckBoxPreference", ctor: JCheckBoxPreference, sup: "android/preference/Preference", methods: checkBoxMethods });
 rt.register({ name: "android/preference/ListPreference", ctor: JListPreference, sup: "android/preference/Preference", methods: listPrefMethods });
 // pure callback interfaces — apps implement these; left unregistered they'd auto-stub in

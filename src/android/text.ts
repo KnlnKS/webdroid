@@ -2,7 +2,7 @@
 import { JDrawable, JColorStateList } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 
-import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, stringOf, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, cssColor, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
@@ -234,7 +234,7 @@ rt.register({
   name: "android/text/SpannableString", ctor: JSpannable,
   ifaces: ["java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned"],
   methods: {
-    ...spanMethods,
+    ...without(spanMethods, ["<init>()V"]),
     "static valueOf(Ljava/lang/CharSequence;)Landroid/text/SpannableString;": (cs: unknown) =>
       rt.iof(cs, "android/text/SpannableString") ? cs : newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs),
   },
@@ -703,23 +703,18 @@ const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
   "android/text/style/URLSpan": { sup: "android/text/style/ClickableSpan" },
 };
 for (const name of ["android/text/style/BackgroundColorSpan", "android/text/style/UnderlineSpan", "android/text/style/StrikethroughSpan"]) {
-  const c = class extends JCharacterStyle { color = 0; style = 0; size = 1; url = ""; };
+  const c = class extends JCharacterStyle { color = 0; };
   rt.register({
     name, ctor: c,
     ...spanHierarchy[name],
     methods: {
-      "<init>(I)V": function (this: any, v: number) { this.color = v; this.style = v; this.size = v; },
-      "<init>(F)V": function (this: any, v: number) { this.size = v; },
-      "<init>(Ljava/lang/String;)V": function (this: any, v: string) { this.url = v; },
-      ...noops("<init>()V"),
-      "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
-      "getForegroundColor()I": function (this: any) { return this.color; },
+      ...name === "android/text/style/BackgroundColorSpan"
+        ? { "<init>(I)V": function (this: { color: number }, v: number) { this.color = v; } } : noops("<init>()V"),
       "updateDrawState(Landroid/text/TextPaint;)V": name === "android/text/style/BackgroundColorSpan"
         ? function (this: { color: number }, paint: JTextPaint) { paint.bgColor = this.color; }
         : name === "android/text/style/UnderlineSpan"
           ? function (paint: JTextPaint) { paint.underline = true; }
           : function (paint: JTextPaint) { paint.strikeThru = true; },
-      "getStyle()I": function (this: any) { return this.style; },
     },
   });
 }
@@ -1015,7 +1010,6 @@ rt.register({
       for (let i = start; i < start + count; i++) { const m = MIRROR.get(chars[i]); if (m !== undefined) { chars[i] = m; changed = 1; } }
       return changed;
     },
-    "static getDirectionality(C)B": (c: number) => (c >= 0x590 && c <= 0x8ff) || (c >= 0xfb1d && c <= 0xfdff) || (c >= 0xfe70 && c <= 0xfeff) ? 1 : c < 0x20 || (c >= 0x2000 && c <= 0x200f) ? 12 : 0,
     "static getDirectionalities([C[BI)V": (chars: Uint16Array, out: Int8Array, count: number) => { for (let i = 0; i < count; i++) out[i] = chars[i] >= 0x590 && chars[i] <= 0x8ff ? 1 : 0; },
     "static getEastAsianWidth(C)I": (c: number) => (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xff60) ? 5 : (c >= 0xff61 && c <= 0xffdc) ? 2 : (c >= 0xffe0 && c <= 0xffe6) ? 3 : 0,
   },
@@ -1454,8 +1448,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getEllipsizedWidth()I": layoutWidth,
   "getTopPadding()I": function (this: JLayout) { return -this.padTop; },
   "getBottomPadding()I": function (this: JLayout) { return this.padBottom; },
-  ...stubs(0, "isFallbackLineSpacingEnabled()Z", "getUseFallbackLineSpacing()Z",
-    "isRtlCharAt(I)Z"),
+  ...stubs(0, "isFallbackLineSpacingEnabled()Z", "isRtlCharAt(I)Z"),
   "getEllipsisStart(I)I": function (this: JLayout, i: number) { return this.lines[i]?.ellipsis?.start ?? 0; },
   "getEllipsisCount(I)I": function (this: JLayout, i: number) { return this.lines[i]?.ellipsis?.count ?? 0; },
   "getAlignment()Landroid/text/Layout$Alignment;": function (this: JLayout) { return this.alignment ?? rt.link("android/text/Layout$Alignment").ctor.s$ALIGN_NORMAL; },
@@ -1579,7 +1572,6 @@ rt.register({
     "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFLandroid/text/BoringLayout$Metrics;ZLandroid/text/TextUtils$TruncateAt;IZ)V": boringInit,
     "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFLandroid/text/BoringLayout$Metrics;ZLandroid/text/TextUtils$TruncateAt;I)V": boringInit,
     "static isBoring(Ljava/lang/CharSequence;Landroid/text/TextPaint;)Landroid/text/BoringLayout$Metrics;": isBoring,
-    "static isBoring(Ljava/lang/CharSequence;Landroid/text/TextPaint;Landroid/text/TextDirectionHeuristic;)Landroid/text/BoringLayout$Metrics;": isBoring,
     "static isBoring(Ljava/lang/CharSequence;Landroid/text/TextPaint;Landroid/text/TextDirectionHeuristic;ZLandroid/text/BoringLayout$Metrics;)Landroid/text/BoringLayout$Metrics;": isBoring,
     "static make(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFLandroid/text/BoringLayout$Metrics;Z)Landroid/text/BoringLayout;": boringMake,
     "static make(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFLandroid/text/BoringLayout$Metrics;ZLandroid/text/TextUtils$TruncateAt;I)Landroid/text/BoringLayout;": boringMake,

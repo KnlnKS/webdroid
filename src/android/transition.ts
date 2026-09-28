@@ -78,9 +78,10 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   "toString()Ljava/lang/String;": function (this: JTransition) { return "Transition@" + this.durationMs; },
 };
 rt.register({ name: "android/transition/Transition", ctor: JTransition, ifaces: ["java/lang/Cloneable"], methods: transitionMethods });
-for (const n of ["Transition$TransitionListener", "Transition$EpicenterCallback", "PathMotion", "TransitionPropagation", "TransitionValues"]) {
+for (const n of ["Transition$EpicenterCallback", "PathMotion", "TransitionPropagation", "TransitionValues"]) {
   rt.register({ name: "android/transition/" + n, ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 }
+rt.markers("android/transition/Transition$TransitionListener");
 rt.register({
   name: "android/transition/TransitionListenerAdapter", ctor: class extends JObj {}, ifaces: ["android/transition/Transition$TransitionListener"],
   methods: Object.fromEntries(["onTransitionStart", "onTransitionEnd", "onTransitionCancel", "onTransitionPause", "onTransitionResume"]
@@ -88,7 +89,7 @@ rt.register({
 });
 // the concrete transitions: same bookkeeping, distinct classes so instanceof and getName hold
 for (const [n, ctors] of [
-  ["Visibility", ["()V", "(I)V"]], ["Fade", ["()V", "(I)V"]], ["ChangeBounds", ["()V"]], ["ChangeTransform", ["()V"]],
+  ["Visibility", ["()V"]], ["Fade", ["()V", "(I)V"]], ["ChangeBounds", ["()V"]], ["ChangeTransform", ["()V"]],
   ["ChangeClipBounds", ["()V"]], ["ChangeImageTransform", ["()V"]], ["ChangeScroll", ["()V"]], ["Slide", ["()V", "(I)V"]], ["Explode", ["()V"]],
 ] as const) {
   rt.register({

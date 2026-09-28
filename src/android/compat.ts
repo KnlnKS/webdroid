@@ -699,11 +699,11 @@ rt.register({
       "save(Ljava/io/OutputStream;)V", "addGesture(Ljava/lang/String;Landroid/gesture/Gesture;)V"),
   },
 });
-for (const n of ["android/gesture/Gesture", "android/gesture/GestureLibrary", "android/gesture/Prediction",
-  "android/gesture/GestureLibraries", "android/gesture/GestureOverlayView$OnGesturePerformedListener",
-  "android/gesture/GestureOverlayView$OnGestureListener", "android/gesture/GestureOverlayView$OnGesturingListener"]) {
+for (const n of ["android/gesture/Gesture", "android/gesture/GestureLibrary", "android/gesture/GestureLibraries"]) {
   rt.register({ name: n, ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 }
+rt.markers("android/gesture/Prediction", "android/gesture/GestureOverlayView$OnGesturePerformedListener",
+  "android/gesture/GestureOverlayView$OnGestureListener", "android/gesture/GestureOverlayView$OnGesturingListener");
 rt.register({
   name: "android/gesture/GestureOverlayView", ctor: class extends JViewGroup {}, sup: "android/widget/FrameLayout",
   methods: {
