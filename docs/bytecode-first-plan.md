@@ -655,6 +655,10 @@ These classes now run from AOSP bytecode, with their TS code deleted:
     worker serves byte ranges of split files;
   - `zygoteInit()` (`src/android/delegates.ts`): RuntimeHooks' time-zone supplier reads
     `persist.sys.timezone`, which `device.timezone` (the host zone) answers.
+- **java.io.File (B.7 cut 2).** libcore's File over `java/io/UnixFileSystem` natives and Linux
+  access/remove/rename (`src/android/os.ts`), with VFS modification times. TS reads a File with
+  `pathOf` and makes one with `newFile` (`jio.ts`). The TS java.nio.file layer stays and answers
+  `FileSystems.getDefault()` for `File.toPath`.
 - **java.util.Locale.** libcore's Locale starts from `user.locale` (`device.locale`). TS reads a
   Locale through its Java API (`localeTag`, `localeDirection`, `defaultLocale` in `jvalues.ts`);
   LocaleList keeps its Locales' tags for synchronous readers. The "3x suite time" was
@@ -699,6 +703,9 @@ Fixes that apply to every mode:
      the rest; single classes need an exact-match form. About 60 TS sites read TS layout
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
+   - **Done:** cut 2 (File). **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
+     getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,
+     which fflate's push API does not expose; there is no line or speed gain to pay for that risk.
    - **Cut order.** (1) zip codecs (CRC32, Adler32, Inflater, Deflater and their streams; 26
      natives over fflate; ZipFile stays TS). (2) File (12 UnixFileSystem natives over `vfs`).
      (3) FileDescriptor and the file streams over Linux read/write/pread/pwrite (`stdio.ts` needs

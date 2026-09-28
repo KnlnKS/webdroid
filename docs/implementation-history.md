@@ -295,6 +295,14 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   resumable-body compiles as the now-hot frames suspended at yields, and building those in idle
   too left fewer promoted by the tap: slow `light` measured 151-162 ms against 147-150 at HEAD
   in an interleaved A/B.
+- 2026-09-28, java.io.File from libcore (B.7 cut 2). The TS File returned the current time for
+  lastModified, a constant for free space, and success for permission changes and for
+  createNewFile under a missing directory. libcore's File runs over UnixFileSystem's natives on
+  the VFS, which now records modification times. The first e2e run failed three flows: AndroidX
+  ProfileInstaller creates `/data/misc/profiles/cur/0/<pkg>/primary.prof`, whose directory installd
+  makes on a device, and the native threw ErrnoException where the JNI throws IOException, the one
+  ProfileInstaller catches. libcore's UnixFileSystem also needs `java.home`, and `File.toPath` reaches
+  `FileSystems.getDefault()`.
 
 ## Java, storage and framework semantics
 
