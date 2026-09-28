@@ -2,7 +2,7 @@ import { JObj, rt } from "../jvm/runtime";
 import { type JComponentName, type JIntent, mkComponentName, filterKey } from "./intent";
 import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
 import { onMain, inMainJob } from "./mainloop";
 import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME, JFnRunnable } from "./os";
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
@@ -47,13 +47,15 @@ function serviceRecord(ctx: JContext, cls: string): JRunningServiceInfo {
   }
   return si;
 }
+// a service's callbacks run on the main thread; the awaits between them can resume under another
+// thread's identity, so each call names the main thread
 async function createService(service: JRunningServiceInfo, ctx: JContext): Promise<JContextWrapper> {
   if (!service.instance) {
-    const instance: unknown = await newObj(service.service!.cls.replace(/\./g, "/"));
+    const instance: unknown = await callOn(mainThread, () => newObj(service.service!.cls.replace(/\./g, "/")));
     if (!(instance instanceof JContextWrapper) || !rt.iof(instance, "android/app/Service")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a service: " + service.service!.cls);
     service.instance = instance;
-    await vcall(instance, "attachBaseContext", "(Landroid/content/Context;)V", ctx.$host?.application ?? ctx);
-    await vcall(instance, "onCreate", "()V");
+    await vcallOn(mainThread, instance, "attachBaseContext", "(Landroid/content/Context;)V", ctx.$host?.application ?? ctx);
+    await vcallOn(mainThread, instance, "onCreate", "()V");
   }
   return service.instance;
 }
@@ -72,7 +74,7 @@ export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): J
   si.lastActivityTime = BigInt(Date.now());
   const service = si, startId = ++si.startId;
   void onMain(async () => {
-    await vcall(await createService(service, ctx), "onStartCommand", "(Landroid/content/Intent;II)I", intent, 0, startId);
+    await vcallOn(mainThread, await createService(service, ctx), "onStartCommand", "(Landroid/content/Intent;II)I", intent, 0, startId);
   }).catch((error) => {
     if (runningServices.get(cls) === service) runningServices.delete(cls);
     reportUncaught(error);
@@ -86,7 +88,7 @@ export function svcStop(cls: string | null | undefined, startId = -1): number {
   service.started = 0; service.flags &= ~1;
   if (service.clientCount) return 1;
   runningServices.delete(cls!);
-  void onMain(async () => { if (service.instance) await vcall(service.instance, "onDestroy", "()V"); }).catch(reportUncaught);
+  void onMain(async () => { if (service.instance) await vcallOn(mainThread, service.instance, "onDestroy", "()V"); }).catch(reportUncaught);
   return 1;
 }
 const localConnections = new Map<string, { service: JRunningServiceInfo; filter: string }>();
@@ -95,10 +97,10 @@ export function bindLocalService(ctx: JContext, intent: JIntent, key: string): P
     const service = serviceRecord(ctx, intent.component!), instance = await createService(service, ctx), filter = filterKey(intent);
     let binding = service.bindings.get(filter);
     if (!binding) {
-      binding = { intent, binder: await vcall(instance, "onBind", "(Landroid/content/Intent;)Landroid/os/IBinder;", intent), clients: new Set(), rebind: false };
+      binding = { intent, binder: await vcallOn(mainThread, instance, "onBind", "(Landroid/content/Intent;)Landroid/os/IBinder;", intent), clients: new Set(), rebind: false };
       service.bindings.set(filter, binding);
     } else if (!binding.clients.size && binding.rebind) {
-      await vcall(instance, "onRebind", "(Landroid/content/Intent;)V", intent); binding.rebind = false;
+      await vcallOn(mainThread, instance, "onRebind", "(Landroid/content/Intent;)V", intent); binding.rebind = false;
     }
     if (!binding.clients.has(key)) { binding.clients.add(key); service.clientCount++; }
     localConnections.set(key, { service, filter });
@@ -113,10 +115,10 @@ export function unbindLocalService(key: string): Promise<void> {
     localConnections.delete(key);
     const { service, filter } = connection, binding = service.bindings.get(filter)!;
     if (binding.clients.delete(key)) service.clientCount--;
-    if (!binding.clients.size) binding.rebind = !!await vcall(service.instance, "onUnbind", "(Landroid/content/Intent;)Z", binding.intent);
+    if (!binding.clients.size) binding.rebind = !!await vcallOn(mainThread, service.instance, "onUnbind", "(Landroid/content/Intent;)Z", binding.intent);
     if (!service.started && !service.clientCount) {
       runningServices.delete(service.service!.cls);
-      await vcall(service.instance, "onDestroy", "()V");
+      await vcallOn(mainThread, service.instance, "onDestroy", "()V");
     }
   };
   return inMainJob() ? run() : onMain(run);
