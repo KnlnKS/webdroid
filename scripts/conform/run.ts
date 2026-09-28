@@ -39,10 +39,14 @@ if (suite.source) {
   const srcDir = `${CACHE}/src/${suiteName}`, root = `${srcDir}/${suite.source.root}`;
   if (!existsSync(root)) {
     mkdirSync(srcDir, { recursive: true });
-    await Bun.write(`${srcDir}/src.tar.gz`, await fetch(suite.source.archive));
+    let res = await fetch(suite.source.archive);
+    for (let tries = 1; !res.ok && tries < 5; tries++) { await Bun.sleep(2000 * tries); res = await fetch(suite.source.archive); }
+    if (!res.ok) throw new Error(`${suite.source.archive}: HTTP ${res.status}`);
+    await Bun.write(`${srcDir}/src.tar.gz`, res);
     run(["tar", "xzf", `${srcDir}/src.tar.gz`, "-C", srcDir]);
   }
   for (const f of new Bun.Glob("**/*.java").scanSync(root)) {
+    if (suite.source.exclude?.test(f)) continue;
     sources.push(`${root}/${f}`);
     if (suite.source.tests.test(f.slice(f.lastIndexOf("/") + 1))) classes.push(f.replace(/\.java$/, "").replace(/\//g, "."));
   }
@@ -51,7 +55,11 @@ if (suite.source) {
 if (!existsSync(`${dexDir}/classes.dex`)) {
   const out = `${dexDir}/classes`;
   mkdirSync(out, { recursive: true });
-  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", "-cp", jars.join(":"), "-d", out, `${import.meta.dir}/ConformRunner.java`, ...sources]);
+  // libcore's test sources also name android.* and test-selection annotations (scripts/conform/stubs)
+  const stubs = [...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/stubs`)].map((f) => `${import.meta.dir}/stubs/${f}`);
+  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", "-cp", [...jars, `${androidPlatform(35)}/android.jar`].join(":"),
+    "-d", out, `${import.meta.dir}/ConformRunner.java`, ...(suite.source ? stubs : []),
+    ...(suite.testng ? [`${import.meta.dir}/NgRunner.java`] : []), ...sources]);
   run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,
     ...[...new Bun.Glob("**/*.class").scanSync(out)].map((f) => `${out}/${f}`)]);
 }
@@ -74,7 +82,7 @@ if (one) {
   const debug = process.env.CONFORM_DEBUG;
   console.warn = () => {};
   if (debug) rt.throwables = [];
-  const runner = rt.link("ConformRunner");
+  const runner = rt.link(suite.testng ? "NgRunner" : "ConformRunner");
   await rt.initClass(runner);
   let text: string;
   try { text = await vcallAsync(runner.ctor, "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", one, filter); }

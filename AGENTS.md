@@ -42,8 +42,7 @@ WEBDROID_URL=http://localhost:4090 bun run e2e --live
 WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
 WEBDROID_URL=http://localhost:4090 bun run corpus
 WEBDROID_URL=http://localhost:4090 bun run lat [--warm]
-bun run conform guava
-bun run conform jsr166
+bun run conform guava|jsr166|ojluni-time
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ```
 

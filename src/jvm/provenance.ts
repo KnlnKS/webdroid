@@ -13,10 +13,11 @@
 // misses, logs, and reads `undefined` with no throw. android/view/View is a clean cut for
 // exactly this reason: its super is java/lang/Object, which has no fields.
 
-/** `?bytecode=android/graphics/text/,android/graphics/fonts/` cuts those prefixes over for one
- *  page load, so the same bundle can be A/B'd against itself — by the e2e driver, by a
- *  comparison script, or by hand — without an edit and a rebuild. */
-const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode") : null;
+/** `?bytecode=android/graphics/text/,android/graphics/fonts/` (headless: WEBDROID_BYTECODE) cuts
+ *  those prefixes over for one page load, so the same bundle can be A/B'd against itself — by the
+ *  e2e driver, by a comparison script, or by hand — without an edit and a rebuild. */
+const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode")
+  : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec */
 export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean) : [];
