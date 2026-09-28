@@ -303,6 +303,16 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   makes on a device, and the native threw ErrnoException where the JNI throws IOException, the one
   ProfileInstaller catches. libcore's UnixFileSystem also needs `java.home`, and `File.toPath` reaches
   `FileSystems.getDefault()`.
+- 2026-09-28, override bypasses. `bun run bypass` (plan §5.6) found 786 places where a TS method
+  answered without the overridable method AOSP's body calls and a corpus app overrides; about 230
+  were fixed that day. The most consequential: no view's onScrollChanged or onWindowFocusChanged
+  ever ran; Activity.setTitle never reached onTitleChanged, so AppCompat toolbars missed titles;
+  canScroll* returned a stubbed false; an app's own Drawable never received setColorFilter(int,
+  Mode); Resources subclasses serving their own strings were skipped by getString. Two fixes had
+  a cost to watch: Random first drew through a generator per call (2.3-3x slower for a plain
+  Random), so a plain Random keeps its direct LCG and only a subclass overriding next(bits) takes
+  the dispatching path; and per-frame paths (layout's setFrame, refreshDrawableState's invalidate,
+  Drawable.setBounds) call an override only when the app declares one.
 
 ## Java, storage and framework semantics
 

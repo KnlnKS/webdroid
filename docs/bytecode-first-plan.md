@@ -696,6 +696,17 @@ Fixes that apply to every mode:
 - Properties has its defaults chain, with Hashtable as its superclass.
 - Settings `get*ForUser`.
 
+### Override-bypass lint (§5.6)
+
+`bun run bypass` lists TS spec methods whose AOSP body calls an overridable method on `this`
+that neither the TS method nor the module helpers it names reach, limited to methods a corpus
+app overrides (`tests/fixtures/app-overrides.json`, rebuilt with `--corpus`). `bun run test`
+fails on findings outside `tests/fixtures/bypass-baseline.json`. The backlog went from 786 to
+302 on 2026-09-28. What remains is mostly deliberate: guards for features not modelled
+(accessibility, fading edges, state save), per-line Layout hot paths, socket state checks the
+lazy SSL handoff cannot pass, and dispatch the lint cannot see (a method name in a variable, a
+precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog shrinks.
+
 ### Next steps, in plan order
 
 1. **B.7 io/nio/net**, in cuts. A read-only inventory (2026-09-28) found:
