@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the API 33 reference AVD at webdroid's default framebuffer geometry.
+# Create the API 35 reference AVD at webdroid's default framebuffer geometry.
 # The size is NOT written here: it is read from the one device profile (src/shell/config.ts),
 # so a profile change cannot leave the reference AVD behind. WEBDROID_SCREEN=WxH@dpi overrides.
 # Idempotent: re-running rewrites config.ini but keeps the existing userdata.
@@ -8,8 +8,8 @@ set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 export PATH="$JAVA_HOME/bin:$PATH"
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
-AVD_NAME="${AVD_NAME:-webdroid_api33_ref}"
-ANDROID_API="${ANDROID_API:-33}"
+AVD_NAME="${AVD_NAME:-webdroid_api35_ref}"
+ANDROID_API="${ANDROID_API:-35}"
 IMAGE="system-images;android-${ANDROID_API};google_apis;arm64-v8a"
 AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 

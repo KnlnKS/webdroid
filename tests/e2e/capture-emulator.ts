@@ -2,7 +2,7 @@
 //
 //   bun tests/e2e/capture-emulator.ts [flow...]
 //
-// Walks each flow on the API 33 oracle, resolves every text anchor to a concrete normalized
+// Walks each flow on the API 35 oracle, resolves every text anchor to a concrete normalized
 // coordinate, and writes tests/e2e/golden/<flow>/{NN-id.png, manifest.json}. Run this by hand
 // when the flows change; `bun run e2e --full` then diffs off the committed result with no emulator.
 import { mkdtemp, rename, rm } from "node:fs/promises";

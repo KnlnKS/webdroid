@@ -41,7 +41,7 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
       at("shell", "getprop", "ro.build.version.sdk"), at("shell", "getprop", "ro.build.fingerprint"),
       at("shell", "wm", "size"), at("shell", "wm", "density"),
     ]);
-    if (sdk !== "33") throw new Error(`oracle ${serial} is API ${sdk}, expected API 33`);
+    if (sdk !== "35") throw new Error(`oracle ${serial} is API ${sdk}, expected API 35`);
     const screen = `${size.match(/(\d+x\d+)\s*$/)?.[1]}@${density.match(/(\d+)\s*$/)?.[1]}`;
     const expected = formatScreen(device);
     if (screen !== expected) throw new Error(`oracle ${serial} screen is ${screen}, expected ${expected}; run scripts/fuzz/setup-oracle.sh`);

@@ -67,7 +67,7 @@ export class AndroidUiTarget {
       adb("shell", "settings", "get", "system", "accelerometer_rotation"),
       adb("shell", "settings", "get", "system", "user_rotation"),
     ]);
-    if (sdk.stdout.toString().trim() !== "33") throw new Error(`oracle ${serial} is not API 33`);
+    if (sdk.stdout.toString().trim() !== "35") throw new Error(`oracle ${serial} is not API 35`);
     const setting = (result: CommandResult): string | null => {
       const value = result.stdout.toString().trim();
       return value === "null" ? null : value;

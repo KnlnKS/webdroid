@@ -14,7 +14,7 @@ function option(args: string[], name: string, fallback?: string): string | undef
 }
 
 export async function inventory(args: string[]): Promise<void> {
-  const sdk = Number(option(args, "--sdk", "33"));
+  const sdk = Number(option(args, "--sdk", "35"));
   if (!Number.isInteger(sdk) || sdk < 1) throw new Error("--sdk must be a positive integer");
   const cached = `fuzz-cache/android-${sdk}/framework.jar`;
   const frameworkPath = option(args, "--framework", existsSync(cached) ? cached : "vendor/aosp/framework.jar")!;

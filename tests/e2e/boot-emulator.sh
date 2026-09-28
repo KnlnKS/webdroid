@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Boot the API 33 reference and make it deterministic. Record-path only.
+# Boot the API 35 reference and make it deterministic. Record-path only.
 set -euo pipefail
 
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
 EMU="$SDK/emulator/emulator"
-AVD_NAME="${AVD_NAME:-webdroid_api33_ref}"
+AVD_NAME="${AVD_NAME:-webdroid_api35_ref}"
 # Must match PINNED_CLOCK_MS in tests/e2e/types.ts (2026-01-02T12:00:00Z).
 PIN_UTC="${PIN_UTC:-2026-01-02 12:00:00}"
 

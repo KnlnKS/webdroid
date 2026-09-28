@@ -5,18 +5,17 @@ campaigns, fuzz APK user interfaces, replay minimized failures, and turn those f
 webdroid fixes. It is intentionally explicit so a new engineer or coding agent can operate the
 harness without inferring contracts from implementation details.
 
-The compatibility oracle is Android API 33 because webdroid advertises SDK 33. API 35 framework
-artifacts under `vendor/aosp` remain a separate forward-looking signal and must not be substituted
-for the API-33 oracle.
+The compatibility oracle is Android API 35, the build recorded in `vendor/aosp/build.txt`, matching
+the SDK webdroid advertises.
 
 ## Non-negotiable rules
 
 - Run the same `WebdroidFuzzProbe.apk` unchanged on Android and webdroid. Do not add platform-
   specific intents, test-only runtime branches, or expected values to make a comparison pass.
-- Treat Android API 33 as the behavioral reference. If Android itself varies between identical
+- Treat Android API 35 as the behavioral reference. If Android itself varies between identical
   replays, classify the case as unstable before changing webdroid.
 - Inventory coverage and behavioral coverage are different. The inventory classifies every public
-  API-33 declaration and reached hidden declaration. Only members owned by an explicit recipe are
+  API-35 declaration and reached hidden declaration. Only members owned by an explicit recipe are
   behaviorally exercised.
 - Never convert an unsupported operation into fabricated success. A missing API, native requirement,
   timeout, or absent process diagnostic is evidence, not an empty or successful result.
@@ -34,7 +33,7 @@ for the API-33 oracle.
 The public entry point is:
 
 ```text
-bun run fuzz inventory --sdk 33 --json <path>
+bun run fuzz inventory --sdk 35 --json <path>
 bun run fuzz api --seed <n> --cases <n> --oracle <serial> --out <dir>
 bun run fuzz graphics --seed <n> --cases <n> --oracle <serial> --out <dir>
 bun run fuzz ui <apk...> --seed <n> --steps <n> [--oracle <serial>] --out <dir>
@@ -44,9 +43,9 @@ bun run fuzz smoke
 
 | Command | Defaults and requirements |
 | --- | --- |
-| `inventory` | SDK 33; reached-surface scan enabled; JSON is written only with `--json` |
-| `api` | Random printed seed; 1,000 cases; API-33 `--oracle` required; output `fuzz-results/api-<seed>` |
-| `graphics` | Random printed seed; 1,000 cases; API-33 `--oracle` required; output `fuzz-results/graphics-<seed>` |
+| `inventory` | SDK 35; reached-surface scan enabled; JSON is written only with `--json` |
+| `api` | Random printed seed; 1,000 cases; API-35 `--oracle` required; output `fuzz-results/api-<seed>` |
+| `graphics` | Random printed seed; 1,000 cases; API-35 `--oracle` required; output `fuzz-results/graphics-<seed>` |
 | `ui` | Random printed seed; 100 actions per APK; oracle optional; output `fuzz-results/ui-<seed>` |
 | `replay` | One validated failure bundle; real API/graphics bundles require an oracle |
 | `smoke` | Fixed seed `0x5eed1234`; injected local mismatches; no oracle |
@@ -85,8 +84,8 @@ Install these Android SDK components:
 ```bash
 sdkmanager \
   'platform-tools' \
-  'platforms;android-33' \
-  'system-images;android-33;google_apis;arm64-v8a'
+  'platforms;android-35' \
+  'system-images;android-35;google_apis;arm64-v8a'
 ```
 
 At least one installed build-tools version must provide `aapt2`, `d8`, and `apksigner`. The harness
@@ -104,7 +103,7 @@ bun install
 If the command-line tools live in a versioned directory rather than `latest`, put that directory's
 `bin` on `PATH`. Do not rewrite repository scripts with a machine-specific SDK path.
 
-## Prepare the API-33 oracle
+## Prepare the API-35 oracle
 
 Run the setup script from the repository root:
 
@@ -114,13 +113,13 @@ bash scripts/fuzz/setup-oracle.sh
 
 It performs four operations:
 
-1. Creates or updates the `webdroid_api33_ref` AVD.
+1. Creates or updates the `webdroid_api35_ref` AVD.
 2. Uses webdroid's canonical framebuffer geometry and density, currently supplied by
    `src/shell/config.ts` rather than duplicated in the setup script, and replaces any
    persistent `wm size` or `wm density` overrides.
-3. boots or validates an API-33 emulator.
+3. boots or validates an API-35 emulator.
 4. pulls the matching `framework.jar`, `framework-res.apk`, build fingerprint, and
-   `api-versions.xml` into `fuzz-cache/android-33/`.
+   `api-versions.xml` into `fuzz-cache/android-35/`.
 
 When more than one Android device is connected, select the intended emulator before running setup:
 
@@ -138,11 +137,11 @@ adb -s emulator-5554 shell getprop ro.build.fingerprint
 adb -s emulator-5554 emu avd name
 ```
 
-The SDK value must be `33`, and the AVD name should be `webdroid_api33_ref`. The campaign runner
-rejects a non-33 oracle or one whose active size and density differ from webdroid's profile.
+The SDK value must be `35`, and the AVD name should be `webdroid_api35_ref`. The campaign runner
+rejects a non-35 oracle or one whose active size and density differ from webdroid's profile.
 
-The cache is deliberately ignored. Do not replace `vendor/aosp/framework.jar` or
-`vendor/framework-res.apk` with API-33 files; those checked-in paths have different provenance.
+The cache is deliberately ignored. Do not copy it over `vendor/aosp`, which `bun run gen-framework`
+owns and verifies.
 
 ## Build the unchanged probe APK
 
@@ -192,17 +191,17 @@ If smoke fails, repair the harness before trusting a real campaign.
 
 ## Inventory API support
 
-Create the full API-33 inventory after preparing the oracle cache:
+Create the full API-35 inventory after preparing the oracle cache:
 
 ```bash
-bun run fuzz inventory --sdk 33 --json fuzz-results/api-33-inventory.json
+bun run fuzz inventory --sdk 35 --json fuzz-results/api-35-inventory.json
 ```
 
 By default, inventory:
 
-- parses public declarations and introduction/removal metadata from API-33 `api-versions.xml`;
+- parses public declarations and introduction/removal metadata from API-35 `api-versions.xml`;
 - resolves native/JNI registrations through the canonical runtime catalog;
-- checks the cached API-33 framework DEX surface for bytecode candidates;
+- checks the cached API-35 framework DEX surface for bytecode candidates;
 - scans every `.apk` and `.xapk` directly under `apks/`;
 - follows APK roots through framework bytecode; and
 - adds framework/internal members reached by that static analysis as `reached-hidden` entries.
@@ -211,16 +210,12 @@ Useful variants are:
 
 ```bash
 # Public SDK classification without corpus/framework reachability expansion.
-bun run fuzz inventory --sdk 33 --no-reached --json fuzz-results/api-33-public.json
+bun run fuzz inventory --sdk 35 --no-reached --json fuzz-results/api-35-public.json
 
 # Explicit framework artifact, normally used only for a controlled provenance check.
-bun run fuzz inventory --sdk 33 --framework fuzz-cache/android-33/framework.jar \
-  --json fuzz-results/api-33-inventory.json
+bun run fuzz inventory --sdk 35 --framework fuzz-cache/android-35/framework.jar \
+  --json fuzz-results/api-35-inventory.json
 ```
-
-Do not run API-33 classification against the API-35 `vendor/aosp/framework.jar` fallback and then
-describe the result as an API-33 behavioral inventory. Prepare the cache or pass the matching
-framework explicitly.
 
 Each catalog member has:
 
@@ -241,23 +236,23 @@ Support classifications mean:
 | `placeholder` | Registration resolves to an explicit `stubs()`/`noops()` placeholder | Compatibility; placeholder success is not an implementation |
 | `bytecode-candidate` | The member exists in the paired framework bytecode | That all transitive native dependencies work |
 | `missing` | No matching delegate, placeholder, or framework member was found | That an application reaches it dynamically |
-| `platform-absent` | API metadata says the member was removed by SDK 33 | That webdroid should reintroduce it |
+| `platform-absent` | API metadata says the member was removed by SDK 35 | That webdroid should reintroduce it |
 
 Useful inventory queries:
 
 ```bash
-jq '.totals' fuzz-results/api-33-inventory.json
+jq '.totals' fuzz-results/api-35-inventory.json
 
 jq '[.members[] | select(.source == "public" and .support == "missing")] | length' \
-  fuzz-results/api-33-inventory.json
+  fuzz-results/api-35-inventory.json
 
 jq '.members[] | select(.sites > 0 and (.support == "missing" or .support == "placeholder"))' \
-  fuzz-results/api-33-inventory.json
+  fuzz-results/api-35-inventory.json
 
-jq '.members[] | select(.exercised)' fuzz-results/api-33-inventory.json
+jq '.members[] | select(.exercised)' fuzz-results/api-35-inventory.json
 
 jq '.members[] | select(.owner == "android/graphics/Matrix")' \
-  fuzz-results/api-33-inventory.json
+  fuzz-results/api-35-inventory.json
 ```
 
 Prioritize reached missing/placeholder members by `sites`, but confirm runtime reachability before
@@ -478,7 +473,7 @@ jq '{actions:.minimized.actions,steps:[.minimized.run.steps[] | {
 
 ## Replay before attempting a fix
 
-API and graphics replay require the API-33 oracle:
+API and graphics replay require the API-35 oracle:
 
 ```bash
 bun run fuzz replay \
@@ -581,9 +576,9 @@ evidence, but prefer resource/text/description/class identity over blind coordin
 
 ## Troubleshooting
 
-### `oracle <serial> is API <n>, expected API 33`
+### `oracle <serial> is API <n>, expected API 35`
 
-Boot `webdroid_api33_ref`, check `adb devices`, and pass its exact serial. Do not disable this check.
+Boot `webdroid_api35_ref`, check `adb devices`, and pass its exact serial. Do not disable this check.
 
 ### `missing fuzz-cache/WebdroidFuzzProbe.apk`
 
@@ -593,7 +588,7 @@ package that contains `aapt2`, `d8`, and `apksigner`.
 ### `avdmanager not on PATH` or missing system image
 
 Put Android command-line tools on `PATH` and install
-`system-images;android-33;google_apis;arm64-v8a`. Rerun setup; it is idempotent.
+`system-images;android-35;google_apis;arm64-v8a`. Rerun setup; it is idempotent.
 
 ### Case timeout
 

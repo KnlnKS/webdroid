@@ -45,7 +45,7 @@ prior run durations when available. `actual-fast/summary.json` distinguishes `co
 Frame rates are recorded (`fps`, `glFps`, `presentFps`) and flagged `SLOW` below a flow's
 `minFps` under `--jobs 1`, but never fail the quick gate: a rate measured beside other browsers
 or background load measures the host. Use `scripts/perf-browser.ts` (below) for performance.
-Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
+Flappy Bird and Doodle Jump remain smoke-only because the ARM64 reference emulator
 cannot install their ARM32 native libraries. Visual checkpoints compare the launch or core
 result where references exist; later live steps are semantic checks and do not claim Android
 visual parity. Resy's Android launch reference includes an optional upstream alert, so its
@@ -246,14 +246,14 @@ same record rather than inferring health from PNGs.
 ## Re-recording the goldens (needs an emulator)
 
 ```bash
-bun run e2e:setup    # create/configure an API 33 AVD (geometry from the device profile)
+bun run e2e:setup    # create/configure an API 35 AVD (geometry from the device profile)
 bun run e2e:boot     # boot it and apply the determinism settings
 bun run e2e --record # walk every flow, write golden/ + manifest.json
 bun run e2e --record --startup --test resy # record only a live flow's launch reference
 ```
 
 Install the APKs on the emulator first. The recorder adjusts size and density for each flow,
-then verifies both geometry and API 33 before capture. Review the images and commit
+then verifies both geometry and SDK level before capture. Review the images and commit
 `tests/e2e/golden/`; `actual/` and `report/` are ignored. Older FitNotes, Mihon, and Harmonic
 references were recorded on API 35 and remain labeled as such in the report. CalculatorM was
 recorded on API 33 at its declared 1080×2424 geometry. A `depth: "startup"` manifest records
