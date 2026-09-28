@@ -123,7 +123,8 @@ function idle(): void {
       try { recordBody(key, make(), "e"); } catch { /* it compiles on demand instead */ }
     }
     idling = false;
-    if (performance.now() - lastSave > 30_000) void saveCode();
+    // the first save follows startup, so a launch that ends early keeps it without a pagehide write
+    if (phase === "l" && !lastSave || performance.now() - lastSave > 30_000) void saveCode();
   }, { timeout: 60_000 });
 }
 

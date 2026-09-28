@@ -238,6 +238,21 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   cut against 120-128 ms in TS mode; the 18/20 ms TS samples taken earlier were the bimodal
   fast-frame case, not the norm. TreeMap had declared ConcurrentMap only because it shared a
   registration with ConcurrentSkipListMap.
+- 2026-09-28, persisted code and launch. `bun run lat` now reports navigation to first frame.
+  A warm Mihon launch reached it about 500 ms after a cold one (2.54-2.61 s against 2.05-2.11 s):
+  its 48.7 MB of persisted bodies (23,840; microG's two processes add 63 MB) were preparsed at
+  import and compiled again on the main thread at each method's first call (`bind`, 690 ms).
+  Parenthesizing the factories compiled them with the module: main-thread compile at first frame
+  fell from 515 to about 95 ms, but first frame did not move, because the launch then waited
+  about 800 ms on the import and spent 330 ms finishing its compile. Serving the chunks through
+  blob URLs instead of the service worker changed nothing, and a third launch (V8 code cache)
+  helped little. Not awaiting the import matched cold first frame but ran startup cold (96k cold
+  calls) and slowed the first taps. Saving bodies by the phase of their method's first call, and
+  awaiting only the startup ones (12,400), brought warm first frame to about 2.1 s with warm taps
+  unchanged. The phase must be the first call's, not the compile's: startup methods promoted after
+  the first frame otherwise land in the later chunk and the next startup runs 12-17k cold calls.
+  A pagehide save that awaited one write lost the second, and a reload inside 30 s saved nothing;
+  both chunks are now written together, and the first save follows startup.
 
 ## Java, storage and framework semantics
 
