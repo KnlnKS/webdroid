@@ -2402,7 +2402,6 @@ rt.register({
       (f: unknown) => keyed(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"),
     "static naturalOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(a, "compareTo", "(Ljava/lang/Object;)I", b)),
     "static reverseOrder()Ljava/util/Comparator;": naturalReversed,
-    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": reversedOf,
     "reversed()Ljava/util/Comparator;": function (this: unknown) {
       return mkCmp((a, b) => vcall(this, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a));
     },

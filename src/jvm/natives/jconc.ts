@@ -281,7 +281,6 @@ function removeQueued(this: JExecutor, task: unknown): unknown {
   return entry.queued ? after(vcall(this.queue, "remove", "(Ljava/lang/Object;)Z", task), () => 1) : 1;
 }
 const executorMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": execute,
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submitTask(this, "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, null);
@@ -359,6 +358,8 @@ const executorMethods: NativeSpec["methods"] = {
     }
     throw failure;
   }),
+};
+const scheduleMethods: NativeSpec["methods"] = {
   "schedule(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
     function (this: JExecutor, r: unknown, d: bigint, u: JTimeUnit) {
       return submit(this, r, "run", "()V", Number(d) * u.ms);
@@ -433,14 +434,23 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
     sup: "java/util/concurrent/AbstractExecutorService",
     methods: {
       ...executorMethods,
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": initPool,
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V": initPool,
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JObj, handler: unknown) { initPool.call(this, core, max, keep, unit, queue, null, handler); },
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initPool,
-      "<init>(I)V": initScheduled,
-      "<init>(ILjava/util/concurrent/ThreadFactory;)V": initScheduled,
-      "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, handler: unknown) { initScheduled.call(this, core, null, handler); },
-      "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
+      ...(n !== "java/util/concurrent/ScheduledThreadPoolExecutor" ? {
+        "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": initPool,
+        "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V": initPool,
+        "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JObj, handler: unknown) { initPool.call(this, core, max, keep, unit, queue, null, handler); },
+        "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initPool,
+      } : {}),
+      ...(n !== "java/util/concurrent/ThreadPoolExecutor" ? {
+        ...scheduleMethods,
+        "<init>(I)V": initScheduled,
+        "<init>(ILjava/util/concurrent/ThreadFactory;)V": initScheduled,
+        "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, handler: unknown) { initScheduled.call(this, core, null, handler); },
+        "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
+        // kotlinx looks this up reflectively (removeFutureOnCancel); a cancelled schedule() never runs
+        // here regardless, so the policy is just remembered
+        "setRemoveOnCancelPolicy(Z)V": function (this: JExecutor, v: number) { this.removeOnCancel = v; },
+        "getRemoveOnCancelPolicy()Z": function (this: JExecutor) { return this.removeOnCancel; },
+      } : {}),
       ...(n === "java/util/concurrent/ScheduledThreadPoolExecutor" ? {
         "setExecuteExistingDelayedTasksAfterShutdownPolicy(Z)V": function (this: JExecutor, value: number) {
           this.executeDelayedAfterShutdown = !!value;
@@ -513,10 +523,6 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "getRejectedExecutionHandler()Ljava/util/concurrent/RejectedExecutionHandler;": function (this: JExecutor) {
         return this.rejectionHandler ??= rt.make("java/util/concurrent/ThreadPoolExecutor$AbortPolicy");
       },
-      // kotlinx looks this up reflectively (removeFutureOnCancel); a cancelled schedule() never runs
-      // here regardless, so the policy is just remembered
-      "setRemoveOnCancelPolicy(Z)V": function (this: JExecutor, v: number) { this.removeOnCancel = v; },
-      "getRemoveOnCancelPolicy()Z": function (this: JExecutor) { return this.removeOnCancel; },
     },
   });
 }
@@ -608,12 +614,12 @@ rt.register({
 rt.register({
   name: "java/util/concurrent/AbstractExecutorService", ctor: class extends JExecutor {},
   ifaces: ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
-  methods: executorMethods,
+  methods: { "<init>()V": function () {}, ...executorMethods },
 });
 class JExecutors extends JObj {}
 class JDelegatedExecutor extends JObj { delegate: unknown = null; }
 const delegated: NativeSpec["methods"] = {};
-for (const signature of Object.keys(executorMethods)) {
+for (const signature of Object.keys({ ...executorMethods, ...scheduleMethods })) {
   const [name, desc] = splitSig(signature);
   if (name === "<init>" || name === "newTaskFor") continue;
   delegated[signature] = async function (this: JDelegatedExecutor, ...args: unknown[]) { return vcall(this.delegate, name, desc, ...args); };

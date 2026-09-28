@@ -48,8 +48,10 @@ function rmwAsync(k: Kind, cell: Cell, call: (f: unknown, cur: unknown, x: unkno
 function atomicOps(k: Kind, cell: Cell): Methods {
   const pre = cell === "array" ? "I" : cell === "field" ? O : "", d = k.d, m: Methods = {};
   const def = (name: string, arg: string, ret: string, fn: (cur: any, x: any) => unknown, old: boolean) => { m[`${name}(${pre}${arg})${ret}`] = rmw(k, cell, fn, old); };
-  for (const name of ["get", "getPlain", "getOpaque", "getAcquire"]) def(name, "", d, (c) => c, true);
-  for (const name of ["set", "lazySet", "setPlain", "setOpaque", "setRelease"]) def(name, d, "V", (_, x) => x, true);
+  // the field updaters have none of the Java 9 memory-order variants
+  const orders = cell !== "field";
+  for (const name of ["get", ...orders ? ["getPlain", "getOpaque", "getAcquire"] : []]) def(name, "", d, (c) => c, true);
+  for (const name of ["set", "lazySet", ...orders ? ["setPlain", "setOpaque", "setRelease"] : []]) def(name, d, "V", (_, x) => x, true);
   def("getAndSet", d, d, (_, x) => x, true);
   const cas = (name: string) => {
     m[`${name}(${pre}${d}${d})Z`] = cell === "scalar"
@@ -58,7 +60,7 @@ function atomicOps(k: Kind, cell: Cell): Methods {
         ? function (this: { a: any }, i: number, e: unknown, v: unknown) { if (i >>> 0 >= this.a.length) oob(i); if (this.a[i] !== e) return 0; this.a[i] = v; return 1; }
         : function (this: { prop: string }, t: any, e: unknown, v: unknown) { if (t == null) rt.npe(); if ((t[this.prop] ?? k.zero) !== e) return 0; t[this.prop] = v; return 1; };
   };
-  for (const name of ["compareAndSet", "weakCompareAndSet", "weakCompareAndSetPlain", "weakCompareAndSetVolatile", "weakCompareAndSetAcquire", "weakCompareAndSetRelease"]) cas(name);
+  for (const name of ["compareAndSet", "weakCompareAndSet", ...orders ? ["weakCompareAndSetPlain", "weakCompareAndSetVolatile", "weakCompareAndSetAcquire", "weakCompareAndSetRelease"] : []]) cas(name);
   if (k.wrap) {
     const w = k.wrap, one = k.one as any;
     def("incrementAndGet", "", d, (c) => w(c + one), false);
