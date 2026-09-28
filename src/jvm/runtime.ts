@@ -241,10 +241,15 @@ export class Runtime {
     this.dexes.push(dex);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
-      if (!this.dexIndex.has(name)) {
-        this.dexIndex.set(name, dexIndex * CLASS_INDEX_BASE + i);
-        if (platform) this.platformClasses.add(name);
-      }
+      if (this.dexIndex.has(name)) continue;
+      this.dexIndex.set(name, dexIndex * CLASS_INDEX_BASE + i);
+      if (!platform) continue;
+      this.platformClasses.add(name);
+      // a class linked before the platform arrived: a stub now has a definition, and a native
+      // spec now has platform methods to fall through to
+      const linked = this.classes.get(name);
+      if (linked?.stub) this.classes.delete(name);
+      else if (linked?.native && linked.compiled) this.fallThrough(linked);
     }
   }
 
