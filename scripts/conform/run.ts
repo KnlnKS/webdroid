@@ -33,11 +33,27 @@ const jars = await Promise.all(suite.maven.map(async (coords) => {
   }
   return file;
 }));
+const sources: string[] = [];
+let classes = suite.classes ?? [];
+if (suite.source) {
+  const srcDir = `${CACHE}/src/${suiteName}`, root = `${srcDir}/${suite.source.root}`;
+  if (!existsSync(root)) {
+    mkdirSync(srcDir, { recursive: true });
+    await Bun.write(`${srcDir}/src.tar.gz`, await fetch(suite.source.archive));
+    run(["tar", "xzf", `${srcDir}/src.tar.gz`, "-C", srcDir]);
+  }
+  for (const f of new Bun.Glob("**/*.java").scanSync(root)) {
+    sources.push(`${root}/${f}`);
+    if (suite.source.tests.test(f.slice(f.lastIndexOf("/") + 1))) classes.push(f.replace(/\.java$/, "").replace(/\//g, "."));
+  }
+  classes = classes.sort();
+}
 if (!existsSync(`${dexDir}/classes.dex`)) {
-  mkdirSync(`${dexDir}/runner`, { recursive: true });
-  run(["javac", "--release", "8", "-nowarn", "-cp", jars.join(":"), "-d", `${dexDir}/runner`, `${import.meta.dir}/ConformRunner.java`]);
+  const out = `${dexDir}/classes`;
+  mkdirSync(out, { recursive: true });
+  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", "-cp", jars.join(":"), "-d", out, `${import.meta.dir}/ConformRunner.java`, ...sources]);
   run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,
-    ...readdirSync(`${dexDir}/runner`).map((f) => `${dexDir}/runner/${f}`)]);
+    ...[...new Bun.Glob("**/*.class").scanSync(out)].map((f) => `${out}/${f}`)]);
 }
 
 // the runtime: suite dex ahead of the platform class path, natives linked after both
@@ -47,7 +63,7 @@ await import("../../src/natives");
 const { dexesIn } = await import("../../src/jvm/dex");
 const { jarDexes } = await import("../../src/android/framework");
 const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
-const { vcall, vcallAsync } = await import("../../src/jvm/natives/jlang");
+const { vcallAsync } = await import("../../src/jvm/natives/jlang");
 for (const f of readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort())
   for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
 for (const jar of PLATFORM_JARS)
@@ -56,15 +72,24 @@ rt.linkNatives();
 const console_ = { warn: console.warn };
 console.warn = () => {};
 
+if (process.env.CONFORM_DEBUG) rt.throwables = [];
 const runner = rt.link("ConformRunner");
 await rt.initClass(runner);
 /** per class, each test name and whether it passed */
 const results: Record<string, Map<string, boolean>> = {};
+const CLASS_TIMEOUT_MS = 120_000;
 const started = performance.now();
-for (const cls of suite.classes) {
+// a filter naming classes runs just those classes; otherwise it selects tests by name
+const named = filter ? classes.filter((c) => c.includes(filter)) : [];
+const testFilter = named.length ? "" : filter;
+for (const cls of named.length ? named : classes) {
   const t0 = performance.now();
   let text: string;
-  try { text = await vcall(runner.ctor, "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", cls, filter); }
+  // a class that never finishes (a lost wakeup, a deadlock) fails as a whole rather than stalling the suite
+  try {
+    text = await Promise.race([vcallAsync(runner.ctor, "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", cls, testFilter),
+      new Promise<string>((resolve) => setTimeout(() => resolve(`F\t${cls}\ttimed out after ${CLASS_TIMEOUT_MS / 1000}s\n`), CLASS_TIMEOUT_MS))]);
+  }
   catch (e) { text = `F\t${cls}\t${await vcallAsync(e, "toString", "()Ljava/lang/String;").catch(() => String(e))}\n`; }
   let pass = 0, fail = 0;
   const tests = results[cls] = new Map();
@@ -78,6 +103,14 @@ for (const cls of suite.classes) {
   console.log(`${cls}: ${pass} pass, ${fail} fail (${((performance.now() - t0) / 1000).toFixed(1)}s)`);
 }
 console.warn = console_.warn;
+if (process.env.CONFORM_DEBUG) {
+  const { stackTraceText } = await import("../../src/jvm/natives/jlang");
+  const pattern = new RegExp(process.env.CONFORM_DEBUG);
+  for (const t of rt.throwables!) {
+    const text = await stackTraceText(t as never);
+    if (pattern.test(text)) { console.log(text.split("\n").slice(0, 14).join("\n")); break; }
+  }
+}
 
 const hash = (name: string) => Bun.hash.crc32(name).toString(16).padStart(8, "0");
 const baselinePath = `tests/conformance/${suiteName}.json`;
