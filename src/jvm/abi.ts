@@ -21,7 +21,12 @@ function hash36(s: string): string {
 
 const nameRe = /[^A-Za-z0-9_]/g;
 function safeName(n: string): string {
-  return n.replace(nameRe, (c) => "$" + c.charCodeAt(0).toString(16) + "$");
+  for (let i = 0; i < n.length; i++) {
+    const c = n.charCodeAt(i);
+    if (!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57 || c === 95))
+      return n.replace(nameRe, (ch) => "$" + ch.charCodeAt(0).toString(16) + "$");
+  }
+  return n;
 }
 
 // Two-level memo (name → desc → mangled). vcall mangles on every dynamic dispatch — per
