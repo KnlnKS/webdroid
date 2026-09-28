@@ -253,6 +253,8 @@ function monWait(obj: object | string, ms: number): Promise<void> {
 
 export class JClass extends JObj {
   ci: ClassInfo | null = null;
+  /** ART's per-class extension data (ClassValue's map lives there), made on first request */
+  ext: JObj | null = null;
   primName: string | null = null;
   arrDesc: string | null = null;
   componentOwner: Runtime | null = null;
@@ -308,6 +310,7 @@ rt.register({
   methods: {
     "getName()Ljava/lang/String;": function (this: JClass) { return jclassName(this); },
     "toString()Ljava/lang/String;": function (this: JClass) { return "class " + jclassName(this); },
+    "ensureExtDataPresent()Ldalvik/system/ClassExt;": function (this: JClass) { return this.ext ??= rt.make("dalvik/system/ClassExt"); },
     "getSimpleName()Ljava/lang/String;": function (this: JClass) {
       const n = jclassName(this);
       const i = Math.max(n.lastIndexOf("."), n.lastIndexOf("$"));
