@@ -24,6 +24,7 @@ import "./jvm/natives/jtime";
 import "./jvm/natives/jregex";
 import "./jvm/natives/jtext";
 import "./jvm/natives/jnumberformat";
+import "./jvm/natives/jicu";
 import "./jvm/natives/jmessageformat";
 import "./jvm/natives/jreflect";
 import "./jvm/natives/jdom";
