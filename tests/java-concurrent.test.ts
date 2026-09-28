@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync, curThread, mainThread, JThread, setCurThread, vcallOn, park } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, curThread, mainThread, JThread, vcallOn, park } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
 import { jarray } from "../src/jvm/abi";
 import { mainLooper } from "../src/android/os";
@@ -10,7 +10,7 @@ describe("blocking-queue-drain", () => {
   rt.linkNatives();
 
   test("bounded queues reject overflow and wake blocked producers after removal", async () => {
-    const queue = await newObj("java/util/concurrent/ArrayBlockingQueue", "(I)V", 1);
+    const queue = await newObj("java/util/concurrent/LinkedBlockingQueue", "(I)V", 1);
     expect(await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "first")).toBe(1);
     expect(await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "overflow")).toBe(0);
     let completed = false;
@@ -22,31 +22,24 @@ describe("blocking-queue-drain", () => {
     await producer;
     expect(await vcall(queue, "take", "()Ljava/lang/Object;")).toBe("second");
     expect(await vcall(queue, "remainingCapacity", "()I")).toBe(1);
-    const handoff = await newObj("java/util/concurrent/SynchronousQueue");
-    const pending = vcall(handoff, "put", "(Ljava/lang/Object;)V", "handoff");
-    expect(await vcall(handoff, "size", "()I")).toBe(0);
-    expect(await vcall(handoff, "take", "()Ljava/lang/Object;")).toBe("handoff");
-    await pending;
   });
 
-  for (const name of ["ArrayBlockingQueue", "LinkedBlockingQueue", "LinkedBlockingDeque", "LinkedTransferQueue", "PriorityBlockingQueue"]) {
-    test(`${name} drains a bounded prefix and then the remaining elements`, async () => {
-      const queue = await newObj(`java/util/concurrent/${name}`, "(I)V", 8);
-      for (const value of ["a", "b", "c"]) await vcall(queue, "offer", "(Ljava/lang/Object;)Z", value);
-      const target = newArrayList(["existing"]);
-      const drain = (max: number) => vcall(queue, "drainTo", "(Ljava/util/Collection;I)I", target, max);
-      expect(await drain(-1)).toBe(0);
-      expect(await drain(2)).toBe(2);
-      expect(target.a).toEqual(["existing", "a", "b"]);
-      expect(await vcall(queue, "peek", "()Ljava/lang/Object;")).toBe("c");
-      expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;)I", target)).toBe(1);
-      expect(target.a).toEqual(["existing", "a", "b", "c"]);
-      expect(await vcall(queue, "size", "()I")).toBe(0);
-      expect(await drain(10)).toBe(0);
-      expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;I)I", null, 0).catch(e => rt.iof(e, "java/lang/NullPointerException"))).toBe(1);
-      expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;)I", queue).catch(e => rt.iof(e, "java/lang/IllegalArgumentException"))).toBe(1);
-    });
-  }
+  test("LinkedBlockingQueue drains a bounded prefix and then the remaining elements", async () => {
+    const queue = await newObj("java/util/concurrent/LinkedBlockingQueue", "(I)V", 8);
+    for (const value of ["a", "b", "c"]) await vcall(queue, "offer", "(Ljava/lang/Object;)Z", value);
+    const target = newArrayList(["existing"]);
+    const drain = (max: number) => vcall(queue, "drainTo", "(Ljava/util/Collection;I)I", target, max);
+    expect(await drain(-1)).toBe(0);
+    expect(await drain(2)).toBe(2);
+    expect(target.a).toEqual(["existing", "a", "b"]);
+    expect(await vcall(queue, "peek", "()Ljava/lang/Object;")).toBe("c");
+    expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;)I", target)).toBe(1);
+    expect(target.a).toEqual(["existing", "a", "b", "c"]);
+    expect(await vcall(queue, "size", "()I")).toBe(0);
+    expect(await drain(10)).toBe(0);
+    expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;I)I", null, 0).catch(e => rt.iof(e, "java/lang/NullPointerException"))).toBe(1);
+    expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;)I", queue).catch(e => rt.iof(e, "java/lang/IllegalArgumentException"))).toBe(1);
+  });
 
   test("draining calls suspending collection overrides and propagates failures", async () => {
     class Target extends JObj { values: unknown[] = []; fail = false; }
@@ -58,7 +51,7 @@ describe("blocking-queue-drain", () => {
         return 1;
       },
     } });
-    const queue = await newObj("java/util/concurrent/ArrayBlockingQueue", "(I)V", 8);
+    const queue = await newObj("java/util/concurrent/LinkedBlockingQueue", "(I)V", 8);
     const target = rt.make("test/DrainTarget");
     if (!(target instanceof Target)) throw new Error("Wrong target class");
     await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "first");
@@ -67,127 +60,6 @@ describe("blocking-queue-drain", () => {
     target.fail = true;
     await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "second");
     expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;)I", target).catch(e => rt.iof(e, "java/lang/UnsupportedOperationException"))).toBe(1);
-  });
-});
-
-describe("completable-future", () => {
-  class Supplier extends JObj { runs = 0; error: unknown = null; thread = mainThread; }
-  class Executor extends JObj { tasks: unknown[] = []; }
-  class Action extends JObj { call: (...args: unknown[]) => unknown = () => null; }
-  rt.register({ name: "test/FutureSupplier", ctor: Supplier, ifaces: ["java/util/function/Supplier"], methods: {
-    "get()Ljava/lang/Object;": function (this: Supplier) {
-      this.runs++; this.thread = curThread;
-      if (this.error) throw this.error;
-      return "supplied";
-    },
-  } });
-  rt.register({ name: "test/FutureExecutor", ctor: Executor, ifaces: ["java/util/concurrent/Executor"], methods: {
-    "execute(Ljava/lang/Runnable;)V": function (this: Executor, task: unknown) { this.tasks.push(task); },
-  } });
-  rt.register({ name: "test/FutureAction", ctor: Action, ifaces: ["java/util/function/Function", "java/util/function/BiConsumer"], methods: {
-    "apply(Ljava/lang/Object;)Ljava/lang/Object;": function (this: Action, value: unknown) { return this.call(value); },
-    "accept(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: Action, value: unknown, error: unknown) { return this.call(value, error); },
-  } });
-  rt.linkNatives();
-  const supply = (supplier: Supplier) => vcall(rt.link("java/util/concurrent/CompletableFuture").ctor,
-    "supplyAsync", "(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;", supplier);
-
-  test("supplyAsync runs on a worker and completes with the supplier's value", async () => {
-    const supplier = new Supplier(), future = await supply(supplier);
-    expect(supplier.runs).toBe(0);
-    expect(await vcall(future, "join", "()Ljava/lang/Object;")).toBe("supplied");
-    expect(supplier.runs).toBe(1);
-    expect(supplier.thread).not.toBe(mainThread);
-  });
-
-  test("supplier exceptions retain their cause through get and join", async () => {
-    const supplier = new Supplier(); supplier.error = rt.mkThrowable("java/lang/IllegalArgumentException", "supplier failed");
-    const future = await supply(supplier);
-    for (const [method, type] of [["get", "ExecutionException"], ["join", "CompletionException"]]) {
-      const error = await vcallAsync(future, method, "()Ljava/lang/Object;").then(() => null, e => e);
-      expect(rt.iof(error, `java/util/concurrent/${type}`)).toBeTruthy();
-      expect(await vcall(error, "getCause", "()Ljava/lang/Throwable;")).toBe(supplier.error);
-    }
-  });
-
-  test("cancelling before the supplied executor runs skips the supplier", async () => {
-    const supplier = new Supplier(), executor = new Executor();
-    const future = await vcall(rt.link("java/util/concurrent/CompletableFuture").ctor, "supplyAsync",
-      "(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;", supplier, executor);
-    expect(await vcall(future, "cancel", "(Z)Z", 1)).toBe(1);
-    await vcall(executor.tasks[0], "run", "()V");
-    expect(supplier.runs).toBe(0);
-    expect(await vcall(future, "isCompletedExceptionally", "()Z")).toBe(1);
-    const error = await vcallAsync(future, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", "fallback").then(() => null, e => e);
-    expect(rt.iof(error, "java/util/concurrent/CancellationException")).toBeTruthy();
-    const incomplete = await newObj("java/util/concurrent/CompletableFuture");
-    expect(await vcall(incomplete, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", "fallback")).toBe("fallback");
-  });
-
-  test("dependent functions can suspend without blocking completion and compose another future", async () => {
-    const source = await newObj("java/util/concurrent/CompletableFuture"), next = await newObj("java/util/concurrent/CompletableFuture");
-    const action = new Action(); let release: (value: unknown) => void = () => {};
-    action.call = value => { expect(value).toBe("source"); return new Promise(resolve => { release = resolve; }); };
-    const mapped = await vcall(source, "thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;", action);
-    const compose = new Action(); compose.call = value => { expect(value).toBe("mapped"); return next; };
-    const result = await vcall(mapped, "thenCompose", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;", compose);
-    expect(await vcall(source, "complete", "(Ljava/lang/Object;)Z", "source")).toBe(1);
-    expect(await vcall(mapped, "isDone", "()Z")).toBe(0);
-    release("mapped");
-    await vcall(next, "complete", "(Ljava/lang/Object;)Z", "composed");
-    expect(await vcall(result, "join", "()Ljava/lang/Object;")).toBe("composed");
-  });
-
-  test("failed sources skip transforms, can recover, and retain their error when observation fails", async () => {
-    const source = await newObj("java/util/concurrent/CompletableFuture"), original = rt.mkThrowable("java/lang/IllegalArgumentException", "original");
-    const action = new Action(); action.call = () => { throw rt.mkThrowable("java/lang/IllegalStateException", "observer"); };
-    const observed = await vcall(source, "whenComplete", "(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletableFuture;", action);
-    await vcall(source, "completeExceptionally", "(Ljava/lang/Throwable;)Z", original);
-    const error = await vcallAsync(observed, "join", "()Ljava/lang/Object;").then(() => null, e => e);
-    expect(await vcall(error, "getCause", "()Ljava/lang/Throwable;")).toBe(original);
-    const recovery = new Action(); recovery.call = value => { expect(value).toBe(original); return "recovered"; };
-    const recovered = await vcall(source, "exceptionally", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;", recovery);
-    expect(await vcall(recovered, "join", "()Ljava/lang/Object;")).toBe("recovered");
-    const transform = new Action(); let calls = 0; transform.call = () => { calls++; };
-    const skipped = await vcall(source, "thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;", transform);
-    await vcallAsync(skipped, "join", "()Ljava/lang/Object;").catch(() => {});
-    expect(calls).toBe(0);
-  });
-});
-
-describe("cyclic-barrier", () => {
-  class BarrierAction extends JObj { calls = 0; }
-  rt.register({ name: "test/BarrierAction", ctor: BarrierAction, ifaces: ["java/lang/Runnable"], methods: {
-    "run()V": async function (this: BarrierAction) { await Bun.sleep(1); this.calls++; },
-  } });
-  rt.linkNatives();
-  const wait = (barrier: unknown, thread: JThread, duration?: bigint) => {
-    setCurThread(thread);
-    const result = duration === undefined ? vcall(barrier, "await", "()I") : vcall(barrier, "await", "(JLjava/util/concurrent/TimeUnit;)I", duration, rt.link("java/util/concurrent/TimeUnit").ctor.s$MILLISECONDS);
-    setCurThread(mainThread); return result;
-  };
-  test("CyclicBarrier releases every generation after the suspendable action", async () => {
-    const action = await newObj("test/BarrierAction");
-    const barrier = await newObj("java/util/concurrent/CyclicBarrier", "(ILjava/lang/Runnable;)V", 2, action);
-    for (let i = 0; i < 2; i++) {
-      const first = wait(barrier, new JThread());
-      const second = wait(barrier, new JThread());
-      expect(await Promise.all([first, second])).toEqual([1, 0]);
-      expect(action.calls).toBe(i + 1);
-    }
-  });
-  test("timeout and interruption break peers until reset", async () => {
-    const barrier = await newObj("java/util/concurrent/CyclicBarrier", "(I)V", 3);
-    const peer = wait(barrier, new JThread()).catch((e: unknown) => e);
-    await expect((async () => wait(barrier, new JThread(), 1n))()).rejects.toMatchObject({ constructor: rt.link("java/util/concurrent/TimeoutException").ctor });
-    expect(await peer).toMatchObject({ constructor: rt.link("java/util/concurrent/BrokenBarrierException").ctor });
-    await vcall(barrier, "reset", "()V");
-    expect(await vcall(barrier, "isBroken", "()Z")).toBe(0);
-    const thread = new JThread();
-    const interrupted = wait(barrier, thread).catch((e: unknown) => e);
-    await vcall(thread, "interrupt", "()V");
-    expect(await interrupted).toMatchObject({ constructor: rt.link("java/lang/InterruptedException").ctor });
-    expect(await vcall(barrier, "isBroken", "()Z")).toBe(1);
   });
 });
 
@@ -330,13 +202,6 @@ describe("executor-queue", () => {
     expect(task.runs).toBe(0);
   });
 
-  test("CompletableFuture supplyAsync runs on the supplied executor", async () => {
-    const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
-    const supplier = new ValueSupplier();
-    const future = await vcall(rt.link("java/util/concurrent/CompletableFuture").ctor, "supplyAsync",
-      "(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;", supplier, ex);
-    expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("supplied");
-  });
 
   test("executor work is eligible at the next cooperative turn", async () => {
     const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
@@ -365,17 +230,11 @@ describe("executor-queue", () => {
   });
 
   test("a pool grows when a wrapped synchronous queue refuses storage", async () => {
-    class QueueProxy extends JObj { delegate: unknown; }
     rt.register({
-      name: "test/HandoffQueue", ctor: QueueProxy, ifaces: ["java/util/concurrent/BlockingQueue"],
-      methods: {
-        "offer(Ljava/lang/Object;)Z": function (this: QueueProxy, item: unknown) {
-          return vcall(this.delegate, "offer", "(Ljava/lang/Object;)Z", item);
-        },
-      },
+      name: "test/HandoffQueue", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/BlockingQueue"],
+      methods: { "offer(Ljava/lang/Object;)Z": () => 0 },
     });
-    const queue = rt.make("test/HandoffQueue") as QueueProxy;
-    queue.delegate = await newObj("java/util/concurrent/SynchronousQueue");
+    const queue = rt.make("test/HandoffQueue");
     const ex = await newObj("java/util/concurrent/ThreadPoolExecutor",
       "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V", 0, 2, 0n, seconds(), queue);
     const first = new BlockingRunnable(), second = new BlockingRunnable();
@@ -385,7 +244,6 @@ describe("executor-queue", () => {
     expect(await vcall(ex, "getActiveCount", "()I")).toBe(2);
     expect(await vcall(ex, "getCorePoolSize", "()I")).toBe(0);
     expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(2);
-    expect(await vcall(queue.delegate, "size", "()I")).toBe(0);
     await expect(vcallAsync(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", new RecordingRunnable())).rejects.toBeDefined();
     const handler = await newObj("java/util/concurrent/ThreadPoolExecutor$CallerRunsPolicy");
     await vcall(ex, "setRejectedExecutionHandler", "(Ljava/util/concurrent/RejectedExecutionHandler;)V", handler);
@@ -549,41 +407,6 @@ describe("executor-task-factory", () => {
   });
 });
 
-describe("priority-blocking-queue", () => {
-  rt.linkNatives();
-
-  test("PriorityBlockingQueue keeps a compared item queued until insertion completes", async () => {
-    let compareStarted!: () => void, finishCompare!: () => void;
-    const started = new Promise<void>((resolve) => { compareStarted = resolve; });
-    const gate = new Promise<void>((resolve) => { finishCompare = resolve; });
-    class Entry extends JObj { key: number | null = null; }
-    rt.register({ name: "test/PriorityQueueEntry", ctor: Entry, methods: {
-      "compareTo(Ljava/lang/Object;)I": async function (this: Entry, other: Entry) {
-        compareStarted();
-        await gate;
-        if (this.key === null || other.key === null) throw new Error("compared a released entry");
-        return this.key - other.key;
-      },
-    } });
-    const queue = await newObj("java/util/concurrent/PriorityBlockingQueue");
-    const first = rt.make("test/PriorityQueueEntry") as Entry, second = rt.make("test/PriorityQueueEntry") as Entry;
-    first.key = 1; second.key = 2;
-    await vcall(queue, "offer", "(Ljava/lang/Object;)Z", first);
-    const insertion = vcall(queue, "offer", "(Ljava/lang/Object;)Z", second);
-    await started;
-    let released = false;
-    const removal = vcallAsync(queue, "remove", "(Ljava/lang/Object;)Z", first).then(() => {
-      first.key = null;
-      released = true;
-    });
-    await Promise.resolve();
-    expect(released).toBe(false);
-    finishCompare();
-    await Promise.all([insertion, removal]);
-    expect(await vcall(queue, "poll", "()Ljava/lang/Object;")).toBe(second);
-  });
-});
-
 describe("runnable-future-interface", () => {
   rt.linkNatives();
 
@@ -592,35 +415,6 @@ describe("runnable-future-interface", () => {
     const task = rt.make("test/RunnableFutureImpl");
     expect(rt.iof(task, "java/lang/Runnable")).toBe(1);
     expect(rt.iof(task, "java/util/concurrent/Future")).toBe(1);
-  });
-});
-
-describe("semaphore", () => {
-  rt.linkNatives();
-
-  test("Semaphore.drainPermits returns positive, zero and negative counts and empties the semaphore", async () => {
-    for (const permits of [7, 0, -3]) {
-      const semaphore = await newObj("java/util/concurrent/Semaphore", "(I)V", permits);
-      expect(await vcall(semaphore, "drainPermits", "()I")).toBe(permits);
-      expect(await vcall(semaphore, "availablePermits", "()I")).toBe(0);
-      expect(await vcall(semaphore, "drainPermits", "()I")).toBe(0);
-      expect(await vcall(semaphore, "tryAcquire", "()Z")).toBe(0);
-      await vcall(semaphore, "release", "()V");
-      expect(await vcall(semaphore, "tryAcquire", "()Z")).toBe(1);
-    }
-  });
-
-  test("draining permits does not complete a waiting acquisition", async () => {
-    const semaphore = await newObj("java/util/concurrent/Semaphore", "(I)V", 1);
-    let completed = false;
-    const waiting = vcallAsync(semaphore, "acquire", "(I)V", 2).then(() => { completed = true; });
-    expect(await vcall(semaphore, "drainPermits", "()I")).toBe(1);
-    await vcall(semaphore, "release", "()V");
-    expect(completed).toBe(false);
-    await vcall(semaphore, "release", "()V");
-    await waiting;
-    expect(completed).toBe(true);
-    expect(await vcall(semaphore, "availablePermits", "()I")).toBe(0);
   });
 });
 

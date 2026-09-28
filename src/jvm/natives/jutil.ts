@@ -1590,40 +1590,36 @@ function treeSetMethods(): NativeSpec["methods"] {
     "descendingIterator()Ljava/util/Iterator;": function (this: JTreeSet) { return mkIter(this.slow.map((e) => e.k).reverse()); },
   };
 }
-for (const n of ["java/util/TreeMap", "java/util/concurrent/ConcurrentSkipListMap"]) {
-  rt.register({
-    name: n, ctor: class extends JTreeMap {}, typeVars: "K,V",
-    ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...without(mapMethods(), ["<init>(I)V", "<init>(IF)V", IFI, IFZ]), ...treeMapMethods() },
-  });
-}
-for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSet"]) {
-  rt.register({
-    name: n, ctor: class extends JTreeSet {}, typeVars: "E",
-    serialization: n === "java/util/TreeSet" ? { uid: -2479143000061671589n, fields: [] } : undefined,
-    ifaces: ["java/util/NavigableSet", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...without(setMethods(), ["<init>(I)V", "<init>(IF)V"]), ...treeSetMethods(), ...(n === "java/util/TreeSet" ? {
-      "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
-        yield vcall(stream, "defaultWriteObject", "()V");
-        yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.cmp);
-        yield vcall(stream, "writeInt", "(I)V", this.slow.length);
-        for (const item of this.slow) yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item.k);
-      }),
-      "readObject(Ljava/io/ObjectInputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
-        yield vcall(stream, "defaultReadObject", "()V");
-        this.cmp = yield vcall(stream, "readObject", "()Ljava/lang/Object;");
-        const count: number = yield vcall(stream, "readInt", "()I");
-        if (count < 0) throw rt.mkThrowable("java/io/StreamCorruptedException", "negative set size");
-        this.m.clear(); this.slow = [];
-        for (let i = 0; i < count; i++) yield tadd(this, yield vcall(stream, "readObject", "()Ljava/lang/Object;"));
-      }),
-    } : {}) },
-  });
-}
+rt.register({
+  name: "java/util/TreeMap", ctor: class extends JTreeMap {}, typeVars: "K,V",
+  ifaces: ["java/util/NavigableMap", "java/lang/Cloneable", "java/io/Serializable"],
+  methods: { ...without(mapMethods(), ["<init>(I)V", "<init>(IF)V", IFI, IFZ]), ...treeMapMethods() },
+});
+rt.register({
+  name: "java/util/TreeSet", ctor: class extends JTreeSet {}, typeVars: "E",
+  serialization: { uid: -2479143000061671589n, fields: [] },
+  ifaces: ["java/util/NavigableSet", "java/lang/Cloneable", "java/io/Serializable"],
+  methods: { ...without(setMethods(), ["<init>(I)V", "<init>(IF)V"]), ...treeSetMethods(),
+    "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
+      yield vcall(stream, "defaultWriteObject", "()V");
+      yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.cmp);
+      yield vcall(stream, "writeInt", "(I)V", this.slow.length);
+      for (const item of this.slow) yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item.k);
+    }),
+    "readObject(Ljava/io/ObjectInputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
+      yield vcall(stream, "defaultReadObject", "()V");
+      this.cmp = yield vcall(stream, "readObject", "()Ljava/lang/Object;");
+      const count: number = yield vcall(stream, "readInt", "()I");
+      if (count < 0) throw rt.mkThrowable("java/io/StreamCorruptedException", "negative set size");
+      this.m.clear(); this.slow = [];
+      for (let i = 0; i < count; i++) yield tadd(this, yield vcall(stream, "readObject", "()Ljava/lang/Object;"));
+    }),
+  },
+});
 
-export class JPriorityQueue extends JList { cmp: unknown = null; }
+class JPriorityQueue extends JList { cmp: unknown = null; }
 /** keep the backing array sorted ascending so poll() takes the head (stable after equal keys) */
-export const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown): Gen {
+const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown): Gen {
   if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   // the comparator may suspend, and another thread's take()/offer() can move the array under
   // it (Java holds a lock here): search a snapshot and only splice if the live array still is it
@@ -1640,7 +1636,7 @@ export const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown)
     }
   }
 });
-export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
+const priorityQueueMethods: NonNullable<NativeSpec["methods"]> = {
   ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, SEQUENCED, CAPACITY),
   "<init>()V": function () {},
   "<init>(I)V": function () {},
@@ -1654,11 +1650,11 @@ export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "peek()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a[0] : null; },
   "element()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a[0]; },
   "comparator()Ljava/util/Comparator;": function (this: JPriorityQueue) { return this.cmp; },
-});
+};
 rt.register({
   name: "java/util/PriorityQueue", ctor: JPriorityQueue, sup: "java/util/AbstractQueue",
   ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
-  methods: priorityQueueMethods(),
+  methods: priorityQueueMethods,
 });
 function snapshotIterator(list: JList, at = 0): JIter {
   if (at < 0 || at > list.a.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(at));
@@ -1666,37 +1662,30 @@ function snapshotIterator(list: JList, at = 0): JIter {
   it.i = at; it.readOnly = true;
   return it;
 }
-const concurrentListExtras: Record<string, Methods> = {
-  "java/util/concurrent/CopyOnWriteArrayList": {
-    "<init>([Ljava/lang/Object;)V": function (this: JList, items: unknown[]) { this.a = items.slice(); },
-    "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
-    "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
-    "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
-    "addIfAbsent(Ljava/lang/Object;)Z": driven(function* (this: JList, v: unknown): Gen {
-      if ((yield indexIn(this.a, v)) >= 0) return 0;
-      this.a.push(v);
-      return 1;
-    }),
-    "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JList, c: unknown): Gen {
-      if (c == null) rt.npe();
-      const thread = curThread, before = this.a.slice(), retained: unknown[] = [];
-      for (const item of before) if (yield vcallOn(thread, c, "contains", "(Ljava/lang/Object;)Z", item)) retained.push(item);
-      if (this.a.length !== before.length || this.a.some((item, i) => item !== before[i])) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
-      if (retained.length === before.length) return 0;
-      this.a = retained; return 1;
-    }),
-  },
+const cowExtras: Methods = {
+  "<init>([Ljava/lang/Object;)V": function (this: JList, items: unknown[]) { this.a = items.slice(); },
+  "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
+  "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
+  "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
+  "addIfAbsent(Ljava/lang/Object;)Z": driven(function* (this: JList, v: unknown): Gen {
+    if ((yield indexIn(this.a, v)) >= 0) return 0;
+    this.a.push(v);
+    return 1;
+  }),
+  "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JList, c: unknown): Gen {
+    if (c == null) rt.npe();
+    const thread = curThread, before = this.a.slice(), retained: unknown[] = [];
+    for (const item of before) if (yield vcallOn(thread, c, "contains", "(Ljava/lang/Object;)Z", item)) retained.push(item);
+    if (this.a.length !== before.length || this.a.some((item, i) => item !== before[i])) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
+    if (retained.length === before.length) return 0;
+    this.a = retained; return 1;
+  }),
 };
-for (const n of ["java/util/concurrent/CopyOnWriteArrayList", "java/util/concurrent/ConcurrentLinkedDeque"]) {
-  rt.register({
-    name: n, ctor: class extends JList {},
-    ifaces: n === "java/util/concurrent/CopyOnWriteArrayList"
-      ? ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"]
-      : ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque"],
-    methods: { ...without(listMethods(), ["<init>(I)V"], CAPACITY, ...(n === "java/util/concurrent/CopyOnWriteArrayList"
-      ? [QUEUE_ONLY, DEQUE_ONLY] : [LIST_ONLY, INDEX_OF])), ...concurrentListExtras[n] },
-  });
-}
+rt.register({
+  name: "java/util/concurrent/CopyOnWriteArrayList", ctor: class extends JList {},
+  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
+  methods: { ...without(listMethods(), ["<init>(I)V"], CAPACITY, QUEUE_ONLY, DEQUE_ONLY), ...cowExtras },
+});
 
 // ── BitSet: 32-bit words (Java's are 64-bit, which only shows in size()/hashCode, handled)
 class JBitSet extends JObj { w: Int32Array = new Int32Array(2); }
@@ -2358,7 +2347,6 @@ rt.register({ name: "java/util/SortedSet", ctor: class extends JObj {}, ifaces: 
 rt.register({ name: "java/util/NavigableSet", ctor: class extends JObj {}, ifaces: ["java/util/SortedSet"], typeVars: "E" });
 rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
 rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"], typeVars: "K,V" });
-rt.register({ name: "java/util/concurrent/ConcurrentNavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap"], typeVars: "K,V" });
 rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
 rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: { ...mapDefaults, ...mapFactories } });
 rt.register({

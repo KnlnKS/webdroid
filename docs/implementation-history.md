@@ -227,6 +227,17 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   main thread. Apps that format dates read the whole 28 MB ICU file into memory (FitNotes does), where
   a device maps it lazily. SystemClock.currentGnssTimeClock is libcore's, whose reads fail with an NPE
   while no location service is hosted.
+- 2026-09-28, Stage B flip of java.util.concurrent's synchronizers and most of its queues:
+  the locks, AQS, LockSupport, CountDownLatch, CyclicBarrier, Semaphore, CompletableFuture,
+  the skip-list collections, ConcurrentLinkedDeque and the blocking queues other than
+  LinkedBlockingQueue now run from libcore over the Unsafe park/unpark natives (about 1,000 TS
+  lines removed). ConcurrentHashMap, the atomics, CopyOnWriteArrayList, ConcurrentLinkedQueue,
+  the executors, FutureTask, LinkedBlockingQueue and TimeUnit stay TS: cutting the whole package
+  raised JSR-166 further (2,916) but cost Mihon's cold dark tap 191 ms. JSR-166 rose from 1,448
+  to 2,538 passes and Guava from 37,276 to 38,088. Warm Mihon `light` measured 111-119 ms with the
+  cut against 120-128 ms in TS mode; the 18/20 ms TS samples taken earlier were the bimodal
+  fast-frame case, not the norm. TreeMap had declared ConcurrentMap only because it shared a
+  registration with ConcurrentSkipListMap.
 
 ## Java, storage and framework semantics
 

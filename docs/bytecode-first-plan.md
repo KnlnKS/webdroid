@@ -581,8 +581,7 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-28. The branch is `bytecode-first`, worktree
-`/Users/kunalan/Projects/webdroid-bytecode`, 88 commits ahead of `main`, with a clean tree. Each
+Last updated 2026-09-28. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`. Each
 commit message states what it measured. The implementation history (the 2026-09-27 and
 2026-09-28 Stage A/B entries) records failure mechanisms.
 
@@ -618,10 +617,10 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,393 pass);
+- `bun run test` (1,377 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time`. Baselines are 37,276, 1,448 and 26,163; jsr166
+- `bun run conform guava|jsr166|ojluni-time`. Baselines are 38,088, 2,538 and 26,163; jsr166
   takes about 8 minutes;
 - `bun run lat` cold and `--warm`;
 - `bun run smoke apks/FitNotes.apk` (0 method failures).
@@ -667,6 +666,12 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   implemented on the JS RegExp translation (`jregex.ts`).
 - **ThreadLocalRandom.** It needed Thread fields reached through Unsafe offsets, and `Random`
   implementing `RandomGenerator`.
+- **java.util.concurrent synchronizers and queues (B.5).** Locks, AQS, LockSupport, the latches,
+  barriers and semaphores, CompletableFuture, the skip-list collections, ConcurrentLinkedDeque and
+  every blocking queue but LinkedBlockingQueue run from libcore over Unsafe park/unpark (`jsync.ts`).
+  ConcurrentHashMap, the atomics, CopyOnWriteArrayList, ConcurrentLinkedQueue, the executors
+  (`mkExecutor` serves `android/os.ts` and `intentservice.ts`), FutureTask, LinkedBlockingQueue
+  and TimeUnit stay TS; the whole-package cut cost a 191 ms cold Mihon tap.
 
 Fixes that apply to every mode:
 - Fallthrough ordering. A platform body that cannot run on a TS class yields to the spec's
@@ -686,60 +691,25 @@ Fixes that apply to every mode:
 - Properties has its defaults chain, with Hashtable as its superclass.
 - Settings `get*ForUser`.
 
-### In progress: java.util.concurrent flip (B.5)
-
-All enabling work is committed (025430ef): Unsafe park/unpark, LockSupport interrupt semantics,
-the Thread fields, `sleep(JI)`, `VMSupportsCS8`, `Class.getAccessFlags`, and eager Field linking.
-
-- **Whole package cut** (`WEBDROID_BYTECODE=java/util/concurrent/`): JSR-166 passes 2,916 of
-  3,106 (baseline 1,448), the gate is 7/7, and live flows pass. Cold Mihon was slower, with one
-  dark tap at 191 ms and warm light at 89–118 ms.
-- **Selective cut:** everything except ConcurrentHashMap, the atomics, CopyOnWrite*,
-  ConcurrentLinkedQueue, the executors, FutureTask, LinkedBlockingQueue and TimeUnit. JSR-166
-  passes 2,538 with 0 regressions, the gate is 7/7, and live flows pass apart from the YouTube
-  flake. Its prefix list:
-  ```
-  java/util/concurrent/{BlockingDeque,BrokenBarrierException,CompletableFuture,CompletionStage,
-  ConcurrentLinkedDeque,ConcurrentNavigableMap,ConcurrentSkipListMap,ConcurrentSkipListSet,
-  CountDownLatch,CyclicBarrier,LinkedBlockingDeque,LinkedTransferQueue,Semaphore,SynchronousQueue,
-  ArrayBlockingQueue,PriorityBlockingQueue},
-  java/util/concurrent/locks/{AbstractOwnableSynchronizer,AbstractQueuedSynchronizer,Condition,
-  Lock,LockSupport,ReadWriteLock,ReentrantLock,ReentrantReadWriteLock (+$ReadLock,$WriteLock)}
-  ```
-  (expand to comma-separated full prefixes).
-- **Open question when stopped:** warm Mihon `light` measured 114/118 ms under the selective cut,
-  against 18/20 ms in TS mode. That measurement is bimodal (a fast first frame at about 20 ms
-  versus a full recomposition at 90–170 ms). I was collecting more TS-mode warm samples
-  (`bun run lat mihon --warm`, x3) to tell noise from regression. Resolve that before deleting
-  code.
-- **If the flip holds:** delete the TS classes in `jsync.ts` (all but `webdroid/Condition`), six
-  in `jblockingqueue.ts`, `CompletableFuture` in `jconc.ts`, and the ConcurrentSkipList/
-  ConcurrentLinkedDeque specs in `jutil.ts`. `mkExecutor` (jconc) is used by `android/os.ts` and
-  `intentservice.ts`; keep it. Then update the JSR-166 baseline.
-- **If Mihon regresses,** profile it (`lat --cpuprofile`, then `scripts/lat/profsum.ts ...
-  tap=1 window=200`) before deciding. Candidates for the cost are platform AQS or locks on the
-  coroutine and OkHttp paths.
-
 ### Next steps, in plan order
 
-1. Finish B.5 as above.
-2. **B.4 collections.** This is not viable as a cut: about 250 TS call sites build and read the
+1. **B.4 collections.** This is not viable as a cut: about 250 TS call sites build and read the
    TS maps, lists and sets directly (`.m`, `newArrayList`, `newStringSet`, `toJsArray`,
    `JMapEntry`). Those need converting to the Java API first, and JS-backed collections are
    likely faster, so measure before committing to it.
-3. **Locale flip.** Convert the `JLocale` field readers (Paint, LocaleList, resnative, TextView,
+2. **Locale flip.** Convert the `JLocale` field readers (Paint, LocaleList, resnative, TextView,
    geocoder, bidiformatter, jutil ResourceBundle, text) to the Java API, then cut `java/util/Locale`.
-4. **B.7 io/nio/net/security.** `libcore.io.Linux` has only the subset TS Os had plus open and
+3. **B.7 io/nio/net/security.** `libcore.io.Linux` has only the subset TS Os had plus open and
    fstat. The rest of the 134 natives map onto `src/native/stdio.ts`'s descriptor table; Java
    callers now receive `-errno` from it. The `java/nio` cut failed on the TS FileChannel.
-5. **§4 performance.** Cold Mihon's first theme switch is about 90 ms of real
+4. **§4 performance.** Cold Mihon's first theme switch is about 90 ms of real
    recomposition plus cold-tier cost. Of what's left, resumable-body compilation (about 11 ms)
    happens on suspension. Starting leaf methods cold was tried and was worse; FitNotes once went
    unresponsive. Build-time AOT and the boot image (§4.1, §4.3) are the structural fixes.
-6. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap,
+5. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap,
    because `FileChannel.map` copies it (`jio.ts`). A lazily paged mapping would match the
    device's mmap.
-7. **Known limits.**
+6. **Known limits.**
    - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
    - TS `eraseThreadLocals` does not clear the TS locals.
    - Regex `hitEnd`/`requireEnd` are approximations, and UNIX_LINES is ignored.
