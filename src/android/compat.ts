@@ -168,7 +168,6 @@ rt.register({
     "getScaledVerticalScrollFactor()F": () => device.scrollUnit,
     "getScaledHoverSlop()I": () => Math.round(device.dp(4)),
     "getScaledFadingEdgeLength()I": () => Math.round(device.dp(12)),
-    "getScaledMinScalingSpan()I": minimumScalingSpan,
     "getScaledMinimumScalingSpan()I": minimumScalingSpan,
     "static getAmbiguousGestureMultiplier()F": () => 2,
     "static getMinimumFlingVelocity()I": () => 50,

@@ -142,7 +142,7 @@ CONSUMED_INSETS.consumedV = true;
 rt.register({
   name: "android/view/WindowInsets", ctor: JWindowInsets,
   statics: { CONSUMED: CONSUMED_INSETS },
-  methods: { "<init>()V": () => {}, ...wiMethods },
+  methods: wiMethods,
 });
 rt.register({
   name: "android/view/WindowInsets$Type", ctor: class extends JObj {},

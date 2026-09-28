@@ -986,10 +986,6 @@ rt.register({
   fields: ["foregroundColor", "backgroundColor", "edgeType", "edgeColor", "windowColor", "typeface"],
   statics: { DEFAULT: defaultCaptionStyle },
   methods: {
-    "<init>(IIIIILandroid/graphics/Typeface;)V": function (this: JCaptionStyle, foreground: number, background: number,
-      edgeType: number, edgeColor: number, window: number, typeface: unknown) {
-      Object.assign(this, { foregroundColor: foreground, backgroundColor: background, edgeType, edgeColor, windowColor: window, typeface });
-    },
     "getTypeface()Landroid/graphics/Typeface;": function (this: JCaptionStyle) { return this.typeface; },
     ...stubs(1, "hasForegroundColor()Z", "hasBackgroundColor()Z", "hasEdgeType()Z", "hasEdgeColor()Z", "hasWindowColor()Z"),
   },

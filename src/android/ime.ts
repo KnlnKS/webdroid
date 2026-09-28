@@ -319,7 +319,6 @@ class JICWrapper extends JObj { targetIc: unknown = null; }
 const wrapMethods: Record<string, unknown> = {
   "<init>(Landroid/view/inputmethod/InputConnection;Z)V": function (this: JICWrapper, t: unknown) { this.targetIc = t; },
   "setTarget(Landroid/view/inputmethod/InputConnection;)V": function (this: JICWrapper, t: unknown) { this.targetIc = t; },
-  "getTarget()Landroid/view/inputmethod/InputConnection;": function (this: JICWrapper) { return this.targetIc; },
 };
 for (const sig of IC_SIGS) {
   const [name, desc] = splitSig(sig);
@@ -426,7 +425,6 @@ rt.register({
       this.info.matrix = c; this.matrixSet = true;
       return this;
     },
-    [`addEditorBoundsInfo(Landroid/view/inputmethod/EditorBoundsInfo;)${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },
     [`addVisibleLineBounds(FFFF)${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },
     [`clearVisibleLineBounds()${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },
     "reset()V": function (this: JCursorAnchorInfoBuilder) { this.info = new JCursorAnchorInfo(); this.matrixSet = false; },

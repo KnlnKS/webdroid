@@ -1270,8 +1270,6 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "getStateListAnimator()Landroid/animation/StateListAnimator;": function (this: JView) { return this.stateListAnimator; },
   "setKeyboardNavigationCluster(Z)V": function (this: JView, v: number) { this.keyboardCluster = !!v; },
-  "setTouchscreenBlocksFocus(Z)V": function (this: JView, v: number) { this.touchBlocksFocus = !!v; },
-  "getTouchscreenBlocksFocus()Z": function (this: JView) { return this.touchBlocksFocus ? 1 : 0; },
   "isKeyboardNavigationCluster()Z": function (this: JView) { return this.keyboardCluster ? 1 : 0; },
   "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; this.outlineDirty = true; invalidate(this); },
   "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider === undefined ? bgOutline : this.outlineProvider; },
@@ -1375,10 +1373,6 @@ const viewMethods: NativeSpec["methods"] = {
     return yield guardCall(this, M_onTouchEvent, ev);
   }),
   "requestUnbufferedDispatch(Landroid/view/MotionEvent;)V": () => {},
-  "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
-    let v: JView | null = this.parent;
-    while (v) { (v as any).disallowIntercept = !!dis; v = v.parent; }
-  },
   "cancelLongPress()V": function (this: JView) {
     if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
   },
@@ -1511,13 +1505,11 @@ const viewMethods: NativeSpec["methods"] = {
   "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
   "onCreateDrawableState(I)[I": function (this: JView, extra: number) { return createDrawableState(this, extra); },
   "static mergeDrawableStates([I[I)[I": mergeDrawableStates,
-  "mergeDrawableStates([I[I)[I": mergeDrawableStates,
   "getFitsSystemWindows()Z": function (this: JView) { return this.fitsSys ? 1 : 0; },
   // The overlay is a layer on top of the host's own content that anything can park a drawable
   // (or, for a ViewGroup, a view) in without touching the hierarchy. Material's SearchView
   // expand and androidx transitions both animate through it.
   "getOverlay()Landroid/view/ViewOverlay;": overlayOf,
-  "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
   "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
   "getRootWindowInsets()Landroid/view/WindowInsets;": function (this: JView) { return this.attached ? rootWindowInsets(this) : null; },
   "getWindowInsetsController()Landroid/view/WindowInsetsController;": function (this: JView) {
@@ -1654,7 +1646,7 @@ const viewMethods: NativeSpec["methods"] = {
     "addFocusables(Ljava/util/ArrayList;II)V", "addTouchables(Ljava/util/ArrayList;)V", "cancelPendingInputEvents()V",
     "setAccessibilityPaneTitle(Ljava/lang/CharSequence;)V",
     "setStateDescription(Ljava/lang/CharSequence;)V", "setAccessibilityHeading(Z)V", "setScreenReaderFocusable(Z)V",
-    "setDuplicateParentStateEnabled(Z)V", "setAddStatesFromChildren(Z)V", "onWindowFocusChanged(Z)V",
+    "setDuplicateParentStateEnabled(Z)V", "onWindowFocusChanged(Z)V",
     "dispatchWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V", "setRotationX(F)V",
     "setRotationY(F)V", "setTransitionAlpha(F)V", "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setOnGenericMotionListener(Landroid/view/View$OnGenericMotionListener;)V",
@@ -1665,7 +1657,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
     "drawableHotspotChanged(FF)V", "setLayoutDirection(I)V", "setTextDirection(I)V"),
   ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I",
-    "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z", "willNotDraw()Z", "canScrollVertically(I)Z",
+    "willNotDraw()Z", "canScrollVertically(I)Z",
     "canScrollHorizontally(I)Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",
     "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
@@ -1685,7 +1677,6 @@ const viewMethods: NativeSpec["methods"] = {
     "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;",
     "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;"),
   ...stubs(-1, "getBaseline()I"),
-  "resolveSizeAndState(III)I": resolveSizeAndState,
   "static resolveSizeAndState(III)I": resolveSizeAndState,
   "static resolveSize(II)I": (size: number, spec: number) => resolveSize(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
@@ -2546,6 +2537,14 @@ rt.register({
       requestLayoutVirtual(this);
     },
     "cleanupLayoutState(Landroid/view/View;)V": (c: JView) => { c.layoutRequested = false; },
+    "setTouchscreenBlocksFocus(Z)V": function (this: JView, v: number) { this.touchBlocksFocus = !!v; },
+    "getTouchscreenBlocksFocus()Z": function (this: JView) { return this.touchBlocksFocus ? 1 : 0; },
+    "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
+      let v: JView | null = this.parent;
+      while (v) { (v as any).disallowIntercept = !!dis; v = v.parent; }
+    },
+    ...stubs(0, "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z"),
+    "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
     ...viewMethods, ...vgMethods },
 });
 rt.markers("android/view/ViewParent", "android/view/ViewManager");

@@ -38,7 +38,6 @@ rt.register({
       if (this.target !== null && this.downKey === ev.keyCode) { ev.tracking = true; this.downKey = 0; this.target = null; }
     },
     "performedLongPress(Landroid/view/KeyEvent;)V": function () {},
-    "isLongPressTracking(Landroid/view/KeyEvent;)Z": () => 0,
   },
 });
 /** a window's dispatcher state, shared by every view in it (View.getKeyDispatcherState) */
