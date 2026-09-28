@@ -196,6 +196,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   `/proxy` requests through the WebView context lookup, which timed out; shell pages pass through.
   Under five or more parallel live flows, TikTok wedged and YouTube, ChatGPT and Komikku timed out
   intermittently; each passes alone, as on the starting commit.
+- 2026-09-28, Stage B start. libcore's java.time tests run under TestNG (`conform ojluni-time`).
+  Every class first failed in TestNG setup: Method/Constructor did not extend Executable, and the
+  Package stub lacked libcore's fields. Building Package through the async `newObj` suspended a
+  service's `onCreate`, and its continuation ran off the main thread, so Mihon's microG
+  `ProvisionService` threw "handleLifecycleEvent must be called on the main thread". The TS
+  Collectors lacked `CH_*`, so every factory it omitted failed as unsafe fallthrough; libcore's
+  Collectors replaced it. Reflective calls did not widen `Integer` to `long`. With those fixes and
+  ICU data mounted, passes rose from 0 to 15,763 of 24,367. Cutting `java/time/` to bytecode reached
+  11,392 of 12,218 tests run: ICU's resource lookup falls through the TS `ULocale`, which lacks
+  `localeID`. The java.time flip therefore waits on the ICU flip (plan step B.2). A 4217 server
+  started before the `/vendor/aosp/icu` route existed served 404s, and Komikku then failed twice in
+  the parallel gate. After a restart the gate passed repeatedly, with no ICU requests.
 
 ## Java, storage and framework semantics
 
