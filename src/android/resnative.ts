@@ -3,7 +3,6 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser, newXmlSerializer } from "./xmlpull";
-import { parseSax } from "./sax";
 import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, obtainStyleAttributes, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, loadDrawableFile, bitmapDensity, type JColorStateList } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
@@ -819,10 +818,6 @@ rt.register({
     "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
     "static newPullParser()Lorg/xmlpull/v1/XmlPullParser;": () => newXmlPullParser(),
     "static newSerializer()Lorg/xmlpull/v1/XmlSerializer;": () => newXmlSerializer(),
-    "static parse(Ljava/lang/String;Lorg/xml/sax/ContentHandler;)V": parseSax,
   },
 });
 
-// Implemented by app/library code, never handed out by us — it only has to exist so a
-// class declaring `implements NamespaceContext` links instead of being auto-stubbed.
-rt.markers("javax/xml/namespace/NamespaceContext");

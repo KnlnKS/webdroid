@@ -142,20 +142,6 @@ rt.register({
   },
 });
 
-class JQName extends JObj { ns = ""; local = ""; prefix = ""; }
-rt.register({
-  name: "javax/xml/namespace/QName", ctor: JQName,
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JQName, ns: string, l: string, p: string) { this.ns = ns; this.local = l; this.prefix = p; },
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JQName, ns: string, l: string) { this.ns = ns; this.local = l; },
-    "<init>(Ljava/lang/String;)V": function (this: JQName, l: string) { this.local = l; },
-    "getLocalPart()Ljava/lang/String;": function (this: JQName) { return this.local; },
-    "getNamespaceURI()Ljava/lang/String;": function (this: JQName) { return this.ns; },
-    "getPrefix()Ljava/lang/String;": function (this: JQName) { return this.prefix; },
-    "toString()Ljava/lang/String;": function (this: JQName) { return this.ns ? "{" + this.ns + "}" + this.local : this.local; },
-  },
-});
-
 // java.net addresses, and Socket over the relay above. A name's address is the synthetic one the
 // native resolver hands out for it, so an app that resolves in Java and dials natively (or the
 // other way round) reaches the same relay connection.

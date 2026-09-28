@@ -1123,42 +1123,6 @@ rt.register({
 });
 mkEnumSet("android/text/TextUtils$TruncateAt", ["START", "MIDDLE", "END", "MARQUEE"]);
 
-type SaxAttr = { uri: string; local: string; qname: string; value: string };
-class JSaxAttributes extends JObj { values: SaxAttr[] = []; }
-const saxAttributeMethods = {
-  "getLength()I": function (this: JSaxAttributes) { return this.values.length; },
-  "getURI(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.uri ?? null; },
-  "getLocalName(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.local ?? null; },
-  "getQName(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.qname ?? null; },
-  "getType(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i] ? "CDATA" : null; },
-  "getValue(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.value ?? null; },
-  "getValue(Ljava/lang/String;)Ljava/lang/String;": function (this: JSaxAttributes, qname: string) { return this.values.find((a) => a.qname === qname)?.value ?? null; },
-  "getValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JSaxAttributes, uri: string, local: string) {
-    return this.values.find((a) => a.uri === uri && a.local === local)?.value ?? null;
-  },
-};
-rt.register({
-  name: "org/xml/sax/Attributes", ctor: JSaxAttributes,
-  methods: saxAttributeMethods,
-});
-rt.register({
-  name: "org/xml/sax/helpers/AttributesImpl", ctor: class extends JSaxAttributes {},
-  ifaces: ["org/xml/sax/Attributes"],
-  methods: {
-    ...saxAttributeMethods,
-    "<init>()V": function () {},
-    "<init>(Lorg/xml/sax/Attributes;)V": driven(function* (this: JSaxAttributes, source: unknown): Gen {
-      const length = (yield vcall(source, "getLength", "()I")) as number;
-      for (let i = 0; i < length; i++) this.values.push({
-        uri: (yield vcall(source, "getURI", "(I)Ljava/lang/String;", i)) as string,
-        local: (yield vcall(source, "getLocalName", "(I)Ljava/lang/String;", i)) as string,
-        qname: (yield vcall(source, "getQName", "(I)Ljava/lang/String;", i)) as string,
-        value: (yield vcall(source, "getValue", "(I)Ljava/lang/String;", i)) as string,
-      });
-    }),
-  },
-});
-
 rt.register({
   name: "android/text/InputType", ctor: class extends JObj {},
   statics: {

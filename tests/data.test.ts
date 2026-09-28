@@ -12,6 +12,7 @@ import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
 import { newXmlSerializer } from "../src/android/xmlpull";
 import { onMain } from "../src/android/mainloop";
+import { loadLibcore } from "./java";
 
 rt.linkNatives();
 const loadSql = () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
@@ -149,15 +150,34 @@ describe("jsonstringer", () => {
   });
 });
 
-describe("sax-features", () => {
-  test("SAX factory passes namespace-prefixes through to its reader", async () => {
-    const factory = rt.make("javax/xml/parsers/SAXParserFactory");
-    const feature = "http://xml.org/sax/features/namespace-prefixes";
-    await vcall(factory, "setFeature", "(Ljava/lang/String;Z)V", feature, 1);
-    expect(await vcall(factory, "getFeature", "(Ljava/lang/String;)Z", feature)).toBe(1);
-    const parser = await vcall(factory, "newSAXParser", "()Ljavax/xml/parsers/SAXParser;");
-    const reader = await vcall(parser, "getXMLReader", "()Lorg/xml/sax/XMLReader;");
-    expect(await vcall(reader, "getFeature", "(Ljava/lang/String;)Z", feature)).toBe(1);
+describe("sax", () => {
+  // libcore's ExpatParser over our expat natives: namespaces, entities, CDATA and well-formedness
+  test("libcore's SAX parser reports what expat reports", async () => {
+    await loadLibcore();
+    const events: string[] = [];
+    rt.register({ name: "test/SaxEvents", ctor: class extends JObj {}, ifaces: ["org/xml/sax/ContentHandler"], methods: {
+      ...Object.fromEntries(["setDocumentLocator(Lorg/xml/sax/Locator;)V", "startDocument()V", "endDocument()V", "endPrefixMapping(Ljava/lang/String;)V",
+        "ignorableWhitespace([CII)V", "skippedEntity(Ljava/lang/String;)V", "processingInstruction(Ljava/lang/String;Ljava/lang/String;)V"].map((sig) => [sig, () => {}])),
+      "startPrefixMapping(Ljava/lang/String;Ljava/lang/String;)V": (prefix: string, uri: string) => { events.push(`ns ${prefix}=${uri}`); },
+      "startElement(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/xml/sax/Attributes;)V": async (uri: string, local: string, _q: string, attributes: unknown) =>
+        { events.push(`<${uri}|${local} ${await vcall(attributes, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "b:k")}`); },
+      "endElement(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": (_u: string, local: string) => { events.push(`/${local}`); },
+      "characters([CII)V": (text: Uint16Array, start: number, length: number) => { events.push(String.fromCharCode(...text.subarray(start, start + length))); },
+    } });
+    const parse = async (xml: string) => {
+      const factory = rt.link("javax/xml/parsers/SAXParserFactory");
+      await rt.initClass(factory);
+      const f = await vcall(factory.ctor, "newInstance", "()Ljavax/xml/parsers/SAXParserFactory;");
+      await vcall(f, "setNamespaceAware", "(Z)V", 1);
+      const reader = await vcall(await vcall(f, "newSAXParser", "()Ljavax/xml/parsers/SAXParser;"), "getXMLReader", "()Lorg/xml/sax/XMLReader;");
+      await vcall(reader, "setContentHandler", "(Lorg/xml/sax/ContentHandler;)V", rt.make("test/SaxEvents"));
+      await vcallAsync(reader, "parse", "(Lorg/xml/sax/InputSource;)V",
+        await newObj("org/xml/sax/InputSource", "(Ljava/io/Reader;)V", await newObj("java/io/StringReader", "(Ljava/lang/String;)V", xml)));
+    };
+    await parse('<!DOCTYPE r [<!ENTITY who "world">]><r xmlns="urn:a" xmlns:b="urn:b" b:k="v&amp;w"><b:c>hi &who;</b:c><![CDATA[<x>]]></r>');
+    expect(events).toEqual(["ns =urn:a", "ns b=urn:b", "<urn:a|r v&w", "<urn:b|c null", "hi world", "/c", "<x>", "/r"]);
+    const error = await parse("<a><b></a>").catch((e) => e);
+    expect(rt.iof(error, "org/xml/sax/SAXParseException")).toBe(1);
   });
 });
 
