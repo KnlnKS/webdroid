@@ -407,6 +407,8 @@ export class Runtime {
 
   /** the Java frames calling into the runtime here, innermost first (set by jlang) */
   javaFrames: () => string[] = () => [];
+  /** when an array, every throwable filling in its stack is appended (a diagnostic, capped at 500) */
+  throwables: unknown[] | null = null;
   /** where each missing entry was first reached */
   missingAt = new Map<string, string[]>();
   noteMissing(what: string) {

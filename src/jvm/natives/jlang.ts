@@ -487,6 +487,7 @@ function jsStackHere(): Error {
   return js;
 }
 function captureStack(t: JThrowable): void {
+  if (rt.throwables && rt.throwables.length < 500) rt.throwables.push(t);
   t.jsErr = jsStackHere();
   t.coldFrames = coldStack.slice(-STACK_DEPTH);
   t.trace = null;
