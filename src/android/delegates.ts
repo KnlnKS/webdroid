@@ -47,12 +47,11 @@ const FINALIZER = handle((h: bigint) => release(h));
 // ── the libcore plumbing framework bytecode stands on ──────────────────────────────────
 // Not native methods but classes, and only reachable when AOSP bytecode runs: every graphics
 // class hands its finalizer to NativeAllocationRegistry from a <clinit>, so without it the
-// class fails to initialize before any of the work below is reached. JS collects our objects,
-// so registering an allocation is bookkeeping we do not need to keep.
-class JFreeRunnable extends JObj {}
+// class fails to initialize before any of the work below is reached.
+class JFreeRunnable extends JObj { free = () => {}; }
 rt.register({
   name: "webdroid/FreeRunnable", ctor: JFreeRunnable, ifaces: ["java/lang/Runnable"],
-  methods: { "run()V": () => {} },
+  methods: { "run()V": function (this: JFreeRunnable) { this.free(); } },
 });
 // Framework behaviour gated on the app's targetSdk goes through Compatibility. Every change
 // is "enabled": that is what a platform reports to an app targeting the SDK it was built
@@ -67,18 +66,28 @@ rt.register({
 });
 rt.markers("android/compat/Compatibility$BehaviorChangeDelegate");
 
-class JNativeAllocationRegistry extends JObj {}
-const mkRegistry = () => new JNativeAllocationRegistry();
+/** a class's free function, which runs on each native allocation once its Java owner is
+ *  collected, or at once when the returned Runnable runs, as libcore's Cleaner does */
+class JNativeAllocationRegistry extends JObj { free = 0n; }
+const freeNative = (fn: bigint, ptr: bigint) => { deref<(p: bigint) => void>(fn)?.(ptr); };
+const collected = new FinalizationRegistry<{ fn: bigint; ptr: bigint }>(({ fn, ptr }) => freeNative(fn, ptr));
+const mkRegistry = (_loader: unknown, free: bigint) => Object.assign(new JNativeAllocationRegistry(), { free });
 rt.register({
   name: "libcore/util/NativeAllocationRegistry", ctor: JNativeAllocationRegistry,
   methods: {
-    "<init>(Ljava/lang/ClassLoader;JJ)V": function () {},
+    "<init>(Ljava/lang/ClassLoader;JJ)V": function (this: JNativeAllocationRegistry, _loader: unknown, free: bigint) { this.free = free; },
     "static createMalloced(Ljava/lang/ClassLoader;J)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
     "static createMalloced(Ljava/lang/ClassLoader;JJ)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
     "static createNonmalloced(Ljava/lang/ClassLoader;JJ)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
-    "registerNativeAllocation(Ljava/lang/Object;J)Ljava/lang/Runnable;": () => rt.make("webdroid/FreeRunnable"),
-    // the one case that is not bookkeeping: an explicit free has to reach the delegate
-    "static applyFreeFunction(JJ)V": (fn: bigint, ptr: bigint) => { deref<(p: bigint) => void>(fn)?.(ptr); },
+    "registerNativeAllocation(Ljava/lang/Object;J)Ljava/lang/Runnable;": function (this: JNativeAllocationRegistry, referent: object | null, ptr: bigint) {
+      if (!referent) rt.npe();
+      const fn = this.free, token = {};
+      collected.register(referent!, { fn, ptr }, token);
+      const run = rt.make("webdroid/FreeRunnable") as JFreeRunnable;
+      run.free = () => { if (collected.unregister(token)) freeNative(fn, ptr); };
+      return run;
+    },
+    "static applyFreeFunction(JJ)V": freeNative,
   },
 });
 
