@@ -130,7 +130,7 @@ interface DexLink {
   ics(i: number): any;                  // link an invoke-custom call site
 }
 
-/** development and test builds make a read of a field a native class lacks throw */
+/** development and test builds make a read of a field a native class lacks throw, when it happens */
 const STRICT_FIELDS = process.env.NODE_ENV !== "production";
 /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
 const CLINIT_WAIT_MS = 60;
@@ -344,39 +344,42 @@ export class Runtime {
     const fr = dex.field(fieldIdx);
     const clsName = descToName(dex.type(fr.cls));
     try {
-      const prop = instanceFieldOf(this.link(clsName), fr.name);
+      const info = this.link(clsName), prop = instanceFieldOf(info, fr.name);
       if (prop) return prop;
-    } catch { /* class missing — fall through */ }
-    this.noteMissing(`field ${clsName}.${fr.name}`);
-    const prop = mangleField(clsName, fr.name);
-    if (STRICT_FIELDS) this.guardField(clsName, fr.name, prop);
-    return prop;
-  }
-
-  /** A native class without the field: reading it before anything wrote it throws rather than
-   *  reading undefined, and a write makes it an ordinary property of that object. */
-  private guardField(cls: string, name: string, prop: string) {
-    const info = this.classes.get(cls);
-    if (!info?.native || info.stub || !info.ctor || prop in info.ctor.prototype) return;
-    const R = this;
-    Object.defineProperty(info.ctor.prototype, prop, {
-      configurable: true,
-      get() { throw R.mkThrowable("java/lang/NoSuchFieldError", `${cls}.${name} is not a field of the native class`); },
-      set(value: unknown) { Object.defineProperty(this, prop, { value, writable: true, enumerable: true, configurable: true }); },
-    });
+      const absent = mangleField(clsName, fr.name);
+      this.absentField(info, info.ctor?.prototype, fr.name, absent);
+      return absent;
+    } catch { /* class missing: link reported it */ }
+    return mangleField(clsName, fr.name);
   }
 
   /** compile-time: static field access site info */
   resolveStaticField(dex: DexFile, fieldIdx: number): { prop: string; typeIdx: number } {
-    const fr = dex.field(fieldIdx);
+    const fr = dex.field(fieldIdx), prop = mangleStaticField(fr.name);
     try {
       const start = this.link(descToName(dex.type(fr.cls)));
       const field = findStaticOwner(start, fr.name, dex.type(fr.type));
       if (field) return { prop: field.prop, typeIdx: field.info === start ? fr.cls : -1 };
       // a native class declares every static it has (a <clinit> hook may still be adding some)
-      if (start.native && start.state === 2 && !start.stub) this.noteMissing(`field ${start.name}.${fr.name}`);
+      if (start.state === 2) this.absentField(start, start.ctor, fr.name, prop);
     } catch { /* class missing */ }
-    return { prop: mangleStaticField(fr.name), typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
+    return { prop, typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
+  }
+
+  /** A field a native class lacks. Compiling is not running (profiles compile ahead), so outside
+   *  production the report and a NoSuchFieldError wait for the first read, and a write makes it
+   *  an ordinary property; production reports it now and reads undefined. */
+  private absentField(info: ClassInfo, holder: Record<string, unknown> | undefined, name: string, prop: string) {
+    if (!info.native || info.stub || !holder) return;
+    const what = `field ${info.name}.${name}`;
+    if (!STRICT_FIELDS) return this.noteMissing(what);
+    if (prop in holder) return;
+    const R = this;
+    Object.defineProperty(holder, prop, {
+      configurable: true,
+      get() { R.noteMissing(what); throw R.mkThrowable("java/lang/NoSuchFieldError", `${info.name}.${name} is not a field of the native class`); },
+      set(value: unknown) { Object.defineProperty(this, prop, { value, writable: true, enumerable: true, configurable: true }); },
+    });
   }
 
   /** set by jinvoke: run an invoke-custom call site's bootstrap, giving the function it calls */
