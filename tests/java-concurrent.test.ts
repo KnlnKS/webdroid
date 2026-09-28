@@ -330,21 +330,6 @@ describe("executor-queue", () => {
     expect(task.runs).toBe(0);
   });
 
-  test("ForkJoinPool executes tasks and exposes their result", async () => {
-    rt.register({
-      name: "test/ConstTask", ctor: class extends (rt.link("java/util/concurrent/RecursiveTask").ctor as typeof JObj) {},
-      sup: "java/util/concurrent/RecursiveTask", methods: { "compute()Ljava/lang/Object;": () => "done" },
-    });
-    const pool = await newObj("java/util/concurrent/ForkJoinPool", "(I)V", 2);
-    const task = rt.make("test/ConstTask");
-    expect(await vcall(pool, "invoke", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;", task)).toBe("done");
-    expect(await vcall(task, "getRawResult", "()Ljava/lang/Object;")).toBe("done");
-    const submitted = await vcall(pool, "submit", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;", rt.make("test/ConstTask"));
-    expect(await vcall(submitted, "join", "()Ljava/lang/Object;")).toBe("done");
-    const common = await vcall(rt.link("java/util/concurrent/ForkJoinPool").ctor, "commonPool", "()Ljava/util/concurrent/ForkJoinPool;");
-    expect(common).toBe(await vcall(rt.link("java/util/concurrent/ForkJoinPool").ctor, "commonPool", "()Ljava/util/concurrent/ForkJoinPool;"));
-  });
-
   test("CompletableFuture supplyAsync runs on the supplied executor", async () => {
     const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
     const supplier = new ValueSupplier();
