@@ -393,7 +393,8 @@ class ProcessBroker {
     for (const resolved of await toJsArray(list)) {
       if (!(resolved instanceof JResolveInfo)) continue;
       const info = resolved.activityInfo;
-      if (!info || caller && !info.exported && info.packageName !== caller.pkg) continue;
+      // the platform package's receivers are system_server's, whose part the shell plays itself
+      if (!info || info.packageName === "android" || caller && !info.exported && info.packageName !== caller.pkg) continue;
       if (caller && info.permission && await permissionDenied(info.permission, caller.pkg)) continue;
       targets.push({ entry: this.connect(info.packageName, info.processName), component: info.name, priority: resolved.priority ?? 0 });
     }

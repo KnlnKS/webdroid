@@ -6,13 +6,12 @@ import { forwardDnsMessage, proxyRequest } from "./src/shell/proxy";
 import { openInstall } from "./src/shell/install";
 import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
-import { ensureFrameworkRes } from "./scripts/gen-framework-res";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
 import { parseIpv4 } from "./src/shell/relay";
 import dns from "node:dns/promises";
 
-await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
+await prepareSystemPackages();
 const webRelay = new WebRelay();
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
@@ -104,9 +103,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
-    // the android: resource package (bun run gen-framework-res) and, under vendor/aosp, the
-    // device's own framework.jar + framework-res.apk (bun run gen-framework). Both only change
-    // when the device profile does, so let the browser keep them across reloads.
+    // under vendor/aosp, the reference build's class path and framework-res.apk (bun run
+    // gen-framework): they only change with the build, so let the browser keep them.
     "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/fonts/:file": (req) => serveFile("vendor/fonts", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),

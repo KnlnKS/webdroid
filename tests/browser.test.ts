@@ -19,7 +19,7 @@ beforeAll(async () => {
   const bundle = build.outputs[0];
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/framework-res.apk`));
+    if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
 }, PAGE_TIMEOUT);

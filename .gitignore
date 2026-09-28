@@ -11,7 +11,6 @@ tests/e2e/report/
 vendor/aosp
 vendor/microg/
 vendor/sql.js/dist
-vendor/framework-res.apk
 tests/gms-client/.gradle/
 tests/gms-client/build/
 tests/gms-client/app/build/

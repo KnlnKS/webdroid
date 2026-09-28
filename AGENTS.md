@@ -50,7 +50,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   `bun run e2e` is the reproducible gate; `--live` adds flows that depend on network content.
 - Typecheck includes `noUnusedLocals` and builds the Wasm core with Zig 0.16. Generated core
   blobs and the sql.js build are not committed; Bun preloads their builders and tests use
-  ReleaseSafe. The server builds `vendor/framework-res.apk` when it is missing.
+  ReleaseSafe.
 - Smoke-compile affected APKs; require zero method failures or explicitly report a reproduced
   baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
 - Inspect per-step `run.json`: `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors,

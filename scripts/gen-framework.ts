@@ -102,7 +102,4 @@ const report = (label: string, r: ReturnType<typeof check>) => {
 console.log(`R ids declared by the framework dex: ${ids.size}`);
 const p = check(paired);
 report(RES, p);
-if (existsSync("vendor/framework-res.apk")) {
-  report("vendor/framework-res.apk (aapt2-relinked from the SDK res tree)", check(await tableOf("vendor/framework-res.apk")));
-}
 if (p.wrong) throw new Error(`${p.wrong} ids name a different resource in ${RES} than in ${JAR} — the two halves are not from one build`);

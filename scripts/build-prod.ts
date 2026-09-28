@@ -1,6 +1,5 @@
 import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { ensureFrameworkRes } from "./gen-framework-res";
 import { prepareSystemPackages } from "./system-packages";
 import { PLATFORM_JARS } from "../src/jvm/provenance";
 
@@ -10,7 +9,7 @@ const aospFiles = [...PLATFORM_JARS, "framework-res.apk"];
 for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp/${name}`).exists()))
   throw new Error(`Missing vendor/aosp/${name}; run bun run gen-framework`);
 
-await Promise.all([ensureFrameworkRes(), prepareSystemPackages()]);
+await prepareSystemPackages();
 await rm(out, { recursive: true, force: true });
 await mkdir(out);
 const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", "--minify", "--splitting", "--external", "*core.wasm", "--external", "*core.safe.wasm", "--outdir", out, "index.html", "process.html"], {
@@ -24,7 +23,6 @@ async function copyFile(source: string, target = source): Promise<void> {
 }
 
 await Promise.all([
-  copyFile("vendor/framework-res.apk"),
   copyFile("vendor/platform.x509.pem"),
   copyFile("src/native/native-core.wasm", "native-core.wasm"),
   copyFile("vendor/android-cacerts.pem"),
