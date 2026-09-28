@@ -1151,7 +1151,8 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
     "contains(Ljava/lang/Object;)Z": hashtableContains,
     "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements,
   },
-  "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
+  // Properties keeps its own map and builds its Hashtable part through this package-private constructor
+  "java/util/Hashtable": { "<init>(Ljava/lang/Void;)V": function () {}, "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
 };
 /** the sizing constructors mapMethods() shares that each map does not declare */
 const IFI = "<init>(IFI)V", IFZ = "<init>(IFZ)V";
@@ -2813,7 +2814,7 @@ const streamProperties = driven(function* streamProperties(stream: unknown): Gen
   const bytes = yield readStreamFully(stream);
   return propertyText(charsToString(bytes, 0, bytes.length));
 });
-export class JProps extends JMap {}
+export class JProps extends JMap { defaults: unknown = null; }
 function escapeProperty(text: string, key: boolean): string {
   return text.replace(/[\u0000-\u0020\\=:#!\u007f-\uffff]/g, (c, offset: number) => {
     const code = c.charCodeAt(0);
@@ -2836,13 +2837,30 @@ const storeProperties = driven(function* storeProperties(props: JProps, stream: 
   yield vcallOn(thread, stream, "write", "([BII)V", bytes, 0, bytes.length);
   yield vcallOn(thread, stream, "flush", "()V");
 });
+/** a string value here, else the defaults' (Properties.getProperty) */
+function propertyOrDefault(this: JProps, k: string): unknown {
+  const v = this.m.get(k)?.v;
+  if (typeof v === "string") return v;
+  return this.defaults ? vcall(this.defaults, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", k) : null;
+}
+/** the keys with string values, the defaults' included */
+const propertyNames = driven(function* (props: JProps): Gen<Set<string>> {
+  const names = new Set<string>(props.defaults ? (yield toJsArray(yield vcall(props.defaults, "stringPropertyNames", "()Ljava/util/Set;"))) as string[] : []);
+  for (const { k, v } of props.m.values()) if (typeof k === "string" && typeof v === "string") names.add(k);
+  return names;
+});
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
-  name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",
+  name: "java/util/Properties", ctor: JProps, sup: "java/util/Hashtable", fields: ["defaults"],
   methods: {
     "<init>()V": function () {},
-    "getProperty(Ljava/lang/String;)Ljava/lang/String;": function (this: JProps, k: string) { return (this.m.get(k)?.v as string) ?? null; },
-    "getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JProps, k: string, d: string) { return (this.m.get(k)?.v as string) ?? d; },
+    "<init>(Ljava/util/Properties;)V": function (this: JProps, defaults: unknown) { this.defaults = defaults; },
+    "getProperty(Ljava/lang/String;)Ljava/lang/String;": propertyOrDefault,
+    "getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JProps, k: string, d: string) {
+      return after(propertyOrDefault.call(this, k), (v) => v ?? d);
+    },
+    "stringPropertyNames()Ljava/util/Set;": function (this: JProps) { return after(propertyNames(this), newStringSet); },
+    "propertyNames()Ljava/util/Enumeration;": function (this: JProps) { return after(propertyNames(this), (names) => mkIter([...names])); },
     "setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;": function (this: JProps, k: string, v: string) {
       const old = this.m.get(k)?.v ?? null; this.m.set(k, { k, v }); return old;
     },
