@@ -83,8 +83,8 @@ export const device = {
   /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
   scrollUnitDp: 64,
   battery: { level: 80, status: 2 },
-  sdk: 33,
-  release: "13",
+  sdk: 35,
+  release: "15",
   lang: "en",
   region: "US",
   /** the browser's dark-mode preference, live as a device's is (see setDeviceNight) */
