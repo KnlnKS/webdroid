@@ -273,6 +273,21 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   AppCompat's createOverrideAppConfiguration parses a tag through libcore's LanguageTag for the
   first time (about 40 methods linked, prepared and run cold). Warm launches persist that code;
   cold `light` medians were equal (148.5 ms).
+- 2026-09-28, background realms and the first tap. After the Locale flip, warm Mihon `dark` took
+  253-342 ms in 4 of 5 runs (60-62 ms at the commit before; bisected in a worktree). The Locale code
+  was not the cost (initDeviceLocales runs 4-9 ms): a microG process realm boots from about 2.2 to
+  3.4 s, and the flip moved the main app's launch-idle point, where `lat` taps, into that boot.
+  Realms are same-origin frames on the page's one thread, and the boot's `linkNatives` (100-215 ms)
+  and platform-jar indexing (~45 ms) ran as single tasks. Slicing both, and yielding at
+  `scheduler.postTask` background priority in realms that do not present, brought warm `dark` to
+  61-83 ms and cold to 72-88 ms. The cold `dark` rise recorded for the Locale flip was mostly this
+  collision, not libcore's LanguageTag parse. Two hypotheses tested first did not help: moving the
+  first code save back, and leaving later code chunks lazily compiled.
+- 2026-09-28, leaner emitted code. Registers a numeric constant cannot reach never hold 0 for null,
+  so only constant carriers get `(vN===0?null:vN)`; suspension sites no longer store `$p` (the save
+  point takes the tested `$t`/`$u`, or `$fu` when `$r` is 0); a one-block entry body with no branch
+  has no dispatch loop. Mihon's eager source fell 6.0% and FitNotes' 7.1%. Suspension checks
+  remain the largest pattern (22% of source), then `let` declarations (8%) and frame capture (4.6%).
 
 ## Java, storage and framework semantics
 
