@@ -8,7 +8,7 @@ import {
   type Methods, T, TEMPORAL, UNIT, AMOUNT, U, UNIT_NANOS, UNIT_SECONDS, JDuration, JPeriod, dtErr, unsupported, npe, noUnit, isUnit, check,
   floorDiv, carried, mkDuration, periodOf, periodBetween, longHash, rotl, durationSteps, periodSteps,
 } from "./jtime-iso";
-import { chronoUnits, ordering, lazyStatics } from "./jtime-temporal";
+import { chronoUnits, ordering, compareOnly, lazyStatics } from "./jtime-temporal";
 
 const parseError = (what: string) => rt.mkThrowable(T + "format/DateTimeParseException", `Text cannot be parsed to a ${what}`);
 const divideByZero = () => rt.mkThrowable("java/lang/ArithmeticException", "Cannot divide by zero");
@@ -110,7 +110,7 @@ rt.register({
     "isPositive()Z": function (this: JDuration) { return +(this.s > 0 || (this.s === 0 && this.ns > 0)); },
     [`addTo(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "plus", durationSteps(this)); },
     [`subtractFrom(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "minus", durationSteps(this)); },
-    ...ordering(`L${T}Duration;`, (a: JDuration, b: JDuration) => a.s - b.s || a.ns - b.ns),
+    ...compareOnly(ordering(`L${T}Duration;`, (a: JDuration, b: JDuration) => a.s - b.s || a.ns - b.ns)),
     "equals(Ljava/lang/Object;)Z": function (this: JDuration, o: unknown) { return +(o instanceof JDuration && o.s === this.s && o.ns === this.ns); },
     "hashCode()I": function (this: JDuration) { return (longHash(this.s) + 51 * this.ns) | 0; },
     "toString()Ljava/lang/String;": function (this: JDuration) { return durationText(this); },

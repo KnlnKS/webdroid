@@ -377,8 +377,11 @@ function streamMethods(k: StreamKind): Methods {
     rt.link(`java/util/Spliterator${prim ? "$Of" + P : ""}`);
     return Object.assign(new (spliterators.get(P)!)(), { a: this.a.slice() });
   };
-  for (const name of ["parallel", "sequential", "unordered"]) m[`${name}()${self}`] = m[`${name}()L${S}BaseStream;`] = function (this: Stage) { return this; };
-  m[`onClose(Ljava/lang/Runnable;)${self}`] = m[`onClose(Ljava/lang/Runnable;)L${S}BaseStream;`] = function (this: Stage) { return this; };
+  const same = function (this: Stage) { return this; };
+  // only the primitive streams redeclare parallel() and sequential() with their own type
+  for (const name of ["parallel", "sequential", "unordered"]) m[`${name}()L${S}BaseStream;`] = same;
+  if (prim) m[`parallel()${self}`] = m[`sequential()${self}`] = same;
+  m[`onClose(Ljava/lang/Runnable;)L${S}BaseStream;`] = same;
   // conversions into the other element kinds
   for (const t of KINDS) {
     if (t === k || !t.P) continue;

@@ -1,7 +1,7 @@
 // java.time's Temporal surface: the accessor/adjuster/arithmetic methods every value class shares,
 // generated per kind from jtime-iso's model, then the value classes, zones and clocks themselves.
 
-import { rt, JObj } from "../runtime";
+import { rt, JObj, without } from "../runtime";
 import { mkEnumSet, vcall, type JSimpleEnum, after, stringHash } from "./jlang";
 import { newStringSet } from "./jutil";
 import type { JLocale } from "./jvalues";
@@ -133,15 +133,16 @@ function temporalMethods<V extends JObj>(k: Kind<V>, extraRet: string[], cmp: (a
     [`isSupported(${UNIT})Z`]: function (this: V, u: unknown) { return isUnit(u) ? +k.unitOk(u.ord) : u == null ? 0 : vcall(u, "isSupportedBy", `(${TEMPORAL})Z`, this); },
     [`format(L${T}format/DateTimeFormatter;)Ljava/lang/String;`]: function (this: V, f: JDateTimeFormatter) { return dtfFormat(f, this); },
     ...ordering(cmpDesc, cmp, isCmp),
-    [`compareTo(${self})I`]: function (this: V, o: V) { return Math.sign(cmp(this, o)); },
   };
+  if (self === cmpDesc) m[`compareTo(${self})I`] = function (this: V, o: V) { return Math.sign(cmp(this, o)); };
   if (k.until) m[`until(${TEMPORAL}${UNIT})J`] = function (this: V, end: unknown, u: unknown) {
     const e = k.from(end);
     if (!isUnit(u)) return u == null ? npe("unit") : vcall(u, "between", `(${TEMPORAL}${TEMPORAL})J`, this, e);
     return k.unitOk(u.ord) ? k.until!(this, e, u.ord) : noUnit(u);
   };
   if (k.trunc) m[`truncatedTo(${UNIT})${self}`] = function (this: V, u: unknown) { return isUnit(u) ? k.trunc!(this, u.ord) : noUnit(u as JSimpleEnum); };
-  for (const [name, u] of PLUS_UNITS) if (k.unitOk(u)) {
+  // only Instant names plusMillis, and it names nothing coarser than plusSeconds
+  for (const [name, u] of PLUS_UNITS) if (k.unitOk(u) && (k.cls === T + "Instant" ? u <= U.SECONDS : u !== U.MILLIS)) {
     m[`plus${name}(J)${self}`] = function (this: V, n: bigint) { return k.plus(this, Number(n), u); };
     m[`minus${name}(J)${self}`] = function (this: V, n: bigint) { return k.plus(this, -Number(n), u); };
   }
@@ -164,6 +165,10 @@ export function ordering<V>(desc: string, cmp: (a: V, b: V) => number, isCmp = c
     [`isBefore(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) < 0); },
     [`isEqual(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) === 0); },
   };
+}
+/** just the compareTo half of ordering(), for a type without the isAfter/isBefore/isEqual trio */
+export function compareOnly(m: Methods): Methods {
+  return Object.fromEntries(Object.entries(m).filter(([key]) => key.startsWith("compareTo(")));
 }
 /** parse(CharSequence[, DateTimeFormatter]) and from(TemporalAccessor) for one kind */
 function parsers<V>(cls: string, iso: string, from: (t: unknown) => V): Methods {
@@ -411,7 +416,7 @@ rt.register({
   name: T + "LocalTime", ctor: JLocalTime, ifaces: VALUE_IFACES,
   statics: lazyStatics({ MIN: () => mkTime(0, 0), MIDNIGHT: () => mkTime(0, 0), NOON: () => mkTime(12, 0), MAX: () => mkTime(23, 59, 59, 999999999) }),
   methods: {
-    ...temporalMethods(TIME_KIND, [], (a, b) => nanoOfDay(a) - nanoOfDay(b), `L${T}LocalTime;`),
+    ...without(temporalMethods(TIME_KIND, [], (a, b) => nanoOfDay(a) - nanoOfDay(b), `L${T}LocalTime;`), [`isEqual(L${T}LocalTime;)Z`]),
     ...nowMethods(T + "LocalTime", (z) => z.ldt.time),
     ...parsers(T + "LocalTime", "ISO_LOCAL_TIME", toLocalTime),
     [`static of(II)L${T}LocalTime;`]: (h: number, m: number) => timeOf(h, m),
@@ -559,10 +564,11 @@ rt.register({
   name: T + "Instant", ctor: JInstant, ifaces: VALUE_IFACES,
   statics: lazyStatics({ EPOCH: () => mkInstant(0), MIN: () => mkInstant(-31557014167219200), MAX: () => mkInstant(31556889864403199, 999999999) }),
   methods: {
-    ...temporalMethods(INSTANT_KIND, [], (a, b) => a.s - b.s || a.ns - b.ns, `L${T}Instant;`),
+    ...without(temporalMethods(INSTANT_KIND, [], (a, b) => a.s - b.s || a.ns - b.ns, `L${T}Instant;`),
+      [`isEqual(L${T}Instant;)Z`, `format(L${T}format/DateTimeFormatter;)Ljava/lang/String;`]),
     [`static now()L${T}Instant;`]: () => instantOfMs(Date.now()),
     [`static now(L${T}Clock;)L${T}Instant;`]: (c: unknown) => (c instanceof JClock ? clockInstant(c) : c == null ? npe("clock") : vcall(c, "instant", `()L${T}Instant;`)),
-    ...parsers(T + "Instant", "ISO_INSTANT", toInstant),
+    ...without(parsers(T + "Instant", "ISO_INSTANT", toInstant), [`static parse(Ljava/lang/CharSequence;L${T}format/DateTimeFormatter;)L${T}Instant;`]),
     [`static ofEpochMilli(J)L${T}Instant;`]: (ms: bigint) => instantOfMs(Number(ms)),
     [`static ofEpochSecond(J)L${T}Instant;`]: (s: bigint) => mkInstant(Number(s)),
     [`static ofEpochSecond(JJ)L${T}Instant;`]: (s: bigint, ns: bigint) => carried(Number(s), 0, Number(ns), U.NANOS, mkInstant),
@@ -580,7 +586,7 @@ rt.register({
 rt.register({
   name: T + "YearMonth", ctor: JYearMonth, ifaces: VALUE_IFACES,
   methods: {
-    ...temporalMethods(YM_KIND, [], (a, b) => a.y - b.y || a.mo - b.mo, `L${T}YearMonth;`),
+    ...without(temporalMethods(YM_KIND, [], (a, b) => a.y - b.y || a.mo - b.mo, `L${T}YearMonth;`), [`isEqual(L${T}YearMonth;)Z`]),
     ...nowMethods(T + "YearMonth", (z) => ymOf(z.ldt.date.y, z.ldt.date.mo)),
     ...parsers(T + "YearMonth", "YEAR_MONTH", toYearMonth),
     [`static of(II)L${T}YearMonth;`]: ymOf,
@@ -620,7 +626,7 @@ rt.register({
     [`atDay(I)L${T}LocalDate;`]: function (this: JYear, d: number) { return ofYearDay(this.y, d); },
     [`atMonth(I)L${T}YearMonth;`]: function (this: JYear, m: number) { return ymOf(this.y, m); },
     [`atMonth(L${T}Month;)L${T}YearMonth;`]: function (this: JYear, m: JSimpleEnum) { return ymOf(this.y, monthArg(m)); },
-    ...ordering(`L${T}Year;`, (a: JYear, b: JYear) => a.y - b.y),
+    ...without(ordering(`L${T}Year;`, (a: JYear, b: JYear) => a.y - b.y), [`isEqual(L${T}Year;)Z`]),
     "equals(Ljava/lang/Object;)Z": function (this: JYear, o: unknown) { return +(o instanceof JYear && o.y === this.y); },
     "hashCode()I": function (this: JYear) { return this.y; },
     "toString()Ljava/lang/String;": function (this: JYear) { return String(this.y); },
@@ -647,7 +653,7 @@ rt.register({
         after(vcall(r, "range", `(${FIELD})L${TT}ValueRange;`, chronoFields[FIELD_ORD.DAY_OF_MONTH]), (rg: JValueRange) =>
           vcall(r, "with", `(${FIELD}J)${TEMPORAL}`, chronoFields[FIELD_ORD.DAY_OF_MONTH], BigInt(Math.min(this.d, rg.max)))));
     },
-    ...ordering(`L${T}MonthDay;`, (a: JMonthDay, b: JMonthDay) => a.mo - b.mo || a.d - b.d),
+    ...without(ordering(`L${T}MonthDay;`, (a: JMonthDay, b: JMonthDay) => a.mo - b.mo || a.d - b.d), [`isEqual(L${T}MonthDay;)Z`]),
     "equals(Ljava/lang/Object;)Z": function (this: JMonthDay, o: unknown) { return +(o instanceof JMonthDay && o.mo === this.mo && o.d === this.d); },
     "hashCode()I": function (this: JMonthDay) { return (this.mo << 6) + this.d; },
     "toString()Ljava/lang/String;": function (this: JMonthDay) { return `--${pad(this.mo)}-${pad(this.d)}`; },
@@ -696,7 +702,7 @@ rt.register({
     [`static ofTotalSeconds(I)L${T}ZoneOffset;`]: offsetOf,
     [`static from(${ACCESSOR})L${T}ZoneOffset;`]: toOffset,
     "getTotalSeconds()I": function (this: JZoneOffset) { return this.totalSeconds; },
-    ...ordering(`L${T}ZoneOffset;`, (a: JZoneOffset, b: JZoneOffset) => b.totalSeconds - a.totalSeconds),
+    ...compareOnly(ordering(`L${T}ZoneOffset;`, (a: JZoneOffset, b: JZoneOffset) => b.totalSeconds - a.totalSeconds)),
   },
 });
 rt.register({

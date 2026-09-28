@@ -11,7 +11,7 @@ import {
   zoneOf, zoneForId, offsetAt, standardOffset, zdtOfEpoch, epochSec, longHash, pad,
 } from "./jtime-iso";
 import { type Style, formatPattern, localizedPattern, displayNames, zoneName, weekInfo, tagOf } from "./jtime-pattern";
-import { ordering } from "./jtime-temporal";
+import { ordering, compareOnly } from "./jtime-temporal";
 import "./jtime-amount";
 import "./jtime-format";
 
@@ -379,7 +379,7 @@ const calMethods: NativeSpec["methods"] = {
     return map;
   }),
   "getCalendarType()Ljava/lang/String;": () => "gregory",
-  ...ordering("Ljava/util/Calendar;", calCmp),
+  ...compareOnly(ordering("Ljava/util/Calendar;", calCmp)),
   "before(Ljava/lang/Object;)Z": function (this: JCalendar, o: unknown) { return +(o instanceof JCalendar && this.ms < o.ms); },
   "after(Ljava/lang/Object;)Z": function (this: JCalendar, o: unknown) { return +(o instanceof JCalendar && this.ms > o.ms); },
   "equals(Ljava/lang/Object;)Z": function (this: JCalendar, o: unknown) {
