@@ -1,6 +1,7 @@
 // Self and inclusive time per function in a V8 CPU profile, optionally for one tap:
-//   bun scripts/lat/profsum.ts <file.cpuprofile> [top=40] [tap=<n> window=<ms>]
-// A tap window starts at the n-th __wdMarkUp sample (bun run lat --cpuprofile) and lasts `window` ms.
+//   bun scripts/lat/profsum.ts <file.cpuprofile> [top=40] [tap=<n> window=<ms> | until=<ms>]
+// A tap window starts at the n-th __wdMarkUp sample (bun run lat --cpuprofile) and lasts `window` ms;
+// `until` keeps the profile's first ms, such as a launch up to its first frame.
 export {};
 const [file, ...rest] = process.argv.slice(2);
 const opt = Object.fromEntries(rest.map((a) => a.split("=")));
@@ -11,7 +12,7 @@ for (const n of prof.nodes) for (const c of n.children ?? []) parent.set(c, n.id
 const key = (n: any) => `${n.callFrame.functionName || "<anon>"} ${(n.callFrame.url || "").split("/").pop()}:${n.callFrame.lineNumber + 1}`;
 const times: number[] = [];
 for (let i = 0, t = prof.startTime; i < prof.samples.length; i++) times.push(t += prof.timeDeltas[i]);
-let from = -Infinity, to = Infinity;
+let from = -Infinity, to = opt.until === undefined ? Infinity : prof.startTime + +opt.until * 1000;
 if (opt.tap !== undefined) {
   const marks = times.filter((_, i) => nodes.get(prof.samples[i]).callFrame.functionName === "__wdMarkUp");
   const starts = marks.filter((t, i) => i === 0 || t - marks[i - 1] > 5000);

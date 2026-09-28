@@ -11,7 +11,8 @@
 // A scenario is scripts/lat/scenarios/<name>.json:
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo)
-// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated. --cpuprofile writes
+// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
+// reports navigation to its first frame and to idle, ungated. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
 // scripts/lat/profsum.ts can window the profile to one tap.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -36,6 +37,8 @@ const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resPar
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
 type Tap = { m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number> };
+/** navigation to the first presented frame, and to the launch going idle, with the counters at the first frame */
+type Launch = { firstFrame: number; idle: number; perf: Record<string, number> };
 
 const inPage = (steps: unknown, counters: string[]) => `(${async function run(steps: any[], counters: string[]) {
   const w = globalThis as any;
@@ -56,7 +59,8 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
   };
   const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd?.perf[k] ?? 0]));
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  while (!(w.wd && w.wd.perf.draws > 0)) await sleep(50);
+  while (!(w.wd && w.wd.perf.draws > 0)) await sleep(5);
+  const firstFrame = Math.round(performance.now()), launchPerf = snapshot();
   const idle = async (maxMs = 8000) => {
     const until = performance.now() + maxMs;
     let quiet = 0, draws = w.wd.perf.draws;
@@ -69,6 +73,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     }
   };
   await idle();
+  const launch = { firstFrame, idle: Math.round(performance.now()), perf: launchPerf };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
   const ev = (type: string, x: number, y: number) => {
     const c = screen(), r = c.getBoundingClientRect();
@@ -129,7 +134,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10])) });
     await idle();
   }
-  document.title = "DONE:" + JSON.stringify(out);
+  document.title = "DONE:" + JSON.stringify({ launch, taps: out });
 }})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}).catch((e) => { document.title = "DONE:ERROR " + e; });`;
 
 /** one headless Chrome over raw CDP, with its own profile directory */
@@ -158,7 +163,7 @@ async function openBrowser(profile: string) {
   return { send, close: () => { ws.close(); proc.kill(); } };
 }
 
-async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown, profile?: string): Promise<Tap[]> {
+async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown, profile?: string): Promise<{ launch: Launch; taps: Tap[] }> {
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
@@ -195,7 +200,7 @@ async function resetData(send: Awaited<ReturnType<typeof openBrowser>>["send"]):
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-const report: { scenario: string; taps: Tap[] }[] = [];
+const report: { scenario: string; launch: Launch; taps: Tap[] }[] = [];
 let failed = false;
 for (const name of names) {
   const { apk, steps } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
@@ -203,8 +208,10 @@ for (const name of names) {
   const browser = await openBrowser(profile);
   try {
     if (warm) { await launch(browser.send, apk, steps); await resetData(browser.send); }
-    const taps = await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`);
-    report.push({ scenario: name, taps });
+    const { launch: started, taps } = await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`);
+    report.push({ scenario: name, launch: started, taps });
+    const counters = Object.entries(started.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${Math.round(v)}`).join(" ");
+    console.log(`     ${name.padEnd(12)} ${"launch".padEnd(14)} ${String(started.firstFrame).padStart(5)} ms  idle=${started.idle} ${counters}`);
     for (const t of taps) {
       const over = t.afterUp === null || t.afterUp > LIMIT_MS;
       failed ||= over;
