@@ -16,12 +16,12 @@ export async function loadFrameworkJar(): Promise<void> {
   for (const dex of jarDexes(jar, "framework.jar")) rt.loadDex(dex, true);
 }
 
-/** libcore's own jars (core-oj, core-libart), for platform classes that forward to natives */
+/** libcore's own jars (core-oj, core-libart, core-icu4j), for platform classes that forward to natives */
 export async function loadLibcore(): Promise<void> {
   const { loadPlatformJar } = await import("../src/android/framework");
   const { PLATFORM_JARS } = await import("../src/jvm/provenance");
   if (rt.dexIndex.has("libcore/io/Linux")) return;
-  for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar"]) {
+  for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar", "boot/core-icu4j.jar"]) {
     const i = PLATFORM_JARS.indexOf(jar);
     loadPlatformJar(new Uint8Array(await Bun.file(new URL(`../vendor/aosp/${jar}`, import.meta.url)).arrayBuffer()), i);
   }

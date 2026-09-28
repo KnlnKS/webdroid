@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
@@ -6,7 +6,7 @@ import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { JSpanned, csText } from "../src/android/text";
-import { scall } from "./java";
+import { scall, loadLibcore } from "./java";
 
 rt.linkNatives();
 
@@ -195,13 +195,15 @@ describe("object-bridge", () => {
   });
 });
 
+// libcore's Pattern and Matcher over our regex natives
 describe("pattern-split", () => {
-  const compile = (source: string) => rt.link("java/util/regex/Pattern").ctor[mangleMethod("compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;")](source);
+  beforeAll(loadLibcore);
+  const compile = (source: string) => scall("java/util/regex/Pattern", "compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;", source);
   const split = (pattern: unknown, input: string, limit: number) =>
     vcall(pattern, "split", "(Ljava/lang/CharSequence;I)[Ljava/lang/String;", input, limit);
 
   test("Pattern.split honors positive, zero, and negative limits", async () => {
-    const colon = compile(":"), letterO = compile("o");
+    const colon = await compile(":"), letterO = await compile("o");
     expect(Array.from(await split(colon, "boo:and:foo", 2))).toEqual(["boo", "and:foo"]);
     expect(Array.from(await split(colon, "one:two:three", 2))).toEqual(["one", "two:three"]);
     expect(Array.from(await split(letterO, "boo:and:foo", 0))).toEqual(["b", "", ":and:f"]);
@@ -211,14 +213,14 @@ describe("pattern-split", () => {
   });
 
   test("Pattern.split excludes captures and skips an initial zero-width match", async () => {
-    expect(Array.from(await split(compile("(:)"), "a:b", -1))).toEqual(["a", "b"]);
-    expect(Array.from(await split(compile("(?=b)"), "boo", -1))).toEqual(["boo"]);
-    expect(Array.from(await split(compile("(?=o)"), "boo", -1))).toEqual(["b", "o", "o"]);
-    expect(Array.from(await split(compile(":"), ":a", -1))).toEqual(["", "a"]);
+    expect(Array.from(await split(await compile("(:)"), "a:b", -1))).toEqual(["a", "b"]);
+    expect(Array.from(await split(await compile("(?=b)"), "boo", -1))).toEqual(["boo"]);
+    expect(Array.from(await split(await compile("(?=o)"), "boo", -1))).toEqual(["b", "o", "o"]);
+    expect(Array.from(await split(await compile(":"), ":a", -1))).toEqual(["", "a"]);
   });
 
   test("atomic groups commit alternatives and hide internal captures", async () => {
-    const matcher = (pattern: string, input: string) => vcall(compile(pattern), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", input);
+    const matcher = async (pattern: string, input: string) => vcall(await compile(pattern), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", input);
     expect(await vcall(await matcher("^(?>a+)a$", "aaa"), "matches", "()Z")).toBe(0);
     expect(await vcall(await matcher("^(?>a+)b$", "aaab"), "matches", "()Z")).toBe(1);
     const path = await matcher("^/(?>(?>\\.\\.?/)+)", "/.././chapter");
@@ -228,14 +230,14 @@ describe("pattern-split", () => {
   });
 
   test("named groups report text and bounds and reject unknown names", async () => {
-    const m = await vcall(compile("(?<k>[a-z]+)=(?<v>\\d+)?"), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", " ab=");
+    const m = await vcall(await compile("(?<k>[a-z]+)=(?<v>\\d+)?"), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", " ab=");
     expect(await vcall(m, "groupCount", "()I")).toBe(2);
     expect(await vcall(m, "find", "()Z")).toBe(1);
     expect(await vcall(m, "group", "(Ljava/lang/String;)Ljava/lang/String;", "k")).toBe("ab");
     expect([await vcall(m, "start", "(Ljava/lang/String;)I", "k"), await vcall(m, "end", "(Ljava/lang/String;)I", "k")]).toEqual([1, 3]);
     expect(await vcall(m, "group", "(Ljava/lang/String;)Ljava/lang/String;", "v")).toBeNull();
     expect(await vcall(m, "start", "(Ljava/lang/String;)I", "v")).toBe(-1);
-    expect(() => vcall(m, "end", "(Ljava/lang/String;)I", "x")).toThrow();
+    await expect(vcallAsync(m, "end", "(Ljava/lang/String;)I", "x")).rejects.toBeDefined();
   });
 });
 

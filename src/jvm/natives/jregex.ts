@@ -1,242 +1,144 @@
-// java.util.regex over JS RegExp (jlang translates the Java syntax).
+// libcore's java.util.regex runs over ICU's regex natives (com.android.icu.util.regex): these
+// answer them with JS RegExp, via jlang's translation of the Java syntax. A match reports every
+// group's [start, end) into the caller's offsets array, -1 for a group that did not take part.
+// hitEnd errs toward true: a caller such as Scanner then reads more input rather than accepting a
+// token that more input could have extended.
 
-import { rt, JObj } from "../runtime";
-import { javaMatches, javaRegex, jToString, defineException, after, type JSB, type JThrowable } from "./jlang";
-import { csText } from "./jchars";
-import { jarray } from "../abi";
+import { rt, driven, type Gen } from "../runtime";
+import { javaRegex, newObj } from "./jlang";
+import { handle, deref, release } from "../../android/handles";
 
-class JPattern extends JObj { src = ""; flags = 0; }
-const groupCounts = new WeakMap<RegExp, number>();
-class JMatcher extends JObj {
-  re!: RegExp;
-  input = "";
-  m: RegExpExecArray | null = null;
-  lastEnd = 0;
-  appendPos = 0;
-  regionS = 0;
-  regionE = -1;    // -1 = input.length
-  rEnd(): number { return this.regionE < 0 ? this.input.length : this.regionE; }
-  sticky(): RegExp { return javaRegex(this.re.source, this.re.flags.replace(/[gy]/g, "") + "y"); }
-  /** both ends anchored, so the engine backtracks into another alternative instead of settling
-   *  for the first branch that matched a prefix */
-  anchored(): RegExp { return javaRegex("(?:" + this.re.source + ")$", this.re.flags.replace(/[gy]/g, "") + "y"); }
-  groupCount(): number {
-    let n = groupCounts.get(this.re);
-    if (n === undefined) {
-      // an empty alternative always matches, so the result's length counts the pattern's groups
-      n = this.re.source.includes("(?<__wdAtomic") ? 0 : new RegExp(`(?:${this.re.source})|`, this.re.flags.replace(/[gyd]/g, "")).exec("")!.length - 1;
-      groupCounts.set(this.re, n);
-    }
-    return n;
-  }
-  cur(): RegExpExecArray {
-    if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
-    return this.m;
-  }
-  /** [start, end] of group g, or undefined when it did not participate */
-  span(g: number): number[] | undefined {
-    const m = this.cur();
-    if (g < 0 || g > this.groupCount()) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `No group ${g}`);
-    return g ? m.indices?.[g] : [m.index, m.index + m[0].length];
-  }
-  named(n: string): number[] | undefined {
-    const m = this.cur();
-    if (!m.groups || !(n in m.groups) || n.startsWith("__wdAtomic")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `No group with name <${n}>`);
-    return m.indices?.groups?.[n];
-  }
+interface CompiledPattern {
+  source: string;
+  /** global, with indices; sticky and whole-region variants are derived from it */
+  re: RegExp;
+  sticky: RegExp;
+  whole: RegExp;
+  /** JS capture index of each Java group (1-based); synthetic atomic-group captures are skipped */
+  groups: number[];
+  names: Map<string, number>;
 }
-const spanText = (m: JMatcher, s: number[] | undefined) => s ? m.input.slice(s[0], s[1]) : null;
-function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
-  if (!m.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
-  let out = "";
-  for (let i = 0; i < r.length; i++) {
-    const c = r[i];
-    if (c === "\\") { out += r[++i] ?? ""; continue; }
-    if (c === "$") {
-      if (r[i + 1] === "{") {
-        const j = r.indexOf("}", i);
-        if (j < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "named capturing group is missing trailing '}'");
-        out += spanText(m, m.named(r.slice(i + 2, j))) ?? ""; i = j; continue;
-      }
-      let j = i + 1, num = "";
-      while (j < r.length && /[0-9]/.test(r[j]) && Number(num + r[j]) <= m.groupCount()) num += r[j++];
-      if (!num) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal group reference");
-      out += m.m[Number(num)] ?? ""; i = j - 1; continue;
-    }
+interface MatcherState {
+  pattern: CompiledPattern;
+  input: string;
+  regionStart: number;
+  regionEnd: number;
+  transparent: boolean;
+  /** the last match's [start, end), or null */
+  last: [number, number] | null;
+  hitEnd: boolean;
+  requireEnd: boolean;
+}
+
+// Pattern's flag bits; UNIX_LINES (1) only narrows which terminators `.` and the anchors see,
+// and JS has one set
+const CASE_INSENSITIVE = 2, COMMENTS = 4, MULTILINE = 8, DOTALL = 32;
+
+/** COMMENTS mode: unescaped whitespace and #-comments outside classes are not part of the pattern */
+function stripComments(source: string): string {
+  let out = "", inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (c === "\\") { out += c + (source[++i] ?? ""); continue; }
+    if (inClass) { if (c === "]") inClass = false; out += c; continue; }
+    if (c === "[") { inClass = true; out += c; continue; }
+    if (/\s/.test(c)) continue;
+    if (c === "#") { while (i < source.length && source[i] !== "\n") i++; continue; }
     out += c;
   }
-  sb.s += m.input.slice(m.appendPos, m.m.index) + out;
-  m.appendPos = m.m.index + m.m[0].length;
-  return m;
+  return out;
 }
-function replaceMatches(m: JMatcher, replacement: string, first: boolean): string {
-  const sb = { s: "" } as JSB;
-  m.re.lastIndex = 0;
-  m.appendPos = 0;
-  for (let match = m.re.exec(m.input); match; match = m.re.exec(m.input)) {
-    m.m = match;
-    appendRepl(m, sb, replacement);
-    if (first) break;
-    if (!match[0].length) m.re.lastIndex = match.index + 1;
+/** each capturing group of a JS source in order, with its name when it has one */
+function captures(source: string): (string | null)[] {
+  const out: (string | null)[] = [];
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (c === "\\") { i++; continue; }
+    if (inClass) { if (c === "]") inClass = false; continue; }
+    if (c === "[") { inClass = true; continue; }
+    if (c !== "(") continue;
+    if (source[i + 1] !== "?") out.push(null);
+    else if (source[i + 2] === "<" && !/[=!]/.test(source[i + 3] ?? "")) out.push(/^\(\?<([^>]+)>/.exec(source.slice(i))![1]);
   }
-  sb.s += m.input.slice(m.appendPos);
-  return sb.s;
+  return out;
 }
-function toJsRegex(p: string, flags: number, global: boolean): RegExp {
-  let f = "ud"; // `d`: group indices, which start(n)/end(n) report
-  if (flags & 2) f += "i";
-  if (flags & 8) f += "m";
-  if (flags & 32) f += "s";
-  if (global) f += "g";
-  try { return javaRegex(p, f); }
-  catch { return javaRegex(p.replace(/\(\?</g, "(?:<"), f.replace("u", "")); }
+
+function compilePattern(source: string, flags: number): CompiledPattern {
+  const java = flags & COMMENTS ? stripComments(source) : source;
+  let f = "ud";
+  if (flags & CASE_INSENSITIVE) f += "i";
+  if (flags & MULTILINE) f += "m";
+  if (flags & DOTALL) f += "s";
+  let re: RegExp;
+  try { re = javaRegex(java, f + "g"); } catch { re = javaRegex(java.replace(/\(\?</g, "(?:<"), f.replace("u", "") + "g"); }
+  const plain = re.flags.replace(/[gy]/g, "");
+  const groups: number[] = [], names = new Map<string, number>();
+  captures(re.source).forEach((name, i) => {
+    if (name?.startsWith("__wdAtomic")) return;
+    groups.push(i + 1);
+    if (name) names.set(name, groups.length);
+  });
+  return { source: java, re, groups, names, sticky: new RegExp(re.source, plain + "y"), whole: new RegExp(`(?:${re.source})(?![\\s\\S])`, plain + "y") };
 }
-const compile = (p: string, flags = 0) => { const pt = new JPattern(); pt.src = p; pt.flags = flags; return pt; };
-const quoteRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const patternRe = (p: JPattern) => toJsRegex(p.flags & 16 ? quoteRe(p.src) : p.src, p.flags, true);
-function splitPattern(pattern: JPattern, sequence: unknown, limit: number): string[] {
-  const input = jToString(sequence), re = patternRe(pattern), out: string[] = [];
-  re.lastIndex = 0;
-  let index = 0;
-  for (let match = re.exec(input); match; match = re.exec(input)) {
-    const end = match.index + match[0].length;
-    if (index === 0 && match.index === 0 && end === 0) {
-      re.lastIndex += (input.codePointAt(re.lastIndex) ?? 0) > 0xffff ? 2 : 1;
-      continue;
+
+/** run `re` over the matcher's region from `from`, filling offsets on a match */
+function run(m: MatcherState, re: RegExp, from: number, offsets: Int32Array): number {
+  const base = m.transparent ? 0 : m.regionStart, text = m.input.slice(base, m.regionEnd);
+  re.lastIndex = from - base;
+  const match = re.exec(text);
+  if (!match) { m.last = null; m.hitEnd = true; m.requireEnd = false; return 0; }
+  const start = match.index + base, end = start + match[0].length;
+  m.last = [start, end];
+  m.hitEnd = end === m.regionEnd;
+  m.requireEnd = m.hitEnd && /\$|\\[zZb]/.test(m.pattern.source);
+  offsets[0] = start; offsets[1] = end;
+  m.pattern.groups.forEach((js, g) => {
+    const span = match.indices?.[js];
+    offsets[2 * g + 2] = span ? span[0] + base : -1;
+    offsets[2 * g + 3] = span ? span[1] + base : -1;
+  });
+  return 1;
+}
+
+const matcher = (address: bigint) => deref<MatcherState>(address);
+const nextIndex = (s: string, i: number) => i + ((s.codePointAt(i) ?? 0) > 0xffff ? 2 : 1);
+const FREE = handle((address: bigint) => release(address));
+
+const patternNatives: Record<string, (...args: never[]) => unknown> = {
+  "compileImpl(Ljava/lang/String;I)J": driven(function* (source: string, flags: number): Gen {
+    try { return handle(compilePattern(source, flags)); }
+    catch (e) {
+      throw yield newObj("java/util/regex/PatternSyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", (e as Error).message, source, -1);
     }
-    if (limit > 0 && out.length === limit - 1) {
-      out.push(input.slice(index));
-      return jarray(out, "Ljava/lang/String;");
-    }
-    out.push(input.slice(index, match.index));
-    index = end;
-    if (end === match.index) re.lastIndex += (input.codePointAt(re.lastIndex) ?? 0) > 0xffff ? 2 : 1;
-  }
-  if (index === 0) return jarray([input], "Ljava/lang/String;");
-  out.push(input.slice(index));
-  if (limit === 0) while (out.at(-1) === "") out.pop();
-  return jarray(out, "Ljava/lang/String;");
-}
-rt.register({
-  name: "java/util/regex/Pattern", ctor: JPattern, ifaces: ["java/io/Serializable"],
-  statics: { CASE_INSENSITIVE: 2, MULTILINE: 8, DOTALL: 32, LITERAL: 16, UNICODE_CASE: 64 },
-  methods: {
-    "static compile(Ljava/lang/String;)Ljava/util/regex/Pattern;": compile,
-    "static compile(Ljava/lang/String;I)Ljava/util/regex/Pattern;": compile,
-    "static quote(Ljava/lang/String;)Ljava/lang/String;": quoteRe,
-    "static matches(Ljava/lang/String;Ljava/lang/CharSequence;)Z": (p: string, s: unknown) => javaMatches(p, jToString(s)),
-    "matcher(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;": function (this: JPattern, s: unknown) {
-      const m = new JMatcher();
-      m.re = patternRe(this);
-      m.input = s == null ? "" : jToString(s);
-      return m;
-    },
-    "pattern()Ljava/lang/String;": function (this: JPattern) { return this.src; },
-    "flags()I": function (this: JPattern) { return this.flags; },
-    "toString()Ljava/lang/String;": function (this: JPattern) { return this.src; },
-    "split(Ljava/lang/CharSequence;)[Ljava/lang/String;": function (this: JPattern, s: unknown) { return splitPattern(this, s, 0); },
-    "split(Ljava/lang/CharSequence;I)[Ljava/lang/String;": function (this: JPattern, s: unknown, limit: number) { return splitPattern(this, s, limit); },
+  }),
+  "getMatchedGroupIndexImpl(JLjava/lang/String;)I": (address: bigint, name: string) => deref<CompiledPattern>(address).names.get(name) ?? -1,
+  "openMatcherImpl(J)J": (address: bigint) => handle({ pattern: deref<CompiledPattern>(address), input: "", regionStart: 0, regionEnd: 0,
+    transparent: false, last: null, hitEnd: false, requireEnd: false } satisfies MatcherState),
+  "getNativeFinalizer()J": () => FREE,
+};
+for (const [sig, fn] of Object.entries(patternNatives)) rt.registerJni("com/android/icu/util/regex/PatternNative", sig, fn);
+
+const matcherNatives: Record<string, (...args: never[]) => unknown> = {
+  "setInputImpl(JLjava/lang/String;II)V": (address: bigint, input: string, start: number, end: number) => {
+    Object.assign(matcher(address), { input, regionStart: start, regionEnd: end, last: null, hitEnd: false, requireEnd: false });
   },
-});
-rt.markers("java/util/regex/MatchResult");
-type SyntaxError = JThrowable & { desc: string; regex: string | null; index: number };
-defineException("java/util/regex/PatternSyntaxException", "java/lang/IllegalArgumentException", [], {
-  "<init>(Ljava/lang/String;Ljava/lang/String;I)V": function (this: SyntaxError, desc: string, regex: string | null, index: number) {
-    Object.assign(this, { desc, regex, index });
-    this.msg = desc + (index >= 0 ? " near index " + index : "") + "\n" + regex + (index >= 0 && regex != null && index < regex.length ? "\n" + " ".repeat(index) + "^" : "");
+  "findImpl(JI[I)Z": (address: bigint, from: number, offsets: Int32Array) => { const m = matcher(address); return run(m, m.pattern.re, from, offsets); },
+  "findNextImpl(J[I)Z": (address: bigint, offsets: Int32Array) => {
+    const m = matcher(address);
+    // after an empty match the search moves on by a character, or it would find it again
+    const from = !m.last ? m.regionStart : m.last[0] === m.last[1] ? nextIndex(m.input, m.last[1]) : m.last[1];
+    if (from > m.regionEnd) { m.last = null; m.hitEnd = true; return 0; }
+    return run(m, m.pattern.re, from, offsets);
   },
-  "getDescription()Ljava/lang/String;": function (this: SyntaxError) { return this.desc; },
-  "getPattern()Ljava/lang/String;": function (this: SyntaxError) { return this.regex; },
-  "getIndex()I": function (this: SyntaxError) { return this.index; },
-});
-const appendReplacement = function (this: JMatcher, sb: JSB, r: string) { return appendRepl(this, sb, r); };
-const appendTail = function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; };
-rt.register({
-  name: "java/util/regex/Matcher", ctor: JMatcher, ifaces: ["java/util/regex/MatchResult"],
-  methods: {
-    "find()Z": function (this: JMatcher) {
-      this.re.lastIndex = Math.max(this.lastEnd, this.regionS);
-      this.m = this.re.exec(this.input);
-      if (this.m && this.m.index + this.m[0].length <= this.rEnd()) {
-        this.lastEnd = this.m.index + Math.max(1, this.m[0].length);
-        return 1;
-      }
-      this.m = null;
-      return 0;
-    },
-    "matches()Z": function (this: JMatcher) {
-      const re = this.anchored();
-      re.lastIndex = this.regionS;
-      this.m = re.exec(this.input.slice(0, this.rEnd()));
-      return this.m ? 1 : 0;
-    },
-    "lookingAt()Z": function (this: JMatcher) {
-      const re = this.sticky();
-      re.lastIndex = this.regionS;
-      this.m = re.exec(this.input);
-      return this.m ? 1 : 0;
-    },
-    "group()Ljava/lang/String;": function (this: JMatcher) { return this.cur()[0]; },
-    "group(I)Ljava/lang/String;": function (this: JMatcher, g: number) { return spanText(this, this.span(g)); },
-    "group(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, n: string) { return spanText(this, this.named(n)); },
-    "groupCount()I": function (this: JMatcher) { return this.groupCount(); },
-    "start()I": function (this: JMatcher) { return this.cur().index; },
-    "end()I": function (this: JMatcher) { const m = this.cur(); return m.index + m[0].length; },
-    "start(I)I": function (this: JMatcher, g: number) { return this.span(g)?.[0] ?? -1; },
-    "end(I)I": function (this: JMatcher, g: number) { return this.span(g)?.[1] ?? -1; },
-    "start(Ljava/lang/String;)I": function (this: JMatcher, n: string) { return this.named(n)?.[0] ?? -1; },
-    "end(Ljava/lang/String;)I": function (this: JMatcher, n: string) { return this.named(n)?.[1] ?? -1; },
-    "toMatchResult()Ljava/util/regex/MatchResult;": function (this: JMatcher) {
-      const c = new JMatcher(); c.re = this.re; c.input = this.input; c.m = this.m; c.lastEnd = this.lastEnd; return c;
-    },
-    // appendReplacement/appendTail: the classic find() loop that rewrites a string piecewise.
-    // The replacement's $n / ${name} refer to this match's groups; a backslash escapes.
-    "appendReplacement(Ljava/lang/StringBuffer;Ljava/lang/String;)Ljava/util/regex/Matcher;": appendReplacement,
-    "appendReplacement(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;": appendReplacement,
-    "appendTail(Ljava/lang/StringBuffer;)Ljava/lang/StringBuffer;": appendTail,
-    "appendTail(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;": appendTail,
-    "static quoteReplacement(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s.replace(/[\\$]/g, "\\$&"),
-    "usePattern(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;": function (this: JMatcher, p: JPattern) {
-      this.re = patternRe(p);
-      this.m = null;
-      return this;
-    },
-    "pattern()Ljava/util/regex/Pattern;": function (this: JMatcher) { const p = new JPattern(); p.src = this.re.source; return p; },
-    "replaceAll(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, r: string) {
-      return replaceMatches(this, r, false);
-    },
-    "replaceFirst(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, r: string) {
-      return replaceMatches(this, r, true);
-    },
-    "reset()Ljava/util/regex/Matcher;": function (this: JMatcher) {
-      this.lastEnd = 0; this.appendPos = 0;
-      this.m = null;
-      this.regionS = 0; this.regionE = -1;
-      return this;
-    },
-    "reset(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;": function (this: JMatcher, s: unknown) {
-      return after(csText(s ?? rt.npe()), (input: string) => {
-        this.input = input;
-        this.lastEnd = 0; this.appendPos = 0;
-        this.m = null;
-        this.regionS = 0; this.regionE = -1;
-        return this;
-      });
-    },
-    "hitEnd()Z": () => 0,
-    "useAnchoringBounds(Z)Ljava/util/regex/Matcher;": function (this: JMatcher) { return this; },
-    "useTransparentBounds(Z)Ljava/util/regex/Matcher;": function (this: JMatcher) { return this; },
-    "region(II)Ljava/util/regex/Matcher;": function (this: JMatcher, s: number, e: number) {
-      this.regionS = s; this.regionE = e; this.lastEnd = s; this.m = null;
-      return this;
-    },
-    "regionStart()I": function (this: JMatcher) { return this.regionS; },
-    "regionEnd()I": function (this: JMatcher) { return this.rEnd(); },
-    "find(I)Z": function (this: JMatcher, from: number) {
-      this.re.lastIndex = from;
-      this.m = this.re.exec(this.input);
-      if (this.m) { this.lastEnd = this.m.index + Math.max(1, this.m[0].length); return 1; }
-      return 0;
-    },
-  },
-});
+  "lookingAtImpl(J[I)Z": (address: bigint, offsets: Int32Array) => { const m = matcher(address); return run(m, m.pattern.sticky, m.regionStart, offsets); },
+  "matchesImpl(J[I)Z": (address: bigint, offsets: Int32Array) => { const m = matcher(address); return run(m, m.pattern.whole, m.regionStart, offsets); },
+  "groupCountImpl(J)I": (address: bigint) => matcher(address).pattern.groups.length,
+  "hitEndImpl(J)Z": (address: bigint) => +matcher(address).hitEnd,
+  "requireEndImpl(J)Z": (address: bigint) => +matcher(address).requireEnd,
+  // anchoring bounds are what a region search gets, since it searches the region's text
+  "useAnchoringBoundsImpl(JZ)V": () => {},
+  "useTransparentBoundsImpl(JZ)V": (address: bigint, value: number) => { matcher(address).transparent = !!value; },
+  "getNativeFinalizer()J": () => FREE,
+};
+for (const [sig, fn] of Object.entries(matcherNatives)) rt.registerJni("com/android/icu/util/regex/MatcherNative", sig, fn);
