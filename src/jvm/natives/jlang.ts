@@ -7,7 +7,7 @@ import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
 import { coldStack, type ColdMethod } from "../cold";
-import { mangleMethod, mangleStaticField, demangle, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { mangleMethod, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
@@ -529,7 +529,12 @@ function javaFrames(js: string | undefined, cold: readonly ColdMethod[]): [strin
   let k = cold.length;
   for (const line of (js ?? "").split("\n")) {
     const at = /^\s*at (?:(.*) \()?wd\/(.*)\.js:\d+:\d+\)?$/.exec(line);
-    if (!at) continue;
+    if (!at) {
+      // a persisted body's script names the whole chunk; its function names the method
+      const named = /^\s*at /.test(line) ? frameOf(line) : null;
+      if (named) out.push(named);
+      continue;
+    }
     const [cls, method] = at[2].split(".");
     if (cls === "") {
       const c = cold[--k];

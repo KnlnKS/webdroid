@@ -4,7 +4,7 @@
 // when the callee suspended, and only then does the caller save its frame (Runtime.dfr).
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
-import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
+import { mangleMethod, frameName, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
 import { ACC, JObj, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
@@ -444,7 +444,7 @@ class MethodEmitter {
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.resuming ? "" : "P.entry($pn);"}try{`
       : "";
     const profileEnd = jvmProfiler.enabled ? `}finally{P.add($pn,"hotRun",performance.now()-$pt);}` : "";
-    const source = `function(${this.resuming ? "$F" : jsParams.join(",")}){
+    const source = `function ${frameName(this.info.name, this.mname)}(${this.resuming ? "$F" : jsParams.join(",")}){
 ${this.resuming ? "" : coverageProbeSource(profileName)}
 ${profileStart}
 ${init}

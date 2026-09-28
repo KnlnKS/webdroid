@@ -32,6 +32,9 @@ export function persistedBody(key: string): Factory | undefined { return loaded[
 /** a body compiled in this launch: `body` is the factory's statements (an entry) or expression (resumable) */
 export function recordBody(key: string, body: string, form: "e" | "r"): void {
   if (loaded[key] || pending.has(key)) return;
+  // a chunk holds many bodies, and its last sourceURL would name them all; their function names
+  // name each one instead
+  body = body.replace(/\n\/\/# sourceURL=\S*\s*$/, "");
   pending.set(key, form === "e" ? `(C,D,R,S,P,$R)=>{${body}\n}` : `(C,D,R,S,P)=>(${body}\n)`);
   deferred.delete(key);
   idle();

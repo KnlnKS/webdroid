@@ -192,3 +192,16 @@ for (const [n, modes] of [
 export const VARHANDLE_MODES: readonly string[] = [...VARHANDLE_VALUES.keys()];
 /** how many value operands a VarHandle access mode takes; undefined for any other name */
 export const varHandleValues = (mode: string): number | undefined => VARHANDLE_VALUES.get(mode);
+
+/** A compiled body's function name, naming its class and method in identifier characters: stack
+ *  frames carry it whatever script the body came from, as persisted code does not carry its
+ *  per-method sourceURL. Every other character is `_` and four hex digits, so `__` separates. */
+const frameEscape = (s: string) => s.replace(/[^A-Za-z0-9]/g, (c) => "_" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+export const frameName = (cls: string, method: string) => `wd_${frameEscape(cls)}__${frameEscape(method)}`;
+/** [class, method] from a frameName in a stack line, if it holds one */
+export function frameOf(line: string): [string, string] | null {
+  const m = /\bwd_([A-Za-z0-9_]*?)__([A-Za-z0-9_]+)/.exec(line);
+  if (!m) return null;
+  const unescape = (s: string) => s.replace(/_([0-9a-f]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+  return [unescape(m[1]), unescape(m[2])];
+}
