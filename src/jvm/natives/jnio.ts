@@ -101,6 +101,7 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/ByteBuffer;"),
+    "setAccessible(Z)V": () => {},
     "static allocateDirect(I)Ljava/nio/ByteBuffer;": allocateDirect,
     "static allocate(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap),
     "static wrap([B)Ljava/nio/ByteBuffer;": (arr: Int8Array) => wrapArray(JByteBuffer, arr, 0),
