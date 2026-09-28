@@ -306,9 +306,9 @@ rt.register({
     "onCreateActionView(Landroid/view/MenuItem;)Landroid/view/View;": function (this: JActionProvider) {
       return vcall(this, "onCreateActionView", "()Landroid/view/View;");
     },
-    ...noops("<init>(Landroid/content/Context;)V", "onPrepareSubMenu(Landroid/view/SubMenu;)V"),
+    ...noops("<init>(Landroid/content/Context;)V"),
     ...stubs(null, "onCreateActionView()Landroid/view/View;"),
-    ...stubs(0, "onPerformDefaultAction()Z", "hasSubMenu()Z", "overridesItemVisibility()Z"),
+    ...stubs(0, "hasSubMenu()Z"),
     ...stubs(1, "isVisible()Z"),
     "refreshVisibility()V": async function (this: JActionProvider) {
       if (this.visL && await vcall(this, "overridesItemVisibility", "()Z")) {

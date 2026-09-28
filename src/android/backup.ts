@@ -4,7 +4,7 @@ import { JContextWrapper } from "./context";
 class JBackupAgent extends JContextWrapper {}
 rt.register({
   name: "android/app/backup/BackupAgent", ctor: JBackupAgent, sup: "android/content/ContextWrapper",
-  methods: noops("<init>()V", "onCreate()V", "onDestroy()V"),
+  methods: noops("<init>()V"),
 });
 
 class JBackupAgentHelper extends JBackupAgent { helpers = new Map<string, unknown>(); }

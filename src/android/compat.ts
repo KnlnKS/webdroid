@@ -690,12 +690,7 @@ rt.register({
   name: "android/view/GestureDetector$SimpleOnGestureListener", ctor: JSimpleGestureListener,
   ifaces: ["android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener"],
   methods: {
-    ...noops("<init>()V", "onLongPress(Landroid/view/MotionEvent;)V", "onShowPress(Landroid/view/MotionEvent;)V"),
-    ...stubs(0, "onDown(Landroid/view/MotionEvent;)Z", "onSingleTapUp(Landroid/view/MotionEvent;)Z",
-      "onScroll(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z",
-      "onFling(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z",
-      "onSingleTapConfirmed(Landroid/view/MotionEvent;)Z", "onDoubleTap(Landroid/view/MotionEvent;)Z",
-      "onDoubleTapEvent(Landroid/view/MotionEvent;)Z"),
+    ...noops("<init>()V"),
   },
 });
 rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");

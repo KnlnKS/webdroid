@@ -217,11 +217,9 @@ rt.register({
       if (!this.insetsController) { rt.link("webdroid/InsetsController"); this.insetsController = new JInsetsController(); this.insetsController.w = this; }
       return this.insetsController;
     },
-    ...noops("setStatusBarContrastEnforced(Z)V", "setNavigationBarContrastEnforced(Z)V",
-      "addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V",
+    ...noops("addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V",
       "removeOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;)V",
       "setSoftInputMode(I)V", "setWindowAnimations(I)V", "setFeatureInt(II)V"),
-    ...stubs(0, "isStatusBarContrastEnforced()Z", "isNavigationBarContrastEnforced()Z"),
   },
 });
 // API-30 window state, shared by decor's inset consumption and the shell's bar rendering.

@@ -755,20 +755,7 @@ rt.register({
     "shouldInterceptRequest(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;": function (this: JObj, v: JWebView, r: JReq) {
       return vcall(this, "shouldInterceptRequest", "(Landroid/webkit/WebView;Ljava/lang/String;)Landroid/webkit/WebResourceResponse;", v, r.url);
     },
-    ...noops("<init>()V", "onPageStarted(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V",
-      "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V",
-      "onPageCommitVisible(Landroid/webkit/WebView;Ljava/lang/String;)V",
-      "onLoadResource(Landroid/webkit/WebView;Ljava/lang/String;)V",
-      "onReceivedError(Landroid/webkit/WebView;ILjava/lang/String;Ljava/lang/String;)V",
-      "onReceivedHttpError(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceResponse;)V",
-      "doUpdateVisitedHistory(Landroid/webkit/WebView;Ljava/lang/String;Z)V",
-      "onScaleChanged(Landroid/webkit/WebView;FF)V",
-      "onUnhandledKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V",
-      "onReceivedLoginRequest(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
-    ...stubs(0, "shouldOverrideUrlLoading(Landroid/webkit/WebView;Ljava/lang/String;)Z",
-      "onRenderProcessGone(Landroid/webkit/WebView;Landroid/webkit/RenderProcessGoneDetail;)Z",
-      "shouldOverrideKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z"),
-    ...stubs(null, "shouldInterceptRequest(Landroid/webkit/WebView;Ljava/lang/String;)Landroid/webkit/WebResourceResponse;"),
+    ...noops("<init>()V", "onUnhandledKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V"),
   },
 });
 rt.register({
@@ -779,27 +766,8 @@ rt.register({
       yield vcall(this, "onConsoleMessage", "(Ljava/lang/String;ILjava/lang/String;)V", m.msg, m.line, m.src);
       return 0;
     }),
-    ...noops("<init>()V", "onProgressChanged(Landroid/webkit/WebView;I)V",
-      "onReceivedTitle(Landroid/webkit/WebView;Ljava/lang/String;)V",
-      "onReceivedIcon(Landroid/webkit/WebView;Landroid/graphics/Bitmap;)V",
-      "onReceivedTouchIconUrl(Landroid/webkit/WebView;Ljava/lang/String;Z)V",
-      "onShowCustomView(Landroid/view/View;Landroid/webkit/WebChromeClient$CustomViewCallback;)V",
-      "onShowCustomView(Landroid/view/View;ILandroid/webkit/WebChromeClient$CustomViewCallback;)V",
-      "onHideCustomView()V", "onConsoleMessage(Ljava/lang/String;ILjava/lang/String;)V",
-      "onPermissionRequest(Landroid/webkit/PermissionRequest;)V",
-      "onPermissionRequestCanceled(Landroid/webkit/PermissionRequest;)V",
-      "onGeolocationPermissionsShowPrompt(Ljava/lang/String;Landroid/webkit/GeolocationPermissions$Callback;)V",
-      "onGeolocationPermissionsHidePrompt()V", "getVisitedHistory(Landroid/webkit/ValueCallback;)V",
-      "onCloseWindow(Landroid/webkit/WebView;)V", "onRequestFocus(Landroid/webkit/WebView;)V"),
-    ...stubs(0, "onJsAlert(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z",
-      "onJsConfirm(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z",
-      "onJsPrompt(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsPromptResult;)Z",
-      "onJsBeforeUnload(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z",
-      "onCreateWindow(Landroid/webkit/WebView;ZZLandroid/os/Message;)Z",
-      "onShowFileChooser(Landroid/webkit/WebView;Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)Z"),
+    ...noops("<init>()V", "onPermissionRequest(Landroid/webkit/PermissionRequest;)V"),
     ...stubs(1, "onJsTimeout()Z"),
-    ...stubs(null, "getDefaultVideoPoster()Landroid/graphics/Bitmap;",
-      "getVideoLoadingProgressView()Landroid/view/View;"),
   },
 });
 for (const n of ["android/webkit/WebChromeClient$CustomViewCallback", "android/webkit/WebResourceRequest", "android/webkit/ValueCallback", "android/webkit/DownloadListener"]) {

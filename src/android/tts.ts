@@ -6,8 +6,7 @@ import { reportUncaught } from "./os";
 rt.register({
   name: "android/speech/tts/UtteranceProgressListener", ctor: class extends JObj {},
   methods: { ...noops("<init>()V", "onStart(Ljava/lang/String;)V", "onDone(Ljava/lang/String;)V",
-    "onError(Ljava/lang/String;)V", "onError(Ljava/lang/String;I)V", "onStop(Ljava/lang/String;Z)V",
-    "onBeginSynthesis(Ljava/lang/String;III)V", "onAudioAvailable(Ljava/lang/String;[B)V", "onRangeStart(Ljava/lang/String;III)V") },
+    "onError(Ljava/lang/String;)V", "onError(Ljava/lang/String;I)V", "onRangeStart(Ljava/lang/String;III)V") },
 });
 rt.markers("android/speech/tts/TextToSpeech$OnInitListener");
 rt.markers("android/speech/RecognitionListener");

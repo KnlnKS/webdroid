@@ -32,7 +32,7 @@ rt.register({
       if (!syncManager) throw rt.mkThrowable("java/lang/IllegalStateException", "CookieSyncManager::createInstance() needs to be called before CookieSyncManager::getInstance()");
       return syncManager;
     },
-    ...noops("sync()V", "startSync()V", "stopSync()V", "resetSync()V"),
+    ...noops("sync()V"),
   },
 });
 rt.register({

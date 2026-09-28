@@ -222,11 +222,9 @@ const drawableMethods: NativeSpec["methods"] = {
   },
   ...noops("<init>()V", "applyTheme(Landroid/content/res/Resources$Theme;)V",
     "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
-    "setChangingConfigurations(I)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setHotspot(FF)V",
-    "setHotspotBounds(IIII)V"),
-  ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;",
-    "getColorFilter()Landroid/graphics/ColorFilter;", "getTransparentRegion()Landroid/graphics/Region;"),
-  ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z", "onLayoutDirectionChanged(I)Z"),
+    "setChangingConfigurations(I)V", "setHotspot(FF)V"),
+  ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
+  ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z"),
 };
 // BlendMode.fromValue and blendModeToPorterDuffMode where the names differ; a blend mode with no
 // Porter-Duff form becomes the default SRC_IN
@@ -1208,7 +1206,7 @@ class JAnimatedVectorDrawable extends JVectorDrawable {
 }
 rt.register({ name: "android/graphics/drawable/Animatable2", ctor: class extends JObj {} });
 rt.register({ name: "android/graphics/drawable/Animatable2$AnimationCallback", ctor: class extends JObj {}, methods: {
-  ...noops("<init>()V", "onAnimationStart(Landroid/graphics/drawable/Drawable;)V", "onAnimationEnd(Landroid/graphics/drawable/Drawable;)V"),
+  ...noops("<init>()V"),
 } });
 // ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
 // app drawable that decorates another). Bounds, state and level reach the child through its
@@ -1461,7 +1459,7 @@ const shapeMethods: NonNullable<NativeSpec["methods"]> = {
     this.w = w; this.h = h;
     return jmethod(this, M_onResize)!.call(this, w, h);
   },
-  ...noops("<init>()V", "onResize(FF)V", "getOutline(Landroid/graphics/Outline;)V"),
+  ...noops("<init>()V", "getOutline(Landroid/graphics/Outline;)V"),
   ...stubs(1, "hasAlpha()Z"),
   "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JCanvas, p: JPaint) {
     const path = this.path();

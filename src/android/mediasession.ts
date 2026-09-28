@@ -136,8 +136,7 @@ rt.register({ name: "android/media/session/MediaSession$Token", ctor: JSessionTo
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
 } });
 rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class extends JObj {}, methods: {
-  ...noops("<init>()V", "onCommand(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V", "onPlay()V", "onPause()V", "onStop()V",
-    "onSkipToNext()V", "onSkipToPrevious()V", "onFastForward()V", "onRewind()V", "onSeekTo(J)V", "onCustomAction(Ljava/lang/String;Landroid/os/Bundle;)V"),
+  ...noops("<init>()V"),
 } });
 rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
   "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, context: JContext | null, token: JSessionToken | null) {

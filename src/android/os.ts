@@ -304,7 +304,7 @@ rt.register({ name: "android/os/HandlerThread", ctor: class extends JThread { jl
     "getLooper()Landroid/os/Looper;": function (this: any) { return this.jlooper; },
     "getThreadId()I": function (this: JThread) { return this.alive ? threadTid(this) : -1; },
     "quit()Z": handlerThreadQuit("quit"), "quitSafely()Z": handlerThreadQuit("quitSafely"),
-    ...noops("run()V", "onLooperPrepared()V"),
+    ...noops("run()V"),
   },
 });
 
@@ -1467,8 +1467,7 @@ rt.register({
     },
     "isCancelled()Z": function (this: JAsyncTask) { return this.cancelled; },
     "getStatus()Landroid/os/AsyncTask$Status;": function (this: JAsyncTask) { return taskStatuses[this.status]; },
-    ...noops("<init>()V", "onPreExecute()V", "onPostExecute(Ljava/lang/Object;)V",
-      "onProgressUpdate([Ljava/lang/Object;)V", "onCancelled()V"),
+    ...noops("<init>()V"),
     ...stubs(null, "doInBackground([Ljava/lang/Object;)Ljava/lang/Object;"),
     "onCancelled(Ljava/lang/Object;)V": function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); },
     "publishProgress([Ljava/lang/Object;)V": function (this: JAsyncTask, values: unknown[]) {

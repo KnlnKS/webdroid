@@ -761,8 +761,6 @@ rt.register({
   name: "android/animation/AnimatorListenerAdapter", ctor: class extends JObj {},
   ifaces: ["android/animation/Animator$AnimatorListener"],
   methods: {
-    ...noops("<init>()V", "onAnimationStart(Landroid/animation/Animator;)V",
-      "onAnimationEnd(Landroid/animation/Animator;)V", "onAnimationCancel(Landroid/animation/Animator;)V",
-      "onAnimationRepeat(Landroid/animation/Animator;)V"),
+    ...noops("<init>()V"),
   },
 });

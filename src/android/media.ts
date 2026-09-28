@@ -58,10 +58,7 @@ rt.register({ name: "android/media/MediaDataSource", ctor: class extends JObj {}
 
 rt.register({
   name: "android/media/session/MediaController$Callback", ctor: class extends JObj {},
-  methods: { ...noops("<init>()V", "onSessionDestroyed()V", "onSessionEvent(Ljava/lang/String;Landroid/os/Bundle;)V",
-    "onPlaybackStateChanged(Landroid/media/session/PlaybackState;)V", "onMetadataChanged(Landroid/media/MediaMetadata;)V",
-    "onQueueChanged(Ljava/util/List;)V", "onQueueTitleChanged(Ljava/lang/CharSequence;)V",
-    "onExtrasChanged(Landroid/os/Bundle;)V", "onAudioInfoChanged(Landroid/media/session/MediaController$PlaybackInfo;)V") },
+  methods: { ...noops("<init>()V") },
 });
 class JPlaybackCustomAction extends JObj {
   action = "";
@@ -1083,7 +1080,6 @@ rt.markers("android/media/Spatializer$OnSpatializerStateChangedListener");
 rt.register({
   name: "android/media/AudioDeviceCallback", ctor: class extends JObj {},
   methods: {
-    ...noops("<init>()V", "onAudioDevicesAdded([Landroid/media/AudioDeviceInfo;)V",
-      "onAudioDevicesRemoved([Landroid/media/AudioDeviceInfo;)V"),
+    ...noops("<init>()V"),
   },
 });

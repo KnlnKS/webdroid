@@ -425,15 +425,11 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...noops("registerScreenCaptureCallback(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V",
     "unregisterScreenCaptureCallback(Landroid/app/Activity$ScreenCaptureCallback;)V"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
-    "onNewIntent(Landroid/content/Intent;)V", "onSaveInstanceState(Landroid/os/Bundle;)V",
-    "onRestoreInstanceState(Landroid/os/Bundle;)V", "onActivityResult(IILandroid/content/Intent;)V",
-    "onRequestPermissionsResult(I[Ljava/lang/String;[I)V", "onWindowFocusChanged(Z)V", "onAttachedToWindow()V",
-    "onDetachedFromWindow()V", "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V",
-    "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
-    "onActionModeFinished(Landroid/view/ActionMode;)V", "onPointerCaptureChanged(Z)V",
+    "onSaveInstanceState(Landroid/os/Bundle;)V",
+    "onRestoreInstanceState(Landroid/os/Bundle;)V", "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V",
+    "onPanelClosed(ILandroid/view/Menu;)V", "onPointerCaptureChanged(Z)V",
     "onProvideKeyboardShortcuts(Ljava/util/List;Landroid/view/Menu;I)V", "onLowMemory()V", "onTrimMemory(I)V",
-    "onUserInteraction()V",
-    "onChildTitleChanged(Landroid/app/Activity;Ljava/lang/CharSequence;)V", "closeOptionsMenu()V",
+    "closeOptionsMenu()V",
     "overridePendingTransition(II)V", "overrideActivityTransition(III)V", "overrideActivityTransition(IIII)V",
     "clearOverrideActivityTransition(I)V", "startPostponedEnterTransition()V", "reportFullyDrawn()V",
     "setVolumeControlStream(I)V", "setDefaultKeyMode(I)V", "showDialog(I)V", "dismissDialog(I)V",
@@ -461,9 +457,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     },
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
-    "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
-    "getCurrentFocus()Landroid/view/View;", "onRetainNonConfigurationInstance()Ljava/lang/Object;",
-    "getReferrer()Landroid/net/Uri;"),
+    "getCurrentFocus()Landroid/view/View;", "getReferrer()Landroid/net/Uri;"),
 };
 rt.register({
   name: "android/app/Activity", ctor: JActivity, sup: "android/view/ContextThemeWrapper",
@@ -543,7 +537,7 @@ rt.register({
   methods: {
     ...wrapperMethods,
     "static getProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || "app",
-    ...noops("<init>()V", "onCreate()V", "onTerminate()V", "onLowMemory()V", "onTrimMemory(I)V",
+    ...noops("<init>()V", "onCreate()V", "onLowMemory()V", "onTrimMemory(I)V",
       "onConfigurationChanged(Landroid/content/res/Configuration;)V"),
     ...lifecycleCallbackMethods,
     "registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
@@ -1166,9 +1160,7 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
   methods: {
     ...wrapperMethods,
     "getApplication()Landroid/app/Application;": function (this: JService) { return this.$host.application; },
-    ...noops("<init>()V", "onCreate()V", "onDestroy()V", "onRebind(Landroid/content/Intent;)V",
-      "onStart(Landroid/content/Intent;I)V"),
-    ...stubs(0, "onUnbind(Landroid/content/Intent;)Z"),
+    ...noops("<init>()V", "onCreate()V", "onDestroy()V"),
     "onStartCommand(Landroid/content/Intent;II)I": driven(function* (this: JObj, intent: JIntent, _flags: number, startId: number): Gen {
       yield vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId); return 1;
     }),
@@ -1188,7 +1180,7 @@ rt.register({
 rt.register({
   name: "android/service/quicksettings/TileService", ctor: class extends JService {}, sup: "android/app/Service",
   methods: {
-    ...noops("<init>()V", "onClick()V", "onTileAdded()V", "onTileRemoved()V"),
+    ...noops("<init>()V"),
     "static requestListeningState(Landroid/content/Context;Landroid/content/ComponentName;)V": (context: unknown, component: unknown) => {
       if (context == null || component == null) rt.npe();
       rt.noteMissing("systemService statusbar");
@@ -1247,10 +1239,7 @@ rt.register({
         if (oldIds && ids) yield vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids);
       }
     }),
-    ...noops("<init>()V", "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V",
-      "onDeleted(Landroid/content/Context;[I)V", "onEnabled(Landroid/content/Context;)V",
-      "onDisabled(Landroid/content/Context;)V", "onRestored(Landroid/content/Context;[I[I)V",
-      "onAppWidgetOptionsChanged(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V"),
+    ...noops("<init>()V"),
   },
 });
 class JAppWidgetProviderInfo extends JObj {

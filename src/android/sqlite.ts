@@ -541,7 +541,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     st.sql = sql;
     return st;
   },
-  ...noops("setMaxSqlCacheSize(I)V", "disableWriteAheadLogging()V", "setLocale(Ljava/util/Locale;)V", "setLockingEnabled(Z)V"),
+  ...noops("setMaxSqlCacheSize(I)V", "disableWriteAheadLogging()V", "setLocale(Ljava/util/Locale;)V"),
   ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
     "yieldIfContendedSafely()Z", "static releaseMemory()I"),
 };
@@ -788,8 +788,7 @@ rt.register({
     },
     ...noops("onCreate(Landroid/database/sqlite/SQLiteDatabase;)V",
       "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V",
-      "onDowngrade(Landroid/database/sqlite/SQLiteDatabase;II)V", "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V",
-      "onConfigure(Landroid/database/sqlite/SQLiteDatabase;)V", "setWriteAheadLoggingEnabled(Z)V"),
+      "onDowngrade(Landroid/database/sqlite/SQLiteDatabase;II)V", "setWriteAheadLoggingEnabled(Z)V"),
   },
 });
 function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {

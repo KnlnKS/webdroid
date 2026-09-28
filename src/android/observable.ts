@@ -42,7 +42,7 @@ rt.register({
     "notifyInvalidated()V": function (this: JObservable) { return notifyObservers(this, "onInvalidated", "()V"); },
   },
 });
-rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V", "onChanged()V", "onInvalidated()V") } });
+rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V") } });
 rt.register({
   name: "android/database/ContentObservable", ctor: class extends JObservable {}, sup: "android/database/Observable",
   methods: {

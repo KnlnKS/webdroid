@@ -2271,16 +2271,14 @@ export const vgMethods: NativeSpec["methods"] = {
     return +(!!(yield vcall(this, "getBackground", "()Landroid/graphics/drawable/Drawable;")) ||
       (yield vcall(this, "getTransitionName", "()Ljava/lang/String;")) !== null || !!outline && outline !== bgOutline);
   }),
-  ...noops("onViewAdded(Landroid/view/View;)V", "onViewRemoved(Landroid/view/View;)V",
-    "setChildrenDrawingCacheEnabled(Z)V", "setHandwritingBoundsOffsets(FFFF)V", "suppressLayout(Z)V",
+  ...noops("setChildrenDrawingCacheEnabled(Z)V", "setHandwritingBoundsOffsets(FFFF)V", "suppressLayout(Z)V",
     "setMotionEventSplittingEnabled(Z)V", "setDescendantFocusability(I)V",
     "requestChildFocus(Landroid/view/View;Landroid/view/View;)V", "focusableViewAvailable(Landroid/view/View;)V",
     "requestTransparentRegion(Landroid/view/View;)V", "setLayoutTransition(Landroid/animation/LayoutTransition;)V",
     "startViewTransition(Landroid/view/View;)V", "endViewTransition(Landroid/view/View;)V"),
   ...stubs(null, "focusSearch(Landroid/view/View;I)Landroid/view/View;",
     "getLayoutTransition()Landroid/animation/LayoutTransition;"),
-  ...stubs(0, "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z",
-    "requestChildRectangleOnScreen(Landroid/view/View;Landroid/graphics/Rect;Z)Z"),
+  ...stubs(0, "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z"),
   ...stubs(1, "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z"),
 
   "offsetDescendantRectToMyCoords(Landroid/view/View;Landroid/graphics/Rect;)V": function (this: JViewGroup, c: JView, r: JRect) {

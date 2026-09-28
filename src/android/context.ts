@@ -200,7 +200,6 @@ rt.register({
     "getAttributionTag()Ljava/lang/String;": function (this: JAttributionSource) { return this.tag; },
     ...stubs(null, "getNext()Landroid/content/AttributionSource;"),
     ...stubs(1, "isTrusted(Landroid/content/Context;)Z"),
-    ...stubs(0, "describeContents()I"),
   },
 });
 

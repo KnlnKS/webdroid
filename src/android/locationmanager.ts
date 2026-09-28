@@ -14,7 +14,7 @@ export const locationTransport = {
 const providers = () => locationTransport.available() ? ["gps", "network", "passive"] : [];
 rt.markers("android/location/GpsStatus$Listener");
 rt.register({ name: "android/location/GnssStatus$Callback", ctor: class extends JObj {}, methods: {
-  ...noops("<init>()V", "onStarted()V", "onStopped()V", "onFirstFix(I)V", "onSatelliteStatusChanged(Landroid/location/GnssStatus;)V"),
+  ...noops("<init>()V"),
 } });
 function location(fix: LocationFix, provider: string): JLocation {
   rt.link("android/location/Location");

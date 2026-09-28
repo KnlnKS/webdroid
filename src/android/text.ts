@@ -1668,13 +1668,9 @@ rt.register({ name: "android/text/method/SingleLineTransformationMethod", ctor: 
 });
 class JBaseMovementMethod extends JObj {}
 const movementMethods: NonNullable<NativeSpec["methods"]> = {
-  ...noops("<init>()V", "initialize(Landroid/widget/TextView;Landroid/text/Spannable;)V",
-    "onTakeFocus(Landroid/widget/TextView;Landroid/text/Spannable;I)V"),
+  ...noops("<init>()V"),
   ...stubs(0, "onKeyDown(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z",
-    "onKeyUp(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z",
     "onKeyOther(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/KeyEvent;)Z",
-    "onTrackballEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
-    "onTouchEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
     "onGenericMotionEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
     "canSelectArbitrarily()Z"),
 };

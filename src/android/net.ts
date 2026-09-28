@@ -535,11 +535,6 @@ rt.register({
   name: "android/net/ConnectivityManager$NetworkCallback", ctor: class extends JObj {},
   methods: {
     "<init>()V": function () {}, "<init>(I)V": function () {},
-    ...noops("onAvailable(Landroid/net/Network;)V", "onLosing(Landroid/net/Network;I)V",
-      "onLost(Landroid/net/Network;)V", "onUnavailable()V",
-      "onCapabilitiesChanged(Landroid/net/Network;Landroid/net/NetworkCapabilities;)V",
-      "onLinkPropertiesChanged(Landroid/net/Network;Landroid/net/LinkProperties;)V",
-      "onBlockedStatusChanged(Landroid/net/Network;Z)V"),
   },
 });
 

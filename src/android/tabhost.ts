@@ -157,7 +157,6 @@ rt.register({
       if (i >= 0) return vcall(this, "setCurrentTab", "(I)V", i);
     },
     "setOnTabChangedListener(Landroid/widget/TabHost$OnTabChangeListener;)V": function (this: JTabHost, l: unknown) { this.listener = l; },
-    ...noops("onTouchModeChanged(Z)V"),
   },
 });
 
