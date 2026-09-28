@@ -4,7 +4,7 @@
 // when the callee suspended, and only then does the caller save its frame (Runtime.dfr).
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
-import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, type PrimElem } from "./abi";
+import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
 import { ACC, JObj, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
@@ -75,20 +75,6 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
     }
   }
   return out.join("\n");
-}
-
-/** the bootstrap a call_site links through, for the missing-API report. Best effort:
- *  a dex we cannot read the call site out of still has to compile the rest of its class. */
-function bootstrapName(dex: DexFile, callSiteIdx: number): string {
-  try {
-    const h = dex.callSite(callSiteIdx)[0];
-    if (!h || typeof h !== "object" || !("kind" in h) || h.kind !== "mhandle") return `#${callSiteIdx}`;
-    const ref = dex.methodHandle(h.idx);
-    const m = dex.method(ref.idx);
-    return descToName(dex.type(m.cls)) + "." + m.name;
-  } catch {
-    return `#${callSiteIdx}`;
-  }
 }
 
 /** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body. */
@@ -609,12 +595,25 @@ ${profileEnd}
     return `throw R.unimplemented(${this.literal(`${this.info.name} ${what}`)});`;
   }
 
+  /** argument expressions for registers `regs[first..]` typed by `params`: wide values take
+   *  two registers and a reference 0 is null */
+  private args(i: Ins, params: readonly string[], first: number): string[] {
+    const args: string[] = [];
+    let ri = first;
+    for (const p of params) {
+      const r = this.reg(i.regs[ri]);
+      args.push(isRef(p) ? ref(r) : r);
+      ri += isWide(p) ? 2 : 1;
+    }
+    return args;
+  }
+
   private emitInvoke(i: Ins, out: string[]) {
     const { dex } = this;
-    // invoke-custom's B operand is a call_site_idx: never a method ref. Name the
-    // bootstrap so the report says which linkage is missing, not just "invoke-custom".
     if (i.name.startsWith("invoke-custom")) {
-      out.push(this.unsupported(`invoke-custom ${bootstrapName(dex, i.b)}`));
+      const params = dex.protoParamTypes((dex.callSite(i.b)[2] as { idx: number }).idx);
+      const k = this.literal(i.b);
+      this.guard(`(D.cs[${k}]??D.ics(${k}))(${this.args(i, params, 0).join(",")})`, out);
       return;
     }
     const mref = dex.method(i.b);
@@ -622,18 +621,10 @@ ${profileEnd}
     const mangled = mangleMethod(mref.name, desc);
     const clsName = descToName(dex.type(mref.cls));
     const kind = i.name.replace("/range", "");
-
-    // collapse wide args: regs list per param shorty; 0→null for ref params
     const isInstance = kind !== "invoke-static";
-    const args: string[] = [];
-    let ri = isInstance ? 1 : 0;
-    for (const p of dex.protoParamTypes(mref.proto)) {
-      const r = this.reg(i.regs[ri]);
-      args.push(isRef(p) ? ref(r) : r);
-      ri += isWide(p) ? 2 : 1;
-    }
     const recv = isInstance ? (i.nullRecv ? ref(this.reg(i.regs[0])) : this.reg(i.regs[0])) : "";
-    const argStr = args.join(",");
+    if (kind === "invoke-polymorphic") return this.emitPolymorphic(i, clsName, mref.name, recv, out);
+    const argStr = this.args(i, dex.protoParamTypes(mref.proto), isInstance ? 1 : 0).join(",");
 
     if (clsName[0] === "[") {
       // methods on array types (clone/getClass/…)
@@ -670,9 +661,25 @@ ${profileEnd}
         this.guard(`${this.u}${this.prop(mangled)}(${args})`, out);
         break;
       }
-      // invoke-polymorphic (MethodHandle.invoke/invokeExact) lands here
       default: out.push(this.unsupported(`${kind} ${clsName}.${mref.name}${desc}`));
     }
+  }
+
+  /** A signature-polymorphic call takes its argument types from the call site's proto (H). A
+   *  VarHandle access mode always receives two coordinates, padded, before its values. */
+  private emitPolymorphic(i: Ins, cls: string, name: string, recv: string, out: string[]) {
+    const params = this.dex.protoParamTypes(i.c);
+    const args = this.args(i, params, 1);
+    const values = cls === "java/lang/invoke/VarHandle" ? varHandleValues(name) : undefined;
+    if (values !== undefined && params.length >= values && params.length - values <= 2) {
+      const coords = args.slice(0, args.length - values);
+      while (coords.length < 2) coords.push("0");
+      out.push(`${this.t}=${recv}.$${name}(${[...coords, ...args.slice(args.length - values)].join(",")});`);
+    } else if (cls === "java/lang/invoke/MethodHandle" && (name === "invoke" || name === "invokeExact")) {
+      const proto = this.dex.proto(i.c);
+      const site = "(" + params.join("") + ")" + this.dex.type(proto.ret);
+      this.guard(`${recv}.$invoke(${this.literal(site)},${name === "invokeExact"}${args.map((a) => "," + a).join("")})`, out);
+    } else out.push(this.unsupported(`invoke-polymorphic ${cls}.${name}`));
   }
 
   private emitArith(i: Ins, out: string[]) {

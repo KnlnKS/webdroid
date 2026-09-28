@@ -178,3 +178,17 @@ export function intBitsToFloat(i: number): number { bits.setInt32(0, i | 0); ret
 export function floatToIntBits(f: number): number { bits.setFloat32(0, f); return bits.getInt32(0); }
 export function longBitsToDouble(l: bigint): number { bits.setBigInt64(0, l); return bits.getFloat64(0); }
 export function doubleToLongBits(d: number): bigint { bits.setFloat64(0, d); return bits.getBigInt64(0); }
+
+/** VarHandle access modes by how many value operands follow the coordinates */
+const VARHANDLE_VALUES = new Map<string, number>();
+for (const [n, modes] of [
+  [0, "get getVolatile getOpaque getAcquire"],
+  [1, "set setVolatile setOpaque setRelease getAndSet getAndSetAcquire getAndSetRelease getAndAdd getAndAddAcquire " +
+    "getAndAddRelease getAndBitwiseOr getAndBitwiseOrAcquire getAndBitwiseOrRelease getAndBitwiseAnd " +
+    "getAndBitwiseAndAcquire getAndBitwiseAndRelease getAndBitwiseXor getAndBitwiseXorAcquire getAndBitwiseXorRelease"],
+  [2, "compareAndSet compareAndExchange compareAndExchangeAcquire compareAndExchangeRelease weakCompareAndSet " +
+    "weakCompareAndSetPlain weakCompareAndSetAcquire weakCompareAndSetRelease"],
+] as const) for (const m of modes.split(" ")) VARHANDLE_VALUES.set(m, n);
+export const VARHANDLE_MODES: readonly string[] = [...VARHANDLE_VALUES.keys()];
+/** how many value operands a VarHandle access mode takes; undefined for any other name */
+export const varHandleValues = (mode: string): number | undefined => VARHANDLE_VALUES.get(mode);

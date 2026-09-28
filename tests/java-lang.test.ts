@@ -499,3 +499,25 @@ describe("unicode-block", () => {
     await expect((async () => named(null))()).rejects.toMatchObject({ msg: "blockName" });
   });
 });
+
+describe("invoke-polymorphic-custom", () => {
+  test("VarHandles, method handles and record methods agree across tiers", async () => {
+    const { DexFile } = await import("../src/jvm/dex");
+    const { configureJvm } = await import("../src/jvm/profile");
+    const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/InvokeProbe.dex").arrayBuffer());
+    for (const tier of ["js", "cold"] as const) {
+      configureJvm({ profile: false, tier });
+      try {
+        const R = rt.fork();
+        R.loadDex(new DexFile(bytes));
+        const info = R.link("InvokeProbe");
+        await R.initClass(info);
+        const call = (name: string) => info.ctor[mangleMethod(name, "()Ljava/lang/String;")]();
+        expect(await call("varHandles")).toBe("true,false,5,8,true,true,true,40,42,true,y,oob");
+        expect(await call("methodHandles")).toBe("103,107,n7");
+        expect(await call("records")).toBe("Point[x=1, label=a, id=9],true,false,true,Point[x=2, label=null, id=9]");
+        expect([...R.missing]).toEqual([]);
+      } finally { configureJvm({ profile: false, tier: "auto" }); }
+    }
+  });
+});

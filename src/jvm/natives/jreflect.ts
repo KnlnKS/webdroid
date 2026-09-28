@@ -143,7 +143,7 @@ function fieldFloat(value: number | bigint): number {
   const rounded = magnitude > 0x1fffffffffffffn ? ((magnitude >> 12n) | BigInt((magnitude & 0xfffn) !== 0n)) << 12n : magnitude;
   return Math.fround(Number(value < 0n ? -rounded : rounded));
 }
-function classFields(info: ClassInfo, name?: string): JField[] {
+export function classFields(info: ClassInfo, name?: string): JField[] {
   const out: JField[] = [];
   const push = (fname: string, desc: string, isStatic: boolean, prop: string, flags = isStatic ? 0x9 : 0x1) => {
     const f = new JField();
@@ -573,7 +573,7 @@ function arrayIndexScale(cls: JClass): number {
 
 const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
 /** Class.getMethods (public, own and inherited) or, when declaredOnly, getDeclaredMethods */
-function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
+export function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   let c = methodsCache.get(info);
   if (!c) methodsCache.set(info, (c = [undefined, undefined]));
   return (c[declaredOnly ? 1 : 0] ??= collectMethods(info, declaredOnly)).slice();
@@ -765,7 +765,7 @@ rt.register({
   },
 });
 
-function classForDesc(desc: string, runtime: Runtime = rt): unknown {
+export function classForDesc(desc: string, runtime: Runtime = rt): unknown {
   if (desc[0] === "L") return runtime.classFor(descToName(desc));
   if (desc[0] === "[") return runtime.classFor(desc);
   return runtime.classFor(PRIM_NAME[desc] ?? "int");
@@ -1143,7 +1143,7 @@ function installClassReflection() {
     proto[mangleMethod(...splitSig(sig))] = fn;
   }
 }
-function classDesc(c: JClass): string {
+export function classDesc(c: JClass): string {
   if (c?.primName) return PRIM_DESC[c.primName] ?? "I";
   if (c?.arrDesc) return c.arrDesc;
   return c?.ci ? "L" + c.ci.name + ";" : "Ljava/lang/Object;";

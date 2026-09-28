@@ -171,15 +171,22 @@ const NO_TARGETS: readonly number[] = [];
 const isNumericConst = (op: number) => op >= 0x12 && op <= 0x19;
 const isMove = (op: number) => op >= 0x01 && op <= 0x09;
 const isFieldPut = (op: number) => (op >= 0x59 && op <= 0x5f) || (op >= 0x67 && op <= 0x6d);
-const isMethodInvoke = (op: number) => (op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78) || op === 0xfa || op === 0xfb;
-const isInstanceInvoke = (op: number) => isMethodInvoke(op) && op !== 0x71 && op !== 0x77;
+const isMethodInvoke = (op: number) => (op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78) || (op >= 0xfa && op <= 0xfd);
+const isInstanceInvoke = (op: number) => isMethodInvoke(op) && op !== 0x71 && op !== 0x77 && op < 0xfc;
+/** the proto an invoke passes arguments by: a polymorphic call site's own, a call site's, or the method's */
+function invokeProto(dex: DexFile, { op, b, c }: MutableInstruction): number {
+  if (op === 0xfa || op === 0xfb) return c;
+  if (op === 0xfc || op === 0xfd) return (dex.callSite(b)[2] as { idx: number }).idx;
+  return dex.method(b).proto;
+}
 type FloatKind = "F" | "D";
 const floatKind = (type: string): FloatKind | undefined => type === "F" || type === "D" ? type : undefined;
 
 /** Visits each register the instruction reads as a float or double. An aput reads its value as
  *  its array's element kind, which only the caller's `arrayKind` knows. */
-function floatReads(dex: DexFile, { op, a, b, c, regs }: MutableInstruction, returnType: string,
+function floatReads(dex: DexFile, instruction: MutableInstruction, returnType: string,
   arrayKind: (reg: number) => FloatKind | undefined, visit: (reg: number, kind: FloatKind) => void): void {
+  const { op, a, b, c, regs } = instruction;
   const operands = floatingOperands(op);
   if (operands) {
     if (op >= 0xc6) { visit(a, operands.kind); visit(b, operands.kind); }
@@ -192,7 +199,7 @@ function floatReads(dex: DexFile, { op, a, b, c, regs }: MutableInstruction, ret
     if (kind) visit(a, kind);
   } else if (isMethodInvoke(op)) {
     let index = isInstanceInvoke(op) ? 1 : 0;
-    for (const type of dex.protoParamTypes(dex.method(b).proto)) {
+    for (const type of dex.protoParamTypes(invokeProto(dex, instruction))) {
       const kind = floatKind(type);
       if (kind) visit(regs[index], kind);
       index += isWide(type) ? 2 : 1;
@@ -279,7 +286,7 @@ function typeConstants(
         const kind = arrays.get(b);
         if (kind) arrays.set(a, kind); else arrays.delete(a);
       } else if (writesRegister(op)) arrays.delete(a);
-      if (isMethodInvoke(op)) lastReturnType = dex.type(dex.proto(dex.method(b).proto).ret);
+      if (isMethodInvoke(op)) lastReturnType = dex.type(dex.proto(invokeProto(dex, instruction)).ret);
       else if (op !== 0x0c) lastReturnType = "";
 
       if (isNumericConst(op)) defs.set(a, new Set([instruction]));

@@ -1155,6 +1155,7 @@ function sbSpec(name: string): NativeSpec {
 rt.register(sbSpec("java/lang/StringBuilder"));
 rt.register(sbSpec("java/lang/StringBuffer"));
 
+rt.register({ name: "java/lang/Record", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 class JNumber extends JObj {}
 rt.register({
   name: "java/lang/Number", ctor: JNumber, ifaces: ["java/io/Serializable"],

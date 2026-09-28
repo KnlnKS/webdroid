@@ -110,6 +110,7 @@ interface DexLink {
   s: readonly (string | undefined)[]; // string cache
   dp: any[];            // methodIdx → direct-invoke prototype fn
   fs: any[];            // fieldIdx → inited owner ctor (static fields declared off-refclass)
+  cs: any[];            // callSiteIdx → linked invoke-custom target
   info: ClassInfo[];    // typeIdx → ClassInfo (linked)
   gs(i: number): string;
   link(i: number): any;             // sync: linked ctor
@@ -118,6 +119,7 @@ interface DexLink {
   rdp(i: number, from?: number): Promise<any> | any;   // resolve direct-dispatch fn
   rdp0(i: number): any;                 // resolve w/o init (same-class call sites)
   rsf(i: number, from?: number): Promise<any> | any;   // resolve+init static field owner ctor
+  ics(i: number): any;                  // link an invoke-custom call site
 }
 
 /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
@@ -268,7 +270,7 @@ export class Runtime {
     d = {
       dex,
       cl: new Array(dex.typeCount), ic: new Array(dex.typeCount),
-      s: dex.cachedStrings, dp: [], fs: [], info: new Array(dex.typeCount),
+      s: dex.cachedStrings, dp: [], fs: [], cs: [], info: new Array(dex.typeCount),
       gs(i) { return dex.string(i); },
       linfo(i) { return this.info[i] ?? (this.info[i] = R.link(descToName(dex.type(i)))); },
       link(i) { return (this.cl[i] = this.linfo(i).ctor); },
@@ -308,6 +310,7 @@ export class Runtime {
         const p = R.initClass(owner, from === undefined ? undefined : this.linfo(from));
         return p ? p.then(set) : set();
       },
+      ics(i) { return (this.cs[i] = R.linkCallSite(R, dex, i)); },
     };
     this.links.set(dex, d);
     return d;
@@ -341,6 +344,10 @@ export class Runtime {
     } catch { /* class missing */ }
     return { prop: mangleStaticField(fr.name), typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
   }
+
+  /** set by jinvoke: run an invoke-custom call site's bootstrap, giving the function it calls */
+  linkCallSite: (runtime: Runtime, dex: DexFile, callSite: number) => (...a: never[]) => unknown =
+    (runtime) => { throw runtime.unimplemented("invoke-custom"); };
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, (...a: never[]) => unknown>();
