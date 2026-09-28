@@ -41,6 +41,9 @@ WEBDROID_URL=http://localhost:4090 bun run e2e
 WEBDROID_URL=http://localhost:4090 bun run e2e --live
 WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
 WEBDROID_URL=http://localhost:4090 bun run corpus
+WEBDROID_URL=http://localhost:4090 bun run lat [--warm]
+bun run conform guava
+bun run conform jsr166
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ```
 
@@ -51,6 +54,11 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - Typecheck includes `noUnusedLocals` and builds the Wasm core with Zig 0.16. Generated core
   blobs and the sql.js build are not committed; Bun preloads their builders and tests use
   ReleaseSafe.
+- `bun run lat` gates tap latency (≤ 150 ms, pointerup to the answering frame); `--warm`
+  repeats each scenario with the code a first launch persisted. `bun run conform <suite>`
+  compares a conformance suite with its baseline in `tests/conformance/`; `--bytecode <prefixes>`
+  measures a provenance cut. `bun run gen-framework` (reference AVD booted) refreshes the
+  platform class path, framework-res, ICU/tz data and the recorded device colors.
 - Smoke-compile affected APKs; require zero method failures or explicitly report a reproduced
   baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
 - Inspect per-step `run.json`: `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors,
