@@ -18,7 +18,7 @@ export function processTid(thread: object, main: boolean): number {
 
 /** The sysconf names this device answers, by Bionic's number (bits/sysconf.h); the rest are -1.
  *  AVPHYS_PAGES agrees with /proc/meminfo's MemFree, and CLK_TCK is the kernel's USER_HZ. */
-export const SYSCONF: Record<string, [number, () => number]> = {
+const SYSCONF: Record<string, [number, () => number]> = {
   _SC_CLK_TCK: [0x06, () => 100], _SC_OPEN_MAX: [0x0b, () => 32768],
   _SC_PAGESIZE: [0x27, () => 4096], _SC_PAGE_SIZE: [0x28, () => 4096],
   _SC_NPROCESSORS_CONF: [0x60, () => device.cpu.cores], _SC_NPROCESSORS_ONLN: [0x61, () => device.cpu.cores],

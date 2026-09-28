@@ -12,7 +12,7 @@ import { Resources, JTheme } from "../src/android/res";
 import { JImageView } from "../src/android/imageview";
 import { JWindowInsets } from "../src/android/windowinsets";
 import { JWebView } from "../src/android/webkit";
-import { scall } from "./java";
+import { scall, loadLibcore } from "./java";
 
 describe("android-surface-state", () => {
   rt.linkNatives();
@@ -72,7 +72,8 @@ describe("android-surface-state", () => {
   });
 
   test("uname reports the emulated Linux ABI", async () => {
-    const uts = scall("android/system/Os", "uname", "()Landroid/system/StructUtsname;");
+    await loadLibcore();
+    const uts = await scall("android/system/Os", "uname", "()Landroid/system/StructUtsname;");
     if (typeof uts !== "object" || uts === null || !("sysname" in uts) || !("release" in uts) || !("machine" in uts))
       throw new Error("uname returned an invalid StructUtsname");
     expect(uts.sysname).toBe("Linux");

@@ -8,13 +8,14 @@ import { mkFile, JFileDescriptor, JInputStream, readStreamFully } from "../src/j
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
+import { E } from "../src/native/abi";
 import { Cpu, setA64 } from "../src/native/cpu";
 import { lookupHost } from "../src/native/host";
 import { mem, guestAt } from "../src/native/mem";
 import { javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, renamePath, stdioInit } from "../src/native/stdio";
 import { BytesFile } from "../src/shell/lazyfile";
 import { mkIter } from "../src/jvm/natives/jutil";
-import { scall } from "./java";
+import { scall, loadLibcore } from "./java";
 
 rt.linkNatives();
 
@@ -127,6 +128,7 @@ describe("file-descriptor", () => {
   });
 
   test("a file stream's and an archive entry's descriptors duplicate onto open native files", async () => {
+    await loadLibcore();
     vfs.write("/data/data/test/fd/in.bin", new Uint8Array([5, 6, 7]));
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");
     const pfd = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(input, "getFD", FD));
@@ -391,11 +393,12 @@ describe("parcel-file", () => {
   });
 
   test("Os.mmap exposes file bytes to native code and munmap releases the address", async () => {
+    await loadLibcore();
     const pfd = mkPfd(Uint8Array.of(9, 8, 7), null);
     const fd = await vcall(pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
-    const address = await vcall(rt.link("android/system/Os").ctor, "mmap", "(JJIILjava/io/FileDescriptor;J)J", 0n, 3n, 1, 2, fd, 0n) as bigint;
+    const address = await scall("android/system/Os", "mmap", "(JJIILjava/io/FileDescriptor;J)J", 0n, 3n, 1, 2, fd, 0n) as bigint;
     expect([...mem.bytes(guestAt(address), 3)]).toEqual([9, 8, 7]);
-    await vcall(rt.link("android/system/Os").ctor, "munmap", "(JJ)V", address, 3n);
+    await scall("android/system/Os", "munmap", "(JJ)V", address, 3n);
     await vcall(pfd, "close", "()V");
   });
 });
@@ -433,10 +436,10 @@ describe("rename", () => {
     });
 
     test("reports a missing source and a directory target", () => {
-      expect(renamePath(null, "/data/t/none", "/data/t/x")).toBe(-1);
+      expect(renamePath(null, "/data/t/none", "/data/t/x")).toBe(-E.NOENT);
       vfs.mkdir("/data/t/dir");
       vfs.write("/data/t/f", new Uint8Array(1));
-      expect(renamePath(null, "/data/t/f", "/data/t/dir")).toBe(-1);
+      expect(renamePath(null, "/data/t/f", "/data/t/dir")).toBe(-E.ISDIR);
       expect(vfs.exists("/data/t/f")).toBe(true);
     });
 
@@ -448,7 +451,7 @@ describe("rename", () => {
       expect(vfs.exists("/data/t/old")).toBe(false);
       expect([...vfs.read("/data/t/new/sub/x")!]).toEqual([4]);
       expect(vfs.isDir("/data/t/new/empty")).toBe(true);
-      expect(renamePath(null, "/data/t/new", "/data/t/new/inner")).toBe(-1);
+      expect(renamePath(null, "/data/t/new", "/data/t/new/inner")).toBe(-E.INVAL);
     });
   });
 });

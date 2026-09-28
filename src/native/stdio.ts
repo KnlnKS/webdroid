@@ -197,6 +197,8 @@ export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, 
 export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number): number => fdDup(null, fd);
+/** socketpair's ends are the only sockets this table holds */
+export const javaIsSocketFd = (fd: number): boolean => fds.get(fd)?.path === "socketpair";
 /** the bytes behind a descriptor read at offsets: not a stream, a directory or /dev/random */
 const regularContent = (f: Fd | undefined): VfsFile | null =>
   !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify ? null : f.content;

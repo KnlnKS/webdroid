@@ -2,7 +2,7 @@
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import type { JMessenger } from "./messenger";
-import { procIdentity, processTid, sysconf, SYSCONF } from "../shell/procfs";
+import { procIdentity, processTid, sysconf } from "../shell/procfs";
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
@@ -14,6 +14,7 @@ import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
 import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
+import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
@@ -1225,6 +1226,14 @@ rt.register({
   },
 });
 const FD = "Ljava/io/FileDescriptor;";
+function statOf(size: number, dir: boolean): JStructStat {
+  const s = new JStructStat();
+  s.st_mode = dir ? 0o40755 : 0o100644;
+  s.st_size = BigInt(size);
+  s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
+  s.st_blocks = (s.st_size + 511n) / 512n;
+  return s;
+}
 const storageStatVfs = driven(function* storageStatVfs(): Gen<JStructStatVfs> {
   const { total, free } = yield storageEstimate();
   const s = new JStructStatVfs();
@@ -1234,22 +1243,35 @@ const storageStatVfs = driven(function* storageStatVfs(): Gen<JStructStatVfs> {
   s.f_namemax = 255n;
   return s;
 });
-rt.register({
-  name: "android/system/Os", ctor: class extends JObj {},
-  methods: {
-    [`static lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
+// libcore.io.Linux: the syscalls behind android.system.Os and Libcore.os, over the descriptor
+// table native code shares
+const linux: Record<string, (...args: never[]) => unknown> = {
+    "open(Ljava/lang/String;II)Ljava/io/FileDescriptor;": (path: string, flags: number) => {
+      if (path === null) rt.npe();
+      const fd = javaOpenFd(path, flags);
+      if (fd < 0) throw errno("open", -fd);
+      const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
+      d.fd = fd;
+      return d;
+    },
+    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JFileDescriptor) => {
+      const fd = descriptorFd(d), file = fdFile(fd), source = file ? null : javaFdSource(fd);
+      if (!file && !source) throw errno("fstat", E.BADF);
+      return statOf(file ? file.len : source!.size, false);
+    },
+    [`lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
       const r = javaSeekFd(descriptorFd(d), Number(off), whence);
-      if (r < 0) throw errno("lseek", 9);
+      if (r < 0) throw errno("lseek", -r);
       return BigInt(r);
     },
-    [`static close(${FD})V`]: (d: JFileDescriptor) => { javaCloseFd(d.fd); d.fd = -1; },
-    [`static dup(${FD})${FD}`]: (d: JFileDescriptor) => {
+    [`close(${FD})V`]: (d: JFileDescriptor) => { javaCloseFd(d.fd); d.fd = -1; },
+    [`dup(${FD})${FD}`]: (d: JFileDescriptor) => {
       const n = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       n.fd = javaDupFd(descriptorFd(d));
-      if (n.fd < 0) throw errno("dup", 9);
+      if (n.fd < 0) throw errno("dup", -n.fd);
       return n;
     },
-    [`static mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint): Gen {
+    [`mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint): Gen {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
           (prot & ~7) !== 0 || ((flags & 3) !== 1 && (flags & 3) !== 2) || (flags & 0x10) !== 0 && (hint & 4095n) !== 0n)
@@ -1272,69 +1294,52 @@ rt.register({
       if (file) trackSharedMap(BigInt(address), size, Number(offset), file, (prot & 2) !== 0);
       return BigInt(address);
     }),
-    "static munmap(JJ)V": (address: bigint, count: bigint) => {
+    "munmap(JJ)V": (address: bigint, count: bigint) => {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
       syncShared(address, size, true);
       if (!mem.unmapVa(address, size)) throw errno("munmap", E.INVAL);
     },
-    "static gettid()I": () => threadTid(curThread),
-    "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string) => {
+    "gettid()I": () => threadTid(curThread),
+    "getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string) => {
       if (key === null) rt.npe();
       return processEnv[key] ?? null;
     },
-    "static getpid()I": () => PROCESS_PID,
-    "static uname()Landroid/system/StructUtsname;": () => {
+    "getpid()I": () => PROCESS_PID,
+    "uname()Landroid/system/StructUtsname;": () => {
       const info = new JStructUtsname();
       info.machine = is64BitProcess() ? "aarch64" : "armv7l";
       return info;
     },
-    "static sysconf(I)J": (name: number) => BigInt(sysconf(name)),
-    "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
+    "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
+    "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = existing("stat", path);
-      const s = new JStructStat();
-      s.st_mode = st ? 0o100644 : 0o40755;
-      s.st_size = BigInt(st?.size ?? 0);
-      s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
-      s.st_blocks = (s.st_size + 511n) / 512n;
-      return s;
+      return statOf(st?.size ?? 0, !st);
     },
     // the VFS keeps no permission bits: an existing file takes any mode
-    "static chmod(Ljava/lang/String;I)V": (path: string) => {
+    "chmod(Ljava/lang/String;I)V": (path: string) => {
       if (path === null) rt.npe();
       existing("chmod", path);
     },
-    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
+    "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
       existing("statvfs", path);
       return storageStatVfs();
     },
-    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JFileDescriptor) => {
+    [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JFileDescriptor) => {
       if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
       return storageStatVfs();
     },
-    "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
-  },
-});
-// android.system.OsConstants: static int fields naming POSIX/bionic constants.
-// Only the fields real APKs have asked for are implemented, not the full table AOSP ships.
-rt.register({
-  name: "android/system/OsConstants", ctor: class extends JObj {},
-  statics: {
-    ...Object.fromEntries(Object.entries(E).map(([name, value]) => ["E" + name, value])),
-    PROT_READ: 0x1,
-    PROT_WRITE: 0x2,
-    PROT_EXEC: 0x4,
-    PROT_NONE: 0,
-    MAP_PRIVATE: 0x02, MAP_SHARED: 0x01, MAP_ANONYMOUS: 0x20,
-    SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
-    // open(2) flags as arm64 bionic defines them
-    O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_ACCMODE: 3, O_CREAT: 0o100, O_EXCL: 0o200, O_NOCTTY: 0o400,
-    O_TRUNC: 0o1000, O_APPEND: 0o2000, O_NONBLOCK: 0o4000, O_DSYNC: 0o10000, O_SYNC: 0o4010000,
-    O_DIRECTORY: 0o40000, O_NOFOLLOW: 0o100000, O_CLOEXEC: 0o2000000,
-    SIGKILL: 9,
-    S_IFMT: 0o170000, S_IFREG: 0o100000, S_IFDIR: 0o40000,
-    ...Object.fromEntries(Object.entries(SYSCONF).map(([name, [value]]) => [name, value])),
-  },
+    "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
+};
+for (const [sig, fn] of Object.entries(linux)) rt.registerJni("libcore/io/Linux", sig, fn);
+// libcore's OsConstants fills its fields from native initConstants(); these are the reference
+// device's values (bun run gen-framework)
+rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
+  const info = rt.link("android/system/OsConstants");
+  for (const [name, value] of Object.entries(OS_CONSTANTS)) {
+    const prop = info.staticFieldTable.get(name + ":I");
+    if (prop) info.ctor[prop] = value;
+  }
 });
 
 class JAsyncTask extends JObj {

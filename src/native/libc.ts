@@ -52,8 +52,12 @@ export function writeTs(p: number, ms: number, unit = 1e6): void {
 /** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
 export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
 function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
-/** the common "-1 and errno" return */
-export function fail(cpu: Cpu | null, e: number): number { if (cpu) setErrno(cpu, e); return -1; }
+/** the common "-1 and errno" return; a Java caller (no cpu) gets -errno, as the kernel returns it */
+export function fail(cpu: Cpu | null, e: number): number {
+  if (!cpu) return -e;
+  setErrno(cpu, e);
+  return -1;
+}
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const randomWord = new Uint32Array(1);

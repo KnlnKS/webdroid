@@ -10,7 +10,7 @@ import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/a
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
-import { scall } from "./java";
+import { scall, loadLibcore } from "./java";
 
 
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
@@ -272,10 +272,11 @@ test("HandlerThread.getThreadId is -1 until started, then a stable tid distinct 
   expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
 });
 
-test("Os.sysconf reports the configured page and processor counts", () => {
-  expect(scall("android/system/Os", "sysconf", "(I)J", 0x27)).toBe(4096n);
-  expect(scall("android/system/Os", "sysconf", "(I)J", 0x61)).toBe(4n);
-  expect(scall("android/system/Os", "sysconf", "(I)J", -1)).toBe(-1n);
+test("Os.sysconf reports the configured page and processor counts", async () => {
+  await loadLibcore();
+  expect(await scall("android/system/Os", "sysconf", "(I)J", 0x27)).toBe(4096n);
+  expect(await scall("android/system/Os", "sysconf", "(I)J", 0x61)).toBe(4n);
+  expect(await scall("android/system/Os", "sysconf", "(I)J", -1)).toBe(-1n);
 });
 
 test("Process.isApplicationUid checks the app id across users", () => {

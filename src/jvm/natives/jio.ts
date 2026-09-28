@@ -8,7 +8,7 @@ import { csText } from "./jchars";
 import { readFully, writable, type FileSource } from "../../shell/lazyfile";
 import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
 import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer, type JCharsetDecoder } from "./jnio";
-import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
+import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
@@ -471,6 +471,7 @@ rt.register({
     "valid()Z": function (this: JFileDescriptor) { return this.fd >= 0 || (this.owner !== null && !closedFiles.has(this.owner)) ? 1 : 0; },
   },
 });
+rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
 export class JOutputStream extends JObj {
   chunks: number[] = [];
 }
