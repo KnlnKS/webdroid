@@ -749,6 +749,11 @@ export class JAudioTrack extends JObj {
 const setPositionListener = function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); };
 const bufferFrames = function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); };
 const writeByteBuffer = function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); };
+// AudioTrack::latency(): the output's latency plus the track's own buffer, in ms
+rt.registerJni("android/media/AudioTrack", "native_get_latency()I", function (this: JAudioTrack) {
+  const ctx = this.ctx();
+  return Math.round(((ctx.outputLatency || ctx.baseLatency) + this.bufBytes / this.frameBytes() / this.rate) * 1000);
+});
 rt.register({
   name: "android/media/AudioTrack", ctor: JAudioTrack,
   statics: { MODE_STATIC: 0, MODE_STREAM: 1, PLAYSTATE_STOPPED: 1, PLAYSTATE_PAUSED: 2, PLAYSTATE_PLAYING: 3, STATE_UNINITIALIZED: 0, STATE_INITIALIZED: 1, STATE_NO_STATIC_DATA: 2,

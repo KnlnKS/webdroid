@@ -212,6 +212,7 @@ export class Runtime {
     });
   }
   fuel = 4096;
+  private clinitDepth = 0;
 
   hotSourceBytes = 0;
   parent: Runtime | null = null;
@@ -573,6 +574,11 @@ export class Runtime {
   private fallThrough(info: ClassInfo) {
     const { dex, def } = this.classDefOf(info.name)!;
     const proto = info.ctor.prototype;
+    // the platform's compile-time constants (encoded static values) for statics the spec omits
+    if (def.staticValuesOff) dex.encodedArray(def.staticValuesOff).forEach((value, i) => {
+      const prop = mangleStaticField(dex.field(def.staticFields[i].fieldIdx).name);
+      if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = this.encToJs(dex, value);
+    });
     for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
       if (m.flags & ACC.ABSTRACT) continue;
       const { name, desc, mangled } = methodKey(dex, m.methodIdx);
@@ -677,29 +683,9 @@ export class Runtime {
     // always-async initializer would make every first touch of a class await, so no method
     // containing an sget, a new-instance or an invoke-static could run synchronously.
     const rest = (): Promise<void> | null => {
-      for (const i of info.interfaces) this.ensureCompiled(i);   // defaults copy down
-      this.ensureCompiled(info);
-      let r: unknown;
-      if (info.native) {
-        const spec = this.natives.get(info.name);
-        if (spec?.clinit) r = spec.clinit();
-      } else if (info.def) {
-        const dex = info.dex!;
-        if (info.def.staticValuesOff) {
-          const vals = dex.encodedArray(info.def.staticValuesOff);
-          for (let i = 0; i < vals.length; i++) {
-            const fr = dex.field(info.def.staticFields[i].fieldIdx);
-            info.ctor[info.staticFieldTable.get(fr.name + ":" + dex.type(fr.type))!] = this.encToJs(dex, vals[i]);
-          }
-        }
-        // own property only: JS constructors inherit statics, and a subclass without a
-        // <clinit> must not re-run its super's (which would replace identity-compared
-        // sentinels the super's callers already hold)
-        const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
-        this.st(info.initThread); // <clinit> runs on the initiating thread, whatever ran meanwhile
-        if (clinit) r = clinit.call(info.ctor);
-      }
-      return r instanceof Promise ? r : null;
+      const outer = this.clinitDepth++ === 0, started = outer ? performance.now() : 0;
+      try { return this.runClinit(info); }
+      finally { this.clinitDepth--; if (outer) perf.clinitMs += performance.now() - started; }
     };
 
     const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; };
@@ -733,6 +719,33 @@ export class Runtime {
     } catch (e) { throw failed(e); }
     settle();
     return null;
+  }
+
+  /** the class's own initialization: constant statics, then <clinit> or the native clinit hook */
+  private runClinit(info: ClassInfo): Promise<void> | null {
+    for (const i of info.interfaces) this.ensureCompiled(i);   // defaults copy down
+    this.ensureCompiled(info);
+    let r: unknown;
+    if (info.native) {
+      const spec = this.natives.get(info.name);
+      if (spec?.clinit) r = spec.clinit();
+    } else if (info.def) {
+      const dex = info.dex!;
+      if (info.def.staticValuesOff) {
+        const vals = dex.encodedArray(info.def.staticValuesOff);
+        for (let i = 0; i < vals.length; i++) {
+          const fr = dex.field(info.def.staticFields[i].fieldIdx);
+          info.ctor[info.staticFieldTable.get(fr.name + ":" + dex.type(fr.type))!] = this.encToJs(dex, vals[i]);
+        }
+      }
+      // own property only: JS constructors inherit statics, and a subclass without a
+      // <clinit> must not re-run its super's (which would replace identity-compared
+      // sentinels the super's callers already hold)
+      const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
+      this.st(info.initThread); // <clinit> runs on the initiating thread, whatever ran meanwhile
+      if (clinit) r = clinit.call(info.ctor);
+    }
+    return r instanceof Promise ? r : null;
   }
 
   ensureCompiled(info: ClassInfo): void {

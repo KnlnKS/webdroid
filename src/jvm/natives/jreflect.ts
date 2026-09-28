@@ -452,6 +452,8 @@ rt.register({
     "static getRuntime()Ldalvik/system/VMRuntime;": () => theVmRuntime,
     "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
     "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
+    // no hidden-API policy is enforced here, so every exemption already holds
+    "setHiddenApiExemptions([Ljava/lang/String;)V": () => {},
   },
 });
 
