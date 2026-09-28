@@ -672,7 +672,7 @@ function unescapeQuery(s: string): string {
 rt.markers("android/net/UrlQuerySanitizer$ValueSanitizer");
 rt.register({
   name: "android/net/UrlQuerySanitizer$ParameterValuePair", ctor: JParameterValuePair, fields: ["mParameter", "mValue"],
-  methods: { "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JParameterValuePair, p: string, v: string) { this.mParameter = p; this.mValue = v; } },
+  methods: { "<init>(Landroid/net/UrlQuerySanitizer;Ljava/lang/String;Ljava/lang/String;)V": function (this: JParameterValuePair, _outer: unknown, p: string, v: string) { this.mParameter = p; this.mValue = v; } },
 });
 rt.register({
   name: "android/net/UrlQuerySanitizer$IllegalCharacterValueSanitizer", ctor: JIllegalCharacterValueSanitizer, ifaces: ["android/net/UrlQuerySanitizer$ValueSanitizer"],

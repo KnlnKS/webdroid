@@ -413,7 +413,7 @@ rt.register({
     [`readTypedObject(${CR})Ljava/lang/Object;`]: function (this: JParcel, c: unknown) { return readInt(this) ? createFrom(this, c, null) : null; },
     [`readTypedList(Ljava/util/List;${CR})V`]: driven(function* (this: JParcel, out: unknown, c: unknown): Gen { yield vcall(out, "clear", "()V"); for (const v of (yield readTyped(this, c)) ?? []) yield vcall(out, "add", "(Ljava/lang/Object;)Z", v); }),
     "readSerializable()Ljava/io/Serializable;": function (this: JParcel) { return readSerializable(this); },
-    [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: function (this: JParcel) { return readSerializable(this); },
+    [`readSerializable(${L}Ljava/lang/Class;)Ljava/lang/Object;`]: function (this: JParcel) { return readSerializable(this); },
     "readStrongBinder()Landroid/os/IBinder;": function (this: JParcel) { return readObject(this); },
     "readException()V": function (this: JParcel) {
       const code = readInt(this);

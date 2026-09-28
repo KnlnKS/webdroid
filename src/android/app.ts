@@ -548,7 +548,7 @@ rt.register({
     "static currentApplication()Landroid/app/Application;": currentApplication,
     "static currentPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
     "static currentProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || null,
-    "static getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
+    "getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
   },
 });
 rt.register({
