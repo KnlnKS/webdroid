@@ -117,12 +117,10 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/apks": async () => {
       const names: string[] = [];
-      for (const pattern of ["*.{apk,xapk}", "new/*.{apk,xapk}"])
-        for await (const f of new Bun.Glob(pattern).scan(apkDirectory)) names.push(f);
+      for await (const f of new Bun.Glob("*.{apk,xapk}").scan(apkDirectory)) names.push(f);
       return Response.json(names.sort());
     },
     "/apks/:name": (req) => serveFile(apkDirectory, decodeURIComponent(req.params.name)),
-    "/apks/new/:name": (req) => serveFile(`${apkDirectory}/new`, decodeURIComponent(req.params.name)),
   },
   // Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
   // ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.

@@ -1,7 +1,7 @@
 // Tap latency gate (docs/bytecode-first-plan.md §4.8): pointerup to the first presented frame
 // that shows the app's response, for every gated tap of a scenario.
 //
-//   bun run lat [scenario ...] [--gpu] [--warm] [--json <file>] [--query jvmProfile=1]
+//   bun run lat [scenario ...] [--gpu] [--warm] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -10,7 +10,9 @@
 // A scenario is scripts/lat/scenarios/<name>.json:
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"m":"name","tap":[x,y]} | {"wait":ms}
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo)
-// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated.
+// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated. --cpuprofile writes
+// the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
+// scripts/lat/profsum.ts can window the profile to one tap.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -24,7 +26,7 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 const args = process.argv.slice(2);
 const flag = (name: string) => { const i = args.indexOf(name); return i < 0 ? false : (args.splice(i, 1), true); };
 const option = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args.splice(i, 2)[1]; };
-const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json"), query = option("--query");
+const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
@@ -100,6 +102,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     const t0 = performance.now();
     ev("pointerdown", x, y);
     await sleep(s.hold ?? 60);
+    if (s.m && w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
     const tu = performance.now(), before = snapshot();
     ev("pointerup", x, y);
     if (!s.m) { await sleep(300); await idle(); continue; }
@@ -148,11 +151,12 @@ async function openBrowser(profile: string) {
   return { send, close: () => { ws.close(); proc.kill(); } };
 }
 
-async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown): Promise<Tap[]> {
+async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown, profile?: string): Promise<Tap[]> {
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS)} });` }, sessionId);
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: `${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS)} });` }, sessionId);
+  if (profile) { await send("Profiler.enable", {}, sessionId); await send("Profiler.setSamplingInterval", { interval: 200 }, sessionId); await send("Profiler.start", {}, sessionId); }
   await send("Page.navigate", { url: `${BASE}/?apk=${encodeURIComponent(apk)}&screen=${encodeURIComponent(SCREEN)}${query ? "&" + query : ""}` }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
@@ -161,6 +165,7 @@ async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk
       if (!targetInfo.title.startsWith("DONE:")) continue;
       const body = targetInfo.title.slice(5);
       if (body.startsWith("ERROR")) throw new Error(body);
+      if (profile) await Bun.write(profile, JSON.stringify((await send("Profiler.stop", {}, sessionId)).profile));
       return JSON.parse(body);
     }
     throw new Error("scenario timed out");
@@ -175,7 +180,7 @@ for (const name of names) {
   const browser = await openBrowser(profile);
   try {
     if (warm) await launch(browser.send, apk, steps);
-    const taps = await launch(browser.send, apk, steps);
+    const taps = await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`);
     report.push({ scenario: name, taps });
     for (const t of taps) {
       const over = t.afterUp === null || t.afterUp > LIMIT_MS;
