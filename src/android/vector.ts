@@ -34,7 +34,7 @@ export function namedTargets(g: VGroup, into = new Map<string, VGroup | VPath>()
 }
 
 /** a tint replaces the colour and keeps the path's alpha, as SRC_IN does */
-const tinted = (color: number, tint: number | null) => tint === null ? color : (tint & 0xffffff) | Math.round((tint >>> 24) * (color >>> 24) / 255) << 24;
+export const tinted = (color: number, tint: number | null) => tint === null ? color : (tint & 0xffffff) | Math.round((tint >>> 24) * (color >>> 24) / 255) << 24;
 export function drawVectorGroup(ctx: JCanvas["ctx"], g: VGroup, tint: number | null, alpha: number) {
   ctx.save();
   ctx.translate(g.translateX + g.pivotX, g.translateY + g.pivotY);

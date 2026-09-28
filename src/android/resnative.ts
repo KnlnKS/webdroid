@@ -691,13 +691,13 @@ const attributeSetMethods: NativeSpec["methods"] = {
   "getAttributeFloatValue(Ljava/lang/String;Ljava/lang/String;F)F": function (this: HasNode, _ns: string, n: string, d: number) { return attrFloat(byName(this, n), d); },
   "getStyleAttribute()I": function (this: HasNode) { return this.node?.attrs.find((x) => x.name === "style" && !x.ns)?.data ?? 0; },
   "getIdAttributeResourceValue(I)I": function (this: HasNode, d: number) { return this.node?.attrs.find((x) => x.resId === 0x010100d0)?.data ?? d; },
+  "getIdAttribute()Ljava/lang/String;": function (this: HasNode) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "id")); },
+  "getClassAttribute()Ljava/lang/String;": function (this: HasNode) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "class")); },
 };
 rt.register({
   name: "webdroid/AttrSet", ctor: JAttrSet, ifaces: ["android/util/AttributeSet"],
   methods: {
     ...attributeSetMethods,
-    "getIdAttribute()Ljava/lang/String;": () => null,
-    "getClassAttribute()Ljava/lang/String;": function (this: JAttrSet) { return this.node?.attrs.find((x) => x.name === "class")?.str ?? null; },
     "getPositionDescription()Ljava/lang/String;": () => "<webdroid xml>",
   },
 });
@@ -774,8 +774,6 @@ const xmlParserMethods: NativeSpec["methods"] = {
   "getAttributeNamespace(I)Ljava/lang/String;": function (this: JXmlParser, i: number) { return byIdx(this, i)?.ns ?? ""; },
   "getAttributeType(I)Ljava/lang/String;": () => "CDATA",
   "getAttributePrefix(I)Ljava/lang/String;": () => null,
-  "getIdAttribute()Ljava/lang/String;": function (this: JXmlParser) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "id")); },
-  "getClassAttribute()Ljava/lang/String;": function (this: JXmlParser) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "class")); },
   "getText()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.text ?? null; },
   "getPositionDescription()Ljava/lang/String;": function (this: JXmlParser) { return `<webdroid xml line ${this.events[this.pos]?.line ?? -1}>`; },
   "isEmptyElementTag()Z": function (this: JXmlParser) {

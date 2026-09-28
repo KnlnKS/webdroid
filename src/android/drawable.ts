@@ -13,7 +13,7 @@ import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode } from "./axml";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 import { parsePathData } from "./pathdata";
-import { applyTimeline, cloneTree, drawVectorGroup, loadTimeline, namedTargets, timelineLength, type Timeline, type VGroup, type VPath, type VRoot } from "./vector";
+import { applyTimeline, cloneTree, drawVectorGroup, tinted, loadTimeline, namedTargets, timelineLength, type Timeline, type VGroup, type VPath, type VRoot } from "./vector";
 
 export const ST = {
   pressed: 0x010100a7, enabled: 0x0101009e, selected: 0x010100a1, checked: 0x010100a0,
@@ -495,7 +495,7 @@ class JGradientDrawable extends JDrawable {
     const path = this.shapePath(left, top, right, bottom);
     if (this.shape !== 2) {
       let fill: string | CanvasGradient | null = null;
-      if (this.tint !== null) fill = cssColor(this.solid === null ? this.tint : (this.tint & 0xffffff) | (Math.round((this.tint >>> 24) * (this.solid >>> 24) / 255) << 24));
+      if (this.tint !== null) fill = cssColor(this.solid === null ? this.tint : tinted(this.solid, this.tint));
       else if (this.gradColors && this.gradColors.length > 1) {
         const [x0, y0, x1, y1] = GRADIENT_ENDS[this.gradAngle / 45];
         const g = this.gradType === 1
