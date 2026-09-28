@@ -1,6 +1,6 @@
 // Override bypasses (docs/bytecode-first-plan.md §5.6): a TS spec method whose AOSP body calls an
-// overridable method on `this`, where the TS source never names that method, answers without the
-// app's override. Only methods a corpus app overrides are reported; tests/fixtures/app-overrides.json
+// overridable method on `this`, where neither the TS method nor the helpers it calls ever name that
+// method, answers without the app's override. Only methods a corpus app overrides are reported; tests/fixtures/app-overrides.json
 // records those, with how many apps override each, so the check needs no APKs.
 //   bun run bypass [--corpus] [--write-baseline]
 // --corpus rescans apks/ into the fixture; --write-baseline accepts the current findings.
@@ -10,10 +10,20 @@ import { ACC, rt } from "../src/jvm/runtime";
 import { descToName } from "../src/jvm/abi";
 import type { ClassDef } from "../src/jvm/dex";
 import { prepareMethod } from "../src/jvm/prepared";
-import { jarDexes } from "../src/android/framework";
 import { PLATFORM_JARS } from "../src/jvm/provenance";
-import { openDexes } from "./lib";
-import "../src/natives";
+
+// the file registering each spec, whose helpers a method's source reaches
+const specFile = new Map<string, string>();
+const register = rt.register.bind(rt);
+rt.register = ((spec: { name: string }) => {
+  const file = /(\/[^\s():]+\.ts):\d+/.exec(new Error().stack!.split("\n").slice(2).join("\n"))?.[1];
+  if (file) specFile.set(spec.name, file);
+  return register(spec as never);
+}) as typeof rt.register;
+// natives register as their modules load, so everything that imports them comes after the wrapper
+await import("../src/natives");
+const { jarDexes } = await import("../src/android/framework");
+const { openDexes } = await import("./lib");
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dir, "..");
@@ -32,6 +42,44 @@ function platformDefs(): Map<string, ClassDef> {
 }
 const superOf = (def: ClassDef) => def.superIdx === NO_INDEX ? undefined : descToName(def.dex.type(def.superIdx));
 const signature = (def: ClassDef, methodIdx: number) => def.dex.method(methodIdx).name + def.dex.methodDesc(methodIdx);
+
+/** the text of each top-level function or const in a module, by name */
+function declarations(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of text.matchAll(/\n(?:export )?(?:async )?(?:function\*? ([A-Za-z_$][\w$]*)|(?:const|let) ([A-Za-z_$][\w$]*)\b)/g)) {
+    let depth = 0, i = m.index! + m[0].length, quote = "";
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (quote) { if (c === "\\") i++; else if (c === quote) quote = ""; continue; }
+      if (c === "/" && text[i + 1] === "/") i = text.indexOf("\n", i) - 1;
+      else if (c === "/" && text[i + 1] === "*") i = text.indexOf("*/", i) + 1;
+      else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c)) depth--;
+      else if (depth === 0 && (c === ";" || c === "\n" && text[i + 1] !== " ")) break;
+    }
+    out.set(m[1] ?? m[2], text.slice(m.index!, i));
+  }
+  return out;
+}
+const moduleDecls = new Map<string, Map<string, string>>();
+/** `source` with the module-level helpers it names, three calls deep */
+function withHelpers(cls: string, source: string): string {
+  const file = specFile.get(cls);
+  if (!file) return source;
+  let decls = moduleDecls.get(file);
+  if (!decls) moduleDecls.set(file, decls = declarations(readFileSync(file, "utf8")));
+  const seen = new Set<string>();
+  for (let depth = 0, frontier = source; depth < 3 && frontier; depth++) {
+    let next = "";
+    for (const id of new Set(frontier.match(/[A-Za-z_$][\w$]*/g))) {
+      const decl = decls.get(id);
+      if (decl && !seen.has(id)) { seen.add(id); next += "\n" + decl; }
+    }
+    source += next; frontier = next;
+  }
+  return source;
+}
 
 /** "Class.method(desc)" → the overridable methods AOSP's body calls on `this` that the TS source never names */
 export function selfCallsSkipped(defs = platformDefs()): Map<string, string[]> {
@@ -55,7 +103,7 @@ export function selfCallsSkipped(defs = platformDefs()): Map<string, string[]> {
       const m = def.virtualMethods.find((e) => signature(def, e.methodIdx) === key);
       if (!m?.codeOff || typeof impl !== "function") continue;
       const code = def.dex.code(m.codeOff), self = code.regs - code.ins;
-      const source = String((impl as { $g?: unknown }).$g ?? impl);
+      const source = withHelpers(spec.name, String((impl as { $g?: unknown }).$g ?? impl));
       const skipped = new Set<string>();
       for (const ins of prepareMethod(def.dex, code, def.dex.methodDesc(m.methodIdx), false).instructions) {
         if (!/^invoke-(virtual|interface)/.test(ins.name) || ins.regs[0] !== self) continue;
