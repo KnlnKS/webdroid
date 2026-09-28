@@ -1,7 +1,7 @@
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor } from "./drawable";
-import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, type JInsets, JRect, JTypeface, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
@@ -22,6 +22,7 @@ const PROGRESS_ID = 0x0102000d, SECONDARY_ID = 0x0102000f;
  *  indeterminate drawable animates itself when Animatable, else its level cycles. */
 class JProgressBar extends JView {
   indeterminate = false;
+  interpolator: unknown = null;
   /** indeterminateDuration and indeterminateBehavior (1 repeat, 2 cycle) of the level cycle */
   duration = 4000; behavior = 1;
   /** indeterminateOnly: a spinner style's promise that the bar never shows progress */
@@ -145,11 +146,11 @@ rt.register({
       "getIndeterminateTintList()Landroid/content/res/ColorStateList;": "indetTint",
       "getMinWidth()I": "minWidth", "getMaxWidth()I": "maxWidth", "getMinHeight()I": "minHeight", "getMaxHeight()I": "maxHeight" }),
     ...relayoutSetters({ "setMinWidth(I)V": "minWidth", "setMaxWidth(I)V": "maxWidth", "setMinHeight(I)V": "minHeight", "setMaxHeight(I)V": "maxHeight" }),
-    ...noops("setInterpolator(Landroid/view/animation/Interpolator;)V"),
+    "setInterpolator(Landroid/view/animation/Interpolator;)V": function (this: JProgressBar, i: unknown) { this.interpolator = i; },
+    "getInterpolator()Landroid/view/animation/Interpolator;": function (this: JProgressBar) { return this.interpolator; },
     "setInterpolator(Landroid/content/Context;I)V": function (this: JProgressBar, c: { $host: { res: Resources } }, id: number) {
       return vcall(this, "setInterpolator", "(Landroid/view/animation/Interpolator;)V", loadInterpolator(c.$host.res, id));
     },
-    ...stubs(null, "getInterpolator()Landroid/view/animation/Interpolator;"),
     "onMeasure(II)V": driven(function* (this: JProgressBar, wSpec: number, hSpec: number): Gen {
       const d = this.current();
       let dw = 0, dh = 0;

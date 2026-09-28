@@ -240,6 +240,7 @@ export class JMenuItem extends JObj {
   id = 0;
   title = "";
   icon: JDrawable | null = null;
+  actionView: unknown = null;
   showAsAction = 0;
   visible = true;
   enabled = true;
@@ -287,9 +288,9 @@ const menuItemMethods: NativeSpec["methods"] = {
     "hasSubMenu()Z": "sub" }),
   "setTitleCondensed(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
   "setAlphabeticShortcut(C)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
-  "setActionView(Landroid/view/View;)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
+  "setActionView(Landroid/view/View;)Landroid/view/MenuItem;": function (this: JMenuItem, view: unknown) { this.actionView = view; return this; },
+  "getActionView()Landroid/view/View;": function (this: JMenuItem) { return this.actionView; },
   ...stubs(0, "getOrder()I", "getGroupId()I", "expandActionView()Z", "collapseActionView()Z"),
-  ...stubs(null, "getActionView()Landroid/view/View;"),
 };
 rt.register({ name: "webdroid/MenuItem", ctor: JMenuItem, ifaces: ["android/view/MenuItem"], methods: menuItemMethods });
 rt.markers("android/view/MenuItem", "android/view/SubMenu");

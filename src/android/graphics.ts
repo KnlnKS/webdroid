@@ -388,6 +388,7 @@ export class JPaint extends JObj {
     return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 &&
       !this.shaderObj && this.filterColor === null && !this.filterMatrix;
   }
+  pathEffect: unknown = null;
   letterSpacingEm = 0;
   textScaleX = 1;
   textSkewX = 0;
@@ -516,9 +517,12 @@ const paintMethods: NativeSpec["methods"] = {
     return s;
   },
   "setPathEffect(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;": function (this: JPaint, e: any) {
+    this.pathEffect = e ?? null;
     this.dash = e?.intervals ?? null;
     return e;
   },
+  "getPathEffect()Landroid/graphics/PathEffect;": function (this: JPaint) { return this.pathEffect; },
+  "getLetterSpacing()F": function (this: JPaint) { return this.letterSpacingEm; },
   "setColorFilter(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;": function (this: JPaint, f: any) {
     this.filterColor = f?.tint ?? null;
     this.filterMatrix = f?.matrix ?? null;
@@ -553,8 +557,7 @@ const paintMethods: NativeSpec["methods"] = {
     "setFlags(I)V"),
   ...stubs(1, "isFilterBitmap()Z", "getHinting()I",
     "getFlags()I"),
-  ...stubs(0, "getWordSpacing()F", "getLetterSpacing()F", "isDither()Z"),
-  ...stubs(null, "getPathEffect()Landroid/graphics/PathEffect;"),
+  ...stubs(0, "getWordSpacing()F", "isDither()Z"),
   "measureText(Ljava/lang/String;)F": function (this: JPaint, s: string) { return measureText(this, s ?? ""); },
   "measureText(Ljava/lang/CharSequence;II)F": function (this: JPaint, s: unknown, a: number, b: number) {
     return after(csText(s), (text) => measureText(this, text.slice(a, b)));

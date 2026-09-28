@@ -712,7 +712,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     yield vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", text, bufferTypes[on ? 1 : 0]);
   }),
   "isTextSelectable()Z": function (this: JTextView) { return this.textSelectable ? 1 : 0; },
-  ...stubs(1, "getIncludeFontPadding()Z"),
+  "getIncludeFontPadding()Z": function (this: JTextView) { return +this.includePad; },
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
   "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; return relayout(this); },
   "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); return relayout(this); },

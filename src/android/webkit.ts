@@ -767,7 +767,6 @@ rt.register({
       return 0;
     }),
     ...noops("<init>()V", "onPermissionRequest(Landroid/webkit/PermissionRequest;)V"),
-    ...stubs(1, "onJsTimeout()Z"),
   },
 });
 for (const n of ["android/webkit/WebChromeClient$CustomViewCallback", "android/webkit/WebResourceRequest", "android/webkit/ValueCallback", "android/webkit/DownloadListener"]) {
