@@ -11,7 +11,7 @@ import { SUITES } from "./suites";
 
 const [suiteName, ...rest] = process.argv.slice(2);
 const option = (name: string) => { const i = rest.indexOf(name); return i < 0 ? undefined : rest.splice(i, 2)[1]; };
-const cut = option("--bytecode");
+const cut = option("--bytecode"), one = option("--one");
 const update = rest.includes("--update"), filter = rest.find((a) => !a.startsWith("--")) ?? "";
 const suite = SUITES[suiteName as keyof typeof SUITES];
 if (!suite) throw new Error(`bun run conform <${Object.keys(SUITES).join("|")}> [filter] [--update]`);
@@ -56,41 +56,53 @@ if (!existsSync(`${dexDir}/classes.dex`)) {
     ...[...new Bun.Glob("**/*.class").scanSync(out)].map((f) => `${out}/${f}`)]);
 }
 
-// the runtime: suite dex ahead of the platform class path, natives linked after both
-if (cut) (await import("../../src/jvm/provenance")).BYTECODE.push(...cut.split(","));
-const { rt } = await import("../../src/jvm/runtime");
-await import("../../src/natives");
-const { dexesIn } = await import("../../src/jvm/dex");
-const { jarDexes } = await import("../../src/android/framework");
-const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
-const { vcallAsync } = await import("../../src/jvm/natives/jlang");
-for (const f of readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort())
-  for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
-for (const jar of PLATFORM_JARS)
-  for (const d of jarDexes(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), jar)) rt.loadDex(d, true);
-rt.linkNatives();
-const console_ = { warn: console.warn };
-console.warn = () => {};
+// a child process runs one class, so a class that never yields can be killed rather than stall the suite
+if (one) {
+  // the runtime: suite dex ahead of the platform class path, natives linked after both
+  if (cut) (await import("../../src/jvm/provenance")).BYTECODE.push(...cut.split(","));
+  const { rt } = await import("../../src/jvm/runtime");
+  await import("../../src/natives");
+  const { dexesIn } = await import("../../src/jvm/dex");
+  const { jarDexes } = await import("../../src/android/framework");
+  const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
+  const { vcallAsync, stackTraceText } = await import("../../src/jvm/natives/jlang");
+  for (const f of readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort())
+    for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
+  for (const jar of PLATFORM_JARS)
+    for (const d of jarDexes(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), jar)) rt.loadDex(d, true);
+  rt.linkNatives();
+  const debug = process.env.CONFORM_DEBUG;
+  console.warn = () => {};
+  if (debug) rt.throwables = [];
+  const runner = rt.link("ConformRunner");
+  await rt.initClass(runner);
+  let text: string;
+  try { text = await vcallAsync(runner.ctor, "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", one, filter); }
+  catch (e) { text = `F\t${one}\t${await vcallAsync(e, "toString", "()Ljava/lang/String;").catch(() => String(e))}\n`; }
+  if (debug) for (const t of rt.throwables!) {
+    const trace = await stackTraceText(t as never);
+    if (new RegExp(debug).test(trace)) { console.error(trace.split("\n").slice(0, 14).join("\n")); break; }
+  }
+  await Bun.write(Bun.stdout, "\u0001" + text);
+  process.exit(0);
+}
 
-if (process.env.CONFORM_DEBUG) rt.throwables = [];
-const runner = rt.link("ConformRunner");
-await rt.initClass(runner);
 /** per class, each test name and whether it passed */
 const results: Record<string, Map<string, boolean>> = {};
-const CLASS_TIMEOUT_MS = 120_000;
+const CLASS_TIMEOUT_MS = 120_000, JOBS = 4;
 const started = performance.now();
 // a filter naming classes runs just those classes; otherwise it selects tests by name
 const named = filter ? classes.filter((c) => c.includes(filter)) : [];
 const testFilter = named.length ? "" : filter;
-for (const cls of named.length ? named : classes) {
+async function runClass(cls: string): Promise<void> {
   const t0 = performance.now();
-  let text: string;
-  // a class that never finishes (a lost wakeup, a deadlock) fails as a whole rather than stalling the suite
-  try {
-    text = await Promise.race([vcallAsync(runner.ctor, "run", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", cls, testFilter),
-      new Promise<string>((resolve) => setTimeout(() => resolve(`F\t${cls}\ttimed out after ${CLASS_TIMEOUT_MS / 1000}s\n`), CLASS_TIMEOUT_MS))]);
-  }
-  catch (e) { text = `F\t${cls}\t${await vcallAsync(e, "toString", "()Ljava/lang/String;").catch(() => String(e))}\n`; }
+  const proc = Bun.spawn(["bun", import.meta.path, suiteName, "--one", cls, ...(testFilter ? [testFilter] : []), ...(cut ? ["--bytecode", cut] : [])],
+    { stdout: "pipe", stderr: process.env.CONFORM_DEBUG ? "inherit" : "ignore" });
+  const timer = setTimeout(() => proc.kill(), CLASS_TIMEOUT_MS);
+  const out = await new Response(proc.stdout).text();
+  clearTimeout(timer);
+  const marker = out.indexOf("\u0001");
+  const text = marker >= 0 ? out.slice(marker + 1) : `F\t${cls}\t${proc.signalCode ? `killed after ${CLASS_TIMEOUT_MS / 1000}s` : "no result"}\n`;
   let pass = 0, fail = 0;
   const tests = results[cls] = new Map();
   for (const line of text.split("\n").filter(Boolean)) {
@@ -102,15 +114,8 @@ for (const cls of named.length ? named : classes) {
   }
   console.log(`${cls}: ${pass} pass, ${fail} fail (${((performance.now() - t0) / 1000).toFixed(1)}s)`);
 }
-console.warn = console_.warn;
-if (process.env.CONFORM_DEBUG) {
-  const { stackTraceText } = await import("../../src/jvm/natives/jlang");
-  const pattern = new RegExp(process.env.CONFORM_DEBUG);
-  for (const t of rt.throwables!) {
-    const text = await stackTraceText(t as never);
-    if (pattern.test(text)) { console.log(text.split("\n").slice(0, 14).join("\n")); break; }
-  }
-}
+const queue = [...(named.length ? named : classes)];
+await Promise.all(Array.from({ length: JOBS }, async () => { while (queue.length) await runClass(queue.shift()!); }));
 
 const hash = (name: string) => Bun.hash.crc32(name).toString(16).padStart(8, "0");
 const baselinePath = `tests/conformance/${suiteName}.json`;
