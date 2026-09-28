@@ -42,13 +42,14 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     for (let i = 0; i < d.length; i += 4) h = (Math.imul(h, 31) + (d[i] >> 3) * 1024 + (d[i + 1] >> 3) * 32 + (d[i + 2] >> 3)) | 0;
     return h;
   };
-  let frames: { t: number; bmp: Promise<ImageBitmap> }[] | null = null;
+  let frames: { t: number; bmp: Promise<ImageBitmap>; perf: Record<string, number> }[] | null = null;
   const raw = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
   ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bmp: ImageBitmap | null) {
     if (bmp && frames && (this.canvas as HTMLCanvasElement).id === "screen")
-      frames.push({ t: performance.now(), bmp: createImageBitmap(bmp, { resizeWidth: 54, resizeHeight: 108, resizeQuality: "pixelated" }) });
+      frames.push({ t: performance.now(), bmp: createImageBitmap(bmp, { resizeWidth: 54, resizeHeight: 108, resizeQuality: "pixelated" }), perf: snapshot() });
     return raw.call(this, bmp);
   };
+  const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd?.perf[k] ?? 0]));
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   while (!(w.wd && w.wd.perf.draws > 0)) await sleep(50);
   const idle = async (maxMs = 8000) => {
@@ -68,7 +69,6 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     const c = screen(), r = c.getBoundingClientRect();
     c.dispatchEvent(new PointerEvent(type, { clientX: r.left + x * r.width / 1080, clientY: r.top + y * r.height / 2160, pointerId: 1, isPrimary: true, bubbles: true, pointerType: "touch" }));
   };
-  const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd.perf[k] ?? 0]));
   const out: Record<string, unknown>[] = [];
   for (const s of steps) {
     if (s.wait) { await sleep(s.wait); await idle(); continue; }
@@ -107,13 +107,13 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
       if (f) last = Math.max(last, f.t);
     }
     const got = frames!; frames = null;
-    const after = snapshot();
-    const changes: number[] = [];
+    const changes: typeof got = [];
     let prev = base;
-    for (const f of got) { const sg = sig(await f.bmp); if (sg !== prev) changes.push(f.t); prev = sg; }
-    const au = changes.find((t) => t >= tu);
-    out.push({ m: s.m, afterUp: au === undefined ? null : Math.round(au - tu), first: changes.length ? Math.round(changes[0] - t0) : null,
-      settled: changes.length ? Math.round(changes.at(-1)! - t0) : null, frames: got.length,
+    for (const f of got) { const sg = sig(await f.bmp); if (sg !== prev) changes.push(f); prev = sg; }
+    // the breakdown is the work done from pointerup until the frame that answered it
+    const au = changes.find((f) => f.t >= tu), after = au?.perf ?? snapshot();
+    out.push({ m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
+      settled: changes.length ? Math.round(changes.at(-1)!.t - t0) : null, frames: got.length,
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10])) });
     await idle();
   }

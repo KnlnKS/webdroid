@@ -92,7 +92,7 @@ async function boot(file: string, local?: File) {
   shell.setState({ kind: "loading", file, stage: local ? "Opening package…" : "Downloading package…" });
   let rollbackAssets: (() => void) | undefined;
   try {
-    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText(), displayRate]);
+    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + file.split("/").map(encodeURIComponent).join("/")), fontsReady, provisionPackages(), loadSkiaText(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
