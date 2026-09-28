@@ -453,12 +453,17 @@ rt.register({
 // slack here, so the array is exactly the length asked for — which the contract allows.
 class JVMRuntime extends JObj {}
 const theVmRuntime = new JVMRuntime();
+/** the app's targetSdkVersion as ActivityThread binds it; ART's default is the development SDK */
+let targetSdk = 10000;
+export const setTargetSdkVersion = (version: number) => { targetSdk = version; };
 rt.register({
   name: "dalvik/system/VMRuntime", ctor: JVMRuntime,
   methods: {
     "static getRuntime()Ldalvik/system/VMRuntime;": () => theVmRuntime,
     "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
     "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
+    "getTargetSdkVersion()I": () => targetSdk,
+    "setTargetSdkVersion(I)V": setTargetSdkVersion,
     // no hidden-API policy is enforced here, so every exemption already holds
     "setHiddenApiExemptions([Ljava/lang/String;)V": () => {},
   },

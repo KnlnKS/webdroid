@@ -1633,6 +1633,7 @@ function createNioTempFile(dir: JNioPath | null, prefix: string | null, suffix: 
 rt.register({
   name: "java/nio/file/Path", ctor: JNioPath, ifaces: ["java/lang/Comparable", "java/lang/Iterable"],
   methods: {
+    "static of(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": (first: string, more: string[] | null) => joinPath(first, more),
     "toString()Ljava/lang/String;": function (this: JNioPath) { return this.p; },
     "toFile()Ljava/io/File;": function (this: JNioPath) { return mkFile(this.p); },
     "getFileSystem()Ljava/nio/file/FileSystem;": () => nioFileSystem,

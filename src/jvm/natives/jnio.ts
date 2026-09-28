@@ -341,6 +341,13 @@ async function charText(buffer: JCharBuffer): Promise<string> {
   for (let i = 0; i < chars.length; i++) chars[i] = view.getUint16((buffer.pos + i) << 1, buffer.little);
   return charsToString(chars, 0, chars.length);
 }
+function duplicateChars(source: JCharBuffer): JCharBuffer {
+  const b = new JCharBuffer();
+  b.backing = source.backing; b.byteOffset = source.byteOffset; b.elemShift = 1;
+  b.sequence = source.sequence; b.sequenceOffset = source.sequenceOffset;
+  b.cap = source.cap; b.lim = source.lim; b.pos = source.pos; b.mark = source.mark; b.little = source.little; b.readOnly = source.readOnly;
+  return b;
+}
 class JLongBuffer extends JBuffer {}
 class JDoubleBuffer extends JBuffer {}
 
@@ -477,6 +484,14 @@ rt.register({
       b.byteOffset = this.sequence === null ? this.byteOffset + this.pos * 2 : 0;
       return b;
     },
+    // a view of [position + start, position + end) over the same chars
+    "subSequence(II)Ljava/nio/CharBuffer;": function (this: JCharBuffer, start: number, end: number) {
+      if (start < 0 || end < start || end > this.lim - this.pos) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      const b = duplicateChars(this);
+      b.pos = this.pos + start; b.lim = this.pos + end; b.mark = -1;
+      return b;
+    },
+    "duplicate()Ljava/nio/CharBuffer;": function (this: JCharBuffer) { return duplicateChars(this); },
     "length()I": function (this: JCharBuffer) { return this.lim - this.pos; },
     "charAt(I)C": function (this: JCharBuffer, i: number) { if (i < 0) rt.aio(i, this.lim - this.pos); return charAt(this, this.pos + i); },
     "get(I)C": function (this: JCharBuffer, i: number) { return charAt(this, i); },

@@ -1327,6 +1327,10 @@ rt.register({
     PROT_NONE: 0,
     MAP_PRIVATE: 0x02, MAP_SHARED: 0x01, MAP_ANONYMOUS: 0x20,
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
+    // open(2) flags as arm64 bionic defines them
+    O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_ACCMODE: 3, O_CREAT: 0o100, O_EXCL: 0o200, O_NOCTTY: 0o400,
+    O_TRUNC: 0o1000, O_APPEND: 0o2000, O_NONBLOCK: 0o4000, O_DSYNC: 0o10000, O_SYNC: 0o4010000,
+    O_DIRECTORY: 0o40000, O_NOFOLLOW: 0o100000, O_CLOEXEC: 0o2000000,
     SIGKILL: 9,
     S_IFMT: 0o170000, S_IFREG: 0o100000, S_IFDIR: 0o40000,
     ...Object.fromEntries(Object.entries(SYSCONF).map(([name, [value]]) => [name, value])),

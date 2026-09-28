@@ -7,6 +7,7 @@ import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
 import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
+import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { loadCode } from "../jvm/codecache";
@@ -199,7 +200,9 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
-  setViewTargetSdk(usesSdk(manifest).target);
+  const { target } = usesSdk(manifest);
+  setViewTargetSdk(target);
+  setTargetSdkVersion(target);
   prepared?.();
 
   return onMain(async () => {

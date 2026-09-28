@@ -1108,6 +1108,15 @@ function sbSpec(name: string): NativeSpec {
     return this;
   };
   const appendChar = app(function (v) { this.s += String.fromCharCode(v); });
+  const insertAt = (sb: JSB, i: number, text: string) => {
+    if (i < 0 || i > sb.s.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${i}, length ${sb.s.length}`);
+    sb.s = sb.s.slice(0, i) + text + sb.s.slice(i);
+    return sb;
+  };
+  const ins = <T>(text: (v: T) => string) => function (this: JSB, i: number, v: T) { return insertAt(this, i, text(v)); };
+  const insertObj = async function (this: JSB, i: number, v: unknown) {
+    return insertAt(this, i, v === null ? "null" : await vcall(v, "toString", "()Ljava/lang/String;"));
+  };
   const indexOf = function (this: JSB, value: string | null, from = 0) {
     if (value === null) return rt.npe();
     return this.s.indexOf(value, from);
@@ -1157,15 +1166,16 @@ function sbSpec(name: string): NativeSpec {
         this.s = n <= this.s.length ? this.s.slice(0, n) : this.s.padEnd(n, "\0");
       },
       [`reverse()${L}`]: function (this: JSB) { this.s = [...this.s].reverse().join(""); return this; },
-      [`insert(ILjava/lang/String;)${L}`]: function (this: JSB, i: number, v: string) {
-        this.s = this.s.slice(0, i) + (v === null ? "null" : v) + this.s.slice(i); return this;
-      },
-      [`insert(IC)${L}`]: function (this: JSB, i: number, v: number) {
-        this.s = this.s.slice(0, i) + String.fromCharCode(v) + this.s.slice(i); return this;
-      },
-      [`insert(II)${L}`]: function (this: JSB, i: number, v: number) {
-        this.s = this.s.slice(0, i) + v + this.s.slice(i); return this;
-      },
+      [`insert(ILjava/lang/String;)${L}`]: ins((v: string | null) => v === null ? "null" : v),
+      [`insert(IC)${L}`]: ins((v: number) => String.fromCharCode(v)),
+      [`insert(II)${L}`]: ins(String),
+      [`insert(IJ)${L}`]: ins(String),
+      [`insert(IF)${L}`]: ins(fmtFloat),
+      [`insert(ID)${L}`]: ins(fmtDouble),
+      [`insert(IZ)${L}`]: ins((v: number) => v ? "true" : "false"),
+      [`insert(I[C)${L}`]: ins((v: Uint16Array) => charsToString(v, 0, v.length)),
+      [`insert(ILjava/lang/Object;)${L}`]: insertObj,
+      [`insert(ILjava/lang/CharSequence;)${L}`]: insertObj,
       [`deleteCharAt(I)${L}`]: function (this: JSB, i: number) {
         this.s = this.s.slice(0, i) + this.s.slice(i + 1); return this;
       },

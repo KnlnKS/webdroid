@@ -1140,6 +1140,9 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
       }
     }),
   },
+  "java/util/LinkedHashMap": {
+    "eldest()Ljava/util/Map$Entry;": function (this: JMap) { const first = allEnts(this).next(); return first.done ? null : new JMapEntry(first.value); },
+  },
   "java/util/EnumMap": { "<init>(Ljava/lang/Class;)V": function () {} },
   "android/util/ArrayMap": arrayMapMethods,
   "java/util/concurrent/ConcurrentHashMap": {

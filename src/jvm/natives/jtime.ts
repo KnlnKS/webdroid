@@ -3,9 +3,9 @@
 // formatter engine SimpleDateFormat shares, and jtime-temporal/-amount/-format the classes.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { vcall, stringHash, boxInt } from "./jlang";
+import { vcall, stringHash, boxInt, after } from "./jlang";
 import { usLocale, type JLocale } from "./jvalues";
-import { jarray } from "../abi";
+import { jarray, mangleStaticField } from "../abi";
 import {
   JTimeZone, localTz, hostZone, type JInstant, type JZonedDateTime, floorDiv, floorMod, isLeap, monthLen, npe, iae, instantOfMs, instantMs,
   zoneOf, zoneForId, offsetAt, standardOffset, zdtOfEpoch, epochSec, longHash, pad,
@@ -135,8 +135,14 @@ rt.register({
       return tzOffset(this, c.ms);
     },
     "static getTimeZone(Ljava/lang/String;)Ljava/util/TimeZone;": timeZoneOf,
-    "static getTimeZone(Ljava/time/ZoneId;)Ljava/util/TimeZone;": (z: { id: string }) => timeZoneOf(z.id),
-    "toZoneId()Ljava/time/ZoneId;": function (this: JTimeZone) { return zoneForId(this.id); },
+    // through ZoneId's Java API, which libcore's java.time also answers when it is the one linked
+    "static getTimeZone(Ljava/time/ZoneId;)Ljava/util/TimeZone;": (z: unknown) => after(vcall(z ?? rt.npe(), "getId", "()Ljava/lang/String;"),
+      (id: string) => timeZoneOf(id[0] === "+" || id[0] === "-" ? "GMT" + id : id === "Z" ? "UTC" : id)),
+    "toZoneId()Ljava/time/ZoneId;": driven(function* (this: JTimeZone): Gen {
+      const zoneId = rt.link("java/time/ZoneId"), pending = rt.initClass(zoneId);
+      if (pending) yield pending;
+      return vcall(zoneId.ctor, "of", "(Ljava/lang/String;Ljava/util/Map;)Ljava/time/ZoneId;", this.id, zoneId.ctor[mangleStaticField("SHORT_IDS")] ?? null);
+    }),
     "getID()Ljava/lang/String;": function (this: JTimeZone) { return this.id; },
     "setID(Ljava/lang/String;)V": function (this: JTimeZone, id: string) { this.id = id; },
     "getRawOffset()I": function (this: JTimeZone) { return tzSeasons(this)[0]; },
