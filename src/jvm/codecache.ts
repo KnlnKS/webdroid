@@ -13,6 +13,8 @@ const bundle = new URL(import.meta.url).pathname.replace(/[^\w.-]+/g, "_");
 let url: string | null = null;
 let loaded: Record<string, Factory> = {};
 const used = new Map<string, string>();
+/** methods that only ran cold: their hot bodies are generated when the launch next saves */
+const deferred = new Map<string, () => string>();
 let unsaved = 0;
 
 /** what this launch loaded, reused and has yet to save */
@@ -32,6 +34,11 @@ export function recordBody(key: string, body: string, form: "e" | "r"): void {
   if (used.has(key)) return;
   used.set(key, form === "e" ? `(C,D,R,S,P,$R)=>{${body}\n}` : `(C,D,R,S,P)=>(${body}\n)`);
   unsaved++;
+}
+
+/** a method that ran without a hot body; `make` emits one, so the next launch runs it hot */
+export function recordLater(key: string, make: () => string): void {
+  if (!used.has(key)) deferred.set(key, make);
 }
 
 /** install persisted bodies: what loadCode imports from codeText's module */
@@ -60,8 +67,25 @@ export async function loadCode(app: string): Promise<void> {
   }
 }
 
-/** write every body this launch used or compiled, when there is anything new */
-export async function saveCode(): Promise<void> {
+let saving: Promise<void> | null = null;
+/** write every body this launch used or compiled, then the hot bodies of methods that only ran
+ *  cold, emitted in slices of about 4 ms (about 0.1 ms each) so no frame or tap waits on them */
+export function saveCode(): Promise<void> {
+  return saving ??= (async () => {
+    try {
+      await write();
+      let slice = performance.now();
+      for (const [key, make] of deferred) {
+        deferred.delete(key);
+        if (!used.has(key)) try { recordBody(key, make(), "e"); } catch { /* it compiles on demand instead */ }
+        if (performance.now() - slice > 4) { await new Promise((r) => setTimeout(r)); slice = performance.now(); }
+      }
+      await write();
+    } finally { saving = null; }
+  })();
+}
+
+async function write(): Promise<void> {
   if (!url || !unsaved || typeof caches === "undefined") return;
   unsaved = 0;
   const cache = await caches.open(CACHE);

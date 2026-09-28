@@ -10,7 +10,7 @@ import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
 import { coverageProbeSource, jvmCoverage } from "./coverage";
-import { codeKey, persistedBody, recordBody, type Factory } from "./codecache";
+import { codeKey, persistedBody, recordBody, recordLater, type Factory } from "./codecache";
 import {
   coldInstructions,
   ifTarget,
@@ -177,6 +177,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
     .compileCold(prepared.widths, coldInstructions(code, prepared));
+  if (persist) recordLater(entryKey, () => source(prepare(), false));
   let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
