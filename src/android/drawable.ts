@@ -34,6 +34,9 @@ export class JDrawable extends JObj {
   autoMirrored = false;
   layoutDir = 0;
   visible = true;
+  // AOSP's mSetTintModeInvoked/mSetBlendModeInvoked: each tint-mode setter forwards to the other once
+  settingTintMode = false;
+  settingBlendMode = false;
 
   /** TS-side paint. Subclasses override. */
   paint(cv: JCanvas): unknown { return undefined; }
@@ -48,6 +51,8 @@ const M_onBoundsChange = mangleMethod("onBoundsChange", "(Landroid/graphics/Rect
 const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_onStateChange = mangleMethod("onStateChange", "([I)Z");
 const M_onLevelChange = mangleMethod("onLevelChange", "(I)Z");
+const M_invalidateSelf = mangleMethod("invalidateSelf", "()V");
+const M_getCallback = mangleMethod("getCallback", "()Landroid/graphics/drawable/Drawable$Callback;");
 const M_drawD = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 /**
  * Draw a drawable this one does not own. A container must go through the child's virtual
@@ -60,24 +65,43 @@ export function drawChild(d: JDrawable, cv: JCanvas, thread = curThread): unknow
   const f = (d as unknown as Record<string, (cv: JCanvas) => unknown>)[M_drawD];
   return callOn(thread, () => f ? f.call(d, cv) : d.paint(cv));
 }
-/** AOSP setBounds: only a real change reaches onBoundsChange, dispatched virtually so an app
- *  subclass's override (shape caches, wrapped children) sees it */
+/** AOSP setBounds: only a real change invalidates the old area and reaches onBoundsChange, both
+ *  dispatched virtually so an app subclass's override (shape caches, wrapped children) sees it.
+ *  Views here set bounds on every draw rather than on a size change, so the platform's own
+ *  invalidateSelf is skipped: a drawable shared by two views of different sizes would otherwise
+ *  invalidate every frame. */
 function setBounds(this: JDrawable, l: number, t: number, r: number, b: number) {
   const bd = this.bounds;
   if (bd.left === l && bd.top === t && bd.right === r && bd.bottom === b) return;
+  const inv = jmethod(this, M_invalidateSelf);
+  if (inv && inv !== invalidateSelf && bd.left < bd.right && bd.top < bd.bottom) {
+    const res = inv.call(this);
+    if (res instanceof Promise) return res.then(() => applyBounds(this, l, t, r, b));
+  }
+  return applyBounds(this, l, t, r, b);
+}
+function applyBounds(d: JDrawable, l: number, t: number, r: number, b: number) {
+  const bd = d.bounds;
   bd.left = l; bd.top = t; bd.right = r; bd.bottom = b;
-  const f = jmethod(this, M_onBoundsChange);
-  const res = f ? f.call(this, bd) : onBoundsChangeAll(this);
+  const f = jmethod(d, M_onBoundsChange);
+  const res = f ? f.call(d, bd) : onBoundsChangeAll(d);
   if (res instanceof Promise) return res;
 }
+/** AOSP reaches the callback through getCallback(), which a subclass may override */
+function withCallback(d: JDrawable, use: (callback: unknown) => void) {
+  const f = jmethod(d, M_getCallback);
+  const callback = f ? f.call(d) : d.callback;
+  if (callback instanceof Promise) void callback.then((c) => { if (c) use(c); });
+  else if (callback) use(callback);
+}
 function scheduleSelf(this: JDrawable, r: unknown, when: bigint) {
-  if (this.callback) void vcall(this.callback, "scheduleDrawable", "(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V", this, r, when);
+  withCallback(this, (c) => void vcall(c, "scheduleDrawable", "(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V", this, r, when));
 }
 function unscheduleSelf(this: JDrawable, r: unknown) {
-  if (this.callback) void vcall(this.callback, "unscheduleDrawable", "(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V", this, r);
+  withCallback(this, (c) => void vcall(c, "unscheduleDrawable", "(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V", this, r));
 }
 function invalidateSelf(this: JDrawable) {
-  if (this.callback) void vcall(this.callback, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", this);
+  withCallback(this, (c) => void vcall(c, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", this));
 }
 const drawableMethods: NativeSpec["methods"] = {
   "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JCanvas) { return this.paint(cv); },
@@ -109,13 +133,22 @@ const drawableMethods: NativeSpec["methods"] = {
       (filter) => vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", filter));
   },
   "clearColorFilter()V": function (this: JDrawable) { return vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
-  "setTint(I)V": function (this: JDrawable, c: number) { this.tint = c; },
+  "setTint(I)V": function (this: JDrawable, c: number) { return vcall(this, "setTintList", "(Landroid/content/res/ColorStateList;)V", mkCsl(c)); },
   "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
     this.tintCsl = csl; this.tint = csl ? cslColor(csl, this.stateSet) : null;
   },
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, mode: JSimpleEnum | null) {
     const name = mode?.ename ?? null;
     if (this.tintMode !== name) { this.tintMode = name; invalidateSelf.call(this); }
+    const blend = mode ? BLEND_OF_TINT[mode.ename] ?? mode.ename : "SRC_IN";
+    return forwardOnce(this, "settingTintMode", () =>
+      vcall(this, "setTintBlendMode", "(Landroid/graphics/BlendMode;)V", rt.link("android/graphics/BlendMode").ctor["s$" + blend]));
+  },
+  "setTintBlendMode(Landroid/graphics/BlendMode;)V": function (this: JDrawable, blend: JSimpleEnum | null) {
+    const name = blend?.ename ?? "";
+    const mode = TINT_OF_BLEND[name] ?? (TINT_MODE_NAMES.has(name) ? name : "SRC_IN");
+    return forwardOnce(this, "settingBlendMode", () =>
+      vcall(this, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", rt.link("android/graphics/PorterDuff$Mode").ctor["s$" + mode]));
   },
   "setState([I)Z": driven(function* (this: JDrawable, st: Int32Array): Gen {
     const cur = this.stateSet;
@@ -151,7 +184,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (this: JDrawable, _d: unknown, r: unknown) { unscheduleSelf.call(this, r); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": invalidateSelf,
   "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) { return this; },
-  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable || this.tintCsl || this instanceof JGradientDrawable && (this.solidCsl || this.strokeCsl) ? 1 : 0; },
+  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable || (this.tintCsl?.items.length ?? 0) > 1 || this instanceof JGradientDrawable && (this.solidCsl || this.strokeCsl) ? 1 : 0; },
   "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawable, r: JRect) {
     const p = (this as any).padding as JRect | undefined;
     if (p) { r.left = p.left; r.top = p.top; r.right = p.right; r.bottom = p.bottom; return 1; }
@@ -160,7 +193,11 @@ const drawableMethods: NativeSpec["methods"] = {
   },
   "getOpacity()I": () => -3,
   "static resolveOpacity(II)I": (a: number, b: number) => a === b ? a : a === 0 || b === 0 ? 0 : a === -3 || b === -3 ? -3 : a === -2 || b === -2 ? -2 : -1,
-  "setVisible(ZZ)Z": function (this: JDrawable, v: number) { const changed = this.visible !== !!v; this.visible = !!v; return changed ? 1 : 0; },
+  "setVisible(ZZ)Z": function (this: JDrawable, v: number) {
+    if (this.visible === !!v) return 0;
+    this.visible = !!v;
+    return after(jmethod(this, M_invalidateSelf)!.call(this), () => 1);
+  },
   "isVisible()Z": function (this: JDrawable) { return this.visible ? 1 : 0; },
   "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawable, o: unknown) {
     const b = this.bounds;
@@ -172,7 +209,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "setLayoutDirection(I)Z": function (this: JDrawable, d: number) {
     if (this.layoutDir === d) return 0;
     this.layoutDir = d;
-    return 1;
+    return vcall(this, "onLayoutDirectionChanged", "(I)Z", d);
   },
   "getLayoutDirection()I": function (this: JDrawable) { return this.layoutDir; },
   "jumpToCurrentState()V": () => {},
@@ -180,9 +217,10 @@ const drawableMethods: NativeSpec["methods"] = {
     return this instanceof JStateListDrawable ? this.current() : this;
   },
   "getDirtyBounds()Landroid/graphics/Rect;": function (this: JDrawable) { return this.bounds; },
-  ...noops("<init>()V", "setTintBlendMode(Landroid/graphics/BlendMode;)V",
-    "applyTheme(Landroid/content/res/Resources$Theme;)V",
-    "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)V",
+  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)V": function (this: JDrawable, res: unknown, parser: unknown, attrs: unknown) {
+    return vcall(this, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V", res, parser, attrs, null);
+  },
+  ...noops("<init>()V", "applyTheme(Landroid/content/res/Resources$Theme;)V",
     "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
     "setChangingConfigurations(I)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setHotspot(FF)V",
     "setHotspotBounds(IIII)V"),
@@ -190,6 +228,20 @@ const drawableMethods: NativeSpec["methods"] = {
     "getColorFilter()Landroid/graphics/ColorFilter;", "getTransparentRegion()Landroid/graphics/Region;"),
   ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z", "onLayoutDirectionChanged(I)Z"),
 };
+// BlendMode.fromValue and blendModeToPorterDuffMode where the names differ; a blend mode with no
+// Porter-Duff form becomes the default SRC_IN
+const BLEND_OF_TINT: Record<string, string> = { ADD: "PLUS", MULTIPLY: "MODULATE" };
+const TINT_OF_BLEND: Record<string, string> = { PLUS: "ADD", MODULATE: "MULTIPLY", MULTIPLY: "SRC_IN" };
+const TINT_MODE_NAMES = new Set(["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
+  "SRC_ATOP", "DST_ATOP", "XOR", "DARKEN", "LIGHTEN", "SCREEN", "OVERLAY"]);
+function forwardOnce(d: JDrawable, flag: "settingTintMode" | "settingBlendMode", call: () => unknown): unknown {
+  if (d[flag]) return;
+  d[flag] = true;
+  let res: unknown;
+  try { res = call(); } catch (e) { d[flag] = false; throw e; }
+  if (res instanceof Promise) return res.finally(() => { d[flag] = false; });
+  d[flag] = false;
+}
 function onBoundsChangeAll(d: JDrawable) {
   if (d instanceof JLayerDrawable) return d.layout();
   if (d instanceof JStateListDrawable) { const c = d.current(); if (c) copyBounds(d, c); }
@@ -711,6 +763,7 @@ rt.register({
     "<init>()V": function () {},
     "addState([ILandroid/graphics/drawable/Drawable;)V": function (this: JStateListDrawable, st: Int32Array, d: JDrawable) {
       this.items.push({ ...splitStates(st), d });
+      if (d) return vcall(this, "onStateChange", "([I)Z", Int32Array.from(this.stateSet));
     },
   },
 });
@@ -1188,7 +1241,12 @@ rt.register({
     "setDrawable(Landroid/graphics/drawable/Drawable;)V": wrapSet,
     "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
     "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawableWrapper, r: JRect) { if (this.dr) return setBounds.call(this.dr, r.left, r.top, r.right, r.bottom); },
-    "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) { return this.dr ? vcall(this.dr, "setState", "([I)Z", st) : 0; },
+    // a child whose state changed may have changed its padding: AOSP re-runs onBoundsChange
+    "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) {
+      if (!this.dr) return 0;
+      return after(vcall(this.dr, "setState", "([I)Z", st), (changed: number) =>
+        changed ? after(vcall(this, "onBoundsChange", "(Landroid/graphics/Rect;)V", this.bounds), () => changed) : changed);
+    },
     "onLevelChange(I)Z": function (this: JDrawableWrapper, l: number) { return this.dr ? vcall(this.dr, "setLevel", "(I)Z", l) : 0; },
     "isStateful()Z": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "isStateful", "()Z") : 0; },
     "hasFocusStateSpecified()Z": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "hasFocusStateSpecified", "()Z") : 0; },

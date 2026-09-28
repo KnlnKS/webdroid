@@ -11,12 +11,13 @@ import { JMatrix, restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas }
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
   get drawable(): JDrawable | null { return this.dr; }
-  setDrawable(d: JDrawable | null) {
+  /** a caller that goes on to call the view's invalidate() itself passes `invalidateView` false */
+  setDrawable(d: JDrawable | null, invalidateView = true) {
     const thread = curThread;
     if (this.dr) this.dr.callback = null;
     this.dr = d;
     if (d) d.callback = this;
-    invalidate(this);
+    if (invalidateView) invalidate(this);
     return after(d ? vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())) : 0, () =>
       after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
       this.drawableW = w; this.drawableH = h;
@@ -84,47 +85,49 @@ const initImageView = driven(function* initImageView(view: JImageView, c: unknow
     if (view.drawable && tint) view.drawable.tint = tint;
   }
 });
+/** this.invalidate(), which an app's view may override */
+const invalidateV = (v: JView): unknown => vcallOn(curThread, v, "invalidate", "()V");
 const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": function (this: JImageView, c: unknown) { return initImageView(this, c, null, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JImageView, c: unknown, set: JAttrSet | null) { return initImageView(this, c, set, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number) { return initImageView(this, c, set, style); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle: number) { return initImageView(this, c, set, style, defaultStyle); },
   "setImageDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JImageView, d: JDrawable | null) {
-    const pending = this.setDrawable(d);
+    const pending = this.setDrawable(d, false);
     requestLayout(this);
-    return pending;
+    return after(pending, () => invalidateV(this));
   },
   "setImageResource(I)V": driven(function* (this: JImageView, id: number): Gen {
-    yield this.setDrawable(id && this.jres ? yield loadDrawable(this.jres, id, this.theme) : null);
+    yield this.setDrawable(id && this.jres ? yield loadDrawable(this.jres, id, this.theme) : null, false);
     requestLayout(this);
+    yield invalidateV(this);
   }),
-  "setImageBitmap(Landroid/graphics/Bitmap;)V": driven(function* (this: JImageView, b: JBitmap | null): Gen {
-    if (b) {
-      const d = new JBitmapDrawable();
-      d.bmp = b;
-      yield this.setDrawable(d);
-    } else yield this.setDrawable(null);
-    requestLayout(this);
-  }),
+  "setImageBitmap(Landroid/graphics/Bitmap;)V": function (this: JImageView, b: JBitmap | null) {
+    const d = b ? Object.assign(new JBitmapDrawable(), { bmp: b }) : null;
+    return vcallOn(curThread, this, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+  },
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
   "getImageAlpha()I": function (this: JImageView) { return this.imageAlpha; },
   "setImageAlpha(I)V": function (this: JImageView, alpha: number) {
+    return vcallOn(curThread, this, "setAlpha", "(I)V", alpha);
+  },
+  "setAlpha(I)V": function (this: JImageView, alpha: number) {
     alpha &= 255;
     if (this.imageAlpha === alpha) return;
     this.imageAlpha = alpha;
     this.hasImageAlpha = true;
-    invalidate(this);
-    return this.applyImageAlpha();
-  },
-  "setAlpha(I)V": function (this: JImageView, alpha: number) {
-    return vcallOn(curThread, this, "setImageAlpha", "(I)V", alpha);
+    return after(this.applyImageAlpha(), () => invalidateV(this));
   },
   "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number } | null) {
     if (!st) return rt.npe();
     if (this.scaleType === st.ord) return;
-    this.scaleType = st.ord; requestLayout(this); invalidate(this);
+    this.scaleType = st.ord; requestLayout(this);
+    return invalidateV(this);
   },
-  "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) { this.adjustBounds = !!v; },
+  "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) {
+    this.adjustBounds = !!v;
+    if (v) return vcallOn(curThread, this, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", scaleTypes[3]);
+  },
   "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
   "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
@@ -140,8 +143,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
     if (this.colorFilter === f) return;
     this.colorFilter = f; this.hasColorFilter = true;
-    invalidate(this);
-    return this.applyColorFilter();
+    return after(this.applyColorFilter(), () => invalidateV(this));
   },
   "clearColorFilter()V": function (this: JImageView) { return vcallOn(curThread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
   "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JImageView) { return this.colorFilter; },
@@ -171,7 +173,8 @@ const imageViewMethods: NativeSpec["methods"] = {
   },
   "drawableStateChanged()V": function (this: JImageView) {
     const d = this.drawable;
-    if (d) return after(vcallOn(curThread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())), (changed) => { if (changed) invalidate(this); });
+    if (d) return after(vcallOn(curThread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())),
+      (changed) => changed ? vcallOn(curThread, this, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d) : undefined);
   },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },
   "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) { return this.drawMatrix() ?? new JMatrix(); },
@@ -179,9 +182,9 @@ const imageViewMethods: NativeSpec["methods"] = {
     const src = matrix?.m ?? [1, 0, 0, 1, 0, 0], dst = this.imageMatrix.m;
     let changed = false;
     for (let i = 0; i < 6; i++) if (dst[i] !== src[i]) { dst[i] = src[i]; changed = true; }
-    if (changed) { this.drawMatrix(); invalidate(this); }
+    if (changed) { this.drawMatrix(); return invalidateV(this); }
   },
-  "setCropToPadding(Z)V": function (this: JImageView, crop: number) { this.cropToPadding = !!crop; invalidate(this); },
+  "setCropToPadding(Z)V": function (this: JImageView, crop: number) { this.cropToPadding = !!crop; return invalidateV(this); },
   "getCropToPadding()Z": function (this: JImageView) { return +this.cropToPadding; },
   ...noops("setImageURI(Landroid/net/Uri;)V"),
   "onMeasure(II)V": driven(function* (this: JImageView, wSpec: number, hSpec: number): Gen {

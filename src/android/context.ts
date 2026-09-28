@@ -220,8 +220,9 @@ function contextSender(this: JContext, sender: JIntentSender, fill: JIntent | nu
  *  instead loses every ThemeOverlay — which is how Material passes a widget its shape and
  *  colours — and resolves `?attr` references against the wrong stack. */
 function contextStyled(this: JContext, set: JAttrSet | null, attrs: Int32Array, dsa = 0, dsr = 0) {
-  return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, set, attrs, dsa, dsr);
+  return after(contextTheme(this), (theme) => obtainStyled(this.$host.res, theme, set, attrs, dsa, dsr));
 }
+const contextTheme = (c: JContext): JTheme | Promise<JTheme> => vcall(c, "getTheme", "()Landroid/content/res/Resources$Theme;");
 const extFilesDir = (c: JContext, type: string | null) => privDir(`/sdcard/Android/data/${c.$host.pkg}/files` + (type ? "/" + type : ""));
 const extCacheDir = (c: JContext) => privDir(`/sdcard/Android/data/${c.$host.pkg}/cache`);
 const obbDir = (c: JContext) => privDir(`/sdcard/Android/obb/${c.$host.pkg}`);
@@ -426,7 +427,7 @@ const contextMethods: NativeSpec["methods"] = {
   "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JContext, styleId: number, attrs: Int32Array) {
-    return obtainStyleAttributes(this.$host.res, themeOf(this) ?? this.$host.theme, styleId, attrs);
+    return after(contextTheme(this), (theme) => obtainStyleAttributes(this.$host.res, theme, styleId, attrs));
   },
   "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {
     return configurationContext(this, config);

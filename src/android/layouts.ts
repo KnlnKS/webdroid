@@ -14,6 +14,8 @@ import { TV } from "./axml";
 import { inflateLayout } from "./inflate";
 import { vcall, after } from "../jvm/natives/jlang";
 
+/** this.requestLayout(), which an app's layout subclass may override */
+const relayout = (v: JView): unknown => vcall(v, "requestLayout", "()V");
 /** ViewGroup.generateLayoutParams(LayoutParams): keep ours, else copy size (and margins) into a fresh one */
 function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | null): T {
   if (lp instanceof Ctor) return lp;
@@ -24,11 +26,19 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
 
 export class JFrameLayout extends JViewGroup { measureAllChildren = false; }
 /** Layout subclasses expose the covariant descriptors declared by the Android SDK in addition
- *  to ViewGroup's erased descriptor. */
-function covariantLayoutParams(methods: NativeSpec["methods"], lp: string, covariantDefault = true): void {
+ *  to ViewGroup's erased descriptor, which (as javac's bridge does) calls the covariant one
+ *  virtually: an app overrides that one. */
+function covariantLayoutParams(methods: NativeSpec["methods"], lp: string, covariantDefault = true, covariantCopy = false): void {
   const m = methods as Record<string, unknown>;
-  m[`generateLayoutParams(Landroid/util/AttributeSet;)L${lp};`] = m["generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;"];
-  if (covariantDefault) m[`generateDefaultLayoutParams()L${lp};`] ??= m["generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;"];
+  const bridge = (name: string, params: string) => {
+    const erased = `${name}(${params})Landroid/view/ViewGroup$LayoutParams;`, covariant = `(${params})L${lp};`;
+    if (m[name + covariant]) return;
+    m[name + covariant] = m[erased];
+    m[erased] = function (this: JViewGroup, ...args: unknown[]) { return vcall(this, name, covariant, ...args); };
+  };
+  bridge("generateLayoutParams", "Landroid/util/AttributeSet;");
+  if (covariantDefault) bridge("generateDefaultLayoutParams", "");
+  if (covariantCopy) bridge("generateLayoutParams", "Landroid/view/ViewGroup$LayoutParams;");
 }
 const frameMethods: NativeSpec["methods"] = {
   ...viewConstructors,
@@ -56,8 +66,10 @@ const frameMethods: NativeSpec["methods"] = {
       state |= c.measuredState;
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) matchCount++;
     }
-    this.setMeasuredDimension(resolveSizeAndState(Math.max(mw + this.padL + this.padR, this.minW), wSpec, state),
-      resolveSizeAndState(Math.max(mh + this.padT + this.padB, this.minH), hSpec, state << 16));
+    const minH: number = yield vcall(this, "getSuggestedMinimumHeight", "()I");
+    const minW: number = yield vcall(this, "getSuggestedMinimumWidth", "()I");
+    this.setMeasuredDimension(resolveSizeAndState(Math.max(mw + this.padL + this.padR, minW), wSpec, state),
+      resolveSizeAndState(Math.max(mh + this.padT + this.padB, minH), hSpec, state << 16));
     if (matchCount <= 1 || (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY)) return;
     for (const c of this.children) {
       if (c.visibility === 8 && !this.measureAllChildren) continue;
@@ -92,7 +104,6 @@ const frameMethods: NativeSpec["methods"] = {
       yield layoutView(c, x, y, x + c.measuredW, y + c.measuredH);
     }
   }),
-  "setForegroundGravity(I)V": () => {},
   "setMeasureAllChildren(Z)V": function (this: JFrameLayout, all: number) { this.measureAllChildren = !!all; },
   "getMeasureAllChildren()Z": function (this: JFrameLayout) { return +this.measureAllChildren; },
 };
@@ -150,11 +161,11 @@ export const linearMethods: NativeSpec["methods"] = {
       if (ta.vals[5]) yield callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, yield loadDrawableRV(this.jres, ta.vals[5], this.theme));
     }
   }),
-  "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; requestLayout(this); },
+  "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; return relayout(this); },
   "getOrientation()I": function (this: JLinearLayout) { return this.orientation; },
-  "setGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = g; requestLayout(this); },
-  "setHorizontalGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = (g & 0x800007) | (this.gravity & ~0x800007); requestLayout(this); },
-  "setVerticalGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = (g & 0x70) | (this.gravity & ~0x70); requestLayout(this); },
+  "setGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = g; return relayout(this); },
+  "setHorizontalGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = (g & 0x800007) | (this.gravity & ~0x800007); return relayout(this); },
+  "setVerticalGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = (g & 0x70) | (this.gravity & ~0x70); return relayout(this); },
   "setWeightSum(F)V": function (this: JLinearLayout, w: number) { this.weightSum = w; },
   "setBaselineAlignedChildIndex(I)V": function (this: JLinearLayout, index: number) {
     if (index < 0 || index >= this.children.length)
@@ -162,9 +173,13 @@ export const linearMethods: NativeSpec["methods"] = {
     this.baselineAlignedChildIndex = index;
   },
   "getBaselineAlignedChildIndex()I": function (this: JLinearLayout) { return this.baselineAlignedChildIndex; },
-  "setShowDividers(I)V": function (this: JLinearLayout, flags: number) { if (this.showDividers !== flags) { this.showDividers = flags; requestLayout(this); } },
+  "setShowDividers(I)V": function (this: JLinearLayout, flags: number) { if (this.showDividers !== flags) { this.showDividers = flags; return relayout(this); } },
   "getShowDividers()I": function (this: JLinearLayout) { return this.showDividers; },
-  "setDividerPadding(I)V": function (this: JLinearLayout, padding: number) { this.dividerPadding = padding; invalidate(this); },
+  "setDividerPadding(I)V": function (this: JLinearLayout, padding: number) {
+    if (this.dividerPadding === padding) return;
+    this.dividerPadding = padding;
+    if (this.showDividers) return after(relayout(this), () => invalidate(this));
+  },
   "getDividerPadding()I": function (this: JLinearLayout) { return this.dividerPadding; },
   "getDividerDrawable()Landroid/graphics/drawable/Drawable;": function (this: JLinearLayout) { return this.divider; },
   "getDividerWidth()I": function (this: JLinearLayout) { return this.dividerW; },
@@ -173,7 +188,7 @@ export const linearMethods: NativeSpec["methods"] = {
     this.divider = divider;
     this.dividerW = divider ? yield vcall(divider, "getIntrinsicWidth", "()I") : 0;
     this.dividerH = divider ? yield vcall(divider, "getIntrinsicHeight", "()I") : 0;
-    requestLayout(this);
+    yield relayout(this);
   }),
   "hasDividerBeforeChildAt(I)Z": function (this: JLinearLayout, index: number) {
     if (index === this.children.length) return +(!!(this.showDividers & 4));
@@ -318,7 +333,7 @@ export const linearMethods: NativeSpec["methods"] = {
     }
   }),
 };
-covariantLayoutParams(linearMethods, "android/widget/LinearLayout$LayoutParams");
+covariantLayoutParams(linearMethods, "android/widget/LinearLayout$LayoutParams", true, true);
 rt.register({
   name: "android/widget/LinearLayout", ctor: JLinearLayout, sup: "android/view/ViewGroup",
   clinit: () => { rt.link("android/widget/LinearLayout$LayoutParams"); },
@@ -691,7 +706,11 @@ const scrollInit = async function (this: JScrollView, c: unknown, set: JAttrSet 
 const scrollMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": scrollInit,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": scrollInit,
-  "setFillViewport(Z)V": function (this: JScrollView, f: number) { this.fillViewport = !!f; },
+  "setFillViewport(Z)V": function (this: JScrollView, f: number) {
+    if (this.fillViewport === !!f) return;
+    this.fillViewport = !!f;
+    return relayout(this);
+  },
   "onMeasure(II)V": driven(function* (this: JScrollView, wSpec: number, hSpec: number): Gen {
     const c = this.children[0];
     if (c && c.visibility !== 8) {
@@ -722,7 +741,8 @@ const scrollMethods: NativeSpec["methods"] = {
     if (c && c.visibility !== 8) {
       yield layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH);
     }
-    this.clampScroll();
+    // AOSP re-claims the present scroll through scrollTo, which clamps it to the new extent
+    yield vcall(this, "scrollTo", "(II)V", this.scrollX, this.scrollY);
   }),
   "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScrollView, ev: JMotionEvent) {
     const a = ev.action & 0xff;
@@ -890,7 +910,7 @@ const relativeMethods: NativeSpec["methods"] = {
     if (!(g & G.H_MASK)) g |= G.START;
     if (!(g & G.V_MASK)) g |= G.TOP;
     this.gravityR = g;
-    requestLayout(this);
+    return relayout(this);
   },
   "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JRelativeLayout, set: JAttrSet) {
     const lp = lpFromAttrs(new JRelativeLP(), this.jres!, set);

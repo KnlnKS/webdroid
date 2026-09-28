@@ -172,9 +172,7 @@ rt.register({
     },
     "setBackgroundDrawableResource(I)V": driven(function* (this: JWindow, id: number): Gen {
       if (!appHost) return;
-      this.bg = yield loadDrawable(appHost.res, id, appHost.theme); this.bgSet = true;
-      if (this.activity && this.decor) this.decor.background = this.bg;
-      invalidate();
+      yield vcall(this, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", yield loadDrawable(appHost.res, id, appHost.theme));
     }),
     "getAttributes()Landroid/view/WindowManager$LayoutParams;": function (this: JWindow) {
       const lp = rt.make("android/view/WindowManager$LayoutParams");

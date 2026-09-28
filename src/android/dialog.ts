@@ -134,7 +134,7 @@ rt.register({
       }
     }),
     "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: DialogRoot, ev: JMotionEvent): Gen {
-      if (this.dialog) yield dialogTouch(this.dialog, ev);
+      if (this.dialog) yield vcall(this.dialog, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", ev);
       return 1;
     }),
   },
@@ -171,7 +171,7 @@ class JDialog extends JObj {
     if (this.cancelL) {
       try { yield vcall(this.cancelL, "onCancel", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
-    yield this.dismissImpl();
+    yield vcall(this, "dismiss", "()V");
   }
   ensureRoot(): DialogRoot {
     if (!this.root) {
@@ -193,7 +193,7 @@ async function dialogTouch(dialog: JDialog, event: JMotionEvent): Promise<number
   const root = dialog.root, action = event.action & 0xff;
   if (!dialog.cancelable || !dialog.showing || !dialog.canceledOnTouchOutside || !root) return 0;
   if (action !== 4 && (action !== 1 || event.x >= 0 && event.x < root.width() && event.y >= 0 && event.y < root.height())) return 0;
-  await dialog.cancel();
+  await vcall(dialog, "cancel", "()V");
   return 1;
 }
 /** A title/message/button text arrives as a resource id or any CharSequence (a Spanned from
@@ -261,7 +261,10 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "cancel()V": function (this: JDialog) { return this.cancel(); },
   "isShowing()Z": function (this: JDialog) { return this.showing ? 1 : 0; },
   "setTitle(Ljava/lang/CharSequence;)V": setDialogTitle,
-  "setTitle(I)V": setDialogTitle,
+  "setTitle(I)V": function (this: JDialog, id: number) {
+    const host = this.jctx?.$host;
+    return vcall(this, "setTitle", "(Ljava/lang/CharSequence;)V", host ? resString(host.res, id) : "");
+  },
   "setCancelable(Z)V": function (this: JDialog, c: number) { this.cancelable = !!c; },
   // AOSP: an outside-touch cancel implies a cancelable dialog, but withdrawing it leaves Back alone
   "setCanceledOnTouchOutside(Z)V": function (this: JDialog, c: number) { if (c) this.cancelable = true; this.canceledOnTouchOutside = !!c; },
@@ -295,8 +298,13 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.ownerActivity; },
   "setOwnerActivity(Landroid/app/Activity;)V": function (this: JDialog, activity: unknown) { this.ownerActivity = activity; },
-  "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
+  "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return vcall(this, "cancel", "()V"); },
   "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JDialog, event: JMotionEvent) { return dialogTouch(this, event); },
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JDialog, event: JMotionEvent): Gen {
+    if (this.win && (yield vcall(this.win, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event))) return 1;
+    return vcall(this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
+  }),
+  "onSearchRequested(Landroid/view/SearchEvent;)Z": function (this: JDialog) { return vcall(this, "onSearchRequested", "()Z"); },
 
   "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V": function (this: JDialog, l: unknown) { this.keyL = l; },
   // Dialog.dispatchKeyEvent: its OnKeyListener, then the window's views, then KeyEvent.dispatch
@@ -317,8 +325,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(null, "getCurrentFocus()Landroid/view/View;", "onCreatePanelView(I)Landroid/view/View;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;"),
-  ...stubs(0, "dispatchTouchEvent(Landroid/view/MotionEvent;)Z", "onSearchRequested()Z",
-    "onSearchRequested(Landroid/view/SearchEvent;)Z", "onCreatePanelMenu(ILandroid/view/Menu;)Z",
+  ...stubs(0, "onSearchRequested()Z", "onCreatePanelMenu(ILandroid/view/Menu;)Z",
     "onMenuItemSelected(ILandroid/view/MenuItem;)Z", "dispatchKeyShortcutEvent(Landroid/view/KeyEvent;)Z", "dispatchTrackballEvent(Landroid/view/MotionEvent;)Z",
     "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z"),
@@ -367,7 +374,7 @@ async function buildAlertContent(d: JAlertDialog) {
   const dismissingClick = (l: unknown, which: number) => ({
     [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen {
       if (l) yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which);
-      yield d.dismissImpl();
+      yield vcall(d, "dismiss", "()V");
     }),
   });
   const accent = themeAccent(col);
@@ -494,8 +501,9 @@ const builderMethods: NativeSpec["methods"] = {
   "setIcon(I)Landroid/app/AlertDialog$Builder;": function (this: JAlertBuilder) { return this; },
   "create()Landroid/app/AlertDialog;": function (this: JAlertBuilder) { return this.d; },
   "show()Landroid/app/AlertDialog;": driven(function* (this: JAlertBuilder): Gen {
-    yield callSelf(alertMethods, "show()V", this.d);
-    return this.d;
+    const dialog = yield vcall(this, "create", "()Landroid/app/AlertDialog;");
+    yield vcall(dialog, "show", "()V");
+    return dialog;
   }),
 };
 for (const [name, which] of [["Positive", -1], ["Negative", -2], ["Neutral", -3]] as const) {

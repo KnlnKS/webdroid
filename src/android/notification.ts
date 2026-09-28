@@ -279,7 +279,7 @@ const bMethods: Record<string, Impl> = {
     this.style = s; if (s) s.builder = this; return this;
   },
   ["setFlag(IZ)" + B]: function (this: JNBuilder, bit: number, on: number) { setFlag(this.n, bit, on); return this; },
-  ["setSmallIcon(II)" + B]: function (this: JNBuilder, i: number, lvl: number) { this.n.icon = i; this.n.iconLevel = lvl; return this; },
+  ["setSmallIcon(II)" + B]: function (this: JNBuilder, i: number, lvl: number) { this.n.iconLevel = lvl; return vcall(this, "setSmallIcon", "(I)" + B, i); },
   ["setLights(III)" + B]: function (this: JNBuilder, argb: number, on: number, off: number) {
     this.n.ledARGB = argb; this.n.ledOnMS = on; this.n.ledOffMS = off; return this;
   },
@@ -290,7 +290,7 @@ const bMethods: Record<string, Impl> = {
     this.n.sound = u; this.n.audioStreamType = st; return this;
   },
   ["setTicker(Ljava/lang/CharSequence;Landroid/widget/RemoteViews;)" + B]: function (this: JNBuilder, t: unknown, v: unknown) {
-    this.n.tickerText = t; this.n.tickerView = v; return this;
+    this.n.tickerView = v; return vcall(this, "setTicker", "(Ljava/lang/CharSequence;)" + B, t);
   },
   ["setFullScreenIntent(Landroid/app/PendingIntent;Z)" + B]: function (this: JNBuilder, pi: unknown, hi: number) {
     this.n.fullScreenIntent = pi;
@@ -346,13 +346,19 @@ for (const [sig, f] of Object.entries({
 })) bMethods[sig + B] = function (this: JNBuilder, v: unknown) { this.n[f] = v; return this; };
 // AOSP: a silent notification alerts through its group summary (children, for a summary),
 // drops sound and vibration, and joins the "silent" group when it has none
-bMethods["setSilent(Z)" + B] = function (this: JNBuilder, silent: number) {
+bMethods["setSilent(Z)" + B] = driven(function* (this: JNBuilder, silent: number): Gen {
   if (!silent) return this;
   const n = this.n;
-  n.groupAlertBehavior = (n.flags as number) & FLAG_GROUP_SUMMARY ? 2 : 1;
-  n.vibrate = n.sound = null; n.defaults = (n.defaults as number) & ~3;
-  n.group ||= "silent";
+  yield vcall(this, "setGroupAlertBehavior", "(I)" + B, (n.flags as number) & FLAG_GROUP_SUMMARY ? 2 : 1);
+  yield vcall(this, "setVibrate", "([J)" + B, null);
+  yield vcall(this, "setSound", "(Landroid/net/Uri;)" + B, null);
+  yield vcall(this, "setDefaults", "(I)" + B, (n.defaults as number) & ~3);
+  if (!n.group) yield vcall(this, "setGroup", "(Ljava/lang/String;)" + B, "silent");
   return this;
+});
+// the older overloads forward to their replacements, as AOSP's do
+bMethods["setContent(Landroid/widget/RemoteViews;)" + B] = function (this: JNBuilder, v: unknown) {
+  return vcall(this, "setCustomContentView", "(Landroid/widget/RemoteViews;)" + B, v);
 };
 // setter → the flags bit it toggles
 for (const [sig, bit] of Object.entries({

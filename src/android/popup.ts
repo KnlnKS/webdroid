@@ -501,8 +501,11 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
   "getMaxAvailableHeight(Landroid/view/View;)I": function (this: JPopupWindow, a: JView) { return pwMaxAvail.call(this, a); },
   "getMaxAvailableHeight(Landroid/view/View;I)I": pwMaxAvail,
   "getMaxAvailableHeight(Landroid/view/View;IZ)I": pwMaxAvail,
-  "showAsDropDown(Landroid/view/View;)V": function (this: JPopupWindow, a: JView) { return pwShowDropDown.call(this, a); },
-  "showAsDropDown(Landroid/view/View;II)V": pwShowDropDown,
+  // the shorter forms fill in AOSP's defaults (TOP|START) and forward to the overridable full one
+  "showAsDropDown(Landroid/view/View;)V": function (this: JPopupWindow, a: JView) { return vcall(this, "showAsDropDown", "(Landroid/view/View;II)V", a, 0, 0); },
+  "showAsDropDown(Landroid/view/View;II)V": function (this: JPopupWindow, a: JView, x: number, y: number) {
+    return vcall(this, "showAsDropDown", "(Landroid/view/View;III)V", a, x, y, 0x800033);
+  },
   "showAsDropDown(Landroid/view/View;III)V": pwShowDropDown,
   "showAtLocation(Landroid/view/View;III)V": pwShowAt,
   "dismiss()V": pwDismiss,

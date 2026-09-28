@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jarray, jmethod } from "../jvm/abi";
-import { vcall, vcallOn, curThread, boxInt, box, JFloat } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, boxInt, box, JFloat, after } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
@@ -321,7 +321,9 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "evaluate(FLjava/lang/Number;Ljava/lang/Number;)Ljava/lang/Float;": evalFloat,
-    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": evalFloat,
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JObj, f: number, a: unknown, b: unknown) {
+      return vcall(this, "evaluate", "(FLjava/lang/Number;Ljava/lang/Number;)Ljava/lang/Float;", f, a, b);
+    },
   },
 });
 rt.register({
@@ -434,8 +436,11 @@ const animatorMethods: NativeSpec["methods"] = {
   "end()V": function (this: JValueAnimator) { this.running = false; },
   ...flagGetters({ "isRunning()Z": "running", "isStarted()Z": "running" }),
 };
+/** a covariant setDuration's bridges forward to it, where a subclass overrides it */
+const durationBridge = (cls: string) => function (this: JValueAnimator, d: bigint) { return vcall(this, "setDuration", `(J)L${cls};`, d); };
 const vaMethods: NativeSpec["methods"] = {
   ...animatorMethods,
+  "setDuration(J)Landroid/animation/Animator;": durationBridge("android/animation/ValueAnimator"),
   "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
   "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
   "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
@@ -487,7 +492,21 @@ const vaMethods: NativeSpec["methods"] = {
     return a;
   },
 };
-rt.register({ name: "android/animation/Animator", ctor: class extends JValueAnimator {}, methods: animatorMethods });
+// Animator's own defaults read an app subclass's abstract getters; ValueAnimator and AnimatorSet
+// keep the state-based forms above, as they override these
+rt.register({ name: "android/animation/Animator", ctor: class extends JValueAnimator {}, methods: {
+  ...animatorMethods,
+  "getTotalDuration()J": function (this: JValueAnimator) {
+    return after(vcall(this, "getDuration", "()J"), (duration: bigint) =>
+      duration === -1n ? -1n : after(vcall(this, "getStartDelay", "()J"), (delay: bigint) => delay + duration));
+  },
+  "isStarted()Z": function (this: JValueAnimator) { return vcall(this, "isRunning", "()Z"); },
+  "pause()V": function (this: JValueAnimator) {
+    return after(vcall(this, "isStarted", "()Z"), (started: number) => {
+      if (started && !this.paused) { this.paused = true; this.pausedAt = guestNow(); }
+    });
+  },
+} });
 rt.register({ name: "android/animation/ValueAnimator", ctor: JValueAnimator, sup: "android/animation/Animator", methods: vaMethods });
 class JTimeAnimator extends JValueAnimator { timeListener: unknown = null; lastTime = -1; timeStarted = false; }
 rt.markers("android/animation/TimeAnimator$TimeListener");
@@ -501,6 +520,8 @@ rt.register({
     ...vaMethods,
     // R8/javac narrow the return type at ObjectAnimator call sites, so the mangled name
     // differs from the ValueAnimator/Animator overloads above and needs its own entry.
+    "setDuration(J)Landroid/animation/Animator;": durationBridge("android/animation/ObjectAnimator"),
+    "setDuration(J)Landroid/animation/ValueAnimator;": durationBridge("android/animation/ObjectAnimator"),
     "setDuration(J)Landroid/animation/ObjectAnimator;": setDur,
     "clone()Landroid/animation/ObjectAnimator;": cloneAnimator,
     "static ofFloat(Ljava/lang/Object;Ljava/lang/String;[F)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, v: Float32Array) => objAnim(t, { propName: p }, v, false),
@@ -541,6 +562,7 @@ rt.register({
   methods: {
     ...animatorMethods,
     "getCurrentPlayTime()J": getCurrentPlayTime,
+    "setDuration(J)Landroid/animation/Animator;": durationBridge("android/animation/AnimatorSet"),
     "setDuration(J)Landroid/animation/AnimatorSet;": setDur,
     "clone()Landroid/animation/AnimatorSet;": cloneAnimator,
     "playTogether([Landroid/animation/Animator;)V": function (this: JAnimatorSet, arr: JValueAnimator[]) { this.anims = [...(arr ?? [])]; },

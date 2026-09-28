@@ -347,12 +347,10 @@ function initResources(this: JResources, assets: JAssetManager | null, metrics: 
   });
 }
 const notFound = (what: string, id: number) => rt.mkThrowable("android/content/res/Resources$NotFoundException", `${what} resource ID #0x${(id >>> 0).toString(16)}`);
-/** the string behind `id`; an id the table has no entry for is NotFoundException, as AOSP throws it — an app's
- *  Resources subclass may catch that and serve the string from a store of its own */
-const stringOf = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? (() => { throw notFound("String", id); })();
 const pluralOf = (res: Resources, id: number, n: number): string => pluralString(res, id, n) ?? (() => { throw notFound("Plural", id); })();
 const stringsOf = (res: Resources, id: number): string[] => res.bag(id) ? bagStrings(res, id) : (() => { throw notFound("String array", id); })();
-const getString = function (this: JResources, id: number) { return stringOf(this.host, id); };
+/** CharSequence.toString() of what an overridable text getter returned, as AOSP's String getters take it */
+const textString = (cs: unknown): string | Promise<string> => cs == null ? rt.npe() : vcall(cs, "toString", "()Ljava/lang/String;");
 function resourceText(res: Resources, id: number): unknown {
   const value = res.ref(id), pool = res.tbl(value.r ?? id)?.values;
   return value.t === TV.STRING && pool ? annotatedResource(pool, value.d) : rvString(res, value);
@@ -369,9 +367,12 @@ function drawableForDensity(this: JResources, id: number, density: number, theme
   return loadDrawableFile(this.host, file!.path, bytes, theme, bucket === density ? device.densityDpi : Math.trunc(bucket * device.densityDpi / density));
 }
 const resMethods: NativeSpec["methods"] = {
-  "getString(I)Ljava/lang/String;": getString,
+  // AOSP layers these over getText/getQuantityText, which a Resources subclass (a string store) overrides
+  "getString(I)Ljava/lang/String;": function (this: JResources, id: number) {
+    return after(vcall(this, "getText", "(I)Ljava/lang/CharSequence;", id), textString);
+  },
   "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, args: unknown[]) {
-    return javaFormat(stringOf(this.host, id), args);
+    return after(vcall(this, "getString", "(I)Ljava/lang/String;", id), (raw: string) => javaFormat(raw, args));
   },
   "getText(I)Ljava/lang/CharSequence;": function (this: JResources, id: number) {
     const text = resourceText(this.host, id);
@@ -382,10 +383,10 @@ const resMethods: NativeSpec["methods"] = {
     return resourceText(this.host, id) ?? def;
   },
   "getQuantityString(II)Ljava/lang/String;": function (this: JResources, id: number, n: number) {
-    return pluralOf(this.host, id, n);
+    return after(vcall(this, "getQuantityText", "(II)Ljava/lang/CharSequence;", id, n), textString);
   },
   "getQuantityString(II[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, n: number, args: unknown[]) {
-    return javaFormat(pluralOf(this.host, id, n), args);
+    return after(after(vcall(this, "getQuantityText", "(II)Ljava/lang/CharSequence;", id, n), textString), (raw: string) => javaFormat(raw, args));
   },
   "getQuantityText(II)Ljava/lang/CharSequence;": function (this: JResources, id: number, n: number) {
     return pluralOf(this.host, id, n);
@@ -410,13 +411,15 @@ const resMethods: NativeSpec["methods"] = {
     return complexToFraction(value.d, base, pbase);
   },
   "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JResources, id: number) {
-    return loadDrawable(this.host, id, null);
+    return vcall(this, "getDrawable", "(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;", id, null);
   },
   "getDrawable(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":
     function (this: JResources, id: number, t: JTheme | null) {
-      return loadDrawable(this.host, id, t);
+      return vcall(this, "getDrawableForDensity", "(IILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;", id, 0, t);
     },
-  "getDrawableForDensity(II)Landroid/graphics/drawable/Drawable;": drawableForDensity,
+  "getDrawableForDensity(II)Landroid/graphics/drawable/Drawable;": function (this: JResources, id: number, density: number) {
+    return vcall(this, "getDrawableForDensity", "(IILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;", id, density, null);
+  },
   "getDrawableForDensity(IILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;": drawableForDensity,
   "getFloat(I)F": function (this: JResources, id: number) {
     const v = this.host.ref(id);
@@ -478,7 +481,9 @@ const resMethods: NativeSpec["methods"] = {
     a.host = this.host;
     return a;
   },
-  "openRawResource(I)Ljava/io/InputStream;": openRawResource,
+  "openRawResource(I)Ljava/io/InputStream;": function (this: JResources, id: number) {
+    return vcall(this, "openRawResource", "(ILandroid/util/TypedValue;)Ljava/io/InputStream;", id, new JTypedValue());
+  },
   "openRawResource(ILandroid/util/TypedValue;)Ljava/io/InputStream;": openRawResource,
   "openRawResourceFd(I)Landroid/content/res/AssetFileDescriptor;": openRawResourceFd,
   "obtainAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": function (this: JResources, set: JAttrSet | null, attrs: Int32Array) {

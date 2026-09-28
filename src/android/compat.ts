@@ -1,7 +1,7 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj, after } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
 import { JMatrix, rotM } from "./graphics";
@@ -208,14 +208,22 @@ rt.register({
   statics: { DEFAULT_BLEND_MODE: null },
   methods: {
     // stretch overscroll (API 31): the pulled distance is what the caller reads back
-    "onPullDistance(FF)F": function (this: any, d: number) { const before = this.dist; this.dist = Math.max(0, Math.min(1, this.dist + d)); return this.dist - before; },
+    // AOSP reports the consumed pull to onPull(FF), which an app's EdgeEffect overrides
+    "onPullDistance(FF)F": function (this: any, d: number, displacement: number) {
+      const before = this.dist;
+      this.dist = Math.max(0, Math.min(1, this.dist + d));
+      const consumed = this.dist - before;
+      if (consumed === 0 && before === 0) return 0;
+      return after(vcall(this, "onPull", "(FF)V", consumed, displacement), () => consumed);
+    },
+    "onPull(F)V": function (this: JObj, d: number) { return vcall(this, "onPull", "(FF)V", d, 0.5); },
     "getDistance()F": function (this: any) { return this.dist; },
     "onRelease()V": function (this: any) { this.dist = 0; },
     "finish()V": function (this: any) { this.dist = 0; },
     "setColor(I)V": function (this: any, c: number) { this.color = c; },
     "getColor()I": function (this: any) { return this.color; },
     ...noops("<init>(Landroid/content/Context;)V", "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V",
-      "setSize(II)V", "onPull(F)V", "onPull(FF)V", "onAbsorb(I)V", "setBlendMode(Landroid/graphics/BlendMode;)V"),
+      "setSize(II)V", "onPull(FF)V", "onAbsorb(I)V", "setBlendMode(Landroid/graphics/BlendMode;)V"),
     ...stubs(1, "isFinished()Z"),
     ...stubs(0, "draw(Landroid/graphics/Canvas;)Z", "getMaxHeight()I"),
     ...stubs(null, "getBlendMode()Landroid/graphics/BlendMode;"),

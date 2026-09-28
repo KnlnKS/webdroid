@@ -244,6 +244,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     return f === 0 ? vcall(this, "onPrepareOptionsMenu", "(Landroid/view/Menu;)Z", menu) : 1;
   },
   "onMenuItemSelected(ILandroid/view/MenuItem;)Z": driven(function* (this: JActivity, f: number, item: JMenuItem): Gen {
+    if (f === 6) return (yield vcall(this, "onContextItemSelected", "(Landroid/view/MenuItem;)Z", item)) ? 1 : 0;
     if (f !== 0) return 0;
     if (yield vcall(this, "onOptionsItemSelected", "(Landroid/view/MenuItem;)Z", item)) return 1;
     // AOSP: an android.R.id.home nobody claimed, with DISPLAY_HOME_AS_UP set, becomes Up
@@ -296,10 +297,14 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setTitle(Ljava/lang/CharSequence;)V": function (this: JActivity, t: unknown) {
     this.titleStr = spannedString(t);
-    if (this.window.actionBarView) { this.window.actionBarView.titleStr = this.titleStr; invalidate(); }
+    return vcall(this, "onTitleChanged", "(Ljava/lang/CharSequence;I)V", t, 0);
+  },
+  // AppCompatActivity overrides this to title its toolbar
+  "onTitleChanged(Ljava/lang/CharSequence;I)V": function (this: JActivity, t: unknown) {
+    if (this.window.actionBarView) { this.window.actionBarView.titleStr = spannedString(t); invalidate(); }
   },
   "setTitle(I)V": function (this: JActivity, id: number) {
-    callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
+    return vcall(this, "setTitle", "(Ljava/lang/CharSequence;)V", resString(this.$host.res, id));
   },
   "getActionBar()Landroid/app/ActionBar;": driven(function* (this: JActivity): Gen {
     yield ensureDecor(this);
@@ -342,13 +347,19 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
   // onActivityResult, which launchIntent arranges without waiting on a system activity's UI.
-  "startActivityForResult(Landroid/content/Intent;I)V": function (this: JActivity, intent: JIntent, code: number) {
-    return launchIntent(this.$host, intent, { act: this, code });
-  },
-  // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
-  // overload, which must funnel into the body above rather than carry a second copy of it.
+  // A negative request code asks for no result.
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
-    return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
+    return launchIntent(this.$host, intent, code >= 0 ? { act: this, code } : undefined);
+  },
+  "startActivityForResult(Landroid/content/Intent;I)V": function (this: JActivity, intent: JIntent, code: number) {
+    return vcall(this, "startActivityForResult", "(Landroid/content/Intent;ILandroid/os/Bundle;)V", intent, code, null);
+  },
+  "startActivity(Landroid/content/Intent;)V": function (this: JActivity, intent: JIntent) {
+    return vcall(this, "startActivity", "(Landroid/content/Intent;Landroid/os/Bundle;)V", intent, null);
+  },
+  "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, options: unknown) {
+    return options ? vcall(this, "startActivityForResult", "(Landroid/content/Intent;ILandroid/os/Bundle;)V", intent, -1, options)
+      : vcall(this, "startActivityForResult", "(Landroid/content/Intent;I)V", intent, -1);
   },
   "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;III)V": senderForResult,
   "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;IIILandroid/os/Bundle;)V": senderForResult,
@@ -421,7 +432,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
     "onActionModeFinished(Landroid/view/ActionMode;)V", "onPointerCaptureChanged(Z)V",
     "onProvideKeyboardShortcuts(Ljava/util/List;Landroid/view/Menu;I)V", "onLowMemory()V", "onTrimMemory(I)V",
-    "onUserInteraction()V", "onTitleChanged(Ljava/lang/CharSequence;I)V",
+    "onUserInteraction()V",
     "onChildTitleChanged(Landroid/app/Activity;Ljava/lang/CharSequence;)V", "closeOptionsMenu()V",
     "overridePendingTransition(II)V", "overrideActivityTransition(III)V", "overrideActivityTransition(IIII)V",
     "clearOverrideActivityTransition(I)V", "startPostponedEnterTransition()V", "reportFullyDrawn()V",
@@ -435,17 +446,22 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     yield vcall(this, "onUserInteraction", "()V");
     return dispatchWindowKey(this, this.window.decor, ev);
   }),
-  ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
-    "onSearchRequested(Landroid/view/SearchEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
+  "onSearchRequested(Landroid/view/SearchEvent;)Z": function (this: JActivity) { return vcall(this, "onSearchRequested", "()Z"); },
+  ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onContextItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
+    "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z",
     "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
   // Activity checks deviceSupportsPictureInPictureMode() first; this device lacks the feature
   ...noops("setPictureInPictureParams(Landroid/app/PictureInPictureParams;)V", "enterPictureInPictureMode()V"),
   "enterPictureInPictureMode(Landroid/app/PictureInPictureParams;)Z": () => 0,
+  // a <fragment> tag goes to the FragmentController, which has nothing to inflate here
+  "onCreateView(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;":
+    function (this: JActivity, _parent: unknown, name: string, c: unknown, attrs: unknown) {
+      return name === "fragment" ? null : vcall(this, "onCreateView", "(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;", name, c, attrs);
+    },
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
-    "onCreateView(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
     "getCurrentFocus()Landroid/view/View;", "onRetainNonConfigurationInstance()Ljava/lang/Object;",
     "getReferrer()Landroid/net/Uri;"),
 };

@@ -9,7 +9,7 @@ import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from 
 import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
-import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
+import { JDrawable, loadDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
 import { JList, jeq, toJsArray } from "../jvm/natives/jutil";
@@ -467,6 +467,16 @@ const selectFromTop = function (this: JListView, pos: number) { jmethod(this, M_
 const listAdapter = function (this: JListView) {
   return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
 };
+/** AdapterView.getSelectedItem: the adapter's item at the selected position, both asked virtually */
+const selectedItem = driven(function* (this: JListView): Gen {
+  const adapter = yield vcall(this, "getAdapter", "()Landroid/widget/Adapter;");
+  const selection: number = yield vcall(this, "getSelectedItemPosition", "()I");
+  if (!adapter || selection < 0 || !(yield vcall(adapter, "getCount", "()I"))) return null;
+  return vcall(adapter, "getItem", "(I)Ljava/lang/Object;", selection);
+});
+/** the erased getAdapter() bridge to a covariant override */
+const listAdapterBridge = function (this: JListView) { return vcall(this, "getAdapter", "()Landroid/widget/ListAdapter;"); };
+const relayout = (v: JView): unknown => vcall(v, "requestLayout", "()V");
 const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JListView, c: unknown, set: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, set);
@@ -515,7 +525,7 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
     "setOnItemLongClickListener(Landroid/widget/AdapterView$OnItemLongClickListener;)V": "itemLongClickL",
     "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": "itemSelectedL" }),
   ...noops("setVerticalFadingEdgeEnabled(Z)V", "setFadingEdgeLength(I)V"),
-  ...stubs(null, "getSelectedItem()Ljava/lang/Object;"),
+  "getSelectedItem()Ljava/lang/Object;": selectedItem,
   ...stubs(-1, "getSelectedItemPosition()I"),
   "onMeasure(II)V": measureListView,
   "onLayout(ZIIII)V": driven(function* (this: JListView): Gen {
@@ -641,7 +651,7 @@ const absListViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setSelectionFromTop(II)V": function (this: JListView, pos: number, off: number) {
     this.pendingSel = { pos, off };
-    requestLayout(this);
+    return relayout(this);
   },
   "smoothScrollToPosition(I)V": selectFromTop,
   "smoothScrollBy(II)V": function (this: JListView, dy: number) { this.scrollRows(dy); },
@@ -691,7 +701,10 @@ const absListViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...fieldGetters({ "getChoiceMode()I": "choiceMode", "getListPaddingLeft()I": "padL",
     "getListPaddingRight()I": "padR", "getListPaddingTop()I": "padT", "getListPaddingBottom()I": "padB" }),
   ...fieldSetters({ "setMultiChoiceModeListener(Landroid/widget/AbsListView$MultiChoiceModeListener;)V": "multiChoiceL" }),
-  ...noops("setSelector(Landroid/graphics/drawable/Drawable;)V", "setSelector(I)V", "setDrawSelectorOnTop(Z)V",
+  "setSelector(I)V": function (this: JListView, id: number) {
+    return after(loadDrawable(this.jres!, id, this.theme), (d) => vcall(this, "setSelector", "(Landroid/graphics/drawable/Drawable;)V", d));
+  },
+  ...noops("setSelector(Landroid/graphics/drawable/Drawable;)V", "setDrawSelectorOnTop(Z)V",
     "setFastScrollEnabled(Z)V", "setRecyclerListener(Landroid/widget/AbsListView$RecyclerListener;)V",
     "setTextFilterEnabled(Z)V", "setSmoothScrollbarEnabled(Z)V", "setScrollingCacheEnabled(Z)V",
     "setCacheColorHint(I)V", "setTranscriptMode(I)V", "setStackFromBottom(Z)V"),
@@ -713,9 +726,10 @@ const listOnlyMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setDivider(Landroid/graphics/drawable/Drawable;)V": function (this: JListView, d: JDrawable | null) {
     this.divDraw = d;
-    return after(d ? drawableSize(d, true) : 0, h => { this.divH = Math.max(0, h); requestLayout(this); });
+    return after(d ? drawableSize(d, true) : 0, h => { this.divH = Math.max(0, h); return relayout(this); });
   },
-  "setDividerHeight(I)V": function (this: JListView, h: number) { this.divH = h; requestLayout(this); },
+  "setDividerHeight(I)V": function (this: JListView, h: number) { this.divH = h; return relayout(this); },
+  "getAdapter()Landroid/widget/Adapter;": listAdapterBridge,
   "getAdapter()Landroid/widget/ListAdapter;": listAdapter,
   ...fieldGetters({ "getDividerHeight()I": "divH", "getDivider()Landroid/graphics/drawable/Drawable;": "divDraw" }),
   ...noops("setHeaderDividersEnabled(Z)V", "setFooterDividersEnabled(Z)V",
@@ -809,6 +823,7 @@ rt.register({
   methods: {
     ...adapterViewMethods,
     ...absListViewMethods,
+    "getAdapter()Landroid/widget/Adapter;": listAdapterBridge,
     "getAdapter()Landroid/widget/ListAdapter;": listAdapter,
     "setNumColumns(I)V": function (this: any, n: number) { this.cols = Math.max(1, n); requestLayout(this); },
     ...noops("setColumnWidth(I)V", "setStretchMode(I)V", "setHorizontalSpacing(I)V", "setVerticalSpacing(I)V"),
@@ -987,10 +1002,6 @@ const absSpinnerMethods: NativeSpec["methods"] = {
   "setSelection(I)V": driven(function* (this: JSelSpinner, pos: number): Gen { yield selectPosition(this, pos); }),
   "getSelectedItemPosition()I": function (this: JSelSpinner) { return this.selection; },
   "getSelectedView()Landroid/view/View;": function (this: JSelSpinner) { return this.selView; },
-  "getSelectedItem()Ljava/lang/Object;": function(this: JSelSpinner) {
-    if (!this.adapter || this.selection < 0) return null;
-    return vcall(this.adapter, "getItem", "(I)Ljava/lang/Object;", this.selection);
-  },
   "getSelectedItemId()J": function (this: JSelSpinner) { return selectedRowId(this); },
 };
 rt.register({

@@ -2,7 +2,7 @@ import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { AID, type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
+import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, type JInsets, JRect, JTypeface, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
@@ -11,7 +11,7 @@ import { G, absGravity } from "./gravity";
 import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JMotionEvent } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
-import { accelDecel } from "./interpolator";
+import { accelDecel, loadInterpolator } from "./interpolator";
 import { mangleMethod } from "../jvm/abi";
 import { device } from "../shell/config";
 
@@ -123,7 +123,7 @@ rt.register({
     "getSecondaryProgress()I": function (this: JProgressBar) { return this.indeterminate ? 0 : this.secondary; },
     "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(this.min, m); this.progress = this.clamp(this.progress); invalidate(this); },
     "setMin(I)V": function (this: JProgressBar, m: number) { this.min = Math.min(this.max, m); this.progress = this.clamp(this.progress); invalidate(this); },
-    "incrementProgressBy(I)V": function (this: JProgressBar, d: number) { setProgressValue.call(this, this.progress + d); },
+    "incrementProgressBy(I)V": function (this: JProgressBar, d: number) { return vcall(this, "setProgress", "(I)V", this.progress + d); },
     "setIndeterminate(Z)V": function (this: JProgressBar, on: number) {
       if ((!this.onlyIndeterminate || !this.indeterminate) && !!on !== this.indeterminate) { this.indeterminate = !!on; invalidate(this); }
     },
@@ -145,7 +145,10 @@ rt.register({
       "getIndeterminateTintList()Landroid/content/res/ColorStateList;": "indetTint",
       "getMinWidth()I": "minWidth", "getMaxWidth()I": "maxWidth", "getMinHeight()I": "minHeight", "getMaxHeight()I": "maxHeight" }),
     ...relayoutSetters({ "setMinWidth(I)V": "minWidth", "setMaxWidth(I)V": "maxWidth", "setMinHeight(I)V": "minHeight", "setMaxHeight(I)V": "maxHeight" }),
-    ...noops("setInterpolator(Landroid/view/animation/Interpolator;)V", "setInterpolator(Landroid/content/Context;I)V"),
+    ...noops("setInterpolator(Landroid/view/animation/Interpolator;)V"),
+    "setInterpolator(Landroid/content/Context;I)V": function (this: JProgressBar, c: { $host: { res: Resources } }, id: number) {
+      return vcall(this, "setInterpolator", "(Landroid/view/animation/Interpolator;)V", loadInterpolator(c.$host.res, id));
+    },
     ...stubs(null, "getInterpolator()Landroid/view/animation/Interpolator;"),
     "onMeasure(II)V": driven(function* (this: JProgressBar, wSpec: number, hSpec: number): Gen {
       const d = this.current();

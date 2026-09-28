@@ -7,7 +7,7 @@ import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
-import { jarray, mangleMethod } from "../jvm/abi";
+import { jarray, jmethod, mangleMethod } from "../jvm/abi";
 import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
@@ -172,7 +172,8 @@ export class JHandler extends JObj {
     if (delay > 0) msg.timer = setGuestTimeout(() => void go(), delay); else void go();
     return 1;
   }
-  post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
+  // a Promise when an app's sendMessageAtTime suspends; natives hand it back to Java as the result
+  post(r: unknown, delay: number): number { return sendDelayed(this, obtain(this, 0, null, 0, 0, r), delay) as number; }
   cancel(key: unknown): void {
     const messages = this.pending.get(key);
     if (messages) this.cancelMatching(() => true, [[key, messages]]);
@@ -189,6 +190,19 @@ export class JHandler extends JObj {
     }
     this.looper.queue.checkIdle();
   }
+}
+/** AOSP's final post and send methods all enqueue through sendMessageAtTime, which a Handler
+ *  subclass may override; one that does not is sent directly. */
+function sendMessageAtTime(this: JHandler, msg: JMessage, at: bigint): number { return this.send(msg, Number(at) - uptimeMillis()); }
+const M_sendMessageAtTime = mangleMethod("sendMessageAtTime", "(Landroid/os/Message;J)Z");
+function sendAt(h: JHandler, msg: JMessage, at: bigint): unknown {
+  const f = jmethod(h, M_sendMessageAtTime);
+  return f && f !== sendMessageAtTime ? f.call(h, msg, at) : sendMessageAtTime.call(h, msg, at);
+}
+function sendDelayed(h: JHandler, msg: JMessage, delay: number): unknown {
+  const f = jmethod(h, M_sendMessageAtTime);
+  if (!f || f === sendMessageAtTime) return h.send(msg, delay);
+  return f.call(h, msg, BigInt(Math.floor(uptimeMillis())) + BigInt(Math.max(0, Math.ceil(delay))));
 }
 /** The window's handler, which View.post/postDelayed/scheduleDrawable enqueue on. Lazy so it
  *  is built after boot has linked the native classes. */
@@ -236,19 +250,20 @@ rt.register({
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
     "postDelayed(Ljava/lang/Runnable;Ljava/lang/Object;J)Z": function (this: JHandler, r: unknown, token: unknown, d: bigint) {
-      return this.send(obtain(this, 0, token, 0, 0, r), Number(d));
+      return sendDelayed(this, obtain(this, 0, token, 0, 0, r), Number(d));
     },
     "postAtTime(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, at: bigint) {
-      return this.post(r, Math.max(0, Number(at) - uptimeMillis()));
+      return sendAt(this, obtain(this, 0, null, 0, 0, r), at);
     },
     "postAtFrontOfQueue(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "removeCallbacks(Ljava/lang/Runnable;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
-    "sendMessage(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
+    "sendMessage(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return sendDelayed(this, m, 0); },
     "sendMessageAtFrontOfQueue(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
-    "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
-    "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(obtain(null, w), 0); },
-    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(obtain(null, w), Math.max(0, Number(at) - uptimeMillis())); },
-    "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(obtain(null, w), Number(d)); },
+    "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return sendDelayed(this, m, Number(d)); },
+    "sendMessageAtTime(Landroid/os/Message;J)Z": sendMessageAtTime,
+    "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return sendDelayed(this, obtain(null, w), 0); },
+    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return sendAt(this, obtain(null, w), at); },
+    "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return sendDelayed(this, obtain(null, w), Number(d)); },
     "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown, token: unknown) {
       this.cancelMatching((key, message) => key === r && (token == null || message.obj === token));
     },
@@ -275,17 +290,21 @@ rt.register({
     },
   },
 });
+const handlerThreadQuit = (name: string) => function (this: JThread) {
+  return after(vcall(this, "getLooper", "()Landroid/os/Looper;"), (looper: JLooper | null) => looper ? after(vcall(looper, name, "()V"), () => 1) : 0);
+};
 const initHandlerThread = function (this: any, n: string) { this.jname = n; this.jlooper.thread = this; this.looper = this.jlooper; };
 rt.register({ name: "android/os/HandlerThread", ctor: class extends JThread { jlooper = new JLooper(); },
   sup: "java/lang/Thread",
   methods: {
     "<init>(Ljava/lang/String;)V": initHandlerThread,
     "<init>(Ljava/lang/String;I)V": initHandlerThread,
-    "start()V": function (this: any) { this.alive = 1; },
+    // its looper's first job is onLooperPrepared, as HandlerThread.run calls it before Looper.loop
+    "start()V": function (this: any) { this.alive = 1; void this.jlooper.run(() => vcallUncaught(this, "onLooperPrepared", "()V")); },
     "getLooper()Landroid/os/Looper;": function (this: any) { return this.jlooper; },
     "getThreadId()I": function (this: JThread) { return this.alive ? threadTid(this) : -1; },
-    "quit()Z": () => 1, "quitSafely()Z": () => 1,
-    "run()V": function () {},
+    "quit()Z": handlerThreadQuit("quit"), "quitSafely()Z": handlerThreadQuit("quitSafely"),
+    ...noops("run()V", "onLooperPrepared()V"),
   },
 });
 

@@ -1229,7 +1229,10 @@ rt.register({
     "<init>()V": function () {},
     "<init>(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix) { if (o) this.m = [...o.m]; },
     "reset()V": function (this: JMatrix) { this.m = [1, 0, 0, 1, 0, 0]; },
-    "set(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix | null) { this.m = o ? [...o.m] : [1, 0, 0, 1, 0, 0]; },
+    "set(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix | null) {
+      if (!o) return vcall(this, "reset", "()V");
+      this.m = [...o.m];
+    },
     "isIdentity()Z": function (this: JMatrix) { return isIdentityM(this.m) ? 1 : 0; },
     "setPolyToPoly([FI[FII)Z": function (this: JMatrix, src: Float32Array, si: number, dst: Float32Array, di: number, count: number) {
       if (count > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
@@ -1833,6 +1836,15 @@ export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Underflow in restoreToCount - more restores than saves");
   while (cv.saveCount > count) restoreCanvas(cv);
 }
+/** Canvas.drawPicture(Picture, Rect[F]): the picture's own size scaled onto dst */
+const drawPictureInto = driven(function* (this: JCanvas, picture: JPicture, dst: JRect | JRectF): Gen {
+  yield vcall(this, "save", "()I");
+  yield vcall(this, "translate", "(FF)V", dst.left, dst.top);
+  const w: number = yield vcall(picture, "getWidth", "()I"), h: number = yield vcall(picture, "getHeight", "()I");
+  if (w > 0 && h > 0) yield vcall(this, "scale", "(FF)V", (dst.right - dst.left) / w, (dst.bottom - dst.top) / h);
+  yield vcall(this, "drawPicture", "(Landroid/graphics/Picture;)V", picture);
+  yield vcall(this, "restore", "()V");
+});
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
 }
@@ -1924,8 +1936,9 @@ export function saveLayer(cv: JCanvas, bounds: RectLike | null, paint: JPaint | 
 }
 const rectOf = (l: number, t: number, r: number, b: number): RectLike => ({ left: l, top: t, right: r, bottom: b });
 /** run a transform about (px, py) instead of the origin */
-function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) {
-  ctx.translate(px, py); f(); ctx.translate(-px, -py);
+const ALL_SAVE_FLAG = 0x1f;
+function aboutPivotV(cv: JCanvas, px: number, py: number, f: () => unknown): unknown {
+  return after(vcall(cv, "translate", "(FF)V", px, py), () => after(f(), () => vcall(cv, "translate", "(FF)V", -px, -py)));
 }
 export function clipEmptyCanvas(ctx: JCanvas["ctx"]) {
   const m = ctx.getTransform();
@@ -2192,12 +2205,17 @@ export const canvasMethods: NativeSpec["methods"] = {
     m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
   },
   "save()I": canvasSave,
-  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": function (this: JCanvas, r: JRectF | null, p: JPaint | null) { return saveLayer(this, r, p); },
+  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": function (this: JCanvas, r: JRectF | null, p: JPaint | null) {
+    return vcall(this, "saveLayer", "(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I", r, p, ALL_SAVE_FLAG);
+  },
   "saveLayer(FFFFLandroid/graphics/Paint;)I": function (this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint | null) { return saveLayer(this, rectOf(l, t, r, b), p); },
   "saveLayer(FFFFLandroid/graphics/Paint;I)I": function (this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint | null) { return saveLayer(this, rectOf(l, t, r, b), p); },
   "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I": function (this: JCanvas, r: JRectF | null, p: JPaint | null) { return saveLayer(this, r, p); },
   "saveLayerAlpha(FFFFI)I": function (this: JCanvas, l: number, t: number, r: number, b: number, a: number) { return saveLayer(this, rectOf(l, t, r, b), null, a & 255); },
-  "saveLayerAlpha(Landroid/graphics/RectF;I)I": function (this: JCanvas, r: JRectF | null, a: number) { return saveLayer(this, r, null, a & 255); },
+  "saveLayerAlpha(Landroid/graphics/RectF;I)I": function (this: JCanvas, r: JRectF | null, a: number) {
+    return vcall(this, "saveLayerAlpha", "(Landroid/graphics/RectF;II)I", r, a, ALL_SAVE_FLAG);
+  },
+  "saveLayerAlpha(Landroid/graphics/RectF;II)I": function (this: JCanvas, r: JRectF | null, a: number) { return saveLayer(this, r, null, a & 255); },
   "restore()V": function (this: JCanvas) { restoreCanvas(this); },
   "restoreToCount(I)V": function (this: JCanvas, count: number) {
     restoreCanvasToCount(this, count);
@@ -2209,12 +2227,15 @@ export const canvasMethods: NativeSpec["methods"] = {
     else this.ctx.translate(x, y);
   },
   "scale(FF)V": function (this: JCanvas, x: number, y: number) { this.ctx.scale(x, y); },
+  // AOSP composes the pivoted forms from translate and scale/rotate, which a subclass may override
   "scale(FFFF)V": function (this: JCanvas, sx: number, sy: number, px: number, py: number) {
-    aboutPivot(this.ctx, px, py, () => this.ctx.scale(sx, sy));
+    if (sx === 1 && sy === 1) return;
+    return aboutPivotV(this, px, py, () => vcall(this, "scale", "(FF)V", sx, sy));
   },
   "rotate(F)V": function (this: JCanvas, d: number) { this.ctx.rotate(Math.fround(d * Math.PI / 180)); },
   "rotate(FFF)V": function (this: JCanvas, d: number, px: number, py: number) {
-    aboutPivot(this.ctx, px, py, () => this.ctx.rotate(Math.fround(d * Math.PI / 180)));
+    if (d === 0) return;
+    return aboutPivotV(this, px, py, () => vcall(this, "rotate", "(F)V", d));
   },
   "skew(FF)V": function (this: JCanvas, sx: number, sy: number) { this.ctx.transform(1, sy, sx, 1, 0, 0); },
   "concat(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix) {
@@ -2224,10 +2245,8 @@ export const canvasMethods: NativeSpec["methods"] = {
     this.ctx.setTransform(...(m?.m ?? [1, 0, 0, 1, 0, 0]));
   },
   "getMatrix()Landroid/graphics/Matrix;": function (this: JCanvas) {
-    const t = this.ctx.getTransform();
     const m = rt.make("android/graphics/Matrix") as JMatrix;
-    m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
-    return m;
+    return after(vcall(this, "getMatrix", "(Landroid/graphics/Matrix;)V", m), () => m);
   },
   "clipRect(FFFF)Z": clipRect,
   "clipRect(IIII)Z": clipRect,
@@ -2244,14 +2263,18 @@ export const canvasMethods: NativeSpec["methods"] = {
     if (op && op.ename && op.ename !== "INTERSECT") return 1;
     return clipPath.call(this, path);
   },
-  "clipPath(Landroid/graphics/Path;)Z": clipPath,
+  "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: JPath) {
+    return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[1]);
+  },
+  "clipOutPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: JPath) {
+    return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[0]);
+  },
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
     return viewportClipBounds(this, r);
   },
   "getClipBounds()Landroid/graphics/Rect;": function (this: JCanvas) {
     const r = new JRect();
-    viewportClipBounds(this, r);
-    return r;
+    return after(vcall(this, "getClipBounds", "(Landroid/graphics/Rect;)Z", r), () => r);
   },
   "drawColor(I)V": drawColor,
   "drawColor(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JCanvas, c: number, m: { ord: number }) {
@@ -2338,12 +2361,16 @@ export const canvasMethods: NativeSpec["methods"] = {
       try { drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, 0, 0)); }
       finally { this.ctx.restore(); }
     },
-  "drawPicture(Landroid/graphics/Picture;)V": function (this: JCanvas, picture: JPicture) { drawPicture(this, picture); },
-  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
-  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
+  "drawPicture(Landroid/graphics/Picture;)V": driven(function* (this: JCanvas, picture: JPicture): Gen {
+    yield vcall(picture, "endRecording", "()V");
+    const count: number = yield vcall(this, "save", "()I");
+    yield vcall(picture, "draw", "(Landroid/graphics/Canvas;)V", this);
+    yield vcall(this, "restoreToCount", "(I)V", count);
+  }),
+  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": drawPictureInto,
+  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": drawPictureInto,
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
-  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z"),
   // a bitmap's canvas is software; the one a window or RenderNode records into is not
   "isHardwareAccelerated()Z": function (this: JCanvas) { return +(this instanceof JRecordingCanvas); },
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
@@ -2529,35 +2556,28 @@ class JRenderNode extends JObj {
 }
 // android.graphics.Picture is the same recording the render node already does, without the
 // transform properties: what it recorded is replayed into whatever canvas is drawing it.
-class JPicture extends JObj { node = new JRenderNode(); }
+class JPicture extends JObj { node = new JRenderNode(); recording = false; }
 rt.register({
   name: "android/graphics/Picture", ctor: JPicture,
   methods: {
     "<init>()V": function () {},
     "beginRecording(II)Landroid/graphics/Canvas;": function (this: JPicture, w: number, h: number) {
-      this.node.w = w; this.node.h = h;
+      this.node.w = w; this.node.h = h; this.recording = true;
       return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
     },
-    "endRecording()V": function (this: JPicture) { return vcall(this.node, "endRecording", "()V"); },
+    "endRecording()V": function (this: JPicture) {
+      if (!this.recording) return;
+      this.recording = false;
+      return vcall(this.node, "endRecording", "()V");
+    },
     "getWidth()I": function (this: JPicture) { return this.node.w; },
     "getHeight()I": function (this: JPicture) { return this.node.h; },
     "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
-      replayWithSemantics(cv, () => { if (this.node.hasDL) replay(cv.ctx, this.node.ops); });
+      return after(this.recording ? vcall(this, "endRecording", "()V") : undefined,
+        () => replayWithSemantics(cv, () => { if (this.node.hasDL) replay(cv.ctx, this.node.ops); }));
     },
   },
 });
-function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
-  const ctx = canvas.ctx, node = picture.node;
-  node.hasDL = true;
-  ctx.save();
-  try {
-    if (dst) {
-      ctx.translate(dst.left, dst.top);
-      if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
-    }
-    replayWithSemantics(canvas, () => replay(ctx, node.ops));
-  } finally { ctx.restore(); }
-}
 /** replay a node's display list into ctx with its transform props applied */
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
