@@ -288,6 +288,13 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   point takes the tested `$t`/`$u`, or `$fu` when `$r` is 0); a one-block entry body with no branch
   has no dispatch loop. Mihon's eager source fell 6.0% and FitNotes' 7.1%. Suspension checks
   remain the largest pattern (22% of source), then `let` declarations (8%) and frame capture (4.6%).
+  Rejected: promoting baseline-profile methods that already run cold (idle precompile skipped them,
+  since their stub was gone), live ones first, with their resumable bodies. Mihon's profile names
+  18,274 methods; idle precompile had reached 3,643 by the first tap and 13,373 by the second.
+  Promotion cut the slow `light` tap's cold calls from 16.6k to 9.3k, but its time moved to
+  resumable-body compiles as the now-hot frames suspended at yields, and building those in idle
+  too left fewer promoted by the tap: slow `light` measured 151-162 ms against 147-150 at HEAD
+  in an interleaved A/B.
 
 ## Java, storage and framework semantics
 
