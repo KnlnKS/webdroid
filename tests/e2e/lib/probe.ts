@@ -55,6 +55,7 @@ export type StepResult = {
   ms: number;
   perf: Record<string, number>;
   newMissing: string[];
+  newPlaceholders: string[];
   nativeRequired: string[];
   unreadAttrs: string[];
   newErrors: string[];
@@ -316,7 +317,7 @@ function installProbe(cfg: ProbeConfig): void {
   const capture = () => captured ? encode(captured) : screenPng();
 
   const act = (a: Act, screen: Screen, deadlineMs: number, controlled = false) => performAction({ a, screen, deadlineMs, controlled });
-  const seen = { missing: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
+  const seen = { missing: new Set<string>(), placeholders: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
     const out = all.filter((x) => !seen[key].has(x));
     seen[key] = new Set(all);
@@ -358,6 +359,7 @@ function installProbe(cfg: ProbeConfig): void {
       settled, semanticHit, wedged, error,
       perf: counters,
       newMissing: fresh("missing", [...wd.rt.missing]),
+      newPlaceholders: fresh("placeholders", [...wd.rt.placeholders]),
       nativeRequired: fresh("native", wd.nativeRequirements()),
       unreadAttrs: fresh("attrs", wd.unreadAttrs()),
       newErrors: fresh("errors", (wd.logs as string[]).filter((l) => l.startsWith("error:"))),

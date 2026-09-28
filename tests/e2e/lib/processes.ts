@@ -7,6 +7,9 @@ export type ProcessDiagnostics = {
   missing: string[];
   /** the Java frames that first reached each missing entry */
   missingAt: Record<string, string[]>;
+  /** placeholder methods reached, and the Java frames that first reached each */
+  placeholders: string[];
+  placeholderAt: Record<string, string[]>;
   native: string[];
   errors: string[] | null;
   perf: Record<string, number> | null;
@@ -34,6 +37,8 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
         const wd = globalThis.wd;
         return wd ? { status: "ok" as const, pkg: wd.app()?.host.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
           missingAt: Object.fromEntries(wd.rt.missingAt ?? []),
+          placeholders: [...wd.rt.placeholders],
+          placeholderAt: Object.fromEntries(wd.rt.placeholderAt),
           native: wd.nativeRequirements(),
           errors: wd.logs?.filter((line: string) => /^(error:|window.error:|unhandledrejection:)/.test(line)) ?? null,
           perf: wd.perf ? { ...wd.perf } : null,

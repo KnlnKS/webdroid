@@ -26,6 +26,8 @@ export type StepRun = {
   frames?: number;
   /** Framework APIs this step was the first to ask for and not find. The dev loop's work list. */
   newMissing?: string[];
+  /** placeholder methods (`stubs`/`noops`) this step was the first to reach; callers are in `processes` */
+  newPlaceholders?: string[];
   /** Native libraries this step was the first to need as machine code ("libx.so (abi)"). */
   nativeRequired?: string[];
   /** framework attributes this step was the first to use and find unread */
@@ -180,6 +182,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
                 presentFps: motion && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
                 slow: slow || undefined,
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
+                newPlaceholders: r.newPlaceholders.length ? r.newPlaceholders : undefined,
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
                 unreadAttrs: r.unreadAttrs.length ? r.unreadAttrs : undefined,
                 newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
