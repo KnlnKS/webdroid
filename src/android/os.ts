@@ -584,6 +584,14 @@ export function bundleTyped(b: JBaseBundle, k: string, cls: unknown, ret: string
 }
 function copyBundle(this: JBaseBundle, b: JBaseBundle | null) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } }
 function putAll(this: JBaseBundle, b: JBaseBundle) { for (const [k, v] of b.map) this.map.set(k, v); }
+/** BaseBundle's deep copy: nested bundles and arrays are copied too, other values are shared */
+function deepCopy(this: JBaseBundle): JBaseBundle {
+  const copy = new (this.constructor as new () => JBaseBundle)();
+  copy.loader = this.loader;
+  for (const [k, v] of this.map) copy.map.set(k, v instanceof JBaseBundle ? deepCopy.call(v)
+    : Array.isArray(v) ? Object.assign(v.slice(), { $t: (v as { $t?: string }).$t }) : ArrayBuffer.isView(v) ? (v as Uint8Array).slice() : v);
+  return copy;
+}
 const bundleMethods: NativeSpec["methods"] = {
   "<init>(Landroid/os/Bundle;)V": copyBundle,
   "<init>(Landroid/os/PersistableBundle;)V": copyBundle,
@@ -629,9 +637,11 @@ for (const [t, d] of BUNDLE_TYPED) {
 }
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
-  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } }, methods: bundleMethods });
+  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } },
+  methods: { ...bundleMethods, "deepCopy()Landroid/os/Bundle;": deepCopy } });
 rt.register({ name: "android/os/PersistableBundle", ctor: JPersistableBundle, sup: "android/os/BaseBundle",
-  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
+  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JPersistableBundle(); } },
+  methods: { ...bundleMethods, "deepCopy()Landroid/os/PersistableBundle;": deepCopy } });
 
 export const PARCELABLE = {
   "describeContents()I": () => 0,

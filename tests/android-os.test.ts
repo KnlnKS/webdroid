@@ -8,6 +8,7 @@ import { TV, type XmlAttr } from "../src/android/axml";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { vcall, newObj, vcallAsync, JThread, curThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
+import { loadFrameworkJar } from "./java";
 import { onMain } from "../src/android/mainloop";
 import { JBitmap } from "../src/android/graphics";
 import { BridgeCalls } from "../src/shell/bridgecalls";
@@ -328,6 +329,7 @@ describe("job-scheduler", () => {
     const previous = appHost, app = new JApplication(), host = { pkg, application: app } as never;
     Reflect.set(app, "$host", host); setAppHost(host);
     try {
+      await loadFrameworkJar();
       const scheduler = rt.make("android/app/job/JobScheduler");
       const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, pkg + ".Worker");
       const info = await vcall(await newObj("android/app/job/JobInfo$Builder", "(ILandroid/content/ComponentName;)V", 7, component), "build", "()Landroid/app/job/JobInfo;");
