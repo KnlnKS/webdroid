@@ -1151,6 +1151,8 @@ function installClassReflection() {
     if (typeof f === "number") return f;
     return this.ci?.def?.flags ?? 1;
   };
+  // ART's class-def flags, which getModifiers overrides with the InnerClass flags of a member
+  M["getAccessFlags()I"] = function (this: JClass) { return this.ci?.def?.flags ?? this.ci?.flags ?? 1; };
   M["isMemberClass()Z"] = function (this: JClass) {
     const ic = innerAnno(this.ci);
     return ic && ic.elements["name"] != null ? 1 : 0;
@@ -1225,6 +1227,7 @@ export function classDesc(c: JClass): string {
 // link Method and Constructor now so their prototypes carry the native methods
 rt.link("java/lang/reflect/Method");
 rt.link("java/lang/reflect/Constructor");
+rt.link("java/lang/reflect/Field");
 installClassReflection();
 
 // ── java.lang.reflect.Proxy: one synthetic class per interface set. Every interface method, and

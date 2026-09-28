@@ -197,3 +197,5 @@ for (const [name, k, args] of UPDATERS) {
     },
   });
 }
+// libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock; JS does
+rt.registerJni("java/util/concurrent/atomic/AtomicLong", "VMSupportsCS8()Z", () => 1);

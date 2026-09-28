@@ -1951,6 +1951,14 @@ export const threadExit = { hook: null as ((t: JThread) => void) | null };
 const liveThreads = new Set<JThread>();
 export class JThread extends JObj {
   jname = "Thread";
+  /** ThreadLocalRandom's per-thread state, which libcore reaches through Unsafe field offsets. It
+   *  also asks for the thread-local maps' offsets; ours live in `locals`, which those do not name,
+   *  so libcore's eraseThreadLocals (innocuous ForkJoin workers only) leaves them in place. */
+  threadLocalRandomSeed = 0n; threadLocalRandomProbe = 0; threadLocalRandomSecondarySeed = 0;
+  threadLocals: unknown = null; inheritableThreadLocals: unknown = null; inheritedAccessControlContext: unknown = null;
+  /** LockSupport's blocker, and the id it reads through Unsafe as getId reports it */
+  parkBlocker: unknown = null;
+  get tid(): bigint { return BigInt(idHash(this)); }
   daemon = 0;
   private live = 0;
   started = false;
@@ -2041,6 +2049,8 @@ function join(t: JThread, ms: number): Promise<void> | undefined {
 rt.register({
   name: "java/lang/Thread", ctor: JThread,
   ifaces: ["java/lang/Runnable"],
+  fields: ["threadLocalRandomSeed", "threadLocalRandomProbe", "threadLocalRandomSecondarySeed", "threadLocals", "inheritableThreadLocals",
+    "inheritedAccessControlContext", "parkBlocker", "tid"],
   methods: {
     "<init>()V": function (this: JThread) { this.jname = nextThreadName(); },
     "<init>(Ljava/lang/Runnable;)V": function (this: JThread, r: unknown) { this.target = r; this.jname = nextThreadName(); },
@@ -2099,6 +2109,10 @@ rt.register({
     "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": function (this: JThread, h: unknown) { this.ueh = h; },
     "static setDefaultUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": (h: unknown) => { defaultUEH = h; },
     "static sleep(J)V": (ms: bigint) => park(curThread, () => () => {}, Number(ms)),
+    "static sleep(JI)V": (ms: bigint, nanos: number) => {
+      if (ms < 0n || nanos < 0 || nanos > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout value is negative or nanos out of range");
+      return park(curThread, () => () => {}, Number(ms) + nanos / 1e6);
+    },
     "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
     "static holdsLock(Ljava/lang/Object;)Z": (o: unknown) => rt.monitors.holds(o as object, curThread) ? 1 : 0,

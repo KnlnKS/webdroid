@@ -4,7 +4,6 @@ import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { parkTimeout } from "../yield";
 import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException, vcallAsync, dispatchUncaught, mainThread } from "./jlang";
 import { JList, newArrayList, toJsArray } from "./jutil";
-import { JRandom, randomSeed } from "./jrandom";
 import { splitSig, jarray } from "../abi";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
@@ -644,26 +643,6 @@ defineException("java/util/concurrent/TimeoutException", "java/lang/Exception");
 defineException("java/util/concurrent/ExecutionException", "java/lang/Exception");
 defineException("java/util/concurrent/CompletionException", "java/lang/RuntimeException");
 defineException("java/util/concurrent/CancellationException", "java/lang/IllegalStateException");
-
-// one process-wide Random (there is one JS thread), seeded from the CSPRNG
-class JTlr extends JRandom {}
-const threadLocalRandom = new JTlr();
-threadLocalRandom.setSeed(randomSeed());
-rt.register({
-  name: "java/util/concurrent/ThreadLocalRandom", ctor: JTlr, sup: "java/util/Random",
-  methods: {
-    "static current()Ljava/util/concurrent/ThreadLocalRandom;": () => threadLocalRandom,
-    // uniform over [origin, bound); a range wider than an int draws until it lands inside
-    "nextInt(II)I": function (this: JTlr, origin: number, bound: number) {
-      if (origin >= bound) throw rt.mkThrowable("java/lang/IllegalArgumentException", "bound must be greater than origin");
-      const n = (bound - origin) | 0;
-      if (n > 0) return origin + this.bounded(n);
-      let r: number;
-      do r = this.next(32); while (r < origin || r >= bound);
-      return r;
-    },
-  },
-});
 
 // CompletableFuture: completed from outside, so the promise is armed by the constructor
 class JCompletable extends JFuture { settle: () => void = () => {}; dependents: (() => void)[] = []; }

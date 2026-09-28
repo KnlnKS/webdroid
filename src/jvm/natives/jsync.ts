@@ -334,13 +334,27 @@ rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$ReadLock"
 rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$WriteLock", ctor: class extends JRWInner { write = true; }, ifaces: ["java/util/concurrent/locks/Lock", "java/io/Serializable"], methods: rwMethods });
 rt.markers("java/util/concurrent/locks/ReadWriteLock", "java/util/concurrent/locks/Lock", "java/util/concurrent/locks/Condition");
 
-// A parked thread wakes on its permit, its deadline, or an interrupt. The wake is a macrotask
-// so the unparker's own chain runs to its next await first, and an untimed park still polls,
-// as Java's spurious wakeups allow, so a permit lost to a stale thread identity cannot hang it.
-function parkThread(t: JThread, timeoutMs = 1000): void | Promise<void> {
+// A parked thread wakes on its permit, its deadline, or an interrupt, which leaves the interrupt
+// status set rather than throwing (LockSupport.park). The wake is a macrotask so the unparker's
+// own chain runs to its next await first, and an untimed park still polls, as Java's spurious
+// wakeups allow, so a permit lost to a stale thread identity cannot hang it.
+function parkThread(t: JThread, timeoutMs?: number): void | Promise<void> {
   if (t.permit) { t.permit = false; return; }
-  return park(t, (wake) => { t.unpark = () => setTimeout(wake, 0); return () => { t.unpark = null; }; }, timeoutMs).then(() => { t.permit = false; });
+  if (t.interrupted) return;
+  return new Promise<void>((resolve) => {
+    const done = () => { t.parked = 0; t.wake = null; t.unpark = null; unparkTimeout(id); t.permit = false; resolve(); };
+    const id = parkTimeout(done, timeoutMs ?? 1000);
+    t.parked = timeoutMs === undefined ? 3 : 4;
+    t.unpark = () => setTimeout(done, 0);
+    t.wake = done;
+  });
 }
+const unparkThread = (t: JThread | null) => { if (!t) return; if (t.unpark) { t.unpark(); t.unpark = null; } else t.permit = true; };
+// libcore's LockSupport parks through Unsafe: `absolute` times are epoch milliseconds, others
+// nanoseconds, and 0 is no deadline
+rt.registerJni("jdk/internal/misc/Unsafe", "park(ZJ)V", (absolute: number, time: bigint) =>
+  parkThread(curThread, absolute ? Math.max(0, Number(time) - Date.now()) : time > 0n ? Number(time) / 1e6 : undefined));
+rt.registerJni("jdk/internal/misc/Unsafe", "unpark(Ljava/lang/Object;)V", unparkThread);
 rt.register({
   name: "java/util/concurrent/locks/LockSupport", ctor: class extends JObj {},
   methods: {
@@ -348,7 +362,7 @@ rt.register({
     "static park(Ljava/lang/Object;)V": () => parkThread(curThread),
     "static parkNanos(J)V": (n: bigint) => parkThread(curThread, Number(n) / 1e6),
     "static parkNanos(Ljava/lang/Object;J)V": (_b: unknown, n: bigint) => parkThread(curThread, Number(n) / 1e6),
-    "static unpark(Ljava/lang/Thread;)V": (t: JThread | null) => { if (!t) return; if (t.unpark) { t.unpark(); t.unpark = null; } else t.permit = true; },
+    "static unpark(Ljava/lang/Thread;)V": unparkThread,
   },
 });
 // ── AbstractQueuedSynchronizer: the state word, its CAS, and FIFO waiting in exclusive and shared

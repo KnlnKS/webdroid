@@ -36,7 +36,7 @@ export class JRandom extends JObj {
   }
 }
 rt.register({
-  name: "java/util/Random", ctor: JRandom,
+  name: "java/util/Random", ctor: JRandom, ifaces: ["java/util/random/RandomGenerator", "java/io/Serializable"],
   methods: {
     "<init>()V": function (this: JRandom) { this.setSeed(BigInt(Date.now()) ^ BigInt((Math.random() * 1e9) | 0)); },
     "<init>(J)V": function (this: JRandom, s: bigint) { this.setSeed(s); },
