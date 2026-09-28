@@ -3,11 +3,11 @@
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
 import { charsetName, encodeModifiedUtf8, encodeString, streamDecoder, type StreamDecoder } from "../charset";
-import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
+import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { csText } from "./jchars";
 import { readFully, writable, type FileSource } from "../../shell/lazyfile";
 import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
-import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer, type JCharsetDecoder } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer, type JCharsetDecoder } from "./jnio";
 import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
@@ -218,7 +218,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcall(this.wrapped, "mark", "(I)V", limit); },
   "reset()V": function (this: JInputStream) {
     if (this.wrapped) return vcall(this.wrapped, "reset", "()V");
-    throw rt.mkThrowable("java/io/IOException", "mark/reset not supported");
+    return markUnsupported();
   },
   "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcall(this.wrapped, "markSupported", "()Z") : 0; },
 };
@@ -313,7 +313,7 @@ function openRead(this: JFileInputStream, p: string) {
 function readFile(this: JFileInputStream, out: Int8Array, off: number, len: number) {
   checkFileOpen(this);
   if (!out) return rt.npe();
-  if (off < 0 || len < 0 || off > out.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(off, len, out.length);
   if (!len) return 0;
   return after(javaReadFd(this.fd.fd, u8(out, off, len)), n => checkedFdResult(n) || -1);
 }
@@ -375,7 +375,7 @@ rt.register({
     "read([BII)I": driven(function* (this: JBufferedIn, out: Int8Array, offset: number, count: number): Gen {
       this.check();
       if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(offset, count, out.length);
       if (!count) return 0;
       if (this.pos >= this.count) {
         if (count >= this.buf.length && this.marked < 0) return vcall(this.wrapped, "read", "([BII)I", out, offset, count);
@@ -486,7 +486,7 @@ rt.register({
     // OutputStream.write(byte[],int,int) is write(int) per byte, reaching a subclass's override
     "write([BII)V": driven(function* (this: JOutputStream, b: Int8Array, off: number, len: number): Gen {
       if (!b) rt.npe();
-      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, b.length);
       for (let i = 0; i < len; i++) yield vcall(this, "write", "(I)V", b[off + i]);
     }),
     "flush()V": function () {},
@@ -519,7 +519,7 @@ rt.register({
     },
     "write(I)V": function (this: JBAOS, b: number) { this.grow(this.count + 1); this.buf[this.count++] = b; },
     "write([BII)V": function (this: JBAOS, b: Int8Array, off: number, len: number) {
-      if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, b.length);
       this.grow(this.count + len);
       this.buf.set(b.subarray(off, off + len), this.count);
       this.count += len;
@@ -605,7 +605,7 @@ rt.register({
     "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this); },
     "write([BII)V": function (this: JFOS, b: Int8Array, off: number, len: number) {
       checkFileOpen(this);
-      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, b.length);
       this.put(u8(b, off, len));
       if (this.shared) flushFOS(this);
     },
@@ -789,7 +789,7 @@ rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, s
   }),
   "read([BII)I": driven(function* (this: JSequenceInputStream, out: Int8Array, offset: number, count: number): Gen {
     if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    checkFromIndexSize(offset, count, out.length);
     if (!count) return 0;
     while (this.current) { const n = yield vcall(this.current, "read", "([BII)I", out, offset, count); if (n > 0) return n; yield this.advance(); } return -1;
   }),
@@ -849,7 +849,7 @@ rt.register({
     "read([BII)I": driven(function* (this: JPushbackIn, b: Int8Array, off: number, len: number): Gen {
       const buf = pushbackOpen(this);
       if (!b) rt.npe();
-      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, b.length);
       if (!len) return 0;
       const avail = Math.min(buf.length - this.ppos, len);
       b.set(buf.subarray(this.ppos, this.ppos + avail), off);
@@ -903,7 +903,7 @@ rt.register({
       return after(this.count === this.buf.length ? drain(this) : undefined, () => { this.buf[this.count++] = b; });
     },
     "write([BII)V": function (this: JBufferedOut, b: Int8Array, off: number, len: number) {
-      if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, b.length);
       if (len >= this.buf.length) {
         const t = rt.th();
         return after(drain(this), () => { rt.st(t); return vcall(this.out, "write", "([BII)V", b, off, len); });
@@ -1211,7 +1211,7 @@ class JPushbackReader extends JFilterReader { push: number[] = []; capacity = 1;
 function unreadChars(r: JPushbackReader, chars: Uint16Array, off: number, len: number): void {
   filterInput(r);
   if (!chars) return rt.npe();
-  if (off < 0 || len < 0 || off > chars.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(off, len, chars.length);
   if (r.push.length + len > r.capacity) throw rt.mkThrowable("java/io/IOException", "Pushback buffer full");
   for (let i = off + len - 1; i >= off; i--) r.push.push(chars[i]);
 }
@@ -1228,7 +1228,7 @@ rt.register({
     "read([CII)I": function (this: JPushbackReader, out: Uint16Array, off: number, len: number) {
       const input = filterInput(this);
       if (!out) return rt.npe();
-      if (off < 0 || len < 0 || off > out.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, out.length);
       if (!len) return 0;
       let copied = 0;
       while (copied < len && this.push.length) out[off + copied++] = this.push.pop() ?? 0;
@@ -1257,7 +1257,7 @@ const wr = (w: unknown, s: string) => vcall(w, "write", "(Ljava/lang/String;)V",
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
 function writerRange(value: string | Uint16Array, off: number, len: number): void {
   if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  if (off < 0 || len < 0 || off > value.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(off, len, value.length);
 }
 const nativeWriterRanges = {
   "write(Ljava/lang/String;II)V": function (this: JWriter, text: string, off: number, len: number) {
@@ -1503,7 +1503,7 @@ function channelRead(channel: JFileChannel, dst: JBuffer): number | Promise<numb
   const file = channel.readable(), len = dst.lim - dst.pos;
   if (len === 0) return 0;
   dst.clampPut(0);
-  const view = new Int8Array(dst.ab, dst.dv.byteOffset + dst.pos, len);
+  const view = remainingBytes(dst);
   const n = file instanceof JRAF ? rafRead(file, view, 0, len) : (file as any)[readBII](view, 0, len);
   return after(n, (n: number) => { if (n > 0) dst.pos += n; return n; });
 }
@@ -1511,7 +1511,7 @@ function channelWrite(channel: JFileChannel, src: JBuffer): number | Promise<num
   if (!src) throw rt.mkThrowable("java/lang/NullPointerException", "src");
   const file = channel.writable(), len = src.lim - src.pos;
   if (len === 0) return 0;
-  const view = new Int8Array(src.ab, src.dv.byteOffset + src.pos, len);
+  const view = remainingBytes(src);
   const written = file instanceof JRAF ? rafWrite(file, view, 0, len) : vcall(file, "write", "([BII)V", view, 0, len);
   return after(written, () => { src.pos += len; return len; });
 }

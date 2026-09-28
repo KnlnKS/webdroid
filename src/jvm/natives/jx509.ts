@@ -3,7 +3,7 @@
 // built against the system CA store the shell mounts. Cronet asks Java for exactly this.
 import type { asn1 } from "node-forge";
 import { JObj, rt, driven, type Gen } from "../runtime";
-import { jarray, i8 } from "../abi";
+import { jarray, i8, sameBytes } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall, after } from "./jlang";
 import { newArrayList, mkIter, newStringSet } from "./jutil";
 import { JRsaPublicKey, forge, binary, array as bytes } from "./jrsa";
@@ -28,7 +28,7 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": function (this: JX509Key) { return this.algorithm; },
     "getFormat()Ljava/lang/String;": () => "X.509",
     "getEncoded()[B": function (this: JX509Key) { return i8(this.encoded); },
-    "equals(Ljava/lang/Object;)Z": function (this: JX509Key, o: unknown) { return o instanceof JX509Key && binary(o.encoded) === binary(this.encoded) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JX509Key, o: unknown) { return o instanceof JX509Key && sameBytes(o.encoded, this.encoded) ? 1 : 0; },
     "hashCode()I": function (this: JX509Key) { return stringHash(binary(this.encoded)); },
   },
 });
@@ -134,7 +134,7 @@ async function verifyChain(chain: JX509[]): Promise<JX509[]> {
   for (let depth = 0; depth < 16; depth++) {
     checkValidity(cur);
     path.push(cur);
-    const trusted = (store.get(cur.subjectDer) ?? []).some((a) => binary(a.der) === binary(cur.der));
+    const trusted = (store.get(cur.subjectDer) ?? []).some((a) => sameBytes(a.der, cur.der));
     if (trusted) return path;
     const candidates = [...(store.get(cur.issuerDer) ?? []), ...chain.filter((c) => c.subjectDer === cur.issuerDer && !path.includes(c))];
     let issuer: JX509 | null = null;
@@ -222,7 +222,7 @@ rt.register({
       if (issuer.keyOid === EC_OID) { const f = yield forge(); const alg = (f.asn1.fromDer(binary(key.encoded)).value as Node[])[0].value as Node[]; issuer.curve = f.asn1.derToOid(alg[1].value as string); }
       if (!(yield signed(this, issuer))) throw rt.mkThrowable("java/security/SignatureException", "signature does not verify");
     }),
-    "equals(Ljava/lang/Object;)Z": function (this: JX509, o: unknown) { return o instanceof JX509 && (this.der.length ? binary(o.der) === binary(this.der) : o === this) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JX509, o: unknown) { return o instanceof JX509 && (this.der.length ? sameBytes(o.der, this.der) : o === this) ? 1 : 0; },
     "hashCode()I": function (this: JX509) { return stringHash(binary(this.der)); },
     "getType()Ljava/lang/String;": () => "X.509",
     "toString()Ljava/lang/String;": function (this: JX509) { return this.der.length ? `[subject=${this.subject}, issuer=${this.issuer}]` : "CN=" + this.host + " (webdroid relay)"; },
@@ -302,7 +302,7 @@ export const caStoreMethods = {
   "isKeyEntry(Ljava/lang/String;)Z": () => 0,
   "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": driven(function* (a: string): Gen { return (yield systemCaEntries()).get(a) ?? null; }),
   "getCertificateAlias(Ljava/security/cert/Certificate;)Ljava/lang/String;": driven(function* (c: JX509): Gen {
-    for (const [alias, cert] of yield systemCaEntries()) if (binary(cert.der) === binary(c.der)) return alias;
+    for (const [alias, cert] of yield systemCaEntries()) if (sameBytes(cert.der, c.der)) return alias;
     return null;
   }),
 };

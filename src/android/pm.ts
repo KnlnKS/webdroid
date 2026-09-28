@@ -1,5 +1,5 @@
 import { JObj, rt, stubs, driven, type Gen } from "../jvm/runtime";
-import { jarray, hexBytes } from "../jvm/abi";
+import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
 import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
@@ -10,7 +10,7 @@ import { packedArchives } from "../shell/packedarchive";
 import { loadDrawable } from "./drawable";
 import { mkJResources, mkXmlParser } from "./resnative";
 import { getPackageInstaller } from "./packageinstaller";
-import { sameBytes, verifyApkSignature } from "./apksignature";
+import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";

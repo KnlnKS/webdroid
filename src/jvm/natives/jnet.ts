@@ -10,10 +10,10 @@
 import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException, sysProps } from "./jlang";
+import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, dotName, i8, u8 } from "../abi";
-import { type JBAOS } from "./jio";
+import { jarray, strArray, dotName, i8, u8, sameBytes } from "../abi";
+import { type JBAOS, noMark } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
 
@@ -192,7 +192,7 @@ const inetBytes = (bytes: Int8Array, host: string | null) => {
 rt.register({ name: "java/net/Inet4Address", ctor: JInet4Address, sup: "java/net/InetAddress" });
 rt.register({ name: "java/net/Inet6Address", ctor: JInet6Address, sup: "java/net/InetAddress" });
 const v6 = (a: JInetAddress) => a.bytes.length === 16;
-const localhostAddress = () => inetAddr("localhost");
+const localhostAddress = () => inetAddr("localhost") as JInetAddress;   // a literal name resolves synchronously
 rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
@@ -211,7 +211,7 @@ rt.register({
     "isSiteLocalAddress()Z": function (this: JInetAddress) { const [a, b] = this.bytes; return +(v6(this) ? a === 0xfe && (b & 0xc0) === 0xc0 : a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168)); },
     "isLinkLocalAddress()Z": function (this: JInetAddress) { const [a, b] = this.bytes; return +(v6(this) ? a === 0xfe && (b & 0xc0) === 0x80 : a === 169 && b === 254); },
     "isMulticastAddress()Z": function (this: JInetAddress) { const a = this.bytes[0]; return +(v6(this) ? a === 0xff : a >= 224 && a < 240); },
-    "equals(Ljava/lang/Object;)Z": function (this: JInetAddress, o: unknown) { return o instanceof JInetAddress && o.bytes.length === this.bytes.length && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JInetAddress, o: unknown) { return o instanceof JInetAddress && sameBytes(o.bytes, this.bytes) ? 1 : 0; },
     "hashCode()I": function (this: JInetAddress) { let h = 0; for (let i = 0; i < this.bytes.length; i += 4) h ^= (this.bytes[i] << 24) | (this.bytes[i + 1] << 16) | (this.bytes[i + 2] << 8) | this.bytes[i + 3]; return h | 0; },
     "toString()Ljava/lang/String;": function (this: JInetAddress) { return this.host + "/" + addressText(this.bytes); },
   },
@@ -220,7 +220,6 @@ rt.register({
 // not ours. One loopback interface is what a device with no permission to enumerate sees, and
 // it keeps the callers that walk them (device-id fallbacks, MAC lookups) on their empty path.
 class JNetworkInterface extends JObj { iname = "lo"; }
-const loopback = () => inetAddr("localhost") as JInetAddress;   // a literal name resolves synchronously
 rt.register({
   name: "java/net/NetworkInterface", ctor: JNetworkInterface,
   methods: {
@@ -235,7 +234,7 @@ rt.register({
     "isPointToPoint()Z": () => 0,
     "getMTU()I": () => 65536,
     "getIndex()I": () => 1,
-    "getInetAddresses()Ljava/util/Enumeration;": () => mkIter([loopback()]),
+    "getInetAddresses()Ljava/util/Enumeration;": () => mkIter([localhostAddress()]),
     "getInterfaceAddresses()Ljava/util/List;": () => newArrayList(),
     "static getByName(Ljava/lang/String;)Ljava/net/NetworkInterface;": (n: string) =>
       n === "lo" ? new JNetworkInterface() : null,
@@ -923,7 +922,7 @@ class JHttpInputStream extends JObj {
   }
   async read(out: Int8Array | null, offset: number, count: number): Promise<number> {
     if (!out) return rt.npe();
-    if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    checkFromIndexSize(offset, count, out.length);
     if (!count) return 0;
     if (!await this.fill()) return -1;
     const n = Math.min(count, this.bytes.length - this.offset);
@@ -950,9 +949,7 @@ rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "ja
     return count > 0n ? count - left : 0n;
   }),
   "close()V": function (this: JHttpInputStream) { this.close(); },
-  "markSupported()Z": () => 0,
-  "mark(I)V": () => {},
-  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+  ...noMark,
 } });
 type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: JHttpInputStream };
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");

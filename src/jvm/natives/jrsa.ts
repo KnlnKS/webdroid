@@ -1,12 +1,12 @@
 import type { pki } from "node-forge";
 import { JObj, rt, driven, type Gen } from "../runtime";
-import { jarray } from "../abi";
+import { jarray, sameBytes, charsToString } from "../abi";
 import { vcall } from "./jlang";
 import { mkBI } from "./jmath";
 import { JKeyGenSpec } from "../../android/security";
 
 export const forge = () => import("../../forge").then((m) => m.default);
-export const binary = (b: Uint8Array) => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s; };
+export const binary = (b: Uint8Array) => charsToString(b, 0, b.length);
 export const array = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 
 export class JRsaPublicKey extends JObj {
@@ -49,7 +49,7 @@ rt.register({
     "getEncoded()[B": function (this: JRsaPublicKey) { return new Int8Array(this.encoded); },
     "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return bigInt((yield this.key()).n); }),
     "getPublicExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return bigInt((yield this.key()).e); }),
-    "equals(Ljava/lang/Object;)Z": function (this: JRsaPublicKey, o: unknown) { return o instanceof JRsaPublicKey && o.encoded.length === this.encoded.length && o.encoded.every((b, i) => b === this.encoded[i]) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JRsaPublicKey, o: unknown) { return o instanceof JRsaPublicKey && sameBytes(o.encoded, this.encoded) ? 1 : 0; },
     "hashCode()I": function (this: JRsaPublicKey) { let h = 0; for (const b of this.encoded) h = (Math.imul(h, 31) + b) | 0; return h; },
   },
 });

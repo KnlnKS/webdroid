@@ -3,7 +3,8 @@
 // arithmetic is BigInt, which is what lets a key built from a spec (no WebCrypto import of a
 // bare scalar) still agree on a secret, and lets a point be checked before it is trusted.
 import { rt, JObj } from "../runtime";
-import { JBigInteger, mkBI, modInverse } from "./jmath";
+import { sameBytes } from "../abi";
+import { JBigInteger, mkBI, modInverse, bytesToBig } from "./jmath";
 import { valueClass } from "./jsec";
 import { JRsaPublicKey, JRsaPrivateKey, array } from "./jrsa";
 
@@ -62,12 +63,11 @@ const oidBytes = (o: number[]) => {
   for (const v of o.slice(2)) { const b = []; let x = v; do { b.unshift(x & 0x7f); x >>= 7; } while (x); for (let i = 0; i < b.length - 1; i++) b[i] |= 0x80; out.push(...b); }
   return out;
 };
-const tlv = (tag: number, body: number[]) => {
+export const tlv = (tag: number, body: number[]) => {
   const n = body.length, len = n < 128 ? [n] : n < 256 ? [0x81, n] : [0x82, n >> 8, n & 0xff];
   return [tag, ...len, ...body];
 };
-const be = (v: bigint, len: number) => { const out = new Array<number>(len).fill(0); for (let i = len - 1; i >= 0 && v > 0n; i--, v >>= 8n) out[i] = Number(v & 0xffn); return out; };
-const fromBe = (b: Uint8Array) => { let v = 0n; for (const x of b) v = (v << 8n) | BigInt(x); return v; };
+export const be = (v: bigint, len: number) => { const out = new Array<number>(len).fill(0); for (let i = len - 1; i >= 0 && v > 0n; i--, v >>= 8n) out[i] = Number(v & 0xffn); return out; };
 const point = (k: JEcPublicKey) => [4, ...be(k.x, k.c.bytes), ...be(k.y, k.c.bytes)];
 const algId = (c: Curve) => tlv(0x30, [...tlv(6, oidBytes(ID_EC)), ...tlv(6, oidBytes(c.oid))]);
 const spki = (k: JEcPublicKey) => Uint8Array.from(tlv(0x30, [...algId(k.c), ...tlv(3, [0, ...point(k)])]));
@@ -82,7 +82,7 @@ function read(b: Uint8Array, at: number): Tlv {
   return { tag, body: b.subarray(off, off + len), end: off + len };
 }
 function children(b: Uint8Array): Tlv[] { const out = []; for (let at = 0; at < b.length;) { const t = read(b, at); out.push(t); at = t.end; } return out; }
-const sameOid = (t: Tlv, oid: number[]) => { const o = oidBytes(oid); return t.tag === 6 && t.body.length === o.length && o.every((x, i) => x === t.body[i]); };
+const sameOid = (t: Tlv, oid: number[]) => t.tag === 6 && sameBytes(t.body, oidBytes(oid));
 /** the algorithm of an SPKI or PKCS#8 blob: the curve for EC, null for RSA */
 function algorithm(alg: Tlv): Curve | null | undefined {
   const [id, param] = children(alg.body);
@@ -92,7 +92,7 @@ function algorithm(alg: Tlv): Curve | null | undefined {
 }
 function pointOf(c: Curve, raw: Uint8Array): JEcPublicKey {
   if (raw[0] !== 4 || raw.length !== 1 + 2 * c.bytes) throw badSpec("compressed or malformed EC point");
-  return ecPublic(c, fromBe(raw.subarray(1, 1 + c.bytes)), fromBe(raw.subarray(1 + c.bytes)));
+  return ecPublic(c, bytesToBig(raw.subarray(1, 1 + c.bytes)), bytesToBig(raw.subarray(1 + c.bytes)));
 }
 
 // ── keys
@@ -173,7 +173,7 @@ export async function generateEc(name: string) {
   if (!c) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "unsupported curve " + name);
   const keys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: c.web }, true, ["deriveBits"]);
   const jwk = await crypto.subtle.exportKey("jwk", keys.privateKey);
-  const num = (s: string) => fromBe(array(atob(s.replace(/-/g, "+").replace(/_/g, "/"))));
+  const num = (s: string) => bytesToBig(array(atob(s.replace(/-/g, "+").replace(/_/g, "/"))));
   const priv = ecPrivate(c, num(jwk.d!));
   return inst<{ publicKey: JEcPublicKey; privateKey: JEcPrivateKey }>("java/security/KeyPair", { publicKey: priv.pub, privateKey: priv });
 }
@@ -244,7 +244,7 @@ rt.register({
       if (c === undefined || key?.tag !== 4) throw badSpec("not an EC or RSA PrivateKeyInfo");
       if (c === null) return rsaKey<JRsaPrivateKey>("webdroid/RsaPrivateKey", spec.encoded);
       const [, scalar] = children(read(key.body, 0).body);
-      return ecPrivate(c, fromBe(scalar.body));
+      return ecPrivate(c, bytesToBig(scalar.body));
     },
     "getKeySpec(Ljava/security/Key;Ljava/lang/Class;)Ljava/security/spec/KeySpec;": (key: JObj, cls: { ci: { name: string } | null }) => {
       const want = cls.ci?.name ?? "";
@@ -261,7 +261,7 @@ const keyAgreement = (algo: string) => {
   if (String(algo).toUpperCase() !== "ECDH") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algo + " KeyAgreement not available");
   return new JKeyAgreement();
 };
-const invalidKey = (msg: string) => rt.mkThrowable("java/security/InvalidKeyException", msg);
+export const invalidKey = (msg: string) => rt.mkThrowable("java/security/InvalidKeyException", msg);
 function agreementInit(this: JKeyAgreement, k: unknown) { if (!(k instanceof JEcPrivateKey)) throw invalidKey("EC private key required"); this.priv = k; this.peer = null; }
 rt.register({
   name: "javax/crypto/KeyAgreement", ctor: JKeyAgreement,

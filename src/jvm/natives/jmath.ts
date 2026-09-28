@@ -1,7 +1,7 @@
 // java.math: BigDecimal = (unscaled bigint, scale) with JDK rounding/layout semantics; BigInteger over bigint.
 
 import { rt, JObj, driven, type Gen } from "../runtime";
-import { jarray } from "../abi";
+import { jarray, charsToString } from "../abi";
 import { mkEnumSet, fmtDouble, JSimpleEnum, vcall } from "./jlang";
 
 const arith = (msg: string): never => { throw rt.mkThrowable("java/lang/ArithmeticException", msg); };
@@ -307,9 +307,9 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/math/MathContext;)V": function (this: JBigDecimal, s: string, mc: JMathContext) {
       Object.assign(this, roundMC(parseBD(s), mc));
     },
-    "<init>([C)V": function (this: JBigDecimal, c: Uint16Array) { Object.assign(this, parseBD(String.fromCharCode(...c))); },
+    "<init>([C)V": function (this: JBigDecimal, c: Uint16Array) { Object.assign(this, parseBD(charsToString(c, 0, c.length))); },
     "<init>([CII)V": function (this: JBigDecimal, c: Uint16Array, off: number, len: number) {
-      Object.assign(this, parseBD(String.fromCharCode(...c.subarray(off, off + len))));
+      Object.assign(this, parseBD(charsToString(c, off, len)));
     },
     "<init>(D)V": function (this: JBigDecimal, v: number) { Object.assign(this, fromDouble(v)); },
     "<init>(DLjava/math/MathContext;)V": function (this: JBigDecimal, v: number, mc: JMathContext) { Object.assign(this, roundMC(fromDouble(v), mc)); },
@@ -448,7 +448,7 @@ function isProbablePrime(n: bigint): boolean {
   return true;
 }
 export function mkBI(v: bigint): JBigInteger { const b = new JBigInteger(); b.v = v; return b; }
-function bytesToBig(b: Int8Array): bigint { let v = 0n; for (const x of b) v = (v << 8n) | BigInt(x & 0xff); return v; }
+export function bytesToBig(b: Int8Array | Uint8Array): bigint { let v = 0n; for (const x of b) v = (v << 8n) | BigInt(x & 0xff); return v; }
 // Java's bitLength: bits of the minimal two's-complement form, sign bit excluded.
 function bitLength(v: bigint): number { const m = v < 0n ? ~v : v; return m === 0n ? 0 : m.toString(2).length; }
 // JDK hashCode: 31-fold over the big-endian int[] magnitude, times signum

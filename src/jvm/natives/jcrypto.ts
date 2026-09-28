@@ -2,14 +2,14 @@
 // Mac (HMAC), KeyStore, KeyGenerator, KeyPairGenerator — over WebCrypto, which is one-shot and async:
 // update() buffers, doFinal() awaits the whole operation.
 import { rt, JObj, driven, type Gen } from "../runtime";
-import { vcall, defineException } from "./jlang";
+import { vcall, defineException, checkFromIndexSize } from "./jlang";
 import { mkIter } from "./jutil";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array, type RsaScheme } from "./jrsa";
-import { generateEc, isEcCurve, curveOfParams } from "./jec";
+import { generateEc, isEcCurve, curveOfParams, invalidKey } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
-import { type JBuffer, bufferView } from "./jnio";
+import { type JBuffer, remainingBytes } from "./jnio";
 import { JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 
 rt.markers("java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec");
@@ -35,12 +35,12 @@ function setKey(k: JSecretKeySpec, b: Int8Array, off: number, len: number, algo:
   k.algo = algo;
 }
 async function cryptoKey(key: unknown, alg: string, usages: KeyUsage[], hash?: string): Promise<CryptoKey> {
-  if (!(key instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/InvalidKeyException", key == null ? "No key" : "Unsupported key type");
+  if (!(key instanceof JSecretKeySpec)) throw invalidKey(key == null ? "No key" : "Unsupported key type");
   const id = alg + (hash ?? "");
   let k = key.imported.get(id);
   if (!k) {
     try { k = await crypto.subtle.importKey("raw", key.key, hash ? { name: alg, hash } : { name: alg }, false, usages); }
-    catch (e) { throw rt.mkThrowable("java/security/InvalidKeyException", String(e)); }
+    catch (e) { throw invalidKey(String(e)); }
     key.imported.set(id, k);
   }
   return k;
@@ -203,7 +203,7 @@ rt.register({
     }),
     "read([BII)I": driven(function* (this: JCipherInputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      if (off < 0 || len < 0 || off > bytes.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, bytes.length);
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
       if (!len) return 0;
       yield this.load();
@@ -256,7 +256,7 @@ async function initCipher(c: JCipher, opmode: number, key: unknown, params: unkn
   if (opmode < 1 || opmode > 4) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid operation mode");
   if (c.scheme) {
     const encrypt = opmode === 1 || opmode === 3;
-    if (encrypt ? !(key instanceof JRsaPublicKey) : !(key instanceof JRsaPrivateKey)) throw rt.mkThrowable("java/security/InvalidKeyException", "RSA key does not match operation");
+    if (encrypt ? !(key instanceof JRsaPublicKey) : !(key instanceof JRsaPrivateKey)) throw invalidKey("RSA key does not match operation");
     if (params != null && !(c.scheme === "RSA-OAEP" && params instanceof JOAEP)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Unsupported parameter spec");
     c.rsa = key as JRsaPublicKey | JRsaPrivateKey; c.oaep = params ?? new JOAEP(); c.opmode = opmode; c.parts = []; c.iv = null;
     return;
@@ -279,7 +279,7 @@ async function initCipher(c: JCipher, opmode: number, key: unknown, params: unkn
   } else if (opmode === 1 || opmode === 3) {
     c.iv = crypto.getRandomValues(new Uint8Array(gcm ? 12 : 16));
   } else {
-    throw rt.mkThrowable("java/security/InvalidKeyException", "Parameters missing");
+    throw invalidKey("Parameters missing");
   }
 }
 // WebCrypto's AES-CBC always applies PKCS#7, so unpadded encryption drops the padding block it appends and
@@ -353,9 +353,7 @@ rt.register({
     "updateAAD([B)V": function (this: JCipher, b: Int8Array) { requireAad(this); this.aad.push(bytes(b)); },
     "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { requireAad(this); this.aad.push(bytes(b, off, len)); },
     "updateAAD(Ljava/nio/ByteBuffer;)V": function (this: JCipher, bb: JBuffer) {
-      const v = bufferView(bb);
-      const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
-      this.aad.push(new Uint8Array(u)); bb.pos = bb.lim;
+      this.aad.push(u8(remainingBytes(bb)).slice()); bb.pos = bb.lim;
     },
     "doFinal()[B": function (this: JCipher) { return doFinal(this); },
     "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
@@ -368,12 +366,12 @@ rt.register({
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
     "wrap(Ljava/security/Key;)[B": function (this: JCipher, key: JSecretKeySpec) {
       if (this.opmode !== 3) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for wrapping");
-      if (!(key instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key");
+      if (!(key instanceof JSecretKeySpec)) throw invalidKey("Unsupported wrapped key");
       return doFinal(this, new Int8Array(key.key));
     },
     "unwrap([BLjava/lang/String;I)Ljava/security/Key;": driven(function* (this: JCipher, wrapped: Int8Array, algorithm: string, type: number): Gen {
       if (this.opmode !== 4) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for unwrapping");
-      if (type !== 3) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key type");
+      if (type !== 3) throw invalidKey("Unsupported wrapped key type");
       return mkSecretKey(new Uint8Array(yield doFinal(this, wrapped)), algorithm);
     }),
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,

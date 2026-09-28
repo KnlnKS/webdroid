@@ -125,6 +125,12 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
   return s;
 }
 
+export function sameBytes(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 /** modified UTF-8 from `pos`: NUL is two bytes and a supplementary character is two three-byte
  *  halves, or one four-byte sequence as ART's JNI accepts. Stops at `end` or after `units` UTF-16
  *  units, whichever comes first. */

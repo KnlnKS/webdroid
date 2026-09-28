@@ -1,3 +1,5 @@
+import { sameBytes } from "../jvm/abi";
+
 class Fields {
   at = 0;
   view: DataView;
@@ -40,11 +42,6 @@ export function apkSigningBlock(bytes: Uint8Array) {
     return { start, central, end, blocks };
   }
   throw new Error("APK has no valid ZIP end record");
-}
-export function sameBytes(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
 }
 function algorithms(bytes: Uint8Array) {
   return signingSequence(bytes).map((entry) => {

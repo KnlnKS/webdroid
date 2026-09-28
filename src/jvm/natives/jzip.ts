@@ -3,7 +3,7 @@
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
-import { vcall, newObj, defineException } from "./jlang";
+import { vcall, newObj, defineException, checkFromIndexSize } from "./jlang";
 import { JFile, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { JBuffer } from "./jnio";
@@ -219,7 +219,7 @@ class JChecksum extends JObj { state = 0; declare algo: ChecksumAlgo; }
 const CHECKSUMS: [string, ChecksumAlgo][] = [["CRC32", crc(crcTable(0xedb88320))], ["CRC32C", crc(crcTable(0x82f63b78))], ["Adler32", adler32]];
 const updateBytes = function (this: JChecksum, b: Int8Array, off: number, len: number) {
   if (!b) rt.npe();
-  if (off < 0 || len < 0 || off > b.length - len) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+  checkFromIndexSize(off, len, b.length, "java/lang/ArrayIndexOutOfBoundsException");
   this.state = this.algo.step(this.state, u8(b), off, len);
 };
 /** update a Checksum, ours directly and an app's own through its update([BII)V */
@@ -497,7 +497,7 @@ rt.register({
     }),
     "write([BII)V": driven(function* (this: JZipOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!this.entry) throw rt.mkThrowable("java/util/zip/ZipException", "no current ZIP entry");
-      if (off < 0 || len < 0 || len > bytes.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(off, len, bytes.length);
       if (len) this.entry.push(u8(bytes, off, len).slice());
       yield this.flushChunks();
     }),

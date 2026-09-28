@@ -1,11 +1,8 @@
 import { JObj, rt, driven, type Gen } from "../runtime";
-import { vcall } from "./jlang";
+import { vcall, checkFromIndexSize } from "./jlang";
 import { JInputStream, JOutputStream, skipStream, noMark } from "./jio";
-import { bufferView, type JBuffer } from "./jnio";
+import { remainingBytes, type JBuffer } from "./jnio";
 
-function remainingBytes(buffer: JBuffer): Int8Array {
-  const view = bufferView(buffer); return new Int8Array(view.ab, view.byteFromPos, buffer.lim - buffer.pos);
-}
 class JStreamChannel extends JObj { stream: unknown = null; open = true; }
 const channelMethods = {
   "isOpen()Z": function (this: JStreamChannel) { return +this.open; },
@@ -35,7 +32,7 @@ class JChannelInput extends JInputStream { channel: unknown = null; }
 class JChannelOutput extends JOutputStream { channel: unknown = null; }
 async function wrap(bytes: Int8Array, offset: number, count: number): Promise<JBuffer> {
   if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  if (offset < 0 || count < 0 || offset > bytes.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(offset, count, bytes.length);
   return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([BII)Ljava/nio/ByteBuffer;", bytes, offset, count);
 }
 rt.register({ name: "webdroid/ChannelInputStream", ctor: JChannelInput, sup: "java/io/InputStream", methods: {

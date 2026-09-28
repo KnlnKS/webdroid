@@ -1,7 +1,7 @@
 // java.nio.* buffers backed by a shared ArrayBuffer. position/limit/capacity semantics.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { defineException, vcall } from "./jlang";
+import { defineException, vcall, checkFromIndexSize } from "./jlang";
 import { mem } from "../../native/mem";
 import { charsToString } from "../abi";
 import { charsetName, decodeString, encodeString } from "../charset";
@@ -84,7 +84,7 @@ function bufferBaseMethods(): NativeSpec["methods"] {
 }
 
 class JByteBuffer extends JBuffer {}
-const remainingBytes = (b: JBuffer) => new Int8Array(b.dv.buffer, b.dv.byteOffset + b.pos, b.lim - b.pos);
+export const remainingBytes = (b: JBuffer) => new Int8Array(b.dv.buffer, b.dv.byteOffset + b.pos, b.lim - b.pos);
 function compareByteBuffers(this: JByteBuffer, other: JByteBuffer) {
   const a = remainingBytes(this), b = remainingBytes(other);
   for (let i = 0, n = Math.min(a.length, b.length); i < n; i++) if (a[i] !== b[i]) return a[i] - b[i];
@@ -399,7 +399,7 @@ function getFloats(b: JFloatBuffer, arr: Float32Array, off: number, len: number)
   b.pos += len; return b;
 }
 function putInts(buffer: JIntBuffer, values: Int32Array, offset: number, count: number): JIntBuffer {
-  if (offset < 0 || count < 0 || offset > values.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(offset, count, values.length);
   buffer.clampPut(count);
   const view = buffer.dv;
   if (buffer.little && !(view.byteOffset & 3)) new Int32Array(view.buffer, view.byteOffset, buffer.cap).set(values.subarray(offset, offset + count), buffer.pos);
@@ -408,7 +408,7 @@ function putInts(buffer: JIntBuffer, values: Int32Array, offset: number, count: 
   return buffer;
 }
 function putShorts(buffer: JShortBuffer, values: Int16Array, offset: number, count: number): JShortBuffer {
-  if (offset < 0 || count < 0 || offset > values.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(offset, count, values.length);
   buffer.clampPut(count);
   const view = buffer.dv;
   if (buffer.little && !(view.byteOffset & 1)) new Int16Array(view.buffer, view.byteOffset, buffer.cap).set(values.subarray(offset, offset + count), buffer.pos);
@@ -459,7 +459,7 @@ rt.register({
   },
 });
 function getShorts(b: JShortBuffer, arr: Int16Array, off: number, len: number): JShortBuffer {
-  if ((off | len) < 0 || off > arr.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  checkFromIndexSize(off, len, arr.length);
   b.clampGet(len);
   const byteOff = b.dv.byteOffset;
   if (b.little && !(byteOff & 1)) arr.set(new Int16Array(b.ab, byteOff + (b.pos << 1), len), off);

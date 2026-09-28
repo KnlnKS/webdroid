@@ -2,7 +2,7 @@ import { encodeModifiedUtf8 } from "../charset";
 import { streamClass, streamClassAny, type StreamClass } from "../serial-descriptor";
 import { rt, ClassInfo, driven, type Gen } from "../runtime";
 import { i8, jmethod, mangleMethod, jarray, primElem, PRIM_ARRAYS, type PrimElem, decodeModifiedUtf8 } from "../abi";
-import { vcall, vcallOn, callOn, curThread, type JThread, newObj, JClass } from "./jlang";
+import { vcall, vcallOn, callOn, curThread, type JThread, newObj, JClass, checkFromIndexSize } from "./jlang";
 import { JInputStream, JOutputStream, dataBytes, readers, writers } from "./jio";
 
 const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
@@ -126,7 +126,7 @@ rt.register({
     "write(I)V": function (this: JObjectOut, value: number) { blockWrite(this, Uint8Array.of(value)); },
     "write([BII)V": function (this: JObjectOut, bytes: Int8Array, offset: number, length: number) {
       if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      if (offset < 0 || length < 0 || offset > bytes.length - length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      checkFromIndexSize(offset, length, bytes.length);
       blockWrite(this, new Uint8Array(bytes.buffer, bytes.byteOffset + offset, length));
     },
     "flush()V": function (this: JObjectOut) {

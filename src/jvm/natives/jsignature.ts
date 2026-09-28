@@ -5,7 +5,7 @@ import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 import { concat, u8 } from "../abi";
 import { JRsaPublicKey, JRsaPrivateKey, JPSSSpec } from "./jrsa";
-import { JEcPublicKey, JEcPrivateKey, type Curve } from "./jec";
+import { JEcPublicKey, JEcPrivateKey, type Curve, be, tlv, invalidKey } from "./jec";
 
 type Scheme = "RSASSA-PKCS1-v1_5" | "RSA-PSS" | "ECDSA";
 const HASHES: Record<string, string> = { SHA1: "SHA-1", SHA256: "SHA-256", SHA384: "SHA-384", SHA512: "SHA-512" };
@@ -27,11 +27,8 @@ function signature(algo: string): JSignature {
   } else if (algo.toUpperCase() === "RSASSA-PSS") { s.scheme = "RSA-PSS"; return s; }
   throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algo + " Signature not available");
 }
-const noKey = (msg: string) => rt.mkThrowable("java/security/InvalidKeyException", msg);
 function b64url(v: bigint, len: number): string {
-  const b = new Uint8Array(len);
-  for (let i = len - 1; i >= 0 && v > 0n; i--, v >>= 8n) b[i] = Number(v & 0xffn);
-  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(String.fromCharCode(...be(v, len))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 async function importKey(s: JSignature): Promise<{ key: CryptoKey; hash: string }> {
   if (!s.hash) throw rt.mkThrowable("java/security/SignatureException", "parameters must be specified before " + (s.signing ? "signing" : "verifying"));
@@ -39,13 +36,13 @@ async function importKey(s: JSignature): Promise<{ key: CryptoKey; hash: string 
   const usage: KeyUsage[] = [s.signing ? "sign" : "verify"], k = s.key;
   let key: CryptoKey;
   if (s.scheme === "ECDSA") {
-    if (!(k instanceof (s.signing ? JEcPrivateKey : JEcPublicKey))) throw noKey("EC key required");
+    if (!(k instanceof (s.signing ? JEcPrivateKey : JEcPublicKey))) throw invalidKey("EC key required");
     const pub = k instanceof JEcPrivateKey ? k.pub : k, c = pub.c;
     const jwk: JsonWebKey = { kty: "EC", crv: c.web, x: b64url(pub.x, c.bytes), y: b64url(pub.y, c.bytes) };
     if (k instanceof JEcPrivateKey) jwk.d = b64url(k.s, c.bytes);
     key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: c.web }, false, usage);
   } else {
-    if (!(k instanceof (s.signing ? JRsaPrivateKey : JRsaPublicKey))) throw noKey("RSA key required");
+    if (!(k instanceof (s.signing ? JRsaPrivateKey : JRsaPublicKey))) throw invalidKey("RSA key required");
     key = await crypto.subtle.importKey(s.signing ? "pkcs8" : "spki", k.encoded, { name: s.scheme, hash: s.hash }, false, usage);
   }
   return (s.imported = { key, hash: s.hash });
@@ -68,13 +65,9 @@ function derInt(b: Uint8Array): number[] {
   while (i < b.length - 1 && b[i] === 0) i++;
   const body = [...b.subarray(i)];
   if (body[0] & 0x80) body.unshift(0);
-  return [2, body.length, ...body];
+  return tlv(2, body);
 }
-function derFromRaw(raw: Uint8Array, n: number): Int8Array {
-  const body = [...derInt(raw.subarray(0, n)), ...derInt(raw.subarray(n))];
-  const len = body.length < 128 ? [body.length] : [0x81, body.length];
-  return Int8Array.from([0x30, ...len, ...body]);
-}
+const derFromRaw = (raw: Uint8Array, n: number) => Int8Array.from(tlv(0x30, [...derInt(raw.subarray(0, n)), ...derInt(raw.subarray(n))]));
 function rawFromDer(der: Uint8Array, n: number): Uint8Array<ArrayBuffer> | null {
   let at = 0;
   const readLen = () => { let len = der[at++]; if (len === 0x81) len = der[at++]; else if (len & 0x80) return -1; return len; };
@@ -95,7 +88,7 @@ function rawFromDer(der: Uint8Array, n: number): Uint8Array<ArrayBuffer> | null 
 }
 
 function init(s: JSignature, key: unknown, signing: boolean) {
-  if (key == null) throw noKey("key == null");
+  if (key == null) throw invalidKey("key == null");
   s.key = key; s.signing = signing; s.parts = []; s.imported = null;
 }
 function initSign(this: JSignature, key: unknown) { init(this, key, true); }

@@ -72,11 +72,11 @@ const sized = (small: Digest, algorithm: string): Digest => {
   return data => data.length >= LARGE_DIGEST ? native(data) : small(data);
 };
 const sha1Sized = sized(sha1, "SHA-1"), sha256Sized = sized(sha256, "SHA-256");
+const sha384 = webDigest("SHA-384"), sha512 = webDigest("SHA-512");
 // Standard names plus the aliases Android's providers accept (case-insensitive); anything else is
 // honestly NoSuchAlgorithmException, which the SDKs that ask for e.g. MD5 catch and fall back from.
 const DIGESTS = new Map<string, [Digest, number]>([
-  ["SHA-384", [webDigest("SHA-384"), 48]], ["SHA384", [webDigest("SHA-384"), 48]],
-  ["SHA-512", [webDigest("SHA-512"), 64]], ["SHA512", [webDigest("SHA-512"), 64]],
+  ["SHA-384", [sha384, 48]], ["SHA384", [sha384, 48]], ["SHA-512", [sha512, 64]], ["SHA512", [sha512, 64]],
   ["MD5", [md5, 16]], ["SHA-1", [sha1Sized, 20]], ["SHA1", [sha1Sized, 20]], ["SHA", [sha1Sized, 20]], ["SHA-256", [sha256Sized, 32]], ["SHA256", [sha256Sized, 32]],
 ]);
 export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | Promise<Uint8Array> | null {

@@ -655,6 +655,11 @@ export function reportUncaught(e: unknown) {
   rt.onUncaught(je);
 }
 
+/** Objects.checkFromIndexSize: [off, off + len) must lie within [0, length) */
+export function checkFromIndexSize(off: number, len: number, length: number, cls = "java/lang/IndexOutOfBoundsException"): void {
+  if (off < 0 || len < 0 || off > length - len) throw rt.mkThrowable(cls, null);
+}
+
 const excCtors = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
 /** Register a throwable class under an already-registered parent (native here or elsewhere). */
 export function defineException(name: string, sup: string, constructors: string[] = [], extra: NativeSpec["methods"] = {}) {
