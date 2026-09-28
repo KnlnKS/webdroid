@@ -15,7 +15,7 @@ import { onMain } from "./mainloop";
 import { JList, jeq, toJsArray } from "../jvm/natives/jutil";
 import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
-import { addOverlay, removeOverlay } from "./popup";
+import { addOverlay, removeOverlay, popupInput } from "./popup";
 import { device } from "../shell/config";
 import { JActionMode } from "./actionmode";
 
@@ -864,6 +864,7 @@ rt.register({
   name: "webdroid/SpinnerPopup", ctor: JSpinnerPopup, sup: "android/widget/ListView",
   methods: {
     ...listViewMethods,
+    ...popupInput("android/widget/ListView", removeOverlay),
     "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function () {
       const lp = new JLayoutParams();
       lp.width = MATCH_PARENT; lp.height = WRAP_CONTENT;
@@ -909,7 +910,7 @@ const showSpinnerPopup = driven(function* showSpinnerPopup(sp: JSpinner): Gen {
   list.popH = Math.max(y, below);
   yield measureView(list, makeSpec(root.width(), MS_AT_MOST), makeSpec(root.height(), MS_AT_MOST));
   yield vcall(list, "setSelection", "(I)V", sp.selection);
-  addOverlay(list, x, list.measuredH <= below ? y + sp.height() : Math.max(0, y - list.measuredH), true);
+  addOverlay(list, x, list.measuredH <= below ? y + sp.height() : Math.max(0, y - list.measuredH), 0);
 });
 // ── AbsSpinner: AdapterView's selection contract
 //

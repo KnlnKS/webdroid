@@ -686,7 +686,8 @@ rt.register({
   name: "android/net/UrlQuerySanitizer", ctor: JUrlQuerySanitizer,
   methods: {
     "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: JUrlQuerySanitizer, url: string) { return parseSanitizerUrl.call(this, url); },
+    // AOSP: the convenience constructor accepts unregistered parameters before it parses
+    "<init>(Ljava/lang/String;)V": function (this: JUrlQuerySanitizer, url: string) { this.allowUnregistered = true; return parseSanitizerUrl.call(this, url); },
     "parseUrl(Ljava/lang/String;)V": parseSanitizerUrl,
     "parseQuery(Ljava/lang/String;)V": function (this: JUrlQuerySanitizer, query: string) { return this.parseQuery(query ?? ""); },
     "getParameterSet()Ljava/util/Set;": function (this: JUrlQuerySanitizer) { return newLinkedHashSet([...this.entries.keys()]); },

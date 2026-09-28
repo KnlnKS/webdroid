@@ -10,7 +10,8 @@ export class JKeyEvent extends JObj {
   action = 0; keyCode = 0; tracking = false; canceled = false;
   downTime = 0n; eventTime = 0n; repeat = 0; meta = 0; deviceId = -1; scanCode = 0; flags = 0; source = 0x101;
 }
-const KEYCODE_BACK = 4, M_dispatchKey = "(Landroid/view/KeyEvent;)Z";
+export const KEYCODE_BACK = 4;
+const M_dispatchKey = "(Landroid/view/KeyEvent;)Z";
 const keySet = (names: string) => new Set(names.split(" ").map((name) => keyCodes.get(name)!));
 // KeyEvent.isSystemKey, isModifierKey, isGamepadButton and isMediaSessionKey
 const SYSTEM_KEYS = keySet("MENU SOFT_RIGHT HOME BACK CALL ENDCALL VOLUME_UP VOLUME_DOWN VOLUME_MUTE MUTE POWER HEADSETHOOK MEDIA_PLAY " +
@@ -55,8 +56,13 @@ export const pressBackKey = driven(function* pressBackKey(callback: JObj): Gen {
 const dispatchKeyToCallback = (callback: JObj, ev: JKeyEvent) => ev.action === 0 ? vcall(callback, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", ev.keyCode, ev)
   : ev.action === 1 ? vcall(callback, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", ev.keyCode, ev) : 0;
 /** The tail of Activity's and Dialog's dispatchKeyEvent: the window's view tree first, then
- *  KeyEvent.dispatch to the callback itself. */
-export const dispatchWindowKey = driven(function* dispatchWindowKey(callback: JObj, root: JObj | null, ev: JKeyEvent): Gen {
+ *  KeyEvent.dispatch to the callback itself. BACK finishes the window's action mode before its
+ *  views see it (DecorView.superDispatchKeyEvent). */
+export const dispatchWindowKey = driven(function* dispatchWindowKey(callback: JObj & { actionMode?: JObj | null }, root: JObj | null, ev: JKeyEvent): Gen {
+  if (ev.keyCode === KEYCODE_BACK && callback.actionMode) {
+    if (ev.action === 1) yield vcall(callback.actionMode, "finish", "()V");
+    return 1;
+  }
   if (root && (yield vcall(root, "dispatchKeyEvent", M_dispatchKey, ev))) return 1;
   return dispatchKeyToCallback(callback, ev);
 });

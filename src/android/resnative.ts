@@ -38,6 +38,7 @@ function openRawResource(this: JResources, id: number, value = new JTypedValue()
   return streamOf(bytes);
 }
 function openRawResourceFd(this: JResources, id: number) { return mkAssetFd(rawResource(this.host, id).bytes); }
+export const rawResourceBytes = (res: Resources, id: number): Uint8Array => rawResource(res, id).bytes;
 /** the app's Resources double as the system ones: framework attrs resolve through the same table */
 let systemRes: JResources | null = null;
 export function mkJResources(host: Resources, system = true): JResources {

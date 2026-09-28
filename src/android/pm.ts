@@ -816,7 +816,7 @@ rt.register({
     "queryIntentActivities(Landroid/content/Intent;I)Ljava/util/List;": queryActivities,
     "queryIntentActivities(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryActivities(i, Number(f.value)),
     "queryIntentContentProviders(Landroid/content/Intent;I)Ljava/util/List;": queryProviders,
-    "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null, flags: JInfoFlags) => queryProviders(i, Number(flags.value)),
+    "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null, flags: JInfoFlags) => queryProviders(i, Number(flags.value)),
     "queryContentProviders(Ljava/lang/String;II)Ljava/util/List;": queryContentProviders,
     "queryContentProviders(Ljava/lang/String;ILandroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (process: string | null, uid: number, flags: JInfoFlags) => queryContentProviders(process, uid, Number(flags.value), true),
     "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": resolveProvider,
@@ -857,6 +857,8 @@ rt.register({
       }
       throw nameNotFound(name);
     },
+    // no device policy is installed to revoke anything
+    "isPermissionRevokedByPolicy(Ljava/lang/String;Ljava/lang/String;)Z": () => 0,
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": driven(function* (permission: string, pkg: string): Gen {
       const record = packages.get(pkg);
       if (record?.grants.has(permission)) return 0;
@@ -942,6 +944,12 @@ function activityAttr(cls: string, name: string): number | undefined {
 /** The activity's own `android:theme`, or 0 when it just inherits the application's. */
 export const manifestActivityTheme = (cls: string): number => activityAttr(cls, "theme") ?? 0;
 export const manifestActivityOrientation = (cls: string): number => activityAttr(cls, "screenOrientation") ?? -1;
+/** ActivityInfo.taskAffinity: the activity's own, else the application's, else the package name */
+export function manifestTaskAffinity(cls: string): string {
+  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+  const app = manifestRoot?.children.find((c) => c.name === "application");
+  return (node && attrStr(node, "taskAffinity")) ?? (app && attrStr(app, "taskAffinity")) ?? (manifestRoot && attrStr(manifestRoot, "package")) ?? "";
+}
 /** ActivityInfo.launchMode: LAUNCH_MULTIPLE (0) unless the manifest names another */
 export const manifestLaunchMode = (cls: string): number => activityAttr(cls, "launchMode") ?? 0;
 /** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told

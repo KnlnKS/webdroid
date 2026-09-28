@@ -6,6 +6,7 @@ const a64 = @import("a64.zig");
 const arm = @import("arm.zig");
 const libc = @import("libc.zig");
 const jit = @import("jit.zig");
+const is = @import("bits.zig").is;
 
 pub const Cpu = extern struct {
     x: [32]u64,
@@ -53,6 +54,9 @@ pub const Fault = enum(u32) {
     unsupported_syscall = 6,
     sysreg = 7,
     null_page = 8,
+    /// an optional extension HWCAP does not advertise: SIGILL, as on a CPU without it, where
+    /// `.unimplemented` is a gap in the emulator
+    extension = 9,
 };
 
 /// The guest-visible state is the run of fields up to `tls`; src/native/cpu.ts reads it through
@@ -222,9 +226,28 @@ export fn exec_it_block32(cp: u32, pc: u32, end: u32) u32 {
     return 1;
 }
 pub inline fn raise(c: *Cpu, code: Fault, w: u32) Status {
-    c.exit = @intFromEnum(code);
+    c.exit = @intFromEnum(if (code == .unimplemented and optionalExtension(c.a64 != 0, w)) .extension else code);
     c.fault_word = w;
     return .fault;
+}
+/// Encodings of the optional extensions getauxval(AT_HWCAP) leaves out. OpenSSL's armcap probes
+/// AES, PMULL, SHA1/SHA256/SHA512, SHA3 and SM4 by executing one under a SIGILL handler. ARM32
+/// NEON words arrive here in their A32 form, Thumb's included.
+fn optionalExtension(aarch64: bool, w: u32) bool {
+    if (aarch64) return is(w, 0xff3e0c00, 0x4e280800) // AES
+    or is(w, 0xff208c00, 0x5e000000) // SHA1, SHA256 three-register
+    or is(w, 0xff3e0c00, 0x5e280800) // SHA1, SHA256 two-register
+    or is(w, 0xff000000, 0xce000000) // SHA512, SHA3, SM3, SM4
+    or is(w, 0xbfe0fc00, 0x0ee0e000) // PMULL{2} .1Q
+    or is(w, 0x7fe0e000, 0x1ac04000) // CRC32{C}
+    or is(w, 0xffff0000, 0xdac10000) // PAuth
+    or is(w, 0x1e000000, 0x04000000); // SVE
+    return is(w, 0xffb30f10, 0xf3b00300) // AESE, AESD, AESMC, AESIMC
+    or is(w, 0xfe800f50, 0xf2000c40) // SHA1C..SHA256SU1
+    or is(w, 0xffbf0fd0, 0xf3b902c0) // SHA1H
+    or is(w, 0xffbf0f90, 0xf3ba0380) // SHA1SU1, SHA256SU0
+    or is(w, 0xffb00f50, 0xf2a00e00) // VMULL.P64
+    or is(w, 0x0f900df0, 0x01000040); // CRC32{C}
 }
 pub inline fn setPc32(c: *Cpu, target: u32) void {
     c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((target & 1) << 5);

@@ -98,7 +98,7 @@ describe("native-descriptor-flags", () => {
       if (fn === undefined) throw new Error(name);
       return cpu.call(fn, args);
     };
-    let read = -1, write = -1, duplicate = -1;
+    let read = -1, write = -1, duplicate = -1, above = -1;
     try {
       expect(await call("pipe2", out, 0x80000)).toBe(0);
       read = mem.ld32(out); write = mem.ld32(out + 4);
@@ -110,8 +110,12 @@ describe("native-descriptor-flags", () => {
       expect(await call("fcntl", duplicate, 1)).toBe(1);
       expect(await call("dup2", read, duplicate)).toBe(duplicate);
       expect(await call("fcntl", duplicate, 1)).toBe(0);
+      // F_DUPFD_CLOEXEC: the lowest free descriptor at or above the argument
+      above = await call("fcntl", read, 0x406, 100);
+      expect(above).toBe(100);
+      expect(await call("fcntl", above, 1)).toBe(1);
     } finally {
-      for (const fd of [read, write, duplicate]) if (fd >= 0) await call("close", fd);
+      for (const fd of [read, write, duplicate, above]) if (fd >= 0) await call("close", fd);
       mem.free(out); cpu.dispose(); setA64(false);
     }
   });

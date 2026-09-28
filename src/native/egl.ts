@@ -107,9 +107,10 @@ export function eglInit(): void {
       s.presentationTimeNanos = time;
       return 1;
     },
-    eglGetCurrentContext: (cpu) => { const c = boundEglCurrent(cpu.jthread); return c ? Math.max(0, contexts.indexOf(c)) : 0; },
+    // a context or surface Java EGL made current gets its native handle here
+    eglGetCurrentContext: (cpu) => { const c = boundEglCurrent(cpu.jthread); return c ? handle(contexts, c) : 0; },
     eglGetCurrentDisplay: () => 1,
-    eglGetCurrentSurface: (cpu) => { const s = boundEglCurrent(cpu.jthread)?.target; return s ? Math.max(0, surfaces.indexOf(s)) : 0; },
+    eglGetCurrentSurface: (cpu) => { const s = boundEglCurrent(cpu.jthread)?.target; return s ? handle(surfaces, s) : 0; },
     eglWaitGL: () => 1, eglWaitNative: () => 1, eglWaitClient: () => 1,
     eglCopyBuffers: (cpu) => eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread),
     eglBindTexImage: () => 0, eglReleaseTexImage: () => 0,

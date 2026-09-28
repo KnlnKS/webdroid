@@ -1,3 +1,4 @@
+import type { JIntentFilter } from "./intent-filter";
 import { type JFile, mkFile } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -27,11 +28,19 @@ export class JContext extends JObj {
   attributionTag: string | null = null;
   attributionSource: Promise<JAttributionSource> | null = null;
 }
-class JDisplayContext extends JContext { display: unknown = null; }
+/** AOSP's base context of the application, activities and created contexts; SDKs reflect on its
+ *  fields (Phrase replaces mResources), so getResources answers from the field */
+class JContextImpl extends JContext { resources: unknown = null; }
+class JDisplayContext extends JContextImpl { display: unknown = null; }
+export function newContextImpl<T extends JContextImpl = JContextImpl>(host: AppHost, cls = "android/app/ContextImpl"): T {
+  const context: T = rt.make(cls);
+  context.$host = host; context.resources = host.jresources;
+  return context;
+}
 function contextForDisplay(source: JContext, display: unknown, windowType?: number) {
   if (display == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Display must not be null");
-  const context: JDisplayContext = rt.make("webdroid/DisplayContext");
-  context.$host = source.$host; context.packageLoader = source.packageLoader; context.display = display;
+  const context = newContextImpl<JDisplayContext>(source.$host, "webdroid/DisplayContext");
+  context.packageLoader = source.packageLoader; context.display = display;
   if (windowType === undefined) return context;
   const window: JWindowContext = rt.make("android/window/WindowContext");
   window.base = context; window.$host = context.$host; window.packageLoader = context.packageLoader; window.windowType = windowType;
@@ -106,6 +115,7 @@ const SERVICE_CLASS: Record<string, string> = {
   activity: "android/app/ActivityManager",
   device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
+  usagestats: "android/app/usage/UsageStatsManager",
   account: "android/accounts/AccountManager",
   power: "android/os/PowerManager",
   performance_hint: "android/os/PerformanceHintManager",
@@ -195,11 +205,16 @@ rt.register({
 });
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
-function contextRegisterReceiver(this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); }
-function contextRegisterReceiverOn(this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) {
+function contextRegisterReceiver(this: JContext, receiver: JObj | null, filter: JIntentFilter) { return registerReceiver(this, receiver, filter); }
+function contextRegisterReceiverOn(this: JContext, receiver: JObj | null, filter: JIntentFilter, _permission: string, handler: unknown) {
   return registerReceiver(this, receiver, filter, handler);
 }
 function contextStartActivity(this: JContext, intent: JIntent) { return launchIntent(this.$host, intent); }
+/** startActivities: the intents stack in order, the last one in front */
+async function contextStartActivities(this: JContext, intents: JIntent[] | null) {
+  if (!intents) return rt.npe();
+  for (const intent of intents) await launchIntent(this.$host, intent);
+}
 function contextSender(this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); }
 /** AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application theme
  *  instead loses every ThemeOverlay — which is how Material passes a widget its shape and
@@ -248,11 +263,11 @@ const contextMethods: NativeSpec["methods"] = {
       const caller = this.$host;
       ready = (async () => {
         const info = await vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 128);
-        const context = new JContext(), theme = new JTheme();
+        const theme = new JTheme();
         theme.res = record.res;
         if (info.theme) await theme.apply(info.theme);
-        context.$host = { ...caller, pkg, res: record.res, zip: record.res.zip,
-          jresources: mkJResources(record.res, false), theme, themeResId: info.theme, iconRes: info.icon, splits: [] };
+        const context = newContextImpl({ ...caller, pkg, res: record.res, zip: record.res.zip,
+          jresources: mkJResources(record.res, false), theme, themeResId: info.theme, iconRes: info.icon, splits: [] });
         if (flags & 1) context.packageLoader = await newObj("webdroid/PackageClassLoader", "(Ljava/lang/String;)V", record.path);
         return context;
       })();
@@ -262,6 +277,7 @@ const contextMethods: NativeSpec["methods"] = {
     return ready;
   },
   "getOpPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
+  "getBasePackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getApplicationContext()Landroid/content/Context;": function (this: JContext) { return this.$host.application; },
   // API 31. Everything here draws into the one window, but the application context is not a
   // display context on a device and callers branch on that.
@@ -341,6 +357,9 @@ const contextMethods: NativeSpec["methods"] = {
   "databaseList()[Ljava/lang/String;": function (this: JContext) {
     return jarray(vfs.list(`/data/data/${this.$host.pkg}/databases`), "Ljava/lang/String;");
   },
+  "fileList()[Ljava/lang/String;": function (this: JContext) {
+    return jarray(vfs.list(`/data/data/${this.$host.pkg}/files`), "Ljava/lang/String;");
+  },
   "getFileStreamPath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     privDir(`/data/data/${this.$host.pkg}/files`);
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
@@ -392,6 +411,8 @@ const contextMethods: NativeSpec["methods"] = {
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": contextSender,
   "startActivity(Landroid/content/Intent;)V": contextStartActivity,
   "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": contextStartActivity,
+  "startActivities([Landroid/content/Intent;)V": contextStartActivities,
+  "startActivities([Landroid/content/Intent;Landroid/os/Bundle;)V": contextStartActivities,
   "obtainStyledAttributes([I)Landroid/content/res/TypedArray;": function (this: JContext, attrs: Int32Array) { return contextStyled.call(this, null, attrs); },
   "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;": contextStyled,
@@ -418,12 +439,13 @@ function configurationContext(source: JContext, config: JConfiguration): JContex
   const jresources = scopedResources(source.$host.res, config), theme = new JTheme();
   theme.res = jresources.host;
   theme.styles = (themeOf(source) ?? source.$host.theme).styles.slice();
-  const context = new JContext();
-  context.$host = Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme });
-  return context;
+  return newContextImpl(Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme }));
 }
 class JWindowContext extends JContextWrapper { windowType = 0; windowManager: unknown = null; }
-rt.register({ name: "webdroid/DisplayContext", ctor: JDisplayContext, sup: "android/content/Context", methods: {
+rt.register({ name: "android/app/ContextImpl", ctor: JContextImpl, sup: "android/content/Context", fields: { mResources: "resources" }, methods: {
+  "getResources()Landroid/content/res/Resources;": function (this: JContextImpl) { return this.resources; },
+} });
+rt.register({ name: "webdroid/DisplayContext", ctor: JDisplayContext, sup: "android/app/ContextImpl", methods: {
   "getDisplay()Landroid/view/Display;": function (this: JDisplayContext) { return this.display; },
   "isUiContext()Z": () => 0,
 } });
@@ -477,10 +499,21 @@ rt.register({
   name: "android/content/MutableContextWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
   methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase, "setBaseContext(Landroid/content/Context;)V": attachBase },
 });
+export class JContextThemeWrapper extends JContextWrapper { overrideResources: unknown = null; }
+const resourcesViaBase = wrapperMethods["getResources()Landroid/content/res/Resources;"] as (this: JContextWrapper) => unknown;
+/** ContextThemeWrapper's getResources: the override configuration's Resources once one is applied */
+export const themeWrapperMethods: NativeSpec["methods"] = {
+  ...wrapperMethods,
+  "getResources()Landroid/content/res/Resources;": function (this: JContextThemeWrapper) { return this.overrideResources ?? resourcesViaBase.call(this); },
+  "applyOverrideConfiguration(Landroid/content/res/Configuration;)V": function (this: JContextThemeWrapper, config: JConfiguration) {
+    this.$host = configurationContext(this, config).$host;
+    this.overrideResources = this.$host.jresources;
+  },
+};
 rt.register({
-  name: "android/view/ContextThemeWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
+  name: "android/view/ContextThemeWrapper", ctor: JContextThemeWrapper, sup: "android/content/ContextWrapper",
   methods: {
-    ...wrapperMethods,
+    ...themeWrapperMethods,
     "<init>(Landroid/content/Context;)V": attachBase,
     "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
@@ -489,9 +522,6 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/content/res/Resources$Theme;)V": function (this: JContextWrapper, base: JContext, theme: unknown) {
       attachBase.call(this, base);
       if (theme) (this as { ownTheme?: unknown }).ownTheme = theme;
-    },
-    "applyOverrideConfiguration(Landroid/content/res/Configuration;)V": function (this: JContextWrapper, config: JConfiguration) {
-      this.$host = configurationContext(this, config).$host;
     },
   },
 });

@@ -730,6 +730,7 @@ describe("window-context", () => {
 
   test("display and window contexts retain display identity and own their window service", async () => {
     const source = new JContext(), screen = await display();
+    Reflect.set(source, "$host", { pkg: "test" });
     const displayContext = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", screen);
     expect(await vcall(displayContext, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
     expect(await vcall(displayContext, "isUiContext", "()Z")).toBe(0);
@@ -780,9 +781,8 @@ describe("window-context", () => {
     themed.base = owner;
     const ownedView = new JView(), otherView = new JView();
     ownedView.ctx = themed; otherView.ctx = other;
-    let dismissed = false;
-    addOverlay(ownedView, 0, 0, false, undefined, () => { dismissed = true; });
-    addOverlay(otherView);
+    addOverlay(ownedView, 0, 0, 0);
+    addOverlay(otherView, 0, 0, 0);
     await dispatchAttached(ownedView);
     await dispatchAttached(otherView);
     try {
@@ -791,7 +791,6 @@ describe("window-context", () => {
       expect(overlays.some(o => o.view === ownedView)).toBe(false);
       expect(otherView.attached).toBe(true);
       expect(overlays.some(o => o.view === otherView)).toBe(true);
-      expect(dismissed).toBe(false);
     } finally {
       await detachContextOverlays(other);
       removeOverlay(ownedView);
@@ -823,7 +822,7 @@ describe("window-context", () => {
     underneath.decor = activity; above.decor = dialog;
     above.layoutW = above.layoutH = -1;
     dialog.right = device.width; dialog.bottom = device.height;
-    const overlays = [{ view: dialog, x: 0, y: 0, dismissOnOutside: false }];
+    const overlays = [{ view: dialog, x: 0, y: 0, flags: 0 }];
     await vcall(underneath, "setStatusBarColor", "(I)V", 0xff112233);
     await vcall(underneath, "setNavigationBarColor", "(I)V", 0xff223344);
     await vcall(above, "setStatusBarColor", "(I)V", 0xffeeeeee);

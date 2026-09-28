@@ -523,6 +523,8 @@ export class Runtime {
     const fl = spec.fields ?? [];
     if (Array.isArray(fl)) for (const n of fl) info.fieldTable.set(n, n);
     else for (const [jname, prop] of Object.entries(fl)) info.fieldTable.set(jname, prop);
+    // serialized state is the class's own instance fields, which JNI and reflection also reach
+    for (const f of spec.serialization?.fields ?? []) if (!info.fieldTable.has(f.name)) info.fieldTable.set(f.name, f.prop);
     ctorAny.$i = info;
     info.state = spec.clinit ? 0 : 2;
     info.compiled = true;

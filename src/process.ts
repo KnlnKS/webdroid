@@ -5,12 +5,14 @@ import { loadSkiaText } from "./android/skia-text";
 import { setProcessIdentity, recordVsync } from "./android/os";
 import { attachIme, drainInput } from "./shell/input";
 import { setWebLayer } from "./android/webkit";
-import { parsePackageArchive, packageArchive } from "./android/packagearchive";
+import { apkCertificates, packageArchive } from "./android/packagearchive";
+import { zipTree } from "./jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
 import { overlays } from "./android/popup";
 import { jitStats } from "./native/core";
-import type { Install } from "./shell/install";
+import { openInstallApks, type Install } from "./shell/install";
+import type { FileSource } from "./shell/lazyfile";
 import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
@@ -71,24 +73,24 @@ try {
     if (systemFonts.has(font.family.replace(/^"(.*)"$/, "$1"))) document.fonts.add(font);
   }
   mountSystemCertificates();
-  let boot: Uint8Array | Install | null = null;
+  let boot: Install | null = null;
   for (const snapshot of data.registry) {
-    const path = installedPath(snapshot.pkg), source = snapshot.source;
-    let archive;
+    const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;
+    let archive, base: Pick<Install, "zip" | "base">;
     if ("index" in source) {
       const packed = new PackedArchive(source.index, source.base, source);
-      await packed.prepare(snapshot.pkg === data.pkg);
+      await packed.prepare(own);
       archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
       packedArchives.set(path, packed); vfs.mount(path, packed);
-      if (snapshot.pkg === data.pkg) {
-        boot = { zip: packed.zip, base: packed, lazyEntries: new Map(), splits: [] };
-        rt.classpathSource = packed;
-      }
+      if (own) rt.classpathSource = packed;
+      base = { zip: packed.zip, base: packed };
     } else {
-      const bytes = u8(source);
-      archive = await parsePackageArchive(bytes); vfs.write(path, bytes);
-      if (snapshot.pkg === data.pkg) boot = bytes;
+      const bytes = u8(source), zip = zipTree(bytes);
+      archive = packageArchive(zip, await apkCertificates(bytes, zip)); vfs.write(path, bytes);
+      base = { zip, base: bytes };
     }
+    // splits carry their native libraries and config resources; their reads return the parent realm's arrays
+    if (own) boot = await openInstallApks(snapshot.splits.map((split): FileSource => ({ size: split.size, read: async (offset, length) => u8(await split.read(offset, length)) })), base);
     const record = registerPackage(archive, path, snapshot.uid);
     record.system = snapshot.system;
     for (const grant of snapshot.grants) record.grants.add(grant);

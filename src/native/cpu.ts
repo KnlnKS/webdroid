@@ -13,9 +13,10 @@ import { yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
 export { NativeFault, yieldToLoop, yieldStats };
 
-const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
+const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2, IllegalInstruction = 3 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
 const SIGNAL_FRAME = "signal ";
+const SIGILL = 4, ILL_ILLOPC = 1;
 const SA_SIGINFO = 4, SA_ONSTACK = 0x08000000, SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
 const isSignalFrame = (label: string | undefined): boolean => label?.startsWith(SIGNAL_FRAME) ?? false;
 // ~5 ms of guest time per slice: coarse enough that the macrotask hop per slice is noise, fine
@@ -26,12 +27,14 @@ const RESPONSIVE_WINDOW_MS = 250;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
 let responsiveUntil = 0;
-let lastNativeFrameAt = -Infinity;
+let lastPresentAt = -Infinity;
 const FRAME_ACTIVE_MS = 500;
 
+/** a frame reached the screen, whoever drew it */
+export function notePresent(): void { lastPresentAt = performance.now(); }
+/** a native thread swapped a frame, which reaches the screen through the next present() */
 export function noteNativeFrame(cpu: Cpu): void {
   const now = performance.now();
-  lastNativeFrameAt = now;
   for (let c: Cpu | null = cpu; c; c = c.parent) c.lastFrameAt = now;
 }
 
@@ -52,7 +55,8 @@ const L = (i: number) => core.layout(i);
 const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), OFF_FPCR = L(5), OFF_FPSR = L(6), OFF_EXCL = L(7), OFF_TLS = L(8), OFF_IC = L(9), OFF_BPC = L(10), OFF_A64 = L(12), OFF_EXIT = L(13), OFF_WORD = L(14), OFF_ADDR = L(15), OFF_ERRNO = L(17), OFF_TLSTAB = L(18);
 /** the architectural state a nested call saves and restores: registers, pc, V file, flags, monitor */
 const ARCH_SIZE = L(16);
-const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page"];
+const enum Fault { Undefined = 1, BadAddress = 2, UnsupportedSyscall = 6, Extension = 9 }
+const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page", "optional extension"];
 
 export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); } };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
@@ -102,7 +106,7 @@ export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }
 export class Cpu {
   nativeRuntime: Runtime | null = null;
   parent: Cpu | null = null;
-  realtime = false;
+  /** when this thread last produced a frame; Infinity for a thread that always feeds a device */
   lastFrameAt = -Infinity;
   /** the state struct's address in guest memory */
   readonly base: number;
@@ -139,6 +143,9 @@ export class Cpu {
   signalMask = 0n;
   alternateStack: { sp: bigint; size: bigint; flags: number } | null = null;
   alternateActive = false;
+  /** the handlers running, innermost last: the stack range each runs on, and the state a
+   *  siglongjmp out of it leaves for the interrupted code */
+  private handlerFrames: { lo: bigint; hi: bigint; exit: (() => void) | null }[] = [];
 
   constructor(jthread: JThread, name: string) {
     this.jthread = jthread;
@@ -182,6 +189,7 @@ export class Cpu {
   setPc(addr: number): void { this.u32[OFF_PC >> 2] = addr & (this.a64 ? -1 : ~1); this.u32[(OFF_PC >> 2) + 1] = 0; if (!this.a64) this.t = addr & 1; }
   get lr(): number { return this.w[2 * this.lrx]; }
   get sp(): number { return this.w[2 * this.spx]; }
+  get spVa(): bigint { return (this.a64 ? BigInt(this.w[2 * this.spx + 1] >>> 0) << 32n : 0n) | BigInt(this.w[2 * this.spx] >>> 0); }
   get cpsr(): number { return this.u32[OFF_CPSR >> 2]; }
   set cpsr(v: number) { this.u32[OFF_CPSR >> 2] = v; }
   get n(): number { return this.cpsr >>> 31; }
@@ -280,7 +288,8 @@ export class Cpu {
       await this.deliver(sig);
     }
   }
-  async deliver(sig: number): Promise<void> {
+  /** `info`: the siginfo of a signal this thread's own instruction raised */
+  async deliver(sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
     const h = sigHandlers.get(sig);
     this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
     const mask = this.signalMask, handling = this.handling.has(sig);
@@ -305,7 +314,8 @@ export class Cpu {
         // Linux arm64 ucontext_t places mcontext registers at +0xb0.
         mem.memset(frame, 0, 0x1300);
         mem.st32(frame, sig);
-        mem.st32(frame + 8, -6);
+        mem.st32(frame + 8, info ? info.code : -6);
+        if (info) mem.st64(frame + 16, BigInt(info.addr));
         const reg = (i: number) => (BigInt(this.w[2 * i + 1] >>> 0) << 32n) | BigInt(this.w[2 * i] >>> 0);
         if (this.alternateStack) {
           mem.st64(context + 0x10, this.alternateStack.sp);
@@ -327,8 +337,13 @@ export class Cpu {
       }
       // sigreturn: the handler may have rewritten the context. It is loaded before the interrupted
       // frame or another signal can run on this register file.
+      // a handler runs below the interrupted sp, or on the alternate stack
+      const record = { lo: alt !== undefined ? this.alternateStack!.sp : 0n, hi: alt ?? this.spVa, exit: null as (() => void) | null };
+      this.handlerFrames.push(record);
       const resume = (returned: boolean) => {
         restore();
+        this.handlerFrames.pop();
+        if (record.exit) { record.exit(); return; }
         if (!returned || !context) return;
         for (let i = 0; i < 31; i++) {
           const value = mem.ld64(context + 0xb8 + i * 8);
@@ -448,8 +463,7 @@ export class Cpu {
     // a nested call (Java → native while this Cpu is parked in a host call) builds its frame below the guest's sp
     const slotSz = this.a64 ? 8 : 4, align = this.a64 ? ~15 : ~7;
     const nested = this.depth > 0 || stackTop !== undefined;
-    const currentSp = this.depth && stackTop === undefined
-      ? (this.a64 ? BigInt(w[2 * this.spx + 1] >>> 0) << 32n : 0n) | BigInt(w[2 * this.spx] >>> 0) : 0n;
+    const currentSp = this.depth && stackTop === undefined ? this.spVa : 0n;
     const top = stackTop ?? (this.depth ? currentSp - 64n : BigInt(this.stackTop));
     const baseSp = nested ? mem.txVa(top - 16n) + 16 : this.stackTop;
     let sp = (baseSp & align) >>> 0;
@@ -504,13 +518,7 @@ export class Cpu {
       for (;;) {
         setCurThread(this.jthread);
         if (processExited) { setCurThread(mainThread); await new Promise<never>(() => {}); }
-        for (let sig; (sig = this.takeSignal());) {
-          this.state = "deliver";
-          const delivery = this.deliver(sig);
-          setCurThread(mainThread);
-          await delivery;
-          setCurThread(this.jthread);
-        }
+        for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(sig);
         const t0 = performance.now(), ic0 = this.ic;
         let sliceMs = 0;
         let ex: SliceExit;
@@ -523,6 +531,11 @@ export class Cpu {
           if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
         }
         if (ex === SliceExit.Exit) return;
+        if (ex === SliceExit.IllegalInstruction) {
+          // the handler runs with pc at the instruction, as the kernel delivers it
+          await this.deliverFromLoop(SIGILL, { code: ILL_ILLOPC, addr: this.pc });
+          continue;
+        }
         if (ex === SliceExit.Suspend) {
           budgetStreak = 0;
           const p = this.pending!;
@@ -550,9 +563,12 @@ export class Cpu {
         this.state = "yield";
         setCurThread(mainThread);
         budgetStreak++;
-        // All guest pthreads share one JS thread; give sustained off-frame work about a quarter of it.
+        // All guest pthreads share one JS thread, where a device would run them on other cores:
+        // while input is being handled or frames are being presented, sustained background work
+        // (not the UI thread, not a frame producer) gets about a quarter of it. Back-to-back slices
+        // would otherwise hold off rendering until Chrome's 100 ms starvation limit.
         const now = performance.now();
-        if (budgetStreak >= 3 && !this.realtime && !this.handling.size && now - this.lastFrameAt >= FRAME_ACTIVE_MS && now - lastNativeFrameAt < FRAME_ACTIVE_MS)
+        if (!this.foreground(now) && (now < responsiveUntil || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
@@ -564,6 +580,10 @@ export class Cpu {
     } finally { setCurThread(mainThread); }
   }
 
+  /** exempt from the background share: the UI thread, a running signal handler, a frame producer */
+  private foreground(now: number): boolean {
+    return this.jthread === mainThread || this.handling.size > 0 || now - this.lastFrameAt < FRAME_ACTIVE_MS;
+  }
   /** run the core until the frame returns, a host call parks the thread, or the budget is spent */
   runSlice(budget: number): SliceExit {
     const limit = this.ic + budget;
@@ -590,7 +610,8 @@ export class Cpu {
           continue;
         default: {
           const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
-          const what = code === 2 ? `bad address 0x${(this.u32[OFF_ADDR >> 2] >>> 0).toString(16)}` : code === 6 ? `${FAULTS[code]} ${word}` : `${FAULTS[code] ?? "fault " + code} 0x${word.toString(16).padStart(8, "0")}`;
+          if ((code === Fault.Undefined || code === Fault.Extension) && this.trapsIllegal(word)) { jitDrain(); return SliceExit.IllegalInstruction; }
+          const what = code === Fault.BadAddress ? `bad address 0x${(this.u32[OFF_ADDR >> 2] >>> 0).toString(16)}` : code === Fault.UnsupportedSyscall ? `${FAULTS[code]} ${word}` : `${FAULTS[code] ?? "fault " + code} 0x${word.toString(16).padStart(8, "0")}`;
           this.fault(what);
         }
       }
@@ -665,6 +686,29 @@ export class Cpu {
   /** the register file at the first fault, for wd.native.lastFault */
   private snapshot(): void {
     if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: [...Array(32)].map((_, i) => this.w[2 * i]), h: [...Array(32)].map((_, i) => this.w[2 * i + 1]), bt: backtraceHook(this), frames: [...this.frames] };
+  }
+  /** an instruction this CPU does not have, under a SIGILL handler (a feature probe such as
+   *  OpenSSL's armcap) */
+  private trapsIllegal(word: number): boolean {
+    if (!sigHandlers.has(SIGILL) || this.signalMask & 1n << BigInt(SIGILL - 1)) return false;
+    return true;
+  }
+  private async deliverFromLoop(sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
+    this.state = "deliver";
+    const delivery = this.deliver(sig, info);
+    setCurThread(mainThread);
+    await delivery;
+    setCurThread(this.jthread);
+  }
+  /** siglongjmp from a signal handler to a jmp_buf whose sp lies outside the handler's stack:
+   *  the handler's frame is abandoned, as the kernel's would be, and the code it interrupted
+   *  resumes in the state `apply` sets */
+  leaveHandler(sp: bigint, apply: () => void): boolean {
+    const h = this.handlerFrames.at(-1);
+    if (!h || !isSignalFrame(this.frames.at(-1)) || (sp >= h.lo && sp < h.hi)) return false;
+    h.exit = apply;
+    this.setPc(RET_SENTINEL);
+    return true;
   }
   fault(msg: string): never {
     const first = !lastFault.regs;

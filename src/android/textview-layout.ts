@@ -1,4 +1,4 @@
-import { JSpanned, JSpannable, JStaticLayout, type JLayout, type TLine, measureReplacements, drawLayout } from "./text";
+import { JSpanned, JSpannable, JStaticLayout, type JLayout, type TLine, NO_SPANS, prepareSpans, drawLayout } from "./text";
 import { beginPaintShadow, cssColor, measureText, tfDefault, tryDrawBitmapText, type JCanvas } from "./graphics";
 import { ligatureBoundary } from "./text-shaping";
 import { after, callOn, curThread } from "../jvm/natives/jlang";
@@ -19,7 +19,7 @@ function uppercase(source: string | JSpanned): string | JSpanned {
   return result;
 }
 
-type PreparedText = Pick<JLayout, "text" | "replacements"> & { src: string | JSpanned };
+type PreparedText = Pick<JLayout, "text" | "spans"> & { src: string | JSpanned };
 /** Cache offered and final widths while sharing span measurements. */
 export class TextViewLayouts {
   private source: string | JSpanned | null = null;
@@ -42,7 +42,7 @@ export class TextViewLayouts {
     const build = (prepared: PreparedText): JLayout | Promise<JLayout> => {
       const layout = new JStaticLayout();
       layout.src = prepared.src; layout.text = prepared.text; layout.paint = p; layout.width = width;
-      layout.replacements = prepared.replacements; layout.spacingMult = this.mult; layout.spacingAdd = this.extra; layout.includePad = this.pad;
+      layout.spans = prepared.spans; layout.spacingMult = this.mult; layout.spacingAdd = this.extra; layout.includePad = this.pad;
       return after(callOn(thread, () => layout.lineUp(() => breakLines(layout, this.single, this.max, this.ell))), () => {
         this.layouts.unshift(layout); this.layouts.length = Math.min(2, this.layouts.length);
         return layout;
@@ -51,10 +51,9 @@ export class TextViewLayouts {
     if (!changed && this.prepared) return build(this.prepared);
     this.source = source; this.font = font; this.ls = p.letterSpacingEm; this.caps = tv.allCaps;
     const display = tv.allCaps ? uppercase(source) : source;
-    const prepared: PreparedText = { src: display, text: typeof display === "string" ? display : display.text, replacements: [] };
+    const prepared: PreparedText = { src: display, text: typeof display === "string" ? display : display.text, spans: NO_SPANS };
     this.prepared = prepared;
-    if (!(prepared.src instanceof JSpanned)) return build(prepared);
-    return after(measureReplacements(prepared.src, p), replacements => { prepared.replacements = replacements; return build(prepared); });
+    return after(prepareSpans(display, p), spans => { prepared.spans = spans; return build(prepared); });
   }
 }
 
@@ -67,7 +66,7 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   const fits = (start: number, end: number) => Math.round(width(start, end)) <= avail - indent();
   const push = (start: number, end: number) => out.push({ start, end, text: text.slice(start, end), width: width(start, end), indent: indent() });
   const boundary = (start: number, end: number) => {
-    const span = layout.replacements.find(s => s.start < end && s.end > end);
+    const span = layout.spans.replacements.find(s => s.start < end && s.end > end);
     if (span) return Math.max(start, span.start);
     const code = text.charCodeAt(end - 1);
     const safe = end > start && code >= 0xd800 && code <= 0xdbff ? end - 1 : end;
@@ -78,7 +77,7 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
       let lo = start + 1, hi = end;
       while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fits(start, mid)) lo = mid; else hi = mid - 1; }
       let cut = boundary(start, lo);
-      if (cut === start) cut = layout.replacements.find(s => s.start <= start && s.end > start)?.end ?? start + (text.codePointAt(start)! > 0xffff ? 2 : 1);
+      if (cut === start) cut = layout.spans.replacements.find(s => s.start <= start && s.end > start)?.end ?? start + (text.codePointAt(start)! > 0xffff ? 2 : 1);
       push(start, cut); start = cut;
     }
     return start;
@@ -125,7 +124,7 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
 }
 
 export function drawTextViewLayout(layout: JLayout, cv: JCanvas, gravity: number): unknown {
-  if (layout.replacements.length || layout.src instanceof JSpanned && layout.src.spans.length) return drawLayout.call(layout, cv, gravity);
+  if (layout.spans.replacements.length || layout.src instanceof JSpanned && layout.src.spans.length) return drawLayout.call(layout, cv, gravity);
   const ctx = cv.ctx, p = layout.paint;
   ctx.font = p.font(); ctx.fillStyle = cssColor(p.color); ctx.textBaseline = "alphabetic";
   ctx.textRendering = "geometricPrecision";

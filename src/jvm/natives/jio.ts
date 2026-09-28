@@ -2,25 +2,42 @@
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
-import { encodeModifiedUtf8 } from "../charset";
+import { charsetName, encodeModifiedUtf8, encodeString, streamDecoder, type StreamDecoder } from "../charset";
 import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { csText } from "./jchars";
 import { readFully, writable, type FileSource } from "../../shell/lazyfile";
 import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
-import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer, type JCharsetDecoder } from "./jnio";
 import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
 
-export class JFile extends JObj { path = ""; }
+export class JFile extends JObj {
+  /** the absolute path the VFS reads */
+  path = "";
+  /** a relative path as Java reports it; it resolves against user.dir, "/" */
+  rel: string | null = null;
+  get javaPath(): string { return this.rel ?? this.path; }
+}
+/** java.io.File's normalization: repeated and trailing separators go, a relative path stays relative */
+function initFile(f: JFile, p: string | null): void {
+  if (p === null) return rt.npe();
+  let j = p.replace(/\/+/g, "/");
+  if (j.length > 1 && j.endsWith("/")) j = j.slice(0, -1);
+  f.path = vfs.norm(j);
+  f.rel = j.startsWith("/") ? null : j;
+}
 function compareFile(this: JFile, other: unknown): number {
   if (other === null) throw rt.mkThrowable("java/lang/NullPointerException", "pathname");
   if (!(other instanceof JFile)) throw rt.mkThrowable("java/lang/ClassCastException", "Not a File");
-  return stringCompare(this.path, other.path);
+  return stringCompare(this.javaPath, other.javaPath);
 }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
-const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
+/** `new File(p)`: File's own methods return a plain File, whatever the receiver's class */
+function fileOf(p: string): JFile { const f = new JFile(); initFile(f, p); return f; }
+const childOf = (d: JFile, name: string) => fileOf(d.javaPath + "/" + name);
+const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => childOf(d, n)), "Ljava/io/File;");
 // apps implement these to pick over a directory listing (File.listFiles(filter))
 rt.markers("java/io/FilenameFilter", "java/io/FileFilter");
 // Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
@@ -31,8 +48,15 @@ function createTempFile(prefix: string, suffix: string | null, dir: JFile | null
     if (!vfs.exists(f.path)) { vfs.write(f.path, new Uint8Array(0)); return f; }
   }
 }
-function filePath(this: JFile) { return this.path; }
-function sameFile(this: JFile) { return this; }
+function filePath(this: JFile) { return this.javaPath; }
+function absolutePath(this: JFile) { return this.path; }
+/** File.getParent: the path before its last separator, the root for a top-level absolute path */
+function parentOf(f: JFile): string | null {
+  const p = f.javaPath, i = p.lastIndexOf("/"), prefix = f.rel === null ? 1 : 0;
+  if (i >= prefix) return p.slice(0, i);
+  return prefix && p.length > prefix ? "/" : null;
+}
+function absoluteFile(this: JFile) { return this.rel === null ? this : mkFile(this.path); }
 function makeDirs(this: JFile) { vfs.mkdir(this.path); return 1; }
 const markUnsupported = (): never => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); };
 /** the mark/reset trio of a stream that cannot rewind */
@@ -42,30 +66,34 @@ rt.register({
   ifaces: ["java/io/Serializable", "java/lang/Comparable"],
   statics: { separator: "/", separatorChar: 47, pathSeparator: ":" },
   methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JFile, p: string) { this.path = vfs.norm(p); },
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JFile, d: string, n: string) { this.path = vfs.norm(d + "/" + n); },
-    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JFile, d: JFile, n: string) { this.path = vfs.norm((d?.path ?? "") + "/" + n); },
+    "<init>(Ljava/lang/String;)V": function (this: JFile, p: string | null) { initFile(this, p); },
+    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JFile, d: string | null, n: string | null) {
+      if (n === null) return rt.npe();
+      initFile(this, d === null ? n : d + "/" + n);
+    },
+    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JFile, d: JFile | null, n: string | null) {
+      if (n === null) return rt.npe();
+      initFile(this, d === null ? n : d.javaPath + "/" + n);
+    },
     "getPath()Ljava/lang/String;": filePath,
-    "getAbsolutePath()Ljava/lang/String;": filePath,
-    "getCanonicalPath()Ljava/lang/String;": filePath,
+    "getAbsolutePath()Ljava/lang/String;": absolutePath,
+    "getCanonicalPath()Ljava/lang/String;": absolutePath,
+    "isAbsolute()Z": function (this: JFile) { return +(this.rel === null); },
     "toURI()Ljava/net/URI;": function (this: JFile) {
       let path = this.path.startsWith("/") ? this.path : "/" + this.path;
       if (vfs.isDir(this.path) && !path.endsWith("/")) path += "/";
       if (path.startsWith("//")) path = "//" + path;
       return newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "file", null, path, null);
     },
-    "getName()Ljava/lang/String;": function (this: JFile) { return this.path.split("/").pop() ?? ""; },
+    "getName()Ljava/lang/String;": function (this: JFile) { return this.javaPath.slice(this.javaPath.lastIndexOf("/") + 1); },
     "isHidden()Z": function (this: JFile) { return this.path.slice(this.path.lastIndexOf("/") + 1).startsWith(".") ? 1 : 0; },
-    "getParent()Ljava/lang/String;": function (this: JFile) {
-      const i = this.path.lastIndexOf("/");
-      return i <= 0 ? null : this.path.slice(0, i);
-    },
+    "getParent()Ljava/lang/String;": function (this: JFile) { return parentOf(this); },
     "getParentFile()Ljava/io/File;": function (this: JFile) {
-      const i = this.path.lastIndexOf("/");
-      return i <= 0 ? null : mkFile(this.path.slice(0, i));
+      const parent = parentOf(this);
+      return parent === null ? null : fileOf(parent);
     },
-    "getAbsoluteFile()Ljava/io/File;": sameFile,
-    "getCanonicalFile()Ljava/io/File;": sameFile,
+    "getAbsoluteFile()Ljava/io/File;": absoluteFile,
+    "getCanonicalFile()Ljava/io/File;": absoluteFile,
     "exists()Z": function (this: JFile) { return vfs.exists(this.path) ? 1 : 0; },
     "isDirectory()Z": function (this: JFile) { return vfs.isDir(this.path) ? 1 : 0; },
     "isFile()Z": function (this: JFile) { return vfs.stat(this.path) ? 1 : 0; },
@@ -93,7 +121,7 @@ rt.register({
     "listFiles()[Ljava/io/File;": function (this: JFile) { return listFiles(this); },
     "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": driven(function* (this: JFile, f: unknown): Gen {
       const out: JFile[] = [];
-      for (const c of listFiles(this)) if (f === null || (yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, c.path.slice(this.path.length + 1)))) out.push(c);
+      for (const n of vfs.list(this.path)) if (f === null || (yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n))) out.push(childOf(this, n));
       return jarray(out, "Ljava/io/File;");
     }),
     "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": driven(function* (this: JFile, f: unknown): Gen {
@@ -113,8 +141,8 @@ rt.register({
     "toString()Ljava/lang/String;": filePath,
     "compareTo(Ljava/io/File;)I": compareFile,
     "compareTo(Ljava/lang/Object;)I": compareFile,
-    "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.path === this.path ? 1 : 0; },
-    "hashCode()I": function (this: JFile) { return stringHash(this.path) ^ 1234321; },
+    "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.javaPath === this.javaPath ? 1 : 0; },
+    "hashCode()I": function (this: JFile) { return stringHash(this.javaPath) ^ 1234321; },
     "toPath()Ljava/nio/file/Path;": function (this: JFile) { return mkPath(this.path); },
     "getFreeSpace()J": () => 1073741824n,
     "getUsableSpace()J": () => 1073741824n,
@@ -637,6 +665,7 @@ rt.register({
     "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
     "read()I": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
+      vfs.sync(this.file);
       if (!this.source) return this.pos < this.file.len ? this.file.data[this.pos++] : -1;
       const bytes = yield this.source.read(this.pos, 1);
       if (!bytes.length) return -1;
@@ -647,6 +676,7 @@ rt.register({
     "read([BII)I": function(this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); },
     "readLine()Ljava/lang/String;": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
+      vfs.sync(this.file);
       const parts: string[] = [], size = this.file.len;
       if (this.pos >= size) return null;
       while (this.pos < size) {
@@ -684,6 +714,7 @@ rt.register({
 function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Promise<number> {
   checkFileOpen(f);
   if (len === 0) return 0;
+  vfs.sync(f.file);
   if (f.source) {
     return after(f.source.read(f.pos, len), (bytes: Uint8Array) => {
       if (!bytes.length) return -1;
@@ -937,14 +968,14 @@ function printMethods<T>(sink: (self: T, s: string, ln: boolean) => unknown, sel
 
 // ── PrintStream; the unwrapped System streams feed the console.
 class JPrintStream extends JOutputStream {
-  out: unknown = null; auto = false; closed = false; trouble = false;
+  out: unknown = null; auto = false; closed = false; trouble = false; charset = "UTF-8";
   line = ""; err = false; decoder = new TextDecoder();
 }
 async function pr(ps: JPrintStream, s: string, ln: boolean) {
   if (ps.closed) { ps.trouble = true; return; }
   if (ps.out !== null) {
-    const bytes = utf8.enc.encode(ln ? s + "\n" : s);
-    await vcall(ps, "write", "([BII)V", new Int8Array(bytes.buffer), 0, bytes.length);
+    const bytes = encodeString(ln ? s + "\n" : s, ps.charset);
+    await vcall(ps, "write", "([BII)V", bytes, 0, bytes.length);
     return;
   }
   ps.line += s + (ln ? "\n" : "");
@@ -959,15 +990,16 @@ async function printCall(p: JPrintStream, name: string, desc: string, ...args: u
   try { await vcall(p.out, name, desc, ...args); }
   catch (e) { if (!(e instanceof rt.link("java/io/IOException").ctor)) throw e; p.trouble = true; }
 }
-const initPrint = function (this: JPrintStream, out: unknown, auto = 0) {
+const initPrint = function (this: JPrintStream, out: unknown, auto = 0, charset: string | null = "UTF-8") {
   if (out == null) throw rt.mkThrowable("java/lang/NullPointerException", "Null output stream");
-  this.out = out; this.auto = !!auto;
+  this.out = out; this.auto = !!auto; this.charset = charsetName(charset);
 };
 rt.register({
   name: "java/io/PrintStream", ctor: JPrintStream, sup: "java/io/FilterOutputStream",
   methods: {
     "<init>(Ljava/io/OutputStream;)V": initPrint,
     "<init>(Ljava/io/OutputStream;Z)V": initPrint,
+    "<init>(Ljava/io/OutputStream;ZLjava/lang/String;)V": initPrint,
     ...printMethods(pr, "java/io/PrintStream"),
     "flush()V": function (this: JPrintStream) { return this.out !== null ? printCall(this, "flush", "()V") : this.line ? pr(this, "", true) : undefined; },
     "close()V": driven(function* (this: JPrintStream): Gen {
@@ -1006,7 +1038,7 @@ class JReader extends JObj {
   /** the stream or reader still to be decoded into `s`; null once the text is complete */
   src: unknown = null;
   srcChars = false;   // src reads chars (a Reader) rather than bytes (an InputStream)
-  dec: TextDecoder | null = null;
+  dec: StreamDecoder | null = null;
   markPos = -1;
   markLimit = 0;
 }
@@ -1031,7 +1063,7 @@ function fill(r: JReader): void | Promise<void> {
   }
   const out = new Int8Array(READ_CHUNK);
   return after(vcall(src, "read", "([BII)I", out, 0, READ_CHUNK), (n: number) => {
-    const dec = (r.dec ??= new TextDecoder());
+    const dec = (r.dec ??= streamDecoder("UTF-8"));
     if (n > 0) r.s += dec.decode(new Uint8Array(out.buffer, 0, n), { stream: true });
     else if (n < 0) { r.s += dec.decode(); r.src = null; }
   });
@@ -1113,14 +1145,19 @@ rt.register({
     "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
   },
 });
-// UTF-8 whatever charset was asked for
-const decodeStream = function (this: JReader, s: unknown) { this.src = s; };
+const decodeStream = function (this: JReader, s: unknown, charset: unknown = "UTF-8") {
+  if (s === null) rt.npe();
+  this.src = s; this.dec = streamDecoder(charset);
+};
 rt.register({
   name: "java/io/InputStreamReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
     "<init>(Ljava/io/InputStream;)V": decodeStream,
     "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": decodeStream,
     "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": decodeStream,
+    "<init>(Ljava/io/InputStream;Ljava/nio/charset/CharsetDecoder;)V": function (this: JReader, s: unknown, d: JCharsetDecoder | null) {
+      decodeStream.call(this, s, (d ?? rt.npe()).cs);
+    },
   },
 });
 // FileReader is an InputStreamReader over a file: the file's bytes, decoded, in one go.

@@ -153,6 +153,8 @@ export const linearMethods: NativeSpec["methods"] = {
   "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; requestLayout(this); },
   "getOrientation()I": function (this: JLinearLayout) { return this.orientation; },
   "setGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = g; requestLayout(this); },
+  "setHorizontalGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = (g & 0x800007) | (this.gravity & ~0x800007); requestLayout(this); },
+  "setVerticalGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = (g & 0x70) | (this.gravity & ~0x70); requestLayout(this); },
   "setWeightSum(F)V": function (this: JLinearLayout, w: number) { this.weightSum = w; },
   "setBaselineAlignedChildIndex(I)V": function (this: JLinearLayout, index: number) {
     if (index < 0 || index >= this.children.length)

@@ -7,7 +7,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } f
 import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { JMap, newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { csText } from "../jvm/natives/jchars";
-import { JBundle } from "./os";
+import { JAbstractCursor } from "./abstractcursor";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 let SQL: SqlJs | null = null;
@@ -201,19 +201,12 @@ function bindArgs(args: unknown[] | null): (string | number | bigint | Uint8Arra
   });
 }
 
-class JCursor extends JObj {
+/** a cursor over rows already in hand; MatrixCursor and every in-process query result */
+class JCursor extends JAbstractCursor {
   cols: string[] = [];
   rows: unknown[][] = [];
-  pos = -1;
-  closed = false;
-  colIndex(name: string): number {
-    let i = this.cols.indexOf(name);
-    if (i < 0) i = this.cols.findIndex((c) => c.toLowerCase() === name?.toLowerCase());
-    return i;
-  }
-  val(i: number): unknown { return unbox(this.rows[this.pos]?.[i] ?? null); }
+  val(i: number): unknown { return unbox(this.rows[this.mPos]?.[i] ?? null); }
 }
-/** a cursor over rows already in hand — the one Cursor implementation in the tree */
 export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
   rt.link("webdroid/Cursor");
   const c = new JCursor();
@@ -257,35 +250,10 @@ const firstString = (c: JCursor) => c.rows.length ? String(c.rows[0][0] ?? "") :
 
 const cursorMethods: NativeSpec["methods"] = {
   "getCount()I": function (this: JCursor) { return this.rows.length; },
-  "getPosition()I": function (this: JCursor) { return this.pos; },
-  "moveToFirst()Z": function (this: JCursor) { this.pos = 0; return this.rows.length ? 1 : 0; },
-  "moveToLast()Z": function (this: JCursor) { this.pos = this.rows.length - 1; return this.rows.length ? 1 : 0; },
-  "moveToNext()Z": function (this: JCursor) {
-    this.pos++;
-    return this.pos < this.rows.length ? 1 : 0;
-  },
-  "moveToPrevious()Z": function (this: JCursor) { this.pos--; return this.pos >= 0 ? 1 : 0; },
-  "moveToPosition(I)Z": function (this: JCursor, p: number) {
-    this.pos = p;
-    return p >= 0 && p < this.rows.length ? 1 : 0;
-  },
-  "isAfterLast()Z": function (this: JCursor) { return this.pos >= this.rows.length ? 1 : 0; },
-  "isBeforeFirst()Z": function (this: JCursor) { return this.pos < 0 ? 1 : 0; },
-  "isFirst()Z": function (this: JCursor) { return this.pos === 0 ? 1 : 0; },
-  "isLast()Z": function (this: JCursor) { return this.pos === this.rows.length - 1 ? 1 : 0; },
-  "getColumnIndex(Ljava/lang/String;)I": function (this: JCursor, n: string) { return this.colIndex(n); },
-  "getColumnIndexOrThrow(Ljava/lang/String;)I": function (this: JCursor, n: string) {
-    const i = this.colIndex(n);
-    if (i < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "column '" + n + "' does not exist");
-    return i;
-  },
-  "getColumnName(I)Ljava/lang/String;": function (this: JCursor, i: number) { return this.cols[i] ?? null; },
   "getColumnNames()[Ljava/lang/String;": function (this: JCursor) {
-    const a = this.cols.slice();
-    (a as any).$t = "Ljava/lang/String;";
-    return a;
+    (this.cols as { $t?: string }).$t ??= "Ljava/lang/String;";
+    return this.cols;
   },
-  "getColumnCount()I": function (this: JCursor) { return this.cols.length; },
   "getString(I)Ljava/lang/String;": function (this: JCursor, i: number) {
     const v = this.val(i);
     return v === null ? null : String(v);
@@ -309,40 +277,31 @@ const cursorMethods: NativeSpec["methods"] = {
     if (typeof v === "string") return 3;
     return 4;
   },
-  "close()V": function (this: JCursor) { this.closed = true; },
-  "isClosed()Z": function (this: JCursor) { return this.closed ? 1 : 0; },
-  ...noops("registerContentObserver(Landroid/database/ContentObserver;)V",
-    "unregisterContentObserver(Landroid/database/ContentObserver;)V",
-    "registerDataSetObserver(Landroid/database/DataSetObserver;)V",
-    "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
-    "setNotificationUri(Landroid/content/ContentResolver;Landroid/net/Uri;)V", "deactivate()V"),
-  ...stubs(null, "getNotificationUri()Landroid/net/Uri;"),
-  ...stubs(0, "getWantsAllOnMoveCalls()Z"),
-  ...stubs(1, "requery()Z"),
-  "getExtras()Landroid/os/Bundle;": () => new JBundle(),
-  "respond(Landroid/os/Bundle;)Landroid/os/Bundle;": () => new JBundle(),
 };
 rt.register({ name: "android/database/Cursor", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"] });
-// CharArrayBuffer: the caller's reusable char[] a text column is copied into, grown when it is short
-class JCharArrayBuffer extends JObj { data: Uint16Array = new Uint16Array(0); sizeCopied = 0; }
-rt.register({
-  name: "android/database/CharArrayBuffer", ctor: JCharArrayBuffer, fields: ["data", "sizeCopied"],
-  methods: {
-    "<init>(I)V": function (this: JCharArrayBuffer, n: number) { this.data = new Uint16Array(n); },
-    "<init>([C)V": function (this: JCharArrayBuffer, chars: Uint16Array) { this.data = chars; },
+const ABSTRACT_CURSOR = "android/database/AbstractCursor";
+rt.register({ name: "webdroid/Cursor", ctor: JCursor, sup: ABSTRACT_CURSOR, methods: {
+  ...cursorMethods,
+  // row iteration's hot path; nothing subclasses this class, so no getCount/onMove override can intervene
+  "moveToNext()Z": function (this: JCursor) {
+    if (this.mPos + 1 < this.rows.length) { this.mPos++; return 1; }
+    this.mPos = this.rows.length;
+    return 0;
   },
-});
-cursorMethods["copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V"] = driven(function* (this: JCursor, i: number, buffer: JCharArrayBuffer): Gen {
-  const text = (yield callSelf(cursorMethods, "getString(I)Ljava/lang/String;", this, i)) as string | null;
-  if (text === null) { buffer.sizeCopied = 0; return; }
-  if (buffer.data.length < text.length) buffer.data = new Uint16Array(text.length);
-  for (let k = 0; k < text.length; k++) buffer.data[k] = text.charCodeAt(k);
-  buffer.sizeCopied = text.length;
-});
-rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor"], methods: cursorMethods });
+} });
 class JCursorWrapper extends JObj { cursor: unknown = null; }
 const cursorWrapperMethods: NativeSpec["methods"] = {};
-for (const signature of Object.keys(cursorMethods)) {
+for (const signature of ["getCount()I", "getPosition()I", "move(I)Z", "moveToPosition(I)Z", "moveToFirst()Z", "moveToLast()Z",
+  "moveToNext()Z", "moveToPrevious()Z", "isFirst()Z", "isLast()Z", "isBeforeFirst()Z", "isAfterLast()Z",
+  "getColumnIndex(Ljava/lang/String;)I", "getColumnIndexOrThrow(Ljava/lang/String;)I", "getColumnName(I)Ljava/lang/String;",
+  "getColumnNames()[Ljava/lang/String;", "getColumnCount()I", "getBlob(I)[B", "getString(I)Ljava/lang/String;",
+  "copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V", "getShort(I)S", "getInt(I)I", "getLong(I)J", "getFloat(I)F",
+  "getDouble(I)D", "getType(I)I", "isNull(I)Z", "deactivate()V", "requery()Z", "close()V", "isClosed()Z",
+  "registerContentObserver(Landroid/database/ContentObserver;)V", "unregisterContentObserver(Landroid/database/ContentObserver;)V",
+  "registerDataSetObserver(Landroid/database/DataSetObserver;)V", "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
+  "setNotificationUri(Landroid/content/ContentResolver;Landroid/net/Uri;)V", "setNotificationUris(Landroid/content/ContentResolver;Ljava/util/List;)V",
+  "getNotificationUri()Landroid/net/Uri;", "getNotificationUris()Ljava/util/List;", "getWantsAllOnMoveCalls()Z",
+  "setExtras(Landroid/os/Bundle;)V", "getExtras()Landroid/os/Bundle;", "respond(Landroid/os/Bundle;)Landroid/os/Bundle;"]) {
   const split = signature.indexOf("(");
   const name = signature.slice(0, split), descriptor = signature.slice(split);
   cursorWrapperMethods[signature] = function (this: JCursorWrapper, ...args: unknown[]) {
@@ -368,7 +327,7 @@ rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilde
     return this;
   },
 } });
-rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor"], methods: {
+rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, sup: ABSTRACT_CURSOR, methods: {
   ...cursorMethods,
   "<init>([Ljava/lang/String;)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
   "<init>([Ljava/lang/String;I)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
@@ -386,6 +345,8 @@ rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor
 export class JContentValues extends JObj {
   data = new JMap();
 }
+/** a ContentValues' entries with boxed numbers unwrapped */
+export const contentValues = (values: JContentValues): Map<string, unknown> => new Map([...values.data.m.values()].map((e) => [e.k as string, unbox(e.v)]));
 rt.register({
   name: "android/content/ContentValues", ctor: JContentValues, ifaces: ["android/os/Parcelable"],
   methods: (() => {
@@ -754,9 +715,21 @@ rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatab
   }
 }
 rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
+// DatabaseUtils.getSqlStatementType: AOSP classifies by the first three letters
+const STATEMENT_TYPES: Record<string, number> = {
+  SEL: 1, INS: 2, UPD: 2, REP: 2, DEL: 2, ATT: 3, BEG: 4, COM: 5, END: 5, ROL: 6, PRA: 7, CRE: 8, DRO: 8, ALT: 8, ANA: 9, DET: 9,
+};
+function sqlStatementType(sql: string | null): number {
+  if (sql === null) return rt.npe();
+  const text = sql.trim().toUpperCase(), type = text.length < 3 ? 99 : STATEMENT_TYPES[text.slice(0, 3)] ?? 99;
+  return type === 6 && text.includes(" TO ") ? 99 : type; // ROLLBACK TO a savepoint is not an abort
+}
 rt.register({
   name: "android/database/DatabaseUtils", ctor: class extends JObj {},
+  statics: { STATEMENT_SELECT: 1, STATEMENT_UPDATE: 2, STATEMENT_ATTACH: 3, STATEMENT_BEGIN: 4, STATEMENT_COMMIT: 5,
+    STATEMENT_ABORT: 6, STATEMENT_PRAGMA: 7, STATEMENT_DDL: 8, STATEMENT_UNPREPARED: 9, STATEMENT_OTHER: 99 },
   methods: {
+    "static getSqlStatementType(Ljava/lang/String;)I": sqlStatementType,
     "static appendEscapedSQLString(Ljava/lang/StringBuilder;Ljava/lang/String;)V": (builder: { s: string } | null, value: string | null) => {
       if (!builder) return rt.npe();
       builder.s += "'" + String(value).replaceAll("'", "''") + "'";

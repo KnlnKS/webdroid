@@ -1,4 +1,4 @@
-import { readClipData } from "./clipdata";
+import { readClipData, type JClipData } from "./clipdata";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
@@ -26,7 +26,7 @@ export class JIntent extends JObj {
   identifier: string | null = null;
   sourceBounds: JRect | null = null;
   selector: JIntent | null = null;
-  clipData: JObj | null = null;
+  clipData: JClipData | null = null;
   contentUserHint = -2;
   originalIntent: JIntent | null = null;
   copyFrom(o: JIntent) {
@@ -42,6 +42,10 @@ export class JIntent extends JObj {
     }
   }
 }
+const componentPkg = (it: JIntent) => it.componentPkg ?? appHost?.pkg ?? "";
+/** what Intent.filterEquals compares: action, data, type, identifier, package, component, categories */
+export const filterKey = (it: JIntent) => JSON.stringify([it.action, it.dataUri, it.typeStr, it.identifier, it.pkg,
+  it.component && componentPkg(it), it.component, [...it.categories].sort()]);
 function copyBounds(rect: JRect): JRect {
   rt.link("android/graphics/Rect");
   return Object.assign(new JRect(), { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
@@ -57,6 +61,11 @@ function putExtras(this: JIntent, source: JBundle | JIntent) {
   const extras = source instanceof JIntent ? source.extras : source;
   if (extras) for (const [key, value] of extras.map) this.extras.map.set(key, value);
   return this;
+}
+/** replaceExtras: the source's extras, copied, in place of every current one */
+function replaceExtras(this: JIntent, source: JBundle | JIntent | null) {
+  this.extras.map.clear();
+  return source ? putExtras.call(this, source) : this;
 }
 function createChooser(target: JIntent, title: unknown, sender?: unknown): JIntent {
   if (!target) rt.npe();
@@ -210,9 +219,21 @@ const intentMethods: NativeSpec["methods"] = {
     if ((changed & 130 || other.extras.map.size) && this.contentUserHint === -2) this.contentUserHint = other.contentUserHint;
     return changed;
   },
+  "filterEquals(Landroid/content/Intent;)Z": function (this: JIntent, other: JIntent | null) {
+    return +(!!other && filterKey(this) === filterKey(other));
+  },
+  // the fields' hashCodes summed; a ComponentName's is its package's plus its class's
+  "filterHashCode()I": function (this: JIntent) {
+    let h = 0;
+    for (const s of [this.action, this.dataUri, this.typeStr, this.identifier, this.pkg, this.component && componentPkg(this), this.component, ...this.categories])
+      if (s !== null) h = (h + stringHash(s)) | 0;
+    return h;
+  },
   "getExtras()Landroid/os/Bundle;": function (this: JIntent) { return this.extras.map.size ? this.extras : null; },
   "putExtras(Landroid/os/Bundle;)Landroid/content/Intent;": putExtras,
   "putExtras(Landroid/content/Intent;)Landroid/content/Intent;": putExtras,
+  "replaceExtras(Landroid/os/Bundle;)Landroid/content/Intent;": replaceExtras,
+  "replaceExtras(Landroid/content/Intent;)Landroid/content/Intent;": replaceExtras,
   "hasExtra(Ljava/lang/String;)Z": function (this: JIntent, k: string) { return this.extras.map.has(k) ? 1 : 0; },
   "removeExtra(Ljava/lang/String;)V": function (this: JIntent, k: string) { this.extras.map.delete(k); },
   // Extras are live objects here, never a parcel, so there is nothing for a class loader to do.
@@ -416,7 +437,8 @@ export type ActivityResultTarget = { act: JActivity; code: number };
 export const activityTransport: {
   launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ActivityResultTarget) => Promise<void>;
   finish?: (act: JActivity) => boolean;
-  attach?: (act: JActivity, task: number) => void;
+  attach?: (act: JActivity, task: number, affinity: string) => void;
+  finishAffinity?: (act: JActivity) => void;
   isTaskRoot?: (act: JActivity) => boolean;
   removeTask?: (act: JActivity) => void;
   presentation?: (translucent: boolean) => void;
@@ -475,7 +497,7 @@ export function systemActivity(intent: JIntent | null, scoped = true): SystemHan
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(intent.dataUri ?? "")?.[1].toLowerCase() ?? "";
   return systemActivities.get(intent.action ?? "")?.find((h) => h.schemes ? scoped && h.schemes.includes(scheme) : true)?.run ?? null;
 }
-export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
+export function mkResultIntent(uri: string | null, flags = 3 | 0x40): JIntent {
   const i = new JIntent();
   i.dataUri = uri;
   i.flags = flags;
@@ -486,9 +508,11 @@ export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
  *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
 export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
   setTimeout(() => void onMain(async () => {
-    if (resultCode === RESULT_OK && data?.dataUri && (data.flags & 3)) {
+    // the grant flags cover the result's data and every ClipData item URI, as ActivityManager's
+    if (resultCode === RESULT_OK && data && (data.flags & 3)) {
       const { grantUriPermission } = await import("./contentresolver");
-      grantUriPermission(act.$host.pkg, mkUri(data.dataUri), data.flags);
+      const items = data.clipData?.items ?? [];
+      for (const uri of [data.dataUri, ...items.map((item) => item.uri?.uri)]) if (uri) grantUriPermission(act.$host.pkg, mkUri(uri), data.flags);
     }
     const target = act.fragmentResults.get(code);
     if (target) {

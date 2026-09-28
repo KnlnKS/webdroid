@@ -88,6 +88,48 @@ describe("http-stream", () => {
       expect(seen).toEqual(["1"]);
     } finally { globalThis.fetch = original; server.stop(true); }
   });
+  test("HttpURLConnection consults the CookieHandler on every redirect hop", async () => {
+    const seen: { url: string; cookie: string | null }[] = [];
+    const server = Bun.serve({ port: 0, fetch(request) {
+      const url = new URL(request.url).searchParams.get("url")!;
+      seen.push({ url, cookie: request.headers.get("x-wd-cookie") });
+      const headers: Record<string, string> = { "x-wd-final-url": url, "x-wd-status": url.endsWith("/start") ? "302" : "200",
+        "x-wd-set-cookie": JSON.stringify([url.endsWith("/start") ? "hop=1" : "end=2"]) };
+      if (url.endsWith("/start")) headers.location = "https://other.test/end";
+      return new Response(url.endsWith("/start") ? null : "done", { headers });
+    } });
+    class Handler extends JObj { log: string[] = []; }
+    rt.register({ name: "test/RecordingCookieHandler", ctor: Handler, sup: "java/net/CookieHandler", methods: {
+      "get(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;": async function (this: Handler, uri: unknown) {
+        const text = await vcall(uri, "toString", "()Ljava/lang/String;");
+        this.log.push("get " + text);
+        return newObj("java/util/HashMap");
+      },
+      "put(Ljava/net/URI;Ljava/util/Map;)V": async function (this: Handler, uri: unknown, headers: unknown) {
+        const cookies = await vcall(headers, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "set-cookie");
+        this.log.push(`put ${await vcall(uri, "toString", "()Ljava/lang/String;")} ${await vcall(cookies, "toString", "()Ljava/lang/String;")}`);
+      },
+    } });
+    rt.linkNatives();
+    const handler = new Handler(), original = globalThis.fetch;
+    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+      original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
+    await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", handler);
+    try {
+      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/start");
+      const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
+      expect(await vcall(connection, "getResponseCode", "()I")).toBe(200);
+      expect(await vcall(await vcall(connection, "getURL", "()Ljava/net/URL;"), "toString", "()Ljava/lang/String;")).toBe("https://other.test/end");
+      expect(seen.map((s) => s.url)).toEqual(["https://example.test/start", "https://other.test/end"]);
+      expect(handler.log).toEqual([
+        "get https://example.test/start", "put https://example.test/start [hop=1]",
+        "get https://other.test/end", "put https://other.test/end [end=2]",
+      ]);
+    } finally {
+      await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", null);
+      globalThis.fetch = original; server.stop(true);
+    }
+  });
 });
 
 describe("http-upload", () => {

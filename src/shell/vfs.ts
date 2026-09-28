@@ -3,14 +3,17 @@
 import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
 import { procText } from "./procfs";
 import type { JBuffer } from "../jvm/natives/jnio";
+import type { SharedMaps } from "../native/mappings";
 import { utf8 } from "../jvm/abi";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
 export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk` : "/data/app/base.apk";
 
-/** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file */
-export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; maps?: JBuffer[] }
+/** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file. `maps`
+ *  are Java mappings of its pages; `sharedMaps` native MAP_SHARED copies of them, told of every
+ *  write and flushed before a read */
+export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; maps?: JBuffer[]; sharedMaps?: SharedMaps }
 export const EMPTY = new Uint8Array(0);
 /** room for `size` bytes, doubling so appends stay linear */
 function reserve(file: VfsFile, size: number) {
@@ -26,6 +29,8 @@ function setData(file: VfsFile, data: Uint8Array) {
 }
 const openFiles = new Map<string, VfsFile>();
 const volatileFiles = new Set<string>();
+/** stores through native shared mappings of an open file reach its bytes before they are read */
+const flushMapped = (path: string) => openFiles.get(path)?.sharedMaps?.flush();
 const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
   return text === null ? null : utf8.enc.encode(text);
@@ -47,9 +52,10 @@ export const vfs = {
     }
     return "/" + parts.join("/");
   },
-  read(p: string): Uint8Array | null { const path = this.norm(p); return this.files.get(path) ?? procBytes(path); },
+  read(p: string): Uint8Array | null { const path = this.norm(p); flushMapped(path); return this.files.get(path) ?? procBytes(path); },
   readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
     const path = this.norm(p);
+    flushMapped(path);
     const bytes = this.files.get(path);
     if (bytes) return bytes;
     const source = this.lazyFiles.get(path);
@@ -57,6 +63,7 @@ export const vfs = {
   },
   source(p: string): FileSource | null {
     const path = this.norm(p);
+    flushMapped(path);
     const bytes = this.files.get(path) ?? procBytes(path);
     return bytes ? new BytesFile(bytes) : this.lazyFiles.get(path) ?? null;
   },
@@ -71,6 +78,9 @@ export const vfs = {
     if (!file) { file = { path, data: data ?? EMPTY, len: data?.length ?? source!.size, source }; openFiles.set(path, file); }
     return file;
   },
+  /** before reading an open file's bytes directly */
+  sync(file: VfsFile) { file.sharedMaps?.flush(); },
+  opened(p: string): VfsFile | null { return openFiles.get(this.norm(p)) ?? null; },
   publish(file: VfsFile) {
     if (file.path === null || openFiles.get(file.path) !== file) return;
     if (!file.source) this.files.set(file.path, file.data.subarray(0, file.len));
@@ -86,6 +96,7 @@ export const vfs = {
       file.data.set(bytes, off);
     }
     file.len = Math.max(file.len, end);
+    file.sharedMaps?.wrote(off, bytes);
     this.publish(file);
   },
   resize(file: VfsFile, size: number) {

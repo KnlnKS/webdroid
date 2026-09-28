@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY } from "./view";
+import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates } from "./view";
 import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize
 } from "./drawable";
@@ -17,12 +17,14 @@ export class JImageView extends JView {
     this.dr = d;
     if (d) d.callback = this;
     invalidate(this);
-    return after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
+    return after(d ? vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())) : 0, () =>
+      after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
       this.drawableW = w; this.drawableH = h;
       return callOn(thread, () => after(this.applyTint(), () => after(this.applyColorFilter(), () => this.applyImageAlpha())));
-
-    }));
+    })));
   }
+  /** setImageState: extra drawable states, replacing the view's own unless merged */
+  imageState: Int32Array | null = null; mergeImageState = false;
   drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
@@ -158,6 +160,19 @@ const imageViewMethods: NativeSpec["methods"] = {
     if (this.drawable) return vcallOn(curThread, this.drawable, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
   },
   "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
+  "setImageState([IZ)V": function (this: JImageView, state: Int32Array | null, merge: number) {
+    this.imageState = state; this.mergeImageState = !!merge;
+    if (this.drawable) { const pending = this.refreshDrawableState(); requestLayout(this); return pending; }
+  },
+  "onCreateDrawableState(I)[I": function (this: JImageView, extra: number) {
+    const own = this.imageState;
+    if (own && !this.mergeImageState) return own;
+    return mergeDrawableStates(createDrawableState(this, extra + (own?.length ?? 0)), own);
+  },
+  "drawableStateChanged()V": function (this: JImageView) {
+    const d = this.drawable;
+    if (d) return after(vcallOn(curThread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())), (changed) => { if (changed) invalidate(this); });
+  },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },
   "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) { return this.drawMatrix() ?? new JMatrix(); },
   "setImageMatrix(Landroid/graphics/Matrix;)V": function (this: JImageView, matrix: JMatrix | null) {

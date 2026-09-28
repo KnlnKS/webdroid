@@ -193,7 +193,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
       `${stepMs}ms`,
       motion ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
-      p.glFrames ? `${p.glFrames} gl/${Math.round(p.glFrameMs)}ms${p.glSkipped ? " skipped " + p.glSkipped : ""}` : "",
+      p.glFrames ? `${p.glFrames} gl/${Math.round(p.glFrameMs)}ms` : "",
       slow ? "SLOW" : "",
       p.layoutPasses ? `${p.layoutPasses} layout/${Math.round(p.layoutMs)}ms` : "",
       p.draws ? `${p.draws} draw/${Math.round(p.drawMs)}ms` : "",

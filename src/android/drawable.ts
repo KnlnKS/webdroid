@@ -147,7 +147,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (this: JDrawable, _d: unknown, r: unknown) { unscheduleSelf.call(this, r); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": invalidateSelf,
   "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) { return this; },
-  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable || this.tintCsl || this instanceof JGradientDrawable && this.solidCsl ? 1 : 0; },
+  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable || this.tintCsl || this instanceof JGradientDrawable && (this.solidCsl || this.strokeCsl) ? 1 : 0; },
   "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawable, r: JRect) {
     const p = (this as any).padding as JRect | undefined;
     if (p) { r.left = p.left; r.top = p.top; r.right = p.right; r.bottom = p.bottom; return 1; }
@@ -462,6 +462,8 @@ class JGradientDrawable extends JDrawable {
   private clampedRadii = [0, 0, 0, 0];
   strokeW = 0; strokeColor = 0; dashW = 0; dashGap = 0;
   gradColors: number[] | null = null;
+  /** setColors' offsets; null spaces the colors evenly */
+  gradOffsets: number[] | null = null;
   /** degrees, a multiple of 45: a GradientDrawable made in code starts TOP_BOTTOM */
   gradAngle = 270;
   gradType = 0; // linear/radial/sweep
@@ -469,12 +471,19 @@ class JGradientDrawable extends JDrawable {
   sizeW = -1; sizeH = -1;
   padding = new JRect();
   solidCsl: JColorStateList | null = null;
+  strokeCsl: JColorStateList | null = null;
   onStateChange(): boolean {
-    if (!this.solidCsl) return false;
-    const c = cslColor(this.solidCsl, this.stateSet);
-    if (c === this.solid) return false;
-    this.solid = c;
+    const solid = this.solidCsl ? cslColor(this.solidCsl, this.stateSet) : this.solid;
+    const stroke = this.strokeCsl ? cslColor(this.strokeCsl, this.stateSet) : this.strokeColor;
+    if (solid === this.solid && stroke === this.strokeColor) return false;
+    this.solid = solid; this.strokeColor = stroke;
     return true;
+  }
+  setStroke(width: number, color: number | JColorStateList | null, dashWidth = 0, dashGap = 0) {
+    this.strokeCsl = typeof color === "number" ? null : color;
+    this.strokeW = width;
+    this.strokeColor = typeof color === "number" ? color : color ? cslColor(color, this.stateSet) : 0;
+    this.dashW = dashWidth; this.dashGap = dashGap;
   }
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -493,7 +502,7 @@ class JGradientDrawable extends JDrawable {
           ? ctx.createRadialGradient(left + w / 2, top + h / 2, 0, left + w / 2, top + h / 2, this.gradRadius || Math.max(w, h) / 2)
           : ctx.createLinearGradient(left + x0 * w, top + y0 * h, left + x1 * w, top + y1 * h);
         const last = this.gradColors.length - 1;
-        this.gradColors.forEach((c, i) => g.addColorStop(i / last, cssColor(c)));
+        this.gradColors.forEach((c, i) => g.addColorStop(this.gradOffsets?.[i] ?? i / last, cssColor(c)));
         fill = g;
       } else if (this.solid !== null) fill = cssColor(this.solid);
       if (fill) {
@@ -527,14 +536,19 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "setColor(I)V": function (this: JGradientDrawable, c: number) { this.solid = c; },
-    "setColors([I)V": function (this: JGradientDrawable, cs: Int32Array) { this.gradColors = [...cs]; },
+    "setColors([I)V": function (this: JGradientDrawable, cs: Int32Array | null) { this.gradColors = cs && [...cs]; this.gradOffsets = null; },
+    "setColors([I[F)V": function (this: JGradientDrawable, cs: Int32Array | null, offsets: Float32Array | null) {
+      this.gradColors = cs && [...cs]; this.gradOffsets = offsets && [...offsets];
+    },
     "setCornerRadius(F)V": function (this: JGradientDrawable, r: number) { this.radii = [r, r, r, r]; },
     "setCornerRadii([F)V": function (this: JGradientDrawable, r: Float32Array) {
       this.radii = [r[0] ?? 0, r[2] ?? 0, r[4] ?? 0, r[6] ?? 0];
     },
-    "setStroke(II)V": function (this: JGradientDrawable, w: number, c: number) { this.strokeW = w; this.strokeColor = c; },
-    "setStroke(IIFF)V": function (this: JGradientDrawable, w: number, c: number, dw: number, dg: number) {
-      this.strokeW = w; this.strokeColor = c; this.dashW = dw; this.dashGap = dg;
+    "setStroke(II)V": function (this: JGradientDrawable, w: number, c: number) { this.setStroke(w, c); },
+    "setStroke(IIFF)V": function (this: JGradientDrawable, w: number, c: number, dw: number, dg: number) { this.setStroke(w, c, dw, dg); },
+    "setStroke(ILandroid/content/res/ColorStateList;)V": function (this: JGradientDrawable, w: number, c: JColorStateList | null) { this.setStroke(w, c); },
+    "setStroke(ILandroid/content/res/ColorStateList;FF)V": function (this: JGradientDrawable, w: number, c: JColorStateList | null, dw: number, dg: number) {
+      this.setStroke(w, c, dw, dg);
     },
     "setShape(I)V": function (this: JGradientDrawable, s: number) { this.shape = s; },
     "setSize(II)V": function (this: JGradientDrawable, w: number, h: number) { this.sizeW = w; this.sizeH = h; },
@@ -1647,10 +1661,9 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
             dimen(cg(AT.bottomLeftRadius), d.radii[3]),
           ];
         } else if (c.name === "stroke") {
-          d.strokeW = dimen(cg(AT.width), 1);
-          d.strokeColor = colorOf(cg(AT.color), 0);
-          d.dashW = dimen(cg(AT.dashWidth), 0);
-          d.dashGap = dimen(cg(AT.dashGap), 0);
+          const value = resolveStyleValue(res, theme, cg(AT.color));
+          const color = value?.t === TV.REFERENCE ? (yield loadColorStateList(res, value.d, theme)) as JColorStateList : rvColor(res, value, 0);
+          d.setStroke(dimen(cg(AT.width), 1), color, dimen(cg(AT.dashWidth), 0), dimen(cg(AT.dashGap), 0));
         } else if (c.name === "gradient") {
           const cols = [colorOf(cg(AT.startColor), 0)];
           const cc = cg(AT.centerColor);

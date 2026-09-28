@@ -499,8 +499,11 @@ test("ColorMatrix saturation, scale and concat feed a ColorMatrixColorFilter", a
 });
 
 test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitizes values", async () => {
-  const strict = await newObj("android/net/UrlQuerySanitizer", "(Ljava/lang/String;)V", "http://x/?a=1&b=2");
+  const strict = await newObj("android/net/UrlQuerySanitizer");
+  await vcall(strict, "parseUrl", "(Ljava/lang/String;)V", "http://x/?a=1&b=2");
   expect(await vcall(strict, "hasParameter", "(Ljava/lang/String;)Z", "a")).toBe(0);
+  const convenient = await newObj("android/net/UrlQuerySanitizer", "(Ljava/lang/String;)V", "http://x/?a=1&b=2");
+  expect(await vcall(convenient, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "a")).toBe("1");
   const open = await newObj("android/net/UrlQuerySanitizer");
   await vcall(open, "setAllowUnregisteredParamaters", "(Z)V", 1);
   await vcall(open, "setUnregisteredParameterValueSanitizer", "(Landroid/net/UrlQuerySanitizer$ValueSanitizer;)V",
@@ -699,6 +702,24 @@ test("MessageFormat substitutes arguments and honors apostrophe quoting", async 
   const args = Object.assign(["world", 3], { $t: "Ljava/lang/Object;" });
   expect(await scall("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "Hello {0}: {1}", args)).toBe("Hello world: 3");
   expect(await scall("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "'{0}' ''{1}''", args)).toBe("{0} '3'");
+});
+
+test("MessageFormat number subformats keep pattern affixes and format any Number", async () => {
+  // a DEX Number subclass (Gson's LazilyParsedNumber) carries no boxed value
+  class LazyNumber extends rt.link("java/lang/Number").ctor {}
+  rt.register({ name: "test/LazyNumber", ctor: LazyNumber, sup: "java/lang/Number", methods: { "doubleValue()D": () => 2.5 } });
+  rt.linkNatives();
+  const args = Object.assign([new LazyNumber(), 1234.5], { $t: "Ljava/lang/Object;" });
+  expect(await scall("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "{0} {1,number,'$'#,##0.00}", args))
+    .toBe("2.5 $1,234.50");
+});
+
+test("SimpleDateFormat parses the AM/PM strings its symbols replace", async () => {
+  const symbols = await newObj("java/text/DateFormatSymbols", "()V");
+  await vcall(symbols, "setAmPmStrings", "([Ljava/lang/String;)V", Object.assign(["vorm.", "nachm."], { $t: "Ljava/lang/String;" }));
+  const sdf = await newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;Ljava/text/DateFormatSymbols;)V", "h:mm a", symbols);
+  const date = await vcall(sdf, "parse", "(Ljava/lang/String;)Ljava/util/Date;", "3:04 nachm.");
+  expect(await vcall(sdf, "format", "(Ljava/util/Date;)Ljava/lang/String;", date)).toBe("3:04 nachm.");
 });
 
 test("String.split preserves the unsplit tail for a positive limit", async () => {

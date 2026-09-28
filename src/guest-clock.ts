@@ -131,16 +131,19 @@ const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const realSetInterval = globalThis.setInterval.bind(globalThis);
 const realClearInterval = globalThis.clearInterval.bind(globalThis);
 
+// HTML timers take a signed 32-bit delay: a longer one (a 30-day retry, a Long.MAX_VALUE wait)
+// would wrap and fire at once, so it waits the longest a timer can instead (~24.8 days)
+export const MAX_TIMER_DELAY = 0x7fffffff;
 export const guestNow = clock ? () => clock.nowMs : realNow;
 export const setGuestTimeout = clock
   ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(callback, delayMs, realm)
-  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, delayMs);
+  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY));
 export const clearGuestTimeout = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearTimeout(timer as ReturnType<typeof setTimeout>); };
 export const setGuestInterval = clock
   ? (callback: () => void, intervalMs: number): GuestTimer => clock.schedule(callback, intervalMs, realm, intervalMs)
-  : (callback: () => void, intervalMs: number): GuestTimer => realSetInterval(callback, intervalMs);
+  : (callback: () => void, intervalMs: number): GuestTimer => realSetInterval(callback, Math.min(intervalMs, MAX_TIMER_DELAY));
 export const clearGuestInterval = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearInterval(timer as ReturnType<typeof setInterval>); };

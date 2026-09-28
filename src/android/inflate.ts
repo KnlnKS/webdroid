@@ -10,11 +10,13 @@ import type { JContext } from "./context";
 
 class JLayoutInflater extends JObj {
   jctx: JContext | null = null;
-  /** AOSP's FactoryMerger: setFactory keeps the one already installed and asks the new one
-   *  first, so a cloned inflater that a fragment manager adds its factory to still reaches
-   *  appcompat's — which is what turns <ImageView> into AppCompatImageView. Newest first. */
-  factory2: unknown[] = [];
+  /** AOSP's mFactory and mFactory2 as the FactoryMerger chains they are, newest first: a
+   *  cloned inflater that a fragment manager adds its factory to still reaches appcompat's,
+   *  which is what turns <ImageView> into AppCompatImageView. `factory` is asked as Factory;
+   *  `factory2` asks each entry as whichever it was merged as, and a Factory set after a
+   *  Factory2 joins only `factory`, which inflation then no longer consults. */
   factory: unknown[] = [];
+  factory2: { f: unknown; two: boolean }[] = [];
   privateFactory: unknown = null;
   factorySet = false;
 }
@@ -40,27 +42,35 @@ async function createViewByName(name: string, jctx: unknown, set: JAttrSet): Pro
   return newObj(clsName, "(Landroid/content/Context;Landroid/util/AttributeSet;)V", jctx, set);
 }
 
-function setFactory(inflater: JLayoutInflater, f: unknown, chain: unknown[]): void {
-  if (f === null) throw rt.mkThrowable("java/lang/NullPointerException", "Given factory can not be null");
+function setFactory(inflater: JLayoutInflater, f: unknown, two: boolean): void {
   if (inflater.factorySet) throw rt.mkThrowable("java/lang/IllegalStateException", "A factory has already been set on this LayoutInflater");
+  if (f === null) throw rt.mkThrowable("java/lang/NullPointerException", "Given factory can not be null");
   inflater.factorySet = true;
-  chain.unshift(f);
+  if (two) {
+    const rest = inflater.factory2.length ? inflater.factory2 : inflater.factory.map((old) => ({ f: old, two: false }));
+    inflater.factory2 = [{ f, two }, ...rest];
+  }
+  inflater.factory = [f, ...inflater.factory];
 }
 
+const F2 = "(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;";
+const F1 = "(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;";
 async function createViewFromTag(
   inflater: JLayoutInflater, parent: JView | null, name: string, jctx: JContext, set: JAttrSet,
 ): Promise<JView> {
-  for (const factory of [...inflater.factory2, inflater.privateFactory]) {
-    if (!factory) continue;
-    const v = await vcall(factory, "onCreateView",
-      "(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
-      parent, name, jctx, set);
-    if (v === parent || (v as JView)?.parent) { console.warn("[inflate] factory returned parent/attached view for", name, "— ignoring"); continue; }
+  // AOSP tryCreateView: the app's factories, then the activity's private one. A view they
+  // return is used as is; one that already has a parent fails in addView as it does there.
+  if (inflater.factory2.length) {
+    for (const { f, two } of inflater.factory2) {
+      const v = await (two ? vcall(f, "onCreateView", F2, parent ?? null, name, jctx, set) : vcall(f, "onCreateView", F1, name, jctx, set));
+      if (v) return v as JView;
+    }
+  } else for (const f of inflater.factory) {
+    const v = await vcall(f, "onCreateView", F1, name, jctx, set);
     if (v) return v as JView;
   }
-  for (const factory of inflater.factory) {
-    const v = await vcall(factory, "onCreateView",
-      "(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;", name, jctx, set);
+  if (inflater.privateFactory) {
+    const v = await vcall(inflater.privateFactory, "onCreateView", F2, parent ?? null, name, jctx, set);
     if (v) return v as JView;
   }
   return createViewByName(name, jctx, set);
@@ -81,11 +91,31 @@ const M_generateLP = mangleMethod("generateLayoutParams", "(Landroid/util/Attrib
 const M_addView = mangleMethod("addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
 const M_onFinishInflate = mangleMethod("onFinishInflate", "()V");
 
-async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentView: JViewGroup, jctx: JContext) {
+/** the AttributeSet of a layout tag, resolving against `ctx`'s theme */
+function attrSetFor(node: XmlNode, ctx: JContext): JAttrSet {
+  const set = new JAttrSet();
+  set.node = node;
+  set.res = ctx.$host.res;
+  set.theme = themeOf(ctx) ?? ctx.$host.theme;
+  return set;
+}
+
+const A_value = 0x01010024;
+/** AOSP parseViewTag: a <tag> child keys its android:value on the enclosing view under android:id */
+async function applyViewTag(view: JView, node: XmlNode, jctx: JContext) {
+  const set = attrSetFor(node, jctx);
+  const ta = obtainStyled(set.res, set.theme, set, [A_id, A_value], 0, 0);
+  const key = await vcall(ta, "getResourceId", "(II)I", 0, 0);
+  await vcall(view, "setTag", "(ILjava/lang/Object;)V", key, await vcall(ta, "getText", "(I)Ljava/lang/CharSequence;", 1));
+}
+
+async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentView: JView, jctx: JContext) {
   const host = jctx.$host;
   for (const child of node.children) {
-    if (child.name === "requestFocus" || child.name === "tag") continue;
+    if (child.name === "tag") { await applyViewTag(parentView, child, jctx); continue; }
+    if (child.name === "requestFocus") continue;
     if (child.name === "include") {
+      if (!(parentView instanceof JViewGroup)) throw rt.mkThrowable("android/view/InflateException", "<include /> can only be used inside of a ViewGroup");
       const layoutAttr = child.attrs.find((a) => a.name === "layout" || a.resId === A_layout);
       const layoutId = layoutAttr?.data ?? 0;
       if (layoutId) {
@@ -95,13 +125,10 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
         // a <merge> include inflates straight into parentView and returns it
         if (incView === parentView) continue;
         if (incView) {
-          const set = new JAttrSet();
-          set.node = child;
-          set.res = host.res;
-          set.theme = host.theme;
+          const set = attrSetFor(child, jctx);
           const idAttr = child.attrs.find((a) => a.resId === A_id);
           if (idAttr) (incView as JView).idNum = idAttr.data;
-          const visibility = rvInt(host.res, obtainStyled(host.res, themeOf(jctx), set, [A_visibility], 0, 0).vals[0], -1);
+          const visibility = rvInt(host.res, obtainStyled(host.res, set.theme, set, [A_visibility], 0, 0).vals[0], -1);
           if (visibility >= 0 && visibility <= 2) await vcall(incView, "setVisibility", "(I)V", visibility * 4);
           // AOSP: the <include> tag's layout params win only when it declares them; otherwise
           // the included root keeps its own (inflateNode already put them on incView.lp).
@@ -114,18 +141,13 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
       continue;
     }
     const cctx = await themedCtx(jctx, child);
-    const set = new JAttrSet();
-    set.node = child;
-    set.res = host.res;
-    set.theme = themeOf(cctx) ?? host.theme;
+    const set = attrSetFor(child, cctx);
     const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
     noteUnreadAttrs(child, child.name);
     let lp = v.lp;
     if (!lp) lp = await guardCall(parentView, M_generateLP, set) as JLayoutParams;
     await guardCall(parentView, M_addView, v, lp);
-    if (v instanceof JViewGroup && child.children.length) {
-      await inflateChildren(inflater, child, v, cctx);
-    }
+    if (child.children.length) await inflateChildren(inflater, child, v, cctx);
     await guardMaybe(v, M_onFinishInflate);
   }
 }
@@ -138,17 +160,13 @@ async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | nu
 }
 async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inf: JLayoutInflater): Promise<JView | null> {
   const ctx = jctx as JContext;
-  const host = ctx.$host;
   if (root.name === "merge") {
     if (!parent) throw rt.mkThrowable("java/lang/IllegalStateException", "<merge> needs a parent");
     await inflateChildren(inf, root, parent, ctx);
     return parent;
   }
   const rctx = await themedCtx(ctx, root);
-  const set = new JAttrSet();
-  set.node = root;
-  set.res = host.res;
-  set.theme = themeOf(rctx) ?? host.theme;
+  const set = attrSetFor(root, rctx);
   const v = await createViewFromTag(inf, parent, root.name, rctx, set);
   noteUnreadAttrs(root, root.name);
   if (parent) {
@@ -156,9 +174,7 @@ async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup
     if (attach) await guardCall(parent, M_addView, v, lp);
     else { v.lp = lp; await resolveLp(lp); }
   }
-  if (v instanceof JViewGroup && root.children.length) {
-    await inflateChildren(inf, root, v, rctx);
-  }
+  if (root.children.length) await inflateChildren(inf, root, v, rctx);
   await guardMaybe(v, M_onFinishInflate);
   return attach && parent ? parent : v;
 }
@@ -219,16 +235,20 @@ rt.register({
     },
     "inflate(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;": inflateParser,
     "inflate(Landroid/content/res/XmlResourceParser;Landroid/view/ViewGroup;Z)Landroid/view/View;": inflateParser,
-    "setFactory2(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { setFactory(this, f, this.factory2); },
-    "setFactory(Landroid/view/LayoutInflater$Factory;)V": function (this: JLayoutInflater, f: unknown) { setFactory(this, f, this.factory); },
-    "getFactory()Landroid/view/LayoutInflater$Factory;": function (this: JLayoutInflater) { return this.factory[0] ?? this.factory2[0] ?? null; },
-    "getFactory2()Landroid/view/LayoutInflater$Factory2;": function (this: JLayoutInflater) { return this.factory2[0] ?? null; },
+    "setFactory2(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { setFactory(this, f, true); },
+    "setFactory(Landroid/view/LayoutInflater$Factory;)V": function (this: JLayoutInflater, f: unknown) { setFactory(this, f, false); },
+    "getFactory()Landroid/view/LayoutInflater$Factory;": function (this: JLayoutInflater) { return this.factory[0] ?? null; },
+    "getFactory2()Landroid/view/LayoutInflater$Factory2;": function (this: JLayoutInflater) { return this.factory2[0]?.f ?? null; },
     "setPrivateFactory(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { this.privateFactory = f; },
     "cloneInContext(Landroid/content/Context;)Landroid/view/LayoutInflater;": function (this: JLayoutInflater, jctx: JContext) { return newInflater(this, jctx); },
     "getContext()Landroid/content/Context;": function (this: JLayoutInflater) { return this.jctx; },
     "createView(Ljava/lang/String;Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
       function (this: JLayoutInflater, name: string, prefix: string | null, set: JAttrSet) {
         return createViewByName(prefix ? prefix + name : name, this.jctx, set);
+      },
+    "createView(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
+      function (this: JLayoutInflater, jctx: unknown, name: string, prefix: string | null, set: JAttrSet) {
+        return createViewByName(prefix ? prefix + name : name, jctx ?? this.jctx, set);
       },
     "onCreateView(Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
       function (this: JLayoutInflater, name: string, set: JAttrSet) {

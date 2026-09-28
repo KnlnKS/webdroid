@@ -1,5 +1,5 @@
 import { JObj, rt } from "../jvm/runtime";
-import { type JComponentName, type JIntent, mkComponentName } from "./intent";
+import { type JComponentName, type JIntent, mkComponentName, filterKey } from "./intent";
 import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
 import { newObj, vcall } from "../jvm/natives/jlang";
@@ -89,7 +89,6 @@ export function svcStop(cls: string | null | undefined, startId = -1): number {
   void onMain(async () => { if (service.instance) await vcall(service.instance, "onDestroy", "()V"); }).catch(reportUncaught);
   return 1;
 }
-const filterKey = (intent: JIntent) => JSON.stringify([intent.action, intent.dataUri, intent.typeStr, intent.identifier, intent.pkg, intent.component, [...intent.categories].sort()]);
 const localConnections = new Map<string, { service: JRunningServiceInfo; filter: string }>();
 export function bindLocalService(ctx: JContext, intent: JIntent, key: string): Promise<unknown> {
   const run = async () => {
@@ -208,4 +207,15 @@ export function svcUnbind(connection: unknown): void {
 export function svcFg(svc: unknown, fg: boolean) {
   const si = runningServices.get(jclsNameOf(svc));
   if (si) { si.foreground = fg ? 1 : 0; si.flags = fg ? si.flags | 2 : si.flags & ~2; }
+}
+/** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
+export async function bindAsSystem(component: JComponentName, key: string): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
+  const owner = packages.get(component.pkg), cls = qualifyComponent(component.cls, component.pkg);
+  const node = owner?.components.service.get(cls), ctx = appHost?.application;
+  if (!owner || !node || !ctx) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + component.pkg + "/" + cls + "}");
+  const intent: JIntent = rt.make("android/content/Intent");
+  intent.component = cls; intent.componentPkg = owner.pkg;
+  const process = owner.process(node);
+  if (owner.pkg === ctx.$host.pkg && process === (PROCESS_NAME || owner.pkg)) return { binder: await bindLocalService(ctx, intent, key) as JObj, unbind: () => unbindLocalService(key) };
+  return { binder: await serviceTransport.bind(owner, process, intent, key) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
 }

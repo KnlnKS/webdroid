@@ -4,18 +4,19 @@
 import { rt, type Gen, driven } from "../jvm/runtime";
 import { vcall, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
-import { manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode } from "../android/pm";
+import { manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode, manifestTaskAffinity } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
-import { JContext } from "../android/context";
+import { newContextImpl } from "../android/context";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import { JView, uiState, requestLayoutAll, dispatchAttached, dispatchDetached } from "../android/view";
 import { detachContextOverlays } from "../android/popup";
 import { setGuestTimeout } from "../guest-clock";
+import { affinityRun } from "./activitytasks";
 import { applyOrientationRequest } from "./device";
 
 export interface BootedApp {
@@ -136,7 +137,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
   act.activityId = options?.activityId ?? 0; act.taskId = options?.taskId ?? 0;
   if (!act.activityId) {
     const previous = booted.stack.at(-1);
-    activityTransport.attach?.(act, options?.taskId ?? (intent && intent.flags & 0x10000000 ? 0 : previous?.taskId ?? 0));
+    activityTransport.attach?.(act, options?.taskId ?? (intent && intent.flags & 0x10000000 ? 0 : previous?.taskId ?? 0), manifestTaskAffinity(cls));
   }
   act.requestedOrientation = requestedOrientation;
   act.lastNonConfig = relaunch?.nonConfig ?? null;
@@ -145,8 +146,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
     yield vcall(act, "<init>", "()V");
     // Activity.attach(): the base context arrives before the manifest theme, which AOSP applies
     // before onCreate so an app's own setTheme layers on top of it rather than replacing it
-    const baseCtx = new JContext();
-    baseCtx.$host = host;
+    const baseCtx = newContextImpl(host);
     yield vcall(act, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
     const actTheme = manifestActivityTheme(cls);
     if (actTheme) vcall(act, "setTheme", "(I)V", actTheme);
@@ -282,10 +282,22 @@ const finishActivity = driven(function* finishActivity(act: JActivity, resume: b
   invalidateWindow();
 });
 
-export function finishTask(taskId: number, resume: boolean): Promise<void> {
+/** the broker has already dropped a removed task's records */
+export const finishTask = (taskId: number, resume: boolean) => finishActivities(() => booted?.stack.filter(a => a.taskId === taskId) ?? [], resume, true);
+export const finishActivityIds = (ids: number[], resume: boolean) => finishActivities(() => booted?.stack.filter(a => ids.includes(a.activityId)) ?? [], resume, false);
+/** a process of its own (no broker) walks its own stack */
+function localAffinityGroup(act: JActivity): JActivity[] {
+  const task = booted?.stack.filter(a => a.taskId === act.taskId) ?? [];
+  return affinityRun(task, task.indexOf(act), a => manifestTaskAffinity(jclsNameOf(a))).reverse();
+}
+function finishActivities(select: () => JActivity[], resume: boolean, removedTask: boolean): Promise<void> {
   return onMain(async () => {
-    const activities = booted?.stack.filter(a => a.taskId === taskId) ?? [];
-    for (const act of activities) { act.finished = true; act.remoteId = 0; }
+    const activities = select();
+    for (const act of activities) {
+      act.finished = true;
+      // finishActivityAffinity finishes each with RESULT_CANCELED
+      if (removedTask) act.remoteId = 0; else { act.resultCode = 0; act.resultData = null; }
+    }
     for (const act of activities.reverse()) await finishActivity(act, false);
     const top = booted?.stack.at(-1);
     if (resume && top) await resumeTop(top);
@@ -338,7 +350,7 @@ const buildOptionsMenu = driven(function* buildOptionsMenu(act: JActivity): Gen 
 
 /** The AppHost entry points the activity stack answers. */
 export const activityHost: Pick<AppHost, "launch" | "finishActivity" | "roundTrip" | "recreateActivity" | "moveTaskToBack"
-  | "currentActivity" | "activities" | "finishTask" | "invalidateOptionsMenu"> = {
+  | "currentActivity" | "activities" | "finishTask" | "finishAffinity" | "invalidateOptionsMenu"> = {
   launch: async (component, intent, options) => { await launchActivity(component, intent, options); },
   // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
   // messages, so it queues as a main job rather than running detached alongside the caller
@@ -353,5 +365,9 @@ export const activityHost: Pick<AppHost, "launch" | "finishActivity" | "roundTri
   currentActivity: () => booted?.stack.at(-1) ?? null,
   activities: () => booted?.stack.slice() ?? [],
   finishTask: (taskId) => { void finishTask(taskId, true); },
+  finishAffinity: (a) => {
+    if (activityTransport.finishAffinity) activityTransport.finishAffinity(a);
+    else void finishActivities(() => localAffinityGroup(a), true, false);
+  },
   invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
 };

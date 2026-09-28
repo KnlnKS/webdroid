@@ -5,7 +5,7 @@ import { curThread, threadSwitch } from "../jvm/natives/jlang";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
-import { activeUniformInfo, externalSamplersAs2D, gles3Extensions, textureTarget } from "../native/gles3";
+import { activeUniformInfo, externalSamplersAs2D, gles3Extensions, pixelStore, textureTarget } from "../native/gles3";
 import { perf } from "../perf";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
@@ -152,7 +152,7 @@ rt.register({
     "static glBlendFuncSeparate(IIII)V": (sr: number, dr: number, sa: number, da: number) => gl?.blendFuncSeparate(sr, dr, sa, da),
     "static glPolygonOffset(FF)V": (factor: number, units: number) => gl?.polygonOffset(factor, units),
     "static glActiveTexture(I)V": (t: number) => gl?.activeTexture(t),
-    "static glPixelStorei(II)V": (name: number, p: number) => gl?.pixelStorei(name, p),
+    "static glPixelStorei(II)V": (name: number, p: number) => { if (gl) pixelStore(gl, name, p); },
     "static glCreateProgram()I": () => put(T.programs, gl?.createProgram() ?? null),
     "static glCreateShader(I)I": (type: number) => put(T.shaders, gl?.createShader(type) ?? null),
     "static glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(T.shaders[sh]!, externalSamplersAs2D(T.shaders[sh]!, src)),
@@ -216,6 +216,7 @@ rt.register({
     "static glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.textures, () => gl?.createTexture(), n, out, off),
     "static glGenTextures(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => genIntoBuffer(T.textures, () => gl?.createTexture(), n, buf),
     "static glBindTexture(II)V": (target: number, t: number) => gl?.bindTexture(textureTarget(target), t ? T.textures[t]! : null),
+    "static glIsTexture(I)Z": (t: number) => (t && gl?.isTexture(T.textures[t] ?? null) ? 1 : 0),
     "static glDeleteTextures(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.textures, (o) => gl?.deleteTexture(o), n, arr, off),
     "static glTexParameterf(IIF)V": (target: number, pname: number, v: number) => gl?.texParameterf(textureTarget(target), pname, v),
     "static glTexParameteri(III)V": (target: number, pname: number, v: number) => gl?.texParameteri(textureTarget(target), pname, v),

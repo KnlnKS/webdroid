@@ -62,6 +62,14 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   matrix/clip state, glyph coverage and Porter-Duff edges. Small-seed success
   does not establish graphics parity. See the [fuzz guide](../scripts/fuzz/README.md)
   for replay and failure bundles.
+- Harness cost is not user cost. The driver's `latency` `up` includes `wd.tap`'s
+  60 ms down/up hold, and a present hook that read pixels back synchronously
+  delayed the next dispatch 100–300 ms per frame on SwiftShader (fixed in the
+  driver by a downscaled `createImageBitmap`). Playwright's `Runtime.enable`
+  makes every `new Error()` capture a detailed stack (~20 µs at depth versus
+  ~4 µs without CDP); Snapseed's ~1,140 reflective NoSuchFieldExceptions per
+  tool open cost ~65 ms only under the harness. Measure with real pointer
+  events from the up (`plat`) or raw CDP, on the hardware GPU, on a quiet host.
 
 ## JVM, DEX and process ownership
 
@@ -126,6 +134,23 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   Parcels and handles, never Java objects; replies must reach callers waiting
   on main queues. Coverage probes are selected before method generation and
   propagate to child realms; disabled methods contain no probe branch.
+- Cold taps in large apps are mostly interpretation plus compilation (Tubi, in
+  400 ms after a tap: interp 116–199 ms, compile 47–93 ms). Hot-promotion at
+  8 or 16 calls instead of 32 did not help Snapseed or FitNotes and raised heap
+  40–50 MB at launch; 16 looked better on Tubi tab switches but was within
+  host-load noise. Re-run that A/B on a quiet host before changing it.
+- Host timers take a signed 32-bit delay. Adjust's `ask_in` of 30 days wrapped
+  and fired immediately, re-signing a request every ~300 ms (and producing
+  most of the >600k `JNI:ExceptionOccurred` calls); guest delays are capped.
+- A future cancelled by `shutdownNow` settles while its task still runs, so
+  `awaitTermination` must use the executor's own count. Racing settled job
+  promises spun 2.9M microtask iterations and ~2 GB of heap (Split SSE pool).
+- All guest pthreads share the JS thread. Sustained background native work
+  (ThreatMetrix hashing the 340 MB `base.apk`, Adjust `libsigner`) is held to
+  about a quarter of it during the input window and while frames are presented;
+  the UI thread and frame producers are exempt. Adjust `nSign`'s second call in
+  Yelp spins >70 G instructions (calloc/free churn in flattened control flow)
+  under both interpreter and JIT; its cause is not known.
 
 ## Java, storage and framework semantics
 
@@ -201,6 +226,47 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   to the broker, preserving creator UID and wall/elapsed timing. A five-minute
   alarm recovered microG MCS after a killed process, but immediate sticky
   service behavior and indefinite uptime remain unproved.
+- `LruCache` follows AOSP: an access-ordered LinkedHashMap (keys compare with
+  equals()), sizes from `sizeOf`, eviction through `entryRemoved`. Identity keys
+  lost Yelp's search results (looked up with an equal new key); counting entries
+  let byte-budgeted bitmap caches grow unbounded; SQLCipher finalizes cached
+  statements in `entryRemoved`, so without it `sqlite3_close` returned BUSY.
+- `ByteBuffer` equals/hashCode/compareTo compare remaining content; identity
+  equality failed Tink AES-GCM and so EncryptedSharedPreferences.
+- `saveLayer` is a real offscreen layer composited with its paint's alpha,
+  xfermode and colour filter; a plain save broke every DST_IN/DST_OUT mask
+  (Lottie). RenderNode compositing layers (`setUseCompositingLayer`, Compose
+  `CompositingStrategy.Offscreen`) also composite offscreen; CLEAR ignores the
+  paint colour and paint alpha modulates shaders.
+- Compose `AndroidView` children draw through RenderNode replay, so per-frame
+  side effects of `onDraw` (the WebView frame's visibility mark) are recorded
+  operations. WebView frames follow Chromium's GC-based AwContents cleanup:
+  detaching only hides, `destroy()` or collection releases the iframe, bridge
+  socket and cookie port, and page-side hooks reach the WebView weakly.
+- Base contexts are `android.app.ContextImpl` whose reflectable `mResources`
+  backs `getResources()` (Phrase injects its Resources there).
+- `<tag>` children set keyed view tags on any view; selected/activated state
+  reaches a ViewGroup's children; layout factories are asked Factory2, Factory,
+  private factory, and their result is used as returned.
+- Akamai (mcdonalds.com) rejects requests without `Sec-Fetch-*`, a browser
+  Accept-Encoding, or with headless `sec-ch-*` hints. A service worker cannot see
+  forbidden headers it forwards, so they are rebuilt from `request.mode` and
+  `request.destination`; WebView frame loads carry the WebView user agent and
+  HttpURLConnection sends `http.agent` when no User-Agent is set.
+- The relay terminates TLS and hands apps a peer certificate without a public
+  key; apps that pin certificates would fail.
+- `LinkedHashMap` access order stamps a sequence on insert and access, merging
+  fast and custom-equals entries in one order; `put` on an existing key moves it,
+  as `afterNodeAccess` does. HttpURLConnection follows redirects hop by hop so a
+  CookieHandler sees each hop's URI.
+- One offscreen-layer path serves `saveLayer`, RenderNode compositing layers and
+  `setLayerType`: rasters come from per-pool free lists and recorded layers
+  replay with semantics. Layout factories follow AOSP's two FactoryMerger chains:
+  a Factory set after a Factory2 is never consulted.
+- Overlays route touches and BACK on their real `LayoutParams` flags only: touch-
+  modal windows take outside DOWNs, FLAG_WATCH_OUTSIDE_TOUCH windows get an
+  ACTION_OUTSIDE copy and the touch passes through, BACK goes to the topmost
+  focusable window's callback.
 
 ## Native CPU, media and transport
 
@@ -290,9 +356,81 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   named fields while named lookup retains the null-key status line: Google
   Maps' bundled Chromium previously stopped at index zero and missed map
   response `Content-Type`.
+- Guest memory cannot alias a page at two addresses, so a `MAP_SHARED` file
+  mapping is a copy. Realm maps its data file read-only for readers and
+  writes through separate writable windows (two can cover the same range);
+  readers never saw committed arrays (`No such table exists` from
+  `OsKeyPathMapping`) and an older window's `munmap` wrote its stale copy
+  over newer ones. Writable mappings now keep the bytes they last agreed on
+  with the file: msync, munmap, file reads and new mappings carry exactly the
+  changed bytes to the file and every other mapping; `write(2)` reaches all
+  mappings. Stores stay invisible to another mapping until one of those
+  points, which Realm's full-durability commits always reach.
+- An instruction the core lacks is SIGILL to an installed, unblocked handler
+  (pc at the instruction, `ILL_ILLOPC`), as for the advertised CPU without
+  optional extensions; OpenSSL's armcap probes PMULL/AES/SHA this way. A
+  `siglongjmp` from a handler to a `jmp_buf` outside the handler's stack ends
+  the handler's `call()` frame and resumes the interrupted frame in the
+  `jmp_buf` state.
+- `fcntl(F_DUPFD[_CLOEXEC])` must return the lowest free descriptor at or above
+  its argument. Returning 0 made mio's cloned epoll fd stdin; dropping a tokio
+  runtime closed it and sockets then collided with epoll on fd 0, failing every
+  reqwest connect in Tubi within 13 ms. It was not IPv6 or DNS.
+- `munmap` rounds its length to whole pages and refuses an unaligned address
+  before syncing shared mappings, which read guest memory as aligned words.
+- WebGL `getParameter` is a synchronous GPU-process round trip; pixel-store state
+  is tracked in JS (~770 ms of a Snapseed Tune Image open on SwiftShader).
+- Snapseed's Looks runs MediaPipe/LiteRT's ML Drift OpenGL delegate, which needs
+  GLES 3.1 compute (`glGetIntegerv` 0x90DB/0x91BD/0x91BC, then a 0-byte max
+  allocation) and `_exit(1)`s on failure; an ES 3.0 device fails the same way.
+- ExoPlayer HLS through MediaCodec/WebCodecs plays Tubi's clear streams at the
+  content rate with audio, pause and seek; the relay carries 12–13 MB/s.
+  Widevine-only titles (`hlsv6_widevine_psshv0`) need MediaDrm over EME, which
+  headless Chromium cannot test.
+- SIGILL reaches a handler only for `.undefined` and for `.extension`: optional
+  encodings HWCAP does not advertise (A64 AES/SHA/SHA512/SHA3/SM3/SM4, PMULL
+  .1Q, CRC32, PAuth, SVE; A32 NEON AES/SHA/VMULL.P64, CRC32). `.unimplemented`
+  stays a loud fault so crash SDKs never see fabricated signals. A32 CRC32 used
+  to decode as a flagless TST and run as a silent no-op.
+- `readv` returns what it moved rather than waiting on an empty pipe or socket,
+  and continues across iovecs on lazy files. POSIX timers and timerfds arm on
+  the guest clock, so under `testClock=controlled` they fire only as virtual
+  time advances. MAP_SHARED mappings live on their `VfsFile`: `vfs.writeAt`
+  propagates every write (Java streams included) and reads flush mapping stores.
+- GLSurfaceView was paced twice (swap's vsync plus an in-flight tick gate), so it
+  drew every other display frame (30 fps at 60 Hz). Its GLThread is one loop
+  woken by the holder callbacks, with BufferQueue-style backpressure: the next
+  frame waits until `present()` has latched the last one, since `vsync()`'s
+  watchdog alone let headless GL queue ~60 frames/s against ~8 shown.
 
 ## App investigations and remaining limits
 
+- **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
+  startup blocker after the shared-mapping and SIGILL fixes. The US build
+  gates startup on Play Age Signals (`R.bool.is_age_gate_enabled`); the
+  library finds microG FakeStore (version and spoofed signature accepted)
+  but FakeStore 0.3.16 has no age-verification service, so the bind fails
+  and any error maps to `BlockerResult.Blocking` — the same outcome as a
+  device with that FakeStore. microG merged an Age Signals service
+  (GmsCore PR #3742, milestone 0.3.17) whose reply omits `user.status`,
+  which the app maps to `SignalDecision.NULL`, a non-blocking result.
+  As of 2026-09-27 no release has it (latest 0.3.16.252432); the user chose to
+  wait for the official 0.3.17 rather than build from master or bypass the gate.
+- **Tubi (XAPK):** onboarding, Home, details, Explore search, Live TV and clear
+  (non-DRM) VOD play. Widevine-only titles and every detail-page preview need
+  MediaDrm (open decision).
+- **Walmart (XAPK):** the location GraphQL answers from the egress IP (this
+  host geolocates to Mississauga, CA) and ignores the device's US coordinates
+  and ZIP; curl from the host gets the same answer. Onboarding then fails and
+  search returns nothing; with a harness-only seed of a US store the home feed
+  and type-ahead work. microG's FIDO UI answers CredentialManager sign-in in the
+  `gms:ui` process and needs a Back.
+- **Yelp (XAPK):** onboarding, home, suggestions and category search (map, list,
+  results) work. Search rejects fixes older than 15 minutes; Playwright's
+  emulated fix is timestamped before page boot, so the harness must re-set
+  geolocation. The business page was unverified at the end of the session.
+- **Snapseed (XAPK):** Tune, Crop/Rotate, Details, Healing, Brush, undo/redo and
+  repeated export work; Looks aborts (GLES 3.1 compute, above).
 - **Genshin Impact 7.1 (XAPK, ARM64 Unity 2017.4 IL2CPP):** reaches the logo,
   the Home scene and the login page context: it downloads the global dispatch
   and SDK configuration, runs SDK init/login and renders the Celestia login

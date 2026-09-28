@@ -1,14 +1,14 @@
-// GLSurfaceView: owns a WebGL canvas, drives the Renderer, blits into the 2D framebuffer.
+// SurfaceView, TextureView and GLSurfaceView surfaces, and the Java EGL10/EGL14 bindings over them.
 
 import { rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import type { JAttrSet } from "./res";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, vcallOn, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
-import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
+import { vcall, vcallOn, JThread, curThread } from "../jvm/natives/jlang";
+import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JCanvas, JBitmap, JMatrix, JRect } from "./graphics";
-import { setGL, gl, tables } from "./gl";
+import { JBitmap, JMatrix, JRect } from "./graphics";
+import { gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler, vsync } from "./os";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
@@ -19,133 +19,7 @@ function measureDefault(this: JView, w: number, h: number) {
   this.measuredH = defaultSize(specSize(h), h);
 }
 const D_chooseConfig = "(Ljavax/microedition/khronos/egl/EGL10;Ljavax/microedition/khronos/egl/EGLDisplay;)Ljavax/microedition/khronos/egl/EGLConfig;";
-
-class JGLSurfaceView extends JViewGroup {
-  glCanvas: OffscreenCanvas | null = null;
-  ctx: WebGL2RenderingContext | WebGLRenderingContext | null = null;
-  renderer: unknown = null;
-  configChooser: unknown = null;
-  eglConfig: JObj | null = null;
-  glThread = new JThread();
-  surfaceCreated = false;
-  lastW = 0; lastH = 0;
-  renderMode = 1; // 1 = CONTINUOUSLY, 0 = WHEN_DIRTY
-  dirty = true;
-  inFlight = false;
-  paused = false;
-  t0 = 0;
-  hook: (() => boolean) | null = null;
-  fakeGL10: JObj | null = null;
-
-  ensureCanvas(w: number, h: number) {
-    if (w <= 0 || h <= 0) return;
-    if (!this.glCanvas || this.lastW !== w || this.lastH !== h) {
-      this.glCanvas = new OffscreenCanvas(w, h);
-      // A SurfaceView's surface is opaque unless the app asks for a translucent format.
-      this.ctx = (this.glCanvas.getContext("webgl2", { alpha: false, antialias: false, preserveDrawingBuffer: true })
-        ?? this.glCanvas.getContext("webgl", { alpha: false, antialias: false, preserveDrawingBuffer: true })) as WebGL2RenderingContext;
-      this.lastW = w; this.lastH = h;
-      this.surfaceCreated = false;
-    }
-  }
-  async runFrame() {
-    if (!this.ctx || !this.renderer) return;
-    const prev = curThread;
-    setCurThread(this.glThread);
-    setGL(this.ctx);
-    setCurThread(prev);
-    try {
-      if (!this.fakeGL10) { const info = rt.link("webdroid/GL10"); this.fakeGL10 = new info.ctor(); }
-      if (!this.surfaceCreated) {
-        this.surfaceCreated = true;
-        // EglHelper.start(): the chooser's answer is the EGLConfig onSurfaceCreated receives,
-        // and renderers read back through it what the chooser recorded.
-        if (!this.eglConfig) {
-          this.eglConfig = this.configChooser
-            ? (await vcallOn(this.glThread, this.configChooser, "chooseConfig", D_chooseConfig,
-                rt.make("javax/microedition/khronos/egl/EGL10"),
-                egl10Display)) ?? theConfig
-            : theConfig;
-        }
-        await vcallOn(this.glThread, this.renderer, "onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V", this.fakeGL10, this.eglConfig);
-        await vcallOn(this.glThread, this.renderer, "onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V", this.fakeGL10, this.lastW, this.lastH);
-      }
-      await vcallOn(this.glThread, this.renderer, "onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V", this.fakeGL10);
-    } catch (e) {
-      reportUncaught(e);
-    }
-  }
-}
-
-rt.register({
-  name: "android/opengl/GLSurfaceView", ctor: JGLSurfaceView, sup: "android/view/ViewGroup",
-  ifaces: ["android/view/SurfaceHolder$Callback"],
-  statics: { RENDERMODE_WHEN_DIRTY: 0, RENDERMODE_CONTINUOUSLY: 1, DEBUG_CHECK_GL_ERROR: 1 },
-  methods: {
-    "<init>(Landroid/content/Context;)V": viewInit,
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": viewInit,
-    "setEGLConfigChooser(Landroid/opengl/GLSurfaceView$EGLConfigChooser;)V": function (this: JGLSurfaceView, c: unknown) { this.configChooser = c; },
-    "setRenderer(Landroid/opengl/GLSurfaceView$Renderer;)V": function (this: JGLSurfaceView, r: unknown) {
-      this.renderer = r;
-      if (this.hook) uiState.animHooks.delete(this.hook);
-      const self = this;
-      // GLThread: one frame in flight. onDrawFrame may await the app's own update thread across
-      // ticks, so the frame is not awaited here (that would park the main-looper queue on it)
-      // and the next tick composites whatever has landed, as SurfaceFlinger does for a GL surface.
-      const done = () => {
-        self.inFlight = false;
-        perf.glFrames++; perf.glFrameMs += performance.now() - self.t0;
-        invalidate();
-      };
-      this.hook = () => {
-        if (!self.attached || self.paused) return true;
-        if (self.inFlight) { perf.glSkipped++; return true; }
-        if (self.renderMode === 1 || self.dirty) {
-          self.dirty = false; self.inFlight = true; self.t0 = performance.now();
-          void self.runFrame().finally(done);
-        }
-        return true;
-      };
-      if (this.attached) uiState.animHooks.add(this.hook);
-      requestLayout(this);
-    },
-    "setRenderMode(I)V": function (this: JGLSurfaceView, m: number) { this.renderMode = m; },
-    "getRenderMode()I": function (this: JGLSurfaceView) { return this.renderMode; },
-    "requestRender()V": function (this: JGLSurfaceView) { this.dirty = true; invalidate(); },
-    "queueEvent(Ljava/lang/Runnable;)V": function (this: JGLSurfaceView, r: unknown) {
-      setTimeout(() => {
-        try { void Promise.resolve(vcallOn(this.glThread, r, "run", "()V")).catch(reportUncaught); } catch (e) { reportUncaught(e); }
-      }, 0);
-    },
-    // GLThread stops rendering while paused; the WebGL context is kept across it, which is the
-    // setPreserveEGLContextOnPause(true) behaviour and the only one we can offer.
-    "onResume()V": function (this: JGLSurfaceView) { this.paused = false; invalidate(); },
-    "onPause()V": function (this: JGLSurfaceView) { this.paused = true; },
-    "getHolder()Landroid/view/SurfaceHolder;": function (this: JGLSurfaceView) { return getHolder(this); },
-    ...noops("setEGLConfigChooser(ZZ)V", "setEGLConfigChooser(IIIIII)V", "setEGLContextClientVersion(I)V",
-      "setEGLContextFactory(Landroid/opengl/GLSurfaceView$EGLContextFactory;)V",
-      "setEGLWindowSurfaceFactory(Landroid/opengl/GLSurfaceView$EGLWindowSurfaceFactory;)V",
-      "setPreserveEGLContextOnPause(Z)V", "setZOrderOnTop(Z)V", "setDebugFlags(I)V"),
-    "onMeasure(II)V": measureDefault,
-    "onLayout(ZIIII)V": function (this: JGLSurfaceView) {
-      this.ensureCanvas(this.width(), this.height());
-    },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JGLSurfaceView, cv: JCanvas) {
-      if (this.glCanvas && this.surfaceCreated) {
-        cv.ctx.drawImage(this.glCanvas, 0, 0, this.width(), this.height());
-      }
-    },
-    "onDetachedFromWindow()V": function (this: JGLSurfaceView) {
-      if (this.hook) uiState.animHooks.delete(this.hook);
-    },
-    "onAttachedToWindow()V": function (this: JGLSurfaceView) {
-      if (this.hook) uiState.animHooks.add(this.hook);
-      this.ensureCanvas(this.width() || device.width, this.height() || device.height - device.statusBar);
-    },
-  },
-});
-rt.markers("android/opengl/GLSurfaceView$Renderer", "android/opengl/GLSurfaceView$EGLConfigChooser",
-  "android/opengl/GLSurfaceView$EGLContextFactory", "android/opengl/GLSurfaceView$EGLWindowSurfaceFactory");
+const D_createContext = "(Ljavax/microedition/khronos/egl/EGL10;Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;)Ljavax/microedition/khronos/egl/EGLContext;";
 
 // ── SurfaceView: a real surface (an OffscreenCanvas + WebGL context) composited behind the view
 // (JView.surfaceLayer). SurfaceHolder callbacks fire on the main looper once the view has a size,
@@ -163,6 +37,8 @@ export interface GlSurface {
   swapInterval?: number;
   presentationTimeNanos?: bigint;
   onFrame?: () => void;
+  /** the display frame count when the last frame was queued */
+  queuedAt?: number;
 }
 export const bufferWidth = (s: GlSurface): number => s.userWidth || s.width;
 export const bufferHeight = (s: GlSurface): number => s.userHeight || s.height;
@@ -170,9 +46,20 @@ export function presentSurface(surface: GlSurface, frame: ImageBitmap | VideoFra
   surface.present?.close();
   surface.present = frame;
   surface.frames++;
+  surface.queuedAt = displayFrames;
   perf.glFrames++;
   if (surface.view) { surface.view.surfaceLayer = frame; invalidate(surface.view); }
   surface.onFrame?.();
+}
+let displayFrames = 0, latchWaiters: (() => void)[] = [];
+/** until the display has shown the surface's last queued frame */
+const latched = (s: GlSurface) => s.queuedAt !== displayFrames ? undefined : new Promise<void>((resolve) => latchWaiters.push(resolve));
+/** the display showed a frame, with every surface's latest buffer in it (SurfaceFlinger's latch) */
+export function latchSurfaces(): void {
+  displayFrames++;
+  const waiters = latchWaiters;
+  latchWaiters = [];
+  for (const resolve of waiters) resolve();
 }
 /** An EGL context owns the WebGL2 context: WebGL binds one to a canvas for life, so making a
  *  surface current retargets the canvas to the surface's size, and a swap hands the finished frame
@@ -247,6 +134,8 @@ rt.register({
       (v: JView, bmp: JBitmap, l: unknown) => { void pixelCopy(getHolder(v).surface, bmp, l); },
     "static request(Landroid/view/Surface;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
       (s: JSurface, bmp: JBitmap, l: unknown) => { void pixelCopy(s.surf, bmp, l); },
+    "static request(Landroid/view/Window;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
+      (_window: unknown, bmp: JBitmap, listener: unknown) => { void windowPixelCopy(null, bmp, listener); },
     "static request(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
       (_window: unknown, rect: JRect | null, bmp: JBitmap, listener: unknown) => { void windowPixelCopy(rect, bmp, listener); },
   },
@@ -523,6 +412,143 @@ rt.register({
   },
 });
 
+/** GLSurfaceView's GLThread and EglHelper: an EGL context current on the view's own thread over its
+ *  SurfaceView surface, so Java EGL10/GLES and native EGL all see the context the renderer runs in,
+ *  and each onDrawFrame ends in a swap that presents the frame and waits for vsync. The thread is
+ *  an async loop off the main queue: onDrawFrame may await the app's own update thread, which must
+ *  not park the main looper. */
+class JGLSurfaceView extends JSurfaceView {
+  renderer: unknown = null;
+  configChooser: unknown = null;
+  contextFactory: unknown = null;
+  eglConfig: JObj | null = null;
+  clientVersion = 1;
+  egl: EglContext | null = null;
+  glThread = new JThread();
+  /** GLThread's mHasSurface, and the create/resize the renderer has not been told about yet */
+  hasSurface = false;
+  needCreate = false;
+  sizeChanged = false;
+  winW = 0; winH = 0;
+  renderMode = 1; // 1 = CONTINUOUSLY, 0 = WHEN_DIRTY
+  dirty = true;
+  paused = false;
+  running = false;
+  wake: (() => void) | null = null;
+  fakeGL10: JObj | null = null;
+
+  /** GLThread's notifyAll: wake the waiting loop, or start it when none runs */
+  signal(): void {
+    if (this.running) this.wake?.();
+    else void this.loop();
+  }
+  async loop(): Promise<void> {
+    this.running = true;
+    try {
+      while (this.attached && !this.paused && this.renderer) {
+        const surface = this.hasSurface ? getHolder(this).surface : null;
+        if (surface && this.winW > 0 && this.winH > 0 && (this.renderMode === 1 || this.dirty || this.needCreate || this.sizeChanged)) {
+          this.dirty = false;
+          const presented = await this.runFrame(surface);
+          if (presented === null) return;
+          // BufferQueue backpressure: the next frame waits until the display has shown this one; a
+          // failed swap waits for a new surface or a resume
+          if (presented) { await latched(surface); continue; }
+        }
+        await new Promise<void>((resolve) => { this.wake = resolve; });
+        this.wake = null;
+      }
+    } finally { this.running = false; }
+  }
+  /** one GLThread pass: whether the swap presented, or null when the renderer threw (the thread dies) */
+  async runFrame(surface: GlSurface): Promise<boolean | null> {
+    try {
+      if (!this.egl) {
+        // EglHelper.start(): the chooser's answer is the EGLConfig the context factory and
+        // onSurfaceCreated receive, and renderers read back through it what the chooser recorded.
+        const egl10 = rt.make("javax/microedition/khronos/egl/EGL10");
+        this.eglConfig ??= this.configChooser
+          ? (await vcallOn(this.glThread, this.configChooser, "chooseConfig", D_chooseConfig, egl10, egl10Display)) ?? theConfig
+          : theConfig;
+        if (this.contextFactory) {
+          const context = await vcallOn(this.glThread, this.contextFactory, "createContext", D_createContext, egl10, egl10Display, this.eglConfig) as JEGLContext | null;
+          if (!context?.egl) throw rt.mkThrowable("java/lang/RuntimeException", "createContext failed");
+          this.egl = context.egl;
+        } else { this.egl = new EglContext(); this.egl.major = this.clientVersion; }
+      }
+      if (!this.egl.makeCurrent(surface, this.glThread)) return false;
+      this.fakeGL10 ??= rt.make("webdroid/GL10");
+      const t0 = performance.now();
+      if (this.needCreate) {
+        this.needCreate = false;
+        await vcallOn(this.glThread, this.renderer, "onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V", this.fakeGL10, this.eglConfig);
+      }
+      if (this.sizeChanged) {
+        this.sizeChanged = false;
+        await vcallOn(this.glThread, this.renderer, "onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V", this.fakeGL10, this.winW, this.winH);
+      }
+      await vcallOn(this.glThread, this.renderer, "onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V", this.fakeGL10);
+      perf.glFrameMs += performance.now() - t0;
+      return await this.egl.swap();
+    } catch (e) {
+      reportUncaught(e);
+      return null;
+    }
+  }
+}
+
+/** AOSP's GLSurfaceView.init(): the view is its own holder's callback */
+function glViewInit(this: JGLSurfaceView, c: unknown, set: JAttrSet | null = null) {
+  getHolder(this).callbacks.push(this);
+  return viewInit.call(this, c, set);
+}
+rt.register({
+  name: "android/opengl/GLSurfaceView", ctor: JGLSurfaceView, sup: "android/view/SurfaceView",
+  ifaces: ["android/view/SurfaceHolder$Callback"],
+  statics: { RENDERMODE_WHEN_DIRTY: 0, RENDERMODE_CONTINUOUSLY: 1, DEBUG_CHECK_GL_ERROR: 1 },
+  methods: {
+    "<init>(Landroid/content/Context;)V": glViewInit,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": glViewInit,
+    // GLThread.surfaceCreated/onWindowResize/surfaceDestroyed; subclasses call through to these
+    "surfaceCreated(Landroid/view/SurfaceHolder;)V": function (this: JGLSurfaceView) {
+      this.hasSurface = this.needCreate = true;
+      this.signal();
+    },
+    "surfaceChanged(Landroid/view/SurfaceHolder;III)V": function (this: JGLSurfaceView, _h: unknown, _f: number, w: number, h: number) {
+      this.winW = w; this.winH = h; this.sizeChanged = true;
+      this.signal();
+    },
+    "surfaceDestroyed(Landroid/view/SurfaceHolder;)V": function (this: JGLSurfaceView) { this.hasSurface = false; },
+    "setEGLConfigChooser(Landroid/opengl/GLSurfaceView$EGLConfigChooser;)V": function (this: JGLSurfaceView, c: unknown) { this.configChooser = c; },
+    "setEGLContextClientVersion(I)V": function (this: JGLSurfaceView, version: number) { this.clientVersion = version; },
+    "setEGLContextFactory(Landroid/opengl/GLSurfaceView$EGLContextFactory;)V": function (this: JGLSurfaceView, factory: unknown) { this.contextFactory = factory; },
+    "setRenderer(Landroid/opengl/GLSurfaceView$Renderer;)V": function (this: JGLSurfaceView, r: unknown) {
+      this.renderer = r;
+      this.signal();
+      requestLayout(this);
+    },
+    "setRenderMode(I)V": function (this: JGLSurfaceView, m: number) { this.renderMode = m; this.signal(); },
+    "getRenderMode()I": function (this: JGLSurfaceView) { return this.renderMode; },
+    "requestRender()V": function (this: JGLSurfaceView) { this.dirty = true; this.signal(); },
+    "queueEvent(Ljava/lang/Runnable;)V": function (this: JGLSurfaceView, r: unknown) {
+      setTimeout(() => {
+        try { void Promise.resolve(vcallOn(this.glThread, r, "run", "()V")).catch(reportUncaught); } catch (e) { reportUncaught(e); }
+      }, 0);
+    },
+    // GLThread stops rendering while paused; the EGL context is kept across it, which is the
+    // setPreserveEGLContextOnPause(true) behaviour and the only one we can offer.
+    "onResume()V": function (this: JGLSurfaceView) { this.paused = false; this.signal(); },
+    "onPause()V": function (this: JGLSurfaceView) { this.paused = true; },
+    ...noops("setEGLConfigChooser(ZZ)V", "setEGLConfigChooser(IIIIII)V",
+      "setEGLWindowSurfaceFactory(Landroid/opengl/GLSurfaceView$EGLWindowSurfaceFactory;)V",
+      "setPreserveEGLContextOnPause(Z)V", "setDebugFlags(I)V"),
+    "onDetachedFromWindow()V": function (this: JGLSurfaceView) { this.destroySurface(); this.signal(); },
+    "onAttachedToWindow()V": function (this: JGLSurfaceView) { this.ensureSurface(); this.signal(); },
+  },
+});
+rt.markers("android/opengl/GLSurfaceView$Renderer", "android/opengl/GLSurfaceView$EGLConfigChooser",
+  "android/opengl/GLSurfaceView$EGLContextFactory", "android/opengl/GLSurfaceView$EGLWindowSurfaceFactory");
+
 rt.register({ name: "webdroid/GL10", ctor: class extends JObj {}, ifaces: ["javax/microedition/khronos/opengles/GL10", "javax/microedition/khronos/opengles/GL"],
   methods: { "glViewport(IIII)V": (x: number, y: number, w: number, h: number) => gl?.viewport(x, y, w, h) },
 });
@@ -645,6 +671,7 @@ rt.register({
     "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z":
       (display: unknown) => egl10DisplayValid(display) ? 1 : eglFailure(EGL_BAD_DISPLAY, 0),
     ...stubs(1, "eglWaitGL()Z", "eglWaitNative(ILjava/lang/Object;)Z"),
+    "eglGetCurrentDisplay()Ljavax/microedition/khronos/egl/EGLDisplay;": () => glSurfaces.current ? egl10Display : noEglDisplay,
     "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => {
       const current = glSurfaces.current;
       if (!current) return noEglContext;

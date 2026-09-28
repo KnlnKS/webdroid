@@ -4,16 +4,17 @@ import { clockTime, fail, LAYOUT, readTs, writeTs } from "./libc";
 import { mem } from "./mem";
 import { startThread } from "./pthread";
 import { E } from "./abi";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 /** a POSIX timer or a timerfd: its clock, next expiry and interval, in that clock's milliseconds */
-export type ClockTimer = { clock: number; next: number; interval: number; timeout?: ReturnType<typeof setTimeout> };
+export type ClockTimer = { clock: number; next: number; interval: number; timeout?: GuestTimer };
 type Timer = ClockTimer & { overrun: number; notify: () => void };
 const timers = new Map<number, Timer>();
 /** fire(expirations) once the clock passes the next expiry, then wait for the one after */
 export function armClockTimer(timer: ClockTimer, fire: (count: number) => void): void {
-  clearTimeout(timer.timeout);
+  disarmClockTimer(timer);
   if (!timer.next || hasProcessExited()) return;
-  timer.timeout = setTimeout(() => {
+  timer.timeout = setGuestTimeout(() => {
     if (hasProcessExited()) return;
     const now = clockTime(timer.clock);
     if (now >= timer.next) {
@@ -22,8 +23,9 @@ export function armClockTimer(timer: ClockTimer, fire: (count: number) => void):
       fire(count);
     }
     armClockTimer(timer, fire);
-  }, Math.min(0x7fffffff, Math.max(0, timer.next - clockTime(timer.clock))));
+  }, Math.max(0, timer.next - clockTime(timer.clock)));
 }
+export const disarmClockTimer = (timer: ClockTimer): void => clearGuestTimeout(timer.timeout);
 const arm = (timer: Timer): void => armClockTimer(timer, (count) => { timer.overrun = Math.min(0x7fffffff, count - 1); timer.notify(); });
 /** an itimerspec: the interval, then what remains until the next expiry */
 export function timerState(timer: ClockTimer, out: number): void {
@@ -62,6 +64,6 @@ export function timersInit(): void {
     },
     timer_gettime: (cpu, a) => { const timer = timers.get(a.p()), out = a.p(); if (!timer || !out) return fail(cpu, E.INVAL); timerState(timer, out); return 0; },
     timer_getoverrun: (cpu, a) => timers.get(a.p())?.overrun ?? fail(cpu, E.INVAL),
-    timer_delete: (cpu, a) => { const id = a.p(), timer = timers.get(id); if (!timer) return fail(cpu, E.INVAL); clearTimeout(timer.timeout); timers.delete(id); mem.free(id); return 0; },
+    timer_delete: (cpu, a) => { const id = a.p(), timer = timers.get(id); if (!timer) return fail(cpu, E.INVAL); disarmClockTimer(timer); timers.delete(id); mem.free(id); return 0; },
   });
 }

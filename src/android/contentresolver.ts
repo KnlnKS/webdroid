@@ -7,16 +7,16 @@ import {
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
 import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle } from "./os";
-import { mkFile } from "../jvm/natives/jio";
-import { mkAssetFd } from "./resnative";
+import { mkFile, streamOf } from "../jvm/natives/jio";
+import { mkAssetFd, rawResourceBytes } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
-import { mkCursor } from "./sqlite";
+import { mkCursor, contentValues, type JContentValues } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { packages } from "./packages";
-import { isMediaUri, mediaDelete, mediaMime, mediaPath, mediaQuery } from "./mediastore";
+import { isMediaUri, mediaDelete, mediaInsert, mediaMime, mediaPath, mediaQuery, mediaUpdate } from "./mediastore";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -158,6 +158,17 @@ export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: nu
   }
   return -1;
 }
+/** ContentResolver.getResourceId: android.resource://pkg/id or android.resource://pkg/type/name */
+function resourceBytes(u: JUri): Uint8Array {
+  const { authority, path } = uriParts(u), res = authority === appHost?.pkg ? appHost.res : null;
+  if (!res) throw rt.mkThrowable("java/io/FileNotFoundException", "No package found for authority: " + u.uri);
+  const segments = (path ?? "").split("/").filter(Boolean).map((s) => uriDecode(s) ?? "");
+  const id = segments.length === 1 ? Number(segments[0]) : segments.length === 2 ? res.idFor(segments[0], segments[1], authority!) : NaN;
+  if (!id) throw rt.mkThrowable("java/io/FileNotFoundException", "No resource found for: " + u.uri);
+  try { return rawResourceBytes(res, id); }
+  catch { throw rt.mkThrowable("java/io/FileNotFoundException", "Resource does not exist: " + u.uri); }
+}
+const isResourceUri = (u: JUri) => uriParts(u).scheme === "android.resource";
 function fileOf(u: JUri): string {
   const parts = uriParts(u);
   if (parts.scheme !== "file") throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
@@ -186,7 +197,16 @@ export async function openPfd(u: JUri, mode: string) {
   const bytes = await pfdBackingBytes(id) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id));
   return mkPfd(bytes, write ? (b) => docWrite(id, b) : null, id);
 }
+const openOutputStream = driven(function* (u: JUri, mode: string): Gen {
+  if (isDocsUri(u)) return docOutputStream(documentId(u, true), mode.includes("a"));
+  if (u.uri.startsWith("content:") && !isMediaUri(u))
+    return newObj("android/os/ParcelFileDescriptor$AutoCloseOutputStream", "(Landroid/os/ParcelFileDescriptor;)V", yield openPfd(u, mode));
+  const path = isMediaUri(u) ? yield mediaPath(u) : fileOf(u);
+  if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
+  return newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", path, mode.includes("a") ? 1 : 0);
+});
 const openAfd = async (u: JUri, mode: string) => {
+  if (isResourceUri(u)) return mkAssetFd(resourceBytes(u));
   const pfd = await openPfd(u, mode);
   return mkAssetFd(pfd.bytes, pfd);
 };
@@ -223,16 +243,13 @@ const resolverMethods: NativeSpec["methods"] = {
   },
   "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": driven(function* (u: JUri): Gen {
     return isDocsUri(u) ? docInputStream(documentId(u, true))
+      : isResourceUri(u) ? streamOf(resourceBytes(u))
       : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", yield openPfd(u, "r"))
       : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u));
   }),
-  "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) =>
-    isDocsUri(u) ? docOutputStream(documentId(u, true), false)
-      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", fileOf(u)),
+  "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) => openOutputStream(u, "w"),
   // AOSP's modes: "w" truncates, "wa" appends, "rw"/"rwt" keep or truncate in place.
-  "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": (u: JUri, mode: string) =>
-    isDocsUri(u) ? docOutputStream(documentId(u, true), (mode ?? "w").includes("a"))
-      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0),
+  "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": (u: JUri, mode: string) => openOutputStream(u, mode ?? "w"),
   "getType(Landroid/net/Uri;)Ljava/lang/String;": driven(function* (u: JUri): Gen {
     if (isDocsUri(u)) return (yield docRow(documentId(u, true)))?.mime ?? null;
     if (isMediaUri(u)) return mediaMime(u);
@@ -309,7 +326,8 @@ const resolverMethods: NativeSpec["methods"] = {
   "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/os/ParcelFileDescriptor;": openPfd,
   "openAssetFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": openAfd,
   "openTypedAssetFile(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/content/res/AssetFileDescriptor;": openAfd,
-  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: unknown): Gen {
+  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: JContentValues | null): Gen {
+    if (isMediaUri(u)) return mediaInsert(u, values ? contentValues(values) : new Map());
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "insert", providerOperations.insert, u, values) : null;
   }),
@@ -318,7 +336,8 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "bulkInsert", providerOperations.bulkInsert, u, values) : 0;
   }),
-  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: unknown, where: string | null, args: string[] | null): Gen {
+  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: JContentValues | null, where: string | null, args: string[] | null): Gen {
+    if (isMediaUri(u)) return mediaUpdate(u, values ? contentValues(values) : new Map(), where, args);
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "update", providerOperations.update, u, values, where, args) : 0;
   }),

@@ -69,10 +69,11 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
     if (out.has("content-length")) out.set("x-wd-content-length", out.get("content-length")!);
     out.set("access-control-allow-origin", "*");
     out.set("x-wd-final-url", upstream.url || url);
+    // a browser hides Set-Cookie from fetch, so the values travel under our own name
+    const cookies = upstream.headers.getSetCookie();
+    if (cookies.length) out.set("x-wd-set-cookie", JSON.stringify(cookies));
     if (manual) {
       out.set("x-wd-status", String(upstream.status));
-      const cookies = upstream.headers.getSetCookie();
-      if (cookies.length) out.set("x-wd-set-cookie", JSON.stringify(cookies));
       if ([301, 302, 303, 307, 308].includes(upstream.status)) {
         out.set("x-wd-status-text", upstream.statusText);
         out.delete("content-length");

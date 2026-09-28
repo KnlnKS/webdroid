@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
+import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
@@ -47,6 +47,12 @@ export function methodAnnotations(info: ClassInfo, name: string, desc: string): 
   return classAnno(info).methodsByRef.get(name + desc) ?? [];
 }
 
+/** getExceptionTypes: the classes a dalvik.annotation.Throws lists for the member */
+function thrownTypes(owner: ClassInfo, name: string, desc: string) {
+  const v = methodAnnotations(owner, name, desc).find((a) => a.type === "dalvik/annotation/Throws")?.elements.value;
+  const out = Array.isArray(v) ? v.map((e) => e && typeof e === "object" && "idx" in e ? (owner.owner ?? rt).classFor(descToName(owner.dex!.type(e.idx as number))) : null) : [];
+  return jarray(out.filter(Boolean), "Ljava/lang/Class;");
+}
 /** a descriptor as Java spells the type: int, java.lang.String, byte[] */
 function javaTypeName(d: string): string {
   let dims = 0;
@@ -643,17 +649,22 @@ rt.register({
     },
     "getParameterCount()I": function (this: JMethod) { return parseMethodDesc(this.desc).params.length; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
+    "getExceptionTypes()[Ljava/lang/Class;": function (this: JMethod) { return thrownTypes(this.owner, this.name, this.desc); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JMethod) { return types(genericMethodTypes(this.owner, this.name, this.desc).params); },
     "getDeclaringClass()Ljava/lang/Class;": declaringClass,
     ...accessibleMethods,
-    "isSynthetic()Z": () => 0,
-    "isBridge()Z": () => 0,
+    "isSynthetic()Z": function (this: JMethod) { return (this.mods >> 12) & 1; },
+    "isBridge()Z": function (this: JMethod) { return (this.mods >> 6) & 1; },
+    "isVarArgs()Z": function (this: JMethod) { return (this.mods >> 7) & 1; },
     "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMethod, recv: unknown, args: unknown[] | null): Gen {
       const a = (args ?? []).map(unboxArg);
       const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? lateMethod.find?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
-      const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
-      const val = r instanceof Promise ? yield r : r;
+      let val: unknown;
+      try {
+        const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
+        val = r instanceof Promise ? yield r : r;
+      } catch (e) { throw invocationTarget(e); }
       return boxReturn(parseMethodDesc(this.desc).ret, val);
     }),
     ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
@@ -672,6 +683,19 @@ rt.register({
     "hashCode()I": function (this: JMethod) { return stringHash(this.name + this.desc); },
   },
 });
+// Method.invoke and Constructor.newInstance report what the target threw inside this wrapper
+defineException("java/lang/reflect/InvocationTargetException", "java/lang/ReflectiveOperationException", [], {
+  "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, target: JThrowable | null) { this.cause = target; fillInStackTrace(this); },
+  "<init>(Ljava/lang/Throwable;Ljava/lang/String;)V": function (this: JThrowable, target: JThrowable | null, msg: string | null) {
+    this.cause = target; this.msg = msg; fillInStackTrace(this);
+  },
+  "getTargetException()Ljava/lang/Throwable;": function (this: JThrowable) { return this.cause; },
+});
+function invocationTarget(e: unknown): JThrowable {
+  const wrapper = rt.mkThrowable("java/lang/reflect/InvocationTargetException", null) as JThrowable;
+  wrapper.cause = rt.jx(e);
+  return wrapper;
+}
 // ── reflect Constructor. <init> mangles to i$<hash(desc)> with NO class component, so a
 // ctor must always be invoked through the prototype of the class that DECLARES it.
 export class JCtor extends JAccessibleObject {
@@ -715,6 +739,7 @@ rt.register({
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
     "getParameterCount()I": function (this: JCtor) { return parseMethodDesc(this.desc).params.length; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
+    "getExceptionTypes()[Ljava/lang/Class;": function (this: JCtor) { return thrownTypes(this.owner, "<init>", this.desc); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return types(genericMethodTypes(this.owner, "<init>", this.desc).params); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
     ...annotatedElement(function (this: JCtor) { return classAnno(this.owner).methodsByRef.get("<init>" + this.desc) ?? []; }),
@@ -726,8 +751,10 @@ rt.register({
       const ps = parseMethodDesc(this.desc).params;
       const a = (args ?? []).map((v, i) => ("IJFDZBCS".includes(ps[i] ?? "L") ? unboxArg(v) : v));
       const o = new info.ctor();
-      const r = fn.apply(o, a);
-      if (r instanceof Promise) yield r;
+      try {
+        const r = fn.apply(o, a);
+        if (r instanceof Promise) yield r;
+      } catch (e) { throw invocationTarget(e); }
       return o;
     }),
     "toString()Ljava/lang/String;": function (this: JCtor) { return this.owner.name + ".<init>" + this.desc; },
@@ -966,16 +993,13 @@ function installForName(classCtor: unknown) {
     if (linked) return !linked.stub;
     return rt.natives.has(n) || rt.dexIndex.has(n);
   };
-  const forName = async function (jn: string, initialize = 1, loader: unknown = null) {
-    if (loader) {
-      const c: JClass = await vcall(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", jn);
-      if (initialize && c.ci) await rt.initClass(c.ci);
-      return c;
-    }
+  // synchronous unless loading or initialization suspends
+  const forName = function (jn: string, initialize = 1, loader: unknown = null): JClass | Promise<JClass> {
+    if (loader) return after(vcall(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", jn) as JClass | Promise<JClass>,
+      (c) => initialize && c.ci ? after(rt.initClass(c.ci), () => c) : c);
     const name = slashName(jn);
     if (!loadable(name)) throw rt.mkThrowable("java/lang/ClassNotFoundException", jn);
-    if (initialize) await linkInit(name);
-    return rt.classFor(name);
+    return after(initialize ? rt.initClass(rt.link(name)) : null, () => rt.classFor(name) as JClass);
   };
   const c = classCtor as Record<string, unknown>;
   c[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")] = (name: string, caller: Runtime = rt) => forName(name, 1, caller.classLoader);

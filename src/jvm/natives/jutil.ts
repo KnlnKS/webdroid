@@ -79,7 +79,9 @@ function mapKey(k: unknown): unknown {
   return SLOW;
 }
 
-interface Ent { k: unknown; v: unknown; hash?: number; }
+/** `seq` orders the fast and slow buckets as one insertion (or access) sequence */
+interface Ent { k: unknown; v: unknown; hash?: number; seq?: number; }
+let entSeq = 0;
 class JMapEntry extends JObj {
   constructor(public e: Ent, public mutable = true) { super(); }
 }
@@ -727,11 +729,22 @@ const putSlow = driven(function* putSlow(map: JMap, k: unknown, v: unknown, only
   if (index >= 0) {
     const entry = map.slow[index], old = entry.v;
     if (!onlyAbsent || old == null) entry.v = v;
+    if (map.access) touchSlow(map, index);
     return old;
   }
-  map.slow.push({ k, v, hash });
+  map.slow.push({ k, v, hash, seq: ++entSeq });
   return null;
 });
+/** LinkedHashMap.afterNodeAccess: an accessed entry becomes the youngest */
+function touch(map: JMap, mk: unknown, e: Ent): void {
+  map.m.delete(mk); map.m.set(mk, e); e.seq = ++entSeq;
+}
+function touchSlow(map: JMap, i: number): Ent {
+  const e = map.slow[i];
+  if (i !== map.slow.length - 1) { map.slow.splice(i, 1); map.slow.push(e); }
+  e.seq = ++entSeq;
+  return e;
+}
 function mapMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -755,10 +768,11 @@ function mapMethods(): Methods {
       const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
-        if (e && this.access) { this.m.delete(mk); this.m.set(mk, e); }
-        return e ? e.v : null;
+        if (!e) return null;
+        if (this.access) touch(this, mk, e);
+        return e.v;
       }
-      return after(slowFind(this.slow, k), (i) => (i >= 0 ? this.slow[i].v : null));
+      return after(slowFind(this.slow, k), (i) => (i < 0 ? null : this.access ? touchSlow(this, i).v : this.slow[i].v));
     },
     "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMap, k: unknown, d: unknown): Gen {
       const v = yield (vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k));
@@ -788,8 +802,8 @@ function mapMethods(): Methods {
       const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
-        if (e) { const o = e.v; e.v = v; return o; }
-        this.m.set(mk, { k, v });
+        if (e) { const o = e.v; e.v = v; if (this.access) touch(this, mk, e); return o; }
+        this.m.set(mk, { k, v, seq: ++entSeq });
         return null;
       }
       return putSlow(this, k, v, false);
@@ -799,9 +813,11 @@ function mapMethods(): Methods {
       const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
-        if (e?.v !== null && e?.v !== undefined) return e.v;
-        if (e) e.v = v; else this.m.set(mk, { k, v });
-        return null;
+        if (!e) { this.m.set(mk, { k, v, seq: ++entSeq }); return null; }
+        const old = e.v;
+        if (old === null) e.v = v;
+        if (this.access) touch(this, mk, e);
+        return old;
       }
       return putSlow(this, k, v, true);
     },
@@ -860,9 +876,16 @@ function mapMethods(): Methods {
     },
   };
 }
-function* allEnts(m: JMap): Generator<Ent> {
-  yield* m.m.values();
-  yield* m.slow;
+/** both buckets in `seq` order (each bucket is already ascending) */
+function* allEnts(s: { m: Map<unknown, Ent>; slow: Ent[] }): Generator<Ent> {
+  const slow = s.slow;
+  if (!slow.length) return yield* s.m.values();
+  let j = 0;
+  for (const e of s.m.values()) {
+    while (j < slow.length && slow[j].seq! < e.seq!) yield slow[j++];
+    yield e;
+  }
+  while (j < slow.length) yield slow[j++];
 }
 function mapEquals(entries: Ent[], other: unknown, from = 0): number | Promise<number> {
   for (let i = from; i < entries.length; i++) {
@@ -913,12 +936,12 @@ const addImmutableMapping = driven(function* addImmutableMapping(map: JImmutable
   const bucket = mapKey(key);
   if (bucket !== SLOW) {
     if (map.m.has(bucket)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
-    map.m.set(bucket, { k: key, v: value });
+    map.m.set(bucket, { k: key, v: value, seq: ++entSeq });
   } else {
     const thread = curThread, result = jhash(key);
     const hash = result instanceof Promise ? yield result : result;
     if ((yield callOn(thread, () => slowFind(map.slow, key, hash))) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
-    map.slow.push({ k: key, v: value, hash });
+    map.slow.push({ k: key, v: value, hash, seq: ++entSeq });
   }
 });
 const immutableMap = driven(function* immutableMap(entries: readonly (readonly [unknown, unknown])[]): Gen<JImmutableMap> {
@@ -1048,8 +1071,7 @@ rt.register({
 });
 
 rt.register({ name: "webdroid/BaseMap", ctor: JMap, ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods() });
-// ArrayMap is a Map that also answers by index; a JS Map already keeps insertion order, so
-// the index is just its key order, with the slow bucket (custom-equals keys) after it.
+// ArrayMap is a Map that also answers by index: the index is its entries' insertion order.
 const arrayMapMethods: NativeSpec["methods"] = {
   "keyAt(I)Ljava/lang/Object;": function (this: JMap, i: number) { return bucketKeys(this)[i] ?? null; },
   "valueAt(I)Ljava/lang/Object;": function (this: JMap, i: number) {
@@ -1146,15 +1168,13 @@ class JSet extends JObj {
   slowVersion = 0;
 }
 class JEnumSet extends JSet { enumClass: JObj | null = null; }
-/** the keys, fast bucket first then the custom-equals ones (both must be walked) */
 function bucketKeys(s: { m: Map<unknown, Ent>; slow: Ent[] }): unknown[] {
   const out: unknown[] = [];
-  for (const e of s.m.values()) out.push(e.k);
-  for (const e of s.slow) out.push(e.k);
+  for (const e of allEnts(s)) out.push(e.k);
   return out;
 }
 function copyBuckets(from: { m: Map<unknown, Ent>; slow: Ent[] }, to: { m: Map<unknown, Ent>; slow: Ent[] }): void {
-  for (const [k, e] of from.m) to.m.set(k, { k: e.k, v: e.v });
+  for (const [k, e] of from.m) to.m.set(k, { ...e });
   to.slow = from.slow.map((e) => ({ ...e }));
 }
 function setStream(this: JSet) { return mkStream(bucketKeys(this)); }
@@ -1258,11 +1278,11 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   const mk = mapKey(v);
   if (mk !== SLOW) {
     if (s.m.has(mk)) return 0;
-    s.m.set(mk, { k: v, v: v });
+    s.m.set(mk, { k: v, v, seq: ++entSeq });
     return 1;
   }
   const thread = curThread;
-  return after(jhash(v), hash => after(callOn(thread, () => slowFind(s.slow, v, hash)), i => i >= 0 ? 0 : (s.slow.push({ k: v, v, hash }), 1)));
+  return after(jhash(v), hash => after(callOn(thread, () => slowFind(s.slow, v, hash)), i => i >= 0 ? 0 : (s.slow.push({ k: v, v, hash, seq: ++entSeq }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
 const setSerialization: Methods = {
@@ -1341,6 +1361,7 @@ function enumSetStatics() {
     for (const v of extra) await addToSet(s, v);
     return s;
   };
+  const copyOf = driven(function* (c: JObj): Gen { return fromValues((c as JEnumSet).enumClass, false, yield toJsArray(c)); });
   return {
     "clone()Ljava/util/EnumSet;": function (this: JEnumSet) {
       const copy = new (this.constructor as new () => JEnumSet)();
@@ -1356,7 +1377,8 @@ function enumSetStatics() {
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown) => fromValues(null, false, [a, b, c]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown, d: unknown) => fromValues(null, false, [a, b, c, d]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown) => fromValues(null, false, [a, b, c, d, e]),
-    "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": driven(function* (c: JObj): Gen { return fromValues((c as JEnumSet).enumClass, false, yield toJsArray(c)); }),
+    "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": copyOf,
+    "static copyOf(Ljava/util/EnumSet;)Ljava/util/EnumSet;": copyOf,
     "static complementOf(Ljava/util/EnumSet;)Ljava/util/EnumSet;": driven(function* (source: JEnumSet): Gen {
       const result = yield fromValues(source.enumClass!, true, []);
       yield vcall(result, "removeAll", "(Ljava/util/Collection;)Z", source);
@@ -1594,7 +1616,7 @@ export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "comparator()Ljava/util/Comparator;": function (this: JPriorityQueue) { return this.cmp; },
 });
 rt.register({
-  name: "java/util/PriorityQueue", ctor: JPriorityQueue,
+  name: "java/util/PriorityQueue", ctor: JPriorityQueue, sup: "java/util/AbstractQueue",
   ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
   methods: priorityQueueMethods(),
 });
@@ -2636,6 +2658,10 @@ rt.register({
     "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": reversedOf,
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static rotate(Ljava/util/List;I)V": rotate,
+    "static swap(Ljava/util/List;II)V": driven(function* (l: unknown, i: number, j: number): Gen {
+      const SET = "(ILjava/lang/Object;)Ljava/lang/Object;";
+      yield vcall(l, "set", SET, i, yield vcall(l, "set", SET, j, yield vcall(l, "get", "(I)Ljava/lang/Object;", i)));
+    }),
     "static shuffle(Ljava/util/List;)V": shuffle,
     "static shuffle(Ljava/util/List;Ljava/util/Random;)V": shuffle,
     "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": driven(function* (a: unknown, b: unknown): Gen {

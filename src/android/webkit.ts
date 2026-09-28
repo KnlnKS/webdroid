@@ -21,6 +21,7 @@ import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import type { JCanvas } from "./graphics";
+import { recordOrRun } from "./recording";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
@@ -117,6 +118,7 @@ function webProxy(): Promise<void> {
 }
 /** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
 export function setWebLayer(el: HTMLElement) {
+  if (!layer) window.addEventListener("message", JWebView.message);
   layerObserver?.disconnect();
   layer = el;
   layerObserver = new ResizeObserver(([entry]) => {
@@ -125,7 +127,29 @@ export function setWebLayer(el: HTMLElement) {
   layerObserver.observe(el);
 }
 let frame = 1;
+/** attached WebViews the last draw passes may have painted */
 const live = new Set<JWebView>();
+/** what a WebView's page holds on the host side; it never references the WebView itself */
+interface FrameHold { el: HTMLIFrameElement | null; remote: WebBridge | null; port: MessagePort | null }
+function unbridge(h: FrameHold) {
+  if (h.remote) { bridges.delete(h.remote.id); h.remote.close(); h.remote = null; }
+  h.port?.close(); h.port = null;
+}
+function release(h: FrameHold) { unbridge(h); h.el?.remove(); h.el = null; }
+// Chromium destroys an AwContents once its WebView is garbage collected (a CleanupReference), so
+// an app that drops a WebView without destroy() does not keep its page. Page-side callbacks and the
+// bridge therefore reach a WebView only weakly; detaching alone keeps the page, as apps reattach.
+const collected = new FinalizationRegistry<FrameHold>(release);
+const bridges = new Map<string, WeakRef<JWebView>>();
+/** page-side proxies of the interfaces, so the page does not keep the Java objects (and so often its WebView) reachable */
+function weakIfaces(of: () => WebInterfaces | null | undefined): WebInterfaces {
+  const out: WebInterfaces = Object.create(null);
+  for (const [name, methods] of Object.entries(of() ?? {})) {
+    const proxy: WebInterfaces[string] = out[name] = Object.create(null);
+    for (const m in methods) proxy[m] = async (...args) => of()?.[name]?.[m]?.(...args);
+  }
+  return out;
+}
 /** frames sit above the canvas, so a visible window stacked over the WebView's own hides it */
 function covered(v: JView): boolean {
   const root = rootOf(v);
@@ -135,9 +159,9 @@ function covered(v: JView): boolean {
 /** after each canvas draw pass: show the WebViews that pass painted, at their on-screen rect */
 export function webLayerSweep(): void {
   for (const v of live) {
-    if (!v.el) continue;
+    if (!v.hold.el) continue;
     const show = v.drawnAt === frame && !covered(v) && v.place();
-    if (show !== v.shown) { v.shown = show; v.el.hidden = !show; }
+    if (show !== v.shown) { v.shown = show; v.hold.el.hidden = !show; }
   }
   frame++;
 }
@@ -149,7 +173,7 @@ export function webViewInfo(): { url: string | null; title: string; loaded: bool
 const assetOf = (v: JView) => (v.ctx as JContext | null)?.$host?.assetKey ?? "";
 /** what the browser loads for an Android URL: the dev server fronts http(s) and the apk's assets */
 function srcFor(url: string, v: JWebView): string {
-  if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url);
+  if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url) + "&ua=" + encodeURIComponent(String(v.settings.v.userAgentString));
   const m = /^file:\/\/\/android_asset\/(.*)$/i.exec(url);
   return m ? "/asset/" + encodeURIComponent(assetOf(v)) + "/assets/" + m[1] : url;
 }
@@ -167,7 +191,7 @@ function unmap(href: string, v: JWebView): string {
 }
 /** the frame's window when its document is ours to script (data: URLs are opaque) */
 function win(v: JWebView): Window | null {
-  const w = v.el?.contentWindow ?? null;
+  const w = v.hold.el?.contentWindow ?? null;
   try { return w?.document ? w : null; } catch { return null; }
 }
 const toJava = (d: string, x: unknown): unknown =>
@@ -254,25 +278,28 @@ export class JWebView extends JViewGroup {
   hist: Entry[] = [];
   idx = -1;
   ifaces: WebInterfaces = Object.create(null);
+  /** the interfaces the bridged page was loaded with, as Chromium injects them per load */
+  private pageIfaces: WebInterfaces | null = null;
   bridgeThread = Object.assign(new JThread(), { jname: "JavaBridge" });
   private requestThread = Object.assign(new JThread(), { jname: "Chrome_IOThread" });
-  private remote: WebBridge | null = null;
+  private readonly ref = new WeakRef(this);
+  readonly hold: FrameHold = { el: null, remote: null, port: null };
   private remoteOrigin = "";
   remoteWidth = 0;
   remoteHeight = 0;
-  private cookiePort: MessagePort | null = null;
   private nextEval = 0;
   private evaluations = new Map<number, (value: string) => void>();
   private nextSnapshot = 0;
   private snapshots = new Map<number, { resolve: (data: string) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   private pendingScripts = new Map<number, string>();
   private scriptReady = false;
-  private message = (event: MessageEvent) => {
-    if (event.source !== this.el?.contentWindow || event.origin !== this.remoteOrigin || event.data?.bridge !== this.remote?.id) return;
-    const data = event.data;
-    if (data.kind === "ready" && !this.cookiePort) {
+  static message(event: MessageEvent) { bridges.get(event.data?.bridge)?.deref()?.message(event); }
+  private message(event: MessageEvent) {
+    if (event.source !== this.hold.el?.contentWindow || event.origin !== this.remoteOrigin) return;
+    const data = event.data, ref = this.ref;
+    if (data.kind === "ready" && !this.hold.port) {
       const channel = new MessageChannel(), cookies = webCookies(appHost?.pkg ?? "");
-      this.cookiePort = channel.port1;
+      this.hold.port = channel.port1;
       channel.port1.onmessage = async ({ data, ports }) => {
         if (!ports[0]) return;
         if (data?.kind === "webasset") {
@@ -282,10 +309,11 @@ export class JWebView extends JViewGroup {
           port.close();
           return;
         }
-        if (typeof data?.url !== "string") return;
+        const v = ref.deref();
+        if (typeof data?.url !== "string" || !v) return;
         const jar = await cookies;
         const values = Array.isArray(data.values) ? data.values.filter((value: unknown): value is string => typeof value === "string") : [];
-        ports[0].postMessage(jar.network(data.url, this.url ?? "", values, thirdPartyCookies.has(this))); ports[0].close();
+        ports[0].postMessage(jar.network(data.url, v.url ?? "", values, thirdPartyCookies.has(v))); ports[0].close();
       };
       const entry = this.hist[this.idx];
       this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body,
@@ -315,12 +343,12 @@ export class JWebView extends JViewGroup {
         else pending.resolve(data.data);
       }
     }
-  };
-  private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
+  }
+  private send(data: object, transfer: Transferable[] = []) { this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
   requestPrint(): boolean {
-    if (!this.loaded || !this.el?.contentWindow) return false;
+    if (!this.loaded || !this.hold.el?.contentWindow) return false;
     if (this.remoteOrigin) this.send({ kind: "print" });
-    else this.el.contentWindow.print();
+    else this.hold.el.contentWindow.print();
     return true;
   }
   async bitmapSnapshot(): Promise<ImageBitmap> {
@@ -335,16 +363,14 @@ export class JWebView extends JViewGroup {
         this.snapshots.set(seq, { resolve, reject, timer });
         this.send({ kind: "snapshot", seq });
       });
-    } else if (this.el?.contentDocument) {
-      data = (await snapshotDocument(this.el.contentDocument)).data;
+    } else if (this.hold.el?.contentDocument) {
+      data = (await snapshotDocument(this.hold.el.contentDocument)).data;
     } else throw rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView content is unavailable for bitmap capture");
     return createImageBitmap(await (await fetch(data)).blob());
   }
   private closeBridge() {
     this.scriptReady = false;
-    this.remote?.close(); this.remote = null; this.remoteOrigin = "";
-    this.cookiePort?.close(); this.cookiePort = null;
-    window.removeEventListener("message", this.message);
+    unbridge(this.hold); this.remoteOrigin = "";
     for (const done of this.evaluations.values()) done("null");
     for (const pending of this.snapshots.values()) {
       clearTimeout(pending.timer);
@@ -352,8 +378,7 @@ export class JWebView extends JViewGroup {
     }
     this.snapshots.clear();
   }
-  destroy() { this.gen++; this.closeBridge(); this.hide(); this.el?.remove(); this.el = null; live.delete(this); }
-  el: HTMLIFrameElement | null = null;
+  destroy() { this.gen++; this.closeBridge(); collected.unregister(this.hold); release(this.hold); this.shown = false; live.delete(this); }
   drawnAt = 0;
   shown = false;
   /** bumped by every load and by stopLoading: a frame event from an older load is ignored */
@@ -361,15 +386,15 @@ export class JWebView extends JViewGroup {
   x0 = 0; y0 = 0; x1 = 0; y1 = 0;
 
   frame(): HTMLIFrameElement | null {
-    if (this.el || !layer) return this.el;
-    const el = this.el = document.createElement("iframe");
+    if (this.hold.el || !layer) return this.hold.el;
+    const el = this.hold.el = document.createElement("iframe"), ref = this.ref;
     el.referrerPolicy = "no-referrer";
     el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1))";
     el.hidden = true;
-    (el as unknown as { __wdIfaces: unknown }).__wdIfaces = this.ifaces;
-    (el as unknown as { __wdConsole: unknown }).__wdConsole = (data: unknown) => this.consoleMessage(data);
-    el.addEventListener("load", () => this.onLoad());
+    (el as unknown as { __wdConsole: unknown }).__wdConsole = (data: unknown) => ref.deref()?.consoleMessage(data);
+    el.addEventListener("load", () => ref.deref()?.onLoad());
     layer.appendChild(el);
+    collected.register(this, this.hold, this.hold);
     return el;
   }
   go(e: Entry, push = true) {
@@ -384,14 +409,18 @@ export class JWebView extends JViewGroup {
         else { el.removeAttribute("srcdoc"); el.src = e.src!; }
       };
       this.closeBridge();
+      // Chromium injects the interfaces a page loads with; a later add or remove applies at the next load
+      const ref = this.ref, ifaces = this.pageIfaces = { ...this.ifaces };
+      (el as unknown as { __wdIfaces: WebInterfaces }).__wdIfaces = weakIfaces(() => ref.deref()?.pageIfaces);
       const base = rt.link("android/webkit/WebViewClient").ctor.prototype;
       const intercept = ["Landroid/webkit/WebResourceRequest;", "Ljava/lang/String;"].some(arg => {
         const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
         return jmethod(this.client, method) !== jmethod(base, method);
       });
-      if (intercept || Object.keys(this.ifaces).length || e.method === "POST") {
-        const remote = this.remote = new WebBridge({ ...this.ifaces }, webCookies(appHost?.pkg ?? ""), () => this.url, intercept ? request => this.intercept(request) : undefined);
-        window.addEventListener("message", this.message);
+      if (intercept || Object.keys(ifaces).length || e.method === "POST") {
+        const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
+          webCookies(appHost?.pkg ?? ""), () => ref.deref()?.url ?? null, intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined);
+        bridges.set(remote.id, ref);
         void remote.ready.then((origin) => {
           if (this.gen !== g) return;
           this.remoteOrigin = origin;
@@ -439,8 +468,8 @@ export class JWebView extends JViewGroup {
     this.go(this.hist[i], false);
   }
   private onLoad() {
-    if (this.remote) return;
-    const cur = this.hist[this.idx], doc = this.el!.contentDocument;
+    if (this.hold.remote) return;
+    const cur = this.hist[this.idx], doc = this.hold.el!.contentDocument;
     // the iframe's initial about:blank fires load too; it is nobody's navigation
     if (doc?.URL === "about:blank" && cur?.src !== "about:blank") return;
     const redirected = doc?.querySelector('meta[name="wd-proxy-url"]')?.getAttribute("content");
@@ -485,23 +514,25 @@ export class JWebView extends JViewGroup {
   }
   /** a link click in the frame is the app's to override, as Chromium asks before navigating */
   private hookLinks(doc: Document) {
-    const g = this.gen;
+    const g = this.gen, ref = this.ref;
     doc.defaultView?.addEventListener("hashchange", event => {
-      if (event.isTrusted && this.gen === g) this.fragmentNavigated(unmap(event.newURL, this));
+      const v = ref.deref();
+      if (event.isTrusted && v?.gen === g) v.fragmentNavigated(unmap(event.newURL, v));
     });
     doc.addEventListener("click", (e) => {
-      const a = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
-      if (!a || /^javascript:/i.test(a.href)) return;
-      const href = unmap(a.href, this);
-      if (a.hash && href.split("#")[0] === (this.url ?? "").split("#")[0]) return; // same-document fragment: no navigation
+      const a = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null, v = ref.deref();
+      if (!a || !v || /^javascript:/i.test(a.href)) return;
+      const href = unmap(a.href, v);
+      if (a.hash && href.split("#")[0] === (v.url ?? "").split("#")[0]) return; // same-document fragment: no navigation
       e.preventDefault();
-      this.navigate(href);
+      v.navigate(href);
     }, true);
     const submit = (form: HTMLFormElement, submitter: HTMLElement | null) => {
-      void webFormRequest(form, submitter, this.url ?? doc.URL).then((request) => {
-        if (!request || this.gen !== g) return;
-        if (request.method === "GET") this.navigate(request.url);
-        else this.go({ ...request, src: srcFor(request.url, this) });
+      void webFormRequest(form, submitter, ref.deref()?.url ?? doc.URL).then((request) => {
+        const v = ref.deref();
+        if (!request || v?.gen !== g) return;
+        if (request.method === "GET") v.navigate(request.url);
+        else v.go({ ...request, src: srcFor(request.url, v) });
       });
     };
     doc.defaultView?.addEventListener("submit", (event) => {
@@ -524,7 +555,7 @@ export class JWebView extends JViewGroup {
   }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
   evalJs(js: string): string | Promise<string> {
-    if (this.remote) return new Promise<string>((resolve) => {
+    if (this.hold.remote) return new Promise<string>((resolve) => {
       const seq = ++this.nextEval;
       const done = (value: string) => { clearTimeout(timer); this.evaluations.delete(seq); this.pendingScripts.delete(seq); resolve(value); };
       const timer = setTimeout(() => done("null"), 30_000);
@@ -559,7 +590,7 @@ export class JWebView extends JViewGroup {
   async keyEvent(code: number, event: unknown, type: "keydown" | "keyup"): Promise<number> {
     if (await vcall(this.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", this, event)) return 1;
     const key = navigationKeys[code];
-    if (!key || !this.el || !this.loaded) return 0;
+    if (!key || !this.hold.el || !this.loaded) return 0;
     const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
       repeat: (await vcall(event, "getRepeatCount", "()I")) > 0 };
     const generation = this.gen;
@@ -584,14 +615,14 @@ export class JWebView extends JViewGroup {
     if (r <= l || b <= t) return false;
     if (l !== this.x0 || t !== this.y0 || r !== this.x1 || b !== this.y1) {
       this.x0 = l; this.y0 = t; this.x1 = r; this.y1 = b;
-      const s = this.el!.style;
+      const s = this.hold.el!.style;
       s.left = l / device.width * 100 + "%"; s.top = t / device.height * 100 + "%";
       s.width = (r - l) / device.density + "px"; s.height = (b - t) / device.density + "px";
     }
     return true;
   }
-  contentHeight() { return this.remote ? this.remoteHeight : win(this)?.document.documentElement.scrollHeight ?? 0; }
-  hide() { if (this.shown) { this.shown = false; this.el!.hidden = true; } }
+  contentHeight() { return this.hold.remote ? this.remoteHeight : win(this)?.document.documentElement.scrollHeight ?? 0; }
+  hide() { if (this.shown) { this.shown = false; this.hold.el!.hidden = true; } }
 }
 /** srcdoc payload: the bridge bootstrap first (after a doctype, or the document goes quirks), then the base */
 function srcdoc(data: string, enc: string | null, base: string | null): string {
@@ -615,12 +646,13 @@ rt.register({
       this.measuredH = defaultSize(Math.max(this.minH, this.padT + this.padB, this.remoteHeight * device.density), h);
     },
     "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JWebView, canvas: JCanvas): Gen {
-      if (!canvas.bmp) { this.drawnAt = frame; live.add(this); return; }
+      // a recorded display list (a Compose layer) is replayed without calling onDraw again
+      if (!canvas.bmp) { recordOrRun(canvas.ctx, () => { this.drawnAt = frame; live.add(this); }); return; }
       const image = yield this.bitmapSnapshot();
       try { canvas.ctx.drawImage(image, 0, 0, this.width(), this.height()); }
       finally { image.close(); }
     }),
-    "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); },
+    "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); live.delete(this); },
     "destroy()V": function (this: JWebView) { this.destroy(); },
     "createPrintDocumentAdapter()Landroid/print/PrintDocumentAdapter;": function (this: JWebView) { return webPrintAdapter(this, this.title || "WebView"); },
     "createPrintDocumentAdapter(Ljava/lang/String;)Landroid/print/PrintDocumentAdapter;": function (this: JWebView, name: string) { return webPrintAdapter(this, name); },

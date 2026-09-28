@@ -63,6 +63,11 @@ function clip(label: unknown, type: string, item: JClipItem): JClipData {
   rt.link("android/content/ClipData$Item"); rt.link("android/content/ClipDescription");
   const data = new JClipData(); data.description.label = label; data.description.types = [type]; data.items.push(item); return data;
 }
+export function uriListClip(uris: JUri[]): JClipData {
+  const data = clip(null, "text/uri-list", Object.assign(new JClipItem(), { uri: uris[0] }));
+  for (const uri of uris.slice(1)) data.items.push(Object.assign(new JClipItem(), { uri }));
+  return data;
+}
 export function plainTextClip(label: unknown, text: unknown): JClipData { return clip(label, "text/plain", Object.assign(new JClipItem(), { text })); }
 const itemObjects = [["intent", "android/content/Intent"], ["sender", "android/content/IntentSender"], ["uri", "android/net/Uri"],
   ["activity", "android/content/pm/ActivityInfo"], ["links", "android/view/textclassifier/TextLinks"]] as const;

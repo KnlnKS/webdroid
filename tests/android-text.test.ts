@@ -4,7 +4,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { JLayout, JSpannable, JTextPaint, JSpanned } from "../src/android/text";
-import { fillFontMetrics, typefaceFor } from "../src/android/graphics";
+import { fillFontMetrics, measureText, typefaceFor } from "../src/android/graphics";
 import { JTheme, Resources, T_STR } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import { mkCsl } from "../src/android/drawable";
@@ -81,6 +81,32 @@ describe("metric-spans", () => {
         expect([layout.lineTop(1), layout.baseline(0), -layout.padTop, layout.padBottom]).toEqual(pad ? [65, 51, 1, -6] : [72, 52, -0, 0]);
       }
     }
+  });
+
+  test("metric-affecting runs size lines, widths and replacements like the desired width", async () => {
+    // a measuring context without a browser: each character half its font size wide
+    if (typeof OffscreenCanvas === "undefined") Object.defineProperty(globalThis, "OffscreenCanvas", { configurable: true, value: class {
+      getContext() { return { font: "", measureText(this: { font: string }, s: string) { return { width: s.length * parseFloat(/([\d.]+)px/.exec(this.font)![1]) / 2 }; } }; }
+    } });
+    const paint = new JTextPaint(); paint.textSize = 14;
+    const big = new JTextPaint(); big.textSize = 48;
+    const [fm, bigFm] = [paint, big].map((p) => { const m = { top: 0, ascent: 0, descent: 0, bottom: 0, leading: 0 }; fillFontMetrics(p, m, true); return m; });
+    const text = new JSpannable(); text.text = "Now $12 each";
+    const replacement = rt.make("android/text/style/ReplacementSpan");
+    let sizedWith = 0;
+    Object.assign(replacement, {
+      [mangleMethod("getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I")]: (p: JTextPaint) => { sizedWith = p.textSize; return 30; },
+    });
+    text.spans.push({ span: await newObj("android/text/style/AbsoluteSizeSpan", "(I)V", 48), start: 4, end: 7, flags: 33 });
+    text.spans.push({ span: replacement, start: 5, end: 6, flags: 33 });
+    const layout = await newObj("android/text/StaticLayout", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V", text, paint, 1000, null, 1, 0, 1);
+    expect(sizedWith).toBe(48);
+    expect(await vcall(layout, "getHeight", "()I")).toBe(bigFm.bottom - bigFm.top);
+    expect(await vcall(layout, "getLineBaseline", "(I)I", 0)).toBe(-bigFm.top);
+    const width = measureText(paint, "Now ") + measureText(big, "$") + 30 + measureText(big, "2") + measureText(paint, " each");
+    expect(await vcall(layout, "getLineWidth", "(I)F", 0)).toBeCloseTo(width, 3);
+    expect(await vcall(rt.link("android/text/Layout").ctor, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", text, paint)).toBeCloseTo(width, 3);
+    expect(fm.bottom - fm.top).toBeLessThan(bigFm.bottom - bigFm.top);
   });
 
   test("style spans preserve existing italics for drawing and measurement", async () => {

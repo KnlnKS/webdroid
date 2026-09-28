@@ -7,7 +7,7 @@ import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostF
 import { E, ERRSTR, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
-import { stdioInit, readInto, fdWriteBack, faccessatPath } from "./stdio";
+import { stdioInit, readInto, fdFile, faccessatPath } from "./stdio";
 import { pthreadInit, futex } from "./pthread";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
@@ -173,16 +173,20 @@ function setjmp(cpu: Cpu, buf: number): number {
 }
 function longjmp(cpu: Cpu, buf: number, val: number): typeof NORET {
   const w = cpu.w;
-  if (!cpu.a64) {
-    for (let i = 4; i <= 14; i++) w[2 * i] = mem.ld32(buf + (i - 4) * 4);
-    w[0] = val || 1;
-    cpu.setPc(w[28]);
-    return NORET;
-  }
-  for (let i = 19; i <= 31; i++) { w[2 * i] = mem.ld32(buf + (i - 19) * 8); w[2 * i + 1] = mem.ld32(buf + (i - 19) * 8 + 4); }
-  for (let k = 8; k <= 15; k++) { cpu.si[4 * k] = mem.ld32(buf + 104 + (k - 8) * 8); cpu.si[4 * k + 1] = mem.ld32(buf + 108 + (k - 8) * 8); }
-  w[0] = val || 1; w[1] = 0;
-  cpu.setPc(w[60]);
+  const apply = () => {
+    if (!cpu.a64) {
+      for (let i = 4; i <= 14; i++) w[2 * i] = mem.ld32(buf + (i - 4) * 4);
+      w[0] = val || 1;
+      cpu.setPc(w[28]);
+      return;
+    }
+    for (let i = 19; i <= 31; i++) { w[2 * i] = mem.ld32(buf + (i - 19) * 8); w[2 * i + 1] = mem.ld32(buf + (i - 19) * 8 + 4); }
+    for (let k = 8; k <= 15; k++) { cpu.si[4 * k] = mem.ld32(buf + 104 + (k - 8) * 8); cpu.si[4 * k + 1] = mem.ld32(buf + 108 + (k - 8) * 8); }
+    w[0] = val || 1; w[1] = 0;
+    cpu.setPc(w[60]);
+  };
+  const sp = cpu.a64 ? mem.ld64(buf + 96) : BigInt(mem.ld32(buf + 36) >>> 0);
+  if (!cpu.leaveHandler(sp, apply)) apply();
   return NORET;
 }
 
@@ -197,17 +201,17 @@ const SYSCALL_NR64: Record<number, string> = {
   19: "eventfd", 20: "epoll_create1", 21: "epoll_ctl", 22: "epoll_pwait", 24: "dup3",
   26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch",
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
-  25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
+  25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 65: "readv", 66: "writev", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
   129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
   124: "sched_yield", 132: "sigaltstack", 167: "prctl", 233: "madvise", 261: "prlimit64",
-  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction", 267: "syncfs",
+  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction", 155: "getpgid", 267: "syncfs",
 };
 const SYSCALL_NR32: Record<number, string> = {
   316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch", 360: "inotify_init1",
   350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
-  221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
+  221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 145: "readv", 146: "writev", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
   78: "gettimeofday", 91: "munmap", 125: "mprotect",
-  174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
+  132: "getpgid", 174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
 };
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
  *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
@@ -311,6 +315,9 @@ export function libcInit(): void {
     gettid: (cpu) => cpu.osTid,
     getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
     getppid: () => 1,
+    // the process leads its own group, as /proc/self/stat says; no other process is visible
+    getpgid: (cpu, a) => { const pid = a.i(); return pid === 0 || pid === cpu.pid ? cpu.pid : fail(cpu, E.SRCH); },
+    getpgrp: (cpu) => cpu.pid,
     bsd_signal: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,
     sysconf: (_c, a) => sysconf(a.i()),
@@ -354,8 +361,7 @@ export function libcInit(): void {
       return 0;
     },
     // File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
-    // MAP_SHARED writable one writes its bytes back to the file on msync and munmap (Linux would
-    // share the page cache continuously; a reader of the file between two syncs sees the older bytes).
+    // MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
     mmap: (cpu, a) => {
       const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
@@ -367,13 +373,18 @@ export function libcInit(): void {
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
       if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) {
-        if (flags & 1 && prot & 2) { const writeBack = fdWriteBack(fd); if (writeBack) trackSharedMap(BigInt(p), n, off, writeBack); }
-        const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p;
+        const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
+        const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
       }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),
-    munmap: (cpu, a) => { const va = a.va(), n = Number(a.va()); syncShared(va, n, true); return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL); },
+    munmap: (cpu, a) => {
+      const va = a.va(), n = Math.ceil(Number(a.va()) / PAGE_SIZE) * PAGE_SIZE; // whole pages, as the kernel unmaps
+      if (va & BigInt(PAGE_SIZE - 1) || !n) return fail(cpu, E.INVAL);
+      syncShared(va, n, true);
+      return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL);
+    },
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
     // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
     // cache, which already holds its stores, so its contents stay

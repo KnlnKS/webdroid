@@ -1,6 +1,6 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { displayListLength, isRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
+import { displayListLength, isRecording, nestedRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -774,8 +774,9 @@ const paintJoinEnum = mkEnumSet("android/graphics/Paint$Join", ["MITER", "ROUND"
  * Xfermode/BlendMode → the Canvas2D composite operation with the same meaning. PorterDuff.Mode
  * and BlendMode spell the shared modes identically, so one table by name serves both; modes
  * Canvas2D cannot express are absent and fall back to plain source-over.
- * CLEAR maps to destination-out, which is exactly CLEAR for the opaque fill everyone uses it
- * with (Compose's vector cache clears its layer with an opaque black rect).
+ * CLEAR maps to destination-out, which clears only where the source is opaque: prep() fills a
+ * CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes with a
+ * transparent one).
  */
 const COMPOSITE: Record<string, GlobalCompositeOperation> = {
   CLEAR: "destination-out", SRC: "copy", SRC_OVER: "source-over", DST_OVER: "destination-over",
@@ -1270,6 +1271,11 @@ rt.register({
     "mapRect(Landroid/graphics/RectF;Landroid/graphics/RectF;)Z": mapMatrixRect,
     ...mapFamily("Points", true),
     ...mapFamily("Vectors", false),
+    // SkMatrix::mapRadius: the geometric mean of the mapped (r, 0) and (0, r) vectors' lengths
+    "mapRadius(F)F": function (this: JMatrix, r: number) {
+      const [a, b, c, d] = this.m;
+      return Math.fround(Math.sqrt(Math.hypot(a * r, b * r) * Math.hypot(c * r, d * r)));
+    },
     "invert(Landroid/graphics/Matrix;)Z": function (this: JMatrix, out: JMatrix) {
       const [a, b, c, d, e, f] = this.m;
       const det = a * d - b * c;
@@ -1298,6 +1304,21 @@ const putArgb = (d: RGBA, i: number, c: number) => {
 // Canvas pixels are straight RGBA; the NDK exposes the bitmap's declared alpha representation.
 export function copyBitmapPixels(src: ArrayLike<number>, dst: Uint8Array | Uint8ClampedArray, alpha: number, decode: boolean) {
   if (alpha === 2) { dst.set(src); return; }
+  // Opaque and fully transparent pixels need no scaling: whole words move at copy speed
+  if (ArrayBuffer.isView(src) && src.byteOffset % 4 === 0 && dst.byteOffset % 4 === 0 && dst.length % 4 === 0) {
+    const s = new Uint32Array(src.buffer, src.byteOffset, dst.length >> 2), d = new Uint32Array(dst.buffer, dst.byteOffset, dst.length >> 2);
+    for (let w = 0; w < d.length; w++) {
+      const v = s[w], a = alpha === 1 ? 255 : v >>> 24;
+      if (a === 255) { d[w] = v | 0xff000000; continue; }
+      if (a === 0) { d[w] = 0; continue; }
+      const i = w << 2, scale = decode ? 255 / a : a / 255;
+      dst[i] = Math.round(src[i] * scale);
+      dst[i + 1] = Math.round(src[i + 1] * scale);
+      dst[i + 2] = Math.round(src[i + 2] * scale);
+      dst[i + 3] = a;
+    }
+    return;
+  }
   for (let i = 0; i < dst.length; i += 4) {
     const a = alpha === 1 ? 255 : src[i + 3], scale = a === 0 ? 0 : decode ? 255 / a : a / 255;
     dst[i] = Math.round(src[i] * scale);
@@ -1564,6 +1585,8 @@ export class JCanvas extends JObj {
   ctx!: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
   w = 0; h = 0;
   saveCount = 1;
+  /** open saveLayers, innermost last: the save count each restores to and the context it drew into before */
+  layers: { count: number; parent: Ctx2D; close: () => void }[] | null = null;
   clipDevice: [number, number, number, number] | null = null;
   clipStack: ([number, number, number, number] | null)[] = [];
   clipPolygon: [number, number][] | null = null;
@@ -1621,6 +1644,7 @@ export class JCanvas extends JObj {
     } else {
       if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
+    if ((p.blendMode ?? p.xfermode as JXfermode | null)?.ename === "CLEAR") ctx[stroke ? "strokeStyle" : "fillStyle"] = "#000";
     return !!pattern || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
   private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
@@ -1682,7 +1706,7 @@ export class JCanvas extends JObj {
     }
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
-    const shadow = beginPaintShadow(this.ctx, p);
+    const shaded = beginShaderAlpha(this.ctx, p), shadow = beginPaintShadow(this.ctx, p);
     const blend = p.compositeOp();
     const prev = blend ? this.ctx.globalCompositeOperation : null;
     const filter = p.maskFilter ? this.ctx.filter : null;
@@ -1707,6 +1731,7 @@ export class JCanvas extends JObj {
       if (prev) this.ctx.globalCompositeOperation = prev;
       if (filter !== null) this.ctx.filter = filter;
       if (shadow) this.ctx.restore();
+      if (shaded) endShaderAlpha(this.ctx);
     }
   }
   private shaderCtx: (typeof this.ctx) | null = null;
@@ -1790,6 +1815,12 @@ export function saveCanvas(cv: JCanvas): number {
 }
 function restoreCanvas(cv: JCanvas): void {
   if (cv.saveCount <= 1) throw rt.mkThrowable("java/lang/IllegalStateException", "Underflow in restore - more restores than saves");
+  const layer = cv.layers?.at(-1);
+  if (layer?.count === cv.saveCount - 1) {
+    cv.layers!.pop();
+    cv.ctx = layer.parent;
+    layer.close();
+  }
   cv.ctx.restore();
   cv.clipDevice = cv.clipStack.pop() ?? null;
   cv.clipPolygon = cv.clipPolygonStack.pop() ?? null;
@@ -1802,6 +1833,93 @@ export function restoreCanvasToCount(cv: JCanvas, count: number): void {
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
 }
+type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; tint: number | null; matrix: Float32Array | null };
+type LayerRaster = { ctx: OffscreenCanvasRenderingContext2D; pool: OffscreenCanvas[]; x: number; y: number; w: number; h: number };
+/** what a layer's paint (and an extra 0-255 `alpha`) does to its pixels when it is restored */
+function layerStyle(paint: JPaint | null, alpha = 255): LayerStyle {
+  return {
+    alpha: paint ? (paint.renderAlpha ?? paint.color >>> 24) * alpha / 255 : alpha,
+    blend: paint?.compositeOp() ?? null, tint: paint?.filterColor ?? null, matrix: paint?.filterMatrix ?? null,
+  };
+}
+// Free rasters, grown to the largest target they served: a layer opened every frame (Lottie
+// masks and mattes) must not allocate every frame. A layer lives where its target does — CPU for
+// a bitmap's canvas, GPU otherwise — or every restore is a GPU readback. A raster whose layer is
+// abandoned (Canvas.setBitmap) is simply never returned.
+const layerPools: [OffscreenCanvas[], OffscreenCanvas[]] = [[], []];
+const devBox = new Float64Array(4);
+/** the device-space bounding box [x0, y0, x1, y1] of (l, t, r, b) under `m`, in a shared buffer */
+function deviceBounds(m: DOMMatrix, l: number, t: number, r: number, b: number): Float64Array {
+  const x = m.a * l + m.c * t + m.e, y = m.b * l + m.d * t + m.f;
+  const wx = m.a * (r - l), wy = m.b * (r - l), hx = m.c * (b - t), hy = m.d * (b - t);
+  devBox[0] = x + Math.min(0, wx) + Math.min(0, hx); devBox[1] = y + Math.min(0, wy) + Math.min(0, hy);
+  devBox[2] = x + Math.max(0, wx) + Math.max(0, hx); devBox[3] = y + Math.max(0, wy) + Math.max(0, hy);
+  return devBox;
+}
+/** a cleared raster over the device bounds of `bounds` (the whole target when null), in the
+ *  target's device space so every clip and fast path inside keeps its coordinates */
+function openLayer(target: Ctx2D, bounds: RectLike | null, cpu: boolean): LayerRaster {
+  const W = target.canvas.width, H = target.canvas.height, m = target.getTransform();
+  let x0 = 0, y0 = 0, x1 = W, y1 = H;
+  if (bounds) {
+    const d = deviceBounds(m, bounds.left, bounds.top, bounds.right, bounds.bottom);
+    x0 = Math.max(0, Math.floor(d[0])); y0 = Math.max(0, Math.floor(d[1]));
+    x1 = Math.min(W, Math.ceil(d[2])); y1 = Math.min(H, Math.ceil(d[3]));
+  }
+  const pool = layerPools[+cpu], raster = pool.pop() ?? new OffscreenCanvas(W, H);
+  if (raster.width < W) raster.width = W;
+  if (raster.height < H) raster.height = H;
+  const ctx = raster.getContext("2d", { willReadFrequently: cpu })!;
+  ctx.save();
+  ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.setTransform(m);
+  return { ctx, pool, x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+/** SkCanvas::restore of a layer: its pixels through the save-time paint, confined to its bounds
+ *  (Canvas2D's destination-in and friends would otherwise clear the whole target) */
+function closeLayer(target: Ctx2D, { ctx, pool, x, y, w, h }: LayerRaster, style: LayerStyle) {
+  ctx.restore();
+  pool.push(ctx.canvas); // nothing below opens a layer, so the raster is not reused before it is read
+  if (w <= 0 || h <= 0) return;
+  if (style.tint !== null || style.matrix) recolor(ctx, w, h, style.tint, style.matrix, "SRC_IN", x, y);
+  target.save();
+  try {
+    target.resetTransform();
+    target.beginPath(); target.rect(x, y, w, h); target.clip();
+    target.globalAlpha *= style.alpha / 255;
+    if (style.blend) target.globalCompositeOperation = style.blend;
+    target.drawImage(ctx.canvas, x, y, w, h, x, y, w, h);
+  } finally { target.restore(); }
+}
+/** `ops` replayed through a layer over `bounds` of the real `target`; recorded text keeps the
+ *  semantic owner the target replays for, the layer sharing its device space */
+function drawInLayer(target: Ctx2D, bounds: RectLike | null, style: LayerStyle, ops: DisplayList) {
+  const layer = openLayer(target, bounds, false), outer = replayCanvas(target);
+  try {
+    if (outer) replayWithSemantics(outer, () => replay(layer.ctx, ops), layer.ctx);
+    else replay(layer.ctx, ops);
+  } finally { closeLayer(target, layer, style); }
+}
+/** Canvas.saveLayer: draws until the matching restore land in an offscreen raster, composited
+ *  then with what the paint said when the layer was opened */
+export function saveLayer(cv: JCanvas, bounds: RectLike | null, paint: JPaint | null, alpha = 255): number {
+  const style = layerStyle(paint, alpha);
+  const count = saveCanvas(cv), parent = cv.ctx;
+  let close: () => void;
+  if (isRecording(parent)) {
+    // a display list opens the layer where it is replayed, against that target's transform
+    const ops: DisplayList = [];
+    cv.ctx = nestedRecording(parent, ops);
+    close = () => recordOrRun(parent, (target) => drawInLayer(target, bounds, style, ops));
+  } else {
+    const layer = openLayer(parent, bounds, !!cv.bmp);
+    cv.ctx = layer.ctx;
+    close = () => closeLayer(parent, layer, style);
+  }
+  (cv.layers ??= []).push({ count, parent, close });
+  return count;
+}
+const rectOf = (l: number, t: number, r: number, b: number): RectLike => ({ left: l, top: t, right: r, bottom: b });
 /** run a transform about (px, py) instead of the origin */
 function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) {
   ctx.translate(px, py); f(); ctx.translate(-px, -py);
@@ -1851,17 +1969,12 @@ function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   ctx.beginPath();
   ctx.rect(l, t, r - l, b - t);
   ctx.clip();
-  const x = m.a * l + m.c * t + m.e, y = m.b * l + m.d * t + m.f;
-  const wx = m.a * (r - l), wy = m.b * (r - l);
-  const hx = m.c * (b - t), hy = m.d * (b - t);
-  const old = this.clipDevice;
-  const left = Math.max(old?.[0] ?? 0, Math.round(x + Math.min(0, wx) + Math.min(0, hx)));
-  const top = Math.max(old?.[1] ?? 0, Math.round(y + Math.min(0, wy) + Math.min(0, hy)));
-  const right = Math.min(old?.[2] ?? this.w, Math.round(x + Math.max(0, wx) + Math.max(0, hx)));
-  const bottom = Math.min(old?.[3] ?? this.h, Math.round(y + Math.max(0, wy) + Math.max(0, hy)));
+  const d = deviceBounds(m, l, t, r, b), old = this.clipDevice;
+  const left = Math.max(old?.[0] ?? 0, Math.round(d[0])), top = Math.max(old?.[1] ?? 0, Math.round(d[1]));
+  const right = Math.min(old?.[2] ?? this.w, Math.round(d[2])), bottom = Math.min(old?.[3] ?? this.h, Math.round(d[3]));
   this.clipDevice = right > left && bottom > top ? [left, top, right, bottom] : [0, 0, 0, 0];
   if (this.clipDevice[2] > this.clipDevice[0] && this.clipDevice[3] > this.clipDevice[1]) {
-    const shape: ClipPoint[] = [[x, y], [x + wx, y + wy], [x + wx + hx, y + wy + hy], [x + hx, y + hy]];
+    const shape: ClipPoint[] = [[l, t], [r, t], [r, b], [l, b]].map(([px, py]): ClipPoint => [m.a * px + m.c * py + m.e, m.b * px + m.d * py + m.f]);
     this.clipPolygon = intersectClip(this.clipPolygon ?? [[0, 0], [this.w, 0], [this.w, this.h], [0, this.h]], shape);
   } else this.clipPolygon = [];
   return +(right > left && bottom > top);
@@ -2055,6 +2168,11 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 type RectLike = { left: number; top: number; right: number; bottom: number };
 const clipRectObj = function (this: JCanvas, r: RectLike) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); };
+function clipRectOp(this: JCanvas, l: number, t: number, r: number, b: number, op: { ename?: string } | null) {
+  if (op?.ename === "DIFFERENCE") return clipOutRect.call(this, l, t, r, b);
+  return op && op.ename && op.ename !== "INTERSECT" ? 1 : clipRect.call(this, l, t, r, b);
+}
+const clipRectObjOp = function (this: JCanvas, r: RectLike, op: { ename?: string } | null) { return clipRectOp.call(this, r.left, r.top, r.right, r.bottom, op); };
 const clipOutRectObj = function (this: JCanvas, r: RectLike) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); };
 const drawRectObj = function (this: JCanvas, r: RectLike, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); };
 export const canvasMethods: NativeSpec["methods"] = {
@@ -2071,16 +2189,12 @@ export const canvasMethods: NativeSpec["methods"] = {
     m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
   },
   "save()I": canvasSave,
-  // layers are drawn straight through: a saveLayer is just a save
-  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": canvasSave,
-  "saveLayer(FFFFLandroid/graphics/Paint;)I": canvasSave,
-  "saveLayer(FFFFLandroid/graphics/Paint;I)I": canvasSave,
-  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I": canvasSave,
-  "saveLayerAlpha(FFFFI)I": function (this: JCanvas, l: number, t: number, r: number, b: number, a: number) {
-    const count = saveCanvas(this);
-    this.ctx.globalAlpha *= a / 255;
-    return count;
-  },
+  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": function (this: JCanvas, r: JRectF | null, p: JPaint | null) { return saveLayer(this, r, p); },
+  "saveLayer(FFFFLandroid/graphics/Paint;)I": function (this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint | null) { return saveLayer(this, rectOf(l, t, r, b), p); },
+  "saveLayer(FFFFLandroid/graphics/Paint;I)I": function (this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint | null) { return saveLayer(this, rectOf(l, t, r, b), p); },
+  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I": function (this: JCanvas, r: JRectF | null, p: JPaint | null) { return saveLayer(this, r, p); },
+  "saveLayerAlpha(FFFFI)I": function (this: JCanvas, l: number, t: number, r: number, b: number, a: number) { return saveLayer(this, rectOf(l, t, r, b), null, a & 255); },
+  "saveLayerAlpha(Landroid/graphics/RectF;I)I": function (this: JCanvas, r: JRectF | null, a: number) { return saveLayer(this, r, null, a & 255); },
   "restore()V": function (this: JCanvas) { restoreCanvas(this); },
   "restoreToCount(I)V": function (this: JCanvas, count: number) {
     restoreCanvasToCount(this, count);
@@ -2114,10 +2228,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "clipRect(FFFF)Z": clipRect,
   "clipRect(IIII)Z": clipRect,
-  "clipRect(FFFFLandroid/graphics/Region$Op;)Z": function (this: JCanvas, l: number, t: number, r: number, b: number, op: { ename?: string } | null) {
-    if (op?.ename === "DIFFERENCE") return clipOutRect.call(this, l, t, r, b);
-    return op && op.ename && op.ename !== "INTERSECT" ? 1 : clipRect.call(this, l, t, r, b);
-  },
+  "clipRect(FFFFLandroid/graphics/Region$Op;)Z": clipRectOp,
+  "clipRect(Landroid/graphics/Rect;Landroid/graphics/Region$Op;)Z": clipRectObjOp,
+  "clipRect(Landroid/graphics/RectF;Landroid/graphics/Region$Op;)Z": clipRectObjOp,
   "clipOutRect(FFFF)Z": clipOutRect,
   "clipOutRect(IIII)Z": clipOutRect,
   "clipOutRect(Landroid/graphics/Rect;)Z": clipOutRectObj,
@@ -2234,7 +2347,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
 export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
-  cv.clipDevice = cv.clipPolygon = null; cv.clipStack.length = cv.clipPolygonStack.length = 0;
+  cv.clipDevice = cv.clipPolygon = null; cv.clipStack.length = cv.clipPolygonStack.length = 0; cv.layers = null;
   if (b) { cv.ctx = b.ctx; cv.w = b.w; cv.h = b.h; cv.bmp = b; return; }
   cv.ctx = new OffscreenCanvas(1, 1).getContext("2d")!;
   cv.w = cv.h = 0; cv.bmp = null;
@@ -2256,7 +2369,7 @@ export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, 
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   cv.recordText(s, x, y, p.textSize, p.textAlignN);
   if (tryDrawBitmapText(cv, s, x, y, p)) return;
-  const ctx = cv.ctx, shadow = beginPaintShadow(cv.ctx, p);
+  const ctx = cv.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
   try {
     ctx.font = p.font();
     ctx.textRendering = "geometricPrecision";
@@ -2271,13 +2384,25 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
       ctx.strokeText(s, x, y);
     }
     if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
-    if (p.underline) {
+    if (p.underline || p.strikeThru) {
       const w = measureText(p, s);
       const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
-      ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
+      if (p.underline) ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
+      if (p.strikeThru) ctx.fillRect(sx, y - p.textSize * 0.3, w, Math.max(1, p.textSize / 14));
     }
-  } finally { if (shadow) ctx.restore(); }
+  } finally { if (shadow) ctx.restore(); if (shaded) endShaderAlpha(ctx); }
 }
+/** Skia modulates a shader by the paint's alpha; a Canvas2D gradient or pattern carries none, so
+ *  the draw runs under a scaled globalAlpha, applied at replay so it composes with layer alpha.
+ *  True when it saved, so endShaderAlpha must follow. */
+function beginShaderAlpha(ctx: Ctx2D, p: JPaint): boolean {
+  const alpha = p.shaderObj ? p.renderAlpha ?? p.color >>> 24 : 255;
+  if (alpha >= 255) return false;
+  recordOrRun(ctx, (c) => { c.save(); c.globalAlpha *= alpha / 255; });
+  return true;
+}
+const restoreOp = (c: Ctx2D) => c.restore();
+function endShaderAlpha(ctx: Ctx2D) { recordOrRun(ctx, restoreOp); }
 const tintCache = new WeakMap<JBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
 /** `b` through a paint's colour filter — recoloured SRC_IN with `tint`, or every pixel through a
  *  4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
@@ -2296,10 +2421,10 @@ export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array 
   }
   return t;
 }
-/** a colour filter applied in place to the w x h pixels `c` holds */
-export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN") {
+/** a colour filter applied in place to the w x h pixels `c` holds at (x, y) */
+export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN", x = 0, y = 0) {
   if (matrix) {
-    const img = c.getImageData(0, 0, w, h), d = img.data, k = matrix;
+    const img = c.getImageData(x, y, w, h), d = img.data, k = matrix;
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], bl = d[i + 2], a = d[i + 3];
       d[i] = k[0] * r + k[1] * g + k[2] * bl + k[3] * a + k[4];
@@ -2307,14 +2432,14 @@ export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: numb
       d[i + 2] = k[10] * r + k[11] * g + k[12] * bl + k[13] * a + k[14];
       d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
     }
-    c.putImageData(img, 0, 0);
+    c.putImageData(img, x, y);
   } else if (tint === null) return;
-  else if (mode === "CLEAR") c.clearRect(0, 0, w, h);
+  else if (mode === "CLEAR") c.clearRect(x, y, w, h);
   else if (mode === "MULTIPLY") {
-    const img = c.getImageData(0, 0, w, h), d = img.data;
+    const img = c.getImageData(x, y, w, h), d = img.data;
     const r = (tint >>> 16 & 255) / 255, g = (tint >>> 8 & 255) / 255, blue = (tint & 255) / 255, alpha = (tint >>> 24) / 255;
     for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
-    c.putImageData(img, 0, 0);
+    c.putImageData(img, x, y);
   } else {
     const composite = COMPOSITE[mode];
     if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
@@ -2322,7 +2447,7 @@ export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: numb
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalCompositeOperation = composite;
     c.fillStyle = cssColor(tint);
-    c.fillRect(0, 0, w, h);
+    c.fillRect(x, y, w, h);
     c.restore();
   }
 }
@@ -2397,6 +2522,8 @@ class JRenderNode extends JObj {
   hasDL = false;
   effect: JRenderEffect | null = null;
   effectInput: OffscreenCanvas | null = null;
+  /** setUseCompositingLayer: the content composites as one offscreen layer, through this paint */
+  layer: JPaint | true | null = null;
 }
 // android.graphics.Picture is the same recording the render node already does, without the
 // transform properties: what it recorded is replayed into whatever canvas is drawing it.
@@ -2450,6 +2577,7 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   // target). A bad op must not abandon this node's save, or its clip leaks into the frame.
   try {
     if (n.effect && n.w > 0 && n.h > 0) {
+      // an effect filters the node's own pixels, so it rasterises node-local
       const surface = n.effectInput ??= new OffscreenCanvas(n.w, n.h);
       if (surface.width !== n.w) surface.width = n.w;
       if (surface.height !== n.h) surface.height = n.h;
@@ -2459,7 +2587,8 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
       if (recording) { canvas.semanticOwner = recording.semanticOwner; canvas.semanticBase = recording.semanticTransform(); }
       replayWithSemantics(canvas, () => replay(input, n.ops));
       n.effect.draw(ctx, surface);
-    } else replay(ctx, n.ops);
+    } else if (n.layer) drawInLayer(ctx, rectOf(0, 0, n.w, n.h), layerStyle(n.layer === true ? null : n.layer), n.ops);
+    else replay(ctx, n.ops);
   }
   catch (e) { perf.drawErrors++; noteNodeError(e); }
   finally { ctx.restore(); }
@@ -2551,7 +2680,10 @@ rt.register({
     "setClipToOutline(Z)Z": function (this: JRenderNode, c: number) { this.clipOutline = !!c; return 1; },
     "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
     "setAmbientShadowColor(I)Z": rn1, "setSpotShadowColor(I)Z": rn1,
-    "setUseCompositingLayer(ZLandroid/graphics/Paint;)Z": rn1,
+    "setUseCompositingLayer(ZLandroid/graphics/Paint;)Z": function (this: JRenderNode, force: number, paint: JPaint | null) {
+      this.layer = force ? paint ?? true : null;
+      return 1;
+    },
     "setRenderEffect(Landroid/graphics/RenderEffect;)Z": function (this: JRenderNode, effect: JRenderEffect | null) {
       if (this.effect === effect) return 0;
       this.effect = effect;

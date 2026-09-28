@@ -1,4 +1,4 @@
-import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
+import { JContextWrapper, JContextThemeWrapper, JAttributionSource, systemService, wrapperMethods, themeWrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, launchIntent, mkComponentName, registerSystemActivity,
@@ -13,7 +13,8 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread, mainThread, vcallUncaught } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj } from "../jvm/natives/jlang";
+import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
@@ -25,6 +26,7 @@ import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
+import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import type { JBitmap } from "./graphics";
 import { JConfigurationInfo, getPM } from "./pm";
 import { deviceConfiguration } from "./resnative";
@@ -118,7 +120,7 @@ export const dispatchSplashExit = driven(function* dispatchSplashExit(activity: 
   rt.link("android/window/SplashScreenView");
   yield vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView());
 });
-export class JActivity extends JContextWrapper {
+export class JActivity extends JContextThemeWrapper {
   window = new JWindow();
   intent: JIntent | null = null;
   titleStr = "";
@@ -167,7 +169,7 @@ const setActivityContent = driven(function* setActivityContent(act: JActivity, v
   yield setWindowContent(act.window.contentParent!, v, lp);
 });
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
-  ...wrapperMethods,
+  ...themeWrapperMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
   "getSplashScreen()Landroid/window/SplashScreen;": function (this: JActivity) {
@@ -320,7 +322,13 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     if (activityTransport.isTaskRoot?.(this) && activityTransport.removeTask) { this.finished = true; activityTransport.removeTask(this); }
     else finishActivity.call(this);
   },
-  "finishAffinity()V": finishActivity,
+  // Activity.finishAffinity (no embedded activities exist here to refuse)
+  "finishAffinity()V": function (this: JActivity) {
+    if (this.resultCode !== 0 || this.resultData !== null) throw rt.mkThrowable("java/lang/IllegalStateException", "Can not be called to deliver a result");
+    if (this.finished) return;
+    this.finished = true;
+    appHost?.finishAffinity(this);
+  },
   "finishAfterTransition()V": finishActivity,
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // only the task's root may move it unless nonRoot says any activity may
@@ -427,6 +435,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z",
     "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
+  // Activity checks deviceSupportsPictureInPictureMode() first; this device lacks the feature
+  ...noops("setPictureInPictureParams(Landroid/app/PictureInPictureParams;)V", "enterPictureInPictureMode()V"),
+  "enterPictureInPictureMode(Landroid/app/PictureInPictureParams;)Z": () => 0,
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
@@ -445,6 +456,49 @@ rt.register({
   methods: activityMethods,
 });
 rt.markers("android/app/Activity$ScreenCaptureCallback");
+// Picture-in-picture parameters: data only, since this device has no FEATURE_PICTURE_IN_PICTURE
+const PIP_FIELDS = { AspectRatio: "Landroid/util/Rational;", ExpandedAspectRatio: "Landroid/util/Rational;", Actions: "Ljava/util/List;",
+  CloseAction: "Landroid/app/RemoteAction;", SourceRectHint: "Landroid/graphics/Rect;", Title: "Ljava/lang/CharSequence;",
+  Subtitle: "Ljava/lang/CharSequence;", AutoEnterEnabled: "Z", SeamlessResizeEnabled: "Z" };
+class JPipParams extends JObj { values = new Map<string, unknown>(); }
+const RATIONAL = "Landroid/util/Rational;";
+// each field as a presence flag and its value, as PictureInPictureParams.writeToParcel writes them
+const readPipParams = driven(function* (p: JParcel): Gen<JPipParams> {
+  const params: JPipParams = rt.make("android/app/PictureInPictureParams");
+  for (const [name, type] of Object.entries(PIP_FIELDS)) if (readInt(p)) params.values.set(name, type === "Z" ? readInt(p)
+    : type === RATIONAL ? yield newObj("android/util/Rational", "(II)V", readInt(p), readInt(p))
+    : yield vcall(p, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
+  return params;
+});
+rt.register({
+  name: "android/app/PictureInPictureParams", ctor: JPipParams, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/app/PictureInPictureParams", readPipParams); } },
+  methods: {
+    ...Object.fromEntries(Object.entries(PIP_FIELDS).map(([name, type]) => [
+      `${type === "Z" ? "is" : "get"}${name}()${type}`, function (this: JPipParams) { return this.values.get(name) ?? (type === "Z" ? 0 : null); }])),
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JPipParams, p: JParcel): Gen {
+      for (const [name, type] of Object.entries(PIP_FIELDS)) {
+        const v = this.values.get(name) ?? null;
+        writeInt(p, +(v !== null));
+        if (v === null) continue;
+        if (type === "Z") writeInt(p, v as number);
+        else if (type === RATIONAL) { writeInt(p, yield vcall(v, "getNumerator", "()I")); writeInt(p, yield vcall(v, "getDenominator", "()I")); }
+        else yield vcall(p, "writeValue", "(Ljava/lang/Object;)V", v);
+      }
+    }),
+  },
+});
+rt.register({
+  name: "android/app/PictureInPictureParams$Builder", ctor: class extends JPipParams {},
+  methods: {
+    ...noops("<init>()V"),
+    "<init>(Landroid/app/PictureInPictureParams;)V": function (this: JPipParams, from: JPipParams) { this.values = new Map(from.values); },
+    ...Object.fromEntries(Object.entries(PIP_FIELDS).map(([name, type]) => [`set${name}(${type})Landroid/app/PictureInPictureParams$Builder;`,
+      function (this: JPipParams, v: unknown) { this.values.set(name, v); return this; }])),
+    "build()Landroid/app/PictureInPictureParams;": function (this: JPipParams) { return Object.assign(rt.make("android/app/PictureInPictureParams"), { values: new Map(this.values) }); },
+  },
+});
 // ListActivity: an Activity whose content is one ListView; the app's own layout supplies it
 rt.register({
   name: "android/app/ListActivity", ctor: class extends JActivity { adapter: unknown = null; }, sup: "android/app/Activity",
@@ -548,6 +602,39 @@ rt.register({
 // permissions follow (context.ts). AOSP's activity ignores an app that did not declare the
 // permission to ask, which reads as the user declining.
 const DOZE_EXEMPTION = "__system_power";
+/** PowerManager.WakeLock's counting: a timeout releases only the internal count (RELEASE_FLAG_TIMEOUT),
+ *  and becoming held or unheld (or any change when not reference-counted) cancels pending timeouts */
+const RELEASE_FLAG_TIMEOUT = 1 << 16;
+class JWakeLock extends JObj {
+  tag: string | null = null;
+  internal = 0; external = 0; refCounted = true; held = false;
+  releasers = new Set<GuestTimer>();
+  cancelReleasers(): void { for (const t of this.releasers) clearGuestTimeout(t); this.releasers.clear(); }
+  acquire(): void {
+    this.internal++; this.external++;
+    if (!this.refCounted || this.internal === 1) { this.cancelReleasers(); this.held = true; }
+  }
+  release(flags: number): void {
+    if (this.internal > 0) this.internal--;
+    if (!(flags & RELEASE_FLAG_TIMEOUT)) this.external--;
+    if (!this.refCounted || this.internal === 0) { this.cancelReleasers(); this.held = false; }
+    if (this.refCounted && this.external < 0) throw rt.mkThrowable("java/lang/RuntimeException", "WakeLock under-locked " + this.tag);
+  }
+}
+rt.register({ name: "android/os/PowerManager$WakeLock", ctor: JWakeLock, methods: {
+  "acquire()V": function (this: JWakeLock) { this.acquire(); },
+  "acquire(J)V": function (this: JWakeLock, timeoutMs: bigint) {
+    this.acquire();
+    const timer = setGuestTimeout(() => { this.releasers.delete(timer); this.release(RELEASE_FLAG_TIMEOUT); }, Number(timeoutMs));
+    this.releasers.add(timer);
+  },
+  "release()V": function (this: JWakeLock) { this.release(0); },
+  "release(I)V": function (this: JWakeLock, flags: number) { this.release(flags); },
+  "setReferenceCounted(Z)V": function (this: JWakeLock, on: number) { this.refCounted = !!on; },
+  "isHeld()Z": function (this: JWakeLock) { return +this.held; },
+  // WorkSource only attributes power use to other uids
+  ...noops("setWorkSource(Landroid/os/WorkSource;)V"),
+} });
 registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
   const pkg = intent.dataUri?.startsWith("package:") ? intent.dataUri.slice(8) : null;
   if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
@@ -587,9 +674,10 @@ for (const [name, methods, statics] of [
   }],
   ["android/os/PowerManager", {
     "getLocationPowerSaveMode()I": () => 0,
-    "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": () => {
-      const info = rt.link("android/os/PowerManager$WakeLock");
-      return new info.ctor();
+    "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": (_levels: number, tag: string) => {
+      const lock: JWakeLock = rt.make("android/os/PowerManager$WakeLock");
+      lock.tag = tag;
+      return lock;
     },
     // the screen is on, so the device is never dozing
     "isDeviceIdleMode()Z": () => 0,
@@ -601,9 +689,6 @@ for (const [name, methods, statics] of [
     ...stubs(1, "isInteractive()Z", "isScreenOn()Z"),
     ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
       "isLowPowerStandbyEnabled()Z"),
-  }],
-  ["android/os/PowerManager$WakeLock", {
-    ...noops("acquire()V", "acquire(J)V", "release()V", "setReferenceCounted(Z)V"), ...stubs(0, "isHeld()Z"),
   }],
   // No Bluetooth or NFC radio: the managers exist, as AOSP always registers them, and report no
   // adapter, which is what a device without the feature answers.
@@ -653,7 +738,8 @@ for (const [name, methods, statics] of [
       "requestAudioFocus(Landroid/media/AudioFocusRequest;)I",
       "abandonAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;)I",
       "abandonAudioFocusRequest(Landroid/media/AudioFocusRequest;)I"),
-    ...stubs(0, "getMode()I", "isSpeakerphoneOn()Z", "isBluetoothA2dpOn()Z", "isWiredHeadsetOn()Z",
+    // every stream reports a non-zero volume, so none is muted
+    ...stubs(0, "isStreamMute(I)Z", "getMode()I", "isSpeakerphoneOn()Z", "isBluetoothA2dpOn()Z", "isWiredHeadsetOn()Z",
       "static getPlaybackOffloadSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I",
       "static isOffloadedPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z"),
     ...stubs("", "getParameters(Ljava/lang/String;)Ljava/lang/String;"),
@@ -689,7 +775,9 @@ for (const [name, methods, statics] of [
       "isNetworkRoaming()Z", "hasIccCard()Z"),
     ...stubs(1, "getSimState()I"),
     ...stubs(null, "getDeviceId()Ljava/lang/String;", "getLine1Number()Ljava/lang/String;",
-      "getSubscriberId()Ljava/lang/String;", "getSimSerialNumber()Ljava/lang/String;"),
+      "getSubscriberId()Ljava/lang/String;", "getSimSerialNumber()Ljava/lang/String;",
+      "getSimCarrierIdName()Ljava/lang/CharSequence;", "getSimSpecificCarrierIdName()Ljava/lang/CharSequence;"),
+    ...stubs(-1, "getSimCarrierId()I", "getSimSpecificCarrierId()I"),   // UNKNOWN_CARRIER_ID
     ...noops("listen(Landroid/telephony/PhoneStateListener;I)V", "unregisterTelephonyCallback(Landroid/telephony/TelephonyCallback;)V"),
     // no radio: the one thing a registration ever hears is the initial "disconnected"/"idle"
     // state, delivered on the caller's executor as the platform does
@@ -850,7 +938,15 @@ for (const [name, methods, statics] of [
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
-rt.register({ name: "android/bluetooth/le/ScanCallback", ctor: class extends JObj {} });
+// the app in front is in the ACTIVE standby bucket and never inactive
+rt.register({ name: "android/app/usage/UsageStatsManager", ctor: class extends JObj {}, methods: {
+  "getAppStandbyBucket()I": () => 10,
+  "isAppInactive(Ljava/lang/String;)Z": () => 0,
+} });
+// callback bases apps extend; without a radio nothing ever invokes them
+for (const name of ["android/bluetooth/le/ScanCallback", "android/bluetooth/BluetoothGattCallback"]) {
+  rt.register({ name, ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+}
 rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });

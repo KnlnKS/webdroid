@@ -7,7 +7,7 @@
 import { mem } from "./mem";
 import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host";
 import type { Cpu } from "./cpu";
-import { glCommon, glProbe, readGuestPixels, vertexTypeBytes, guestIndices, indexBounds } from "./gles3";
+import { glCommon, glProbe, readGuestPixels, pixelStore, vertexTypeBytes, guestIndices, indexBounds } from "./gles3";
 import { gl, invert } from "../android/gl";
 import { perf } from "../perf";
 import { activateEglCurrent } from "./egl-current";
@@ -384,7 +384,7 @@ export function gles1Init(): void {
     const g = c.gl;
     const rec = c.textures[c.bound[c.unit]];
     if (!rec) return;
-    g.pixelStorei(g.UNPACK_ALIGNMENT, c.unpackAlign);
+    pixelStore(g, g.UNPACK_ALIGNMENT, c.unpackAlign);
     g.bindTexture(g.TEXTURE_2D, rec.tex);
     const data = pixelView(c, w, h, fmt, type, p);
     if (sub) g.texSubImage2D(target, level, sub.x, sub.y, w, h, fmt, type, data);
@@ -477,11 +477,11 @@ export function gles1Init(): void {
       if (fmt !== ETC1) { once(c, `glCompressedTexImage2D format 0x${fmt.toString(16)}`); c.err = 0x500; return; }
       const g = c.gl;
       g.bindTexture(g.TEXTURE_2D, rec.tex);
-      g.pixelStorei(g.UNPACK_ALIGNMENT, 4);
+      pixelStore(g, g.UNPACK_ALIGNMENT, 4);
       g.texImage2D(target, level, g.RGBA, w, h, 0, g.RGBA, g.UNSIGNED_BYTE, decodeEtc1(mem.u8.subarray(p, p + size), w, h));
       rec.hasAlpha = false;
     }),
-    glPixelStorei: W("glPixelStorei", (c, a) => { const pn = a.i(), v = a.i(); if (pn === 0x0cf5) c.unpackAlign = v; else c.gl.pixelStorei(pn, v); }),
+    glPixelStorei: W("glPixelStorei", (c, a) => { const pn = a.i(), v = a.i(); if (pn === 0x0cf5) c.unpackAlign = v; else pixelStore(c.gl, pn, v); }),
     glGenerateMipmapOES: W("glGenerateMipmapOES", (c, a) => c.gl.generateMipmap(a.i())),
     glGenBuffers: W("glGenBuffers", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.buffers.push(c.gl.createBuffer()); mem.st32(out + i * 4, c.buffers.length - 1); } }),
     glDeleteBuffers: W("glDeleteBuffers", (c, a) => { const n = a.i(), p = a.p(); for (let i = 0; i < n; i++) { const id = mem.ld32(p + i * 4); const b = c.buffers[id]; if (b) { c.gl.deleteBuffer(b); c.buffers[id] = null; } if (c.arrayBuf === id) c.arrayBuf = 0; if (c.elemBuf === id) c.elemBuf = 0; } }),

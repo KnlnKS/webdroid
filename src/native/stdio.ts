@@ -13,14 +13,15 @@ import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
-import { armClockTimer, timerState, validTime, type ClockTimer } from "./timers";
+import { armClockTimer, disarmClockTimer, timerState, validTime, type ClockTimer } from "./timers";
 const dec = new TextDecoder();
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
-const S_IFDIR = 0x4000, S_IFREG = 0x8000;
+const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000;
 
-/** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
-interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
+/** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its
+ *  open write ends, the last of which closing is its readers' end of file */
+interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed: boolean }
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
@@ -28,10 +29,22 @@ interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
 }
+const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12, F_DUPFD_CLOEXEC = 0x406;
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
-const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
+const newPipe = (writers: number): Pipe => ({ q: [], wake: [], writers, closed: false });
+/** named pipes (mkfifo) in this process, by the file that names them: every open shares the one
+ *  pipe, which outlives its descriptors and goes with its file; Realm's interprocess condition
+ *  variables signal through them */
+const fifos = new WeakMap<VfsFile, Pipe>();
+function makeFifo(cpu: Cpu, path: string): number {
+  const p = vfs.norm(path), taken = newName(cpu, p);
+  if (taken) return taken;
+  vfs.write(p, new Uint8Array(0));
+  fifos.set(vfs.open(p)!, newPipe(0));
+  return 0;
+}
 const inotifies = new Set<Inotify>();
 function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void {
   const bytes = name ? utf8(name + "\0") : new Uint8Array(0);
@@ -136,11 +149,15 @@ export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: numbe
   if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
   return typeof path === "string" ? accessPath(cpu, path, mode) : path;
 }
-function mkdirPath(cpu: Cpu, path: string): number {
-  const p = vfs.norm(path);
+/** a name for a new entry at normalized `p`: EEXIST if taken, ENOENT without its parent directory */
+function newName(cpu: Cpu, p: string): number {
   if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST);
   const parent = p.slice(0, p.lastIndexOf("/")) || "/";
-  if (parent !== "/" && !vfs.isDir(parent)) return fail(cpu, E.NOENT);
+  return parent !== "/" && !vfs.isDir(parent) ? fail(cpu, E.NOENT) : 0;
+}
+function mkdirPath(cpu: Cpu, path: string): number {
+  const p = vfs.norm(path), taken = newName(cpu, p);
+  if (taken) return taken;
   vfs.mkdir(p); return 0;
 }
 function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
@@ -157,7 +174,12 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
   }
   if (flags & O_DIRECTORY) return fail(cpu, E.NOTDIR);
-  const existing = vfs.open(path);
+  const existing = vfs.open(path), fifo = existing && fifos.get(existing);
+  if (fifo) {
+    if (acc !== 0) { fifo.writers++; fifo.closed = false; }
+    return put({ ...fdBase(path), content: existing, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
+      nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+  }
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
@@ -168,21 +190,25 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   if (flags & O_TRUNC && acc !== 0) vfs.write(path, new Uint8Array(0));
   return put({ ...fdBase(path), content: vfs.open(path)!, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
 }
-function put(f: Fd, cloexec = false): number { const fd = allocateFd(); fds.set(fd, f); if (cloexec) closeOnExec.add(fd); return fd; }
+function put(f: Fd, cloexec = false, min = 0): number { const fd = allocateFd(min); fds.set(fd, f); if (cloexec) closeOnExec.add(fd); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
 export const javaBytesFd = (bytes: Uint8Array): number => put({ ...fdBase(""), content: { path: null, data: bytes, len: bytes.length }, synthetic: true });
 export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
 export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
-export const javaDupFd = (fd: number): number => { const f = fds.get(fd); if (!f) return -1; f.references++; return put(f); };
+export const javaDupFd = (fd: number): number => fdDup(null, fd);
+/** the bytes behind a descriptor read at offsets: not a stream, a directory or /dev/random */
+const regularContent = (f: Fd | undefined): VfsFile | null =>
+  !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify ? null : f.content;
 export function javaFdSource(fd: number): FileSource | null {
-  const f = fds.get(fd);
-  if (!f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
+  const f = fds.get(fd), content = regularContent(f);
+  if (!content) return null;
   return {
-    get size() { return f.content.len; },
+    get size() { return content.len; },
     read(offset, length) {
-      if (fds.get(fd) !== f || (f.statusFlags & O_ACCMODE) === 1) throw new Error("Bad file descriptor");
-      return f.content.source ? f.content.source.read(offset, length) : f.content.data.subarray(offset, Math.min(f.content.len, offset + length));
+      if (fds.get(fd) !== f || (f!.statusFlags & O_ACCMODE) === 1) throw new Error("Bad file descriptor");
+      vfs.sync(content);
+      return content.source ? content.source.read(offset, length) : content.data.subarray(offset, Math.min(content.len, offset + length));
     },
   };
 }
@@ -196,6 +222,7 @@ export function javaReadFd(fd: number, target: Uint8Array): number | Promise<num
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return -1;
   if (f && !f.content.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
     const n = Math.max(0, Math.min(target.length, f.content.len - f.pos));
+    vfs.sync(f.content);
     target.set(f.content.data.subarray(f.pos, f.pos + n)); f.pos += n;
     return n;
   }
@@ -213,6 +240,7 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
   if (f && !f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll) {
+    vfs.sync(f.content);
     try { return f.content.source ? await readFully(f.content.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
     catch { return null; }
   }
@@ -248,6 +276,29 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   f.pos += n;
   return n;
 }
+/** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
+ *  told what the call has moved so far: a read that would then have to wait moves nothing. */
+function vectored(cpu: Cpu, iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
+  if (count < 0 || count > 1024) return fail(cpu, E.INVAL);
+  const from = (i: number, done: number): number | Promise<number> => {
+    for (; i < count; i++) {
+      const entry = iov + i * 2 * PTR, len = mem.ld32(entry + PTR) >>> 0;
+      if (!len) continue;
+      const r = op(ldp(entry), len, done);
+      if (r instanceof Promise) return r.then((n) => n < 0 ? done || n : n < len ? done + n : from(i + 1, done + n));
+      if (r < 0) return done || r;
+      done += r;
+      if (r < len) break;
+    }
+    return done;
+  };
+  return from(0, 0);
+}
+function readWouldWait(fd: number): boolean {
+  if (isNativeSocket(fd)) return !(nativePollEvents(fd, 1) & (1 | 8 | 16));
+  const f = fds.get(fd);
+  return !!f && !!(f.rpipe || f.event) && !ready(f);
+}
 function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): number | Promise<number> {
   if (!n) return 0;
   if (f.random) {
@@ -259,6 +310,7 @@ function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): nu
     }
     return n;
   }
+  vfs.sync(f.content);
   const k = Math.max(0, Math.min(n, f.content.len - off));
   if (!k) return 0;
   const source = f.content.source;
@@ -337,10 +389,10 @@ export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: numb
   if (!f) return fail(cpu, E.BADF);
   return f.content.source ? readLoop(dst, n, (q, k, done) => fdReadAt(cpu, f, q, k, off + done)) : fdReadAt(cpu, f, dst, n, off);
 }
-export function fdWriteBack(fd: number): ((off: number, bytes: Uint8Array) => void) | null {
+/** the file a descriptor reads and writes, which a shared mapping of it shares */
+export function fdFile(fd: number): VfsFile | null {
   const f = fds.get(fd);
-  if (!f || f.synthetic || f.random || f.dir || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
-  return (off, bytes) => vfs.writeAt(f.content, off, bytes);
+  return f?.synthetic ? null : regularContent(f);
 }
 function fdClose(cpu: Cpu | null, fd: number): number {
   if (isNativeSocket(fd)) return cpu ? nativeSocketClose(cpu, fd) : fail(cpu, E.BADF);
@@ -350,10 +402,18 @@ function fdClose(cpu: Cpu | null, fd: number): number {
   if (--f.references > 0) return 0;
   if (f.content.path && f.write) notifyInotify(f.content.path, IN_CLOSE_WRITE);
   if (f.inotify) { inotifies.delete(f.inotify); f.inotify.pipe.closed = true; wakeAll(f.inotify.pipe); }
-  if (f.timer) clearTimeout(f.timer.timeout);
+  if (f.timer) disarmClockTimer(f.timer);
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
-  if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
+  if (f.wpipe && !--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   return 0;
+}
+/** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
+function fdDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
+  if (isNativeSocket(fd)) return nativeSocketDup(cpu, fd, min, cloexec);
+  const f = fds.get(fd);
+  if (!f) return fail(cpu, E.BADF);
+  f.references++;
+  return put(f, cloexec, min);
 }
 function fdDup2(cpu: Cpu, fd: number, to: number, cloexec = false): number {
   if (to < 0) return fail(cpu, E.BADF);
@@ -361,7 +421,7 @@ function fdDup2(cpu: Cpu, fd: number, to: number, cloexec = false): number {
   if (isNativeSocket(fd)) {
     if (isNativeSocket(to)) nativeSocketClose(cpu, to);
     else if (fds.has(to)) fdClose(cpu, to);
-    return nativeSocketDup(cpu, fd, to, cloexec);
+    return nativeSocketDup(cpu, fd, to, cloexec);                                 // `to` is free now
   }
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
@@ -398,10 +458,10 @@ function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): numbe
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string): void {
+function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path)): void {
   mem.memset(buf, 0, LAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + LAYOUT.ST_MODE, (isDir ? S_IFDIR | 0o755 : S_IFREG | 0o644));
+  mem.st32(buf + LAYOUT.ST_MODE, isDir ? S_IFDIR | 0o755 : file && fifos.has(file) ? S_IFIFO | 0o600 : S_IFREG | 0o644);
   mem.st32(buf + LAYOUT.ST_NLINK, 1);
   mem.st32(buf + LAYOUT.ST_UID, procIdentity.uid); mem.st32(buf + LAYOUT.ST_GID, procIdentity.uid);
   mem.st32(buf + LAYOUT.ST_SIZE, size); mem.st32(buf + LAYOUT.ST_SIZE + 4, 0);
@@ -427,14 +487,14 @@ function fillStatfs(b: number): void {
   if (PTR === 8) { put(8, 255); put(9, 4096); } else { mem.st32(b + 56, 255); mem.st32(b + 60, 4096); }
 }
 function makePipe(out: number, flags: number): number {
-  const p = newPipe(), nb = !!(flags & 0x800);
+  const p = newPipe(1), nb = !!(flags & 0x800);
   mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb, statusFlags: nb ? O_NONBLOCK : 0 }, !!(flags & O_CLOEXEC)));
   mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }, !!(flags & O_CLOEXEC)));
   return 0;
 }
 function makeInotify(cpu: Cpu, flags: number): number {
   if (flags & ~(IN_NONBLOCK | IN_CLOEXEC)) return fail(cpu, E.INVAL);
-  const pipe = newPipe(), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
+  const pipe = newPipe(0), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
   inotifies.add(state);
   return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, nonblock: !!(flags & IN_NONBLOCK), statusFlags: flags & IN_NONBLOCK }, !!(flags & O_CLOEXEC));
 }
@@ -495,7 +555,7 @@ function statPath(cpu: Cpu, path: string, buf: number): number {
 function statFd(cpu: Cpu, fd: number, buf: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  fillStat(buf, f.dir, f.content.len, Date.now(), f.path);
+  fillStat(buf, f.dir, f.content.len, Date.now(), f.path, f.content);
   return 0;
 }
 
@@ -574,6 +634,13 @@ function pwrite(cpu: Cpu, fd: number, p: number, n: number, off: number): number
 function truncateFd(cpu: Cpu, f: Fd | undefined, n: number): number {
   if (!f) return fail(cpu, E.BADF);
   vfs.resize(f.content, n); return 0;
+}
+/** posix_fallocate: grow the file to cover the range; it reports the error number itself */
+function fallocateFd(f: Fd | undefined, offset: number, len: number): number {
+  if (!f) return E.BADF;
+  if (offset < 0 || len <= 0) return E.INVAL;
+  if (offset + len > f.content.len) vfs.resize(f.content, offset + len);
+  return 0;
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 function openDir(path: string): number {
@@ -722,6 +789,8 @@ export function stdioInit(): void {
     close: (cpu, a) => fdClose(cpu, a.i()),
     read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
     write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
+    readv: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(cpu, fd, p, n)); },
+    writev: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n) => fdWrite(cpu, fd, p, n)); },
     pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), offArg(a)),
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), offArg(a)),
     pread64: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), Number(a.l())),
@@ -741,7 +810,8 @@ export function stdioInit(): void {
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
     chmod: () => 0, fchmod: () => 0, chown: () => 0, fchown: () => 0, umask: () => 0o22,
-    unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
+    unlink: (cpu, a) => vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT),
+    mkfifo: (cpu, a) => makeFifo(cpu, a.str()),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
     rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
     renameat: (cpu, a) => {
@@ -755,6 +825,8 @@ export function stdioInit(): void {
     rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
     ftruncate: (cpu, a) => truncateFd(cpu, fds.get(a.i()), offArg(a)),
     ftruncate64: (cpu, a) => truncateFd(cpu, fds.get(a.i()), Number(a.l())),
+    posix_fallocate: (_c, a) => fallocateFd(fds.get(a.i()), offArg(a), offArg(a)),
+    posix_fallocate64: (_c, a) => fallocateFd(fds.get(a.i()), Number(a.l()), Number(a.l())),
     truncate: (cpu, a) => {
       const file = vfs.open(a.str()), n = offArg(a);
       if (!file) return fail(cpu, E.NOENT);
@@ -763,19 +835,23 @@ export function stdioInit(): void {
     },
     fcntl: (cpu, a) => {
       const fd = a.i(), cmd = a.i();
+      if (cmd === F_DUPFD || cmd === F_DUPFD_CLOEXEC) {
+        const min = a.i();
+        return min < 0 ? fail(cpu, E.INVAL) : fdDup(cpu, fd, min, cmd === F_DUPFD_CLOEXEC);
+      }
       if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, a.i());
       const f = fds.get(fd);
       if (!f) return fail(cpu, E.BADF);
-      if (cmd === 1) return closeOnExec.has(fd) ? 1 : 0;
-      if (cmd === 2) { if (a.i() & 1) closeOnExec.add(fd); else closeOnExec.delete(fd); return 0; }
-      if (cmd === 5 || cmd === 12) {
+      if (cmd === F_GETFD) return closeOnExec.has(fd) ? 1 : 0;
+      if (cmd === F_SETFD) { if (a.i() & 1) closeOnExec.add(fd); else closeOnExec.delete(fd); return 0; }
+      if (cmd === F_GETLK || cmd === F_GETLK64) {
         const lock = a.p();
         if (mem.ld16u(lock) > 2) return fail(cpu, E.INVAL);
         mem.st16(lock, 2);
         return 0;
       }
-      if (cmd === 3) return f.statusFlags;
-      if (cmd === 4) {
+      if (cmd === F_GETFL) return f.statusFlags;
+      if (cmd === F_SETFL) {
         const value = a.i();
         f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (value & (O_APPEND | O_NONBLOCK));
         f.append = !!(f.statusFlags & O_APPEND);
@@ -785,7 +861,7 @@ export function stdioInit(): void {
     },
     fsync: () => 0, fdatasync: () => 0, sync: () => {},
     syncfs: (cpu, a) => fds.has(a.i()) ? 0 : fail(cpu, E.BADF),
-    dup: (cpu, a) => { const fd = a.i(); if (isNativeSocket(fd)) return nativeSocketDup(cpu, fd); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); f.references++; return put(f); },
+    dup: (cpu, a) => fdDup(cpu, a.i()),
     dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
     dup3: (cpu, a) => {
       const fd = a.i(), to = a.i(), flags = a.i();
@@ -820,7 +896,7 @@ export function stdioInit(): void {
     },
     socketpair: (_c, a) => {
       a.i(); const type = a.i(); a.i(); const sv = a.p();
-      const ab = newPipe(), ba = newPipe(), nb = !!(type & 0x800);
+      const ab = newPipe(1), ba = newPipe(1), nb = !!(type & 0x800);
       mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC)));
       mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC)));
       return 0;

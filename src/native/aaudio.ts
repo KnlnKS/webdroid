@@ -33,7 +33,7 @@ class Stream {
     this.buffer = mem.malloc(this.frames * track.frameBytes());
     const thread = new JThread(); thread.jname = "AAudio callback"; thread.alive = 1;
     this.cpu = new Cpu(thread, thread.jname); this.cpu.nativeRuntime = parent.nativeRuntime;
-    this.cpu.realtime = true;
+    this.cpu.lastFrameAt = Infinity;
     bindCpu(thread, this.cpu);
   }
   change(state: number): void { this.state = state; for (const wake of this.waiters) wake(); }

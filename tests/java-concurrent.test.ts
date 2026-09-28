@@ -251,6 +251,30 @@ describe("executor-queue", () => {
     } finally { await vcall(ex, "shutdownNow", "()Ljava/util/List;"); }
   });
 
+  test("a pool's execute()d exception reaches the worker's handler; a scheduled pool's future keeps it", async () => {
+    class Failing extends JObj {}
+    rt.register({ name: "test/FailingRunnable", ctor: Failing, ifaces: ["java/lang/Runnable"],
+      methods: { "run()V": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "boom"); } } });
+    class Handler extends JObj { seen: unknown[] = []; }
+    rt.register({ name: "test/RecordingUEH", ctor: Handler, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"], methods: {
+      "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": function (this: Handler, t: unknown) { this.seen.push(t); },
+    } });
+    rt.linkNatives();
+    const handler = new Handler(), Thread = rt.link("java/lang/Thread").ctor;
+    const previous = await vcall(Thread, "getDefaultUncaughtExceptionHandler", "()Ljava/lang/Thread$UncaughtExceptionHandler;");
+    await vcall(Thread, "setDefaultUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V", handler);
+    try {
+      for (const ex of [await pool(await newObj("java/util/concurrent/LinkedBlockingQueue")), await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1)]) {
+        await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", new Failing());
+        await vcall(ex, "shutdown", "()V");
+        await vcall(ex, "awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z", 5n, seconds());
+        await Promise.resolve();
+      }
+      expect(handler.seen.length).toBe(1);
+      expect(handler.seen[0]).not.toBe(mainThread);
+    } finally { await vcall(Thread, "setDefaultUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V", previous); }
+  });
+
   test("a pool executor runs tasks through a bytecode BlockingQueue", async () => {
     const queue = rt.make("test/AppQueue");
     const ex = await pool(queue);
@@ -403,6 +427,20 @@ describe("executor-queue", () => {
       expect(await vcall(future, "isCancelled", "()Z")).toBe(1);
       expect(await vcall(ex, "isTerminated", "()Z")).toBe(1);
     }
+  });
+
+  test("awaitTermination waits for a cancelled task that is still running", async () => {
+    const ex = await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1);
+    const running = new BlockingRunnable();
+    await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", running);
+    await Promise.resolve();
+    await vcall(ex, "shutdownNow", "()Ljava/util/List;");
+    let done = false;
+    const waiting = vcallAsync(ex, "awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z", 2n, seconds()).then((r) => { done = true; return r; });
+    await new Promise((r) => setTimeout(r, 0));   // a waiting caller leaves the event loop running
+    expect(done).toBe(false);
+    running.release();
+    expect(await waiting).toBe(1);
   });
 
   test("resizing a scheduled pool starts queued work and retires idle excess workers", async () => {

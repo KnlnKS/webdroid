@@ -2,7 +2,7 @@ import { rt, JObj, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JActionBarView, JMenu } from "./menu";
-import { addOverlay, removeOverlay } from "./popup";
+import { addOverlay, removeOverlay, FLAG_NOT_FOCUSABLE, FLAG_NOT_TOUCH_MODAL } from "./popup";
 import { initViewFromCtx, invalidate, type JView } from "./view";
 import { rvString, type Resources } from "./res";
 import { spannedString } from "./text";
@@ -82,7 +82,8 @@ export async function startActionMode(activity: JActivity, cb: unknown): Promise
   mode.onFinished = async () => {
     await vcall(activity, "onActionModeFinished", "(Landroid/view/ActionMode;)V", mode);
   };
-  addOverlay(bar, 0, 0, false, () => vcall(mode, "finish", "()V"));
+  // the bar is part of the activity's window: it takes the touches on it, and the activity BACK
+  addOverlay(bar, 0, 0, FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL);
   await vcall(cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu);
   await vcall(activity, "onActionModeStarted", "(Landroid/view/ActionMode;)V", mode);
   return mode;

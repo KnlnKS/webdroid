@@ -3,9 +3,12 @@
 const claimed = new Set<number>([0, 1, 2]);
 let next = 3;
 
-export function allocateFd(): number {
+/** the lowest unclaimed descriptor at or above `min` */
+export function allocateFd(min = 0): number {
   while (claimed.has(next)) next++;
-  const fd = next++;
+  let fd = Math.max(next, min);
+  while (claimed.has(fd)) fd++;
+  if (fd === next) next++;
   claimed.add(fd);
   return fd;
 }

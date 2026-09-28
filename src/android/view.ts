@@ -2,7 +2,7 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, recolor, type JPoint, type JPaint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, saveCanvas, saveLayer, restoreCanvasToCount, type JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
@@ -307,8 +307,14 @@ function viewLocation(v: JView, out: Int32Array | null, screen: boolean) {
   out[0] = Math.round(x - (screen ? 0 : root.left));
   out[1] = Math.round(y - (screen ? 0 : root.top));
 }
+/** View.onCreateDrawableState: this view's states with `extra` zeroed slots after them */
+export function createDrawableState(v: JView, extra: number): Int32Array {
+  const base = v.baseState(), out = new Int32Array(base.length + Math.max(0, extra | 0));
+  out.set(base);
+  return out;
+}
 /** AOSP: fills baseState's trailing zeros IN PLACE — callers ignore the return value */
-function mergeStates(base: Int32Array, extra: Int32Array | null): Int32Array {
+export function mergeDrawableStates(base: Int32Array, extra: Int32Array | null): Int32Array {
   if (!extra) return base;
   let i = base.length - 1;
   while (i >= 0 && base[i] === 0) i--;
@@ -367,6 +373,8 @@ export class JView extends JObj {
   outlineProvider: unknown = undefined;
   transitionName: string | null = null;
   clipToOutline = false;
+  /** no other app's window can obscure this one, so the flag never filters a touch */
+  filterTouchesWhenObscured = false;
   outline: JOutline | null = null;
   outlineDirty = true;
   outlineW = -1; outlineH = -1;
@@ -445,8 +453,6 @@ export class JView extends JObj {
   }
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
   tooltip: unknown = null;
-  /** an offscreen canvas when layerType asks for one (see drawLayered) */
-  layerCanvas: OffscreenCanvas | null = null;
   /** the running android.view.animation.Animation and the transformation it last produced */
   jAnim: unknown = null;
   animTf: { alpha: number; matrix: { m: number[] } } | null = null;
@@ -767,9 +773,7 @@ export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?
   // AOSP View.draw() brackets the whole thing with getSaveCount()/restoreToCount(): a view
   // that throws between save() and restore() must not leave its clip on the shared context,
   // or every later frame inherits a dead frame's clip and the screen stays blank.
-  const sc = cv.saveCount;
-  ctx.save();
-  cv.saveCount++;
+  const sc = saveCanvas(cv);
   try {
     ctx.translate(v.left + v.translationX, v.top + v.translationY);
     if (v.alphaV < 1) ctx.globalAlpha *= v.alphaV;
@@ -799,43 +803,28 @@ export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?
       }
       if (outline.kind) outline.trace(ctx);
     }
-    if (v.layerType && w > 0 && h > 0) yield drawLayered(v, cv, w, h);
+    if (w <= 0 || h <= 0) clipEmptyCanvas(ctx);
     else {
-      if (w <= 0 || h <= 0) clipEmptyCanvas(ctx);
-      else {
-        ctx.beginPath();
-        ctx.rect(0, 0, w, h);
-        ctx.clip();
-      }
-      yield drawSemantic(v, cv);
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      ctx.clip();
     }
+    let into = cv;
+    if (v.layerType && w > 0 && h > 0) {
+      saveLayer(cv, { left: 0, top: 0, right: w, bottom: h }, v.rare?.layerPaint ?? null);
+      // a software layer draws into a bitmap even under a hardware window
+      if (v.layerType === 1 && cv instanceof JRecordingCanvas) {
+        into = JCanvas.wrap(cv.ctx, cv.w, cv.h);
+        into.clipDevice = cv.clipDevice; into.clipPolygon = cv.clipPolygon; into.semanticBase = cv.semanticBase;
+      }
+    }
+    try { yield drawSemantic(v, into); } finally { if (into !== cv) restoreCanvasToCount(into, 1); }
   } catch (e) {
     perf.drawErrors++;
     noteDrawError(v, e);
   } finally {
-    while (cv.saveCount > sc) { ctx.restore(); cv.saveCount--; }
+    restoreCanvasToCount(cv, sc);
   }
-});
-
-const drawLayered = driven(function* drawLayered(v: JView, cv: JCanvas, w: number, h: number): Gen {
-  let layer = v.layerCanvas;
-  if (!layer || layer.width !== w || layer.height !== h) layer = v.layerCanvas = new OffscreenCanvas(w, h);
-  const lctx = layer.getContext("2d") as OffscreenCanvasRenderingContext2D;
-  lctx.setTransform(1, 0, 0, 1, 0, 0);
-  lctx.globalCompositeOperation = "source-over";
-  lctx.globalAlpha = 1;
-  lctx.clearRect(0, 0, w, h);
-  // a hardware layer records like its window; a software one draws into a bitmap
-  const lcv = JCanvas.wrap(lctx, w, h, v.layerType === 2 && cv instanceof JRecordingCanvas);
-  lcv.semanticBase = cv.semanticTransform();
-  yield drawSemantic(v, lcv);
-  const p = v.rare?.layerPaint;
-  if (!p) { cv.ctx.drawImage(layer, 0, 0); return; }
-  recolor(lctx, w, h, p.filterColor, p.filterMatrix);
-  const ctx = cv.ctx, alpha = ctx.globalAlpha, blend = p.compositeOp();
-  ctx.globalAlpha = alpha * (p.renderAlpha ?? p.color >>> 24) / 255;
-  if (blend) ctx.globalCompositeOperation = blend;
-  try { ctx.drawImage(layer, 0, 0); } finally { ctx.globalAlpha = alpha; if (blend) ctx.globalCompositeOperation = "source-over"; }
 });
 
 const drawSemantic = driven(function* drawSemantic(v: JView, cv: JCanvas): Gen {
@@ -964,6 +953,16 @@ export const generateViewId = () => ++lastViewId;
 const requestFocusDown = function (this: JView) { return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null); };
 const invalidateThis = function (this: JView) { invalidate(this); };
 const attachedWindowToken = function (this: JView) { return this.attached ? windowToken(this) : null; };
+/** AOSP setSelected/setActivated: a change refreshes the drawable state and a ViewGroup hands
+ *  it to every child */
+function setInherited(field: "selected" | "activated", setter: string) {
+  return driven(function* (this: JView, on: number): Gen {
+    if (this[field] === !!on) return;
+    this[field] = !!on;
+    yield this.refreshDrawableState();
+    if (this instanceof JViewGroup) for (const c of [...this.children]) yield vcall(c, setter, "(Z)V", on);
+  });
+}
 const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
   ...rareMethods,
@@ -1106,9 +1105,9 @@ const viewMethods: NativeSpec["methods"] = {
   "isPressed()Z": function (this: JView) { return this.pressed ? 1 : 0; },
   "setPressed(Z)V": function (this: JView, p: number) { this.pressed = !!p; void this.refreshDrawableState(); },
   "isSelected()Z": function (this: JView) { return this.selected ? 1 : 0; },
-  "setSelected(Z)V": function (this: JView, s: number) { this.selected = !!s; void this.refreshDrawableState(); },
+  "setSelected(Z)V": setInherited("selected", "setSelected"),
   "isActivated()Z": function (this: JView) { return this.activated ? 1 : 0; },
-  "setActivated(Z)V": function (this: JView, a: number) { this.activated = !!a; void this.refreshDrawableState(); },
+  "setActivated(Z)V": setInherited("activated", "setActivated"),
   "isFocused()Z": function (this: JView) { return this.focused ? 1 : 0; },
   "hasFocus()Z": function (this: JView) { return this.focused ? 1 : 0; },
   "setFocusable(Z)V": function (this: JView, f: number) { this.focusable = !!f; },
@@ -1278,6 +1277,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider === undefined ? bgOutline : this.outlineProvider; },
   "setClipToOutline(Z)V": function (this: JView, clip: number) { this.clipToOutline = !!clip; invalidate(this); },
   "getClipToOutline()Z": function (this: JView) { return this.clipToOutline ? 1 : 0; },
+  "setFilterTouchesWhenObscured(Z)V": function (this: JView, on: number) { this.filterTouchesWhenObscured = !!on; },
+  "getFilterTouchesWhenObscured()Z": function (this: JView) { return this.filterTouchesWhenObscured ? 1 : 0; },
   "setPointerIcon(Landroid/view/PointerIcon;)V": function (this: JView, icon: JPointerIcon | null) { this.pointerIcon = icon; },
   "getPointerIcon()Landroid/view/PointerIcon;": function (this: JView) { return this.pointerIcon; },
   "onResolvePointerIcon(Landroid/view/MotionEvent;I)Landroid/view/PointerIcon;": function (this: JView) { return this.pointerIcon; },
@@ -1508,14 +1509,9 @@ const viewMethods: NativeSpec["methods"] = {
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "getDrawingTime()J": () => BigInt(Math.floor(uptimeMillis())),
   "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
-  "onCreateDrawableState(I)[I": function (this: JView, extra: number) {
-    const base = this.baseState();
-    const out = new Int32Array(base.length + Math.max(0, extra | 0));
-    out.set(base);
-    return out;
-  },
-  "static mergeDrawableStates([I[I)[I": mergeStates,
-  "mergeDrawableStates([I[I)[I": mergeStates,
+  "onCreateDrawableState(I)[I": function (this: JView, extra: number) { return createDrawableState(this, extra); },
+  "static mergeDrawableStates([I[I)[I": mergeDrawableStates,
+  "mergeDrawableStates([I[I)[I": mergeDrawableStates,
   "getFitsSystemWindows()Z": function (this: JView) { return this.fitsSys ? 1 : 0; },
   // The overlay is a layer on top of the host's own content that anything can park a drawable
   // (or, for a ViewGroup, a view) in without touching the hierarchy. Material's SearchView

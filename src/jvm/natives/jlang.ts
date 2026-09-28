@@ -6,10 +6,12 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
-import { mangleMethod, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { coldStack, type ColdMethod } from "../cold";
+import { mangleMethod, demangle, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
+import { appUserName, procIdentity } from "../../shell/procfs";
 import { csText } from "./jchars";
 import { mkIntStream } from "./jstream-values";
 
@@ -383,17 +385,17 @@ function rememberLoaded(loader: JClassLoader, name: string, cls: JClass): JClass
   }
   return cls;
 }
-async function loadClass(this: JClassLoader, n: string): Promise<JClass> {
-  const loaded: JClass | null = await vcall(this, "findLoadedClass", "(Ljava/lang/String;)Ljava/lang/Class;", n);
+const loadClass = driven(function* (this: JClassLoader, n: string): Gen<JClass> {
+  const loaded: JClass | null = yield vcall(this, "findLoadedClass", "(Ljava/lang/String;)Ljava/lang/Class;", n);
   if (loaded) return loaded;
   try {
     const cls = this.parent
-      ? await vcall(this.parent, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)
-      : await vcall(rt.link("java/lang/Class").ctor, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", n, 0, null);
-    return rememberLoaded(this, n, cls);
+      ? yield vcall(this.parent, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)
+      : yield vcall(rt.link("java/lang/Class").ctor, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", n, 0, null);
+    return rememberLoaded(this, n, cls as JClass);
   } catch (e) { if (!rt.iof(e, "java/lang/ClassNotFoundException")) throw e; }
-  return rememberLoaded(this, n, await vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n));
-}
+  return rememberLoaded(this, n, (yield vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)) as JClass);
+});
 rt.register({
   name: "java/lang/ClassLoader",
   ctor: JClassLoader,
@@ -469,50 +471,94 @@ export class JThrowable extends JObj {
   suppressed: JThrowable[] = [];
   /** captured by fillInStackTrace(), which Throwable's constructors call virtually */
   jsErr: Error | null = null;
+  coldFrames: readonly ColdMethod[] = [];
   get jsStack(): string | undefined { return this.jsErr?.stack; }
   /** memoised getStackTrace(), or what setStackTrace() was handed */
   trace: unknown[] | null = null;
 }
+const STACK_DEPTH = 64;
+/** the JS stack here, deep enough to hold the Java frames a trace reports */
+function jsStackHere(): Error {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = STACK_DEPTH;
+  const js = new Error();
+  Error.stackTraceLimit = limit;
+  return js;
+}
+function captureStack(t: JThrowable): void {
+  t.jsErr = jsStackHere();
+  t.coldFrames = coldStack.slice(-STACK_DEPTH);
+  t.trace = null;
+}
+/** The Java frames of a captured JS stack, innermost first. Compiled code's source names its
+ *  class and method ("wd/pkg/Class.method.js"; neither name can contain '.'), a class's own source
+ *  (native stubs) leaves the method to the function name, and each cold handler frame is the
+ *  next interpreted method outward. */
+function javaFrames(js: string | undefined, cold: readonly ColdMethod[]): [string, string][] {
+  const out: [string, string][] = [];
+  let k = cold.length;
+  for (const line of (js ?? "").split("\n")) {
+    const at = /^\s*at (?:(.*) \()?wd\/(.*)\.js:\d+:\d+\)?$/.exec(line);
+    if (!at) continue;
+    const [cls, method] = at[2].split(".");
+    if (cls === "") {
+      const c = cold[--k];
+      if (c) { const dot = c.name.indexOf("."); out.push([c.name.slice(0, dot), c.name.slice(dot + 1, c.name.indexOf("(", dot))]); }
+    } else if (method !== undefined) out.push([cls, method]);
+    else {
+      const fn = at[1] ?? "", named = demangle(/\[as (\S+)\]$/.exec(fn)?.[1] ?? fn.slice(fn.lastIndexOf(".") + 1));
+      if (named) out.push([cls, named[0]]);
+    }
+  }
+  return out;
+}
 /**
- * A throwable's frames, out of the JS stack the throw actually has. An EMPTY trace is not a
- * thing any JVM produces, and library code counts on that: kotlinx.coroutines' stack-trace
- * recovery does `copyOfRange(trace, 1, trace.size)` on the way out of a *caught* exception,
- * which on an empty array throws — turning a handled failure into a fatal one.
+ * StackTraceElements for Java frames. An EMPTY trace is not a thing any JVM produces, and library
+ * code counts on that: kotlinx.coroutines' stack-trace recovery does `copyOfRange(trace, 1, trace.size)`
+ * on the way out of a *caught* exception, which on an empty array throws — turning a handled
+ * failure into a fatal one.
  */
-function jsStackTrace(js: string | undefined): unknown[] {
-  const out = (js ?? "").split("\n").slice(1, 33).map((line) => {
-    const m = /^\s*at\s+(?:(.*?)\s+\()?(.*?)(?::(\d+))?(?::\d+)?\)?$/.exec(line);
-    const e = new JStackTraceElement();
-    const [decl, meth] = (m?.[1] ?? "<unknown>").split(/\.(?=[^.]*$)/);
-    e.declaring = meth ? decl! : "webdroid";
-    e.method = meth ?? decl!;
-    e.file = m?.[2] ?? null;
-    e.line = Number(m?.[3] ?? 0);
-    return e;
-  });
+function stackTrace(frames: [string, string][]): unknown[] {
+  const out = frames.map(([cls, method]) => Object.assign(new JStackTraceElement(), { declaring: dotName(cls), method }));
   if (!out.length) out.push(new JStackTraceElement());
   return jarray(out, "Ljava/lang/StackTraceElement;");
 }
+/** ART starts a throwable's trace below the frames of its own class hierarchy (its constructors) */
+function throwableTrace(t: JThrowable): unknown[] {
+  const frames = javaFrames(t.jsStack, t.coldFrames), own = new Set<string>();
+  for (let info: ClassInfo | null | undefined = (t.constructor as { $i?: ClassInfo }).$i; info; info = info.superInfo) own.add(info.name);
+  let skip = 0;
+  while (skip < frames.length && own.has(frames[skip][0])) skip++;
+  return stackTrace(frames.slice(skip));
+}
+const framesHere = () => javaFrames(jsStackHere().stack, coldStack);
+/** Thread.getStackTrace: ART's trace names the natives that took it */
+const threadTrace = () => stackTrace([["dalvik/system/VMStack", "getThreadStackTrace"], ["java/lang/Thread", "getStackTrace"], ...framesHere()]);
+/** VMStack.getStackClassN: the class `n` frames out from the native's caller */
+const stackClass = (n: number) => { const frame = framesHere()[n]; return frame ? rt.classFor(frame[0]) : null; };
+rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, methods: {
+  "static getStackClass1()Ljava/lang/Class;": () => stackClass(1),
+  "static getStackClass2()Ljava/lang/Class;": () => stackClass(2),
+} });
 
 const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen {
   yield vcall(out, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
 });
-/** JVM-shaped stack trace text: header from the (overridable) toString, frames from the JS stack. */
+/** JVM-shaped stack trace text: header from the (overridable) toString, then the trace's frames. */
 export async function stackTraceText(t: JThrowable): Promise<string> {
-  const frames = (js: string | undefined) =>
-    (js ?? "").split("\n").slice(1, 41).map((l) => "\n\tat " + l.trim().replace(/^at /, "")).join("");
-  let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + frames(t.jsStack);
+  const frames = (c: JThrowable) => ((c.trace ??= throwableTrace(c)) as JStackTraceElement[]).map((e) => "\n\tat " + elementText(e)).join("");
+  let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + frames(t);
   const seen = new Set<JThrowable>([t]);
   for (let c = t.cause; c && !seen.has(c); c = c.cause) {
     seen.add(c);
-    out += "\nCaused by: " + String(await vcall(c, "toString", "()Ljava/lang/String;")) + frames(c.jsStack);
+    out += "\nCaused by: " + String(await vcall(c, "toString", "()Ljava/lang/String;")) + frames(c);
   }
   return out;
 }
 const M_fillInStackTrace = mangleMethod("fillInStackTrace", "()Ljava/lang/Throwable;");
 /** Throwable's constructors fill the trace through the virtual method: subclasses that override
  *  it to skip the capture (coroutine and Compose cancellations) never pay for a JS stack. */
-function fillInStackTrace(t: JThrowable): void { (t as unknown as Record<string, () => unknown>)[M_fillInStackTrace](); }
+export function fillInStackTrace(t: JThrowable): void { (t as unknown as Record<string, () => unknown>)[M_fillInStackTrace](); }
 const throwableConstructors: NonNullable<NativeSpec["methods"]> = {
   "<init>()V": function (this: JThrowable) { fillInStackTrace(this); },
   "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; fillInStackTrace(this); },
@@ -547,8 +593,8 @@ rt.register({
     // apps route caught exceptions through these (logcat/Timber's Throwable.asLog())
     "printStackTrace(Ljava/io/PrintWriter;)V": printStackTraceTo,
     "printStackTrace(Ljava/io/PrintStream;)V": printStackTraceTo,
-    "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsErr = new Error(); this.trace = null; return this; },
-    "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= jsStackTrace(this.jsStack); },
+    "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { captureStack(this); return this; },
+    "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= throwableTrace(this); },
     "setStackTrace([Ljava/lang/StackTraceElement;)V": function (this: JThrowable, t: unknown[]) { this.trace = t ?? null; },
     "addSuppressed(Ljava/lang/Throwable;)V": function (this: JThrowable, t: JThrowable) { this.suppressed.push(t); },
     "getSuppressed()[Ljava/lang/Throwable;": function (this: JThrowable) { return jarray(this.suppressed.slice(), "Ljava/lang/Throwable;"); },
@@ -590,7 +636,8 @@ for (const [sup, names] of [
   ["Error", "StackOverflowError OutOfMemoryError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
-    "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException"],
+    "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException " +
+    "java/net/UnknownServiceException java/io/CharConversionException"],
   ["java/net/SocketException", "java/net/ConnectException java/net/BindException"],
 ]) {
   if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
@@ -621,7 +668,7 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
   } catch { /* fall through */ }
   const e = new (ctor ?? excCtors.get("java/lang/RuntimeException")!)();
   e.msg = msg;
-  e.jsErr = new Error();
+  captureStack(e);
   return e;
 };
 
@@ -857,6 +904,11 @@ export function jToString(v: unknown): string {
   const r = f && f.call(v);
   return typeof r === "string" ? r : String(v);
 }
+/** String.valueOf(Object): "null", or what the value's virtual toString answers (null included) */
+const valueOfObject = (v: unknown): string | null | Promise<string | null> =>
+  v === null ? "null" : typeof v === "string" ? v : vcall(boxObject(v), "toString", "()Ljava/lang/String;");
+/** the text string concatenation appends for a value */
+export const stringOf = (v: unknown): string | Promise<string> => after(valueOfObject(v), String);
 class JStringStatics extends JObj {}
 export function javaFormat(fmt: string, args: unknown[]): string {
   let ai = 0;
@@ -932,8 +984,7 @@ rt.register({
     "static valueOf(D)Ljava/lang/String;": (v: number) => fmtDouble(v),
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
-    "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": (v: unknown) =>
-      v === null ? "null" : vcall(boxObject(v), "toString", "()Ljava/lang/String;"),
+    "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": valueOfObject,
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
@@ -1166,6 +1217,14 @@ const INT_MIN = -2147483648n, INT_MAX = 2147483647n, LONG_MIN = -922337203685477
 function nfe(s: unknown): never {
   throw rt.mkThrowable("java/lang/NumberFormatException", `For input string: "${s}"`);
 }
+/** Integer/Long.toString use radix 10 for an out-of-range radix */
+const radixOr10 = (r: number) => (r >= 2 && r <= 36 ? r : 10);
+function parseUnsignedIntJ(s: string, radix: number): number {
+  if (typeof s === "string" && s.startsWith("-")) throw rt.mkThrowable("java/lang/NumberFormatException", `Illegal leading minus sign on unsigned string ${s}.`);
+  const v = parseLongJ(s, radix);
+  if (v > 0xffffffffn) throw rt.mkThrowable("java/lang/NumberFormatException", `String value ${s} exceeds range of unsigned int.`);
+  return Number(v) | 0;
+}
 function parseIntJ(s: string, radix = 10): number {
   if (typeof s !== "string" || radix < 2 || radix > 36 || !/^[+-]?[0-9a-zA-Z]+$/.test(s)) nfe(s);
   let start = 0, negative = false;
@@ -1233,7 +1292,15 @@ rt.register({
     "static parseInt(Ljava/lang/String;I)I": (s: string, r: number) => parseIntJ(s, r),
     "static valueOf(Ljava/lang/String;I)Ljava/lang/Integer;": (s: string, r: number) => boxInt(parseIntJ(s, r)),
     "static toString(I)Ljava/lang/String;": (v: number) => String(v),
-    "static toString(II)Ljava/lang/String;": (v: number, r: number) => v.toString(r),
+    "static toString(II)Ljava/lang/String;": (v: number, r: number) => v.toString(radixOr10(r)),
+    "static toUnsignedString(I)Ljava/lang/String;": (v: number) => String(v >>> 0),
+    "static toUnsignedString(II)Ljava/lang/String;": (v: number, r: number) => (v >>> 0).toString(radixOr10(r)),
+    "static toUnsignedLong(I)J": (v: number) => BigInt(v >>> 0),
+    "static compareUnsigned(II)I": (a: number, b: number) => ((a >>> 0) < (b >>> 0) ? -1 : (a >>> 0) > (b >>> 0) ? 1 : 0),
+    "static divideUnsigned(II)I": (a: number, b: number) => { if (!b) divideByZero(); return ((a >>> 0) / (b >>> 0)) | 0; },
+    "static remainderUnsigned(II)I": (a: number, b: number) => { if (!b) divideByZero(); return ((a >>> 0) % (b >>> 0)) | 0; },
+    "static parseUnsignedInt(Ljava/lang/String;)I": (s: string) => parseUnsignedIntJ(s, 10),
+    "static parseUnsignedInt(Ljava/lang/String;I)I": parseUnsignedIntJ,
     "static toHexString(I)Ljava/lang/String;": (v: number) => (v >>> 0).toString(16),
     "static toBinaryString(I)Ljava/lang/String;": (v: number) => (v >>> 0).toString(2),
     "static toOctalString(I)Ljava/lang/String;": (v: number) => (v >>> 0).toString(8),
@@ -1283,9 +1350,12 @@ rt.register({
     "static parseLong(Ljava/lang/String;I)J": parseLongJ,
     "static lowestOneBit(J)J": (v: bigint) => v & -v,
     "static numberOfLeadingZeros(J)I": nlz64,
-    "static toString(JI)Ljava/lang/String;": (v: bigint, radix: number) => v.toString(radix),
+    "static toString(JI)Ljava/lang/String;": (v: bigint, radix: number) => v.toString(radixOr10(radix)),
+    "static toBinaryString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(2),
+    "static toOctalString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(8),
+    "static sum(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, a + b),
     "static toUnsignedString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(),
-    "static toUnsignedString(JI)Ljava/lang/String;": (v: bigint, radix: number) => BigInt.asUintN(64, v).toString(radix >= 2 && radix <= 36 ? radix : 10),
+    "static toUnsignedString(JI)Ljava/lang/String;": (v: bigint, radix: number) => BigInt.asUintN(64, v).toString(radixOr10(radix)),
     "static compareUnsigned(JJ)I": (a: bigint, b: bigint) => { const x = BigInt.asUintN(64, a), y = BigInt.asUintN(64, b); return x < y ? -1 : x > y ? 1 : 0; },
     "static divideUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)),
     "static remainderUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)),
@@ -1340,6 +1410,7 @@ rt.register({
     "static compare(FF)I": cmpFloat,
     "static toString(F)Ljava/lang/String;": fmtFloat,
     "isNaN()Z": function (this: JFloat) { return isNaNZ(this.v); },
+    "isInfinite()Z": function (this: JFloat) { return isInfZ(this.v); },
   },
 });
 rt.register({
@@ -1534,10 +1605,10 @@ rt.register({
     "static toString(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static isDigit(C)Z": isDigit,
     "static isDigit(I)Z": isDigit,
-    ...Object.fromEntries(["C", "I"].map(type => [`static isJavaIdentifierPart(${type})Z`, (c: number) =>
-      c >= 0 && c <= 0x10ffff && /[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\x00-\x08\x0e-\x1b\x7f-\x9f]/u.test(String.fromCodePoint(c)) ? 1 : 0])),
-    ...Object.fromEntries(([["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
-      const test = (c: number) => (re.test(String.fromCodePoint(c)) ? 1 : 0);
+    ...Object.fromEntries(([["isJavaIdentifierStart", /[\p{L}\p{Nl}\p{Sc}\p{Pc}]/u],
+      ["isJavaIdentifierPart", /[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\x00-\x08\x0e-\x1b\x7f-\x9f]/u],
+      ["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
+      const test = (c: number) => c >= 0 && c <= 0x10ffff && re.test(String.fromCodePoint(c)) ? 1 : 0;
       return [[`static ${n}(C)Z`, test], [`static ${n}(I)Z`, test]];
     })),
     "static isUpperCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toLowerCase() && s === s.toUpperCase() ? 1 : 0; },
@@ -1706,12 +1777,17 @@ function sysDecode(prop: string, min: bigint, max: bigint): bigint | null {
   if (raw === undefined) return null;
   try { return decodeJ(raw, min, max); } catch { return null; }
 }
-const sysProps: Record<string, string> = {
+export const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
   // The loader indexes every DEX before application initialization, as ART 2.1 does.
   "java.vm.version": "2.1.0",
   "java.vm.name": "Dalvik", "file.separator": "/", "path.separator": ":",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
+  // libcore reads these from uname and the app's passwd entry
+  "os.arch": "aarch64", "os.version": "3.10.0", "user.home": "/data",
+  // RuntimeInit's default user agent from Build.VERSION.RELEASE, MODEL and ID
+  "http.agent": `Dalvik/2.1.0 (Linux; U; Android ${device.release}; webdroid Build/WD1A)`,
+  get "user.name"() { return appUserName(procIdentity.uid); },
 };
 const sysEnv: Record<string, string> = {
   PATH: "/system/bin:/system/xbin:/vendor/bin",
@@ -1734,7 +1810,8 @@ rt.register({
       for (const [k, v] of Object.entries(sysProps)) yield vcall(p, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", k, v);
       return p;
     }),
-    "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; sysProps[k] = v; return o; },
+    // deleting first replaces a getter-only property (user.name) rather than assigning through it
+    "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; delete sysProps[k]; sysProps[k] = v; return o; },
     "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string | null) => {
       if (key === null) rt.npe();
       return sysEnv[key!] ?? null;
@@ -1801,6 +1878,7 @@ export class JThread extends JObj {
   set alive(value: number) { this.live = value; if (value) { this.started = true; liveThreads.add(this); } else liveThreads.delete(this); }
   prio = 5;
   target: unknown = null;   // Runnable
+  ueh: unknown = null;      // Thread.UncaughtExceptionHandler
   locals = inheritedLocals();
   interrupted = 0;
   wake: (() => void) | null = null;
@@ -1826,13 +1904,20 @@ class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
   methods: {
-    // AOSP's LoggingHandler prints the whole trace; the "Caused by" chain is what names the real fault
+    // AOSP's LoggingHandler prints the whole trace; the "Caused by" chain is what names the real
+    // fault, and the JS stack locates one a native raised
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": driven(function* (_t: unknown, e: unknown): Gen {
-      console.error("[uncaughtException]", e instanceof JThrowable ? yield stackTraceText(e) : e);
+      if (e instanceof JThrowable) console.error("[uncaughtException]", yield stackTraceText(e), "\n" + e.jsStack);
+      else console.error("[uncaughtException]", e);
     }),
   },
 });
 let defaultUEH: unknown = new JDefaultUEH();
+/** Thread.dispatchUncaughtException: the thread's handler, else the default one */
+export async function dispatchUncaught(t: JThread, e: unknown): Promise<void> {
+  try { await vcallOn(t, t.ueh ?? defaultUEH, "uncaughtException", "(Ljava/lang/Thread;Ljava/lang/Throwable;)V", t, rt.jx(e)); }
+  catch (inner) { console.error("[thread " + t.jname + "] uncaught handler failed", rt.jx(inner)); }
+}
 export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
 export function setCurThread(t: JThread) {
   if (t === curThread) return;
@@ -1905,7 +1990,7 @@ rt.register({
       this.done = new Promise((resolve) => {
         queueMicrotask(async () => {
           try { await vcallOn(this, this, "run", "()V"); }
-          catch (e) { console.error("[thread " + this.jname + "]", e); }
+          catch (e) { await dispatchUncaught(this, e); }
           finally { this.alive = 0; threadExit.hook?.(this); resolve(); }
         });
       });
@@ -1919,18 +2004,18 @@ rt.register({
     "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
     "getContextClassLoader()Ljava/lang/ClassLoader;": systemClassLoader,
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
-    "getStackTrace()[Ljava/lang/StackTraceElement;": () => jsStackTrace(new Error().stack),
+    "getStackTrace()[Ljava/lang/StackTraceElement;": threadTrace,
     "static currentThread()Ljava/lang/Thread;": () => curThread,
     "static activeCount()I": () => liveThreads.size,
     "static enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "static getAllStackTraces()Ljava/util/Map;": driven(function* (): Gen {
       const m = yield newObj("java/util/HashMap");
-      yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack));
+      yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, threadTrace());
       return m;
     }),
     "static getDefaultUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
-    "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
-    "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": () => {},
+    "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": function (this: JThread) { return this.ueh ?? defaultUEH; },
+    "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": function (this: JThread, h: unknown) { this.ueh = h; },
     "static setDefaultUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": (h: unknown) => { defaultUEH = h; },
     "static sleep(J)V": (ms: bigint) => park(curThread, () => () => {}, Number(ms)),
     "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
@@ -2180,7 +2265,9 @@ rt.register({
     ["Transient", 128], ["Native", 256], ["Interface", 512], ["Abstract", 1024], ["Strict", 2048]].map(([n, bit]) => [`static is${n}(I)Z`, (m: number) => (m & (bit as number) ? 1 : 0)])),
 });
 
-class JStackTraceElement extends JObj { declaring = ""; method = ""; file: string | null = null; line = 0; }
+class JStackTraceElement extends JObj { declaring = ""; method = ""; file: string | null = null; line = -1; }
+const elementText = (e: JStackTraceElement) => `${e.declaring}.${e.method}(${e.line === -2 ? "Native Method"
+  : e.file === null ? "Unknown Source" : e.line >= 0 ? `${e.file}:${e.line}` : e.file})`;
 rt.register({
   name: "java/lang/StackTraceElement", ctor: JStackTraceElement, ifaces: ["java/io/Serializable"],
   methods: {
@@ -2192,6 +2279,6 @@ rt.register({
     "getFileName()Ljava/lang/String;": function (this: JStackTraceElement) { return this.file; },
     "getLineNumber()I": function (this: JStackTraceElement) { return this.line; },
     "isNativeMethod()Z": function (this: JStackTraceElement) { return this.line === -2 ? 1 : 0; },
-    "toString()Ljava/lang/String;": function (this: JStackTraceElement) { return this.declaring + "." + this.method + "(" + (this.file ?? "Unknown") + ":" + this.line + ")"; },
+    "toString()Ljava/lang/String;": function (this: JStackTraceElement) { return elementText(this); },
   },
 });

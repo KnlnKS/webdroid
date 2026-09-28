@@ -6,15 +6,12 @@ import { JList } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
 import { JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import { onMain } from "./mainloop";
-import { bindLocalService, unbindLocalService, serviceTransport } from "./runningservices";
+import { bindAsSystem } from "./runningservices";
 import { netUp } from "./net";
 import { device } from "../shell/config";
 import { JBinder } from "./binder";
 import { JService } from "./app";
-import { appHost } from "./apphost";
-import { PROCESS_NAME } from "./os";
-import { packages, qualifyComponent } from "./packages";
-import type { JComponentName, JIntent } from "./intent";
+import type { JIntent } from "./intent";
 
 class JJobInfo extends JObj { p: Record<string, any> = { id: 0, svc: null, triggers: [] as unknown[] }; }
 class JJobInfoBuilder extends JObj { j = new JJobInfo(); }
@@ -152,16 +149,6 @@ async function finishJob(job: ScheduledJob, run: JobRun, reschedule: boolean): P
   else if (reschedule || job.work.length) armJob(job, reschedule ? Math.max(30000, Number(job.info.p.backoff ?? 30000n)) : 0);
   else pendingJobs.delete(job.info.p.id);
 }
-async function bindJobService(component: JComponentName, key: string): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
-  const owner = packages.get(component.pkg), cls = qualifyComponent(component.cls, component.pkg);
-  const node = owner?.components.service.get(cls), ctx = appHost?.application;
-  if (!owner || !node || !ctx) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + component.pkg + "/" + cls + "}");
-  const intent: JIntent = rt.make("android/content/Intent");
-  intent.component = cls; intent.componentPkg = owner.pkg;
-  const process = owner.process(node);
-  if (owner.pkg === ctx.$host.pkg && process === (PROCESS_NAME || owner.pkg)) return { binder: await bindLocalService(ctx, intent, key) as JObj, unbind: () => unbindLocalService(key) };
-  return { binder: await serviceTransport.bind(owner, process, intent, key) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
-}
 async function sendJob(binder: JObj, code: number, params: JJobParameters): Promise<void> {
   const parcel = new JParcel();
   await vcall(params, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
@@ -183,7 +170,7 @@ async function startJob(job: ScheduledJob): Promise<void> {
   const run: JobRun = { callback, binder: null, unbind: async () => {}, executing: new Set() };
   callback.job = job; callback.run = run; job.run = run;
   try {
-    const { binder, unbind } = await bindJobService(p.svc, "job:" + p.id + ":" + nextBinding++);
+    const { binder, unbind } = await bindAsSystem(p.svc, "job:" + p.id + ":" + nextBinding++);
     run.binder = binder; run.unbind = unbind;
     if (pendingJobs.get(p.id) !== job) { job.run = null; return unbind(); }
     await sendJob(binder, START, jobParameters(job, callback));

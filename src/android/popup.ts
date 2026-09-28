@@ -6,6 +6,7 @@ import { vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught, uptimeMillis } from "./os";
 import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST, MATCH_PARENT, WRAP_CONTENT } from "./view";
 import { JMotionEvent } from "./motionevent";
+import { KEYCODE_BACK, type JKeyEvent } from "./keyevent";
 import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { AID, obtainStyled, rvDimen, rvInt, themeOf, frameworkDimen, resString, type Resources, type JTheme, type JAttrSet } from "./res";
@@ -18,32 +19,54 @@ import { csText } from "./text";
 import { onMain } from "./mainloop";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 
+/** WindowManager.LayoutParams flags the shell's input routing reads, as InputDispatcher does */
+export const FLAG_NOT_FOCUSABLE = 8, FLAG_NOT_TOUCHABLE = 16, FLAG_NOT_TOUCH_MODAL = 32, FLAG_WATCH_OUTSIDE_TOUCH = 0x40000;
 export interface Overlay {
   view: JView;
   x: number; y: number;
-  dismissOnOutside: boolean;
+  /** the window's LayoutParams.flags */
+  flags: number;
   dim?: () => number;
-  modal?: boolean;
-  /** the window's own back handling (a Dialog cancels itself); absent means dismiss iff dismissOnOutside */
-  onBack?: () => unknown;
-  /** how the shell dismisses this window (outside touch / back): a PopupWindow must run its own
-   *  dismiss() so its OnDismissListener fires; absent means plain removeOverlay */
-  onDismiss?: () => unknown;
 }
 export const overlays: Overlay[] = [];
-export function addOverlay(v: JView, x = 0, y = 0, dismissOnOutside = false, onBack?: () => unknown, onDismiss?: () => unknown) {
-  const overlay: Overlay = { view: v, x, y, dismissOnOutside, onBack, onDismiss };
+export function addOverlay(v: JView, x: number, y: number, flags: number) {
+  const overlay: Overlay = { view: v, x, y, flags };
   overlays.push(overlay);
   uiState.needsInsets = true;
   requestLayout(v);
   return overlay;
 }
-export function dismissOverlay(o: Overlay) { return o.onDismiss ? o.onDismiss() : removeOverlay(o.view); }
 /** the windows under it keep their layout; the screen only has to be drawn without it */
 export function removeOverlay(v: JView) {
   const i = overlays.findIndex((o) => o.view === v);
   if (i >= 0) overlays.splice(i, 1);
   invalidate();
+}
+
+const M_dispatchKey = mangleMethod("dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z");
+const M_onTouch = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
+/** PopupWindow.PopupDecorView.onTouchEvent: a DOWN outside the window, or ACTION_OUTSIDE, dismisses it */
+const touchDismisses = (v: JView, ev: JMotionEvent) => {
+  const a = ev.action & 0xff;
+  return a === 4 || (a === 0 && (ev.x < 0 || ev.y < 0 || ev.x >= v.width() || ev.y >= v.height()));
+};
+/** PopupDecorView's input overrides of `sup`: BACK (a tracked DOWN, then its UP) and touchDismisses
+ *  dismiss the popup window; anything else goes to `sup` */
+export function popupInput(sup: string, dismiss: (v: JView) => unknown): NonNullable<NativeSpec["methods"]> {
+  const superMethod = (m: string) => rt.link(sup).ctor.prototype[m] as (this: JView, ev: unknown) => unknown;
+  return {
+    "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: JKeyEvent): Gen {
+      if (ev.keyCode === KEYCODE_BACK) {
+        if (ev.action === 0 && ev.repeat === 0) { ev.tracking = true; return 1; }
+        if (ev.action === 1 && ev.tracking && !ev.canceled) { yield dismiss(this); return 1; }
+      }
+      return superMethod(M_dispatchKey).call(this, ev);
+    }),
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
+      if (touchDismisses(this, ev)) { yield dismiss(this); return 1; }
+      return superMethod(M_onTouch).call(this, ev);
+    }),
+  };
 }
 
 /** ActivityThread closes leaked windows after destruction, without dismissing their dialogs. */
@@ -185,8 +208,10 @@ rt.register({
         ctx.fillText(this.items[i].title, device.dp(20), this.padV + i * this.itemH + this.itemH / 2);
       }
     },
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: PopupMenuView, ev: any) {
-      if ((ev.action & 0xff) === 1) {
+    ...popupInput("android/view/View", removeOverlay),
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: PopupMenuView, ev: JMotionEvent) {
+      if (touchDismisses(this, ev)) removeOverlay(this);
+      else if ((ev.action & 0xff) === 1) {
         const i = Math.floor((ev.y - this.padV) / this.itemH);
         removeOverlay(this);
         if (i >= 0 && i < this.items.length) this.onPick?.(this.items[i].id);
@@ -203,7 +228,7 @@ export function showPopupMenu(anchor: JView, items: { id: number; title: string 
   v.jres = anchor.jres;
   v.theme = anchor.theme;
   const [x, y] = locationOnScreen(anchor);
-  addOverlay(v, Math.max(device.dp(4), Math.min(device.width - device.dp(200), x + anchor.width() - device.dp(200))), y + device.dp(10), true);
+  addOverlay(v, Math.max(device.dp(4), Math.min(device.width - device.dp(200), x + anchor.width() - device.dp(200))), y + device.dp(10), 0);
 }
 
 // ── android.widget.PopupMenu over the overlay popup
@@ -266,6 +291,7 @@ function windowSpec(dim: number, avail: number): number {
 rt.register({
   name: "webdroid/PopupDecorView", ctor: PopupDecorView, sup: "android/widget/FrameLayout",
   methods: {
+    ...popupInput("android/widget/FrameLayout", (d) => vcall((d as PopupDecorView).popup, "dismiss", "()V")),
     "onMeasure(II)V": driven(function* (this: PopupDecorView, wSpec: number, hSpec: number): Gen {
       const p = this.popup!;
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_onMeasure];
@@ -294,7 +320,7 @@ class JPopupWindow extends JObj {
   bg: JDrawable | null = null;
   w = WRAP_CONTENT; h = WRAP_CONTENT;
   showing = false;
-  focusable = false; outsideTouchable = false; touchable = true; clipping = true;
+  focusable = false; outsideTouchable = false; touchable = true; touchModal = true; clipping = true;
   overlapAnchor = false; aboveAnchor = false;
   elevation = 0;
   animStyle = -1;
@@ -304,6 +330,12 @@ class JPopupWindow extends JObj {
   anchor: JView | null = null;
   xoff = 0; yoff = 0; gravity = 0;
   epicenter: JRect | null = null;
+  overlay: Overlay | null = null;
+  /** PopupWindow.computeFlags, the bits input routing reads */
+  flags() {
+    return (this.focusable ? 0 : FLAG_NOT_FOCUSABLE) | (this.touchable ? 0 : FLAG_NOT_TOUCHABLE) |
+      (this.touchModal ? 0 : FLAG_NOT_TOUCH_MODAL) | (this.outsideTouchable ? FLAG_WATCH_OUTSIDE_TOUCH : 0);
+  }
   /** background padding (AOSP mTempRect after getPadding) */
   bgPad(): [number, number, number, number] {
     const p = (this.bg as any)?.padding as JRect | undefined;
@@ -354,9 +386,7 @@ const pwShow = driven(function* pwShow(this: JPopupWindow): Gen {
   lp.height = this.content.lp?.height === WRAP_CONTENT ? WRAP_CONTENT : MATCH_PARENT;
   this.content.lp = lp;
   yield attachView(d, this.content);
-  const dismiss = () => vcall(this, "dismiss", "()V");
-  // a focusable popup takes Back and outside touches; an outsideTouchable one only the touches
-  addOverlay(d, 0, 0, this.focusable || this.outsideTouchable, this.focusable ? dismiss : undefined, dismiss);
+  this.overlay = addOverlay(d, 0, 0, this.flags());
   yield dispatchAttached(d);
 });
 /** AOSP findDropDownPosition, reduced to the vertical flip and screen clamp */
@@ -379,8 +409,7 @@ const pwPlace = driven(function* pwPlace(this: JPopupWindow): Gen {
     x = Math.max(0, Math.min(x, sw - d.measuredW));
     y = Math.max(0, Math.min(y, sh - d.measuredH));
   }
-  const o = overlays.find((o) => o.view === d);
-  if (o) { o.x = x; o.y = y; }
+  Object.assign(this.overlay!, { x, y });
   requestLayout(d);
 });
 const pwShowDropDown = driven(function* pwShowDropDown(this: JPopupWindow, anchor: JView, xoff: number = 0, yoff: number = 0, gravity: number = 0): Gen {
@@ -399,15 +428,14 @@ const pwShowAt = driven(function* pwShowAt(this: JPopupWindow, parent: JView, gr
   const hg = gravity & 7, vg = gravity & 0x70;
   const px = hg === 1 ? ((sw - d.measuredW) >> 1) + x : hg === 5 ? sw - d.measuredW - x : x;
   const py = vg === 16 ? ((sh - d.measuredH) >> 1) + y : vg === 80 ? sh - d.measuredH - y : y;
-  const o = overlays.find((o) => o.view === d);
-  if (o) { o.x = px; o.y = py; }
+  Object.assign(this.overlay!, { x: px, y: py });
   requestLayout(d);
 });
 const pwDismiss = driven(function* pwDismiss(this: JPopupWindow): Gen {
   if (!this.showing) return;
   this.showing = false;
   const d = this.decor;
-  this.decor = null;
+  this.decor = this.overlay = null;
   if (d) {
     removeOverlay(d);
     yield dispatchDetached(d);
@@ -419,6 +447,7 @@ const pwDismiss = driven(function* pwDismiss(this: JPopupWindow): Gen {
 });
 function pwUpdate(this: JPopupWindow) {
   if (!this.showing || !this.decor) return;
+  this.overlay!.flags = this.flags();
   requestLayout(this.decor);
   if (this.anchor) return pwPlace.call(this);
 }
@@ -454,9 +483,9 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
     "setElevation(F)V": "elevation", "setEpicenterBounds(Landroid/graphics/Rect;)V": "epicenter" }),
   ...flagSetters({ "setFocusable(Z)V": "focusable", "setOutsideTouchable(Z)V": "outsideTouchable",
     "setTouchable(Z)V": "touchable", "setClippingEnabled(Z)V": "clipping", "setIsClippedToScreen(Z)V": "clipping",
-    "setOverlapAnchor(Z)V": "overlapAnchor" }),
+    "setOverlapAnchor(Z)V": "overlapAnchor", "setTouchModal(Z)V": "touchModal" }),
   ...noops("<init>()V", "setIsLaidOutInScreen(Z)V", "setAttachedInDecor(Z)V", "setSplitTouchEnabled(Z)V",
-    "setTouchModal(Z)V", "setIgnoreCheekPress()V", "setLayoutInScreenEnabled(Z)V", "setAllowScrollingAnchorParent(Z)V",
+    "setIgnoreCheekPress()V", "setLayoutInScreenEnabled(Z)V", "setAllowScrollingAnchorParent(Z)V",
     "setWindowLayoutMode(II)V", "setEnterTransition(Landroid/transition/Transition;)V",
     "setExitTransition(Landroid/transition/Transition;)V"),
   ...stubs(1, "isAttachedInDecor()Z", "isSplitTouchEnabled()Z"),
@@ -482,7 +511,7 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
   "update(IIII)V": function (this: JPopupWindow, x: number, y: number, w: number, h: number) {
     if (w !== -1) this.w = w;
     if (h !== -1) this.h = h;
-    if (!this.anchor) { const o = overlays.find((o) => o.view === this.decor); if (o) { o.x = x; o.y = y; } }
+    if (!this.anchor && this.overlay) Object.assign(this.overlay, { x, y });
     return pwUpdate.call(this);
   },
   "update(IIIIZ)V": function (this: JPopupWindow, x: number, y: number, w: number, h: number) {

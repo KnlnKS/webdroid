@@ -2,7 +2,7 @@
 // stack is activities.ts.
 
 import { dexesIn } from "../jvm/dex";
-import { rt, type Gen, driven } from "../jvm/runtime";
+import { rt, type Gen, type JObj, driven } from "../jvm/runtime";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
@@ -15,11 +15,11 @@ import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguratio
 import { localeTag } from "../jvm/natives/jvalues";
 import { setAppHost, type AppHost } from "../android/apphost";
 import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
-import { windowDim, windowParams, takesTouch, takesKeys } from "../android/window";
+import { windowDim, windowParams } from "../android/window";
 import { absGravity, gravityApply } from "../android/gravity";
 import { JActivity, dispatchSplashExit } from "../android/app";
 import { getPrefs } from "../android/sharedprefs";
-import { JContext } from "../android/context";
+import { newContextImpl } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
 import { reportUncaught, runFrameCallbacks, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { pressBackKey } from "../android/keyevent";
@@ -29,11 +29,11 @@ import {
 } from "./activities";
 import { packageUid, packages } from "../android/packages";
 import { onMain, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, copyEvent, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { JCanvas } from "../android/graphics";
-import { overlays, drawToasts, dismissOverlay } from "../android/popup";
+import { overlays, drawToasts, FLAG_NOT_FOCUSABLE, FLAG_NOT_TOUCHABLE, FLAG_NOT_TOUCH_MODAL, FLAG_WATCH_OUTSIDE_TOUCH, type Overlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
@@ -41,8 +41,8 @@ import { guestNow } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { resolveSystemBars, drawSystemBarBackgrounds } from "./systembars";
 import { restoreRoots } from "./hostfs";
-import { setPixelCopyFrame } from "../android/glview";
-import { requestResponsiveSlices } from "../native/cpu";
+import { setPixelCopyFrame, latchSurfaces } from "../android/glview";
+import { notePresent, requestResponsiveSlices } from "../native/cpu";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
@@ -58,8 +58,10 @@ let screen: ImageBitmapRenderingContext | null = null;
 export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); setPixelCopyFrame(c); }
 export function present(): void {
   if (!screen) return;
+  latchSurfaces();
   screen.transferFromImageBitmap(fb.transferToImageBitmap());
   perf.presentations++;
+  notePresent();
 }
 
 /** Apply one of ActivityInfo's fixed orientations; all other requests retain the current axes. */
@@ -198,8 +200,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
 
   return onMain(async () => {
     onStatus("Starting app…");
-    const baseCtx = new JContext();
-    baseCtx.$host = host;
+    const baseCtx = newContextImpl(host);
     let appInfo;
     try {
       appInfo = rt.link(appCls);
@@ -301,15 +302,16 @@ export function pressBack(): Promise<void> {
   return onMain(pressBack0);
 }
 const pressBack0 = driven(function* pressBack0(): Gen<void> {
-  // the topmost window takes the key: a dialog or popup before the activity under it
-  let top;
+  // the focused window takes the key: the topmost focusable one, else the activity under them.
+  // ViewRootImpl hands it to the root view, which a decor passes to its window's callback.
+  let top: JObj | undefined;
   for (let i = overlays.length - 1; i >= 0; i--) {
-    if (overlays[i].view.visibility === 0 && takesKeys(overlays[i].view)) { top = overlays[i]; break; }
+    const o = overlays[i];
+    if (o.view.visibility === 0 && !(o.flags & FLAG_NOT_FOCUSABLE)) { top = (o.view.windowOwner?.callbackObj as JObj | null) ?? o.view; break; }
   }
   const act = booted?.stack.at(-1);
   try {
-    if (top?.onBack) yield top.onBack();
-    else if (top?.dismissOnOutside) yield dismissOverlay(top);
+    if (top) yield pressBackKey(top);
     else if (act && !booted!.background) yield pressBackKey(act);
   } catch (e) { reportUncaught(e); }
 });
@@ -512,7 +514,7 @@ function forceLayoutFlags(v: JView) {
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
 
-let touchTarget: "decor" | { overlay: number } | null = null;
+let touchTarget: "decor" | Overlay | null = null;
 let downTime = 0;
 // input joins the main queue: keeps DOWN/UP ordered and serialized with layout,
 // Handler posts, and lifecycle — like Android's single main looper.
@@ -538,35 +540,29 @@ const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: nu
   ev.downTime = downTime;
   try {
     if (action === 0) {
+      // InputDispatcher: the topmost touchable window whose frame holds the point, or that is
+      // touch-modal, takes the gesture; FLAG_WATCH_OUTSIDE_TOUCH windows above it see ACTION_OUTSIDE
+      touchTarget = "decor";
       for (let i = overlays.length - 1; i >= 0; i--) {
-        const o = overlays[i];
-        const v = o.view;
-        if (v.visibility !== 0 || !takesTouch(v)) continue;
-        if (x >= v.left && x < v.right && y >= v.top && y < v.bottom) {
-          touchTarget = { overlay: i };
-          break;
-        }
-        if (o.dismissOnOutside) {
-          yield dismissOverlay(o);
-          touchTarget = null;
-          return;
-        }
-        if (o.modal) { touchTarget = { overlay: i }; break; }
+        const o = overlays[i], v = o.view;
+        if (v.visibility !== 0) continue;
+        const inside = x >= v.left && x < v.right && y >= v.top && y < v.bottom;
+        if (!(o.flags & FLAG_NOT_TOUCHABLE) && (inside || !(o.flags & (FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL)))) { touchTarget = o; break; }
+        if (o.flags & FLAG_WATCH_OUTSIDE_TOUCH) yield guardCall(v, M_dispatch, Object.assign(copyEvent(ev), { action: 4, x: x - v.left, y: y - v.top }));
       }
-      if (touchTarget === null) touchTarget = "decor";
     } else if (touchTarget === null) {
-      // No target is latched, so the DOWN either never happened or was swallowed dismissing an
-      // overlay. Falling through would dispatch this MOVE to the decor as though a finger had
-      // been down on it all along, and a scroller would jump by the whole distance since its
-      // stale last position.
+      // No target is latched: the DOWN never happened. Falling through would dispatch this MOVE
+      // to the decor as though a finger had been down on it all along, and a scroller would
+      // jump by the whole distance since its stale last position.
       return;
     }
-    if (touchTarget && touchTarget !== "decor") {
-      const o = overlays[touchTarget.overlay];
-      if (o?.view.visibility === 0) {
-        ev.x = x - o.view.left;
-        ev.y = y - o.view.top;
-        yield guardCall(o.view, M_dispatch, ev);
+    if (touchTarget !== "decor") {
+      // a window the gesture's DOWN removed (a dismissed popup) takes nothing more of it
+      const v = touchTarget.view;
+      if (v.visibility === 0 && overlays.includes(touchTarget)) {
+        ev.x = x - v.left;
+        ev.y = y - v.top;
+        yield guardCall(v, M_dispatch, ev);
       }
     } else {
       ev.x = x;

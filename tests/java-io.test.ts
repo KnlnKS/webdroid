@@ -3,7 +3,7 @@ import { unzipSync } from "fflate";
 import "../src/natives";
 import { mkPfd } from "../src/android/os";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
-import { rt } from "../src/jvm/runtime";
+import { rt, type JObj } from "../src/jvm/runtime";
 import { mkFile, JFileDescriptor, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
@@ -263,6 +263,16 @@ describe("file-order", () => {
   });
 });
 
+describe("file-relative", () => {
+  test("a relative directory lists relative children and reports a plain File parent", async () => {
+    vfs.write("/relative-list/child", new Uint8Array(0));
+    const dir = await newObj("java/io/File", "(Ljava/lang/String;)V", "relative-list");
+    const [child] = await vcall(dir, "listFiles", "()[Ljava/io/File;") as JObj[];
+    expect(await vcall(child, "getPath", "()Ljava/lang/String;")).toBe("relative-list/child");
+    expect(await vcall(await vcall(child, "getParentFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;")).toBe("relative-list");
+  });
+});
+
 describe("input-stream-wrapping", () => {
   class ForwardOnlyStream extends JInputStream { cursor = 0; bytes = new TextEncoder().encode("<svg/>"); }
   rt.register({ name: "test/ForwardOnlyStream", ctor: ForwardOnlyStream, sup: "java/io/InputStream", methods: {
@@ -293,6 +303,14 @@ describe("input-stream-wrapping", () => {
     // NUL as C0 80 and U+1F680 as a surrogate pair of three-byte halves, as Java's writeUTF emits them
     const input = await data(await bytes([0, 8, 0xc0, 0x80, 0xed, 0xa0, 0xbd, 0xed, 0xba, 0x80]));
     expect(await vcall(input, "readUTF", "()Ljava/lang/String;")).toBe("\0🚀");
+  });
+
+  test("InputStreamReader's UTF-16 takes the byte order from either mark", async () => {
+    for (const [values, text] of [[[0xff, 0xfe, 0x68, 0, 0x69, 0], "hi"], [[0xfe, 0xff, 0, 0x68], "h"], [[0, 0x68], "h"]] as const) {
+      const reader = await newObj("java/io/InputStreamReader", "(Ljava/io/InputStream;Ljava/lang/String;)V", await bytes([...values]), "UTF-16");
+      const out = new Uint16Array(4), n = await vcall(reader, "read", "([CII)I", out, 0, 4);
+      expect(String.fromCharCode(...out.subarray(0, n))).toBe(text);
+    }
   });
 
   test("DataInputStream advances the original stream's cursor", async () => {

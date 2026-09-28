@@ -18,7 +18,8 @@ import { onMain } from "../android/mainloop";
 import { PROCESS_PID, uptimeMillis, reportUncaught } from "../android/os";
 import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
 import { vcall } from "../jvm/natives/jlang";
-import { vfs } from "./vfs";
+import { apkPath, vfs } from "./vfs";
+import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
 import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
 import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
@@ -47,11 +48,13 @@ type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
 type ActivityRequest = { kind: "launch"; id: number; taskId: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
-  | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" } | { kind: "finishTask"; taskId: number; resume: boolean };
+  | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" } | { kind: "finishTask"; taskId: number; resume: boolean }
+  | { kind: "finishActivities"; ids: number[]; resume: boolean };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
 const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
-type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
+/** splits: the installed config/feature split apks beside the base, which only the running app has */
+type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; splits: FileSource[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
@@ -191,6 +194,15 @@ class ProcessBroker {
       for (const activity of removed.slice(1)) if (this.alive(activity.caller)) await this.result(activity, 0, null);
     });
   }
+  finishAffinity(pid: number, activityId: number): Promise<void> {
+    const group = this.tasks.affinityGroup(pid, activityId);
+    return this.queueActivity(async () => {
+      for (const member of new Set(group.map(a => a.pid))) if (this.alive(member)) {
+        const ids = group.filter(a => a.pid === member).map(a => a.id);
+        await this.request(this.entry(member), endpoint => endpoint.activity({ kind: "finishActivities", ids, resume: member === this.foregroundPid }));
+      }
+    });
+  }
   back(caller: number): boolean {
     if (!this.foregroundPid || this.foregroundPid === caller) return false;
     this.queueActivity(() => this.request(this.entry(this.foregroundPid), (endpoint) => endpoint.activity({ kind: "back" })));
@@ -295,7 +307,8 @@ class ProcessBroker {
     const registry = await Promise.all([...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map(async (record) => {
       const source = packedArchives.get(record.path) ?? await vfs.readFile(record.path);
       if (!source) throw new Error("Package bytes unavailable: " + record.pkg);
-      return { pkg: record.pkg, source, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
+      const splits = record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : [];
+      return { pkg: record.pkg, source, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     }));
     return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry };
   }
@@ -446,10 +459,11 @@ export function connectProcess(): ProcessEndpoint {
     const taskId = intent.flags & 0x10000000 ? 0 : (result?.act ?? appHost?.currentActivity())?.taskId ?? 0;
     void broker.launchActivity(PROCESS_PID, pkg, process, component, data, request, caller?.cls ?? null, taskId);
   };
-  activityTransport.attach = (act, task) => {
-    const attached = broker.tasks.attach(PROCESS_PID, task); act.activityId = attached.id; act.taskId = attached.task;
+  activityTransport.attach = (act, task, affinity) => {
+    const attached = broker.tasks.attach(PROCESS_PID, task, affinity); act.activityId = attached.id; act.taskId = attached.task;
     if (act.remoteId) broker.activityTask(PROCESS_PID, act.remoteId, act.taskId);
   };
+  activityTransport.finishAffinity = act => { void broker.finishAffinity(PROCESS_PID, act.activityId); };
   activityTransport.isTaskRoot = act => broker.tasks.root(PROCESS_PID, act.activityId);
   activityTransport.removeTask = act => {
     void resultIntent(act.resultData).then(data => broker.removeTask(PROCESS_PID, act.activityId, act.resultCode, data)).catch(reportUncaught);
@@ -508,6 +522,7 @@ export function connectProcess(): ProcessEndpoint {
     activity: async (request) => {
       const [shell, stack] = await Promise.all([import("./device"), import("./activities")]);
       if (request.kind === "finishTask") return stack.finishTask(request.taskId, request.resume);
+      if (request.kind === "finishActivities") return stack.finishActivityIds(request.ids, request.resume);
       if (request.kind === "back") return shell.pressBack();
       if (request.kind === "visibility") {
         await stack.activityVisibility(request.phase);

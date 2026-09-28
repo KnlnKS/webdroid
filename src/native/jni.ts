@@ -170,7 +170,18 @@ function retWord(ret: string, v: unknown, cpu: Cpu): HostRet {
   }
 }
 
+/** ART hands out array elements in place, so native code reads a pinned pointer after Java
+ *  filled the array (InputStream.read into it) and passes arrays it wrote through one: a pinned
+ *  array that crosses a call is synced both ways around it. */
+function syncPinned(args: unknown[], toJava: boolean): void {
+  for (const arr of args) {
+    const at = pinsOf.get(arr);
+    if (at) for (const p of at) (toJava ? copyIn : copyOut)(pinned.get(p)!.type, arr, p, 0, (arr as { length: number }).length);
+  }
+}
 async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): Promise<HostRet> {
+  const synced = pinned.size > 0;
+  if (synced) syncPinned(args, true);
   try {
     let fn: any;
     if (m.isStatic) {
@@ -187,6 +198,8 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
   } catch (e) {
     pend(cpu, rt.jx(e));
     return m.ret === "J" || m.ret === "D" ? 0n : 0;
+  } finally {
+    if (synced) syncPinned(args, false);
   }
 }
 
@@ -251,6 +264,8 @@ const PRIM = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Floa
 const PRIM_DESC = ["L", "Z", "B", "C", "S", "I", "J", "F", "D", "V"];
 const elemSize: Record<string, number> = { Z: 1, B: 1, C: 2, S: 2, I: 4, J: 8, F: 4, D: 8 };
 const pinned = new Map<number, { arr: any; type: string }>();
+/** each pinned array's element pointers, for the call boundaries that sync them */
+const pinsOf = new Map<unknown, number[]>();
 function copyOut(type: string, arr: any, p: number, start: number, len: number): void {
   const bytes = u8(arr, start * elemSize[type], len * elemSize[type]);
   mem.u8.set(bytes, p);
@@ -259,10 +274,17 @@ function copyIn(type: string, arr: any, p: number, start: number, len: number): 
   const dst = u8(arr, start * elemSize[type], len * elemSize[type]);
   dst.set(mem.u8.subarray(p, p + len * elemSize[type]));
 }
+function unpin(p: number, arr: unknown): void {
+  pinned.delete(p);
+  const at = pinsOf.get(arr)!;
+  if (at.length > 1) at.splice(at.indexOf(p), 1); else pinsOf.delete(arr);
+}
 function pin(arr: any, type: string, isCopy: number): number {
   const p = mem.malloc(Math.max(1, arr.length * elemSize[type]));
   copyOut(type, arr, p, 0, arr.length);
   pinned.set(p, { arr, type });
+  const at = pinsOf.get(arr);
+  if (at) at.push(p); else pinsOf.set(arr, [p]);
   if (isCopy) mem.st8(isCopy, 1);
   return p;
 }
@@ -461,7 +483,7 @@ export function jniInit(): void {
       const pin = pinned.get(p);
       if (!pin) return;
       if (mode !== 2) copyIn(pin.type, pin.arr, p, 0, pin.arr.length);
-      if (mode !== 1) { pinned.delete(p); mem.free(p); }
+      if (mode !== 1) { unpin(p, pin.arr); mem.free(p); }
     });
     for (const [slot, kind, copy] of [[198, "Get", copyOut], [206, "Set", copyIn]] as const) def(slot + k, `${kind}${P}ArrayRegion`, (cpu, a) => {
       a.p(); const arr = deref(a.p()) as any; const st = a.i(), n = a.i(), buf = a.p();

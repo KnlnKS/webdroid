@@ -12,7 +12,8 @@ export const SYSTEM_PACKAGES = [
     // Browser geolocation supplies the platform provider; radio scans are unavailable.
     disabledComponents: ["org.microg.gms.location.network.NetworkLocationService"],
     provision: { component: "org.microg.gms.provision.ProvisionService",
-      extras: { checkin_enabled: true, gcm_enabled: true },
+      // Nominatim answers the platform Geocoder, which apps use to turn a fix into an address
+      extras: { checkin_enabled: true, gcm_enabled: true, nominatim_enabled: true },
       attestationExtras: { safetynet_enabled: true } },
   },
   {

@@ -5,19 +5,23 @@ import type { JContext } from "./context";
 import { JIntent } from "./intent";
 import { onMain } from "./mainloop";
 import { reportUncaught, JBundle } from "./os";
+import type { JIntentFilter } from "./intent-filter";
+import { mkUri, uriParts } from "./net";
 
-interface Filter { actions: string[]; schemes?: string[]; priority?: number; }
 type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
 export const broadcastTransport: { send: ((intent: JIntent, permission: string | null, ordered: boolean) => Promise<void>) | null } = { send: null };
-const receivers = new Map<JObj, { context: JContext; filter: Filter; handler: unknown }>();
-export function registerReceiver(context: JContext, receiver: JObj | null, filter: Filter, handler: unknown = null): null {
+const receivers = new Map<JObj, { context: JContext; filter: JIntentFilter; handler: unknown }>();
+export function registerReceiver(context: JContext, receiver: JObj | null, filter: JIntentFilter, handler: unknown = null): null {
   if (receiver) receivers.set(receiver, { context, filter, handler });
   return null;
 }
 export function unregisterReceiver(receiver: JObj): void { receivers.delete(receiver); }
-const receiverTargets = (intent: JIntent) => [...receivers].filter(([, { context, filter }]) =>
-  (!intent.pkg || intent.pkg === context.$host?.pkg) && filter.actions.includes(intent.action ?? "") &&
-  (!filter.schemes?.length || filter.schemes.includes(intent.dataUri?.split(":", 1)[0] ?? "")));
+/** a registered receiver is found through its filter's actions, so an intent without one reaches none */
+function receiverTargets(intent: JIntent) {
+  const data = intent.dataUri === null ? null : mkUri(intent.dataUri), scheme = data && uriParts(data).scheme;
+  return [...receivers].filter(([, { context, filter }]) => (!intent.pkg || intent.pkg === context.$host?.pkg)
+    && intent.action !== null && filter.match(intent.action, intent.typeStr, scheme, data, intent.categories) >= 0);
+}
 export const hasBroadcastReceiver = (intent: JIntent): boolean => receiverTargets(intent).length > 0;
 export function sendBroadcast(context: JContext, intent: JIntent, permission: string | null = null, ordered = false): void {
   if (broadcastTransport.send) { void broadcastTransport.send(intent, permission, ordered).catch(reportUncaught); return; }
@@ -29,7 +33,7 @@ export async function deliverBroadcast(context: JContext, intent: JIntent, compo
     await deliver(receiver, context, intent, null, ordered, result); return result;
   }
   const targets = receiverTargets(intent);
-  targets.sort((a, b) => (b[1].filter.priority ?? 0) - (a[1].filter.priority ?? 0));
+  targets.sort((a, b) => b[1].filter.priority - a[1].filter.priority);
   for (const [receiver, registration] of targets) {
     if (result.aborted) break;
     await deliver(receiver, registration.context ?? context, intent, registration.handler, ordered, result);

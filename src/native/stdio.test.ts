@@ -5,7 +5,7 @@ import { Cpu, setA64 } from "./cpu";
 import { lookupHost, stp } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
-import { fdWriteBack, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath, stdioInit } from "./stdio";
+import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath, stdioInit } from "./stdio";
 
 test("printf renders unmapped guest pointer values without dereferencing them", async () => {
   setA64(true); libcInit();
@@ -31,6 +31,36 @@ test("fixed file remapping preserves dirty shared bytes before replacing pages",
     expect(vfs.read(path)?.[0]).toBe(17);
   } finally {
     if (address) await cpu.call(munmap, [address, 4096]);
+    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+  }
+});
+
+test("shared file mappings see each other's synced stores and every writer's, without an older copy clobbering them", async () => {
+  setA64(true); libcInit(); stdioInit();
+  const path = "/coherent-mapping-test";
+  vfs.write(path, new Uint8Array(4096));
+  const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "coherent-mapping-test");
+  const mmap = lookupHost("mmap", "libc.so")!, munmap = lookupHost("munmap", "libc.so")!, msync = lookupHost("msync", "libc.so")!;
+  const pwrite = lookupHost("pwrite", "libc.so")!, buf = mem.hostAlloc(1);
+  const maps: number[] = [];
+  try {
+    for (const prot of [1, 3, 3]) maps.push(await cpu.call(mmap, [0, 4096, prot, 1, fd, 0]));
+    const [reader, a, b] = maps;
+    mem.st8(a, 1); mem.st8(b + 1, 2);
+    await cpu.call(msync, [b, 4096, 4]);
+    await cpu.call(munmap, [a, 4096]);
+    expect([...mem.bytes(reader, 2)]).toEqual([1, 2]);
+    expect([...vfs.read(path)!.subarray(0, 2)]).toEqual([1, 2]);
+    mem.st8(buf, 3);
+    await cpu.call(pwrite, [fd, buf, 1, 2]);
+    expect(mem.ld8u(b + 2)).toBe(3);
+    // a Java stream's write and read go through the same page cache
+    vfs.writeAt(fdFile(fd)!, 3, Uint8Array.of(4));
+    expect(mem.ld8u(b + 3)).toBe(4);
+    mem.st8(b + 4, 5);
+    expect(vfs.read(path)?.[4]).toBe(5);
+  } finally {
+    for (const m of [maps[0], maps[2]]) if (m) await cpu.call(munmap, [m, 4096]);
     javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
 });
@@ -84,16 +114,16 @@ test("independent file opens share writes, growth and truncation without sharing
 test("open files and mappings retain their identity through rename and unlink", () => {
   const from = "/mapped-file-test", to = "/mapped-file-renamed";
   vfs.write(from, Uint8Array.of(1));
-  const fd = javaOpenFd(from, 2), writeBack = fdWriteBack(fd)!;
+  const fd = javaOpenFd(from, 2), file = fdFile(fd)!;
   expect(renamePath(null, from, to)).toBe(0);
-  writeBack(0, Uint8Array.of(2));
+  vfs.writeAt(file, 0, Uint8Array.of(2));
   expect(vfs.read(to)).toEqual(Uint8Array.of(2));
   expect(vfs.read(from)).toBeNull();
   javaCloseFd(fd);
-  writeBack(1, Uint8Array.of(3));
+  vfs.writeAt(file, 1, Uint8Array.of(3));
   expect(vfs.read(to)).toEqual(Uint8Array.of(2, 3));
   vfs.delete(to); vfs.write(to, Uint8Array.of(9));
-  writeBack(0, Uint8Array.of(4));
+  vfs.writeAt(file, 0, Uint8Array.of(4));
   expect(vfs.read(to)).toEqual(Uint8Array.of(9));
   vfs.delete(to);
 });
@@ -170,4 +200,47 @@ test("fts walks directories in pre- and postorder", async () => {
     mem.free(argv); mem.free(path); vfs.delete("/fts-test/a"); vfs.delete("/fts-test/sub/b");
     vfs.rmdir("/fts-test/sub"); vfs.rmdir("/fts-test"); cpu.dispose(); setA64(false);
   }
+});
+
+test("writev and readv move each iovec in order through a pipe, stopping short rather than waiting", async () => {
+  setA64(true); stdioInit();
+  const cpu = new Cpu(mainThread, "iovec-test"), buffer = mem.malloc(64);
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const iov = (at: number, ...parts: [number, number][]) => parts.forEach(([base, len], i) => { mem.st64(at + i * 16, BigInt(base)); mem.st64(at + i * 16 + 8, BigInt(len)); });
+  expect(await call("pipe", buffer)).toBe(0);
+  const reader = mem.ld32(buffer), writer = mem.ld32(buffer + 4);
+  try {
+    mem.write(buffer + 8, Uint8Array.of(1, 2, 3, 4, 5));
+    iov(buffer + 16, [buffer + 8, 2], [buffer + 8, 0], [buffer + 11, 2]);
+    expect(await call("writev", writer, buffer + 16, 3)).toBe(4);
+    iov(buffer + 16, [buffer + 56, 3], [buffer + 60, 3]);
+    expect(await call("readv", reader, buffer + 16, 2)).toBe(4);
+    expect([...mem.bytes(buffer + 56, 3), ...mem.bytes(buffer + 60, 1)]).toEqual([1, 2, 4, 5]);
+    // a read that fills one iovec and would then wait returns what it has
+    expect(await call("write", writer, buffer + 8, 2)).toBe(2);
+    iov(buffer + 16, [buffer + 56, 2], [buffer + 60, 3]);
+    expect(await call("readv", reader, buffer + 16, 2)).toBe(2);
+  } finally { javaCloseFd(reader); javaCloseFd(writer); mem.free(buffer); cpu.dispose(); setA64(false); }
+});
+
+test("a fifo goes with its file and ends when its last writer closes", async () => {
+  setA64(true); stdioInit();
+  const cpu = new Cpu(mainThread, "fifo-test"), path = mem.strdup("/fifo-test"), buf = mem.malloc(4);
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  try {
+    expect(await call("mkfifo", path, 0o600)).toBe(0);
+    const reader = javaOpenFd("/fifo-test", 0x800), writer = javaOpenFd("/fifo-test", 1), copy = javaDupFd(writer);
+    javaCloseFd(writer);
+    expect(await call("read", reader, buf, 4)).toBe(-1);                   // EAGAIN: a writer is still open
+    javaCloseFd(copy);
+    expect(await call("read", reader, buf, 4)).toBe(0);
+    javaCloseFd(reader);
+    expect(await call("unlinkat", -100, path, 0)).toBe(0);
+    vfs.write("/fifo-test", Uint8Array.of(7));
+    const file = javaOpenFd("/fifo-test", 0);
+    expect(await call("read", file, buf, 4)).toBe(1);
+    javaCloseFd(file);
+    vfs.delete("/fifo-test");
+    expect(await call("mkfifo", path, 0o600)).toBe(0);
+  } finally { vfs.delete("/fifo-test"); mem.free(path); mem.free(buf); cpu.dispose(); setA64(false); }
 });

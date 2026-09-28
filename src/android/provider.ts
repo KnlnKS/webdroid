@@ -13,9 +13,10 @@ import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
 import { isMediaUri, mediaDelete, mediaFlag } from "./mediastore";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { uriListClip } from "./clipdata";
 import { appHost } from "./apphost";
 import { packages } from "./packages";
-import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
+import { docCreate, docDelete, docRename, pickTree, pickDocument, pickDocuments, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
 const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 
@@ -27,6 +28,17 @@ registerSystemActivity("android.intent.action.PICK", async (intent) => {
   if (!mime || !/^(image|video|audio)\//.test(mime)) throw rt.unimplemented("PICK for " + (mime ?? intent.dataUri));
   const uri = await pickDocument({ mime });
   return uri ? mkResultIntent(uri, 1) : null;
+});
+// MediaStore.ACTION_PICK_IMAGES, the photo picker: one item as the data, or up to
+// EXTRA_PICK_IMAGES_MAX as ClipData, readable and persistable
+registerSystemActivity("android.provider.action.PICK_IMAGES", async (intent) => {
+  const mime = intent.typeStr, multiple = Number(intent.extras.map.get("android.provider.extra.PICK_IMAGES_MAX") ?? 1) > 1;
+  if (mime && !/^(image|video)\//.test(mime)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid picker MIME type " + mime);
+  const uris = await pickDocuments({ mime, multiple });
+  if (!uris.length) return null;
+  const result = mkResultIntent(multiple ? null : uris[0], 1 | 0x40);
+  if (multiple) result.clipData = uriListClip(uris.map(mkUri));
+  return result;
 });
 for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.action.GET_CONTENT",
   "android.intent.action.CREATE_DOCUMENT"] as const) {

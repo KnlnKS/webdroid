@@ -1,61 +1,9 @@
 import { rt, JObj, type NativeSpec, fieldGetters, fieldSetters, flagGetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
-import { newObj, vcall, vcallUncaught } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newObj, vcall } from "../jvm/natives/jlang";
 
 rt.markers("android/location/LocationListener");
-
-const coordinate = (value: number, limit: number) => {
-  if (!Number.isFinite(value) || Math.abs(value) > limit)
-    throw rt.mkThrowable("java/lang/IllegalArgumentException", `invalid coordinate: ${value}`);
-};
-const geocodeBounds = (minLat: number, minLon: number, maxLat: number, maxLon: number) => {
-  coordinate(minLat, 90); coordinate(minLon, 180); coordinate(maxLat, 90); coordinate(maxLon, 180);
-};
-const geocodeLimit = (count: number) => {
-  if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", `maxResults must be positive: ${count}`);
-};
-const geocodeName = (name: string | null, count: number) => {
-  if (name === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locationName is null");
-  geocodeLimit(count);
-};
-const geocodeCallback = (listener: unknown) => {
-  if (listener === null) rt.npe();
-  setTimeout(() => void vcallUncaught(listener, "onGeocode", "(Ljava/util/List;)V", newArrayList()), 0);
-};
-rt.markers("android/location/Geocoder$GeocodeListener");
-rt.register({
-  name: "android/location/Geocoder", ctor: class extends JObj {},
-  methods: {
-    "<init>(Landroid/content/Context;)V": (context: unknown) => { if (context === null) rt.npe(); },
-    "<init>(Landroid/content/Context;Ljava/util/Locale;)V": (context: unknown, locale: unknown) => {
-      if (context === null || locale === null) rt.npe();
-    },
-    "static isPresent()Z": () => 0,
-    "getFromLocation(DDI)Ljava/util/List;": (lat: number, lon: number, count: number) => {
-      coordinate(lat, 90); coordinate(lon, 180); geocodeLimit(count);
-      return newArrayList();
-    },
-    "getFromLocation(DDILandroid/location/Geocoder$GeocodeListener;)V":
-      (lat: number, lon: number, count: number, listener: unknown) => {
-        coordinate(lat, 90); coordinate(lon, 180); geocodeLimit(count); geocodeCallback(listener);
-      },
-    "getFromLocationName(Ljava/lang/String;I)Ljava/util/List;": (name: string | null, count: number) => {
-      geocodeName(name, count); return newArrayList();
-    },
-    "getFromLocationName(Ljava/lang/String;IDDDD)Ljava/util/List;":
-      (name: string | null, count: number, minLat: number, minLon: number, maxLat: number, maxLon: number) => {
-        geocodeName(name, count); geocodeBounds(minLat, minLon, maxLat, maxLon); return newArrayList();
-      },
-    "getFromLocationName(Ljava/lang/String;ILandroid/location/Geocoder$GeocodeListener;)V":
-      (name: string | null, count: number, listener: unknown) => { geocodeName(name, count); geocodeCallback(listener); },
-    "getFromLocationName(Ljava/lang/String;IDDDDLandroid/location/Geocoder$GeocodeListener;)V":
-      (name: string | null, count: number, minLat: number, minLon: number, maxLat: number, maxLon: number, listener: unknown) => {
-        geocodeName(name, count); geocodeBounds(minLat, minLon, maxLat, maxLon); geocodeCallback(listener);
-      },
-  },
-});
 
 export class JLocation extends JObj {
   provider: string | null = null;

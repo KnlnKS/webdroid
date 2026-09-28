@@ -2,14 +2,18 @@ import "../../../src/natives";
 import { onMain } from "../../../src/android/mainloop";
 import { overlays } from "../../../src/android/popup";
 import { JView } from "../../../src/android/view";
+import type { JKeyEvent } from "../../../src/android/keyevent";
+import { mangleMethod } from "../../../src/jvm/abi";
 import { pressBack } from "../../../src/shell/device";
 
 async function probe() {
   const events: string[] = [];
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  overlays.push({ view: new JView(), x: 0, y: 0, dismissOnOutside: false,
-    onBack: () => { events.push("back"); } });
+  const view = Object.assign(new JView(), {
+    [mangleMethod("dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z")]: (ev: JKeyEvent) => { if (ev.action === 1) events.push("back"); return 1; },
+  });
+  overlays.push({ view, x: 0, y: 0, flags: 0 });
   try {
     const job = onMain(async () => {
       events.push("start");

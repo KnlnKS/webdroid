@@ -22,15 +22,19 @@ type OpenedApk = { source: FileSource; split: string | null; hasManifest: boolea
   | { kind: "lazy"; bytes: null; zip: null; entries: Map<string, ZEntry> }
 );
 
-export function mergeInstall(opened: OpenedApk[]): Install {
-  const base = opened.find((o) => o.hasManifest && !o.split);
-  if (!base || base.kind !== "resident") throw new Error("split install has no resident base apk");
+/** the apks merged over their base: the one among `opened`, or `base` when its tree is already open */
+export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "base">): Install {
+  if (!base) {
+    const apk = opened.find((o) => o.hasManifest && !o.split);
+    if (!apk || apk.kind !== "resident") throw new Error("split install has no resident base apk");
+    base = { zip: apk.zip, base: apk.bytes };
+    opened = opened.filter((o) => o !== apk);
+  }
   const merged = base.zip;
   const lazyEntries = new Map<string, FileSource>();
   const splits: Install["splits"] = [];
   let extra = 0;
   for (const o of opened) {
-    if (o === base) continue;
     if (o.kind === "resident") zipTree(o.bytes, merged, (path) => {
       const target = path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
         : /^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path;
@@ -44,7 +48,7 @@ export function mergeInstall(opened: OpenedApk[]): Install {
     if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : null });
     console.log("[webdroid] split", o.split ?? "(unnamed)", o.kind === "resident" ? Object.keys(o.zip).length : "lazy", "entries");
   }
-  return { zip: merged, lazyEntries, base: base.bytes, splits };
+  return { zip: merged, lazyEntries, base: base.base, splits };
 }
 
 export function openInstall(bytes: Uint8Array): Install {
@@ -98,8 +102,13 @@ async function openInstallSource(source: FileSource): Promise<Install> {
   if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
-  const opened = await Promise.all(apks.map(async (entry) => openedApk(await entrySource(source, entry))));
-  return mergeInstall(opened);
+  return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))));
+}
+
+/** an install from its apks: the base among them, or given already open (a packed archive, a
+ *  parsed apk) so that it is not read again */
+export async function openInstallApks(apks: FileSource[], base?: Pick<Install, "zip" | "base">): Promise<Install> {
+  return mergeInstall(await Promise.all(apks.map(openedApk)), base);
 }
 
 export async function openInstallRemote(url: string): Promise<Install> {

@@ -1,4 +1,4 @@
-import { utf8, charsToString } from "./abi";
+import { utf8, charsToString, concat } from "./abi";
 import { rt } from "./runtime";
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
@@ -56,6 +56,26 @@ export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown): s
   }
   const text = charsToString(chars, 0, chars.length);
   return wide ? text.replace(LONE_SURROGATE, "\ufffd") : text;
+}
+
+export type StreamDecoder = { decode(bytes?: Uint8Array, options?: { stream: boolean }): string };
+/** an incremental decoder for a Java charset; single-byte Latin-1 and ASCII need no state, and
+ *  WHATWG's labels for them mean windows-1252 */
+export function streamDecoder(charset: unknown): StreamDecoder {
+  const name = charsetName(charset);
+  if (name === "ISO-8859-1" || name === "US-ASCII") return { decode: (bytes) => bytes ? decodeString(bytes, name) : "" };
+  if (name === "UTF-8") return new TextDecoder();
+  // UTF-16BE/LE keep a leading U+FEFF as decodeString does
+  if (name !== "UTF-16") return new TextDecoder(name.toLowerCase(), { ignoreBOM: true });
+  // Java's UTF-16 takes the byte order from either mark, big-endian without one
+  let inner: TextDecoder | null = null, head = new Uint8Array(0);
+  return { decode(bytes, options) {
+    if (inner) return inner.decode(bytes, options);
+    if (bytes) head = concat([head, bytes]);
+    if (head.length < 2 && options?.stream) return "";
+    inner = new TextDecoder(head[0] === 0xff && head[1] === 0xfe ? "utf-16le" : "utf-16be");
+    return inner.decode(head, options);
+  } };
 }
 
 export function encodeModifiedUtf8(str: string): Uint8Array {

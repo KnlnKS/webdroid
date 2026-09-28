@@ -34,6 +34,8 @@ export interface AppHost {
   /** every live activity, bottom of the stack first */
   activities: () => JActivity[];
   finishTask: (taskId: number) => void;
+  /** Activity.finishAffinity: this activity and those below it in its task that share its affinity */
+  finishAffinity: (activity: JActivity) => void;
   invalidateOptionsMenu: (activity: JActivity) => void;
 }
 export let appHost: AppHost | null = null;

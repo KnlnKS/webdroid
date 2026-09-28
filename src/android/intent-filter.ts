@@ -123,13 +123,21 @@ export function matchesIntentFilter(filter: XmlNode, intent: JIntent, defaultOnl
   });
 }
 
-class JIntentFilter extends JObj {
+export class JIntentFilter extends JObj {
   actions: string[] = []; schemes: string[] = []; types: string[] = []; categories: string[] = [];
   authorities: { host: string; port: number | null }[] = [];
   paths: JPatternMatcher[] = []; ssp: JPatternMatcher[] = [];
   staticTypes: string[] = []; mimeGroups: string[] = [];
   priority = 0; staticPartial = 0; dynamicPartial = 0; autoVerify = 0; visibility = 0; order = 0;
   extras: JPersistableBundle | null = null;
+  /** IntentFilter.match: NO_MATCH_ACTION (-3), a data/type failure, NO_MATCH_CATEGORY (-4), or the data match */
+  match(action: string | null, type: string | null, scheme: string | null, data: JUri | null, categories: Iterable<string>): number {
+    if (action !== null && !this.actions.includes(action)) return -3;
+    const r = this.matchData(type, scheme, data);
+    if (r < 0) return r;
+    for (const c of categories) if (!this.categories.includes(c)) return -4;
+    return r;
+  }
   matchData(type: string | null, scheme: string | null, data: JUri | null): number {
     if (!this.types.length && !this.schemes.length) return type === null && data === null ? 0x100000 + 0x8000 : -2;
     let match = 0x100000;
@@ -229,11 +237,7 @@ rt.register({
     },
     "match(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;Ljava/util/Set;Ljava/lang/String;)I":
     driven(function* (this: JIntentFilter, action: string | null, type: string | null, scheme: string | null, data: JUri | null, cats: unknown): Gen {
-      if (action !== null && !this.actions.includes(action)) return -3;
-      const r = this.matchData(type, scheme, data);
-      if (r < 0) return r;
-      for (const c of cats ? (yield toJsArray(cats)) as string[] : []) if (!this.categories.includes(c)) return -4;
-      return r;
+      return this.match(action, type, scheme, data, cats ? (yield toJsArray(cats)) as string[] : []);
     }),
     "addDataAuthority(Ljava/lang/String;Ljava/lang/String;)V": function (this: JIntentFilter, host: string, port: string | null) { this.authorities.push({ host, port: port === null ? null : Number(port) }); },
     "addDataPath(Ljava/lang/String;I)V": function (this: JIntentFilter, path: string, type: number) {

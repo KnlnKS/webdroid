@@ -543,7 +543,7 @@ delegate("android/graphics/Canvas", {
   "nRestore(J)Z": (h: bigint) => { const c = canvas(h); if (c.saveCount <= 1) return 0; on("restore()V")(h); return 1; },
   "nRestoreToCount(JI)V": on("restoreToCount(I)V"),
   "nGetSaveCount(J)I": on("getSaveCount()I"),
-  "nSaveLayer(JFFFFJ)I": (h: bigint, l: number, t: number, r: number, b: number) => on("saveLayerAlpha(FFFFI)I")(h, l, t, r, b, 255),
+  "nSaveLayer(JFFFFJ)I": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => on("saveLayer(FFFFLandroid/graphics/Paint;)I")(h, l, t, r, b, optPaint(p)),
   "nSaveLayerAlpha(JFFFFI)I": on("saveLayerAlpha(FFFFI)I"),
   // an unclipped layer is a plain save here: there is no clip to lift
   "nSaveUnclippedLayer(JIIII)I": on("save()I"),

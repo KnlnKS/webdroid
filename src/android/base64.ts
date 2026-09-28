@@ -53,26 +53,38 @@ function enc(input: Int8Array, off: number, len: number, flags: number): Int8Arr
   return out;
 }
 
-function dec(codes: ArrayLike<number>, off: number, len: number): Int8Array {
+/** AOSP's decoder: characters outside the alphabet are skipped, and padding is optional but
+ *  must be well placed. `strict` is java.util.Base64's basic decoder, which rejects them instead. */
+function dec(codes: ArrayLike<number>, off: number, len: number, strict = false): Int8Array {
   const out: number[] = [];
-  let acc = 0, bits = 0;
+  let acc = 0, q = 0, padding = 0;                        // padding: '=' still expected (1) or done (2)
+  const bad = () => rt.mkThrowable("java/lang/IllegalArgumentException", "bad base-64");
   for (let i = off; i < off + len; i++) {
-    const c = codes[i] & 0xff;
-    if (c === 61) break;                                  // '=' ends the data
-    if (c === 10 || c === 13 || c === 32 || c === 9) continue;
-    const v = DEC[c];
-    if (v < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "bad base-64");
-    acc = (acc << 6) | v; bits += 6;
-    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
+    const c = codes[i] & 0xff, v = DEC[c];
+    if (c === 61) {
+      if (padding === 1) { padding = 2; continue; }
+      if (padding || q < 2) throw bad();
+      if (q === 2) { out.push((acc >> 4) & 0xff); padding = 1; }
+      else { out.push((acc >> 10) & 0xff, (acc >> 2) & 0xff); padding = 2; }
+      q = 0;
+      continue;
+    }
+    if (v < 0) { if (strict) throw bad(); continue; }
+    if (padding) throw bad();
+    acc = (acc << 6) | v;
+    if (++q === 4) { out.push((acc >> 16) & 0xff, (acc >> 8) & 0xff, acc & 0xff); acc = 0; q = 0; }
   }
+  if (q === 1 || padding === 1) throw bad();
+  if (q === 2) out.push((acc >> 4) & 0xff);
+  else if (q === 3) out.push((acc >> 10) & 0xff, (acc >> 2) & 0xff);
   return new Int8Array(out);
 }
 
 /** a base64 String decodes from its char codes, as the byte[] forms decode from their bytes */
-const decodeString = (s: string): Int8Array => {
+const decodeString = (s: string, strict = false): Int8Array => {
   const a = new Array<number>(s.length);
   for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
-  return dec(a, 0, a.length);
+  return dec(a, 0, a.length, strict);
 };
 const ascii = new TextDecoder();
 
@@ -86,7 +98,7 @@ rt.register({
     "static encodeToString([BI)Ljava/lang/String;": (b: Int8Array, f: number) => ascii.decode(enc(b, 0, b.length, f)),
     "static encodeToString([BIII)Ljava/lang/String;":
       (b: Int8Array, o: number, l: number, f: number) => ascii.decode(enc(b, o, l, f)),
-    "static decode(Ljava/lang/String;I)[B": decodeString,
+    "static decode(Ljava/lang/String;I)[B": (s: string) => decodeString(s),
     "static decode([BI)[B": (b: Int8Array) => dec(b, 0, b.length),
     "static decode([BIII)[B": (b: Int8Array, o: number, l: number) => dec(b, o, l),
   },
@@ -141,7 +153,7 @@ rt.register({
 rt.register({
   name: "java/util/Base64$Decoder", ctor: JB64Codec,
   methods: {
-    "decode(Ljava/lang/String;)[B": decodeString,
-    "decode([B)[B": (b: Int8Array) => dec(b, 0, b.length),
+    "decode(Ljava/lang/String;)[B": function (this: JB64Codec, s: string) { return decodeString(s, !(this.flags & CRLF)); },
+    "decode([B)[B": function (this: JB64Codec, b: Int8Array) { return dec(b, 0, b.length, !(this.flags & CRLF)); },
   },
 });

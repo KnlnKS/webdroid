@@ -8,6 +8,8 @@ import { newStringSet, toJsArray } from "../src/jvm/natives/jutil";
 import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/shell/vfs";
+import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
+import { mkUri } from "../src/android/net";
 import { newXmlSerializer } from "../src/android/xmlpull";
 import { onMain } from "../src/android/mainloop";
 
@@ -348,5 +350,17 @@ describe("xml-serializer", () => {
     await vcall(xml, "endDocument", "()V");
     const bytes = await vcall(out, "toByteArray", "()[B") as Int8Array;
     expect(new TextDecoder().decode(bytes)).toBe('<?xml version="1.0" encoding="UTF-8"?><root title="a&amp;&quot;b">&lt;x&gt;&amp;</root>');
+  });
+});
+
+describe("mediastore", () => {
+  test("an update renames or moves the file under the same id, and unhandled columns change nothing", async () => {
+    freshSQLiteStore();
+    const uri = (await mediaInsert(mkUri("content://media/external/images/media"), new Map<string, unknown>([["_display_name", "a"], ["mime_type", "image/jpeg"]])))!;
+    expect(await mediaPath(uri)).toBe("/sdcard/Pictures/a.jpg");
+    expect(await mediaUpdate(uri, new Map([["title", "x"]]), null, null)).toBe(0);
+    expect(await mediaUpdate(uri, new Map([["_display_name", "b"], ["relative_path", "DCIM/Camera/"]]), null, null)).toBe(1);
+    expect(await mediaPath(uri)).toBe("/sdcard/DCIM/Camera/b.jpg");
+    expect(vfs.exists("/sdcard/Pictures/a.jpg")).toBe(false);
   });
 });

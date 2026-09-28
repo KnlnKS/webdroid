@@ -263,14 +263,15 @@ function signed(v: number, t: Extract<Tok, { k: "val" }>): string {
   if (v < 0) return t.sign === SIGN.NOT_NEGATIVE ? dtErr(`Field ${camel(t.f)} cannot be printed as the value ${v} cannot be negative according to the SignStyle`) : t.sign === SIGN.NEVER ? body : "-" + body;
   return (t.sign === SIGN.ALWAYS || (t.sign === SIGN.EXCEEDS_PAD && digits.length > t.min) ? "+" : "") + body;
 }
-function formatToks(toks: Tok[], p: Parts, tag: string): string {
+/** ampm: DateFormatSymbols' replacement AM/PM strings */
+function formatToks(toks: Tok[], p: Parts, tag: string, ampm?: string[] | null): string {
   let out = "";
   for (const t of toks) {
     switch (t.k) {
       case "lit": out += t.s; break;
-      case "opt": try { out += formatToks(t.toks, p, tag); } catch (e) { if (!(e instanceof Missing)) throw e; } break;
+      case "opt": try { out += formatToks(t.toks, p, tag, ampm); } catch (e) { if (!(e instanceof Missing)) throw e; } break;
       case "val": out += signed(need(p, t.f, tag), t); break;
-      case "text": out += textOf(t.f, need(p, t.f, tag), t.style, tag); break;
+      case "text": out += t.f === "AMPM_OF_DAY" && ampm ? ampm[need(p, t.f, tag)] ?? "" : textOf(t.f, need(p, t.f, tag), t.style, tag); break;
       case "frac": {
         let digits = pad(need(p, "NANO_OF_SECOND", tag), 9).slice(0, t.max);
         while (digits.length > t.min && digits.endsWith("0")) digits = digits.slice(0, -1);
@@ -302,8 +303,8 @@ function formatToks(toks: Tok[], p: Parts, tag: string): string {
   }
   return out;
 }
-function formatParts(toks: Tok[], p: Parts, tag: string): string {
-  try { return formatToks(toks, p, tag); } catch (e) {
+function formatParts(toks: Tok[], p: Parts, tag: string, ampm?: string[] | null): string {
+  try { return formatToks(toks, p, tag, ampm); } catch (e) {
     if (!(e instanceof Missing)) throw e;
     return e.f === "ZoneId" ? dtErr("Unable to extract ZoneId from temporal") : unsupported(`Unsupported field: ${e.f in FIELD_ORD ? camel(e.f) : e.f}`);
   }
@@ -311,7 +312,7 @@ function formatParts(toks: Tok[], p: Parts, tag: string): string {
 
 // ── parsing
 /** century: SimpleDateFormat's two-digit-year window start (epoch ms); null is 80 years before now */
-interface ParseState { s: string; i: number; f: Map<string, number>; off?: number; zone?: JZoneId; ci: boolean; tag: string; sdf: boolean; century?: number | null }
+interface ParseState { s: string; i: number; f: Map<string, number>; off?: number; zone?: JZoneId; ci: boolean; tag: string; sdf: boolean; century?: number | null; ampm?: string[] | null }
 const isDigit = (c: number) => c >= 48 && c <= 57;
 function parseToks(toks: Tok[], st: ParseState): boolean {
   for (let k = 0; k < toks.length; k++) {
@@ -369,7 +370,7 @@ function parseToks(toks: Tok[], st: ParseState): boolean {
       case "text": {
         let best = -1, bestLen = 0;
         const rest = st.s.slice(st.i), lower = rest.toLowerCase();
-        for (const list of textCandidates(t.f, st.tag)) list.forEach((name, idx) => {
+        for (const list of t.f === "AMPM_OF_DAY" && st.ampm ? [st.ampm] : textCandidates(t.f, st.tag)) list.forEach((name, idx) => {
           if (name.length > bestLen && (rest.startsWith(name) || ((st.ci || st.sdf) && lower.startsWith(name.toLowerCase())))) { best = idx; bestLen = name.length; }
         });
         if (best < 0) return false;
@@ -571,14 +572,14 @@ const sdfToks = (pattern: string) => {
   return toks;
 };
 export function checkSdfPattern(pattern: string): void { sdfToks(pattern); }
-export function formatPattern(pattern: string, ms: number, zoneId = localTz.id, locale: JLocale | null = null): string {
+export function formatPattern(pattern: string, ms: number, zoneId = localTz.id, locale: JLocale | null = null, ampm?: string[] | null): string {
   const zone = zoneForId(zoneId), i = instantOfMs(ms), z = zdtOfEpoch(i.s, i.ns, zone);
-  return formatParts(sdfToks(pattern), { date: z.ldt.date, time: z.ldt.time, off: z.off, zone, inst: i }, tagOf(locale));
+  return formatParts(sdfToks(pattern), { date: z.ldt.date, time: z.ldt.time, off: z.off, zone, inst: i }, tagOf(locale), ampm);
 }
 /** SimpleDateFormat.parse(text, pos): epoch millis, or null with the error index in `pos` */
 export function parsePattern(pattern: string, text: string, pos: { index: number; errorIndex: number }, zoneId = localTz.id, locale: JLocale | null = null,
-  century: number | null = null): number | null {
-  const st: ParseState = { s: text, i: pos.index, f: new Map(), ci: true, tag: tagOf(locale), sdf: true, century };
+  century: number | null = null, ampm?: string[] | null): number | null {
+  const st: ParseState = { s: text, i: pos.index, f: new Map(), ci: true, tag: tagOf(locale), sdf: true, century, ampm };
   if (!parseToks(sdfToks(pattern), st)) { pos.errorIndex = st.i; return null; }
   let p: Parts;
   try { p = resolveFields(st, [], null, true); } catch { pos.errorIndex = st.i; return null; }

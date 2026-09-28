@@ -2,10 +2,52 @@ import { rt, JObj } from "../jvm/runtime";
 import { type JSimpleEnum } from "../jvm/natives/jlang";
 
 type Effect = { kind: "offset"; x: number; y: number } | { kind: "blur"; x: number; y: number; tile: number };
-export class JRenderEffect extends JObj {
+/** the rasters a blur reuses from one run to the next */
+export type BlurCache = { padded: OffscreenCanvas | null; blurred: OffscreenCanvas | null };
+function sized(c: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
+  if (!c) return new OffscreenCanvas(w, h);
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  return c;
+}
+/** `src` drawn at w x h inside a `pad` border tiled by Shader.TileMode `tile`: CLAMP repeats the
+ *  outermost pixels, REPEAT and MIRROR the image, DECAL leaves it transparent */
+function padded(cache: BlurCache, src: OffscreenCanvas, w: number, h: number, pad: number, tile: number): OffscreenCanvas {
+  const padded = cache.padded = sized(cache.padded, w + 2 * pad, h + 2 * pad), p = padded.getContext("2d")!;
+  const sw = src.width, sh = src.height;
+  p.reset();
+  p.drawImage(src, pad, pad, w, h);
+  if (tile === 0) {
+    p.imageSmoothingEnabled = false;
+    p.drawImage(src, 0, 0, sw, 1, pad, 0, w, pad); p.drawImage(src, 0, sh - 1, sw, 1, pad, pad + h, w, pad);
+    p.drawImage(src, 0, 0, 1, sh, 0, pad, pad, h); p.drawImage(src, sw - 1, 0, 1, sh, pad + w, pad, pad, h);
+    p.drawImage(src, 0, 0, 1, 1, 0, 0, pad, pad); p.drawImage(src, sw - 1, 0, 1, 1, pad + w, 0, pad, pad);
+    p.drawImage(src, 0, sh - 1, 1, 1, 0, pad + h, pad, pad); p.drawImage(src, sw - 1, sh - 1, 1, 1, pad + w, pad + h, pad, pad);
+  } else if (tile !== 3) {
+    for (let y = -Math.ceil(pad / h); y <= Math.ceil(pad / h); y++) for (let x = -Math.ceil(pad / w); x <= Math.ceil(pad / w); x++) {
+      if (!x && !y) continue;
+      const flipX = tile === 2 && x % 2 !== 0, flipY = tile === 2 && y % 2 !== 0;
+      p.save(); p.translate(pad + x * w + (flipX ? w : 0), pad + y * h + (flipY ? h : 0));
+      p.scale(flipX ? -1 : 1, flipY ? -1 : 1); p.drawImage(src, 0, 0, w, h); p.restore();
+    }
+  }
+  return padded;
+}
+function gaussian(cache: BlurCache, padded: OffscreenCanvas, sigma: number): OffscreenCanvas {
+  const blurred = cache.blurred = sized(cache.blurred, padded.width, padded.height), b = blurred.getContext("2d")!;
+  b.reset();
+  b.filter = `blur(${sigma}px)`; b.drawImage(padded, 0, 0);
+  return blurred;
+}
+/** a Gaussian of `sigma` over `src` with clamped edges; the result has a ceil(3 sigma) border on
+ *  every side */
+export function clampedBlur(src: OffscreenCanvas, sigma: number, cache: BlurCache): OffscreenCanvas {
+  return gaussian(cache, padded(cache, src, src.width, src.height, Math.ceil(3 * sigma), 0), sigma);
+}
+export class JRenderEffect extends JObj implements BlurCache {
   effect: Effect = { kind: "offset", x: 0, y: 0 };
-  private surface: OffscreenCanvas | null = null;
-  private filtered: OffscreenCanvas | null = null;
+  padded: OffscreenCanvas | null = null;
+  blurred: OffscreenCanvas | null = null;
   private work = new Float32Array(0);
   private scratch = new Float32Array(0);
   draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, source: OffscreenCanvas) {
@@ -16,37 +58,11 @@ export class JRenderEffect extends JObj {
     const radius = Math.min(e.x || e.y, e.y || e.x), sx = e.x ? radius / e.x : 1, sy = e.y ? radius / e.y : 1;
     const w = Math.max(1, Math.ceil(source.width * sx)), h = Math.max(1, Math.ceil(source.height * sy));
     const pad = Math.ceil(radius * 3), width = w + pad * 2, height = h + pad * 2;
-    const surface = this.surface ??= new OffscreenCanvas(width, height);
-    if (surface.width !== width) surface.width = width;
-    if (surface.height !== height) surface.height = height;
-    const target = surface.getContext("2d")!;
-    target.reset();
-    target.drawImage(source, pad, pad, w, h);
-    if (e.tile === 0) {
-      const xs = [[0, 1, 0, pad], [0, source.width, pad, w], [source.width - 1, 1, pad + w, pad]];
-      const ys = [[0, 1, 0, pad], [0, source.height, pad, h], [source.height - 1, 1, pad + h, pad]];
-      for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
-        if (x === 1 && y === 1) continue;
-        const [a, b, c, d] = xs[x], [i, j, k, l] = ys[y];
-        target.drawImage(source, a, i, b, j, c, k, d, l);
-      }
-    } else if (e.tile !== 3) {
-      for (let y = -Math.ceil(pad / h); y <= Math.ceil(pad / h); y++) for (let x = -Math.ceil(pad / w); x <= Math.ceil(pad / w); x++) {
-        if (!x && !y) continue;
-        const flipX = e.tile === 2 && x % 2 !== 0, flipY = e.tile === 2 && y % 2 !== 0;
-        target.save(); target.translate(pad + x * w + (flipX ? w : 0), pad + y * h + (flipY ? h : 0));
-        target.scale(flipX ? -1 : 1, flipY ? -1 : 1); target.drawImage(source, 0, 0, w, h); target.restore();
-      }
-    }
+    const surface = padded(this, source, w, h, pad, e.tile);
     if (e.x && e.y) {
-      const filtered = this.filtered ??= new OffscreenCanvas(width, height);
-      if (filtered.width !== width) filtered.width = width;
-      if (filtered.height !== height) filtered.height = height;
-      const blur = filtered.getContext("2d")!; blur.reset();
-      blur.filter = `blur(${radius}px)`; blur.drawImage(surface, 0, 0);
-      ctx.drawImage(filtered, -pad / sx, -pad / sy, width / sx, height / sy);
+      ctx.drawImage(gaussian(this, surface, radius), -pad / sx, -pad / sy, width / sx, height / sy);
     } else {
-      const pixels = target.getImageData(0, 0, width, height), data = pixels.data;
+      const target = surface.getContext("2d")!, pixels = target.getImageData(0, 0, width, height), data = pixels.data;
       if (this.work.length !== data.length) { this.work = new Float32Array(data.length); this.scratch = new Float32Array(data.length); }
       let input = this.work, output = this.scratch;
       for (let i = 0; i < data.length; i += 4) {

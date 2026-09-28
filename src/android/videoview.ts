@@ -41,7 +41,7 @@ class JVideoView extends JSurfaceView {
     const mp = this.mp = rt.make("android/media/MediaPlayer") as JMediaPlayer;
     const listener = new JVideoListener(this);
     mp.display = holder;
-    mp.preparedL = mp.completionL = mp.errorL = mp.sizeL = listener;
+    mp.preparedL = mp.completionL = mp.errorL = mp.sizeL = mp.infoL = listener;
     try {
       yield vcall(mp, "setDataSource", "(Landroid/content/Context;Landroid/net/Uri;)V", this.ctx, this.uri);
       yield vcall(mp, "prepareAsync", "()V");
@@ -51,17 +51,17 @@ class JVideoView extends JSurfaceView {
       if (!this.errorL) throw e;
     }
   }
-  sized(mp: JMediaPlayer): void {
-    const el = mp.media as HTMLVideoElement;
-    if (el.videoWidth === this.videoW && el.videoHeight === this.videoH) return;
-    this.videoW = el.videoWidth; this.videoH = el.videoHeight;
+  sized(w: number, h: number): void {
+    if (w === this.videoW && h === this.videoH) return;
+    this.videoW = w; this.videoH = h;
     requestLayout(this);
   }
   *prepared$(mp: JMediaPlayer): Gen {
     if (mp !== this.mp) return;
     this.state = PREPARED;
     if (this.preparedL) yield vcall(this.preparedL, "onPrepared", "(Landroid/media/MediaPlayer;)V", mp);
-    this.sized(mp);
+    const el = mp.media as HTMLVideoElement;
+    this.sized(el.videoWidth, el.videoHeight);
     if (this.seekWhenPrepared) { mp.media!.currentTime = this.seekWhenPrepared / 1000; this.seekWhenPrepared = 0; }
     if (this.target === PLAYING) { mpStart(mp); this.state = PLAYING; }
   }
@@ -80,7 +80,7 @@ class JVideoListener extends JObj {
 rt.register({
   name: "webdroid/VideoViewListener", ctor: JVideoListener,
   ifaces: ["android/media/MediaPlayer$OnPreparedListener", "android/media/MediaPlayer$OnCompletionListener",
-    "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnVideoSizeChangedListener"],
+    "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnVideoSizeChangedListener", "android/media/MediaPlayer$OnInfoListener"],
   methods: {
     "onPrepared(Landroid/media/MediaPlayer;)V": function (this: JVideoListener, mp: JMediaPlayer) { return this.view.prepared(mp); },
     "onCompletion(Landroid/media/MediaPlayer;)V": function (this: JVideoListener, mp: JMediaPlayer) {
@@ -93,7 +93,11 @@ rt.register({
       v.state = v.target = ERROR;
       return after(v.errorL ? vcall(v.errorL, "onError", "(Landroid/media/MediaPlayer;II)Z", mp, what, extra) : 0, () => 1);
     },
-    "onVideoSizeChanged(Landroid/media/MediaPlayer;II)V": function (this: JVideoListener, mp: JMediaPlayer) { this.view.sized(mp); },
+    "onInfo(Landroid/media/MediaPlayer;II)Z": function (this: JVideoListener, mp: JMediaPlayer, what: number, extra: number) {
+      const l = this.view.infoL;
+      return after(l ? vcall(l, "onInfo", "(Landroid/media/MediaPlayer;II)Z", mp, what, extra) : 0, () => 1);
+    },
+    "onVideoSizeChanged(Landroid/media/MediaPlayer;II)V": function (this: JVideoListener, _mp: JMediaPlayer, w: number, h: number) { this.view.sized(w, h); },
   },
 });
 /** VideoView.onMeasure: the video's aspect ratio within what the parent allows */

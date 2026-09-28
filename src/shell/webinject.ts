@@ -173,10 +173,11 @@ function message(client, data) {
     client.postMessage(data, [channel.port2]);
   });
 }
+const frameContext = config => ({page: config.get("url"), agent: config.get("ua")});
 async function context(client) {
   const url = new URL(client.url), config = url.searchParams;
   if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua"), intercept: config.get("__wd_intercept") === "1"};
-  if (url.pathname === "/proxy" && config.get("frame") === "1") return {page: config.get("url")};
+  if (url.pathname === "/proxy" && config.get("frame") === "1") return frameContext(config);
   const key = client.id + client.url;
   let value = contexts.get(key);
   if (!value) {
@@ -202,12 +203,18 @@ self.addEventListener("fetch", event => {
   const localProxy = original.origin === self.location.origin && original.pathname === "/proxy";
   if (original.origin === self.location.origin && !localProxy) return;
   event.respondWith((async () => {
-    const client = await self.clients.get(event.clientId);
-    if (!client) return fetch(request);
-    const {page, agent, id, intercept} = await context(client), isolated = !!id;
+    // a frame's own navigation has no client yet: its /proxy URL carries the context
+    const navigation = localProxy && request.mode === "navigate" && original.searchParams.get("frame") === "1";
+    const client = navigation ? null : await self.clients.get(event.clientId);
+    if (!client && !navigation) return fetch(request);
+    const {page, agent, id, intercept} = client ? await context(client) : frameContext(original.searchParams), isolated = !!id;
     const headers = new Headers();
-    request.headers.forEach((value, name) => headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value));
+    // client hints describe the host browser, not the WebView the user agent names
+    request.headers.forEach((value, name) => { if (!name.startsWith("sec-ch-")) headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value); });
     if (agent) headers.set("x-wd-user-agent", agent);
+    // fetch metadata the browser adds past the worker; a frame's navigation loads the WebView's document
+    headers.set("x-wd-sec-fetch-mode", request.mode);
+    headers.set("x-wd-sec-fetch-dest", navigation ? "document" : request.destination || "empty");
     let target = localProxy ? original.searchParams.get("url") : request.url;
     if (page && /^https?:/.test(page)) {
       const source = new URL(page);

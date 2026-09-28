@@ -87,7 +87,11 @@ class JInsetsController extends JObj { w: JWindow = null!; }
 function relayoutWindow(w: JWindow) {
   uiState.needsInsets = true;
   const root = w.decor ?? (w.dialog as { root?: JView | null } | null)?.root;
-  if (root) requestLayout(root);
+  if (!root) return;
+  requestLayout(root);
+  // a shown dialog's window: WindowManager.updateViewLayout takes its new flags
+  const o = overlays.find((o) => o.view === root);
+  if (o) o.flags = w.flags;
 }
 /** FLAG_FULLSCREEN moves the window's top edge, so a flag change is a relayout of the decor. */
 function setWindowFlags(w: JWindow, flags: number) {
@@ -289,15 +293,12 @@ rt.register({
     "isFitInsetsIgnoringVisibility()Z": function (this: JWindowLayoutParams) { return +this.fitInsetsIgnoringVisibility; },
   },
 });
-const FLAG_NOT_FOCUSABLE = 8, FLAG_NOT_TOUCHABLE = 16;
 /** the WindowManager parameters of a window's root view, when it was added with them */
 export const windowParams = (v: JView) => v.lp instanceof JWindowLayoutParams ? v.lp : null;
-export const takesTouch = (v: JView) => !((windowParams(v)?.flags ?? 0) & FLAG_NOT_TOUCHABLE);
-export const takesKeys = (v: JView) => !((windowParams(v)?.flags ?? 0) & FLAG_NOT_FOCUSABLE);
 export const addWindow = driven(function* addWindow(v: JView, lp: JLayoutParams & { x?: number; y?: number }): Gen {
   v.lp = lp;
   v.windowOwner ??= rt.make("android/view/Window");
-  addOverlay(v, lp.x ?? 0, lp.y ?? 0);
+  addOverlay(v, lp.x ?? 0, lp.y ?? 0, windowParams(v)?.flags ?? 0);
   yield dispatchAttached(v);
 });
 export const removeWindow = driven(function* removeWindow(v: JView): Gen {
@@ -327,7 +328,7 @@ rt.register({
     "updateViewLayout(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;
       const o = overlays.find((o) => o.view === v);
-      if (o) { o.x = lp.x ?? 0; o.y = lp.y ?? 0; }
+      if (o) Object.assign(o, { x: lp.x ?? 0, y: lp.y ?? 0, flags: windowParams(v)?.flags ?? 0 });
       requestLayout(v);
     },
   },

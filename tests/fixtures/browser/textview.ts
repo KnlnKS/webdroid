@@ -2,7 +2,7 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
-import { JLayout, JTextPaint, measureReplacements, drawLayout } from "../../../src/android/text";
+import { JLayout, JTextPaint, prepareSpans, drawLayout } from "../../../src/android/text";
 import { JTextView } from "../../../src/android/textview";
 import { JCanvas, measureText, typefaceFor, type JPaint } from "../../../src/android/graphics";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
@@ -117,7 +117,7 @@ async function probe() {
   const directPixels = directCanvas.getImageData(0, 0, 80, 60).data;
   const combined = { line: mixedLayout.lines[0].text, width: await vcall(mixedLayout, "getLineWidth", "(I)F", 0),
     ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0),
-    span: [mixedLayout.replacements[0].start, mixedLayout.replacements[0].end], original: mixedText.text,
+    span: [mixedLayout.spans.replacements[0].start, mixedLayout.spans.replacements[0].end], original: mixedText.text,
     same: mixedLayout === mixed.layout, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
   const selectionView = rt.make("android/widget/TextView");
   await vcall(selectionView, "setText", "(Ljava/lang/CharSequence;)V", "ab\ncd");
@@ -175,14 +175,14 @@ async function probe() {
   for (const strategy of [0, 2]) {
     const layout = new JLayout(); layout.paint = new JTextPaint(); layout.paint.textSize = 16;
     layout.text = "aaa b "; layout.src = spaceText; layout.width = 60; layout.breakStrategy = strategy;
-    layout.replacements = await measureReplacements(spaceText, layout.paint);
+    layout.spans = await prepareSpans(spaceText, layout.paint);
     await layout.lineUp(() => layout.wrap());
     const before = draws;
     await drawLayout.call(layout, JCanvas.wrap(new OffscreenCanvas(60, 100).getContext("2d")!, 60, 100));
     spaceReplacements.push({ draws: draws - before, visible: layout.lines.some(line => line.start <= 5 && line.start + line.text.length >= 6) });
   }
   return { ...result, cursorIdentity, cursorPixels, cursorCleared, spaceReplacements, balancedSpanned, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
-    fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
+    fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).spans.replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
 export default probe;

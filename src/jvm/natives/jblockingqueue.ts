@@ -22,7 +22,7 @@ const timedPoll = function (this: WaitingQueue, d: bigint, u: JTimeUnit): unknow
   return new Promise((resolve) => {
     const taker = (v: unknown) => resolve(v);
     this.takers.push(taker);
-    setTimeout(() => {
+    setGuestTimeout(() => {
       const i = this.takers.indexOf(taker);
       if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
     }, Number(d) * u.ms);
@@ -193,7 +193,7 @@ function pbqPut(this: JPriorityBlockingQueue, v: unknown) {
   });
 }
 rt.register({
-  name: "java/util/concurrent/PriorityBlockingQueue", ctor: JPriorityBlockingQueue,
+  name: "java/util/concurrent/PriorityBlockingQueue", ctor: JPriorityBlockingQueue, sup: "java/util/AbstractQueue",
   ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
   methods: {
     ...priorityMethods,

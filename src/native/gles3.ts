@@ -228,6 +228,20 @@ function pixelRows(width: number, height: number, bytes: number, alignment: numb
   const skip = skipRows * stride + skipPixels * bytes;
   return { stride, skip, extent: skip + (height - 1) * stride + width * bytes };
 }
+// glGetIntegerv is a synchronous round trip to the GPU process that waits for every queued
+// command, so the pixel-store state an upload or readback needs is tracked here instead.
+const pixelStores = new WeakMap<WebGLRenderingContext | WebGL2RenderingContext, Map<number, number>>();
+const ALIGNMENTS = [1, 2, 4, 8];
+export function pixelStore(gl: WebGLRenderingContext | WebGL2RenderingContext, pname: number, value: number): void {
+  gl.pixelStorei(pname, value);
+  const alignment = pname === 0x0cf5 || pname === 0x0d05;
+  if (alignment ? !ALIGNMENTS.includes(value) : value < 0 || !("UNPACK_ROW_LENGTH" in gl)) return;
+  let store = pixelStores.get(gl);
+  if (!store) pixelStores.set(gl, store = new Map());
+  store.set(pname, value);
+}
+const pixelParam = (gl: WebGLRenderingContext | WebGL2RenderingContext, pname: number): number =>
+  pixelStores.get(gl)?.get(pname) ?? (pname === 0x0cf5 || pname === 0x0d05 ? 4 : 0);
 type PixelDimensions = readonly [width: number, height: number] | readonly [width: number, height: number, depth: number];
 // Bound uploads to the bytes WebGL may read; a guest-memory-sized view stalls getError after each frame.
 function uploadPixels(type: number, p: number, format: number, dimensions: PixelDimensions): ArrayBufferView {
@@ -236,14 +250,12 @@ function uploadPixels(type: number, p: number, format: number, dimensions: Pixel
   const layers = dimensions.length === 3 ? dimensions[2] : 1;
   if (!bytes || width < 0 || height < 0 || layers < 0) return pixels(type, p);
   const gl = g(), K = pixelArray(type);
-  const extended = "UNPACK_ROW_LENGTH" in gl;
-  const rowLength = extended ? Number(gl.getParameter(0x0cf2)) || width : width;
-  const { stride, extent } = pixelRows(width, height, bytes, Number(gl.getParameter(gl.UNPACK_ALIGNMENT)), rowLength,
-    extended ? Number(gl.getParameter(0x0cf3)) : 0, extended ? Number(gl.getParameter(0x0cf4)) : 0);
+  const rowLength = pixelParam(gl, 0x0cf2) || width;
+  const { stride, extent } = pixelRows(width, height, bytes, pixelParam(gl, 0x0cf5), rowLength, pixelParam(gl, 0x0cf3), pixelParam(gl, 0x0cf4));
   let required = extent;
-  if (dimensions.length === 3 && extended) {
-    const imageHeight = Number(gl.getParameter(0x806e)) || height;
-    required += (Number(gl.getParameter(0x806d)) + dimensions[2] - 1) * imageHeight * stride;
+  if (dimensions.length === 3) {
+    const imageHeight = pixelParam(gl, 0x806e) || height;
+    required += (pixelParam(gl, 0x806d) + dimensions[2] - 1) * imageHeight * stride;
   }
   if (!Number.isSafeInteger(required) || required < 0) return pixels(type, p);
   return view(K, p, Math.floor(Math.min(required, mem.u8.length - p) / K.BYTES_PER_ELEMENT));
@@ -252,10 +264,8 @@ export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingConte
   const K = pixelArray(type), element = K.BYTES_PER_ELEMENT;
   const bytes = pixelByteSize(format, type);
   if (!bytes || w <= 0 || h <= 0) { gl.readPixels(x, y, w, h, format, type, pixels(type, p)); return; }
-  const extended = "PACK_ROW_LENGTH" in gl;
-  const rowLength = extended ? Number(gl.getParameter(0x0d02)) || w : w;
-  const { stride, skip, extent } = pixelRows(w, h, bytes, Number(gl.getParameter(gl.PACK_ALIGNMENT)), rowLength,
-    extended ? Number(gl.getParameter(0x0d03)) : 0, extended ? Number(gl.getParameter(0x0d04)) : 0);
+  const rowLength = pixelParam(gl, 0x0d02) || w;
+  const { stride, skip, extent } = pixelRows(w, h, bytes, pixelParam(gl, 0x0d05), rowLength, pixelParam(gl, 0x0d03), pixelParam(gl, 0x0d04));
   const data = view(K, p, Math.floor(Math.min(extent, mem.u8.length - p) / element));
   gl.readPixels(x, y, w, h, format, type, data);
   // A short destination is rejected by WebGL. Padding and skipped pixels are never written.
@@ -605,7 +615,7 @@ export function gles3Init(): void {
     glClearBufferfi: (_c, a) => g().clearBufferfi(a.i(), a.i(), a.f(), a.i()),
     glStencilFuncSeparate: (_c, a) => g().stencilFuncSeparate(a.i(), a.i(), a.i(), a.i()), glStencilOpSeparate: (_c, a) => g().stencilOpSeparate(a.i(), a.i(), a.i(), a.i()),
     glStencilMaskSeparate: (_c, a) => g().stencilMaskSeparate(a.i(), a.i()),
-    glPixelStorei: (_c, a) => g().pixelStorei(a.i(), a.i()),
+    glPixelStorei: (_c, a) => pixelStore(g(), a.i(), a.i()),
 
     // ── shaders and programs
     glCreateShader: (_c, a) => put(T().shaders, g().createShader(a.i())),

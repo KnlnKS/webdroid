@@ -520,6 +520,28 @@ describe("lru-cache", () => {
     expect(await vcall(snapshot, "get", `(${O})${O}`, "a")).toBe("a");
     await expect(vcallAsync(cache, "resize", "(I)V", 0)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
   });
+
+  test("access order moves entries on put and get, custom-equals keys included", async () => {
+    class Key extends JObj {}
+    rt.register({ name: "test/LruKey", ctor: Key, methods: {
+      "equals(Ljava/lang/Object;)Z": function (this: Key, o: unknown) { return +(o === this); },
+      "hashCode()I": () => 1,
+    } });
+    rt.linkNatives();
+    const key = new Key(), map = await newObj("java/util/LinkedHashMap", "(IFZ)V", 0, 0.75, 1);
+    const keys = async () => vcall(await vcall(map, "keySet", "()Ljava/util/Set;"), "toArray", `()[${O}`);
+    for (const k of [key, "a", "b"]) await vcall(map, "put", `(${O}${O})${O}`, k, 1);
+    await vcall(map, "get", `(${O})${O}`, "a");
+    await vcall(map, "put", `(${O}${O})${O}`, "b", 2);
+    expect(await keys()).toEqual([key, "a", "b"]);
+    await vcall(map, "get", `(${O})${O}`, key);
+    expect(await keys()).toEqual(["a", "b", key]);
+
+    const cache = await newObj("android/util/LruCache", "(I)V", 2);
+    for (const k of ["a", "b", "a", "c"]) await vcall(cache, "put", `(${O}${O})${O}`, k, k);
+    expect(await vcall(cache, "get", `(${O})${O}`, "b")).toBe(null);
+    expect(await vcall(cache, "get", `(${O})${O}`, "a")).toBe("a");
+  });
 });
 
 describe("map-equality", () => {
@@ -651,6 +673,11 @@ describe("number-percent", () => {
       expect(await vcall(de, "format", "(D)Ljava/lang/String;", 0.25)).toBe("25\u00a0%");
     });
   }
+  test("DecimalFormat.applyPattern replaces a percent instance's style", async () => {
+    const f = await vcall(rt.link("java/text/NumberFormat").ctor, "getPercentInstance", "()Ljava/text/NumberFormat;");
+    await vcall(f, "applyPattern", "(Ljava/lang/String;)V", "#0.0%");
+    expect(await vcall(f, "format", "(D)Ljava/lang/String;", 0.5)).toBe("50.0%");
+  });
   test("NumberFormat preserves all long integer digits", async () => {
     const f = await vcall(rt.link("java/text/NumberFormat").ctor, "getInstance", "()Ljava/text/NumberFormat;");
     expect(rt.iof(f, "java/text/DecimalFormat")).toBe(1);

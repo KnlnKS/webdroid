@@ -130,11 +130,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const code = dex.code(rec.m.codeOff);
   const prepare = () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName);
   const source = (prepared: PreparedMethod, count: boolean) =>
-    emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+    emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}.${rec.name}.js`;
   let resumable: ResumeBody | undefined;
   /** The body that continues a suspended frame: only built once a frame actually suspends. */
   const resume = (): ResumeBody => resumable ??= new Function("C", "D", "R", "S", "P",
-    `return ${resumableSource(R, dex, info, rec.m, prepare())}\n//# sourceURL=wd/${info.name}/${rec.name}$resume.js`,
+    `return ${resumableSource(R, dex, info, rec.m, prepare())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`,
   )(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
   const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;

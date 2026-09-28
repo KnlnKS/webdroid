@@ -352,7 +352,11 @@ export class JMediaPlayer extends JObj {
   completionL: unknown = null;
   errorL: unknown = null;
   sizeL: unknown = null;
+  infoL: unknown = null;
+  seekL: unknown = null;
   display: unknown = null;
+  /** a frame has reached the display since the source was set */
+  rendering = false;
   srcBytes: Uint8Array | null = null;
 }
 export function mpReset(mp: JMediaPlayer) {
@@ -363,7 +367,7 @@ export function mpReset(mp: JMediaPlayer) {
   }
   mp.media = null;
   mp.srcBytes = null;
-  mp.prepared = false;
+  mp.prepared = mp.rendering = false;
 }
 const call = (listener: unknown, name: string, desc: string, ...args: unknown[]) => listener ? vcallUncaught(listener, name, desc, ...args) : undefined;
 function mpLoadSrc(mp: JMediaPlayer, src: string) {
@@ -372,12 +376,14 @@ function mpLoadSrc(mp: JMediaPlayer, src: string) {
   el.preload = "auto";
   el.src = src;
   el.loop = mp.looping;
-  el.onended = () => { void call(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp); };
+  const live = (f: () => void) => () => { if (mp.media === el) f(); };
+  el.onended = live(() => void call(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp));
   // MEDIA_ERROR_UNKNOWN with MEDIA_ERROR_UNSUPPORTED or _IO, as a decoder or source failure reports
-  el.onerror = () => { void call(mp.errorL, "onError", "(Landroid/media/MediaPlayer;II)Z", mp, 1, el.error?.code === 4 ? -1010 : -1004); };
-  el.onloadedmetadata = () => {
-    if (el instanceof HTMLVideoElement && el.videoWidth) void call(mp.sizeL, "onVideoSizeChanged", "(Landroid/media/MediaPlayer;II)V", mp, el.videoWidth, el.videoHeight);
-  };
+  el.onerror = live(() => void call(mp.errorL, "onError", "(Landroid/media/MediaPlayer;II)Z", mp, 1, el.error?.code === 4 ? -1010 : -1004));
+  el.onloadedmetadata = live(() => {
+    if (el.videoWidth) void call(mp.sizeL, "onVideoSizeChanged", "(Landroid/media/MediaPlayer;II)V", mp, el.videoWidth, el.videoHeight);
+  });
+  el.onseeked = live(() => void call(mp.seekL, "onSeekComplete", "(Landroid/media/MediaPlayer;)V", mp));
 }
 export function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
   mpLoadSrc(mp, URL.createObjectURL(new Blob([bytes as BlobPart])));
@@ -388,7 +394,10 @@ function pumpFrames(mp: JMediaPlayer, el: HTMLVideoElement) {
   const next = () => {
     if (mp.media !== el || el.paused) return;
     const surface = surfaceTarget(mp.display);
-    if (surface && el.videoWidth) presentSurface(surface, new VideoFrame(el));
+    if (surface && el.videoWidth) {
+      presentSurface(surface, new VideoFrame(el));
+      if (!mp.rendering) { mp.rendering = true; void call(mp.infoL, "onInfo", "(Landroid/media/MediaPlayer;II)Z", mp, 3, 0); }   // MEDIA_INFO_VIDEO_RENDERING_START
+    }
     el.requestVideoFrameCallback(next);
   };
   el.requestVideoFrameCallback(next);
@@ -424,12 +433,13 @@ const mpLoadUri = driven(function* mpLoadUri(this: JMediaPlayer, context: unknow
   const resolver = yield vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;");
   const asset = yield vcall(resolver, "openAssetFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;", uri, "r");
   if (asset === null) throw rt.mkThrowable("java/io/FileNotFoundException", "Media source not found");
-  try {
-    const fd = yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
-    const offset = yield vcall(asset, "getStartOffset", "()J");
-    const length = yield vcall(asset, "getLength", "()J");
-    yield mpLoadFd.call(this, fd, offset, length);
-  } finally { yield vcall(asset, "close", "()V"); }
+  try { yield mpLoadAsset.call(this, asset); } finally { yield vcall(asset, "close", "()V"); }
+});
+const mpLoadAsset = driven(function* mpLoadAsset(this: JMediaPlayer, asset: unknown): Gen {
+  const fd = yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+  const offset = yield vcall(asset, "getStartOffset", "()J");
+  const length = yield vcall(asset, "getLength", "()J");
+  yield mpLoadFd.call(this, fd, offset, length);
 });
 /** setDataSource(String): a path in the file system, or a URL fetched through the proxy */
 async function mpLoadPath(mp: JMediaPlayer, path: string) {
@@ -462,6 +472,7 @@ rt.register({
     },
     "release()V": function (this: JMediaPlayer) { mpReset(this); },
     "isPlaying()Z": function (this: JMediaPlayer) { return this.media && !this.media.paused ? 1 : 0; },
+    "isLooping()Z": function (this: JMediaPlayer) { return +this.looping; },
     "setLooping(Z)V": function (this: JMediaPlayer, l: number) {
       this.looping = !!l;
       if (this.media) this.media.loop = !!l;
@@ -487,10 +498,12 @@ rt.register({
     },
     "setDataSource(Ljava/io/FileDescriptor;JJ)V": mpLoadFd,
     "setDataSource(Ljava/io/FileDescriptor;)V": mpLoadFd,
+    "setDataSource(Landroid/content/res/AssetFileDescriptor;)V": mpLoadAsset,
+    "setOnInfoListener(Landroid/media/MediaPlayer$OnInfoListener;)V": function (this: JMediaPlayer, l: unknown) { this.infoL = l; },
+    "setOnSeekCompleteListener(Landroid/media/MediaPlayer$OnSeekCompleteListener;)V": function (this: JMediaPlayer, l: unknown) { this.seekL = l; },
     "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V": function (this: JMediaPlayer, context: unknown, uri: JUri) { return mpLoadUri.call(this, context, uri); },
     "reset()V": function (this: JMediaPlayer) { mpReset(this); },
-    ...noops("<init>()V", "setAudioStreamType(I)V", "setWakeMode(Landroid/content/Context;I)V", "setScreenOnWhilePlaying(Z)V",
-      "setOnInfoListener(Landroid/media/MediaPlayer$OnInfoListener;)V"),
+    ...noops("<init>()V", "setAudioStreamType(I)V", "setWakeMode(Landroid/content/Context;I)V", "setScreenOnWhilePlaying(Z)V"),
     "getDuration()I": function (this: JMediaPlayer) { const d = this.media?.duration; return d && Number.isFinite(d) ? Math.round(d * 1000) : -1; },
     "getCurrentPosition()I": function (this: JMediaPlayer) { return Math.round((this.media?.currentTime ?? 0) * 1000); },
     "seekTo(I)V": function (this: JMediaPlayer, ms: number) { if (this.media) this.media.currentTime = ms / 1000; },
@@ -945,7 +958,8 @@ rt.register({
     "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
     ...stubs(1, "getRouteCount()I"),
-    ...noops("addCallback(ILandroid/media/MediaRouter$Callback;)V",
+    // the only route is already the selected one
+    ...noops("selectRoute(ILandroid/media/MediaRouter$RouteInfo;)V", "addCallback(ILandroid/media/MediaRouter$Callback;)V",
       "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
   },
 });

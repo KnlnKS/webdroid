@@ -555,6 +555,13 @@ rt.register({
       appendPath(this, o, matrix.m);
     },
 
+    // addArc starts a new contour at the arc's first point
+    "addArc(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
+      this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 1]);
+    },
+    "addArc(FFFFFF)V": function (this: JPath, l: number, t: number, r: number, b: number, start: number, sweep: number) {
+      this.add(["arc", l, t, r, b, start, sweep, 1]);
+    },
     "arcTo(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
       this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 0]);
     },

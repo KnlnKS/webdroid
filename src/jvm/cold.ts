@@ -30,12 +30,17 @@ export interface ColdMethod {
 }
 const handlers = new Map<string, Handler>();
 
+/** Cold methods share their handlers, so a stack names a running cold frame only by a handler
+ *  frame from this source: the frames in `coldStack`, innermost last, map to those in order. */
+const COLD_SOURCE = "wd/.cold.js";
+export const coldStack: ColdMethod[] = [];
+
 // Pool compiler-owned literals and register operands so cold DEX instructions share V8 code.
 export function coldOp(body: string, constants: unknown[], next: number): ColdOp {
   let run = handlers.get(body);
   if (!run) {
     // Parenthesized: V8 compiles it eagerly instead of preparsing it and reparsing on first call.
-    run = new Function(`return (function(F,K){const R=F.R,D=F.D,S=F.S;${body}})`)() as Handler;
+    run = new Function(`return (function(F,K){const R=F.R,D=F.D,S=F.S;${body}})\n//# sourceURL=${COLD_SOURCE}`)() as Handler;
     handlers.set(body, run); perf.coldHandlers++;
   }
   return { run, constants, next };
@@ -67,6 +72,7 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
   const profiled = jvmProfiler.enabled;
   const started = profiled ? performance.now() : 0;
   let suspended = false;
+  const depth = coldStack.push(method);
   try {
     while (!f.done) {
       const pc = thrownAt >= 0 ? thrownAt : f.next, op = method.ops[pc] ?? method.build(pc);
@@ -102,13 +108,16 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
           method.profiledInstructions = method.hotness;
         }
         if (method.hotness >= jvmProfiler.hotThreshold && method.promote) {
+          coldStack.pop(); // the hot body continues this frame under its own name
           const handoff = method.promote(f, receiver);
           if (handoff) { suspended = true; return handoff.value; }
+          coldStack.push(method);
         }
       }
     }
     return f.value;
   } finally {
+    coldStack.length = depth - 1;
     // A frame that has suspended hands the thread back on completion; one still suspended
     // released it already, and a hot handoff inherits the obligation.
     if (f.$s && !suspended) R.su(f.$th);

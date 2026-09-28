@@ -243,8 +243,10 @@ async function looseDocUri(h: FileSystemFileHandle): Promise<string> {
 /** OPEN_DOCUMENT / GET_CONTENT / CREATE_DOCUMENT: one file, named by a document URI of its own,
  *  since a file the user picked outside a tree has no tree to be relative to. */
 export async function pickDocument(opts: { save?: string; mime?: string | null }): Promise<string | null> {
-  const picked = await pickFiles(opts);
-  return picked?.length ? await looseDocUri(picked[0]!) : null;
+  return (await pickDocuments(opts))[0] ?? null;
+}
+export async function pickDocuments(opts: { multiple?: boolean; save?: string; mime?: string | null }): Promise<string[]> {
+  return Promise.all((await pickFiles(opts) ?? []).map(looseDocUri));
 }
 
 // ── the streams ContentResolver hands out for a document

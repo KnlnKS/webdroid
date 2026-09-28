@@ -3,7 +3,7 @@ import { JDrawable, JColorStateList } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, stringOf, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, cssColor, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
 import { AID, JTypedArray } from "./res";
@@ -375,19 +375,36 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
     },
   };
 }
+const REPLACE = "(IILjava/lang/CharSequence;II)Landroid/text/Editable;";
+const appendRange = function (this: JSpannable, cs: unknown, start: number, end: number) {
+  return vcall(this, "replace", REPLACE, this.text.length, this.text.length, cs, start, end);
+};
 const appendSpanned = driven(function* appendSpanned(this: JSpannable, cs: unknown): Gen {
-  const length = this.text.length;
-  return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", length, length, cs, 0, (yield csText(cs)).length);
+  return appendRange.call(this, cs, 0, (yield csText(cs)).length);
 });
+/** Editable's appends under each return type a caller may have linked against: the class's
+ *  own, Editable's, and Appendable's (Kotlin's joinTo takes any Appendable) */
+function appendMethods(ret: string): NonNullable<NativeSpec["methods"]> {
+  return {
+    [`append(Ljava/lang/CharSequence;)L${ret};`]: appendSpanned,
+    [`append(Ljava/lang/CharSequence;II)L${ret};`]: appendRange,
+    [`append(C)L${ret};`]: function (this: JSpannable, c: number) { return appendRange.call(this, String.fromCharCode(c), 0, 1); },
+  };
+}
 rt.register({
   name: "android/text/SpannableStringBuilder", ctor: class extends JSpannable {},
   ifaces: ["java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned", "android/text/Editable", "java/lang/Appendable"],
   methods: {
     ...spanMethods,
-    "append(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;": appendSpanned,
-    "append(C)Landroid/text/SpannableStringBuilder;": function (this: JSpannable, c: number) {
-      return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/SpannableStringBuilder;", this.text.length, this.text.length, String.fromCharCode(c), 0, 1);
-    },
+    ...appendMethods("android/text/SpannableStringBuilder"),
+    "append(Ljava/lang/CharSequence;Ljava/lang/Object;I)Landroid/text/SpannableStringBuilder;": driven(function* (this: JSpannable, cs: unknown, what: unknown, flags: number): Gen {
+      const start = this.text.length;
+      yield appendSpanned.call(this, cs);
+      yield vcall(this, "setSpan", "(Ljava/lang/Object;III)V", what, start, this.text.length, flags);
+      return this;
+    }),
+    ...appendMethods("android/text/Editable"),
+    ...appendMethods("java/lang/Appendable"),
     ...editMutators("android/text/SpannableStringBuilder"),
     ...editMutators("android/text/Editable"),
     "clearSpans()V": function (this: JSpannable) {
@@ -697,9 +714,11 @@ for (const name of ["android/text/style/BackgroundColorSpan", "android/text/styl
       ...noops("<init>()V"),
       "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
-      ...(name === "android/text/style/BackgroundColorSpan" ? {
-        "updateDrawState(Landroid/text/TextPaint;)V": function (this: { color: number }, paint: JTextPaint) { paint.bgColor = this.color; },
-      } : {}),
+      "updateDrawState(Landroid/text/TextPaint;)V": name === "android/text/style/BackgroundColorSpan"
+        ? function (this: { color: number }, paint: JTextPaint) { paint.bgColor = this.color; }
+        : name === "android/text/style/UnderlineSpan"
+          ? function (paint: JTextPaint) { paint.underline = true; }
+          : function (paint: JTextPaint) { paint.strikeThru = true; },
       "getStyle()I": function (this: any) { return this.style; },
     },
   });
@@ -791,6 +810,11 @@ rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSp
   "updateMeasureState(Landroid/text/TextPaint;)V": applyRelativeSize,
 } });
 
+/** Orders spans by priority, as getSpans returns them, and gives their transitions within [start, end]. */
+function transitions(spans: SpanRec[], start: number, end: number): number[] {
+  spans.sort((a, b) => (b.flags & 0xff0000) - (a.flags & 0xff0000));
+  return [...new Set([start, end, ...spans.flatMap((r) => [Math.max(start, r.start), Math.min(end, r.end)])])].sort((a, b) => a - b);
+}
 function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number): Promise<void> | undefined {
   if (!(src instanceof JSpanned)) return;
   const color = paint.color;
@@ -798,8 +822,7 @@ function drawStyledText(src: unknown, text: string, start: number, canvas: JCanv
   const spans = src.spans.filter((r) => r.start < end && r.end > start && rt.iof(r.span, "android/text/style/CharacterStyle")
     && !rt.iof(r.span, "android/text/style/ReplacementSpan"));
   if (!spans.length) return;
-  spans.sort((a, b) => (b.flags & 0xff0000) - (a.flags & 0xff0000));
-  const edges = [...new Set([start, end, ...spans.flatMap((r) => [Math.max(start, r.start), Math.min(end, r.end)])])].sort((a, b) => a - b);
+  const edges = transitions(spans, start, end);
   return (async () => {
     const p = new JTextPaint();
     canvas.ctx.save();
@@ -932,7 +955,8 @@ rt.register({
   ifaces: ["android/text/Editable", "java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned"],
   methods: {
     ...spanMethods,
-    "append(Ljava/lang/CharSequence;)Landroid/text/Editable;": appendSpanned,
+    ...appendMethods("android/text/Editable"),
+    ...appendMethods("java/lang/Appendable"),
     ...editMutators("android/text/Editable"),
   },
 });
@@ -996,6 +1020,12 @@ rt.register({
     "static getEastAsianWidth(CZ)I": (c: number) => (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xff60) ? 5 : (c >= 0xff61 && c <= 0xffdc) ? 2 : (c >= 0xffe0 && c <= 0xffe6) ? 3 : 0,
   },
 });
+/** TextUtils.join: each token spelled as StringBuilder.append(Object) spells it */
+async function joinTokens(sep: unknown, tokens: unknown[]): Promise<string> {
+  const parts: string[] = [];
+  for (const t of tokens) parts.push(await stringOf(t));
+  return parts.join(sep === null ? "null" : await csText(sep));
+}
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   statics: { get CHAR_SEQUENCE_CREATOR() { return parcelCreator("java/lang/CharSequence", readText); } },
@@ -1071,13 +1101,9 @@ rt.register({
     "static isDigitsOnly(Ljava/lang/CharSequence;)Z": (s: unknown) => (/^\d*$/.test(spannedString(s)) ? 1 : 0),
     "static getTrimmedLength(Ljava/lang/CharSequence;)I": (s: unknown) => spannedString(s).trim().length,
     "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": driven(function* (sep: unknown, it: unknown): Gen {
-      const arr = yield toJsArray(it);
-      const parts: string[] = [];
-      for (const a of arr) parts.push(a === null ? "null" : spannedString(a));
-      return parts.join(spannedString(sep));
+      return joinTokens(sep, yield toJsArray(it));
     }),
-    "static join(Ljava/lang/CharSequence;[Ljava/lang/Object;)Ljava/lang/String;": (sep: unknown, arr: unknown[]) =>
-      arr.map((a) => (a === null ? "null" : spannedString(a))).join(spannedString(sep)),
+    "static join(Ljava/lang/CharSequence;[Ljava/lang/Object;)Ljava/lang/String;": joinTokens,
     "static split(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;": (s: string, p: string) => {
       const out = s.length ? s.split(p) : [];
       (out as any).$t = "Ljava/lang/String;";
@@ -1154,30 +1180,54 @@ rt.register({
 
 // ── android.text layout stack (BoringLayout/StaticLayout) — what Compose ui-text draws through.
 type SpanMetrics = { top: number; ascent: number; descent: number; bottom: number; leading: number };
-type Replacement = SpanRec & { width: number; metrics: SpanMetrics; paint: JTextPaint };
-function replacementSpans(cs: unknown): SpanRec[] {
-  return cs instanceof JSpanned ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
+/** A stretch of spanned text that measures apart from the base paint, as MeasuredParagraph splits
+ *  it at MetricAffectingSpan transitions: a style run measured with the paint its spans'
+ *  updateMeasureState leave, or (with `width`) a ReplacementSpan sized with that paint. `metrics`
+ *  are the font metrics it gives its line. */
+type Run = { start: number; end: number; paint: JTextPaint; metrics: SpanMetrics; width?: number };
+type Replacement = SpanRec & Run & { width: number };
+/** A text's runs, sorted and disjoint, and the replacements among them. */
+export type PreparedSpans = { replacements: Replacement[]; runs: Run[] };
+export const NO_SPANS: PreparedSpans = { replacements: [], runs: [] };
+const isReplacement = (s: SpanRec) => rt.iof(s.span, "android/text/style/ReplacementSpan");
+export function prepareSpans(cs: unknown, paint: JTextPaint): PreparedSpans | Promise<PreparedSpans> {
+  const spans = cs instanceof JSpanned ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/MetricAffectingSpan")) : [];
+  return spans.length ? rt.drive(prepareSpans$(cs as JSpanned, paint, spans)) : NO_SPANS;
 }
-export const measureReplacements = driven(function* measureReplacements(cs: unknown, paint: JTextPaint, spans: SpanRec[] = replacementSpans(cs)): Gen<Replacement[]> {
-  const result: Replacement[] = [], thread = curThread;
-  for (const span of spans) {
-    const p = new JTextPaint(); copyPaint(paint, p); p.density = paint.density;
-    if (cs instanceof JSpanned) for (const style of cs.spans) {
-      if (style.end <= span.start || style.start >= span.end || rt.iof(style.span, "android/text/style/ReplacementSpan")) continue;
-      if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) yield vcallOn(thread, style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
+function* prepareSpans$(cs: JSpanned, paint: JTextPaint, spans: SpanRec[]): Gen<PreparedSpans> {
+  const edges = transitions(spans, 0, cs.text.length);
+  const out: PreparedSpans = { replacements: [], runs: [] }, thread = curThread;
+  for (let i = 0, position = 0; i < edges.length - 1; i++) {
+    const start = edges[i];
+    if (start < position) continue;
+    const own = spans.filter((s) => s.start <= start && s.end > start);
+    if (!own.length) continue;
+    const p = new JTextPaint(); copyTextPaint(paint, p);
+    // applyMetricsAffectingSpan: the last ReplacementSpan replaces the stretch
+    let replacement: SpanRec | undefined;
+    for (const s of own) {
+      if (isReplacement(s)) replacement = s;
+      else yield vcallOn(thread, s.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
     }
     const metrics: SpanMetrics = yield newObj("android/graphics/Paint$FontMetricsInt"); fillFontMetrics(p, metrics, true);
-    const width = yield vcallOn(thread, span.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, span.start, span.end, metrics);
-    result.push({ ...span, width: Number(width), metrics, paint: p });
+    if (!replacement) { out.runs.push({ start, end: edges[i + 1], paint: p, metrics }); continue; }
+    const width = yield vcallOn(thread, replacement.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, start, replacement.end, metrics);
+    const r: Replacement = { ...replacement, start, width: Number(width), metrics, paint: p };
+    out.replacements.push(r); out.runs.push(r); position = r.end;
   }
-  return result;
-});
-function replacementWidth(text: string, paint: JTextPaint, replacements: Replacement[], start: number, end: number): number {
+  return out;
+}
+/** The width of text[start, end): runs with their own paint, a replacement whole, the rest with `paint` */
+function runsWidth(text: string, paint: JTextPaint, runs: readonly Run[], start: number, end: number): number {
   let x = 0, position = start;
-  for (const span of replacements) {
-    if (span.end <= position || span.start >= end) continue;
-    if (span.start > position) x += measureText(paint, text.slice(position, span.start));
-    x += span.width; position = span.end;
+  for (const run of runs) {
+    if (run.start >= end) break;
+    if (run.end <= position) continue;
+    if (run.start > position) x += measureText(paint, text.slice(position, run.start));
+    if (run.width !== undefined) { x += run.width; position = run.end; continue; }
+    const stop = Math.min(end, run.end);
+    x += measureText(run.paint, text.slice(Math.max(position, run.start), stop));
+    position = stop;
   }
   return x + (position < end ? measureText(paint, text.slice(position, end)) : 0);
 }
@@ -1241,7 +1291,8 @@ export class JLayout extends JObj {
     this.margins = margins;
   }
   lines: TLine[] = [];
-  replacements: Replacement[] = [];
+  /** the source's metric-affecting spans, measured by the caller before lineUp */
+  spans = NO_SPANS;
   spacingMult = 1; spacingAdd = 0;
   includePad = true;
   asc = 0; desc = 0; padTop = 0; padBottom = 0;
@@ -1262,12 +1313,12 @@ export class JLayout extends JObj {
     return breakLines(this.text, this.paint, {
       width: this.width, maxLines, balanced: this.breakStrategy === 2,
       measure: (start, end) => this.rangeWidth(start, end),
-      atomic: this.replacements,
+      atomic: this.spans.replacements,
       margin: this.margins ? (start, line) => this.indent(start, line) : undefined,
     });
   }
   rangeWidth(start: number, end: number): number {
-    return this.replacements.length ? replacementWidth(this.text, this.paint, this.replacements, start, end) : measureText(this.paint, this.text.slice(start, end));
+    return runsWidth(this.text, this.paint, this.spans.runs, start, end);
   }
   /**
    * AOSP StaticLayout hands every line's font metrics to the LineHeightSpans covering it and
@@ -1277,14 +1328,14 @@ export class JLayout extends JObj {
   private *applyLineHeightSpans$(src: JSpanned): Gen {
     this.tops = this.bases = null;
     const spans = src.spans.filter((s) => rt.iof(s.span, "android/text/style/LineHeightSpan"));
-    if (!spans.length && !this.replacements.length) return;
+    if (!spans.length && !this.spans.runs.length) return;
     const fm = new (rt.link("android/graphics/Paint$FontMetricsInt").ctor as new () => { top: number; ascent: number; descent: number; bottom: number; leading: number })();
     const tops: number[] = [], bases: number[] = [];
     let v = 0;
     for (let i = 0; i < this.lines.length; i++) {
       const l = this.lines[i];
       fillFontMetrics(this.paint, fm, true);
-      for (const span of this.replacements) if (span.start < l.end && span.end > l.start) {
+      for (const span of this.spans.runs) if (span.start < l.end && span.end > l.start) {
         fm.ascent = Math.min(fm.ascent, span.metrics.ascent); fm.descent = Math.max(fm.descent, span.metrics.descent);
         fm.top = Math.min(fm.top, span.metrics.top); fm.bottom = Math.max(fm.bottom, span.metrics.bottom);
       }
@@ -1318,20 +1369,19 @@ export class JLayout extends JObj {
 }
 /** AOSP Layout.getDesiredWidth: widest paragraph, unwrapped. */
 function desiredWidth(cs: unknown, p: JTextPaint): number | Promise<number> {
-  const text = spannedString(cs), spans = replacementSpans(cs);
-  const width = (replacements: Replacement[]) => {
+  const text = spannedString(cs);
+  return after(prepareSpans(cs, p), ({ runs }) => {
     let max = 0, start = 0;
     for (const para of text.split("\n")) {
-      max = Math.max(max, replacements.length ? replacementWidth(text, p, replacements, start, start + para.length) : measureText(p, para));
+      max = Math.max(max, runsWidth(text, p, runs, start, start + para.length));
       start += para.length + 1;
     }
     return max;
-  };
-  return spans.length ? after(measureReplacements(cs, p, spans), width) : width([]);
+  });
 }
 function primaryHorizontal(this: JLayout, off: number) {
     for (const l of this.lines) {
-      if (off >= l.start && (off < l.end || off === this.text.length)) return this.lineLeft(l) + this.rangeWidth(l.start, this.replacements.find((s) => s.start < off && s.end > off)?.start ?? off);
+      if (off >= l.start && (off < l.end || off === this.text.length)) return this.lineLeft(l) + this.rangeWidth(l.start, this.spans.replacements.find((s) => s.start < off && s.end > off)?.start ?? off);
     }
     return 0;
 }
@@ -1352,13 +1402,13 @@ export const drawLayout = driven(function* drawLayout(this: JLayout, c: JCanvas,
         }
       }
       let position = line.start, x = this.lineLeft(line, gravity);
-      for (const span of this.replacements) {
+      for (const span of this.spans.replacements) {
         if (span.end <= position || span.start >= end) continue;
         if (span.start > position) {
           const text = line.text.slice(position - line.start, span.start - line.start);
           yield (callOn(thread, () => drawStyledText(this.src, text, position, c, this.paint, x, baseline))
             ?? vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint));
-          x += measureText(this.paint, text);
+          x += this.rangeWidth(position, span.start);
         }
         yield vcallOn(thread, span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
         x += span.width; position = span.end;
@@ -1445,8 +1495,8 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     if (!l) return 0;
     let acc = this.lineLeft(l);
     for (let i = 0; i < l.text.length; i++) {
-      const replacement = this.replacements.find((s) => s.start <= l.start + i && s.end > l.start + i);
-      const w = replacement?.width ?? measureText(this.paint, l.text[i]);
+      const replacement = this.spans.replacements.find((s) => s.start <= l.start + i && s.end > l.start + i);
+      const w = replacement?.width ?? this.rangeWidth(l.start + i, l.start + i + 1);
       if (acc + w / 2 > x) return l.start + i;
       acc += w;
       if (replacement) i = replacement.end - l.start - 1;
@@ -1466,9 +1516,8 @@ class JDynamicLayout extends JLayout {
   refresh() {
     const text = spannedString(this.src);
     if (this.lines.length && text === this.text) return;
-    this.text = text; this.replacements = [];
-    const finish = () => this.lineUp(() => this.wrap());
-    return replacementSpans(this.src).length ? after(measureReplacements(this.src, this.paint), (spans) => { this.replacements = spans; return finish(); }) : finish();
+    this.text = text;
+    return after(prepareSpans(this.src, this.paint), (spans) => { this.spans = spans; return this.lineUp(() => this.wrap()); });
   }
 }
 const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
@@ -1508,8 +1557,7 @@ class JBoringLayout extends JLayout {
   *setup$(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl: boolean): Gen<this> {
     this.text = spannedString(cs); this.src = cs; this.paint = p; this.width = w;
     this.spacingMult = smult; this.spacingAdd = sadd; this.includePad = incl;
-    const spans = replacementSpans(cs);
-    this.replacements = spans.length ? yield measureReplacements(cs, p, spans) : [];
+    this.spans = yield prepareSpans(cs, p);
     yield this.lineUp(() => this.wrap(1));
     return this;
   }
@@ -1521,8 +1569,8 @@ const boringInit = function (this: JBoringLayout, cs: unknown, p: JTextPaint, w:
 const boringMake = (cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, smult: number, sadd: number, _m: unknown, incl: number) =>
   boringInit.call(new JBoringLayout(), cs, p, w, alignment, smult, sadd, _m, incl);
 function isBoring(cs: unknown, p: JTextPaint) {
-  if (cs instanceof JSpanned && cs.spans.some((s) => rt.iof(s.span, "android/text/style/ParagraphStyle"))) return null;
-  return replacementSpans(cs).length ? null : boringMetrics(spannedString(cs), p);
+  if (cs instanceof JSpanned && cs.spans.some((s) => rt.iof(s.span, "android/text/style/ParagraphStyle") || s.end > s.start && isReplacement(s))) return null;
+  return boringMetrics(spannedString(cs), p);
 }
 rt.register({
   name: "android/text/BoringLayout", ctor: JBoringLayout, sup: "android/text/Layout",
@@ -1587,8 +1635,7 @@ rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "andr
 const setupSpannedLayout = driven(function* setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0): Gen<JStaticLayout> {
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
-  const spans = replacementSpans(cs);
-  if (spans.length) l.replacements = yield measureReplacements(cs, p, spans);
+  l.spans = yield prepareSpans(cs, p);
   yield l.lineUp(() => l.wrap(maxLines));
   return l;
 });
@@ -1634,6 +1681,8 @@ rt.register({
   methods: {
     "static formatFileSize(Landroid/content/Context;J)Ljava/lang/String;": (_c: unknown, n: bigint) => fmtBytes(n, false),
     "static formatShortFileSize(Landroid/content/Context;J)Ljava/lang/String;": (_c: unknown, n: bigint) => fmtBytes(n, true),
+    // the address in network byte order, as WifiInfo.getIpAddress stores it: lowest byte first
+    "static formatIpAddress(I)Ljava/lang/String;": (a: number) => [0, 8, 16, 24].map((shift) => (a >>> shift) & 255).join("."),
   },
 });
 

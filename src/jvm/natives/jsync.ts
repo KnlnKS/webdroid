@@ -2,7 +2,7 @@ import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, JThread, curThread, park, defineException } from "./jlang";
 import type { JTimeUnit } from "./jconc";
-import { guestNow } from "../../guest-clock";
+import { guestNow, setGuestTimeout } from "../../guest-clock";
 
 /** an interruptible wait's entry check: a pending interrupt is consumed and thrown */
 function throwIfInterrupted(thread: JThread): void {
@@ -189,7 +189,7 @@ rt.register({
       return new Promise<number>((resolve) => {
         const done = () => resolve(1);
         this.waiters.push(done);
-        setTimeout(() => {
+        setGuestTimeout(() => {
           const i = this.waiters.indexOf(done);
           if (i >= 0) { this.waiters.splice(i, 1); resolve(0); }
         }, Number(d) * u.ms);

@@ -9,6 +9,7 @@ const CALL = 0, SET = 1, DEFER = 2;
 
 const recordings = new WeakMap<Ctx2D, DisplayList>();
 const replayCanvases = new WeakMap<Ctx2D, JCanvas>();
+const mirrors = new WeakMap<Ctx2D, Ctx2D>();
 
 export function isRecording(ctx: Ctx2D): boolean { return recordings.has(ctx); }
 
@@ -30,11 +31,12 @@ export function replay(ctx: Ctx2D, ops: DisplayList): void {
 export const displayListLength = (ops: DisplayList): number => ops.length / 3;
 
 export function replayCanvas(ctx: Ctx2D): JCanvas | undefined { return replayCanvases.get(ctx); }
-export function replayWithSemantics(canvas: JCanvas, draw: () => void): void {
-  const previous = replayCanvases.get(canvas.ctx);
-  replayCanvases.set(canvas.ctx, canvas);
+/** `draw` with text recorded for replay into `ctx` attributed to `canvas` */
+export function replayWithSemantics(canvas: JCanvas, draw: () => void, ctx: Ctx2D = canvas.ctx): void {
+  const previous = replayCanvases.get(ctx);
+  replayCanvases.set(ctx, canvas);
   try { draw(); }
-  finally { if (previous) replayCanvases.set(canvas.ctx, previous); else replayCanvases.delete(canvas.ctx); }
+  finally { if (previous) replayCanvases.set(ctx, previous); else replayCanvases.delete(ctx); }
 }
 
 /** Queries: answered by the mirror, never replayed. */
@@ -68,5 +70,11 @@ export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D {
     },
   });
   recordings.set(context, ops);
+  mirrors.set(context, mirror);
   return context;
+}
+/** A recording that shares `ctx`'s mirror, so its state stays continuous, but keeps its
+ *  operations in `ops`: the content of a layer, replayed into the layer's own raster. */
+export function nestedRecording(ctx: Ctx2D, ops: DisplayList): Ctx2D {
+  return recordingContext(mirrors.get(ctx)!, ops);
 }

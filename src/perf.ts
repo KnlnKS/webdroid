@@ -32,9 +32,8 @@ export const perf = {
   jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,
   jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0, jvmSuspendMs: 0,
   jvmProfileDroppedMethods: 0,
-  // Surface frames (GL, native windows and decoded video), Renderer wall time, and ticks where
-  // the previous Renderer frame was still in flight.
-  glFrames: 0, glFrameMs: 0, glSkipped: 0,
+  // Surface frames (GL, native windows and decoded video), and Renderer wall time up to the swap.
+  glFrames: 0, glFrameMs: 0,
   // the native tier: guest instructions, wall time in the core, slices, host calls, GLES draws,
   // and errors from native GL (counted under __wdGlProbe).
   nativeInstr: 0, nativeMs: 0, nativeSlices: 0, nativeHostCalls: 0, glDraws: 0, glErrors: 0,

@@ -4,8 +4,9 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, after, stringHash, JEnum, linkInit } from "../jvm/natives/jlang";
+import { vcall, after, stringHash, JEnum, linkInit, newObj, stringOf } from "../jvm/natives/jlang";
 import { jeq } from "../jvm/natives/jutil";
+import { jclsNameOf } from "./apphost";
 import { PATTERNS } from "./pattern-data";
 import { readerText } from "./xmlpull";
 
@@ -243,64 +244,106 @@ rt.register({
   methods: { "<init>()V": function () {}, "setTo(Landroid/util/DisplayMetrics;)V": function (this: JDisplayMetrics, o: JDisplayMetrics) { Object.assign(this, o); } },
 });
 
+// android.util.LruCache, as AOSP writes it: keys compare by equals() in an access-ordered
+// LinkedHashMap, and size, eviction and replacement go through the overridable sizeOf() and
+// entryRemoved(). SQLiteConnection finalizes its cached statements in entryRemoved, so a cache
+// that drops entries silently leaves the database unclosable.
+const O = "Ljava/lang/Object;";
 class JLruCache extends JObj {
-  max = 16; m = new Map<unknown, unknown>();
+  map: unknown = null; max = 0; size = 0;
   hits = 0; misses = 0; puts = 0; creates = 0; evictions = 0;
-  trim(max: number) {
-    while (this.m.size && this.m.size > max) { this.m.delete(this.m.keys().next().value); this.evictions++; }
-  }
 }
+const safeSizeOf = driven(function* safeSizeOf(c: JLruCache, k: unknown, v: unknown): Gen<number> {
+  const n: number = yield vcall(c, "sizeOf", `(${O}${O})I`, k, v);
+  if (n < 0) throw rt.mkThrowable("java/lang/IllegalStateException", `Negative size: ${yield stringOf(k)}=${yield stringOf(v)}`);
+  return n;
+});
+const entryRemoved = (c: JLruCache, evicted: boolean, k: unknown, old: unknown, next: unknown) =>
+  vcall(c, "entryRemoved", `(Z${O}${O}${O})V`, +evicted, k, old, next);
+const trimToSize = driven(function* trimToSize(c: JLruCache, max: number): Gen<void> {
+  for (;;) {
+    const empty: number = yield vcall(c.map, "isEmpty", "()Z");
+    if (c.size < 0 || (empty && c.size !== 0))
+      throw rt.mkThrowable("java/lang/IllegalStateException", `${jclsNameOf(c)}.sizeOf() is reporting inconsistent results!`);
+    if (c.size <= max || empty) return;
+    const eldest = yield vcall(yield vcall(yield vcall(c.map, "entrySet", "()Ljava/util/Set;"), "iterator", "()Ljava/util/Iterator;"), "next", `()${O}`);
+    const k = yield vcall(eldest, "getKey", `()${O}`), v = yield vcall(eldest, "getValue", `()${O}`);
+    yield vcall(c.map, "remove", `(${O})${O}`, k);
+    c.size -= yield safeSizeOf(c, k, v);
+    c.evictions++;
+    yield entryRemoved(c, true, k, v, null);
+  }
+});
 rt.register({
   name: "android/util/LruCache", ctor: JLruCache,
   methods: {
-    "<init>(I)V": function (this: JLruCache, n: number) {
+    "<init>(I)V": async function (this: JLruCache, n: number) {
       if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
       this.max = n;
+      this.map = await newObj("java/util/LinkedHashMap", "(IFZ)V", 0, 0.75, 1);
     },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown): Gen {
-      if (this.m.has(k)) {
-        this.hits++;
-        const v = this.m.get(k);
-        this.m.delete(k); this.m.set(k, v);   // re-insert: Map order is the recency order
-        return v;
-      }
+      if (k == null) throw rt.mkThrowable("java/lang/NullPointerException", "key == null");
+      let mapValue = yield vcall(this.map, "get", `(${O})${O}`, k);
+      if (mapValue != null) { this.hits++; return mapValue; }
       this.misses++;
-      const created = yield vcall(this, "create", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      if (created !== null) { this.creates++; this.m.set(k, created); this.trim(this.max); }
+      const created = yield vcall(this, "create", `(${O})${O}`, k);
+      if (created == null) return null;
+      this.creates++;
+      mapValue = yield vcall(this.map, "put", `(${O}${O})${O}`, k, created);
+      // a value put while create() ran wins
+      if (mapValue != null) {
+        yield vcall(this.map, "put", `(${O}${O})${O}`, k, mapValue);
+        yield entryRemoved(this, false, k, created, mapValue);
+        return mapValue;
+      }
+      this.size += yield safeSizeOf(this, k, created);
+      yield trimToSize(this, this.max);
       return created;
     }),
     "create(Ljava/lang/Object;)Ljava/lang/Object;": () => null,
-    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JLruCache, k: unknown, v: unknown) {
-      const old = this.m.get(k) ?? null;
+    "sizeOf(Ljava/lang/Object;Ljava/lang/Object;)I": () => 1,
+    "entryRemoved(ZLjava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V": () => {},
+    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown, v: unknown): Gen {
+      if (k == null || v == null) throw rt.mkThrowable("java/lang/NullPointerException", "key == null || value == null");
       this.puts++;
-      this.m.delete(k);
-      this.m.set(k, v);
-      this.trim(this.max);
-      return old;
-    },
-    "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JLruCache, k: unknown) {
-      const old = this.m.get(k) ?? null;
-      this.m.delete(k);
-      return old;
-    },
-    "evictAll()V": function (this: JLruCache) { this.trim(-1); },
+      this.size += yield safeSizeOf(this, k, v);
+      const previous = yield vcall(this.map, "put", `(${O}${O})${O}`, k, v);
+      if (previous != null) {
+        this.size -= yield safeSizeOf(this, k, previous);
+        yield entryRemoved(this, false, k, previous, v);
+      }
+      yield trimToSize(this, this.max);
+      return previous;
+    }),
+    "remove(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown): Gen {
+      if (k == null) throw rt.mkThrowable("java/lang/NullPointerException", "key == null");
+      const previous = yield vcall(this.map, "remove", `(${O})${O}`, k);
+      if (previous != null) {
+        this.size -= yield safeSizeOf(this, k, previous);
+        yield entryRemoved(this, false, k, previous, null);
+      }
+      return previous;
+    }),
+    "trimToSize(I)V": function (this: JLruCache, n: number) { return trimToSize(this, n); },
+    "evictAll()V": function (this: JLruCache) { return trimToSize(this, -1); },
     "resize(I)V": function (this: JLruCache, n: number) {
       if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
       this.max = n;
-      this.trim(n);
+      return trimToSize(this, n);
     },
-    "snapshot()Ljava/util/Map;": driven(function* (this: JLruCache): Gen {
-      const result = rt.make("java/util/LinkedHashMap");
-      for (const [key, value] of this.m) yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
-      return result;
-    }),
-    "size()I": function (this: JLruCache) { return this.m.size; },
+    "snapshot()Ljava/util/Map;": function (this: JLruCache) { return newObj("java/util/LinkedHashMap", "(Ljava/util/Map;)V", this.map); },
+    "size()I": function (this: JLruCache) { return this.size; },
     "maxSize()I": function (this: JLruCache) { return this.max; },
     "hitCount()I": function (this: JLruCache) { return this.hits; },
     "missCount()I": function (this: JLruCache) { return this.misses; },
     "putCount()I": function (this: JLruCache) { return this.puts; },
     "createCount()I": function (this: JLruCache) { return this.creates; },
     "evictionCount()I": function (this: JLruCache) { return this.evictions; },
+    "toString()Ljava/lang/String;": function (this: JLruCache) {
+      const accesses = this.hits + this.misses;
+      return `LruCache[maxSize=${this.max},hits=${this.hits},misses=${this.misses},hitRate=${accesses ? Math.trunc(100 * this.hits / accesses) : 0}%]`;
+    },
   },
 });
 

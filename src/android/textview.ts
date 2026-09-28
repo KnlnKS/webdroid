@@ -401,6 +401,20 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const t = spannedString(cs);
     if (t !== this.text || changedSpans) yield* this.textChanged$(t);
   }),
+  "append(Ljava/lang/CharSequence;)V": driven(function* (this: JTextView, cs: unknown): Gen {
+    yield vcall(this, "append", "(Ljava/lang/CharSequence;II)V", cs, 0, (yield csText(cs)).length);
+  }),
+  // AOSP turns the text into an Editable and appends to it in place
+  "append(Ljava/lang/CharSequence;II)V": driven(function* (this: JTextView, cs: unknown, start: number, end: number): Gen {
+    if (!this.editable) {
+      const text = yield newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", this.rawText ?? this.text);
+      yield vcall(text, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", this.text.length, this.text.length, cs, start, end);
+      yield vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", text, bufferTypes[2]);
+      return;
+    }
+    const text = this.getEditable();
+    yield vcall(text, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", this.text.length, this.text.length, cs, start, end);
+  }),
   "getText()Ljava/lang/CharSequence;": function (this: JTextView) {
     return this.editable ? this.getEditable() : (this.rawText ?? this.text);
   },

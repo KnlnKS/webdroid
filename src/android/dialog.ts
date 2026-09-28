@@ -14,7 +14,7 @@ import { JCanvas, tfMedium, JRect, castShadow } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { pressBackKey, dispatchWindowKey, backKeyMethods, type JKeyEvent } from "./keyevent";
+import { dispatchWindowKey, backKeyMethods, type JKeyEvent } from "./keyevent";
 import { AID, resString, rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
@@ -238,9 +238,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     const root = this.ensureRoot();
     yield loadCardBg(root);
     const win: JWindow = yield vcall(this, "getWindow", "()Landroid/view/Window;");
-    const overlay = addOverlay(root, 0, 0, false, () => pressBackKey(this), () => this.cancel());
-    overlay.dim = () => windowDim(win);
-    overlay.modal = true;
+    addOverlay(root, 0, 0, win.flags).dim = () => windowDim(win);
     const f = jmethod(this, M_onCreate);
     if (f && !(this as any).$created) {
       (this as any).$created = true;
@@ -346,6 +344,8 @@ export class JAlertDialog extends JDialog {
   items: string[] | null = null;
   itemsL: unknown = null;
   customView: JView | null = null;
+  /** replaces the title text, as AOSP's custom title panel does */
+  customTitle: JView | null = null;
   buttons = new Map<number, JButton>();
   built = false;
 }
@@ -371,7 +371,10 @@ async function buildAlertContent(d: JAlertDialog) {
     }),
   });
   const accent = themeAccent(col);
-  if (d.titleStr) {
+  if (d.customTitle) {
+    d.customTitle.lp = lpFill();
+    await attachView(col, d.customTitle);
+  } else if (d.titleStr) {
     const t = inherit(new JTextView());
     t.text = d.titleStr;
     t.paintT.textSize = device.dp(20);
@@ -448,6 +451,7 @@ const alertMethods: NativeSpec["methods"] = {
   }),
   "setMessage(Ljava/lang/CharSequence;)V": driven(function* (this: JAlertDialog, m: unknown): Gen { this.message = yield str(this.jctx?.$host, m); }),
   "setView(Landroid/view/View;)V": function (this: JAlertDialog, v: JView) { this.customView = v; },
+  "setCustomTitle(Landroid/view/View;)V": function (this: JAlertDialog, v: JView | null) { this.customTitle = v; },
   "setButton(ILjava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)V":
     driven(function* (this: JAlertDialog, which: number, t: unknown, l: unknown): Gen { setButton(this, which, yield str(this.jctx?.$host, t), l); }),
   "getButton(I)Landroid/widget/Button;": function (this: JAlertDialog, which: number) { return this.buttons.get(which) ?? null; },
@@ -467,6 +471,10 @@ const builderMethods: NativeSpec["methods"] = {
   "setTitle(I)Landroid/app/AlertDialog$Builder;": builderTitle,
   "setMessage(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;": builderMessage,
   "setMessage(I)Landroid/app/AlertDialog$Builder;": builderMessage,
+  "setCustomTitle(Landroid/view/View;)Landroid/app/AlertDialog$Builder;": function (this: JAlertBuilder, v: JView | null) {
+    this.d.customTitle = v;
+    return this;
+  },
   "setView(Landroid/view/View;)Landroid/app/AlertDialog$Builder;": function (this: JAlertBuilder, v: JView) {
     this.d.customView = v;
     return this;

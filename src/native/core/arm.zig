@@ -614,6 +614,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             return bx(c, target);
         }
         if ((w & 0x0ff000f0) == 0x01200070) return fault(c, .brk, w, pc);
+        if ((w & 0x0f900df0) == 0x01000040) return fault(c, .unimplemented, w, pc); // CRC32{C}
         if ((w & 0x0fff0ff0) == 0x016f0f10) {
             set(c, rd, @clz(reg(c, rm, pc)));
             return .next;

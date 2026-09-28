@@ -36,11 +36,11 @@ const pad4 = (n: number) => (n + 3) & ~3;
 export function writeInt(p: JParcel, v: number) { reserve(p, 4); p.view.setInt32(advance(p, 4), v | 0, true); }
 export function writeLong(p: JParcel, v: bigint) { reserve(p, 8); p.view.setBigInt64(advance(p, 8), BigInt.asIntN(64, v), true); }
 function writeFloat(p: JParcel, v: number) { reserve(p, 4); p.view.setFloat32(advance(p, 4), v, true); }
-function writeDouble(p: JParcel, v: number) { reserve(p, 8); p.view.setFloat64(advance(p, 8), v, true); }
+export function writeDouble(p: JParcel, v: number) { reserve(p, 8); p.view.setFloat64(advance(p, 8), v, true); }
 export function readInt(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getInt32(advance(p, 4), true) : 0; }
 export function readLong(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getBigInt64(advance(p, 8), true) : 0n; }
 function readFloat(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getFloat32(advance(p, 4), true) : 0; }
-function readDouble(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getFloat64(advance(p, 8), true) : 0; }
+export function readDouble(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getFloat64(advance(p, 8), true) : 0; }
 export function writeString(p: JParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
   writeInt(p, s.length);

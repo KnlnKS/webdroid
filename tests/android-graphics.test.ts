@@ -13,6 +13,7 @@ import { mkJResources } from "../src/android/resnative";
 import { TV, type XmlNode } from "../src/android/axml";
 import { JImageView } from "../src/android/imageview";
 import { parsePackageArchive } from "../src/android/packagearchive";
+import { recordingContext, replay, replayWithSemantics } from "../src/android/recording";
 
 describe("canvas-text", () => {
   rt.linkNatives();
@@ -61,6 +62,26 @@ describe("canvas-text", () => {
     await vcall(cv, "drawText", "(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V", new Sequence(), 4, 8, 0, 0, paint);
 
     expect(owner.drawnText).toEqual(["Buck"]);
+  });
+
+  test("text recorded inside a saveLayer keeps the replaying canvas's semantic owner", async () => {
+    // a raster whose context accepts every call, so the layer opens and composites
+    const stub = (canvas: object) => new Proxy({ canvas, getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) } as Record<string | symbol, unknown>,
+      { get: (t, k) => k in t ? t[k] : () => {} }) as unknown as OffscreenCanvasRenderingContext2D;
+    const g = globalThis as { OffscreenCanvas?: unknown };
+    const saved = g.OffscreenCanvas;
+    g.OffscreenCanvas = class { width = 100; height = 100; getContext() { return stub(this); } };
+    try {
+      const ops: unknown[] = [];
+      const cv = JCanvas.wrap(recordingContext(stub({ width: 1, height: 1 }), ops), 100, 100, true), paint = new JPaint();
+      await vcall(cv, "saveLayer", "(FFFFLandroid/graphics/Paint;)I", 0, 0, 50, 50, null);
+      await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "inside", 0, 0, paint);
+      await vcall(cv, "restore", "()V");
+      const target = stub({ width: 100, height: 100 }), outer = JCanvas.wrap(target, 100, 100), owner = semanticOwner();
+      outer.semanticOwner = owner;
+      replayWithSemantics(outer, () => replay(target, ops));
+      expect(owner.drawnText).toEqual(["inside"]);
+    } finally { g.OffscreenCanvas = saved; }
   });
 
   test.each([

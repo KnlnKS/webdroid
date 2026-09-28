@@ -84,6 +84,12 @@ function bufferBaseMethods(): NativeSpec["methods"] {
 }
 
 class JByteBuffer extends JBuffer {}
+const remainingBytes = (b: JBuffer) => new Int8Array(b.dv.buffer, b.dv.byteOffset + b.pos, b.lim - b.pos);
+function compareByteBuffers(this: JByteBuffer, other: JByteBuffer) {
+  const a = remainingBytes(this), b = remainingBytes(other);
+  for (let i = 0, n = Math.min(a.length, b.length); i < n; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return a.length - b.length;
+}
 rt.register({
   name: "java/nio/Buffer", ctor: JBuffer,
   methods: bufferBaseMethods(),
@@ -119,6 +125,19 @@ rt.register({
       bytes(this).set(bytes(src).subarray(src.pos, src.lim), this.pos);
       this.pos += n; src.pos += n; return this;
     },
+    // AOSP compares and hashes the remaining bytes, not the object: Tink checks a GCM
+    // ciphertext's prepended IV with wrap(iv).equals(wrap(ciphertext, 0, 12))
+    "equals(Ljava/lang/Object;)Z": function (this: JByteBuffer, o: unknown) {
+      return +(o instanceof JByteBuffer && compareByteBuffers.call(this, o) === 0);
+    },
+    "hashCode()I": function (this: JByteBuffer) {
+      const a = remainingBytes(this);
+      let h = 1;
+      for (let i = a.length - 1; i >= 0; i--) h = (Math.imul(31, h) + a[i]) | 0;
+      return h;
+    },
+    "compareTo(Ljava/nio/ByteBuffer;)I": compareByteBuffers,
+    "compareTo(Ljava/lang/Object;)I": compareByteBuffers,
     "get()B": function (this: JByteBuffer) { this.clampGet(1); return this.dv.getInt8(this.pos++); },
     "get(I)B": function (this: JByteBuffer, i: number) { return this.dv.getInt8(i); },
     "get([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
@@ -174,12 +193,7 @@ rt.register({
       this.pos = n; this.lim = this.cap;
       return this;
     },
-    "array()[B": function (this: JByteBuffer) {
-      if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
-      const array = accessibleArray(this);
-      if (!array) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
-      return array;
-    },
+    "array()[B": backingArray,
   },
 });
 function duplicateBuffer(source: JByteBuffer): JByteBuffer {
@@ -270,13 +284,27 @@ function bytes(b: JByteBuffer): Int8Array {
 // Java's wrap shares the array: writes through either side show on the other. A typed array is
 // laid out in native order, so a wrapped typed buffer reads little-endian (Java's order() for it
 // too); ByteBuffer.wrap keeps Java's big-endian default.
-function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Uint16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
+type ElemArray = Int8Array | Int16Array | Uint16Array | Int32Array | Float32Array | BigInt64Array | Float64Array;
+function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: ElemArray, shift: number, off = 0, len = arr.length): T {
   const b = new Ctor();
   b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer, array: arr } };
   b.byteOffset = arr.byteOffset;
   b.elemShift = shift; b.little = shift > 0;
   b.cap = arr.length; b.pos = off; b.lim = off + len;
   return b;
+}
+
+/** X.allocate for a typed buffer: a heap buffer over its own element array, as AOSP's HeapXBuffer */
+function allocateTyped<T extends JBuffer>(Ctor: new () => T, Arr: new (n: number) => ElemArray, cap: number, shift: number): T {
+  if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "capacity < 0: (" + cap + " < 0)");
+  return wrapArray(Ctor, new Arr(cap), shift);
+}
+/** array(): the element array behind a writable heap buffer */
+function backingArray(this: JBuffer): ArrayBufferView {
+  if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+  const array = accessibleArray(this);
+  if (!array) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+  return array;
 }
 
 // typed view buffers (Float/Int/Short/Char/Long/Double) sharing the byte buffer's ArrayBuffer
@@ -331,7 +359,8 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/FloatBuffer;"),
-    "static allocate(I)Ljava/nio/FloatBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 4), JFloatBuffer, 2),
+    "static allocate(I)Ljava/nio/FloatBuffer;": (cap: number) => allocateTyped(JFloatBuffer, Float32Array, cap, 2),
+    "array()[F": backingArray,
     "static wrap([F)Ljava/nio/FloatBuffer;": (arr: Float32Array) => wrapArray(JFloatBuffer, arr, 2),
     "put(F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, v: number) { this.clampPut(1); this.dv.setFloat32(this.pos++ << 2, v, this.little); return this; },
     "put(IF)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i << 2, v, this.little); return this; },
@@ -380,7 +409,8 @@ function intBufferMethods(): NativeSpec["methods"] {
   return {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/IntBuffer;"),
-    "static allocate(I)Ljava/nio/IntBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 4), JIntBuffer, 2),
+    "static allocate(I)Ljava/nio/IntBuffer;": (cap: number) => allocateTyped(JIntBuffer, Int32Array, cap, 2),
+    "array()[I": backingArray,
     "static wrap([I)Ljava/nio/IntBuffer;": (arr: Int32Array) => wrapArray(JIntBuffer, arr, 2),
     "put(I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, v: number) { this.clampPut(1); this.dv.setInt32(this.pos++ << 2, v, this.little); return this; },
     "put(II)Ljava/nio/IntBuffer;": function (this: JIntBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i << 2, v, this.little); return this; },
@@ -401,7 +431,8 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/ShortBuffer;"),
-    "static allocate(I)Ljava/nio/ShortBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JShortBuffer, 1),
+    "static allocate(I)Ljava/nio/ShortBuffer;": (cap: number) => allocateTyped(JShortBuffer, Int16Array, cap, 1),
+    "array()[S": backingArray,
     "static wrap([S)Ljava/nio/ShortBuffer;": (arr: Int16Array) => wrapArray(JShortBuffer, arr, 1),
     "static wrap([SII)Ljava/nio/ShortBuffer;": (arr: Int16Array, off: number, len: number) => wrapArray(JShortBuffer, arr, 1, off, len),
     "put(S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, v: number) { this.clampPut(1); this.dv.setInt16(this.pos++ << 1, v, this.little); return this; },
@@ -449,12 +480,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JCharBuffer) { return charText(this); },
     "static wrap([C)Ljava/nio/CharBuffer;": (arr: Uint16Array) => wrapArray(JCharBuffer, arr, 1),
     "static wrap([CII)Ljava/nio/CharBuffer;": (arr: Uint16Array, off: number, len: number) => wrapArray(JCharBuffer, arr, 1, off, len),
-    "array()[C": function (this: JCharBuffer) {
-      const storage = this.backing.storage;
-      if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
-      if (storage.kind !== "heap" || !(storage.array instanceof Uint16Array)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
-      return storage.array;
-    },
+    "array()[C": backingArray,
     "get()C": function (this: JCharBuffer) { this.clampGet(1); return charAt(this, this.pos++); },
     "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
   },
@@ -464,7 +490,8 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/LongBuffer;"),
-    "static allocate(I)Ljava/nio/LongBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 8), JLongBuffer, 3),
+    "static allocate(I)Ljava/nio/LongBuffer;": (cap: number) => allocateTyped(JLongBuffer, BigInt64Array, cap, 3),
+    "array()[J": backingArray,
     "get()J": function (this: JLongBuffer) { this.clampGet(1); return this.dv.getBigInt64(this.pos++ << 3, this.little); },
     "put(J)Ljava/nio/LongBuffer;": function (this: JLongBuffer, v: bigint) { this.clampPut(1); this.dv.setBigInt64(this.pos++ << 3, v, this.little); return this; },
   },
@@ -474,7 +501,8 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/DoubleBuffer;"),
-    "static allocate(I)Ljava/nio/DoubleBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 8), JDoubleBuffer, 3),
+    "static allocate(I)Ljava/nio/DoubleBuffer;": (cap: number) => allocateTyped(JDoubleBuffer, Float64Array, cap, 3),
+    "array()[D": backingArray,
     "get()D": function (this: JDoubleBuffer) { this.clampGet(1); return this.dv.getFloat64(this.pos++ << 3, this.little); },
     "put(D)Ljava/nio/DoubleBuffer;": function (this: JDoubleBuffer, v: number) { this.clampPut(1); this.dv.setFloat64(this.pos++ << 3, v, this.little); return this; },
   },
@@ -607,7 +635,7 @@ rt.register({
     }),
   },
 });
-class JCharsetDecoder extends JCharsetCoder {
+export class JCharsetDecoder extends JCharsetCoder {
   replacement = "\ufffd";
   endian: boolean | null = null;
 }

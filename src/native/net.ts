@@ -6,7 +6,7 @@ import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem, guestAt } from "./mem";
 import { fail } from "./libc";
-import { allocateFd, releaseFd, reserveFd } from "./fd";
+import { allocateFd, releaseFd } from "./fd";
 const enc = new TextEncoder();
 
 const AF_UNSPEC = 0, AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2, IPPROTO_TCP = 6, IPPROTO_UDP = 17;
@@ -428,11 +428,11 @@ export function nativeSocketClose(cpu: Cpu, fd: number): number {
   return 0;
 }
 
-export function nativeSocketDup(cpu: Cpu, fd: number, target?: number, cloexec = false): number {
+/** a descriptor for the socket at the lowest free number at or above `min` */
+export function nativeSocketDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
-  const duplicate = target ?? allocateFd();
-  if (target !== undefined) reserveFd(target);
+  const duplicate = allocateFd(min);
   descriptor.socket.references++;
   sockets.set(duplicate, { socket: descriptor.socket, cloexec });
   return duplicate;

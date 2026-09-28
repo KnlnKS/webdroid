@@ -39,7 +39,7 @@ const OFF_CPSR = @offsetOf(cpu.Cpu, "cpsr");
 
 fn armMisc(w: u32) bool {
     return (w & 0x0ff000f0) == 0x01200070 or (w & 0x0f900090) == 0x01000080 or (w & 0x0f9000f0) == 0x01000050 or
-        (w & 0x0f800ff0) == 0x01800f90 or (w & 0x0fb000f0) == 0x01000090;
+        (w & 0x0f800ff0) == 0x01800f90 or (w & 0x0fb000f0) == 0x01000090 or (w & 0x0f900df0) == 0x01000040;
 }
 
 fn thumbCall(h: u32, h2: u32) bool {

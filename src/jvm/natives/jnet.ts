@@ -7,10 +7,10 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
+import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException, sysProps } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8 } from "../abi";
 import { type JBAOS } from "./jio";
@@ -243,6 +243,11 @@ rt.register({
     "getHardwareAddress()[B": () => null,
     "isLoopback()Z": () => 1,
     "isUp()Z": () => 1,
+    // Linux's lo carries no MULTICAST flag
+    "supportsMulticast()Z": () => 0,
+    "isVirtual()Z": () => 0,
+    "isPointToPoint()Z": () => 0,
+    "getMTU()I": () => 65536,
     "getIndex()I": () => 1,
     "getInetAddresses()Ljava/util/Enumeration;": () => mkIter([loopback()]),
     "getInterfaceAddresses()Ljava/util/List;": () => newArrayList(),
@@ -331,6 +336,7 @@ const datagramPorts = new Map<number, JDatagramSocket>();
 let nextDatagramPort = 49152;
 class JDatagramSocket extends JObj {
   port = -1;
+  reuseAddress = false; broadcast = false; ttl = 1;
   timeout = 0;
   closed = false;
   remote: JInetSocketAddress | null = null;
@@ -421,10 +427,36 @@ rt.register({
       this.timeout = ms;
     },
     "getSoTimeout()I": function (this: JDatagramSocket) { return this.timeout; },
+    "setReuseAddress(Z)V": function (this: JDatagramSocket, on: number) { this.reuseAddress = !!on; },
+    "getReuseAddress()Z": function (this: JDatagramSocket) { return +this.reuseAddress; },
+    "setBroadcast(Z)V": function (this: JDatagramSocket, on: number) { this.broadcast = !!on; },
+    "getBroadcast()Z": function (this: JDatagramSocket) { return +this.broadcast; },
     "getLocalPort()I": function (this: JDatagramSocket) { return this.port; },
     "isBound()Z": function (this: JDatagramSocket) { return +(this.port >= 0); },
     "isClosed()Z": function (this: JDatagramSocket) { return +this.closed; },
     "close()V": function (this: JDatagramSocket) { this.close(); },
+  },
+});
+// MulticastSocket: the one interface is a loopback without multicast, so joining a group fails as
+// IP_ADD_MEMBERSHIP does there (ENODEV); unicast replies to a sent query still arrive.
+const noMulticast = (): never => { throw rt.mkThrowable("java/net/SocketException", "No such device"); };
+const notMember = (): never => { throw rt.mkThrowable("java/net/SocketException", "Cannot assign requested address"); };
+rt.register({
+  name: "java/net/MulticastSocket", ctor: class extends JDatagramSocket {}, sup: "java/net/DatagramSocket",
+  methods: {
+    "<init>()V": function (this: JDatagramSocket) { this.bind(0); },
+    "<init>(I)V": function (this: JDatagramSocket, port: number) { this.bind(port); },
+    "<init>(Ljava/net/SocketAddress;)V": function (this: JDatagramSocket, address: JInetSocketAddress | null) { if (address) this.bind(address.port); },
+    "joinGroup(Ljava/net/InetAddress;)V": noMulticast,
+    "joinGroup(Ljava/net/SocketAddress;Ljava/net/NetworkInterface;)V": noMulticast,
+    "leaveGroup(Ljava/net/InetAddress;)V": notMember,
+    "leaveGroup(Ljava/net/SocketAddress;Ljava/net/NetworkInterface;)V": notMember,
+    "setTimeToLive(I)V": function (this: JDatagramSocket, ttl: number) {
+      if (ttl < 0 || ttl > 255) throw rt.mkThrowable("java/lang/IllegalArgumentException", "ttl out of range");
+      this.ttl = ttl;
+    },
+    "getTimeToLive()I": function (this: JDatagramSocket) { return this.ttl; },
+    ...noops("setLoopbackMode(Z)V", "setNetworkInterface(Ljava/net/NetworkInterface;)V", "setInterface(Ljava/net/InetAddress;)V"),
   },
 });
 class JSocket extends JObj {
@@ -642,7 +674,7 @@ rt.register({
   },
 });
 
-class JURI extends JObj {
+export class JURI extends JObj {
   u = "";
   private parsed: ReturnType<typeof parseURI> | null = null;
   parts(): ReturnType<typeof parseURI> { return this.parsed ??= parseURI(this.u); }
@@ -676,7 +708,7 @@ function hierarchicalURI(scheme: string | null, authority: string | null, path: 
   }
   return uri;
 }
-const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
+export const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
 const formEncode = (s: string) =>
@@ -749,7 +781,7 @@ rt.register({
 
 // ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
 // raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
-// stripped, follows redirects itself and reports the final URL in x-wd-final-url.
+// stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
 defineException("java/net/MalformedURLException", "java/io/IOException");
 // the abstract socket implementation an app may subclass to reach a socket's descriptor
 rt.register({ name: "java/net/SocketImpl", ctor: class extends JObj { fd: unknown = null; }, fields: { fd: "fd" }, methods: { "<init>()V": function () {} } });
@@ -940,7 +972,7 @@ type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: 
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
-async function headerMap(groups: Iterable<[string | null, string[]]>) {
+export async function headerMap(groups: Iterable<[string | null, string[]]>) {
   const m = rt.make("java/util/HashMap");
   for (const [k, v] of groups) await vcall(m, "put", PUT, k, newArrayList(v));
   return m;
@@ -975,41 +1007,66 @@ class JURLConnection extends JObj {
       clearTimeout(timer);
       if (ms > 0) timer = setTimeout(() => { timedOut = what; ac.abort(); }, ms);
     };
-    const headers = new Headers();
-    for (const [k, v] of this.req) headers.append("x-wd-" + k, v);
-    if (this.ifMod) headers.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
-    const hasBody = this.out && this.method !== "GET" && this.method !== "HEAD";
-    let r: Response;
-    arm(this.cto, "connect timed out");
-    try {
-      r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec) + (this.follow ? "" : "&manual=1"), {
-        method: this.method, headers, signal: ac.signal, body: hasBody ? this.out!.bytes().slice() : undefined,
+    const base = new Headers();
+    for (const [k, v] of this.req) base.append("x-wd-" + k, v);
+    // Android's engine adds http.agent to requests that set no User-Agent
+    if (!base.has("x-wd-user-agent") && sysProps["http.agent"]) base.set("x-wd-user-agent", sysProps["http.agent"]);
+    if (this.ifMod) base.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
+    let method = this.method, target = this.url.spec, r: Response, hdrs: [string, string][], length: string | null;
+    let body = this.out && method !== "GET" && method !== "HEAD" ? this.out.bytes().slice() : undefined;
+    // Redirects are followed here, one proxy hop each, because the process CookieHandler that
+    // Android's HttpURLConnection consults around every exchange must see each hop's URL.
+    for (let hop = 0; ; hop++) {
+      const cookies = defaultCookieHandler, uri = cookies && mkURI(target), headers = new Headers(base);
+      if (cookies) {
+        const offered = await vcall(cookies, "get", "(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;", uri, await headerMap(group(this.req)));
+        for (const e of await toJsArray(await vcall(offered, "entrySet", "()Ljava/util/Set;"))) {
+          const key: string | null = await vcall(e, "getKey", "()Ljava/lang/Object;");
+          const values = await toJsArray(await vcall(e, "getValue", "()Ljava/lang/Object;")) as string[];
+          if (key && /^cookie2?$/i.test(key) && values.length) headers.set("x-wd-" + key, values.join("; "));
+        }
+      }
+      arm(this.cto, "connect timed out");
+      try {
+        r = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target), { method, headers, signal: ac.signal, body });
+      } catch (e) {
+        if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
+        if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
+        throw rt.mkThrowable("java/io/IOException", String(e));
+      } finally { clearTimeout(timer); }
+      // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
+      if (r.status === 502 && !r.headers.get("x-wd-final-url")) {
+        const { hostname, port, protocol } = new URL(target), kind = r.headers.get("x-wd-error");
+        const detail = (await r.text()).replace(/^proxy error: /, "");
+        if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
+        if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
+        throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
+      }
+      hdrs = [];
+      r.headers.forEach((v, k) => {
+        if (k === "x-wd-set-cookie") for (const c of JSON.parse(v) as string[]) hdrs.push(["set-cookie", c]);
+        else if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]);
       });
-    } catch (e) {
-      if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
-      if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
-      throw rt.mkThrowable("java/io/IOException", String(e));
-    } finally { clearTimeout(timer); }
-    const final = r.headers.get("x-wd-final-url");
-    // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !final) {
-      const { hostname, port, protocol } = this.url.u, kind = r.headers.get("x-wd-error");
-      const detail = (await r.text()).replace(/^proxy error: /, "");
-      if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
-      if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
-      throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
+      length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
+      if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
+      if (cookies) await vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, await headerMap(group(hdrs)));
+      const status = Number(r.headers.get("x-wd-status")) || r.status, location = r.headers.get("location");
+      if (!this.follow || ![301, 302, 303, 307, 308].includes(status) || !location) break;
+      // OkHttp's MAX_FOLLOW_UPS
+      if (hop === 20) throw rt.mkThrowable("java/net/ProtocolException", "Too many follow-up requests: 21");
+      await r.body?.cancel();
+      // the method rewrites fetch's redirect mode (the proxy's former follower) applies
+      if (status === 303 && method !== "HEAD" || (status === 301 || status === 302) && method === "POST") { method = "GET"; body = undefined; base.delete("x-wd-content-type"); }
+      const next = new URL(location, target).href;
+      if (new URL(next).origin !== new URL(target).origin) base.delete("x-wd-authorization");
+      target = next;
     }
-    if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
-    const hdrs: [string, string][] = [];
-    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
-    const length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
-    if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
+    if (target !== this.url.u.href) this.url = mkURL(target);   // getURL() reports where a redirect landed
     const stream = new JHttpInputStream();
     stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
-    const status = this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status;
-    if (length && this.method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
-    return (this.res = { status,
-      msg: this.follow ? r.statusText : r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
+    const status = Number(r.headers.get("x-wd-status")) || r.status;
+    if (length && method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
+    return (this.res = { status, msg: r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
   hdr(name: string | null): string | null {
@@ -1216,59 +1273,14 @@ rt.register({
   },
 });
 
-// ── cookies. CookieHandler.get/put are abstract and always reach a CookieManager receiver, so the
-// manager carries them; the store is a host → name → value map (attributes are not kept).
-class JCookieHandler extends JObj {}
-let defaultCookieHandler: JCookieHandler | null = null;
+// ── CookieHandler: the process default consulted by HttpURLConnection; java.net's cookie
+// model lives in jcookies
+let defaultCookieHandler: JObj | null = null;
 rt.register({
-  name: "java/net/CookieHandler", ctor: JCookieHandler,
+  name: "java/net/CookieHandler", ctor: class extends JObj {},
   methods: {
     "<init>()V": function () {},
     "static getDefault()Ljava/net/CookieHandler;": () => defaultCookieHandler,
-    "static setDefault(Ljava/net/CookieHandler;)V": (h: JCookieHandler | null) => { defaultCookieHandler = h; },
-  },
-});
-class JCookiePolicy extends JObj { accept = 1; }
-const acceptAll = new JCookiePolicy(), acceptOriginal = new JCookiePolicy(), acceptNone = Object.assign(new JCookiePolicy(), { accept: 0 });
-rt.register({
-  name: "java/net/CookiePolicy", ctor: JCookiePolicy,
-  statics: { ACCEPT_ALL: acceptAll, ACCEPT_NONE: acceptNone, ACCEPT_ORIGINAL_SERVER: acceptOriginal },
-  methods: { "shouldAccept(Ljava/net/URI;Ljava/net/HttpCookie;)Z": function (this: JCookiePolicy) { return this.accept; } },
-});
-rt.markers("java/net/CookieStore");
-class JCookieStore extends JObj { jar = new Map<string, Map<string, string>>(); }
-rt.register({
-  name: "webdroid/CookieStore", ctor: JCookieStore, ifaces: ["java/net/CookieStore"],
-  methods: { "removeAll()Z": function (this: JCookieStore) { const n = this.jar.size; this.jar.clear(); return n ? 1 : 0; } },
-});
-class JCookieManager extends JCookieHandler { store = new JCookieStore(); policy: JObj = acceptOriginal; }
-const hostOf = (uri: JURI | null) => { try { return new URL(uri?.u ?? "").hostname; } catch { return uri?.u ?? ""; } };
-rt.register({
-  name: "java/net/CookieManager", ctor: JCookieManager, sup: "java/net/CookieHandler",
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Ljava/net/CookieStore;Ljava/net/CookiePolicy;)V": function (this: JCookieManager, _s: unknown, p: JObj | null) { if (p) this.policy = p; },
-    "setCookiePolicy(Ljava/net/CookiePolicy;)V": function (this: JCookieManager, p: JObj | null) { if (p) this.policy = p; },
-    "getCookieStore()Ljava/net/CookieStore;": function (this: JCookieManager) { rt.link("webdroid/CookieStore"); return this.store; },
-    "get(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;": function (this: JCookieManager, uri: JURI | null) {
-      const c = this.store.jar.get(hostOf(uri));
-      // OpenJDK always answers the Cookie key, with an empty list when nothing matches
-      return headerMap([["Cookie", c ? [...c].map(([k, v]) => k + "=" + v) : []]]);
-    },
-    "put(Ljava/net/URI;Ljava/util/Map;)V": driven(function* (this: JCookieManager, uri: JURI | null, hdrs: unknown): Gen {
-      if (this.policy === acceptNone || !hdrs) return;
-      const host = hostOf(uri);
-      for (const e of yield toJsArray(yield vcall(hdrs, "entrySet", "()Ljava/util/Set;"))) {
-        const k = (yield vcall(e, "getKey", "()Ljava/lang/Object;")) as string | null;
-        if (!k || !/^set-cookie2?$/i.test(k)) continue;
-        for (const v of (yield toJsArray(yield vcall(e, "getValue", "()Ljava/lang/Object;"))) as string[]) {
-          const m = /^\s*([^=;\s]+)=([^;]*)/.exec(v);
-          if (!m) continue;
-          let c = this.store.jar.get(host);
-          if (!c) this.store.jar.set(host, c = new Map());
-          c.set(m[1], m[2].trim());
-        }
-      }
-    }),
+    "static setDefault(Ljava/net/CookieHandler;)V": (h: JObj | null) => { defaultCookieHandler = h; },
   },
 });

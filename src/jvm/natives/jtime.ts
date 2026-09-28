@@ -15,7 +15,7 @@ import { ordering } from "./jtime-temporal";
 import "./jtime-amount";
 import "./jtime-format";
 
-export { MONTHS, DAYS, localTz, unavailableClock } from "./jtime-iso";
+export { MONTHS, DAYS, localTz, clockIn, offsetOf, unavailableClock } from "./jtime-iso";
 
 const zoneOffsetMs = (id: string, ms: number) => offsetAt(zoneForId(id), floorDiv(ms, 1000)) * 1000;
 const zoneStandardOffsetMs = (id: string, ms: number) => standardOffset(zoneForId(id), floorDiv(ms, 1000)) * 1000;

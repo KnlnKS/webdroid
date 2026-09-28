@@ -116,5 +116,7 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     "isForegroundService()Z": function (this: JPendingIntent) { return +(pendingTransport.kind(pendingId(this)) === "foreground-service"); },
     "isImmutable()Z": function (this: JPendingIntent) { return +(!!(pendingTransport.flags(pendingId(this)) & 0x4000000)); },
     "send()V": function (this: JPendingIntent) { return sendIntent(this.sender); },
+    "send(I)V": function (this: JPendingIntent) { return sendIntent(this.sender); },
+    "send(Landroid/content/Context;ILandroid/content/Intent;)V": function (this: JPendingIntent, _context: JContext, _code: number, fill: JIntent | null) { return sendIntent(this.sender, fill ?? undefined); },
   },
 });

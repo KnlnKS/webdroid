@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
-import { Cpu, setA64 } from "./cpu";
+import { Cpu, setA64, sigHandlers } from "./cpu";
 import { lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
@@ -140,4 +140,21 @@ test("A64 mmap keeps executable and low-hinted mappings where the core runs code
     expect(data >> 32n).not.toBe(0n);
     expect(mem.unmapVa(data, size)).toBe(true);
   } finally { cpu.dispose(); setA64(false); }
+});
+
+test("an instruction the CPU lacks raises SIGILL, and siglongjmp leaves the handler", async () => {
+  setA64(true); libcInit();
+  const cpu = new Cpu(new JThread(), "sigill-test"), code = mem.reserve(4096, 4096), buf = mem.hostAlloc(256, 16), handler = code + 0x100;
+  const lit = (at: number, v: number) => mem.u32.set([v, 0], at >>> 2);
+  // sigsetjmp(buf); if (!result) pmull v0.1q; return result
+  mem.u32.set([0xa9bf7bfd, 0x58000120, 0x58000150, 0xd63f0200, 0x35000060, 0x0ee0e000, 0x528000e0, 0xa8c17bfd, 0xd65f03c0, 0xd503201f], code >>> 2);
+  lit(code + 40, buf); lit(code + 48, lookupHost("sigsetjmp", "libc.so")!);
+  // the handler: siglongjmp(buf, SIGILL)
+  mem.u32.set([0x58000080, 0x52800081, 0x58000090, 0xd61f0200], handler >>> 2);
+  lit(handler + 16, buf); lit(handler + 24, lookupHost("siglongjmp", "libc.so")!);
+  sigHandlers.set(4, { fn: handler, flags: 0, mask: 0n });
+  try {
+    expect(await cpu.call(code)).toBe(4);
+    expect(cpu.depth).toBe(0);
+  } finally { sigHandlers.delete(4); cpu.dispose(); setA64(false); }
 });
