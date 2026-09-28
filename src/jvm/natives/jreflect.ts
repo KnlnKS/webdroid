@@ -138,7 +138,7 @@ const readField = driven(function* readField(this: JField, o: unknown): Gen {
 });
 const writeField = driven(function* writeField(this: JField, o: unknown, value: unknown, boxed = false): Gen<void> {
   const p = rt.initClass(this.owner); if (p) yield p;
-  if (boxed && "IJFDZBCS".includes(this.desc[0])) value = unboxArg(value);
+  if (boxed) value = argFor(this.desc, value);
   if (this.isStatic) this.owner.ctor[this.prop] = value;
   else (o as Record<string, unknown>)[this.prop] = value;
 });
@@ -701,7 +701,7 @@ rt.register({
     "isBridge()Z": function (this: JMethod) { return (this.mods >> 6) & 1; },
     "isVarArgs()Z": function (this: JMethod) { return (this.mods >> 7) & 1; },
     "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMethod, recv: unknown, args: unknown[] | null): Gen {
-      const a = (args ?? []).map(unboxArg);
+      const ps = parseMethodDesc(this.desc).params, a = (args ?? []).map((v, i) => argFor(ps[i], v));
       const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? lateMethod.find?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
       let val: unknown;
@@ -801,7 +801,7 @@ rt.register({
       const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)];
       if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
-      const a = (args ?? []).map((v, i) => ("IJFDZBCS".includes(ps[i] ?? "L") ? unboxArg(v) : v));
+      const a = (args ?? []).map((v, i) => argFor(ps[i], v));
       const o = new (this.alloc ?? info).ctor();
       try {
         const r = fn.apply(o, a);
@@ -869,6 +869,14 @@ export function unboxArg(v: unknown): unknown {
   // reflection passes boxed primitives; unwrap to raw for native/compiled calls
   if (v !== null && typeof v === "object" && "v" in (v as object)) return (v as { v: unknown }).v;
   return v;
+}
+/** a reflective argument for a parameter of type `desc`: unboxed, then widened as Method.invoke
+ *  does (an Integer reaches a long parameter as a long, a Long a double one as a double) */
+function argFor(desc: string | undefined, v: unknown): unknown {
+  if (!desc || !"IJFDZBCS".includes(desc)) return v;
+  const raw = unboxArg(v);
+  if (desc === "J") return typeof raw === "number" ? BigInt(raw) : raw;
+  return typeof raw === "bigint" ? Number(raw) : raw;
 }
 export function boxReturn(retDesc: string, v: unknown): unknown {
   switch (retDesc[0]) {
