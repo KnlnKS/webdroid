@@ -7,7 +7,7 @@ import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
 import { coldStack, type ColdMethod } from "../cold";
-import { mangleMethod, demangle, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { mangleMethod, mangleStaticField, demangle, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
@@ -1781,18 +1781,36 @@ function sysDecode(prop: string, min: bigint, max: bigint): bigint | null {
   if (raw === undefined) return null;
   try { return decodeJ(raw, min, max); } catch { return null; }
 }
-export const sysProps: Record<string, string> = {
-  "java.version": "0", "os.name": "Linux", "line.separator": "\n",
+const ownProps: Record<string, string> = {
   // The loader indexes every DEX before application initialization, as ART 2.1 does.
   "java.vm.version": "2.1.0",
-  "java.vm.name": "Dalvik", "file.separator": "/", "path.separator": ":",
-  "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
+  "java.io.tmpdir": "/data/local/tmp", "user.dir": "/", "os.name": "Linux",
   // libcore reads these from uname and the app's passwd entry
   "os.arch": "aarch64", "os.version": "3.10.0", "user.home": "/data",
   // RuntimeInit's default user agent from Build.VERSION.RELEASE, MODEL and ID
   "http.agent": `Dalvik/2.1.0 (Linux; U; Android ${device.release}; webdroid Build/WD1A)`,
   get "user.name"() { return appUserName(procIdentity.uid); },
 };
+let artProps: Record<string, string> | null = null;
+/** ART's fixed properties (java.class.version, java.specification.*, file.encoding...), read
+ *  from libcore's own table once the platform class path is there */
+function hardcodedProps(): Record<string, string> {
+  if (artProps) return artProps;
+  const info = rt.link("java/lang/AndroidHardcodedSystemProperties");
+  if (info.stub || rt.initClass(info)) return {};
+  artProps = {};
+  for (const pair of (info.ctor as Record<string, (string | null)[][]>)[mangleStaticField("STATIC_PROPERTIES")] ?? [])
+    if (pair[0] && pair[1] !== null) artProps[pair[0]] = pair[1];
+  return artProps;
+}
+/** System properties: webdroid's own, over ART's */
+export const sysProps: Record<string, string> = new Proxy(ownProps, {
+  get: (own, k: string) => k in own ? Reflect.get(own, k) : hardcodedProps()[k],
+  has: (own, k: string) => k in own || k in hardcodedProps(),
+  ownKeys: (own) => [...new Set([...Object.keys(hardcodedProps()), ...Reflect.ownKeys(own) as string[]])],
+  getOwnPropertyDescriptor: (own, k: string) => Reflect.getOwnPropertyDescriptor(own, k)
+    ?? (k in hardcodedProps() ? { value: hardcodedProps()[k], enumerable: true, configurable: true, writable: true } : undefined),
+});
 const sysEnv: Record<string, string> = {
   PATH: "/system/bin:/system/xbin:/vendor/bin",
   ANDROID_ROOT: "/system", ANDROID_DATA: "/data", EXTERNAL_STORAGE: "/sdcard",
