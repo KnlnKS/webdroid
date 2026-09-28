@@ -217,3 +217,17 @@ test("a native spec's missing methods fall through to platform bodies that only 
   const late = R.link("JvmTierProbe$Late").ctor;
   expect(() => late[mangleMethod("get", "(I)I")](1)).toThrow("unsafe-fallthrough JvmTierProbe$Late.get(I)I JvmTierProbe$Late.value");
 });
+
+test("a native class's absent field throws on read until something writes it", async () => {
+  const R = new Runtime();
+  R.register({ name: "java/lang/Object", ctor: class extends JObj {} });
+  R.register({ name: "InvokeProbe", ctor: class extends JObj {} });
+  R.mkThrowable = (name, message) => Object.assign(new Error(message ?? ""), { $javaClass: name });
+  const dex = new DexFile(new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/InvokeProbe.dex").arrayBuffer()));
+  const def = [...Array(dex.classDefCount).keys()].map((i) => dex.classDef(i)).find((d) => dex.type(d.typeIdx) === "LInvokeProbe;")!;
+  const obj = R.make("InvokeProbe"), prop = R.resolveInstanceField(dex, def.instanceFields[0].fieldIdx);
+  expect(() => obj[prop]).toThrow("is not a field of the native class");
+  obj[prop] = 7;
+  expect(obj[prop]).toBe(7);
+  expect(() => R.make("InvokeProbe")[prop]).toThrow();
+});

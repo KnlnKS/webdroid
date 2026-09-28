@@ -123,6 +123,8 @@ interface DexLink {
   ics(i: number): any;                  // link an invoke-custom call site
 }
 
+/** development and test builds make a read of a field a native class lacks throw */
+const STRICT_FIELDS = process.env.NODE_ENV !== "production";
 /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
 const CLINIT_WAIT_MS = 60;
 
@@ -333,7 +335,22 @@ export class Runtime {
       if (prop) return prop;
     } catch { /* class missing — fall through */ }
     this.noteMissing(`field ${clsName}.${fr.name}`);
-    return mangleField(clsName, fr.name);
+    const prop = mangleField(clsName, fr.name);
+    if (STRICT_FIELDS) this.guardField(clsName, fr.name, prop);
+    return prop;
+  }
+
+  /** A native class without the field: reading it before anything wrote it throws rather than
+   *  reading undefined, and a write makes it an ordinary property of that object. */
+  private guardField(cls: string, name: string, prop: string) {
+    const info = this.classes.get(cls);
+    if (!info?.native || info.stub || !info.ctor || prop in info.ctor.prototype) return;
+    const R = this;
+    Object.defineProperty(info.ctor.prototype, prop, {
+      configurable: true,
+      get() { throw R.mkThrowable("java/lang/NoSuchFieldError", `${cls}.${name} is not a field of the native class`); },
+      set(value: unknown) { Object.defineProperty(this, prop, { value, writable: true, enumerable: true, configurable: true }); },
+    });
   }
 
   /** compile-time: static field access site info */
