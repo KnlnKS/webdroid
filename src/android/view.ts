@@ -2,7 +2,7 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, saveCanvas, saveLayer, restoreCanvasToCount, type JPoint, type JPaint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
@@ -78,6 +78,8 @@ function descendantInvalidated(child: JView, target: JView) {
 }
 function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { invalidate(); descendantInvalidated(this, target); }
 function nativeRequestLayout(this: JView) { requestLayout(this); }
+/** where AOSP calls this.invalidate(): an app's override sees it */
+function invalidateVirtual(v: JView): unknown { return (jmethod(v, M_invalidate) ?? invalidateThis).call(v); }
 /** AOSP's addView and removeView call the parent's requestLayout() virtually: an override
  *  (RecyclerView defers while it binds or lays out) decides first */
 function requestLayoutVirtual(v: JView) {
@@ -213,14 +215,17 @@ const performClick = driven(function* performClick(this: JView): Gen {
   yield vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
   return 1;
 });
+/** AOSP setBackgroundDrawable; a background appearing or going away re-measures the view */
 function setBackground(this: JView, d: JDrawable | null) {
+  const relayout = !this.background !== !d;
   if (this.background) this.background.callback = null;
   this.background = d;
   this.outlineDirty = true;
   // AOSP hands a fresh background the view's current state; without it a stateful drawable
   // paints its "no state at all" entry until something else happens to the view
   if (d) { d.callback = this; void this.refreshDrawableState(); }
-  invalidate(this);
+  if (relayout) requestLayoutVirtual(this);
+  void invalidateVirtual(this);
 }
 /** this view's origin in window coordinates */
 function windowOffset(view: JView): [number, number] {
@@ -260,6 +265,10 @@ const addInLayout = driven(function* addInLayout(this: JViewGroup, c: JView, i: 
 const attachToParent = driven(function* attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): Gen {
   c.lp = lp ? yield convertLp(this, lp) : c.lp;
   yield linkChild(this, c, i);
+  // AOSP tells the parent a focused child came back (RecyclerView tracks it through requestChildFocus)
+  if (yield vcall(c, "hasFocus", "()Z")) {
+    yield vcall(this, "requestChildFocus", "(Landroid/view/View;Landroid/view/View;)V", c, yield vcall(c, "findFocus", "()Landroid/view/View;"));
+  }
 });
 export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
   const e = new JMotionEvent();
@@ -289,6 +298,16 @@ const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_getIntrinsicWidth = mangleMethod("getIntrinsicWidth", "()I");
 const M_getIntrinsicHeight = mangleMethod("getIntrinsicHeight", "()I");
 const M_getLayoutDirection = mangleMethod("getLayoutDirection", "()I");
+const M_invalidate = mangleMethod("invalidate", "()V");
+const M_refreshDrawableState = mangleMethod("refreshDrawableState", "()V");
+const M_setFrame = mangleMethod("setFrame", "(IIII)Z");
+const M_setTranslationX = mangleMethod("setTranslationX", "(F)V");
+const M_setTranslationY = mangleMethod("setTranslationY", "(F)V");
+const M_isFocused = mangleMethod("isFocused", "()Z");
+const M_hasWindowFocus = mangleMethod("hasWindowFocus", "()Z");
+const M_sugMinW = mangleMethod("getSuggestedMinimumWidth", "()I");
+const M_sugMinH = mangleMethod("getSuggestedMinimumHeight", "()I");
+const M_stopNestedScroll = mangleMethod("stopNestedScroll", "()V");
 
 /** absolute position of v's top-left: translations applied, each ancestor's scroll removed */
 export function locationOnScreen(v: JView): [number, number] {
@@ -312,6 +331,22 @@ export function createDrawableState(v: JView, extra: number): Int32Array {
   const base = v.baseState(), out = new Int32Array(base.length + Math.max(0, extra | 0));
   out.set(base);
   return out;
+}
+const nativeIsFocused = function (this: JView) { return this.focused ? 1 : 0; };
+const nativeHasWindowFocus = () => 1;
+/** AOSP reads the focused and window-focused states through isFocused()/hasWindowFocus(), which
+ *  apps override (a marquee TextView reports focus it never took) */
+function viewCreateDrawableState(this: JView, extra: number): unknown {
+  const fo = jmethod(this, M_isFocused), wf = jmethod(this, M_hasWindowFocus);
+  if ((!fo || fo === nativeIsFocused) && (!wf || wf === nativeHasWindowFocus)) return createDrawableState(this, extra);
+  return after((fo ?? nativeIsFocused).call(this), (focused) => after((wf ?? nativeHasWindowFocus).call(this), (windowFocused) => {
+    const base = this.baseState().filter((s) => s !== ST.focused && s !== ST.window_focused);
+    if (windowFocused) base.unshift(ST.window_focused);
+    if (focused) base.push(ST.focused);
+    const out = new Int32Array(base.length + Math.max(0, extra | 0));
+    out.set(base);
+    return out;
+  }));
 }
 /** AOSP: fills baseState's trailing zeros IN PLACE — callers ignore the return value */
 export function mergeDrawableStates(base: Int32Array, extra: Int32Array | null): Int32Array {
@@ -488,7 +523,9 @@ export class JView extends JObj {
     yield guardMaybe(this, M_drawableStateChanged);
     if (this.stateListAnimator) yield vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
     if (this.parent instanceof JViewGroup && this.parent.addStatesFromChildren) yield vcall(this.parent, "childDrawableStateChanged", "(Landroid/view/View;)V", this);
-    invalidate();
+    const inv = jmethod(this, M_invalidate);
+    if (inv && inv !== invalidateThis) yield inv.call(this);
+    else invalidate();
   }
 }
 
@@ -501,6 +538,9 @@ class ViewRare {
   exclusionRects: unknown = null;
   /** composites the view's layer: its alpha, blend mode and colour filter */
   layerPaint: JPaint | null = null;
+  /** raw values, kept to see a change; resolution is always LTR */
+  layoutDirection = 2;
+  textDirection = 0;
 }
 const rare = (v: JView) => v.rare ??= new ViewRare();
 const rareMethods: NativeSpec["methods"] = {
@@ -723,6 +763,16 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   }
 }
 
+/** AOSP View.setFrame: new bounds, onSizeChanged when the size changed; true on any change. Apps
+ *  override it (an ImageView subclass refits its matrix), so layout calls it virtually. */
+function nativeSetFrame(this: JView, l: number, t: number, r: number, b: number): unknown {
+  if (this.left === l && this.top === t && this.right === r && this.bottom === b) return 0;
+  const ow = this.width(), oh = this.height();
+  this.left = l; this.top = t; this.right = r; this.bottom = b;
+  invalidate();
+  if (r - l === ow && b - t === oh) return 1;
+  return after(guardMaybe(this, M_onSizeChanged, r - l, b - t, ow, oh), () => 1);
+}
 export const layoutView = driven(function* layoutView(v: JView, l: number, t: number, r: number, b: number): Gen {
   // AOSP View.layout: a measure the cache answered left the children as the last onMeasure did
   if (v.measureBeforeLayout) {
@@ -731,13 +781,16 @@ export const layoutView = driven(function* layoutView(v: JView, l: number, t: nu
     yield guardCall(v, M_onMeasure, v.oldWSpec, v.oldHSpec);
   }
   const oldL = v.left, oldT = v.top, oldR = v.right, oldB = v.bottom;
-  const changed = oldL !== l || oldT !== t || oldR !== r || oldB !== b;
-  const ow = v.width(), oh = v.height();
-  v.left = l; v.top = t; v.right = r; v.bottom = b;
-  if ((r - l !== v.measuredW || b - t !== v.measuredH) && v.measuredW > 0 && v.measuredH > 0) perf.layoutMismatch++;
-  if (changed) {
-    yield guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
+  let changed: boolean;
+  const setFrame = jmethod(v, M_setFrame);
+  if (setFrame && setFrame !== nativeSetFrame) changed = !!(yield setFrame.call(v, l, t, r, b));
+  else {
+    changed = oldL !== l || oldT !== t || oldR !== r || oldB !== b;
+    const ow = v.width(), oh = v.height();
+    v.left = l; v.top = t; v.right = r; v.bottom = b;
+    if (changed) yield guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   }
+  if ((r - l !== v.measuredW || b - t !== v.measuredH) && v.measuredW > 0 && v.measuredH > 0) perf.layoutMismatch++;
   // AOSP View.layout: onLayout runs only when the frame moved or a measure re-ran
   // (PFLAG_LAYOUT_REQUIRED), so children the measure memo skipped are not laid out again.
   if (changed || v.layoutRequired) {
@@ -941,6 +994,16 @@ export const requireViewById = driven(function* requireViewById(this: JObj, id: 
   return view;
 });
 
+/** AOSP's dispatchNested* ask isNestedScrollingEnabled(), which androidx scrolling views override */
+const nestedEnabled = (v: JView) => vcall(v, "isNestedScrollingEnabled", "()Z");
+const canScroll = driven(function* canScroll(v: JView, axis: "Horizontal" | "Vertical", direction: number): Gen {
+  const offset: number = yield vcall(v, `compute${axis}ScrollOffset`, "()I");
+  const range = ((yield vcall(v, `compute${axis}ScrollRange`, "()I")) - (yield vcall(v, `compute${axis}ScrollExtent`, "()I"))) | 0;
+  if (range === 0) return 0;
+  return direction < 0 ? +(offset > 0) : +(offset < range - 1);
+});
+function nativeSugMinW(this: JView) { return this.background ? after(vcall(this.background, "getMinimumWidth", "()I"), n => Math.max(this.minW, n)) : this.minW; }
+function nativeSugMinH(this: JView) { return this.background ? after(vcall(this.background, "getMinimumHeight", "()I"), n => Math.max(this.minH, n)) : this.minH; }
 const initWithAttrs = driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen { yield initViewFromCtx(this, c, a); });
 export const viewConstructors: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": driven(function* (this: JView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
@@ -959,7 +1022,7 @@ function setInherited(field: "selected" | "activated", setter: string) {
   return driven(function* (this: JView, on: number): Gen {
     if (this[field] === !!on) return;
     this[field] = !!on;
-    yield this.refreshDrawableState();
+    yield guardCall(this, M_refreshDrawableState);
     if (this instanceof JViewGroup) for (const c of [...this.children]) yield vcall(c, setter, "(Z)V", on);
   });
 }
@@ -997,8 +1060,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getPaddingEnd()I": function (this: JView) { return this.padR; },
   "setPadding(IIII)V": setPadding,
   "setPaddingRelative(IIII)V": setPadding,
-  "setMinimumWidth(I)V": function (this: JView, v: number) { this.minW = v; },
-  "setMinimumHeight(I)V": function (this: JView, v: number) { this.minH = v; },
+  "setMinimumWidth(I)V": function (this: JView, v: number) { this.minW = v; requestLayoutVirtual(this); },
+  "setMinimumHeight(I)V": function (this: JView, v: number) { this.minH = v; requestLayoutVirtual(this); },
   "getMinimumWidth()I": function (this: JView) { return this.minW; },
   "getMinimumHeight()I": function (this: JView) { return this.minH; },
   "getLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JView) { return this.lp; },
@@ -1016,15 +1079,18 @@ const viewMethods: NativeSpec["methods"] = {
     while (v) { if (v.visibility !== 0) return 0; v = v.parent; }
     return 1;
   },
-  "setBackground(Landroid/graphics/drawable/Drawable;)V": setBackground,
+  "setBackground(Landroid/graphics/drawable/Drawable;)V": function (this: JView, d: JDrawable | null) {
+    return vcall(this, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+  },
   "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": setBackground,
   "setBackgroundColor(I)V": function (this: JView, c: number) {
     const d = new JColorDrawable();
     d.color = c;
-    setBackground.call(this, d);
+    return vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", d);
   },
   "setBackgroundResource(I)V": driven(function* (this: JView, id: number): Gen {
-    setBackground.call(this, id ? yield loadDrawable(this.jres!, id, this.theme) : null);
+    const d = id ? yield loadDrawable(this.jres!, id, this.theme) : null;
+    return yield vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", d);
   }),
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.background; },
   "setForeground(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JView, d: JDrawable | null): Gen {
@@ -1032,7 +1098,7 @@ const viewMethods: NativeSpec["methods"] = {
     if (this.foreground) this.foreground.callback = null;
     this.foreground = d; this.foregroundW = -1;
     if (d) { yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); d.callback = this; }
-    requestLayout(this); invalidate(this);
+    requestLayoutVirtual(this); yield invalidateVirtual(this);
   }),
   "onDrawForeground(Landroid/graphics/Canvas;)V": drawForeground,
   "getForegroundGravity()I": function (this: JView) { return this.foregroundGravity; },
@@ -1047,7 +1113,9 @@ const viewMethods: NativeSpec["methods"] = {
   "setTranslationX(F)V": function (this: JView, x: number) { this.translationX = x; invalidate(); },
   "setTranslationY(F)V": function (this: JView, y: number) { this.translationY = y; invalidate(); },
   "setTranslationZ(F)V": function (this: JView, z: number) { this.translationZ = z; invalidate(this); },
-  "setZ(F)V": function (this: JView, z: number) { this.translationZ = z - this.elevationV; invalidate(this); },
+  "setZ(F)V": function (this: JView, z: number) {
+    return after(vcall(this, "getElevation", "()F"), (e: number) => vcall(this, "setTranslationZ", "(F)V", Math.fround(z - e)));
+  },
 
   "getTranslationX()F": function (this: JView) { return this.translationX; },
   "getTranslationY()F": function (this: JView) { return this.translationY; },
@@ -1081,7 +1149,7 @@ const viewMethods: NativeSpec["methods"] = {
   "isEnabled()Z": function (this: JView) { return this.enabled ? 1 : 0; },
   "setEnabled(Z)V": function (this: JView, e: number) {
     this.enabled = !!e;
-    void this.refreshDrawableState();
+    return guardCall(this, M_refreshDrawableState);
   },
   "isClickable()Z": function (this: JView) { return this.clickable ? 1 : 0; },
   "setClickable(Z)V": function (this: JView, c: number) { this.clickable = !!c; },
@@ -1091,12 +1159,18 @@ const viewMethods: NativeSpec["methods"] = {
   "isLongClickable()Z": function (this: JView) { return this.longClickable ? 1 : 0; },
 
   "isPressed()Z": function (this: JView) { return this.pressed ? 1 : 0; },
-  "setPressed(Z)V": function (this: JView, p: number) { this.pressed = !!p; void this.refreshDrawableState(); },
+  "setPressed(Z)V": function (this: JView, p: number) {
+    this.pressed = !!p;
+    return after(guardCall(this, M_refreshDrawableState), () => vcall(this, "dispatchSetPressed", "(Z)V", p));
+  },
+  // AOSP's ViewGroup hands it to duplicateParentState children, which are not modelled
+  "dispatchSetPressed(Z)V": () => {},
   "isSelected()Z": function (this: JView) { return this.selected ? 1 : 0; },
   "setSelected(Z)V": setInherited("selected", "setSelected"),
   "isActivated()Z": function (this: JView) { return this.activated ? 1 : 0; },
   "setActivated(Z)V": setInherited("activated", "setActivated"),
-  "isFocused()Z": function (this: JView) { return this.focused ? 1 : 0; },
+  "isFocused()Z": nativeIsFocused,
+  "hasWindowFocus()Z": nativeHasWindowFocus,
   "hasFocus()Z": function (this: JView) { return this.focused ? 1 : 0; },
   "setFocusable(Z)V": function (this: JView, f: number) { this.focusable = !!f; },
   "setFocusableInTouchMode(Z)V": function (this: JView, f: number) { this.focusableInTouchMode = !!f; },
@@ -1110,7 +1184,7 @@ const viewMethods: NativeSpec["methods"] = {
   "clearFocus()V": function (this: JView) { return clearFocus(this); },
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
     this.clickL = l;
-    if (l) this.clickable = true;
+    if (l && !this.clickable) return vcall(this, "setClickable", "(Z)V", 1);
   },
   "setOnLongClickListener(Landroid/view/View$OnLongClickListener;)V": function (this: JView, l: unknown) {
     this.longClickL = l;
@@ -1143,8 +1217,13 @@ const viewMethods: NativeSpec["methods"] = {
   "measure(II)V": function (this: JView, w: number, h: number) { return measureView(this, w, h); },
   "onMeasure(II)V": function (this: JView, wSpec: number, hSpec: number) {
     const thread = curThread, bg = this.background;
-    return after(bg ? drawableSize(bg, false, thread) : 0, w => after(bg ? drawableSize(bg, true, thread) : 0, h => {
-      const bw = Math.max(this.minW, w), bh = Math.max(this.minH, h);
+    const sw = jmethod(this, M_sugMinW), sh = jmethod(this, M_sugMinH);
+    // AOSP asks getSuggestedMinimumWidth/Height(); only an app override needs the calls
+    const overridden = sw && sw !== nativeSugMinW || sh && sh !== nativeSugMinH;
+    type Size = () => number | Promise<number>;
+    const minW: Size = overridden ? () => (sw ?? nativeSugMinW).call(this) as number : () => after(bg ? drawableSize(bg, false, thread) : 0, (w) => Math.max(this.minW, w));
+    const minH: Size = overridden ? () => (sh ?? nativeSugMinH).call(this) as number : () => after(bg ? drawableSize(bg, true, thread) : 0, (h) => Math.max(this.minH, h));
+    return after(minW(), (bw: number) => after(minH(), (bh: number) => {
       const cw = Math.max(bw, this.padL + this.padR);
       const ch = Math.max(bh, this.padT + this.padB);
       // Android's getDefaultSize makes a wrap_content plain View fill AT_MOST — a well-known quirk
@@ -1199,7 +1278,12 @@ const viewMethods: NativeSpec["methods"] = {
   "postOnAnimation(Ljava/lang/Runnable;)V": function (this: JView, r: unknown) {
     uiState.frameCallbacks.push({ run: r });
   },
-  "getDrawableState()[I": function (this: JView) { return Int32Array.from(this.drawableState()); },
+  "getDrawableState()[I": function (this: JView) {
+    if (this.stateCache) return Int32Array.from(this.stateCache);
+    // never refreshed: AOSP builds it through the virtual onCreateDrawableState
+    return after(guardCall(this, M_onCreateDrawableState, 0) as Int32Array | null,
+      (raw) => raw ? Int32Array.from([...raw].filter((x) => x !== 0)) : Int32Array.from(this.baseState()));
+  },
   "refreshDrawableState()V": function (this: JView) { return this.refreshDrawableState(); },
   "dispatchConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JView, cfg: unknown) {
     return dispatchConfigurationChanged(this, cfg);
@@ -1215,13 +1299,16 @@ const viewMethods: NativeSpec["methods"] = {
     r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
   },
   "getGlobalVisibleRect(Landroid/graphics/Rect;)Z": function (this: JView, r: JRect) {
-    const [x, y] = locationOnScreen(this);
-    r.left = x; r.top = y; r.right = x + this.width(); r.bottom = y + this.height();
-    return 1;
+    return vcall(this, "getGlobalVisibleRect", "(Landroid/graphics/Rect;Landroid/graphics/Point;)Z", r, null);
   },
+  // AOSP: the global rect moved back by the offset the two-argument form reports
   "getLocalVisibleRect(Landroid/graphics/Rect;)Z": function (this: JView, r: JRect) {
-    r.left = 0; r.top = 0; r.right = this.width(); r.bottom = this.height();
-    return 1;
+    const off = new JPoint();
+    return after(vcall(this, "getGlobalVisibleRect", "(Landroid/graphics/Rect;Landroid/graphics/Point;)Z", r, off), (shown) => {
+      if (!shown) return 0;
+      r.left -= off.x; r.right -= off.x; r.top -= off.y; r.bottom -= off.y;
+      return 1;
+    });
   },
   "findViewById(I)Landroid/view/View;": function (this: JView, id: number) { return findById(this, id); },
   "requireViewById(I)Landroid/view/View;": requireViewById,
@@ -1234,7 +1321,7 @@ const viewMethods: NativeSpec["methods"] = {
     invalidate(this);
   },
   "setLayerPaint(Landroid/graphics/Paint;)V": function (this: JView, p: JPaint | null) {
-    if (this.layerType) { rare(this).layerPaint = p; invalidate(this); }
+    if (this.layerType) { rare(this).layerPaint = p; return invalidateVirtual(this); }
   },
   "getLayerType()I": function (this: JView) { return this.layerType; },
   // layers are rendered at draw time, so building one early has nothing to do beyond AOSP's check
@@ -1354,11 +1441,14 @@ const viewMethods: NativeSpec["methods"] = {
     return 0;
   }),
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
-    if (this.touchL) {
-      const r = yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev);
-      if (r) return 1;
-    }
-    return yield guardCall(this, M_onTouchEvent, ev);
+    const action = ev.action & 0xff;
+    // AOSP ends any nested scroll a new gesture or its end leaves behind
+    if (action === 0) yield guardCall(this, M_stopNestedScroll);
+    let handled = 0;
+    if (this.touchL) handled = yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev);
+    if (!handled) handled = yield guardCall(this, M_onTouchEvent, ev);
+    if (action === 1 || action === 3 || action === 0 && !handled) yield guardCall(this, M_stopNestedScroll);
+    return handled ? 1 : 0;
   }),
   "requestUnbufferedDispatch(Landroid/view/MotionEvent;)V": () => {},
   "cancelLongPress()V": function (this: JView) {
@@ -1368,11 +1458,14 @@ const viewMethods: NativeSpec["methods"] = {
   // parents first; a CoordinatorLayout Behavior is how a collapsing app bar, a bottom sheet or
   // a swipe-refresh consumes it. androidx's helpers fall back to these framework methods
   // whenever the parent is not one of its own interfaces.
-  "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) { this.nestedEnabled = !!v; },
+  "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) {
+    if (v) { this.nestedEnabled = true; return; }
+    return after(guardCall(this, M_stopNestedScroll), () => { this.nestedEnabled = false; });
+  },
   "isNestedScrollingEnabled()Z": function (this: JView) { return this.nestedEnabled ? 1 : 0; },
   "startNestedScroll(I)Z": driven(function* (this: JView, axes: number): Gen {
-    if (this.nestedParent) return 1;
-    if (!this.nestedEnabled) return 0;
+    if (yield vcall(this, "hasNestedScrollingParent", "()Z")) return 1;
+    if (!(yield vcall(this, "isNestedScrollingEnabled", "()Z"))) return 0;
     for (let p: JView | null = this.parent; p; p = p.parent) {
       if (yield vcall(p, "onStartNestedScroll", "(Landroid/view/View;Landroid/view/View;I)Z", this, this, axes)) {
         this.nestedParent = p;
@@ -1389,7 +1482,7 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "hasNestedScrollingParent()Z": function (this: JView) { return this.nestedParent ? 1 : 0; },
   "dispatchNestedPreScroll(II[I[I)Z": driven(function* (this: JView, dx: number, dy: number, consumed: Int32Array | null, offset: Int32Array | null): Gen {
-    const p = this.nestedParent;
+    const p = (yield nestedEnabled(this)) ? this.nestedParent : null;
     if (!p || (!dx && !dy)) { if (offset) { offset[0] = 0; offset[1] = 0; } return 0; }
     const c = consumed ?? new Int32Array(2);
     c[0] = 0; c[1] = 0;
@@ -1398,18 +1491,18 @@ const viewMethods: NativeSpec["methods"] = {
     return c[0] !== 0 || c[1] !== 0 ? 1 : 0;
   }),
   "dispatchNestedScroll(IIII[I)Z": driven(function* (this: JView, dxc: number, dyc: number, dxu: number, dyu: number, offset: Int32Array | null): Gen {
-    const p = this.nestedParent;
+    const p = (yield nestedEnabled(this)) ? this.nestedParent : null;
     if (offset) { offset[0] = 0; offset[1] = 0; }
     if (!p || (!dxc && !dyc && !dxu && !dyu)) return 0;
     yield vcall(p, "onNestedScroll", "(Landroid/view/View;IIII)V", this, dxc, dyc, dxu, dyu);
     return 1;
   }),
   "dispatchNestedPreFling(FF)Z": driven(function* (this: JView, vx: number, vy: number): Gen {
-    const p = this.nestedParent;
+    const p = (yield nestedEnabled(this)) ? this.nestedParent : null;
     return p ? yield vcall(p, "onNestedPreFling", "(Landroid/view/View;FF)Z", this, vx, vy) : 0;
   }),
   "dispatchNestedFling(FFZ)Z": driven(function* (this: JView, vx: number, vy: number, consumed: number): Gen {
-    const p = this.nestedParent;
+    const p = (yield nestedEnabled(this)) ? this.nestedParent : null;
     return p ? yield vcall(p, "onNestedFling", "(Landroid/view/View;FFZ)Z", this, vx, vy, consumed) : 0;
   }),
   "computeScroll()V": noopComputeScroll,
@@ -1457,10 +1550,10 @@ const viewMethods: NativeSpec["methods"] = {
   "hashCode()I": function (this: JView) { return idHash(this); },
   "getY()F": function (this: JView) { return this.top + this.translationY; },
   "getX()F": function (this: JView) { return this.left + this.translationX; },
-  "setY(F)V": function (this: JView, y: number) { this.translationY = y - this.top; invalidate(); },
-  "setX(F)V": function (this: JView, x: number) { this.translationX = x - this.left; invalidate(); },
-  "getSuggestedMinimumWidth()I": function (this: JView) { return this.background ? after(vcall(this.background, "getMinimumWidth", "()I"), n => Math.max(this.minW, n)) : this.minW; },
-  "getSuggestedMinimumHeight()I": function (this: JView) { return this.background ? after(vcall(this.background, "getMinimumHeight", "()I"), n => Math.max(this.minH, n)) : this.minH; },
+  "setY(F)V": function (this: JView, y: number) { return guardCall(this, M_setTranslationY, Math.fround(y - this.top)); },
+  "setX(F)V": function (this: JView, x: number) { return guardCall(this, M_setTranslationX, Math.fround(x - this.left)); },
+  "getSuggestedMinimumWidth()I": nativeSugMinW,
+  "getSuggestedMinimumHeight()I": nativeSugMinH,
   "isFocusable()Z": function (this: JView) { return this.focusable ? 1 : 0; },
   "isFocusableInTouchMode()Z": function (this: JView) { return this.focusableInTouchMode ? 1 : 0; },
   "requestFocus(I)Z": function (this: JView, direction: number) {
@@ -1491,7 +1584,7 @@ const viewMethods: NativeSpec["methods"] = {
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "getDrawingTime()J": () => BigInt(Math.floor(uptimeMillis())),
   "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
-  "onCreateDrawableState(I)[I": function (this: JView, extra: number) { return createDrawableState(this, extra); },
+  "onCreateDrawableState(I)[I": viewCreateDrawableState,
   "static mergeDrawableStates([I[I)[I": mergeDrawableStates,
   "getFitsSystemWindows()Z": function (this: JView) { return this.fitsSys ? 1 : 0; },
   // The overlay is a layer on top of the host's own content that anything can park a drawable
@@ -1569,7 +1662,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getGlobalVisibleRect(Landroid/graphics/Rect;Landroid/graphics/Point;)Z": function (this: JView, r: JRect, off: { x: number; y: number } | null) {
     const [x, y] = locationOnScreen(this);
     r.left = x; r.top = y; r.right = x + this.width(); r.bottom = y + this.height();
-    if (off) { off.x = x - this.left; off.y = y - this.top; }
+    if (off) { off.x = x - this.scrollX; off.y = y - this.scrollY; }
     return 1;
   },
   "getWindowVisibleDisplayFrame(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
@@ -1578,10 +1671,7 @@ const viewMethods: NativeSpec["methods"] = {
     r.right = device.width; r.bottom = device.height - (vis & 2 ? device.navBar : 0);
   },
   "bringToFront()V": function (this: JView) {
-    const p = this.parent as JViewGroup | null;
-    if (!p) return;
-    const i = p.children.indexOf(this);
-    if (i >= 0) { p.children.splice(i, 1); p.children.push(this); invalidate(); }
+    if (this.parent) return vcall(this.parent, "bringChildToFront", "(Landroid/view/View;)V", this);
   },
   "setTooltipText(Ljava/lang/CharSequence;)V": function (this: JView, t: unknown) { this.tooltip = t; },
   "getTooltipText()Ljava/lang/CharSequence;": function (this: JView) { return this.tooltip; },
@@ -1601,8 +1691,9 @@ const viewMethods: NativeSpec["methods"] = {
   "computeVerticalScrollRange()I": function (this: JView) { return this.height(); },
   "getVerticalScrollbarWidth()I": () => 0,
   "setLeftTopRightBottom(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
-    this.left = l; this.top = t; this.right = r; this.bottom = b; invalidate();
+    return after(guardCall(this, M_setFrame, l, t, r, b), () => {});
   },
+  "setFrame(IIII)Z": nativeSetFrame,
   "findOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JView) {
     // the window this view is in: an attached view's context is its activity (or dialog)
     const c = this.ctx as { window?: { backDispatcher?: () => unknown }; win?: { backDispatcher?: () => unknown } } | null;
@@ -1611,11 +1702,48 @@ const viewMethods: NativeSpec["methods"] = {
   },
 
   "isLaidOut()Z": function (this: JView) { return this.right > 0 || this.bottom > 0 ? 1 : 0; },
-  ...stubs(1, "isInTouchMode()Z", "performHapticFeedback(I)Z", "isHardwareAccelerated()Z", "hasWindowFocus()Z",
+  // AOSP: scrollable while the offset is inside range - extent, all three from the overridable
+  // compute*Scroll* methods a scrolling view (RecyclerView, a custom list) supplies
+  "canScrollHorizontally(I)Z": function (this: JView, direction: number) { return canScroll(this, "Horizontal", direction); },
+  "canScrollVertically(I)Z": function (this: JView, direction: number) { return canScroll(this, "Vertical", direction); },
+  "dispatchHoverEvent(Landroid/view/MotionEvent;)Z": function (this: JView, ev: JMotionEvent) {
+    return vcall(this, "onHoverEvent", "(Landroid/view/MotionEvent;)Z", ev);
+  },
+  // AOSP routes a pointer hover to dispatchHoverEvent; the rest falls to onGenericMotionEvent
+  "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": function (this: JView, ev: JMotionEvent) {
+    const action = ev.action & 0xff;
+    const hover = ev.source & 2 && (action === 7 || action === 9 || action === 10)
+      ? vcall(this, "dispatchHoverEvent", "(Landroid/view/MotionEvent;)Z", ev) : 0;
+    return after(hover, (h) => h ? 1 : vcall(this, "onGenericMotionEvent", "(Landroid/view/MotionEvent;)Z", ev));
+  },
+  "dispatchWindowFocusChanged(Z)V": function (this: JView, has: number) { return vcall(this, "onWindowFocusChanged", "(Z)V", has); },
+  "onWindowFocusChanged(Z)V": function (this: JView, has: number) {
+    if (!has && this.pressed) return vcall(this, "setPressed", "(Z)V", 0);
+  },
+  "onFocusChanged(ZILandroid/graphics/Rect;)V": function (this: JView, gain: number) {
+    if (!gain && this.pressed) return vcall(this, "setPressed", "(Z)V", 0);
+  },
+  "onAttachedToWindow()V": function (this: JView) { return vcall(this, "jumpDrawablesToCurrentState", "()V"); },
+  "setLayoutDirection(I)V": function (this: JView, d: number) {
+    if ((this.rare?.layoutDirection ?? 2) === d) return;
+    rare(this).layoutDirection = d;
+    requestLayoutVirtual(this);
+    return invalidateVirtual(this);
+  },
+  "setTextDirection(I)V": function (this: JView, d: number) {
+    if ((this.rare?.textDirection ?? 0) === d) return;
+    rare(this).textDirection = d;
+    const thread = curThread, direction = vcallOn(thread, this, "getLayoutDirection", "()I");
+    return after(after(direction, (ld) => vcallOn(thread, this, "onRtlPropertiesChanged", "(I)V", ld)), () => {
+      requestLayoutVirtual(this);
+      return invalidateVirtual(this);
+    });
+  },
+  ...stubs(1, "isInTouchMode()Z", "performHapticFeedback(I)Z", "isHardwareAccelerated()Z",
     "getTransitionAlpha()F", "hasOverlappingRendering()Z", "isLayoutDirectionResolved()Z"),
   ...noops("playSoundEffect(I)V", "onLayout(ZIIII)V", "onSizeChanged(IIII)V", "onDraw(Landroid/graphics/Canvas;)V",
     "dispatchDraw(Landroid/graphics/Canvas;)V", "drawableStateChanged()V", "jumpDrawablesToCurrentState()V",
-    "onAttachedToWindow()V", "onDetachedFromWindow()V", "onConfigurationChanged(Landroid/content/res/Configuration;)V",
+    "onDetachedFromWindow()V", "onConfigurationChanged(Landroid/content/res/Configuration;)V",
     "onFinishInflate()V", "setOnCreateContextMenuListener(Landroid/view/View$OnCreateContextMenuListener;)V",
     "setSaveEnabled(Z)V", "setSaveFromParentEnabled(Z)V", "setWillNotDraw(Z)V", "setHapticFeedbackEnabled(Z)V",
     "setSoundEffectsEnabled(Z)V", "setImportantForAccessibility(I)V", "setAccessibilityLiveRegion(I)V",
@@ -1634,8 +1762,7 @@ const viewMethods: NativeSpec["methods"] = {
     "addFocusables(Ljava/util/ArrayList;II)V", "addTouchables(Ljava/util/ArrayList;)V", "cancelPendingInputEvents()V",
     "setAccessibilityPaneTitle(Ljava/lang/CharSequence;)V",
     "setStateDescription(Ljava/lang/CharSequence;)V", "setAccessibilityHeading(Z)V", "setScreenReaderFocusable(Z)V",
-    "setDuplicateParentStateEnabled(Z)V", "onWindowFocusChanged(Z)V",
-    "dispatchWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V", "setRotationX(F)V",
+    "setDuplicateParentStateEnabled(Z)V", "setRotationX(F)V",
     "setRotationY(F)V", "setTransitionAlpha(F)V", "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setOnGenericMotionListener(Landroid/view/View$OnGenericMotionListener;)V",
     "setVerticalFadingEdgeEnabled(Z)V", "setHorizontalFadingEdgeEnabled(Z)V",
@@ -1643,18 +1770,17 @@ const viewMethods: NativeSpec["methods"] = {
     "setAnimationMatrix(Landroid/graphics/Matrix;)V",
     "onVisibilityChanged(Landroid/view/View;I)V", "onVisibilityAggregated(Z)V", "onWindowVisibilityChanged(I)V",
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
-    "drawableHotspotChanged(FF)V", "setLayoutDirection(I)V", "setTextDirection(I)V"),
+    "drawableHotspotChanged(FF)V"),
   ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I",
-    "willNotDraw()Z", "canScrollVertically(I)Z",
-    "canScrollHorizontally(I)Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
+    "willNotDraw()Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",
-    "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
+    "onGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
     "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z",
     "getRotationX()F", "getRotationY()F", "isHovered()Z", "isAccessibilityFocused()Z",
     "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I",
     "awakenScrollBars()Z", "getWindowSystemUiVisibility()I", "onHoverEvent(Landroid/view/MotionEvent;)Z",
-    "dispatchHoverEvent(Landroid/view/MotionEvent;)Z", "onDragEvent(Landroid/view/DragEvent;)Z",
+    "onDragEvent(Landroid/view/DragEvent;)Z",
     "onKeyPreIme(ILandroid/view/KeyEvent;)Z", "onCheckIsTextEditor()Z",
     "isInEditMode()Z", "getLayoutDirection()I", "getTextDirection()I", "isPaddingRelative()Z"),
   ...stubs(null, "getContentCaptureSession()Landroid/view/contentcapture/ContentCaptureSession;",
@@ -1982,7 +2108,12 @@ export const vgMethods: NativeSpec["methods"] = {
     const c = this.children[i];
     if (c) return detachView(this, c);
   },
-  "removeAllViews()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, true, true); },
+  "removeAllViews()V": function (this: JViewGroup) {
+    const n = this.children.length;
+    return after(vcall(this, "removeAllViewsInLayout", "()V"), () => {
+      if (n) { requestLayoutVirtual(this); return invalidateVirtual(this); }
+    });
+  },
   "removeAllViewsInLayout()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, false, true); },
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
   "getChildAt(I)Landroid/view/View;": function (this: JViewGroup, i: number) { return this.children[i] ?? null; },
@@ -2002,7 +2133,10 @@ export const vgMethods: NativeSpec["methods"] = {
   },
   "bringChildToFront(Landroid/view/View;)V": function (this: JViewGroup, c: JView) {
     const i = this.children.indexOf(c);
-    if (i >= 0) { this.children.splice(i, 1); this.children.push(c); invalidate(); }
+    if (i < 0) return;
+    this.children.splice(i, 1); this.children.push(c);
+    requestLayoutVirtual(this);
+    return invalidateVirtual(this);
   },
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function () {
     const lp = new JLayoutParams();
@@ -2037,7 +2171,11 @@ export const vgMethods: NativeSpec["methods"] = {
   },
   "getLayoutAnimation()Landroid/view/animation/LayoutAnimationController;": function (this: JViewGroup) { return this.layoutAnimation; },
   "scheduleLayoutAnimation()V": function (this: JViewGroup) { this.layoutAnimationScheduled = true; invalidate(this); },
-  "startLayoutAnimation()V": function (this: JViewGroup) { this.layoutAnimationScheduled = true; invalidate(this); },
+  "startLayoutAnimation()V": function (this: JViewGroup) {
+    this.layoutAnimationScheduled = true;
+    if (this.layoutAnimation) requestLayoutVirtual(this);
+    invalidate(this);
+  },
   "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
   "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
   "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },
@@ -2085,7 +2223,20 @@ export const vgMethods: NativeSpec["methods"] = {
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
   "getClipToPadding()Z": function (this: JViewGroup) { return this.clipToPadding ? 1 : 0; },
   "getDescendantFocusability()I": () => 0x20000,
-  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": addInLayout,
+  "dispatchWindowFocusChanged(Z)V": driven(function* (this: JViewGroup, has: number): Gen {
+    yield vcall(this, "onWindowFocusChanged", "(Z)V", has);
+    for (const c of [...this.children]) yield vcall(c, "dispatchWindowFocusChanged", "(Z)V", has);
+  }),
+  // FOCUS_BEFORE_DESCENDANTS: the group itself first, then the overridable descendant search
+  "requestFocus(ILandroid/graphics/Rect;)Z": function (this: JViewGroup, direction: number, rect: JRect | null) {
+    return after(takeFocus(this), (took) => took ? 1 : vcall(this, "onRequestFocusInDescendants", "(ILandroid/graphics/Rect;)Z", direction, rect));
+  },
+  "findFocus()Landroid/view/View;": function (this: JViewGroup) {
+    return after(vcall(this, "isFocused", "()Z"), (focused) => focused ? this : null);
+  },
+  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": function (this: JViewGroup, c: JView, i: number, lp: JLayoutParams) {
+    return vcall(this, "addViewInLayout", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z", c, i, lp, 0);
+  },
   "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": addInLayout,
   "attachViewToParent(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": attachToParent,
   // the child was already unlinked by detachViewFromParent; this is the rest of its removal
@@ -2181,8 +2332,11 @@ export const vgMethods: NativeSpec["methods"] = {
     // AOSP: the group's own OnTouchListener sees only what no child took (View.dispatchTouchEvent
     // runs when there is no touch target); a listener that swallows everything, like the one
     // BottomSheetDialog puts on its sheet, must not starve the sheet's buttons.
-    if (this.touchL && (yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))) return 1;
-    const self = yield guardCall(this, M_onTouchEvent, ev);
+    // View.dispatchTouchEvent's part, nested-scroll cleanup included
+    if (action === 0) yield guardCall(this, M_stopNestedScroll);
+    const self = this.touchL && (yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))
+      || (yield guardCall(this, M_onTouchEvent, ev));
+    if (action === 1 || action === 3 || action === 0 && !self) yield guardCall(this, M_stopNestedScroll);
     return self ? 1 : 0;
   }),
 };
@@ -2511,10 +2665,21 @@ rt.register({
     // onStartNestedScroll. Declining here is what lets a child walk further up the tree.
     "onStartNestedScroll(Landroid/view/View;Landroid/view/View;I)Z": () => 0,
     "onNestedScrollAccepted(Landroid/view/View;Landroid/view/View;I)V": function (this: JViewGroup, _c: JView, _t: JView, axes: number) { this.nestedAxes = axes; },
-    "onStopNestedScroll(Landroid/view/View;)V": function (this: JViewGroup) { this.nestedAxes = 0; },
-    "onNestedFling(Landroid/view/View;FFZ)Z": (_t: JView, _vx: number, _vy: number, consumed: number) => (consumed ? 0 : 1),
-    ...stubs(0, "shouldDelayChildPressedState()Z", "onNestedPreFling(Landroid/view/View;FF)Z"),
-    ...noops("onNestedScroll(Landroid/view/View;IIII)V", "onNestedPreScroll(Landroid/view/View;II[I)V"),
+    // AOSP's parent half passes each step on up through this group's own child half
+    "onStopNestedScroll(Landroid/view/View;)V": function (this: JViewGroup) { this.nestedAxes = 0; return guardCall(this, M_stopNestedScroll); },
+    "onNestedFling(Landroid/view/View;FFZ)Z": function (this: JViewGroup, _t: JView, vx: number, vy: number, consumed: number) {
+      return vcall(this, "dispatchNestedFling", "(FFZ)Z", vx, vy, consumed);
+    },
+    "onNestedPreFling(Landroid/view/View;FF)Z": function (this: JViewGroup, _t: JView, vx: number, vy: number) {
+      return vcall(this, "dispatchNestedPreFling", "(FF)Z", vx, vy);
+    },
+    "onNestedScroll(Landroid/view/View;IIII)V": function (this: JViewGroup, _t: JView, dxc: number, dyc: number, dxu: number, dyu: number) {
+      return after(vcall(this, "dispatchNestedScroll", "(IIII[I)Z", dxc, dyc, dxu, dyu, null), () => {});
+    },
+    "onNestedPreScroll(Landroid/view/View;II[I)V": function (this: JViewGroup, _t: JView, dx: number, dy: number, consumed: Int32Array) {
+      return after(vcall(this, "dispatchNestedPreScroll", "(II[I[I)Z", dx, dy, consumed, null), () => {});
+    },
+    ...stubs(0, "shouldDelayChildPressedState()Z"),
   "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
     "getLayoutMode()I": function (this: JViewGroup) {
       for (let parent: JView | null = this; parent; parent = parent.parent) {
