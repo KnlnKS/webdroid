@@ -114,7 +114,8 @@ for (const name of ["android/widget/MultiAutoCompleteTextView",
       ...textViewMethods,
       ...textViewCtors<JEditText>("autoCompleteTextViewStyle"),
       ...noops("setThreshold(I)V", "setAdapter(Landroid/widget/ListAdapter;)V", "dismissDropDown()V",
-        "setDropDownAnchor(I)V", "setImeVisibility(Z)V"),
+        "setDropDownAnchor(I)V"),
+      ...(name === "android/widget/SearchView$SearchAutoComplete" ? noops("setImeVisibility(Z)V") : {}),
     },
   });
 }

@@ -226,7 +226,7 @@ rt.register({ name: "android/widget/HeterogeneousExpandableList", ctor: class ex
 // ── BaseExpandableListAdapter: the observable half every app adapter inherits
 const combinedGroupId = (id: bigint) => (BigInt.asUintN(64, id) & 0x7fffffffn) << 32n;
 const baseExpandableMethods: NativeSpec["methods"] = {
-  ...Object.fromEntries(["<init>()V", "registerDataSetObserver(Landroid/database/DataSetObserver;)V", "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
+  ...Object.fromEntries(["registerDataSetObserver(Landroid/database/DataSetObserver;)V", "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
     "notifyDataSetChanged()V", "notifyDataSetInvalidated()V"].map((s) => [s, baseAdapterMethods[s]])),
   ...stubs(1, "areAllItemsEnabled()Z"),
   ...noops("onGroupExpanded(I)V", "onGroupCollapsed(I)V"),
@@ -236,7 +236,7 @@ const baseExpandableMethods: NativeSpec["methods"] = {
   "getChildType(II)I": () => 0, "getChildTypeCount()I": () => 1, "getGroupType(I)I": () => 0, "getGroupTypeCount()I": () => 1,
 };
 rt.register({ name: "android/widget/BaseExpandableListAdapter", ctor: class extends JBaseAdapter {},
-  ifaces: ["android/widget/ExpandableListAdapter", "android/widget/HeterogeneousExpandableList"], methods: baseExpandableMethods });
+  ifaces: ["android/widget/ExpandableListAdapter", "android/widget/HeterogeneousExpandableList"], methods: { ...baseExpandableMethods, ...noops("<init>()V") } });
 
 // ── SimpleExpandableListAdapter: Maps bound into inflated rows by view id
 class JSimpleExpandableListAdapter extends JBaseAdapter {

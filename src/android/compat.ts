@@ -81,6 +81,21 @@ const scrollerMethods: NativeSpec["methods"] = {
   },
   "forceFinished(Z)V": function (this: JScroller, f: number) { this.finished = !!f; },
   "getCurrVelocity()F": function (this: JScroller) { return this.finished ? 0 : 800; },
+  "setFinalX(I)V": function (this: JScroller, x: number) { this.finalX = x; },
+  "setFinalY(I)V": function (this: JScroller, y: number) { this.finalY = y; },
+  "timePassed()I": function (this: JScroller) { return Math.round(uptimeMillis() - this.startT); },
+  ...noops("<init>(Landroid/content/Context;)V",
+    "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;)V",
+    "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;Z)V", "setFriction(F)V",
+    "extendDuration(I)V"),
+};
+rt.register({ name: "android/widget/Scroller", ctor: JScroller, methods: scrollerMethods });
+rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: {
+  ...scrollerMethods,
+  "fling(IIIIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number, overX: number, overY: number) {
+    this.fling(sx, sy, vx, vy, minX, maxX, minY, maxY, overX, overY);
+  },
+  "isOverScrolled()Z": function (this: JScroller) { return this.overfling && !this.finished ? 1 : 0; },
   "springBack(IIIIII)Z": function (this: JScroller, sx: number, sy: number, minX: number, maxX: number, minY: number, maxY: number) {
     const fx = Math.max(minX, Math.min(maxX, sx));
     const fy = Math.max(minY, Math.min(maxY, sy));
@@ -90,22 +105,7 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.startT = uptimeMillis(); this.duration = 200; this.finished = false;
     return 1;
   },
-  "setFinalX(I)V": function (this: JScroller, x: number) { this.finalX = x; },
-  "setFinalY(I)V": function (this: JScroller, y: number) { this.finalY = y; },
-  "timePassed()I": function (this: JScroller) { return Math.round(uptimeMillis() - this.startT); },
-  ...noops("<init>(Landroid/content/Context;)V",
-    "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;)V",
-    "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;Z)V", "setFriction(F)V",
-    "extendDuration(I)V", "notifyHorizontalEdgeReached(III)V", "notifyVerticalEdgeReached(III)V"),
-  ...stubs(0, "isOverScrolled()Z"),
-};
-rt.register({ name: "android/widget/Scroller", ctor: JScroller, methods: scrollerMethods });
-rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: {
-  ...scrollerMethods,
-  "fling(IIIIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number, overX: number, overY: number) {
-    this.fling(sx, sy, vx, vy, minX, maxX, minY, maxY, overX, overY);
-  },
-  "isOverScrolled()Z": function (this: JScroller) { return this.overfling && !this.finished ? 1 : 0; },
+  ...noops("notifyHorizontalEdgeReached(III)V", "notifyVerticalEdgeReached(III)V"),
 } });
 
 /** AOSP VelocityTracker: movements older than this before the newest one are not in the estimate */
