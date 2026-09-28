@@ -15,6 +15,9 @@ import { rt } from "../jvm/runtime";
 import { dexesIn, type DexFile } from "../jvm/dex";
 import { Resources, setFramework } from "./res";
 import { PLATFORM_JARS } from "../jvm/provenance";
+import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
+import { vfs } from "../shell/vfs";
+import { BytesFile } from "../shell/lazyfile";
 import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
@@ -26,6 +29,18 @@ let pendingDex: Promise<void> | null = null;
 export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
   const dir = centralDir(jar);
   return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
+}
+
+/** the `i`th boot class path jar: at its device path, with its classes indexed behind the app's
+ *  and its other entries served as boot resources (libcore reads calendars.properties and its
+ *  Hijrah data from core-oj.jar) */
+export function loadPlatformJar(bytes: Uint8Array, i: number): void {
+  const jar = BOOT_JAR_PATHS[i];
+  vfs.mount(jar, new BytesFile(bytes));
+  for (const d of jarDexes(bytes, PLATFORM_JARS[i])) rt.loadDex(d, true);
+  for (const [name, entry] of centralDir(bytes)) {
+    if (!name.endsWith("/") && !/^classes\d*\.dex$/.test(name) && !rt.bootResources.has(name)) rt.bootResources.set(name, { jar, read: () => entryBytes(bytes, entry) });
+  }
 }
 
 let jars: Promise<Uint8Array[]> | null = null;
@@ -41,9 +56,7 @@ export function fetchPlatformJars(): Promise<Uint8Array[]> {
 /** Index every platform class after the app's own, which loadDex's first-wins keeps ahead.
  *  Indexing 40,860 classes costs ~20ms and compiling is lazy per class. */
 export function loadPlatformDex(): Promise<void> {
-  return pendingDex ??= fetchPlatformJars().then((bytes) => bytes.forEach((jar, i) => {
-    for (const d of jarDexes(jar, PLATFORM_JARS[i])) rt.loadDex(d, true);
-  }));
+  return pendingDex ??= fetchPlatformJars().then((bytes) => bytes.forEach(loadPlatformJar));
 }
 
 export function loadFramework(): Promise<Arsc> {

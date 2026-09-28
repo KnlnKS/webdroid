@@ -71,16 +71,15 @@ if (one) {
   const { rt } = await import("../../src/jvm/runtime");
   await import("../../src/natives");
   const { dexesIn } = await import("../../src/jvm/dex");
-  const { jarDexes } = await import("../../src/android/framework");
+  const { loadPlatformJar } = await import("../../src/android/framework");
   const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
   const { vcallAsync, stackTraceText } = await import("../../src/jvm/natives/jlang");
-  (await import("../../src/shell/apex")).mountPlatformData((file, size) => ({
-    size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp/${file}`).slice(at, at + length).arrayBuffer()),
+  (await import("../../src/shell/apex")).mountPlatformData((path, size) => ({
+    size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp${path}`).slice(at, at + length).arrayBuffer()),
   }));
   for (const f of readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort())
     for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
-  for (const jar of PLATFORM_JARS)
-    for (const d of jarDexes(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), jar)) rt.loadDex(d, true);
+  for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), i);
   rt.linkNatives();
   const debug = process.env.CONFORM_DEBUG;
   console.warn = () => {};

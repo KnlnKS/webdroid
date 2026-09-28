@@ -2,10 +2,11 @@ import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { prepareSystemPackages } from "./system-packages";
 import { PLATFORM_JARS } from "../src/jvm/provenance";
+import { PLATFORM_DATA } from "../src/jvm/bootclasspath";
 
 const out = "dist";
 const partSize = 24 * 1024 * 1024;
-const aospFiles = [...PLATFORM_JARS, "framework-res.apk"];
+const aospFiles = [...PLATFORM_JARS, "framework-res.apk", ...Object.keys(PLATFORM_DATA).map((path) => path.slice(1))];
 for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp/${name}`).exists()))
   throw new Error(`Missing vendor/aosp/${name}; run bun run gen-framework`);
 
@@ -32,15 +33,15 @@ await Promise.all([
   copyFile("node_modules/canvaskit-wasm/bin/canvaskit.wasm", "canvaskit.wasm"),
 ]);
 
-const large: Record<string, { parts: number }> = {};
+const large: Record<string, { parts: number; size: number; partSize: number }> = {};
 for (const name of aospFiles) {
   const path = `vendor/aosp/${name}`;
   const size = (await stat(path)).size;
   if (size <= partSize) { await copyFile(path); continue; }
   const parts = Math.ceil(size / partSize), file = Bun.file(path);
-  await mkdir(join(out, "vendor/aosp"), { recursive: true });
+  await mkdir(dirname(join(out, path)), { recursive: true });
   for (let i = 0; i < parts; i++) await Bun.write(join(out, `${path}.part${i}`), await file.slice(i * partSize, (i + 1) * partSize).arrayBuffer());
-  large[`/${path}`] = { parts };
+  large[`/${path}`] = { parts, size, partSize };
 }
 await Bun.write(join(out, "large-assets.json"), JSON.stringify(large));
 

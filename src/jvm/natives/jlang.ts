@@ -446,7 +446,7 @@ rt.register({
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": (n: string) => { throw rt.mkThrowable("java/lang/ClassNotFoundException", n); },
     "findResource(Ljava/lang/String;)Ljava/net/URL;": function (this: JClassLoader, path: string) {
       if (!this.runtime.hasClasspath(path)) return null;
-      const archive = this.runtime.classpathLocations.get(path) ?? "/data/app/base.apk";
+      const archive = this.runtime.bootResources.get(path)?.jar ?? this.runtime.classpathLocations.get(path) ?? "/data/app/base.apk";
       return newObj("java/net/URL", "(Ljava/lang/String;)V", "jar:file://" + archive + "!/" + path);
     },
     "getResource(Ljava/lang/String;)Ljava/net/URL;": driven(function* (this: JClassLoader, path: string): Gen {

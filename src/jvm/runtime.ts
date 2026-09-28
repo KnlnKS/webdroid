@@ -162,9 +162,14 @@ export class Runtime {
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
   classpathSource: { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null>; names(): string[] } | null = null;
-  hasClasspath(name: string): boolean { return Object.hasOwn(this.classpath, name) || !!this.classpathSource?.has(name); }
+  /** the boot class path's own entries by name, with the jar holding each: the boot class
+   *  loader answers them ahead of the apk */
+  bootResources = new Map<string, { jar: string; read(): Uint8Array }>();
+  hasClasspath(name: string): boolean { return this.bootResources.has(name) || Object.hasOwn(this.classpath, name) || !!this.classpathSource?.has(name); }
   classpathNames(): string[] { return [...Object.keys(this.classpath), ...this.classpathSource?.names() ?? []]; }
   readClasspath(name: string): Uint8Array | null | Promise<Uint8Array | null> {
+    const boot = this.bootResources.get(name);
+    if (boot) return boot.read();
     return Object.hasOwn(this.classpath, name) ? this.classpath[name] : this.classpathSource?.entry(name) ?? null;
   }
   classpathLocations = new Map<string, string>();

@@ -29,31 +29,44 @@ async function dnsLookup(request: Request): Promise<Response> {
   } catch { return new Response("DNS unavailable", { status: 502 }); }
 }
 
+/** a file build-prod split into parts, whole or as the byte range the request names */
 async function largeAsset(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const manifestResponse = await env.ASSETS.fetch(new URL("/large-assets.json", url));
   if (!manifestResponse.ok) return new Response("asset manifest unavailable", { status: 500 });
-  const manifest = await manifestResponse.json() as Record<string, { parts: number }>;
+  const manifest = await manifestResponse.json() as Record<string, { parts: number; size: number; partSize: number }>;
   const entry = manifest[url.pathname];
   if (!entry) return env.ASSETS.fetch(request);
+  const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+  const start = range ? Number(range[1]) : 0, end = range?.[2] ? Math.min(Number(range[2]), entry.size - 1) : entry.size - 1;
+  if (start > end) return new Response(null, { status: 416, headers: { "content-range": `bytes */${entry.size}` } });
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        for (let i = 0; i < entry.parts; i++) {
-          const part = await env.ASSETS.fetch(new URL(`${url.pathname}.part${i}`, url));
+        for (let i = Math.floor(start / entry.partSize); i * entry.partSize <= end; i++) {
+          const from = Math.max(start - i * entry.partSize, 0), to = Math.min(end - i * entry.partSize, entry.partSize - 1);
+          const part = await env.ASSETS.fetch(new URL(`${url.pathname}.part${i}`, url), { headers: { range: `bytes=${from}-${to}` } });
           if (!part.ok || !part.body) throw new Error(`missing asset part ${i}`);
+          // an asset store that ignores Range sends the whole part: skip to `from` and stop after `to`
+          let at = part.status === 206 ? from : 0;
           const reader = part.body.getReader();
-          for (;;) {
+          while (at <= to) {
             const { done, value } = await reader.read();
             if (done) break;
-            controller.enqueue(value);
+            const chunk = value.subarray(Math.max(from - at, 0), Math.max(to + 1 - at, 0));
+            if (chunk.length) controller.enqueue(chunk);
+            at += value.length;
           }
+          await reader.cancel();
         }
         controller.close();
       } catch (error) { controller.error(error); }
     },
   });
-  return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "public, max-age=0, must-revalidate" } });
+  const headers: Record<string, string> = { "content-type": "application/octet-stream", "cache-control": "public, max-age=0, must-revalidate",
+    "accept-ranges": "bytes", "content-length": String(end - start + 1) };
+  if (range) headers["content-range"] = `bytes ${start}-${end}/${entry.size}`;
+  return new Response(body, { status: range ? 206 : 200, headers });
 }
 
 export default {
@@ -77,7 +90,7 @@ export default {
       return bridgeCall(request, env, id);
     }
     if (path === "/process") return env.ASSETS.fetch(new URL("/process.html", url));
-    if (path === "/vendor/aosp/framework.jar" || path === "/vendor/aosp/framework-res.apk") return largeAsset(request, env);
+    if (path.startsWith("/vendor/aosp/")) return largeAsset(request, env);
     if (path.startsWith("/vendor/microg/") && path.endsWith(".gz") && !url.searchParams.has("raw")) {
       const asset = await env.ASSETS.fetch(request);
       if (!asset.ok) return asset;
