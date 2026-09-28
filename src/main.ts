@@ -4,6 +4,7 @@ import "./natives";
 import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
+import { mountPlatformData } from "./shell/apex";
 
 import { locateDrawnText, SYSTEM_FONT, SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "./android/graphics";
 import { rt } from "./jvm/runtime";
@@ -314,6 +315,7 @@ setInterval(() => {
 attachIme(canvas, kbd);
 
 mountSystemCertificates();
+mountPlatformData();
 
 /** The host display's rate, from rAF spacing: skipped frames only lengthen intervals, so the
  *  lower quartile is the frame period even while page startup keeps the thread busy. */

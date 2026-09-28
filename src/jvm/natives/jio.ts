@@ -64,7 +64,7 @@ export const noMark = { "markSupported()Z": () => 0, "mark(I)V": () => {}, "rese
 rt.register({
   name: "java/io/File", ctor: JFile,
   ifaces: ["java/io/Serializable", "java/lang/Comparable"],
-  statics: { separator: "/", separatorChar: 47, pathSeparator: ":" },
+  statics: { separator: "/", separatorChar: 47, pathSeparator: ":", pathSeparatorChar: 58 },
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JFile, p: string | null) { initFile(this, p); },
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JFile, d: string | null, n: string | null) {

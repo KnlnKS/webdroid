@@ -103,12 +103,13 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
-    // under vendor/aosp, the reference build's class path and framework-res.apk (bun run
-    // gen-framework): they only change with the build, so let the browser keep them.
+    // under vendor/aosp, the reference build's class path, framework-res.apk, ICU data and tzdata
+    // (bun run gen-framework): they only change with the build, so let the browser keep them.
     "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/fonts/:file": (req) => serveFile("vendor/fonts", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),
-    "/vendor/aosp/boot/:file": (req) => serveFile("vendor/aosp/boot", req.params.file, { "cache-control": IMMUTABLE }),
+    "/vendor/aosp/:dir/:file": (req) => ["boot", "icu", "tz"].includes(req.params.dir)
+      ? serveFile(`vendor/aosp/${req.params.dir}`, req.params.file, { "cache-control": IMMUTABLE }) : new Response("nope", { status: 404 }),
     "/vendor/microg/:file": (req) => {
       const file = req.params.file;
       const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };

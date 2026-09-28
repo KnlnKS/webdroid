@@ -2848,7 +2848,6 @@ rt.register({
     "store(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JProps, stream: unknown, comments: string | null) { return storeProperties(this, stream, comments); },
   },
 });
-defineException("java/util/MissingResourceException", "java/lang/RuntimeException");
 class JResourceBundle extends JObj { values = new Map<string, unknown>(); parent: JResourceBundle | null = null; }
 class JListResourceBundle extends JResourceBundle { loading: Promise<void> | null = null; }
 const bundleValues = driven(function* bundleValues(bundle: JResourceBundle): Gen<Map<string, unknown>> {

@@ -17,6 +17,7 @@ import type { FileSource } from "./shell/lazyfile";
 import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
+import { mountPlatformData } from "./shell/apex";
 import { hexBytes, u8 } from "./jvm/abi";
 import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
 import { perf } from "./perf";
@@ -74,6 +75,7 @@ try {
     if (systemFonts.has(font.family.replace(/^"(.*)"$/, "$1"))) document.fonts.add(font);
   }
   mountSystemCertificates();
+  mountPlatformData();
   let boot: Install | null = null;
   for (const snapshot of data.registry) {
     const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;

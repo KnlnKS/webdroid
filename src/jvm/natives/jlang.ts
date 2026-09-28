@@ -1843,7 +1843,8 @@ export const sysProps: Record<string, string> = new Proxy(ownProps, {
 });
 const sysEnv: Record<string, string> = {
   PATH: "/system/bin:/system/xbin:/vendor/bin",
-  ANDROID_ROOT: "/system", ANDROID_DATA: "/data", EXTERNAL_STORAGE: "/sdcard",
+  ANDROID_ROOT: "/system", ANDROID_DATA: "/data", ANDROID_ART_ROOT: "/apex/com.android.art",
+  ANDROID_I18N_ROOT: "/apex/com.android.i18n", ANDROID_TZDATA_ROOT: "/apex/com.android.tzdata", EXTERNAL_STORAGE: "/sdcard",
   TMPDIR: "/data/local/tmp",
 };
 rt.register({
@@ -1886,6 +1887,12 @@ rt.register({
     "static lineSeparator()Ljava/lang/String;": () => "\n",
   },
 });
+// Clock.systemUTC's wall time: nanoseconds past `offset` seconds, or -1 beyond ±2^32 s as libcore expects
+rt.registerJni("jdk/internal/misc/VM", "getNanoTimeAdjustment(J)J", (offset: bigint) => {
+  const adjustment = BigInt(Date.now()) * 1_000_000n - offset * 1_000_000_000n;
+  return adjustment > MAX_NANO_ADJUSTMENT || adjustment < -MAX_NANO_ADJUSTMENT ? -1n : adjustment;
+});
+const MAX_NANO_ADJUSTMENT = (1n << 32n) * 1_000_000_000n;
 
 class JRuntimeCls extends JObj {}
 const theRuntime = new JRuntimeCls();
