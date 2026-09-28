@@ -710,9 +710,15 @@ Fixes that apply to every mode:
    - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
      streams (`streamOfSource`), and probably the Buffers and charset codecs.
    - Add an ojluni io/zip conformance suite before cut 3.
-2. **B.4 collections.** Not viable as a cut: about 250 TS call sites build and read the TS maps,
-   lists and sets directly (`.m`, `newArrayList`, `newStringSet`, `toJsArray`, `JMapEntry`). Those
-   need converting to the Java API first, and JS-backed collections are likely faster; measure.
+2. **B.4 collections.** Performance does not rule it out: 20,000 mixed String/Integer keys through
+   HashMap put/get, ArrayList add/get and an entrySet walk took 12.3 ms from libcore against 11.3 ms
+   in TS at steady state (Bun), and 29.9 against 15.4 ms on the first, cold run. The blocker is TS
+   code built on the TS objects: `newArrayList` (83 sites in 28 files; a bytecode ArrayList needs
+   class init and a constructor that can suspend), `toJsArray` (42, already Java-call based),
+   `mkIter` (12) and about 130 direct `.a`/`.m` reads, mostly in jstream, jjson, worksource, sqlite
+   and pm. Serialization comes with it: 25 TS specs carry `serialization:` metadata because AOSP's
+   ObjectStreamClass would reflect over fields TS objects lack, so ObjectInput/OutputStream can
+   only flip after the collections.
 3. **§4 performance.**
    - **First launch.** Cold Mihon's first theme switch is about 90 ms of real recomposition plus
      cold-tier cost, and libcore's first-use code (the Locale flip's LanguageTag parse adds about
