@@ -5,6 +5,7 @@ import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDe
 import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import type { Cells } from "../compiler";
+import { device } from "../../shell/config";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -464,6 +465,8 @@ rt.register({
     "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
     "getTargetSdkVersion()I": () => targetSdk,
     "setTargetSdkVersion(I)V": setTargetSdkVersion,
+    // ro.build.version.sdk
+    "static getSdkVersionNative(I)I": () => device.sdk,
     // no hidden-API policy is enforced here, so every exemption already holds
     "setHiddenApiExemptions([Ljava/lang/String;)V": () => {},
   },

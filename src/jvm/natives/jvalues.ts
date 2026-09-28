@@ -3,7 +3,7 @@ import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, u8 } from "../abi";
 import { after, defineException, mkEnumSet, stringHash, vcall } from "./jlang";
 import { csText } from "./jchars";
-import { newArrayList } from "./jutil";
+import { newArrayList, newStringSet } from "./jutil";
 import { md5 } from "./digest";
 
 class JStringJoiner extends JObj { sep = ","; pre = ""; suf = ""; parts: string[] = []; }
@@ -179,6 +179,11 @@ rt.register({
     "getUnicodeLocaleType(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "stripExtensions()Ljava/util/Locale;": function (this: JLocale) { return this; },
     "getExtension(C)Ljava/lang/String;": () => null,
+    // these locales carry no extensions (-u-, -t-, -x-): the sets are empty
+    "hasExtensions()Z": () => 0,
+    "getExtensionKeys()Ljava/util/Set;": () => newStringSet([]),
+    "getUnicodeLocaleAttributes()Ljava/util/Set;": () => newStringSet([]),
+    "getUnicodeLocaleKeys()Ljava/util/Set;": () => newStringSet([]),
     "toString()Ljava/lang/String;": function (this: JLocale) {
       return this.lang + (this.country || this.variant || this.script ? "_" + this.country : "") + (this.variant ? "_" + this.variant : "") + (this.script ? "_#" + this.script : "");
     },

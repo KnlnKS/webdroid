@@ -1153,6 +1153,11 @@ function sbSpec(name: string): NativeSpec {
       "length()I": function (this: JSB) { return this.s.length; },
       "ensureCapacity(I)V": function () {},
       "charAt(I)C": function (this: JSB, i: number) { return this.s.charCodeAt(i); },
+      "getChars(II[CI)V": function (this: JSB, begin: number, end: number, dst: Uint16Array, at: number) {
+        if (begin < 0 || end > this.s.length || begin > end) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `begin ${begin}, end ${end}, length ${this.s.length}`);
+        if (at < 0 || at + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+        for (let i = begin; i < end; i++) dst[at + i - begin] = this.s.charCodeAt(i);
+      },
       [`appendCodePoint(I)L${name};`]: function (this: JSB, cp: number) { this.s += String.fromCodePoint(cp); return this; },
       "codePointAt(I)I": function (this: JSB, i: number) { return cpAt(this.s, i); },
       "codePointBefore(I)I": function (this: JSB, i: number) { return cpBefore(this.s, i); },
