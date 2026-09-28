@@ -372,20 +372,46 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
     },
   };
 }
-const REPLACE = "(IILjava/lang/CharSequence;II)Landroid/text/Editable;";
-const appendRange = function (this: JSpannable, cs: unknown, start: number, end: number) {
-  return vcall(this, "replace", REPLACE, this.text.length, this.text.length, cs, start, end);
-};
-const appendSpanned = driven(function* appendSpanned(this: JSpannable, cs: unknown): Gen {
-  return appendRange.call(this, cs, 0, (yield csText(cs)).length);
-});
 /** Editable's appends under each return type a caller may have linked against: the class's
- *  own, Editable's, and Appendable's (Kotlin's joinTo takes any Appendable) */
-function appendMethods(ret: string): NonNullable<NativeSpec["methods"]> {
+ *  own, Editable's, and Appendable's (Kotlin's joinTo takes any Appendable). Each goes through
+ *  the class's own replace and append(CharSequence), as AOSP's do. */
+function appendMethods(ret: string, own = ret): NonNullable<NativeSpec["methods"]> {
+  const replace = `(IILjava/lang/CharSequence;II)L${own};`;
+  const appendRange = function (this: JSpannable, cs: unknown, start: number, end: number) {
+    return vcall(this, "replace", replace, this.text.length, this.text.length, cs, start, end);
+  };
   return {
-    [`append(Ljava/lang/CharSequence;)L${ret};`]: appendSpanned,
+    [`append(Ljava/lang/CharSequence;)L${ret};`]: driven(function* (this: JSpannable, cs: unknown): Gen {
+      return appendRange.call(this, cs, 0, (yield csText(cs)).length);
+    }),
     [`append(Ljava/lang/CharSequence;II)L${ret};`]: appendRange,
-    [`append(C)L${ret};`]: function (this: JSpannable, c: number) { return appendRange.call(this, String.fromCharCode(c), 0, 1); },
+    [`append(C)L${ret};`]: function (this: JSpannable, c: number) {
+      return vcall(this, "append", `(Ljava/lang/CharSequence;)L${own};`, String.fromCharCode(c));
+    },
+  };
+}
+const SSB = "Landroid/text/SpannableStringBuilder;";
+/** SpannableStringBuilder's interface-typed forms are javac bridges to its own, which is what a
+ *  subclass (emoji2's SpannableBuilder) overrides */
+function ssbBridges(ret: string, edits: boolean): NonNullable<NativeSpec["methods"]> {
+  const appends: NonNullable<NativeSpec["methods"]> = {
+    [`append(Ljava/lang/CharSequence;)${ret}`]: function (this: JSpannable, cs: unknown) { return vcall(this, "append", `(Ljava/lang/CharSequence;)${SSB}`, cs); },
+    [`append(Ljava/lang/CharSequence;II)${ret}`]: function (this: JSpannable, cs: unknown, start: number, end: number) {
+      return vcall(this, "append", `(Ljava/lang/CharSequence;II)${SSB}`, cs, start, end);
+    },
+    [`append(C)${ret}`]: function (this: JSpannable, c: number) { return vcall(this, "append", `(C)${SSB}`, c); },
+  };
+  if (!edits) return appends;
+  return {
+    ...appends,
+    [`replace(IILjava/lang/CharSequence;)${ret}`]: function (this: JSpannable, a: number, b: number, cs: unknown) {
+      return vcall(this, "replace", `(IILjava/lang/CharSequence;)${SSB}`, a, b, cs);
+    },
+    [`replace(IILjava/lang/CharSequence;II)${ret}`]: function (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number) {
+      return vcall(this, "replace", `(IILjava/lang/CharSequence;II)${SSB}`, a, b, cs, start, end);
+    },
+    [`insert(ILjava/lang/CharSequence;)${ret}`]: function (this: JSpannable, i: number, cs: unknown) { return vcall(this, "insert", `(ILjava/lang/CharSequence;)${SSB}`, i, cs); },
+    [`delete(II)${ret}`]: function (this: JSpannable, a: number, b: number) { return vcall(this, "delete", `(II)${SSB}`, a, b); },
   };
 }
 rt.register({
@@ -396,14 +422,13 @@ rt.register({
     ...appendMethods("android/text/SpannableStringBuilder"),
     "append(Ljava/lang/CharSequence;Ljava/lang/Object;I)Landroid/text/SpannableStringBuilder;": driven(function* (this: JSpannable, cs: unknown, what: unknown, flags: number): Gen {
       const start = this.text.length;
-      yield appendSpanned.call(this, cs);
+      yield vcall(this, "append", `(Ljava/lang/CharSequence;)${SSB}`, cs);
       yield vcall(this, "setSpan", "(Ljava/lang/Object;III)V", what, start, this.text.length, flags);
       return this;
     }),
-    ...appendMethods("android/text/Editable"),
-    ...appendMethods("java/lang/Appendable"),
     ...editMutators("android/text/SpannableStringBuilder"),
-    ...editMutators("android/text/Editable"),
+    ...ssbBridges("Landroid/text/Editable;", true),
+    ...ssbBridges("Ljava/lang/Appendable;", false),
     "clearSpans()V": function (this: JSpannable) {
       if (!this.spans.some(s => rt.iof(s.span, "android/text/SpanWatcher"))) { this.spans.length = 0; return; }
       return (async () => {
