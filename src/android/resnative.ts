@@ -8,8 +8,8 @@ import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, loadDrawableFi
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
 import { sizeClass } from "./arsc";
-import { javaFormat, defineException, vcall, after } from "../jvm/natives/jlang";
-import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
+import { javaFormat, defineException, vcall, after, scall } from "../jvm/natives/jlang";
+import { type JLocale, localeTag, localeDirection, localeForTag, tagDirection } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
 import { mkPfd } from "./os";
@@ -48,21 +48,28 @@ export function mkJResources(host: Resources, system = true): JResources {
   if (system) systemRes = r;
   return r;
 }
-export class JLocaleList extends JObj { values: JLocale[] = []; }
+/** Locales with their tags, which configuration comparisons and resource selection read */
+export class JLocaleList extends JObj { values: JLocale[] = []; tags: string[] = []; }
 const emptyLocaleList = new JLocaleList();
-const localeList = Object.assign(new JLocaleList(), { values: [usLocale] });
-const sameLocale = (a: JLocale | null, b: JLocale | null) => a === b || !!a && !!b &&
-  a.lang === b.lang && a.country === b.country && a.script === b.script && a.variant === b.variant;
-function configLocales(c: JConfiguration): JLocaleList {
-  if (!sameLocale(c.locale, c.locales.values[0] ?? null)) {
-    c.locales = c.locale ? Object.assign(new JLocaleList(), { values: [c.locale] }) : emptyLocaleList;
-  }
-  return c.locales;
+/** the device's languages, from boot (initDeviceLocales) */
+let localeList = emptyLocaleList;
+function withTags(values: JLocale[]): JLocaleList | Promise<JLocaleList> {
+  const tags = values.map(localeTag), list = (tags: string[]) => Object.assign(new JLocaleList(), { values, tags });
+  return tags.some((tag) => tag instanceof Promise) ? Promise.all(tags).then(list) : list(tags as string[]);
 }
+const sameTags = (a: JLocaleList, b: JLocaleList) => a.tags.length === b.tags.length && a.tags.every((tag, i) => tag === b.tags[i]);
+/** Configuration.locale is a public field an app may assign: its list follows it */
+function syncLocales(c: JConfiguration): void | Promise<void> {
+  if (c.locale === (c.locales.values[0] ?? null)) return;
+  if (!c.locale) { c.locales = emptyLocaleList; return; }
+  return after(withTags([c.locale]), (list) => { c.locales = list; });
+}
+/** the resource qualifier language of a configuration's first locale */
+const configLang = (c: JConfiguration) => { const lang = c.locales.tags[0]?.split("-")[0] ?? ""; return lang === "und" ? "" : lang; };
 function setLocales(c: JConfiguration, list: JLocaleList | null): void {
   c.locales = list || emptyLocaleList;
   c.locale = c.locales.values[0] ?? null;
-  c.screenLayout = (c.screenLayout & ~0xc0) | ((localeDirection(c.locale) + 1) << 6);
+  c.screenLayout = (c.screenLayout & ~0xc0) | (((c.locales.tags[0] ? tagDirection(c.locales.tags[0]) : 0) + 1) << 6);
 }
 export class JConfiguration extends JObj {
   orientation = device.orientation;
@@ -84,11 +91,11 @@ const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", "smalle
   "fontWeightAdjustment", "colorMode"] as const;
 /** AOSP compareTo(...) == 0: every public field, not identity (appcompat's resource caches keep a
  *  COPY of the configuration they were filled under and compare it against the live one) */
-function configEquals(a: JConfiguration, b: JConfiguration): boolean {
+const configEquals = driven(function* configEquals(a: JConfiguration, b: JConfiguration): Gen<boolean> {
   for (const k of CONFIG_FIELDS) if (a[k] !== b[k]) return false;
-  const al = configLocales(a).values, bl = configLocales(b).values;
-  return al.length === bl.length && al.every((l, i) => sameLocale(l, bl[i]));
-}
+  yield syncLocales(a); yield syncLocales(b);
+  return sameTags(a.locales, b.locales);
+});
 rt.register({
   name: "android/content/res/Configuration", ctor: JConfiguration,
   fields: ["orientation", "screenWidthDp", "screenHeightDp", "smallestScreenWidthDp", "densityDpi", "fontScale",
@@ -101,20 +108,20 @@ rt.register({
     "setTo(Landroid/content/res/Configuration;)V": function (this: JConfiguration, o: JConfiguration) { Object.assign(this, o); },
     ...noops("<init>()V"),
     ...stubs(0, "diff(Landroid/content/res/Configuration;)I", "updateFrom(Landroid/content/res/Configuration;)I"),
-    "equals(Ljava/lang/Object;)Z": function (this: JConfiguration, o: unknown) { return o instanceof JConfiguration && configEquals(this, o) ? 1 : 0; },
-    "equals(Landroid/content/res/Configuration;)Z": function (this: JConfiguration, o: JConfiguration | null) { return o && configEquals(this, o) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JConfiguration, o: unknown) { return o instanceof JConfiguration ? after(configEquals(this, o), Number) : 0; },
+    "equals(Landroid/content/res/Configuration;)Z": function (this: JConfiguration, o: JConfiguration | null) { return o ? after(configEquals(this, o), Number) : 0; },
     "hashCode()I": function (this: JConfiguration) {
       let h = 17;
       for (const k of CONFIG_FIELDS) h = (h * 31 + ((this as any)[k] | 0)) | 0;
       return h;
     },
-    "getLocales()Landroid/os/LocaleList;": function (this: JConfiguration) { return configLocales(this); },
+    "getLocales()Landroid/os/LocaleList;": function (this: JConfiguration) { return after(syncLocales(this), () => this.locales); },
     "setLocales(Landroid/os/LocaleList;)V": function (this: JConfiguration, list: JLocaleList | null) { setLocales(this, list); },
     "setLocale(Ljava/util/Locale;)V": function (this: JConfiguration, locale: JLocale | null) {
-      setLocales(this, locale ? Object.assign(new JLocaleList(), { values: [locale] }) : null);
+      return locale ? after(withTags([locale]), (list) => setLocales(this, list)) : setLocales(this, null);
     },
     "setLayoutDirection(Ljava/util/Locale;)V": function (this: JConfiguration, locale: JLocale | null) {
-      this.screenLayout = (this.screenLayout & ~0xc0) | ((localeDirection(locale) + 1) << 6);
+      return after(localeDirection(locale), (dir) => { this.screenLayout = (this.screenLayout & ~0xc0) | ((dir + 1) << 6); });
     },
     "getLayoutDirection()I": function (this: JConfiguration) { return (this.screenLayout & 0xc0) === 0x80 ? 1 : 0; },
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
@@ -148,22 +155,25 @@ rt.register({
   methods: {
     "<init>([Ljava/util/Locale;)V": function (this: JLocaleList, locales: JLocale[]) {
       if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
-      this.values = locales.filter((l, i) => locales.findIndex(other => sameLocale(l, other)) === i);
+      return after(withTags(locales), ({ values, tags }) => {
+        const first = tags.map((tag, i) => tags.indexOf(tag) === i);
+        this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
+      });
     },
-    "static getDefault()Landroid/os/LocaleList;": () => configLocales(theConfig),
-    "static getAdjustedDefault()Landroid/os/LocaleList;": () => configLocales(theConfig),
+    "static getDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => theConfig.locales),
+    "static getAdjustedDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => theConfig.locales),
     "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
     "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen {
-      const list = new JLocaleList();
-      for (const t of (tags ?? "").split(",").filter(Boolean)) list.values.push(yield vcall(rt.link("java/util/Locale").ctor, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", t.trim()));
-      return list;
+      const values: JLocale[] = [];
+      for (const t of (tags ?? "").split(",").filter(Boolean)) values.push(yield localeForTag(t.trim()));
+      return withTags(values);
     }),
     "get(I)Ljava/util/Locale;": function (this: JLocaleList, i: number) { return this.values[i] ?? null; },
     "size()I": function (this: JLocaleList) { return this.values.length; },
     "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },
-    "toLanguageTags()Ljava/lang/String;": function (this: JLocaleList) { return this.values.map(localeTag).join(","); },
+    "toLanguageTags()Ljava/lang/String;": function (this: JLocaleList) { return this.tags.join(","); },
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JLocaleList, parcel: JParcel) { writeString(parcel, this.values.map(localeTag).join(",")); },
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JLocaleList, parcel: JParcel) { writeString(parcel, this.tags.join(",")); },
   },
 });
 export function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
@@ -177,19 +187,24 @@ export function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
  * `-night` resource qualifier and the window background all read the bit back off this object.
  */
 const theConfig = new JConfiguration();
-setLocales(theConfig, localeList);
+/** the device's languages as Locales, once libcore can build them */
+export const initDeviceLocales = driven(function* initDeviceLocales(): Gen {
+  localeList = yield withTags([yield localeForTag(device.locale)]);
+  setLocales(theConfig, localeList);
+  setResourceLocale(configLang(theConfig), theConfig.screenLayout & 0xc0);
+});
 const isNight = () => (theConfig.uiMode & 0x30) === 0x20;
 /** Adopt a Configuration and invalidate resource selections for changed qualifiers. */
 function applyDeviceConfiguration(c: JConfiguration): void {
-  const was = isNight(), lang = theConfig.locale?.lang, dir = theConfig.screenLayout & 0xc0;
+  const was = isNight(), lang = configLang(theConfig), dir = theConfig.screenLayout & 0xc0;
   Object.assign(theConfig, c);
   if (isNight() !== was) setResourceNight(isNight());
-  if (theConfig.locale?.lang !== lang || (theConfig.screenLayout & 0xc0) !== dir) {
-    setResourceLocale(theConfig.locale?.lang ?? "", theConfig.screenLayout & 0xc0);
+  if (configLang(theConfig) !== lang || (theConfig.screenLayout & 0xc0) !== dir) {
+    setResourceLocale(configLang(theConfig), theConfig.screenLayout & 0xc0);
   }
 }
 function configurationQualifiers(c: JConfiguration) {
-  return { lang: c.locale?.lang ?? "", dir: c.screenLayout & 0xc0, night: (c.uiMode & 0x30) === 0x20 ? 1 : 0,
+  return { lang: configLang(c), dir: c.screenLayout & 0xc0, night: (c.uiMode & 0x30) === 0x20 ? 1 : 0,
     orientation: c.orientation, density: c.densityDpi, wdp: c.screenWidthDp, hdp: c.screenHeightDp,
     swdp: c.smallestScreenWidthDp, size: c.screenLayout & 0xf, uiType: c.uiMode & 0xf };
 }
@@ -200,8 +215,7 @@ function mergeConfiguration(base: JConfiguration, delta: JConfiguration): void {
     const value = delta[key];
     if (key === "fontScale" ? value > 0 : key === "fontWeightAdjustment" ? value !== 0x7fffffff : value !== 0) base[key] = value;
   }
-  const locales = configLocales(delta);
-  if (locales.values.length) setLocales(base, locales);
+  if (delta.locales.values.length) setLocales(base, delta.locales);
   for (const [key, masks] of [["uiMode", [0xf, 0x30]], ["screenLayout", [0xf, 0x30, 0xc0, 0x300]], ["colorMode", [3, 12]]] as const) {
     for (const mask of masks) if (delta[key] & mask) base[key] = (base[key] & ~mask) | (delta[key] & mask);
   }
@@ -215,18 +229,20 @@ function configurationMetrics(resources: JResources): void {
 }
 /** give `r` its own configuration and selection scope over `source`'s tables, `config` applied
  *  as a delta the way Configuration.updateFrom does */
-function scopeResources(r: JResources, source: Resources, config: JConfiguration): void {
+function scopeResources(r: JResources, source: Resources, config: JConfiguration): void | Promise<void> {
+  return after(syncLocales(config), () => scopeSynced(r, source, config));
+}
+function scopeSynced(r: JResources, source: Resources, config: JConfiguration): void {
   r.config = Object.assign(new JConfiguration(), source.jobj instanceof JResources ? source.jobj.config ?? theConfig : theConfig);
   mergeConfiguration(r.config, config);
   r.host = source.scoped(configurationQualifiers(r.config));
   r.host.jobj = r;
   configurationMetrics(r);
 }
-export function scopedResources(source: Resources, config: JConfiguration): JResources {
+export function scopedResources(source: Resources, config: JConfiguration): JResources | Promise<JResources> {
   if (!config) throw rt.mkThrowable("java/lang/IllegalArgumentException", "overrideConfiguration must not be null");
   const r = new JResources();
-  scopeResources(r, source, config);
-  return r;
+  return after(scopeResources(r, source, config), () => r);
 }
 export const deviceConfiguration = (): JConfiguration => theConfig;
 /** Keep Configuration and resource qualifiers in step with the shell framebuffer. */
@@ -242,11 +258,11 @@ export function syncDeviceOrientation(): void {
  *  the effective locales moved. */
 export function applyApplicationLocales(list: JLocaleList): boolean {
   appLocales = list;
-  const next = list.values.length ? list : localeList, current = configLocales(theConfig).values;
-  if (next.values.length === current.length && next.values.every((l, i) => sameLocale(l, current[i]))) return false;
+  const next = list.values.length ? list : localeList;
+  if (sameTags(next, theConfig.locales)) return false;
   setLocales(theConfig, next);
-  setResourceLocale(theConfig.locale?.lang ?? "", theConfig.screenLayout & 0xc0);
-  void vcall(rt.link("java/util/Locale").ctor, "setDefault", "(Ljava/util/Locale;)V", theConfig.locale);
+  setResourceLocale(configLang(theConfig), theConfig.screenLayout & 0xc0);
+  void scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", theConfig.locale);
   return true;
 }
 export const localesFromTags = (tags: string): Promise<JLocaleList> =>
@@ -324,10 +340,11 @@ rt.register({
 
 /** Resources(AssetManager, DisplayMetrics, Configuration): a ResourcesImpl of its own over the
  *  asset tables, which is what an app's Resources subclass wraps around the package's */
-function initResources(this: JResources, assets: JAssetManager | null, metrics: JDisplayMetrics | null, config: JConfiguration | null): void {
+function initResources(this: JResources, assets: JAssetManager | null, metrics: JDisplayMetrics | null, config: JConfiguration | null): void | Promise<void> {
   if (!assets) throw rt.mkThrowable("java/lang/NullPointerException", "assets");
-  scopeResources(this, assets.host, config ?? new JConfiguration());
-  if (metrics) { Object.assign(this.host.dm, metrics); configurationMetrics(this); }
+  return after(scopeResources(this, assets.host, config ?? new JConfiguration()), () => {
+    if (metrics) { Object.assign(this.host.dm, metrics); configurationMetrics(this); }
+  });
 }
 const notFound = (what: string, id: number) => rt.mkThrowable("android/content/res/Resources$NotFoundException", `${what} resource ID #0x${(id >>> 0).toString(16)}`);
 /** the string behind `id`; an id the table has no entry for is NotFoundException, as AOSP throws it — an app's
@@ -472,12 +489,14 @@ const resMethods: NativeSpec["methods"] = {
   "getAnimation(I)Landroid/content/res/XmlResourceParser;": xmlParser,
   "updateConfiguration(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V": function (this: JResources, c: JConfiguration | null) {
     if (!c) return;
-    if (!this.config) { applyDeviceConfiguration(c); return; }
-    mergeConfiguration(this.config, c);
-    const qualifiers = configurationQualifiers(this.config);
-    for (const table of [this.host.arsc, this.host.tbl(0x01000000)]) if (table) Object.assign(table.device, qualifiers);
-    configurationMetrics(this);
-    this.host.invalidate();
+    return after(syncLocales(c), () => {
+      if (!this.config) { applyDeviceConfiguration(c); return; }
+      mergeConfiguration(this.config, c);
+      const qualifiers = configurationQualifiers(this.config);
+      for (const table of [this.host.arsc, this.host.tbl(0x01000000)]) if (table) Object.assign(table.device, qualifiers);
+      configurationMetrics(this);
+      this.host.invalidate();
+    });
   },
   "getFont(I)Landroid/graphics/Typeface;": driven(function* (this: JResources, id: number): Gen {
     const t = yield fontResource(this.host, id);

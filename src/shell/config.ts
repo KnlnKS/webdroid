@@ -87,6 +87,8 @@ export const device = {
   release: "15",
   lang: "en",
   region: "US",
+  /** persist.sys.locale: the BCP 47 tag of the device's one language */
+  get locale(): string { return `${this.lang}-${this.region}`; },
   /** the host's zone, which the device's persist.sys.timezone names */
   get timezone(): string { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; },
   /** the browser's dark-mode preference, live as a device's is (see setDeviceNight) */

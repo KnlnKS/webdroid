@@ -70,6 +70,11 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
   if (p) await p;
   return info;
 }
+/** A static Java call from native code, once the class has initialized */
+export function scall(cls: string, name: string, desc: string, ...args: unknown[]): any {
+  const info = rt.link(cls), init = rt.initClass(info);
+  return init ? init.then(() => vcall(info.ctor, name, desc, ...args)) : vcall(info.ctor, name, desc, ...args);
+}
 /** `new Cls(args)` from native code: init the class, construct, run the Java constructor `desc` (none when null) */
 export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
   const thread = curThread, info = await linkInit(cls);
@@ -1842,6 +1847,8 @@ const ownProps: Record<string, string> = {
   // RuntimeInit's default user agent from Build.VERSION.RELEASE, MODEL and ID
   "http.agent": `Dalvik/2.1.0 (Linux; U; Android ${device.release}; webdroid Build/WD1A)`,
   get "user.name"() { return appUserName(procIdentity.uid); },
+  // AndroidRuntime passes persist.sys.locale to libcore, whose Locale.getDefault() starts from it
+  get "user.locale"() { return device.locale; },
 };
 let artProps: Record<string, string> | null = null;
 /** ART's fixed properties (java.class.version, java.specification.*, file.encoding...), read

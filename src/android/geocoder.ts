@@ -3,9 +3,9 @@
 // and Address results cross back over binder.
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, vcallUncaught, after } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { JLocale, defaultLocale } from "../jvm/natives/jvalues";
+import { type JLocale, defaultLocale } from "../jvm/natives/jvalues";
 import { JBinder, INTERFACE_TRANSACTION } from "./binder";
 import { JParcel, readDouble, readInt, readString, writeDouble, writeInt, writeString } from "./parcel";
 import { parcelCreator } from "./parcelable";
@@ -18,13 +18,21 @@ import type { JContext } from "./context";
 const FIELDS = ["FeatureName", "AdminArea", "SubAdminArea", "Locality", "SubLocality", "Thoroughfare", "SubThoroughfare",
   "Premises", "PostalCode", "CountryCode", "CountryName"] as const;
 class JAddress extends JObj {
-  locale: JLocale = defaultLocale;
+  locale: JLocale | null = null;
   lines = new Map<number, string>();
   text: Record<string, string | null> = {};
   lat: number | null = null; lon: number | null = null;
   phone: string | null = null; url: string | null = null; extras: JBundle | null = null;
 }
-const readLocale = (p: JParcel) => Object.assign(new JLocale(), { lang: readString(p) ?? "", country: readString(p) ?? "" });
+/** a Locale as Address and GeocoderParams parcel it: its language, then its country */
+function readLocale(p: JParcel): Promise<JLocale> {
+  const language = readString(p) ?? "", country = readString(p) ?? "";
+  return newObj("java/util/Locale", "(Ljava/lang/String;Ljava/lang/String;)V", language, country);
+}
+const writeLocale = driven(function* writeLocale(p: JParcel, locale: JLocale | null): Gen {
+  writeString(p, locale && (yield vcall(locale, "getLanguage", "()Ljava/lang/String;")));
+  writeString(p, locale && (yield vcall(locale, "getCountry", "()Ljava/lang/String;")));
+});
 const coordinateOf = (v: number | null, name: string) => {
   if (v === null) throw rt.mkThrowable("java/lang/IllegalStateException", name + " not set");
   return v;
@@ -64,15 +72,15 @@ const addressMethods: Record<string, (...a: never[]) => unknown> = {
       `,hasLatitude=${this.lat !== null},latitude=${this.lat ?? 0},hasLongitude=${this.lon !== null},longitude=${this.lon ?? 0},phone=${this.phone},url=${this.url},extras=${this.extras}]`;
   },
   // Address.writeToParcel's layout
-  "writeToParcel(Landroid/os/Parcel;I)V": function (this: JAddress, p: JParcel) {
-    writeString(p, this.locale.lang); writeString(p, this.locale.country);
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JAddress, p: JParcel): Gen {
+    yield writeLocale(p, this.locale);
     writeInt(p, this.lines.size);
     for (const [i, line] of this.lines) { writeInt(p, i); writeString(p, line); }
     for (const f of FIELDS) writeString(p, this.text[f] ?? null);
     for (const v of [this.lat, this.lon]) { writeInt(p, +(v !== null)); if (v !== null) writeDouble(p, v); }
     writeString(p, this.phone); writeString(p, this.url);
     return vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras);
-  },
+  }),
 };
 for (const f of FIELDS) {
   addressMethods[`get${f}()Ljava/lang/String;`] = function (this: JAddress) { return this.text[f] ?? null; };
@@ -80,7 +88,7 @@ for (const f of FIELDS) {
 }
 const readAddress = driven(function* readAddress(p: JParcel): Gen<JAddress> {
   const a: JAddress = rt.make("android/location/Address");
-  a.locale = readLocale(p);
+  a.locale = yield readLocale(p);
   for (let n = readInt(p); n > 0; n--) a.lines.set(readInt(p), readString(p) ?? "");
   for (const f of FIELDS) a.text[f] = readString(p);
   if (readInt(p)) a.lat = readDouble(p);
@@ -94,16 +102,17 @@ rt.register({
   statics: { get CREATOR() { return parcelCreator("android/location/Address", readAddress); } },
 });
 
-class JGeocoderParams extends JObj { locale: JLocale = defaultLocale; pkg: string | null = null; uid = PROCESS_UID; }
+class JGeocoderParams extends JObj { locale: JLocale | null = null; pkg: string | null = null; uid = PROCESS_UID; }
 function initParams(this: JGeocoderParams, context: JContext | null, l: JLocale | null) {
   if (!context || !l) return rt.npe();
   this.locale = l; this.pkg = context.$host?.pkg ?? null;
 }
-function readParams(p: JParcel): JGeocoderParams {
-  const params: JGeocoderParams = rt.make("android/location/GeocoderParams");
-  params.locale = readLocale(p); params.pkg = readString(p); params.uid = readInt(p);
+const readParams = driven(function* readParams(p: JParcel): Gen<JGeocoderParams> {
+  const params: JGeocoderParams = rt.make("android/location/GeocoderParams"), locale = readLocale(p);
+  params.pkg = readString(p); params.uid = readInt(p);
+  params.locale = yield locale;
   return params;
-}
+});
 rt.register({
   name: "android/location/GeocoderParams", ctor: JGeocoderParams, ifaces: ["android/os/Parcelable"],
   methods: {
@@ -113,9 +122,9 @@ rt.register({
     "getClientUid()I": function (this: JGeocoderParams) { return this.uid; },
     "getClientAttributionTag()Ljava/lang/String;": () => null,
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JGeocoderParams, p: JParcel) {
-      writeString(p, this.locale.lang); writeString(p, this.locale.country); writeString(p, this.pkg); writeInt(p, this.uid);
-    },
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JGeocoderParams, p: JParcel): Gen {
+      yield writeLocale(p, this.locale); writeString(p, this.pkg); writeInt(p, this.uid);
+    }),
   },
   statics: { get CREATOR() { return parcelCreator("android/location/GeocoderParams", readParams); } },
 });
@@ -210,7 +219,7 @@ function deliver(listener: unknown, lookup: Promise<unknown>): void {
   lookup.then((list) => vcallUncaught(listener, "onGeocode", "(Ljava/util/List;)V", list),
     (e) => vcallUncaught(listener, "onError", "(Ljava/lang/String;)V", (e as { msg?: string }).msg ?? null));
 }
-function initGeocoder(this: JGeocoder, context: JContext | null, l: JLocale | null = defaultLocale) {
+function initGeocoder(this: JGeocoder, context: JContext | null, l: JLocale | null) {
   initParams.call(this.params = rt.make("android/location/GeocoderParams"), context, l);
 }
 // onError is a default method that ignores the failure
@@ -218,7 +227,9 @@ rt.register({ name: "android/location/Geocoder$GeocodeListener", ctor: class ext
 rt.register({
   name: "android/location/Geocoder", ctor: JGeocoder,
   methods: {
-    "<init>(Landroid/content/Context;)V": initGeocoder,
+    "<init>(Landroid/content/Context;)V": function (this: JGeocoder, context: JContext | null) {
+      return after(defaultLocale(), (locale) => initGeocoder.call(this, context, locale));
+    },
     "<init>(Landroid/content/Context;Ljava/util/Locale;)V": initGeocoder,
     "static isPresent()Z": async () => +!!(await providerComponent()),
     "getFromLocation(DDI)Ljava/util/List;": function (this: JGeocoder, lat: number, lon: number, max: number) { return byLocation(this, lat, lon, max); },

@@ -258,6 +258,21 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   as the deep measure stack suspends at each yield) moved from 144-159 to 141-148 ms over eight
   runs each, while `dark` gained 144 and 269 ms outliers against at most 83 ms: pointer events
   wait for the next yield.
+- 2026-09-28, Stage B flip of java.util.Locale. The TS Locale invented values (three available
+  locales, a 20-entry ISO-3 table, no extensions); libcore's now answers, starting from
+  `user.locale`, which is persist.sys.locale (`device.locale`) as AndroidRuntime passes it. TS
+  readers go through the Java API: a Locale's tag is `toLanguageTag()`, kept per object, and
+  LocaleList carries its Locales' tags, so Configuration equality, layout direction and resource
+  qualifiers stay synchronous. Configuration.locale is a public field apps assign, so the list is
+  reconciled with it at the Java entry points (getLocales, equals, updateConfiguration,
+  createConfigurationContext, the Resources constructor). ojluni-time rose from 26,163 to 27,514
+  passes; TestUnicodeExtension from 41 to 500. Its "missing" names were collisions: the TS
+  toString dropped `_#u-fw-fri`-style extensions. The earlier "3x suite time" was
+  TestZoneTextPrinterParser doing its real workload over every available locale (117 s), not a
+  hang. Cold Mihon `dark` rose from a median of 66 to 89 ms in an interleaved A/B (six runs each):
+  AppCompat's createOverrideAppConfiguration parses a tag through libcore's LanguageTag for the
+  first time (about 40 methods linked, prepared and run cold). Warm launches persist that code;
+  cold `light` medians were equal (148.5 ms).
 
 ## Java, storage and framework semantics
 

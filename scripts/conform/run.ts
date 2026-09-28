@@ -99,7 +99,7 @@ if (one) {
 
 /** per class, each test name and whether it passed */
 const results: Record<string, Map<string, boolean>> = {};
-const CLASS_TIMEOUT_MS = 120_000, JOBS = 4;
+const CLASS_TIMEOUT_MS = 240_000, JOBS = 4;
 const started = performance.now();
 // a filter naming classes runs just those classes; otherwise it selects tests by name
 const named = filter ? classes.filter((c) => c.includes(filter)) : [];

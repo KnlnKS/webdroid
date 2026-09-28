@@ -4,7 +4,7 @@ import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, type JAttrSet } from "./res";
-import { newObj, vcall, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
+import { newObj, vcall, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
@@ -444,11 +444,13 @@ rt.register({ name: "android/content/Context", ctor: JContext, methods: contextM
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
 class JAttributionContext extends JContextWrapper {}
-function configurationContext(source: JContext, config: JConfiguration): JContext {
-  const jresources = scopedResources(source.$host.res, config), theme = new JTheme();
-  theme.res = jresources.host;
-  theme.styles = (themeOf(source) ?? source.$host.theme).styles.slice();
-  return newContextImpl(Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme }));
+function configurationContext(source: JContext, config: JConfiguration): JContext | Promise<JContext> {
+  return after(scopedResources(source.$host.res, config), (jresources) => {
+    const theme = new JTheme();
+    theme.res = jresources.host;
+    theme.styles = (themeOf(source) ?? source.$host.theme).styles.slice();
+    return newContextImpl(Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme }));
+  });
 }
 class JWindowContext extends JContextWrapper { windowType = 0; windowManager: unknown = null; }
 rt.register({ name: "android/app/ContextImpl", ctor: JContextImpl, sup: "android/content/Context", fields: { mResources: "resources" }, methods: {
@@ -515,8 +517,10 @@ export const themeWrapperMethods: NativeSpec["methods"] = {
   ...wrapperMethods,
   "getResources()Landroid/content/res/Resources;": function (this: JContextThemeWrapper) { return this.overrideResources ?? resourcesViaBase.call(this); },
   "applyOverrideConfiguration(Landroid/content/res/Configuration;)V": function (this: JContextThemeWrapper, config: JConfiguration) {
-    this.$host = configurationContext(this, config).$host;
-    this.overrideResources = this.$host.jresources;
+    return after(configurationContext(this, config), (context) => {
+      this.$host = context.$host;
+      this.overrideResources = this.$host.jresources;
+    });
   },
 };
 rt.register({

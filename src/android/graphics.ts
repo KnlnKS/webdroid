@@ -4,12 +4,12 @@ import { displayListLength, isRecording, nestedRecording, recordOrRun, recording
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
-import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
+import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
-import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
+import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
 import { readStreamFully, type JFileDescriptor } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
@@ -394,7 +394,7 @@ export class JPaint extends JObj {
   fontFeatureSettings: string | null = null;
   fontVariationSettings: string | null = null;
   locales: JLocaleList | null = null;
-  language = localeTag(usLocale);
+  language = device.locale;
   underline = false; strikeThru = false; fakeBold = false;
 
   // font() is called per text op and per measure; the result is a pure function of
@@ -464,15 +464,18 @@ const paintMethods: NativeSpec["methods"] = {
   "setColor(I)V": function (this: JPaint, c: number) { this.setColorValue(c); },
   "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(argbOfColorLong(c)); },
   "getColorLong()J": function (this: JPaint) { return colorLongOfArgb(this.color); },
-  "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
+  "getTextLocale()Ljava/util/Locale;": function (this: JPaint) {
+    return after(vcall(this, "getTextLocales", "()Landroid/os/LocaleList;"), (locales: JLocaleList) => locales.values[0] ?? null);
+  },
   "getTextLocales()Landroid/os/LocaleList;": driven(function* (this: JPaint): Gen { return this.locales ??= yield vcall((yield linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); }),
   "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
     if (!locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale cannot be null");
-    this.locales = Object.assign(rt.make("android/os/LocaleList"), { values: [locale] }); this.language = localeTag(locale);
+    return after(newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray([locale], "Ljava/util/Locale;")),
+      (locales: JLocaleList) => { this.locales = locales; this.language = locales.tags[0]; });
   },
   "setTextLocales(Landroid/os/LocaleList;)V": function (this: JPaint, locales: JLocaleList) {
     if (!locales?.values.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locales cannot be null or empty");
-    this.locales = locales; this.language = localeTag(locales.values[0]);
+    this.locales = locales; this.language = locales.tags[0];
   },
   "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shaderObj; },
   "getStrokeMiter()F": () => 4,

@@ -22,7 +22,6 @@ import { TV } from "./axml";
 import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod, jmethod } from "../jvm/abi";
-import { usLocale } from "../jvm/natives/jvalues";
 import { TextViewLayouts, drawTextViewLayout } from "./textview-layout";
 
 export class JTextView extends JView {
@@ -568,7 +567,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "setLinksClickable(Z)V": function (this: JTextView, v: number) { this.linksClickable = !!v; },
   "getLinksClickable()Z": function (this: JTextView) { return this.linksClickable ? 1 : 0; },
-  "getTextLocale()Ljava/util/Locale;": () => usLocale,
+  "getTextLocale()Ljava/util/Locale;": function (this: JTextView) { return vcall(this.paintT, "getTextLocale", "()Ljava/util/Locale;"); },
   "setFontVariationSettings(Ljava/lang/String;)Z": function (this: JTextView, s: string | null) { this.fontVariation = s; return 1; },
   "getFontVariationSettings()Ljava/lang/String;": function (this: JTextView) { return this.fontVariation; },
   "setCustomSelectionActionModeCallback(Landroid/view/ActionMode$Callback;)V": function (this: JTextView, cb: unknown) { this.selActionMode = cb; },

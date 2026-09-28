@@ -1,12 +1,6 @@
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
 
-/** A static Java method call: statics live on the class constructor under their mangled names,
- *  installed when the class initializes. */
-export const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => {
-  const info = rt.link(cls), pending = rt.initClass(info);
-  return pending ? pending.then(() => vcall(info.ctor, name, desc, ...args)) : vcall(info.ctor, name, desc, ...args);
-};
+export { scall } from "../src/jvm/natives/jlang";
 
 /** framework.jar on the platform class path, as a booted page has it */
 export async function loadFrameworkJar(): Promise<void> {

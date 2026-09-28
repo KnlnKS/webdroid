@@ -1,6 +1,6 @@
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { directionality } from "../jvm/bidi";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj, after } from "../jvm/natives/jlang";
 import { localeDirection, type JLocale, defaultLocale } from "../jvm/natives/jvalues";
 import { csText, JSpanned } from "./text";
 
@@ -8,10 +8,18 @@ type Heuristic = "ltr" | "rtl" | "firstLtr" | "firstRtl" | "anyRtl" | "locale";
 class JHeuristic extends JObj {
   constructor(readonly kind: Heuristic = "firstLtr") { super(); }
 }
-export function isRtl(text: string, start: number, count: number, kind: Heuristic): number {
-  if (start < 0 || count < 0 || start > text.length - count) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
+const defaultDirection = () => after(defaultLocale(), localeDirection);
+const checkRange = (length: number, start: number, count: number) => {
+  if (start < 0 || count < 0 || start > length - count) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
+};
+function heuristicRtl(text: string, start: number, count: number, kind: Heuristic): number | Promise<number> {
+  if (kind !== "locale") return isRtl(text, start, count, kind);
+  checkRange(text.length, start, count);
+  return defaultDirection();
+}
+export function isRtl(text: string, start: number, count: number, kind: Exclude<Heuristic, "locale">): number {
+  checkRange(text.length, start, count);
   if (kind === "ltr" || kind === "rtl") return +(kind === "rtl");
-  if (kind === "locale") return localeDirection(defaultLocale);
   let isolates = 0;
   for (let i = start, end = start + count; i < end;) {
     const cp = text.codePointAt(i)!; i += cp > 0xffff ? 2 : 1;
@@ -32,13 +40,13 @@ export function isRtl(text: string, start: number, count: number, kind: Heuristi
 rt.register({ name: "android/text/TextDirectionHeuristic", ctor: JHeuristic, methods: {
   "isRtl(Ljava/lang/CharSequence;II)Z": driven(function* (this: JHeuristic, text: unknown, start: number, count: number): Gen {
     if (text == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Null text");
-    return isRtl(yield csText(text), start, count, this.kind);
+    return heuristicRtl(yield csText(text), start, count, this.kind);
   }),
   "isRtl([CII)Z": function (this: JHeuristic, chars: Uint16Array | null, start: number, count: number) {
     if (!chars || start < 0 || count < 0 || start > chars.length - count) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
     let text = "";
     for (let i = start; i < start + count; i++) text += String.fromCharCode(chars[i]);
-    return isRtl(text, 0, text.length, this.kind);
+    return heuristicRtl(text, 0, text.length, this.kind);
   },
 } });
 const heuristics = { LTR: new JHeuristic("ltr"), RTL: new JHeuristic("rtl"), FIRSTSTRONG_LTR: new JHeuristic("firstLtr"), FIRSTSTRONG_RTL: new JHeuristic("firstRtl"), ANYRTL_LTR: new JHeuristic("anyRtl"), LOCALE: new JHeuristic("locale") };
@@ -111,9 +119,9 @@ async function unicodeWrap(this: JBidiFormatter, source: unknown, heuristic: unk
   return result;
 }
 const methods: NativeSpec["methods"] = {
-  "static getInstance()Landroid/text/BidiFormatter;": () => defaults[localeDirection(defaultLocale)],
+  "static getInstance()Landroid/text/BidiFormatter;": () => after(defaultDirection(), (dir) => defaults[dir]),
   "static getInstance(Z)Landroid/text/BidiFormatter;": (rtl: number) => defaults[rtl ? 1 : 0],
-  "static getInstance(Ljava/util/Locale;)Landroid/text/BidiFormatter;": (locale: JLocale | null) => defaults[localeDirection(locale)],
+  "static getInstance(Ljava/util/Locale;)Landroid/text/BidiFormatter;": (locale: JLocale | null) => after(localeDirection(locale), (dir) => defaults[dir]),
   "isRtlContext()Z": function (this: JBidiFormatter) { return +this.rtl; },
   "getStereoReset()Z": function (this: JBidiFormatter) { return +this.reset; },
 };
@@ -128,9 +136,9 @@ for (const type of ["java/lang/String", "java/lang/CharSequence"]) {
 }
 rt.register({ name: "android/text/BidiFormatter", ctor: JBidiFormatter, methods });
 rt.register({ name: "android/text/BidiFormatter$Builder", ctor: class extends JBidiFormatter {}, methods: {
-  "<init>()V": function (this: JBidiFormatter) { this.rtl = !!localeDirection(defaultLocale); },
+  "<init>()V": function (this: JBidiFormatter) { return after(defaultDirection(), (dir) => { this.rtl = !!dir; }); },
   "<init>(Z)V": function (this: JBidiFormatter, rtl: number) { this.rtl = !!rtl; },
-  "<init>(Ljava/util/Locale;)V": function (this: JBidiFormatter, locale: JLocale | null) { this.rtl = !!localeDirection(locale); },
+  "<init>(Ljava/util/Locale;)V": function (this: JBidiFormatter, locale: JLocale | null) { return after(localeDirection(locale), (dir) => { this.rtl = !!dir; }); },
   "stereoReset(Z)Landroid/text/BidiFormatter$Builder;": function (this: JBidiFormatter, reset: number) { this.reset = !!reset; return this; },
   "setTextDirectionHeuristic(Landroid/text/TextDirectionHeuristic;)Landroid/text/BidiFormatter$Builder;": function (this: JBidiFormatter, heuristic: unknown) { this.heuristic = heuristic; return this; },
   "build()Landroid/text/BidiFormatter;": function (this: JBidiFormatter) { return Object.assign(rt.make("android/text/BidiFormatter"), { rtl: this.rtl, reset: this.reset, heuristic: this.heuristic }); },

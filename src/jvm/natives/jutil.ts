@@ -2869,12 +2869,13 @@ const bundleValues = driven(function* bundleValues(bundle: JResourceBundle): Gen
   }
   return bundle.values;
 });
-function bundleNames(baseName: string, locale: JLocale): string[] {
-  const parts = [locale.lang, locale.script, locale.country, locale.variant].filter(Boolean);
-  const names: string[] = [];
-  for (let n = parts.length; n > 0; n--) names.push(baseName + "_" + parts.slice(0, n).join("_"));
+const bundleNames = driven(function* bundleNames(baseName: string, locale: JLocale): Gen<string[]> {
+  const parts: string[] = [];
+  for (const part of ["getLanguage", "getScript", "getCountry", "getVariant"]) parts.push(yield vcall(locale, part, "()Ljava/lang/String;"));
+  const present = parts.filter(Boolean), names: string[] = [];
+  for (let n = present.length; n > 0; n--) names.push(baseName + "_" + present.slice(0, n).join("_"));
   return names;
-}
+});
 const getBundle = driven(function* getBundle(baseName: string, locale: JLocale, control?: JBundleControl): Gen<JResourceBundle> {
   if (baseName == null || locale == null) rt.npe();
   const load = async (name: string): Promise<JResourceBundle | null> => {
@@ -2890,14 +2891,14 @@ const getBundle = driven(function* getBundle(baseName: string, locale: JLocale, 
     bundle.values = propertyText(charsToString(bytes, 0, bytes.length));
     return bundle;
   };
-  const requested = bundleNames(baseName, locale);
+  const requested: string[] = yield bundleNames(baseName, locale);
   const found: JResourceBundle[] = [];
   for (const name of requested) {
     const bundle = yield load(name);
     if (bundle) found.push(bundle);
   }
   if (!found.length && requested.length && !control?.noFallback) {
-    for (const name of bundleNames(baseName, defaultLocale)) {
+    for (const name of yield bundleNames(baseName, yield defaultLocale())) {
       const bundle = yield load(name);
       if (bundle) found.push(bundle);
     }
@@ -2936,16 +2937,16 @@ rt.register({ name: "java/util/ResourceBundle$Control", ctor: JBundleControl,
       if (baseName === null) rt.npe();
       return this.formats;
     },
-    "getFallbackLocale(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/Locale;": function (this: JBundleControl, baseName: string | null, locale: JLocale | null) {
+    "getFallbackLocale(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/Locale;": driven(function* (this: JBundleControl, baseName: string | null, locale: JLocale | null): Gen {
       if (baseName === null || locale === null) rt.npe();
-      return this.noFallback || locale!.lang === defaultLocale.lang && locale!.country === defaultLocale.country &&
-        locale!.script === defaultLocale.script && locale!.variant === defaultLocale.variant ? null : defaultLocale;
-    },
+      const fallback = yield defaultLocale();
+      return this.noFallback || (yield vcall(locale, "equals", "(Ljava/lang/Object;)Z", fallback)) ? null : fallback;
+    }),
   },
 });
 rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: { parent: "parent" }, methods: {
   "<init>()V": function () {},
-  "static getBundle(Ljava/lang/String;)Ljava/util/ResourceBundle;": (baseName: string) => getBundle(baseName, defaultLocale),
+  "static getBundle(Ljava/lang/String;)Ljava/util/ResourceBundle;": (baseName: string) => after(defaultLocale(), (locale) => getBundle(baseName, locale)),
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/ResourceBundle;": getBundle,
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;": (baseName: string, locale: JLocale, control: JBundleControl | null) => {
     if (control === null) rt.npe();

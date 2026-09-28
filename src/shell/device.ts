@@ -14,8 +14,7 @@ import { loadCode, startupDone } from "../jvm/codecache";
 import { parseBaselineProfile, precompileProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
-import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, type JLocaleList } from "../android/resnative";
-import { localeTag } from "../jvm/natives/jvalues";
+import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
 import { setAppHost, type AppHost } from "../android/apphost";
 import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { windowDim, windowParams } from "../android/window";
@@ -142,6 +141,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   // auto-stub it into the class cache for the rest of the run.
   rt.linkNatives((name, e) => console.warn("[link native]", name, e));
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");
+  await initDeviceLocales();
   await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
   const appCls = (attrStr(appNode!, "name") ?? "android.app.Application").replace(/^\./, pkg + ".").replace(/\./g, "/");
@@ -287,7 +287,7 @@ function applyNightMode(night: boolean): void {
 }
 function setApplicationLocales(pkg: string, locales: JLocaleList): void {
   const prefs = getPrefs(pkg, "__system_locales");
-  prefs.map.set("tags", locales.values.map(localeTag).join(","));
+  prefs.map.set("tags", locales.tags.join(","));
   prefs.persist();
   if (applyApplicationLocales(locales)) applyConfigChange(0x0004 | 0x2000); // CONFIG_LOCALE | CONFIG_LAYOUT_DIRECTION
 }

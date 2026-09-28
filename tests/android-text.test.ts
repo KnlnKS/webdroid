@@ -1,4 +1,5 @@
 import { expect, test, describe } from "bun:test";
+import { loadLibcore } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
@@ -29,6 +30,7 @@ describe("linkify", () => {
 describe("locale-span", () => {
   rt.linkNatives();
   test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {
+    await loadLibcore();
     const locales = await vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", "ja-JP,en-US");
     const span = await newObj("android/text/style/LocaleSpan", "(Landroid/os/LocaleList;)V", locales);
     expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
