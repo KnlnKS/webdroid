@@ -1,0 +1,702 @@
+{
+ "android/accounts/AbstractAccountAuthenticator": {
+  "updateCredentials(Landroid/accounts/AccountAuthenticatorResponse;Landroid/accounts/Account;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": 2
+ },
+ "android/animation/Animator": {
+  "getDuration()J": 9,
+  "getStartDelay()J": 9,
+  "isRunning()Z": 9,
+  "isStarted()Z": 1
+ },
+ "android/animation/FloatEvaluator": {
+  "evaluate(FLjava/lang/Number;Ljava/lang/Number;)Ljava/lang/Float;": 1
+ },
+ "android/animation/ValueAnimator": {
+  "setDuration(J)Landroid/animation/ValueAnimator;": 10
+ },
+ "android/app/Activity": {
+  "enterPictureInPictureMode(Landroid/app/PictureInPictureParams;)Z": 1,
+  "finish()V": 20,
+  "finishAffinity()V": 1,
+  "getIntent()Landroid/content/Intent;": 3,
+  "getMenuInflater()Landroid/view/MenuInflater;": 27,
+  "getResources()Landroid/content/res/Resources;": 26,
+  "onBackPressed()V": 33,
+  "onContextItemSelected(Landroid/view/MenuItem;)Z": 2,
+  "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;": 30,
+  "onSearchRequested()Z": 3,
+  "onTitleChanged(Ljava/lang/CharSequence;I)V": 27,
+  "setTitle(Ljava/lang/CharSequence;)V": 3,
+  "startActivity(Landroid/content/Intent;)V": 3,
+  "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": 2,
+  "startActivityForResult(Landroid/content/Intent;I)V": 30,
+  "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": 29
+ },
+ "android/app/AlertDialog$Builder": {
+  "create()Landroid/app/AlertDialog;": 2
+ },
+ "android/app/Dialog": {
+  "cancel()V": 26,
+  "dismiss()V": 27,
+  "onSearchRequested()Z": 1,
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": 20,
+  "onTrackballEvent(Landroid/view/MotionEvent;)Z": 1,
+  "setTitle(Ljava/lang/CharSequence;)V": 27,
+  "show()V": 12
+ },
+ "android/app/DialogFragment": {},
+ "android/app/Fragment": {
+  "onAttach(Landroid/app/Activity;)V": 4
+ },
+ "android/app/Notification$Builder": {
+  "addPerson(Landroid/app/Person;)Landroid/app/Notification$Builder;": 1,
+  "setCustomContentView(Landroid/widget/RemoteViews;)Landroid/app/Notification$Builder;": 1,
+  "setDefaults(I)Landroid/app/Notification$Builder;": 1,
+  "setGroup(Ljava/lang/String;)Landroid/app/Notification$Builder;": 1,
+  "setGroupAlertBehavior(I)Landroid/app/Notification$Builder;": 1,
+  "setLargeIcon(Landroid/graphics/drawable/Icon;)Landroid/app/Notification$Builder;": 1,
+  "setSmallIcon(I)Landroid/app/Notification$Builder;": 1,
+  "setSmallIcon(Landroid/graphics/drawable/Icon;)Landroid/app/Notification$Builder;": 1,
+  "setSound(Landroid/net/Uri;)Landroid/app/Notification$Builder;": 1,
+  "setTicker(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;": 1,
+  "setVibrate([J)Landroid/app/Notification$Builder;": 1
+ },
+ "android/app/ProgressDialog": {
+  "setIndeterminate(Z)V": 1,
+  "setMessage(Ljava/lang/CharSequence;)V": 1,
+  "setProgress(I)V": 1
+ },
+ "android/app/Service": {},
+ "android/content/BroadcastReceiver": {},
+ "android/content/Context": {
+  "getApplicationContext()Landroid/content/Context;": 6,
+  "getTheme()Landroid/content/res/Resources$Theme;": 27
+ },
+ "android/content/Intent": {},
+ "android/content/pm/PackageManager": {},
+ "android/content/pm/ResolveInfo": {},
+ "android/content/res/Resources": {
+  "getDrawable(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;": 10,
+  "getDrawableForDensity(IILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;": 10,
+  "getQuantityText(II)Ljava/lang/CharSequence;": 11,
+  "getResourceName(I)Ljava/lang/String;": 10,
+  "getString(I)Ljava/lang/String;": 11,
+  "getText(I)Ljava/lang/CharSequence;": 11,
+  "openRawResource(ILandroid/util/TypedValue;)Ljava/io/InputStream;": 10
+ },
+ "android/database/AbstractCursor": {
+  "getCount()I": 5,
+  "onMove(II)Z": 1
+ },
+ "android/graphics/Canvas": {
+  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": 15,
+  "drawPicture(Landroid/graphics/Picture;)V": 15,
+  "getClipBounds(Landroid/graphics/Rect;)Z": 15,
+  "getMatrix(Landroid/graphics/Matrix;)V": 15,
+  "isHardwareAccelerated()Z": 12,
+  "restore()V": 15,
+  "restoreToCount(I)V": 15,
+  "rotate(F)V": 15,
+  "save()I": 15,
+  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I": 15,
+  "saveLayerAlpha(Landroid/graphics/RectF;II)I": 15,
+  "scale(FF)V": 15,
+  "setMatrix(Landroid/graphics/Matrix;)V": 15,
+  "translate(FF)V": 15
+ },
+ "android/graphics/Matrix": {
+  "reset()V": 7
+ },
+ "android/graphics/Paint": {
+  "setTextLocales(Landroid/os/LocaleList;)V": 9
+ },
+ "android/graphics/Path": {},
+ "android/graphics/Picture": {
+  "endRecording()V": 1
+ },
+ "android/graphics/RectF": {},
+ "android/graphics/SurfaceTexture": {
+  "setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;Landroid/os/Handler;)V": 1
+ },
+ "android/graphics/drawable/AnimationDrawable": {},
+ "android/graphics/drawable/BitmapDrawable": {},
+ "android/graphics/drawable/ClipDrawable": {},
+ "android/graphics/drawable/ColorDrawable": {},
+ "android/graphics/drawable/Drawable": {
+  "getCallback()Landroid/graphics/drawable/Drawable$Callback;": 1,
+  "getColorFilter()Landroid/graphics/ColorFilter;": 28,
+  "getIntrinsicHeight()I": 30,
+  "getIntrinsicWidth()I": 30,
+  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": 25,
+  "invalidateSelf()V": 27,
+  "onBoundsChange(Landroid/graphics/Rect;)V": 30,
+  "onLayoutDirectionChanged(I)Z": 22,
+  "onLevelChange(I)Z": 29,
+  "onStateChange([I)Z": 28,
+  "setBounds(IIII)V": 11,
+  "setColorFilter(Landroid/graphics/ColorFilter;)V": 32,
+  "setTintBlendMode(Landroid/graphics/BlendMode;)V": 11,
+  "setTintList(Landroid/content/res/ColorStateList;)V": 29,
+  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": 29
+ },
+ "android/graphics/drawable/DrawableWrapper": {
+  "onBoundsChange(Landroid/graphics/Rect;)V": 7
+ },
+ "android/graphics/drawable/GradientDrawable": {},
+ "android/graphics/drawable/InsetDrawable": {},
+ "android/graphics/drawable/LayerDrawable": {},
+ "android/graphics/drawable/RippleDrawable": {},
+ "android/graphics/drawable/ShapeDrawable": {},
+ "android/graphics/drawable/StateListDrawable": {
+  "onStateChange([I)Z": 2,
+  "selectDrawable(I)Z": 1
+ },
+ "android/graphics/drawable/shapes/Shape": {
+  "onResize(FF)V": 6
+ },
+ "android/location/Criteria": {},
+ "android/location/Location": {
+  "hasBearingAccuracy()Z": 1,
+  "hasSpeedAccuracy()Z": 1,
+  "hasVerticalAccuracy()Z": 1
+ },
+ "android/media/MediaMetadataRetriever": {},
+ "android/media/MediaPlayer": {},
+ "android/net/UrlQuerySanitizer": {},
+ "android/opengl/GLSurfaceView": {},
+ "android/os/Binder": {
+  "getInterfaceDescriptor()Ljava/lang/String;": 2
+ },
+ "android/os/Handler": {
+  "sendMessageAtTime(Landroid/os/Message;J)Z": 11
+ },
+ "android/os/HandlerThread": {
+  "getLooper()Landroid/os/Looper;": 1,
+  "onLooperPrepared()V": 3
+ },
+ "android/os/RemoteCallbackList": {},
+ "android/preference/PreferenceFragment": {},
+ "android/service/media/MediaBrowserService": {},
+ "android/speech/tts/UtteranceProgressListener": {
+  "onError(Ljava/lang/String;)V": 5
+ },
+ "android/text/Annotation": {},
+ "android/text/Layout": {
+  "getLineCount()I": 1,
+  "getLineDescent(I)I": 1,
+  "getLineDirections(I)Landroid/text/Layout$Directions;": 1,
+  "getLineForOffset(I)I": 1,
+  "getLineMax(I)F": 1,
+  "getLineStart(I)I": 1,
+  "getLineTop(I)I": 1,
+  "getParagraphDirection(I)I": 1
+ },
+ "android/text/SpannableStringBuilder": {
+  "append(C)Landroid/text/SpannableStringBuilder;": 25,
+  "append(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;": 25,
+  "append(Ljava/lang/CharSequence;II)Landroid/text/SpannableStringBuilder;": 25,
+  "delete(II)Landroid/text/SpannableStringBuilder;": 25,
+  "insert(ILjava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;": 25,
+  "length()I": 2,
+  "replace(IILjava/lang/CharSequence;II)Landroid/text/SpannableStringBuilder;": 25
+ },
+ "android/text/method/BaseMovementMethod": {},
+ "android/text/style/SuperscriptSpan": {},
+ "android/text/style/TextAppearanceSpan": {},
+ "android/transition/Transition": {},
+ "android/transition/TransitionSet": {},
+ "android/util/LruCache": {
+  "entryRemoved(ZLjava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V": 17
+ },
+ "android/util/Property": {},
+ "android/util/SparseArray": {},
+ "android/util/SparseBooleanArray": {},
+ "android/util/SparseIntArray": {},
+ "android/view/ContextThemeWrapper": {},
+ "android/view/LayoutInflater": {
+  "cloneInContext(Landroid/content/Context;)Landroid/view/LayoutInflater;": 4
+ },
+ "android/view/Surface": {},
+ "android/view/SurfaceView": {},
+ "android/view/TextureView": {},
+ "android/view/View": {
+  "buildDrawingCache(Z)V": 1,
+  "computeHorizontalScrollExtent()I": 29,
+  "computeHorizontalScrollOffset()I": 29,
+  "computeHorizontalScrollRange()I": 29,
+  "computeVerticalScrollExtent()I": 29,
+  "computeVerticalScrollOffset()I": 29,
+  "computeVerticalScrollRange()I": 29,
+  "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": 27,
+  "dispatchDraw(Landroid/graphics/Canvas;)V": 31,
+  "dispatchDrawableHotspotChanged(FF)V": 2,
+  "dispatchHoverEvent(Landroid/view/MotionEvent;)Z": 26,
+  "dispatchRestoreInstanceState(Landroid/util/SparseArray;)V": 25,
+  "dispatchSaveInstanceState(Landroid/util/SparseArray;)V": 25,
+  "dispatchSetPressed(Z)V": 18,
+  "drawableStateChanged()V": 31,
+  "findFocus()Landroid/view/View;": 1,
+  "getBottomFadingEdgeStrength()F": 29,
+  "getBottomPaddingOffset()I": 1,
+  "getDrawingCache(Z)Landroid/graphics/Bitmap;": 3,
+  "getGlobalVisibleRect(Landroid/graphics/Rect;Landroid/graphics/Point;)Z": 20,
+  "getId()I": 1,
+  "getImportantForAccessibility()I": 1,
+  "getLayoutDirection()I": 2,
+  "getLeftFadingEdgeStrength()F": 4,
+  "getLeftPaddingOffset()I": 2,
+  "getLocationInWindow([I)V": 1,
+  "getMatrix()Landroid/graphics/Matrix;": 1,
+  "getPaddingBottom()I": 12,
+  "getPaddingLeft()I": 11,
+  "getPaddingRight()I": 12,
+  "getPaddingTop()I": 11,
+  "getRightFadingEdgeStrength()F": 4,
+  "getRightPaddingOffset()I": 2,
+  "getRotation()F": 1,
+  "getScaleX()F": 2,
+  "getScaleY()F": 2,
+  "getSolidColor()I": 3,
+  "getSuggestedMinimumHeight()I": 22,
+  "getSuggestedMinimumWidth()I": 22,
+  "getTopFadingEdgeStrength()F": 29,
+  "getTranslationX()F": 1,
+  "getTranslationY()F": 1,
+  "hasNestedScrollingParent()Z": 29,
+  "hasTransientState()Z": 1,
+  "hasWindowFocus()Z": 27,
+  "invalidate()V": 25,
+  "invalidateOutline()V": 1,
+  "isAttachedToWindow()Z": 25,
+  "isClickable()Z": 2,
+  "isEnabled()Z": 3,
+  "isFocused()Z": 27,
+  "isInTouchMode()Z": 27,
+  "isNestedScrollingEnabled()Z": 29,
+  "isPaddingOffsetRequired()Z": 2,
+  "isPressed()Z": 1,
+  "jumpDrawablesToCurrentState()V": 27,
+  "onCheckIsTextEditor()Z": 18,
+  "onConfigurationChanged(Landroid/content/res/Configuration;)V": 28,
+  "onCreateDrawableState(I)[I": 27,
+  "onDraw(Landroid/graphics/Canvas;)V": 32,
+  "onDrawForeground(Landroid/graphics/Canvas;)V": 4,
+  "onHoverEvent(Landroid/view/MotionEvent;)Z": 27,
+  "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V": 28,
+  "onRtlPropertiesChanged(I)V": 29,
+  "onScrollChanged(IIII)V": 29,
+  "onSetAlpha(I)Z": 1,
+  "onWindowFocusChanged(Z)V": 29,
+  "refreshDrawableState()V": 26,
+  "requestFitSystemWindows()V": 1,
+  "requestLayout()V": 31,
+  "restoreDefaultFocus()Z": 1,
+  "scrollTo(II)V": 29,
+  "sendAccessibilityEventUnchecked(Landroid/view/accessibility/AccessibilityEvent;)V": 24,
+  "setBackground(Landroid/graphics/drawable/Drawable;)V": 25,
+  "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": 30,
+  "setClickable(Z)V": 14,
+  "setFrame(IIII)Z": 27,
+  "setLayerPaint(Landroid/graphics/Paint;)V": 1,
+  "setPressed(Z)V": 23,
+  "setTranslationX(F)V": 21,
+  "setTranslationY(F)V": 21,
+  "setTranslationZ(F)V": 18,
+  "stopNestedScroll()V": 29,
+  "unscheduleDrawable(Landroid/graphics/drawable/Drawable;)V": 9,
+  "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": 30
+ },
+ "android/view/ViewGroup": {
+  "addView(Landroid/view/View;I)V": 29,
+  "addView(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": 31,
+  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": 22,
+  "dispatchNestedFling(FFZ)Z": 29,
+  "dispatchNestedPreFling(FF)Z": 29,
+  "dispatchNestedPreScroll(II[I[I)Z": 29,
+  "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": 31,
+  "getChildAt(I)Landroid/view/View;": 3,
+  "getChildCount()I": 15,
+  "hasFocus()Z": 27,
+  "invalidate()V": 10,
+  "isAttachedToWindow()Z": 25,
+  "isChildrenDrawingOrderEnabled()Z": 1,
+  "isFocused()Z": 27,
+  "onInterceptHoverEvent(Landroid/view/MotionEvent;)Z": 2,
+  "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": 31,
+  "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z": 31,
+  "removeAllViewsInLayout()V": 29,
+  "requestChildFocus(Landroid/view/View;Landroid/view/View;)V": 30,
+  "requestLayout()V": 31,
+  "stopNestedScroll()V": 29
+ },
+ "android/view/ViewGroup$MarginLayoutParams": {},
+ "android/view/Window": {
+  "getDecorView()Landroid/view/View;": 1,
+  "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": 1
+ },
+ "android/view/animation/Animation": {},
+ "android/view/animation/AnimationSet": {},
+ "android/view/inputmethod/BaseInputConnection": {
+  "beginBatchEdit()Z": 1,
+  "endBatchEdit()Z": 1,
+  "getEditable()Landroid/text/Editable;": 1
+ },
+ "android/widget/AbsListView": {
+  "isInTouchMode()Z": 27,
+  "layoutChildren()V": 1,
+  "lookForSelectablePosition(IZ)I": 7,
+  "requestLayout()V": 1,
+  "setSelector(Landroid/graphics/drawable/Drawable;)V": 27
+ },
+ "android/widget/AbsSeekBar": {},
+ "android/widget/AbsSpinner": {
+  "requestLayout()V": 2
+ },
+ "android/widget/AdapterView": {
+  "getAdapter()Landroid/widget/Adapter;": 12
+ },
+ "android/widget/ArrayAdapter": {
+  "notifyDataSetChanged()V": 1
+ },
+ "android/widget/AutoCompleteTextView": {
+  "isPopupShowing()Z": 8
+ },
+ "android/widget/CheckedTextView": {},
+ "android/widget/CompoundButton": {
+  "setDefaultStateDescription()V": 3
+ },
+ "android/widget/EdgeEffect": {
+  "finish()V": 2,
+  "onPull(FF)V": 15
+ },
+ "android/widget/EditText": {
+  "getText()Landroid/text/Editable;": 25
+ },
+ "android/widget/FrameLayout": {
+  "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/widget/FrameLayout$LayoutParams;": 19,
+  "getSuggestedMinimumHeight()I": 7,
+  "getSuggestedMinimumWidth()I": 7,
+  "requestLayout()V": 29
+ },
+ "android/widget/GridLayout": {},
+ "android/widget/GridView": {
+  "getAdapter()Landroid/widget/ListAdapter;": 12
+ },
+ "android/widget/HorizontalScrollView": {
+  "requestLayout()V": 4,
+  "scrollTo(II)V": 3
+ },
+ "android/widget/ImageView": {
+  "invalidate()V": 9,
+  "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": 9,
+  "setImageDrawable(Landroid/graphics/drawable/Drawable;)V": 27,
+  "setScaleType(Landroid/widget/ImageView$ScaleType;)V": 12
+ },
+ "android/widget/LinearLayout": {
+  "generateDefaultLayoutParams()Landroid/widget/LinearLayout$LayoutParams;": 20,
+  "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/widget/LinearLayout$LayoutParams;": 22,
+  "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/widget/LinearLayout$LayoutParams;": 20,
+  "requestLayout()V": 1
+ },
+ "android/widget/ListView": {
+  "hasFocus()Z": 27,
+  "lookForSelectablePosition(IZ)I": 7,
+  "requestLayout()V": 1
+ },
+ "android/widget/OverScroller": {},
+ "android/widget/PopupMenu": {},
+ "android/widget/PopupWindow": {
+  "isShowing()Z": 1,
+  "showAsDropDown(Landroid/view/View;II)V": 11,
+  "showAsDropDown(Landroid/view/View;III)V": 12
+ },
+ "android/widget/ProgressBar": {
+  "setInterpolator(Landroid/view/animation/Interpolator;)V": 1,
+  "setProgress(I)V": 18
+ },
+ "android/widget/RadioButton": {},
+ "android/widget/RadioGroup": {},
+ "android/widget/RatingBar": {},
+ "android/widget/RelativeLayout": {
+  "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/widget/RelativeLayout$LayoutParams;": 3,
+  "requestLayout()V": 1
+ },
+ "android/widget/RelativeLayout$LayoutParams": {},
+ "android/widget/ScrollView": {
+  "getNestedScrollAxes()I": 1,
+  "scrollTo(II)V": 3,
+  "stopNestedScroll()V": 1
+ },
+ "android/widget/Scroller": {},
+ "android/widget/SimpleExpandableListAdapter": {},
+ "android/widget/Spinner": {},
+ "android/widget/Switch": {},
+ "android/widget/TabHost": {},
+ "android/widget/TextView": {
+  "getCompoundPaddingLeft()I": 27,
+  "getCompoundPaddingRight()I": 25,
+  "getIncludeFontPadding()Z": 1,
+  "getLayoutDirection()I": 1,
+  "getLineHeight()I": 1,
+  "getPaint()Landroid/text/TextPaint;": 1,
+  "getTextDirectionHeuristic()Landroid/text/TextDirectionHeuristic;": 2,
+  "getTextSize()F": 1,
+  "invalidate()V": 15,
+  "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": 3,
+  "isSuggestionsEnabled()Z": 1,
+  "requestLayout()V": 2,
+  "setClickable(Z)V": 4,
+  "setCompoundDrawables(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": 28,
+  "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": 28,
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": 28,
+  "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": 28,
+  "setError(Ljava/lang/CharSequence;Landroid/graphics/drawable/Drawable;)V": 1,
+  "setPadding(IIII)V": 27,
+  "setSingleLine(Z)V": 17,
+  "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": 20,
+  "setTextAppearance(Landroid/content/Context;I)V": 28,
+  "setTextSize(IF)V": 26,
+  "setTypeface(Landroid/graphics/Typeface;)V": 5
+ },
+ "android/widget/ToggleButton": {},
+ "android/widget/VideoView": {},
+ "android/widget/ViewAnimator": {},
+ "android/widget/ViewSwitcher": {},
+ "java/io/BufferedReader": {},
+ "java/io/BufferedWriter": {},
+ "java/io/ByteArrayOutputStream": {
+  "write([BII)V": 11
+ },
+ "java/io/FileInputStream": {
+  "read([BII)I": 4
+ },
+ "java/io/FileOutputStream": {
+  "write([BII)V": 4
+ },
+ "java/io/FilterOutputStream": {
+  "flush()V": 12
+ },
+ "java/io/InputStream": {
+  "read([BII)I": 31
+ },
+ "java/io/ObjectInputStream": {},
+ "java/io/ObjectOutputStream": {},
+ "java/io/OutputStream": {
+  "write([BII)V": 31
+ },
+ "java/io/PrintStream": {},
+ "java/io/PrintWriter": {
+  "write(I)V": 1,
+  "write(Ljava/lang/String;)V": 1
+ },
+ "java/io/PushbackInputStream": {},
+ "java/io/PushbackReader": {},
+ "java/io/RandomAccessFile": {
+  "getFilePointer()J": 1,
+  "length()J": 1,
+  "read()I": 1,
+  "read([BII)I": 1,
+  "seek(J)V": 1,
+  "write(I)V": 1,
+  "write([BII)V": 1
+ },
+ "java/io/Reader": {
+  "read([CII)I": 21
+ },
+ "java/io/Writer": {
+  "append(C)Ljava/io/Writer;": 14,
+  "append(Ljava/lang/CharSequence;)Ljava/io/Writer;": 19,
+  "append(Ljava/lang/CharSequence;II)Ljava/io/Writer;": 21
+ },
+ "java/lang/Object": {
+  "hashCode()I": 33
+ },
+ "java/lang/Thread": {
+  "getState()Ljava/lang/Thread$State;": 1
+ },
+ "java/lang/ThreadLocal": {},
+ "java/lang/Throwable": {
+  "printStackTrace(Ljava/io/PrintStream;)V": 18
+ },
+ "java/lang/ref/Reference": {},
+ "java/lang/ref/ReferenceQueue": {},
+ "java/math/BigDecimal": {
+  "toString()Ljava/lang/String;": 1
+ },
+ "java/net/HttpURLConnection": {
+  "getHeaderField(I)Ljava/lang/String;": 8,
+  "getInputStream()Ljava/io/InputStream;": 9,
+  "getResponseCode()I": 9
+ },
+ "java/net/ServerSocket": {},
+ "java/net/Socket": {
+  "connect(Ljava/net/SocketAddress;I)V": 7,
+  "getInetAddress()Ljava/net/InetAddress;": 7,
+  "getLocalAddress()Ljava/net/InetAddress;": 7,
+  "getLocalPort()I": 7,
+  "getPort()I": 7,
+  "isBound()Z": 7,
+  "isClosed()Z": 7,
+  "isConnected()Z": 7,
+  "isInputShutdown()Z": 7,
+  "isOutputShutdown()Z": 7
+ },
+ "java/net/URLConnection": {
+  "getContentLengthLong()J": 3,
+  "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": 10,
+  "getHeaderFieldLong(Ljava/lang/String;J)J": 4
+ },
+ "java/nio/channels/FileLock": {
+  "release()V": 4
+ },
+ "java/nio/charset/CharsetDecoder": {
+  "decodeLoop(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;": 4,
+  "implFlush(Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;": 1,
+  "implReset()V": 1
+ },
+ "java/nio/charset/CharsetEncoder": {
+  "encodeLoop(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;": 4,
+  "implReset()V": 1,
+  "isLegalReplacement([B)Z": 3
+ },
+ "java/nio/file/spi/FileSystemProvider": {
+  "delete(Ljava/nio/file/Path;)V": 4,
+  "newByteChannel(Ljava/nio/file/Path;Ljava/util/Set;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/channels/SeekableByteChannel;": 4
+ },
+ "java/security/KeyPairGenerator": {
+  "generateKeyPair()Ljava/security/KeyPair;": 7,
+  "initialize(ILjava/security/SecureRandom;)V": 7,
+  "initialize(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": 7
+ },
+ "java/security/MessageDigest": {
+  "clone()Ljava/lang/Object;": 1,
+  "engineDigest()[B": 2,
+  "engineGetDigestLength()I": 1,
+  "engineReset()V": 2,
+  "engineUpdate(B)V": 2,
+  "engineUpdate([BII)V": 2
+ },
+ "java/security/Signature": {
+  "engineInitSign(Ljava/security/PrivateKey;)V": 1,
+  "engineInitSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": 1,
+  "engineInitVerify(Ljava/security/PublicKey;)V": 1,
+  "engineSetParameter(Ljava/security/spec/AlgorithmParameterSpec;)V": 1,
+  "engineSign()[B": 1,
+  "engineUpdate(B)V": 1,
+  "engineUpdate([BII)V": 1,
+  "engineVerify([B)Z": 1
+ },
+ "java/util/AbstractCollection": {
+  "iterator()Ljava/util/Iterator;": 33,
+  "size()I": 33
+ },
+ "java/util/AbstractList": {
+  "iterator()Ljava/util/Iterator;": 31,
+  "listIterator()Ljava/util/ListIterator;": 29,
+  "size()I": 31
+ },
+ "java/util/AbstractMap": {
+  "entrySet()Ljava/util/Set;": 31,
+  "size()I": 30
+ },
+ "java/util/AbstractQueue": {
+  "add(Ljava/lang/Object;)Z": 7,
+  "peek()Ljava/lang/Object;": 11,
+  "poll()Ljava/lang/Object;": 11
+ },
+ "java/util/AbstractSequentialList": {
+  "listIterator(I)Ljava/util/ListIterator;": 13
+ },
+ "java/util/AbstractSet": {
+  "iterator()Ljava/util/Iterator;": 31,
+  "size()I": 31
+ },
+ "java/util/ArrayDeque": {},
+ "java/util/ArrayList": {
+  "add(ILjava/lang/Object;)V": 7,
+  "add(Ljava/lang/Object;)Z": 14,
+  "indexOf(Ljava/lang/Object;)I": 11
+ },
+ "java/util/BitSet": {},
+ "java/util/EnumMap": {},
+ "java/util/Hashtable": {
+  "entrySet()Ljava/util/Set;": 1,
+  "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": 1,
+  "size()I": 1
+ },
+ "java/util/IdentityHashMap": {},
+ "java/util/LinkedHashMap": {},
+ "java/util/LinkedList": {
+  "add(Ljava/lang/Object;)Z": 2,
+  "addAll(ILjava/util/Collection;)Z": 1,
+  "addFirst(Ljava/lang/Object;)V": 1,
+  "addLast(Ljava/lang/Object;)V": 1,
+  "indexOf(Ljava/lang/Object;)I": 1,
+  "remove(Ljava/lang/Object;)Z": 1
+ },
+ "java/util/Observable": {},
+ "java/util/PriorityQueue": {},
+ "java/util/Properties": {},
+ "java/util/Random": {
+  "next(I)I": 15,
+  "nextDouble()D": 15
+ },
+ "java/util/StringTokenizer": {
+  "hasMoreTokens()Z": 4
+ },
+ "java/util/TreeMap": {},
+ "java/util/TreeSet": {},
+ "java/util/WeakHashMap": {
+  "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": 3
+ },
+ "java/util/concurrent/AbstractExecutorService": {
+  "execute(Ljava/lang/Runnable;)V": 19,
+  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;": 16,
+  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": 16
+ },
+ "java/util/concurrent/ConcurrentHashMap": {
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": 2
+ },
+ "java/util/concurrent/ConcurrentLinkedQueue": {
+  "offer(Ljava/lang/Object;)Z": 4
+ },
+ "java/util/concurrent/CopyOnWriteArrayList": {
+  "indexOf(Ljava/lang/Object;)I": 3,
+  "remove(I)Ljava/lang/Object;": 1,
+  "size()I": 2
+ },
+ "java/util/concurrent/FutureTask": {
+  "set(Ljava/lang/Object;)V": 2,
+  "setException(Ljava/lang/Throwable;)V": 8
+ },
+ "java/util/concurrent/LinkedBlockingQueue": {},
+ "java/util/concurrent/ScheduledThreadPoolExecutor": {
+  "decorateTask(Ljava/lang/Runnable;Ljava/util/concurrent/RunnableScheduledFuture;)Ljava/util/concurrent/RunnableScheduledFuture;": 2,
+  "decorateTask(Ljava/util/concurrent/Callable;Ljava/util/concurrent/RunnableScheduledFuture;)Ljava/util/concurrent/RunnableScheduledFuture;": 2,
+  "schedule(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;": 2,
+  "schedule(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;": 2
+ },
+ "java/util/concurrent/ThreadPoolExecutor": {
+  "allowsCoreThreadTimeOut()Z": 1,
+  "remove(Ljava/lang/Runnable;)Z": 1
+ },
+ "java/util/zip/DeflaterOutputStream": {},
+ "javax/net/ssl/HttpsURLConnection": {
+  "getLocalCertificates()[Ljava/security/cert/Certificate;": 4,
+  "getServerCertificates()[Ljava/security/cert/Certificate;": 4
+ },
+ "javax/net/ssl/SSLSocket": {
+  "getEnabledCipherSuites()[Ljava/lang/String;": 7,
+  "getEnabledProtocols()[Ljava/lang/String;": 7,
+  "getNeedClientAuth()Z": 7,
+  "getWantClientAuth()Z": 7,
+  "setEnabledCipherSuites([Ljava/lang/String;)V": 7,
+  "setEnabledProtocols([Ljava/lang/String;)V": 7,
+  "setNeedClientAuth(Z)V": 7,
+  "setWantClientAuth(Z)V": 7
+ },
+ "org/json/JSONArray": {},
+ "org/json/JSONObject": {
+  "put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": 4
+ }
+}

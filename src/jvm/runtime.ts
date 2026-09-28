@@ -1124,7 +1124,8 @@ export const rt = new Runtime();
  *  It forwards every argument: caller-sensitive natives receive the caller's Runtime past their
  *  declared (often defaulted) parameters. */
 export function driven<A extends unknown[], T>(g: (this: any, ...a: A) => Gen<T>): (this: any, ...a: A) => Driven<T> {
-  return function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)) as Driven<T>; };
+  // $g: the generator, whose source the override-bypass lint reads
+  return Object.assign(function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)) as Driven<T>; }, { $g: g });
 }
 /** A driven generator's result: its value or a Promise of it (unknown for an untyped `Gen`). */
 type Driven<T> = unknown extends T ? unknown : T | Promise<T>;

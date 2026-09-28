@@ -25,6 +25,7 @@
     "fwscan": "bun scripts/fwscan.ts",
     "fwtest": "bun scripts/fwtest.ts",
     "desccheck": "bun scripts/desccheck.ts",
+    "bypass": "bun scripts/bypass.ts",
     "fuzz": "bun scripts/fuzz.ts",
     "e2e:setup": "bash tests/e2e/setup-avd.sh",
     "e2e:boot": "bash tests/e2e/boot-emulator.sh",
