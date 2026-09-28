@@ -1,5 +1,6 @@
 // Android binary XML (AXML) + shared string-pool / Res_value bits (also used by arsc.ts)
 import { u8 } from "../jvm/abi";
+import { perf } from "../perf";
 
 export const TV = { // typed value dataType
   NULL: 0x00, REFERENCE: 0x01, ATTRIBUTE: 0x02, STRING: 0x03, FLOAT: 0x04,
@@ -124,6 +125,10 @@ function mkEvent(type: number, node: XmlNode | null, depth: number, line: number
  *  the pool indices and the TEXT and line-number chunks the tree drops, for the XmlBlock
  *  delegates. It is off by default because the inflater walks this on every layout. */
 export function parseAXMLDoc(bytes: Uint8Array, events = false): XmlDoc {
+  const started = performance.now();
+  try { return parseChunks(bytes, events); } finally { perf.resParseMs += performance.now() - started; }
+}
+function parseChunks(bytes: Uint8Array, events: boolean): XmlDoc {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (view.getUint16(0, true) !== 0x0003) throw new Error("not AXML");
   const fileSize = view.getUint32(4, true);

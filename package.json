@@ -29,6 +29,7 @@
     "e2e:boot": "bash tests/e2e/boot-emulator.sh",
     "e2e": "bun tests/e2e/run.ts",
     "textcmp": "bun scripts/textcmp.ts",
+    "lat": "bun scripts/lat/run.ts",
     "build:core": "bun scripts/build-core.ts"
   },
   "dependencies": {

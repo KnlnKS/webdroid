@@ -22,6 +22,8 @@ export const perf = {
   layoutErrors: 0, drawErrors: 0,
   // wall time inside input dispatch, and lazy class compilation — both land ON the tap.
   inputMs: 0, compileMs: 0, classesCompiled: 0,
+  // outermost static initializers' synchronous work, and resource tables and XML parsed
+  clinitMs: 0, resParseMs: 0,
   // main-looper jobs run (Handler messages, frames, input, lifecycle)
   mainJobs: 0,
   // leaf method bodies that cannot suspend (no call, static access, monitor or allocation)

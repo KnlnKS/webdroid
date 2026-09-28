@@ -4,6 +4,7 @@
 import { StringPool } from "./axml";
 import { device as dev } from "../shell/config";
 import { u8 } from "../jvm/abi";
+import { perf } from "../perf";
 
 interface ResEntry {
   key: string;                     // entry name
@@ -63,7 +64,11 @@ export class Arsc {
   private profiles = new Map<string, ResourceProfile>();
   private active: ResourceProfile | null = null;
 
-  constructor(bytes: Uint8Array, readonly files: Files = () => null) { this.parse(bytes, false); }
+  constructor(bytes: Uint8Array, readonly files: Files = () => null) {
+    const started = performance.now();
+    this.parse(bytes, false);
+    perf.resParseMs += performance.now() - started;
+  }
 
   /** A config split's table: the same package, carrying only its configs' entries. Its value
    *  strings are appended past the base pool so every entry keeps indexing one pool. */
