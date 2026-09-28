@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { parkTimeout } from "../yield";
-import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException, dispatchUncaught, mainThread } from "./jlang";
+import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, curThread, park, defineException, dispatchUncaught, mainThread } from "./jlang";
 import { JList, newArrayList, toJsArray } from "./jutil";
 import { splitSig, jarray } from "../abi";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../../guest-clock";
@@ -118,11 +118,6 @@ function scheduleDrain(ex: JExecutor) {
 }
 /** an app's ThreadPoolExecutor subclass sees each task through beforeExecute/afterExecute */
 const hooked = (ex: JExecutor) => !(ex.constructor as { $i?: { native?: boolean } }).$i?.native;
-function onThread<T>(thread: JThread, f: () => T): T {
-  const prev = curThread;
-  setCurThread(thread);
-  try { return f(); } finally { setCurThread(prev); }
-}
 const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]): Gen {
   const { task, f, method, desc } = entry;
   try {
@@ -136,8 +131,8 @@ const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["worke
     worker.thread.alive = 1;
     worker.thread.interrupted = 0;
     f.thread = worker.thread;
-    if (hooked(ex)) yield onThread(worker.thread, () => vcall(ex, "beforeExecute", "(Ljava/lang/Thread;Ljava/lang/Runnable;)V", worker.thread, task));
-    const value = yield onThread(worker.thread, () => vcall(task, method, desc));
+    if (hooked(ex)) yield vcallOn(worker.thread, ex, "beforeExecute", "(Ljava/lang/Thread;Ljava/lang/Runnable;)V", worker.thread, task);
+    const value = yield vcallOn(worker.thread, task, method, desc);
     if (!f.cancelled && value !== undefined) f.value = value;
   } catch (e) {
     if (!f.cancelled) f.error = rt.jx(e);
@@ -145,7 +140,7 @@ const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["worke
     ex.completed++;
     // a throwing hook ends that worker on a device; here the pool's accounting must still finish
     if (hooked(ex) && worker.thread?.alive) {
-      try { yield onThread(worker.thread, () => vcall(ex, "afterExecute", "(Ljava/lang/Runnable;Ljava/lang/Throwable;)V", task, f.error ?? null)); }
+      try { yield vcallOn(worker.thread, ex, "afterExecute", "(Ljava/lang/Runnable;Ljava/lang/Throwable;)V", task, f.error ?? null); }
       catch (e) { console.error("[executor] afterExecute", rt.jx(e)); }
     }
     release(ex, f); worker.busy = false;
@@ -256,7 +251,7 @@ function reject(ex: JExecutor, task: unknown): unknown {
   throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", ex.shut ? "executor shut down" : "executor saturated");
 }
 function execute(this: JExecutor, r: unknown): unknown {
-  if (r == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (r == null) rt.npe();
   if (this.shut) return reject(this, r);
   const enqueue = (queued = false) => { submit(this, r, "run", "()V", 0, queued, !this.scheduled); };
   if (!this.pool || this.pending < this.coreSize || this.pending < this.workers.length) return enqueue();
@@ -287,7 +282,7 @@ const executorMethods: NativeSpec["methods"] = {
     return submitTask(this, "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
   },
   "invokeAll(Ljava/util/Collection;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: JList): Gen {
-    if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (tasks == null) rt.npe();
     const futures = newArrayList();
     for (const task of tasks.a) futures.a.push(yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
     for (const future of futures.a) {
@@ -296,7 +291,7 @@ const executorMethods: NativeSpec["methods"] = {
     return futures;
   }),
   "invokeAll(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: JList, timeout: bigint, unit: JTimeUnit): Gen {
-    if (tasks == null || unit == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (tasks == null || unit == null) rt.npe();
     const futures = newArrayList();
     for (const task of tasks.a) futures.a.push(yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
     const deadline = guestNow() + Number(timeout) * unit.ms;
@@ -346,7 +341,7 @@ const executorMethods: NativeSpec["methods"] = {
     return 1;
   }),
   "invokeAny(Ljava/util/Collection;)Ljava/lang/Object;": driven(function* (this: JExecutor, tasks: unknown): Gen {
-    if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (tasks == null) rt.npe();
     const list: unknown[] = yield toJsArray(tasks);
     if (!list.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
     let failure: unknown;
@@ -374,7 +369,7 @@ function taskForCallable(callable: unknown): JFutureTask {
   const task = new JFutureTask(); armTask(task, callable); return task;
 }
 function submitTask(ex: JExecutor, desc: string, task: unknown, ...args: unknown[]): unknown {
-  if (task == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (task == null) rt.npe();
   const thread = curThread;
   return after(vcallOn(thread, ex, "newTaskFor", desc, task, ...args), future =>
     after(vcallOn(thread, ex, "execute", "(Ljava/lang/Runnable;)V", future), () => future));
@@ -476,7 +471,7 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
         return this.factory ??= vcall(rt.link("java/util/concurrent/Executors").ctor, "defaultThreadFactory", "()Ljava/util/concurrent/ThreadFactory;");
       },
       "setThreadFactory(Ljava/util/concurrent/ThreadFactory;)V": function (this: JExecutor, factory: unknown) {
-        if (!factory) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        if (!factory) rt.npe();
         this.factory = factory;
       },
       "prestartCoreThread()Z": function (this: JExecutor) {
@@ -515,7 +510,7 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       },
       "purge()V": function () {},
       "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, handler: unknown) {
-        if (!handler) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        if (!handler) rt.npe();
         this.rejectionHandler = handler;
       },
       "getRejectedExecutionHandler()Ljava/util/concurrent/RejectedExecutionHandler;": function (this: JExecutor) {
@@ -556,7 +551,7 @@ function mkScheduled(count = 1, factory: unknown = null): JExecutor {
 // invoke newThread()/call() themselves, so the auto-stubbed interfaces are not enough.
 class JRunnableCallable extends JObj { r: unknown = null; result: unknown = null; }
 function runnableCallable(r: unknown, result: unknown = null): JRunnableCallable {
-  if (r == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (r == null) rt.npe();
   rt.link("webdroid/RunnableCallable");
   const c = new JRunnableCallable();
   c.r = r; c.result = result;
@@ -601,7 +596,7 @@ rt.register({
     "static newSingleThreadScheduledExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": (factory: unknown) => mkScheduled(1, factory),
     "static unconfigurableExecutorService(Ljava/util/concurrent/ExecutorService;)Ljava/util/concurrent/ExecutorService;": (e: unknown) => e,
     "static unconfigurableScheduledExecutorService(Ljava/util/concurrent/ScheduledExecutorService;)Ljava/util/concurrent/ScheduledExecutorService;": (executor: unknown) => {
-      if (executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (executor == null) rt.npe();
       rt.link("webdroid/DelegatedScheduledExecutor");
       const wrapper = new JDelegatedExecutor(); wrapper.delegate = executor; return wrapper;
     },
@@ -640,7 +635,6 @@ for (const [n, run] of [["AbortPolicy", 0], ["CallerRunsPolicy", 1], ["DiscardPo
 defineException("java/util/concurrent/RejectedExecutionException", "java/lang/RuntimeException");
 defineException("java/util/concurrent/TimeoutException", "java/lang/Exception");
 defineException("java/util/concurrent/ExecutionException", "java/lang/Exception");
-defineException("java/util/concurrent/CompletionException", "java/lang/RuntimeException");
 defineException("java/util/concurrent/CancellationException", "java/lang/IllegalStateException");
 
 
@@ -649,7 +643,7 @@ class JFutureTask extends JFuture {
   wake: (v: unknown) => void = () => {};
 }
 function armTask(t: JFutureTask, callable: unknown) {
-  if (callable == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (callable == null) rt.npe();
   t.callable = callable;
   t.promise = new Promise((r) => (t.wake = r));
 }

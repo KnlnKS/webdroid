@@ -168,7 +168,7 @@ function atomicGroups(src: string): string {
   };
   return rewrite(0, src.length);
 }
-/** Java regex source + JS flags → RegExp, memoised: String.matches and Matcher rebuild theirs per call.
+/** Java regex source + JS flags → RegExp, memoised: String.matches and Pattern.compile would rebuild theirs per call.
  *  Callers that use sticky/global flags must set lastIndex before every exec. */
 export function javaRegex(source: string, flags: string): RegExp {
   const key = flags + "/" + source;
@@ -190,7 +190,7 @@ export function javaRegex(source: string, flags: string): RegExp {
   }
   return re;
 }
-/** String.matches / Pattern.matches: whole-input match, invalid pattern → false */
+/** String.matches: whole-input match, invalid pattern → false */
 function javaMatches(p: string, s: string): number {
   try { return javaRegex("^(?:" + p + ")$", "su").test(s) ? 1 : 0; } catch { return 0; }
 }
@@ -1302,7 +1302,7 @@ function parseIntJ(s: string, radix = 10): number {
 }
 /** Integer/Long/Short/Byte.decode: a sign, then 0x/0X/# for hex, a leading 0 for octal, else decimal */
 function decodeJ(s: string, min: bigint, max: bigint): bigint {
-  if (s == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (s == null) rt.npe();
   if (!s.length) throw rt.mkThrowable("java/lang/NumberFormatException", "Zero length string");
   const neg = s[0] === "-";
   let i = neg || s[0] === "+" ? 1 : 0, radix = 10;
@@ -2183,7 +2183,7 @@ rt.register({
     "remove()V": function (this: JThreadLocal) { curThread.locals.delete(this); },
     "initialValue()Ljava/lang/Object;": function () { return null; },
     "static withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;": (sup: unknown) => {
-      if (sup == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (sup == null) rt.npe();
       const t = rt.make("webdroid/SuppliedThreadLocal");
       t.supplier = sup;
       return t;

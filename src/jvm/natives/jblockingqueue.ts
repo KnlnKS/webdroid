@@ -10,7 +10,7 @@ class JBlockingQueue extends JList {
   takers: ((v: unknown) => void)[] = [];
   putters: { value: unknown; done: (accepted: number) => void }[] = [];
   enqueue(value: unknown): number {
-    if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (value == null) rt.npe();
     const taker = this.takers.shift();
     if (taker) { taker(value); return 1; }
     if (this.a.length + this.reserved >= this.capacity) return 0;
@@ -64,7 +64,7 @@ const queueCapacity = function (this: JBlockingQueue, capacity: number): void {
   this.capacity = capacity;
 };
 async function drainTo(this: JBlockingQueue, collection: unknown, max = 0x7fffffff) {
-  if (collection == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (collection == null) rt.npe();
   if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
   if (max <= 0) return 0;
   const batch = this.a.splice(0, max);

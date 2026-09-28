@@ -21,7 +21,7 @@ class JReadOnlyIterator extends JObj {
 }
 class JReadOnlyEntry extends JObj { delegate: unknown = null; }
 
-const unsupported = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+export const uoe = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
 
 /** Forward to the delegate; a synchronized wrapper holds its mutex across the call. */
 function call(wrapper: JWrapper, name: string, descriptor: string, args: unknown[]): unknown {
@@ -51,7 +51,7 @@ const names: Record<Mode, Record<Kind, string>> = {
 };
 
 function wrap(value: unknown, mode: Mode, kind: Kind, mutex?: object, entries = false): JWrapper {
-  if (value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (value === null) rt.npe();
   const name = mode === "unmodifiable" && kind === "list" && rt.iof(value, "java/util/RandomAccess")
     ? "java/util/Collections$UnmodifiableRandomAccessList" : names[mode][kind];
   const wrapper: JWrapper = rt.make(name);
@@ -86,7 +86,7 @@ function forwards(signatures: readonly string[], transforms: Record<string, Tran
   }));
 }
 function writes(signatures: readonly string[], mode: Mode): Methods {
-  if (mode === "unmodifiable") return Object.fromEntries(signatures.map((signature) => [signature, unsupported]));
+  if (mode === "unmodifiable") return Object.fromEntries(signatures.map((signature) => [signature, uoe]));
   return forwards(signatures);
 }
 
@@ -191,7 +191,7 @@ rt.register({
     },
     "nextIndex()I": function (this: JReadOnlyIterator) { return vcall(this.delegate, "nextIndex", "()I"); },
     "previousIndex()I": function (this: JReadOnlyIterator) { return vcall(this.delegate, "previousIndex", "()I"); },
-    "remove()V": unsupported, "set(Ljava/lang/Object;)V": unsupported, "add(Ljava/lang/Object;)V": unsupported,
+    "remove()V": uoe, "set(Ljava/lang/Object;)V": uoe, "add(Ljava/lang/Object;)V": uoe,
   },
 });
 rt.register({
@@ -199,7 +199,7 @@ rt.register({
   methods: {
     "getKey()Ljava/lang/Object;": function (this: JReadOnlyEntry) { return vcall(this.delegate, "getKey", "()Ljava/lang/Object;"); },
     "getValue()Ljava/lang/Object;": function (this: JReadOnlyEntry) { return vcall(this.delegate, "getValue", "()Ljava/lang/Object;"); },
-    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": unsupported,
+    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": uoe,
     "equals(Ljava/lang/Object;)Z": function (this: JReadOnlyEntry, other: unknown) {
       return vcall(this.delegate, "equals", "(Ljava/lang/Object;)Z", other instanceof JReadOnlyEntry ? other.delegate : other);
     },

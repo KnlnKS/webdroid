@@ -6,10 +6,9 @@ import { JObj, rt, type NativeSpec, type ClassInfo, driven, without, type Gen } 
 import { defaultLocale, JLocale } from "./jvalues";
 import {
   synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet, synchronizedSortedMap,
-  unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet,
+  unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet, uoe,
 } from "./jwrappers";
 
-const uoe = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -588,7 +587,7 @@ rt.register({
 });
 class JImmutableList extends JList {}
 function immutableList(items: unknown[]): JImmutableList {
-  if (items.some((item) => item === null)) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (items.some((item) => item === null)) rt.npe();
   const result = new JImmutableList();
   result.a = items.slice();
   return result;
@@ -616,7 +615,7 @@ rt.register({
 });
 const listFactories: Methods = {
   "static copyOf(Ljava/util/Collection;)Ljava/util/List;": driven(function* (collection: unknown): Gen {
-    if (collection === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (collection === null) rt.npe();
     return immutableList(yield toJsArray(collection));
   }),
   "static of([Ljava/lang/Object;)Ljava/util/List;": (items: unknown[]) => immutableList(items),
@@ -633,7 +632,7 @@ function vectorMethods(base: Methods): Methods {
   };
   return {
     "copyInto([Ljava/lang/Object;)V": function (this: JList, out: unknown[]) {
-      if (out === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (out === null) rt.npe();
       if (out.length < this.a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `length=${out.length}; index=${out.length}`);
       for (let i = 0; i < this.a.length; i++) out[i] = this.a[i];
     },
@@ -952,7 +951,7 @@ const copyMapInto = driven(function* copyMapInto(src: unknown, dst: JMap): Gen {
 
 class JImmutableMap extends JMap { mutable = false; }
 const addImmutableMapping = driven(function* addImmutableMapping(map: JImmutableMap, key: unknown, value: unknown): Gen<void> {
-  if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (key === null || value === null) rt.npe();
   const bucket = mapKey(key);
   if (bucket !== SLOW) {
     if (map.m.has(bucket)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
@@ -976,13 +975,13 @@ rt.register({
 
 const mapFactories: Methods = {
   "static entry(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map$Entry;": (key: unknown, value: unknown) => {
-    if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (key === null || value === null) rt.npe();
     const entry = new JSimpleImmutableEntry();
     entry.e = { k: key, v: value };
     return entry;
   },
   "static copyOf(Ljava/util/Map;)Ljava/util/Map;": driven(function* (source: unknown): Gen {
-    if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (source === null) rt.npe();
     const entries: [unknown, unknown][] = [];
     if (source instanceof JMap) for (const entry of allEnts(source)) entries.push([entry.k, entry.v]);
     else {
@@ -994,7 +993,7 @@ const mapFactories: Methods = {
     return immutableMap(entries);
   }),
   "static ofEntries([Ljava/util/Map$Entry;)Ljava/util/Map;": driven(function* (source: unknown[]): Gen {
-    if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (source === null) rt.npe();
     const entries: [unknown, unknown][] = [];
     for (const entry of source) entries.push([
       yield vcall(entry, "getKey", "()Ljava/lang/Object;"), yield vcall(entry, "getValue", "()Ljava/lang/Object;"),
@@ -1167,7 +1166,7 @@ function hashtableKeys(this: JMap) { return mkIter(bucketKeys(this)); }
 function hashtableElements(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.v)); }
 /** the legacy Hashtable-era alias of containsValue, which rejects null */
 function hashtableContains(this: JMap, v: unknown) {
-  if (v === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (v === null) rt.npe();
   return vcall(this, "containsValue", "(Ljava/lang/Object;)Z", v);
 }
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
@@ -1339,7 +1338,7 @@ class JImmutableSet extends JSet {}
 const immutableSet = driven(function* immutableSet(items: unknown[]): Gen<JImmutableSet> {
   const result = new JImmutableSet();
   for (const item of items) {
-    if (item === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (item === null) rt.npe();
     if (!(yield addToSet(result, item))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate element: " + String(item));
   }
   return result;
@@ -1620,9 +1619,9 @@ rt.register({
 class JPriorityQueue extends JList { cmp: unknown = null; }
 /** keep the backing array sorted ascending so poll() takes the head (stable after equal keys) */
 const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown): Gen {
-  if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  // the comparator may suspend, and another thread's take()/offer() can move the array under
-  // it (Java holds a lock here): search a snapshot and only splice if the live array still is it
+  if (v == null) rt.npe();
+  // the comparator may suspend, and code that runs meanwhile can move the array under it:
+  // search a snapshot and only splice if the live array still is it
   for (;;) {
     const snap = q.a.slice();
     let lo = 0, hi = snap.length;
@@ -2007,7 +2006,7 @@ const absCollection: Methods = {
   "toString()Ljava/lang/String;": function (this: JObj) { return after(toJsArray(this), (items) => seqText(this, items)); },
 };
 const bulkRemove = driven(function* bulkRemove(self: unknown, c: unknown, when: boolean): Gen<number> {
-  if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (c == null) rt.npe();
   let ch = 0;
   const it = yield iterOf(self);
   while (yield vcall(it, "hasNext", "()Z")) {
@@ -2193,7 +2192,7 @@ rt.register({
     }),
     "addAll(Ljava/util/Collection;)Z": function (this: JObj, collection: unknown) {
       if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-      if (collection == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (collection == null) rt.npe();
       return collectionAddAll.call(this, collection);
     },
   },
@@ -3004,7 +3003,6 @@ for (const [key, fn] of [
 
 // java.util.Observable: the legacy observer pair, still constructed by analytics SDKs
 class JObservable extends JObj { observers: unknown[] = []; changed = 0; }
-rt.markers("java/util/Observer");
 rt.register({
   name: "java/util/Observable", ctor: JObservable,
   methods: {

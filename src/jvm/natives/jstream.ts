@@ -7,7 +7,6 @@ import { JStream, JIntStream, JLongStream, JDoubleStream, mkStream, mkIntStream,
 type Methods = NonNullable<NativeSpec["methods"]>;
 type Fn = (...a: any[]) => unknown;
 const O = "Ljava/lang/Object;", F = "java/util/function/", S = "java/util/stream/";
-const npe = (what: string | null = null): never => { throw rt.mkThrowable("java/lang/NullPointerException", what); };
 
 // ── java.util.function: [interface, single abstract method, super-interface]
 const PRIMS = [["Int", "I"], ["Long", "J"], ["Double", "D"]] as const;
@@ -25,8 +24,8 @@ const FUNCTIONS: [string, string, string?][] = [
 ];
 const SAM = new Map(FUNCTIONS.map(([n, sig]) => { const p = sig.indexOf("("); return [n, [sig.slice(0, p), sig.slice(p)] as const]; }));
 /** call a functional object's single abstract method */
-export function invoke(iface: string, f: unknown, ...a: unknown[]): any {
-  if (f == null) npe();
+function invoke(iface: string, f: unknown, ...a: unknown[]): any {
+  if (f == null) rt.npe();
   const [m, d] = SAM.get(iface)!;
   return vcall(f, m, d, ...a);
 }
@@ -43,11 +42,11 @@ const fnDesc = (iface: string) => `L${F}${iface};`;
 /** and/or/negate of the predicate interfaces */
 const logic = (iface: string): Methods => ({
   [`and(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, o: unknown) {
-    if (o == null) npe();
+    if (o == null) rt.npe();
     return lambda(iface, (...a) => after(invoke(iface, this, ...a), (r) => (r ? invoke(iface, o, ...a) : 0)));
   },
   [`or(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, o: unknown) {
-    if (o == null) npe();
+    if (o == null) rt.npe();
     return lambda(iface, (...a) => after(invoke(iface, this, ...a), (r) => (r ? 1 : invoke(iface, o, ...a))));
   },
   [`negate()${fnDesc(iface)}`]: function (this: unknown) { return lambda(iface, (...a) => after(invoke(iface, this, ...a), (r) => +!r)); },
@@ -55,18 +54,18 @@ const logic = (iface: string): Methods => ({
 /** andThen of the consumer interfaces: run this, then the other, with the same arguments */
 const chain = (iface: string): Methods => ({
   [`andThen(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, o: unknown) {
-    if (o == null) npe();
+    if (o == null) rt.npe();
     return lambda(iface, (...a) => after(invoke(iface, this, ...a), () => invoke(iface, o, ...a)));
   },
 });
 /** compose/andThen/identity of Function and the primitive unary operators */
 const composing = (iface: string): Methods => ({
   [`compose(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, g: unknown) {
-    if (g == null) npe();
+    if (g == null) rt.npe();
     return lambda(iface, (x) => after(invoke(iface, g, x), (y) => invoke(iface, this, y)));
   },
   [`andThen(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, g: unknown) {
-    if (g == null) npe();
+    if (g == null) rt.npe();
     return lambda(iface, (x) => after(invoke(iface, this, x), (y) => invoke(iface, g, y)));
   },
   [`static identity()${fnDesc(iface)}`]: () => lambda(iface, (x) => x),
@@ -77,15 +76,15 @@ const DEFAULTS: Record<string, Methods> = {
   UnaryOperator: { [`static identity()${fnDesc("UnaryOperator")}`]: () => lambda("UnaryOperator", (x) => x) },
   BiFunction: {
     [`andThen(${fnDesc("Function")})${fnDesc("BiFunction")}`]: function (this: unknown, g: unknown) {
-      if (g == null) npe();
+      if (g == null) rt.npe();
       return lambda("BiFunction", (a, b) => after(invoke("BiFunction", this, a, b), (r) => invoke("Function", g, r)));
     },
   },
   BinaryOperator: {
     [`static minBy(Ljava/util/Comparator;)${fnDesc("BinaryOperator")}`]: (c: unknown) =>
-      lambda("BinaryOperator", (a, b) => after(compareWith(c ?? npe(), a, b), (r) => (r <= 0 ? a : b))),
+      lambda("BinaryOperator", (a, b) => after(compareWith(c ?? rt.npe(), a, b), (r) => (r <= 0 ? a : b))),
     [`static maxBy(Ljava/util/Comparator;)${fnDesc("BinaryOperator")}`]: (c: unknown) =>
-      lambda("BinaryOperator", (a, b) => after(compareWith(c ?? npe(), a, b), (r) => (r >= 0 ? a : b))),
+      lambda("BinaryOperator", (a, b) => after(compareWith(c ?? rt.npe(), a, b), (r) => (r >= 0 ? a : b))),
   },
   Consumer: chain("Consumer"), BiConsumer: chain("BiConsumer"),
   Predicate: {
@@ -93,7 +92,7 @@ const DEFAULTS: Record<string, Methods> = {
     [`static isEqual(${O})${fnDesc("Predicate")}`]: (t: unknown) =>
       lambda("Predicate", (x) => (t == null ? +(x == null) : vcall(t, "equals", `(${O})Z`, x))),
     [`static not(${fnDesc("Predicate")})${fnDesc("Predicate")}`]: (p: unknown) =>
-      lambda("Predicate", (x) => after(invoke("Predicate", p ?? npe(), x), (r) => +!r)),
+      lambda("Predicate", (x) => after(invoke("Predicate", p ?? rt.npe(), x), (r) => +!r)),
   },
   BiPredicate: logic("BiPredicate"),
   ...Object.fromEntries(PRIMS.flatMap(([P]) => [[`${P}Predicate`, logic(`${P}Predicate`)], [`${P}Consumer`, chain(`${P}Consumer`)],
@@ -151,7 +150,7 @@ for (const [P, d] of PRIMS) {
 rt.register({
   name: "java/util/Optional", ctor: JOptional,
   methods: {
-    "static of(Ljava/lang/Object;)Ljava/util/Optional;": (v: unknown) => mkOpt(v ?? npe()),
+    "static of(Ljava/lang/Object;)Ljava/util/Optional;": (v: unknown) => mkOpt(v ?? rt.npe()),
     "static ofNullable(Ljava/lang/Object;)Ljava/util/Optional;": (v: unknown) => mkOpt(v),
     "static empty()Ljava/util/Optional;": () => mkOpt(null),
     "isPresent()Z": function (this: JOptional) { return this.v === null ? 0 : 1; },
@@ -172,7 +171,7 @@ rt.register({
       return this.v === null ? this : after(invoke("Function", f, this.v), mkOpt);
     },
     "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": function (this: JOptional, f: unknown) {
-      return this.v === null ? this : after(invoke("Function", f, this.v), (o) => o ?? npe());
+      return this.v === null ? this : after(invoke("Function", f, this.v), (o) => o ?? rt.npe());
     },
     "stream()Ljava/util/stream/Stream;": function (this: JOptional) { return mkStream(this.v === null ? [] : [this.v]); },
     "ifPresent(Ljava/util/function/Consumer;)V": function (this: JOptional, c: unknown) {
@@ -286,11 +285,11 @@ function streamMethods(k: StreamKind): Methods {
   const opt = `Ljava/util/Optional${P};`, mkOptional = (v?: unknown) => (prim ? mkOptOf(P, v as number | bigint) : mkOpt(v));
   // sequential and eager: the ordered and unordered forms are one operation
   const forEach = driven(function* (this: Stage, c: unknown): Gen { for (const x of this.a) yield invoke(cons, c, x); });
-  const first = function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? npe()) : mkOptional(); };
+  const first = function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? rt.npe()) : mkOptional(); };
   const m: Methods = {
     [`static empty()${self}`]: () => k.mk([]),
     [`static of(${d})${self}`]: (v: unknown) => k.mk([v]),
-    [`static of([${d})${self}`]: (vs: ArrayLike<unknown>) => k.mk(Array.from(vs ?? npe())),
+    [`static of([${d})${self}`]: (vs: ArrayLike<unknown>) => k.mk(Array.from(vs ?? rt.npe())),
     [`static concat(${self}${self})${self}`]: (a: Stage, b: Stage) => k.mk([...a.a, ...b.a]),
     [`static iterate(${d}${fnDesc(pred)}${fnDesc(prim ? P + "UnaryOperator" : "UnaryOperator")})${self}`]: driven(function* (seed: unknown, has: unknown, next: unknown): Gen {
       const out: unknown[] = [];
@@ -338,7 +337,7 @@ function streamMethods(k: StreamKind): Methods {
       if (!this.a.length) return mkOptional();
       let acc = this.a[0];
       for (let i = 1; i < this.a.length; i++) acc = yield invoke(binop, op, acc, this.a[i]);
-      return mkOptional(acc ?? npe());
+      return mkOptional(acc ?? rt.npe());
     }),
     [`collect(${fnDesc("Supplier")}${fnDesc(prim ? `Obj${P}Consumer` : "BiConsumer")}${fnDesc("BiConsumer")})${O}`]: driven(function* (this: Stage, s: unknown, acc: unknown): Gen {
       const r = yield invoke("Supplier", s);
@@ -463,7 +462,7 @@ async function collect(stream: JStream, c: unknown): Promise<unknown> {
 const extremeBy = (sign: number) => driven(function* (this: JStream, c: unknown): Gen {
   let best = this.a[0];
   for (let i = 1; i < this.a.length; i++) if ((yield compareWith(c, this.a[i], best)) * sign > 0) best = this.a[i];
-  return mkOpt(this.a.length ? best ?? npe() : null);
+  return mkOpt(this.a.length ? best ?? rt.npe() : null);
 });
 rt.register({
   name: S + "Stream", ctor: JStream, ifaces: [S + "BaseStream"],
