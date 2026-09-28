@@ -3,8 +3,8 @@
 Updated 2026-09-27. [PLAN.md](../PLAN.md) tracks current status and
 [AGENTS.md](../AGENTS.md) owns working rules. Results below describe observed
 revisions and paths, not a guarantee for the current tree. Git history retains
-intermediate runs. The [original APK audit](original-apk-coverage-2026-09-24.md)
-and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work.
+intermediate runs. The original APK audit and 15-app handoff that recorded per-app evidence were
+removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
 
 ## Evidence and harness
 
@@ -551,8 +551,8 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   edited KDBX3.1 entry across reload, without independent-format validation.
   Feeder loaded, saved and reloaded articles and exchanged OPML, but native
   stress remains. Markor's simple preview exported text and JPEG; PDF reached
-  browser `print()` without a verified saved PDF. The [handoff](../corpus-plan-v2.md)
-  lists every pinned app and its remaining feature paths.
+  browser `print()` without a verified saved PDF. The handoff (corpus-plan-v2.md, in 24cade3f^)
+  listed every pinned app and its remaining feature paths.
 
 ## Deployment and measured cleanup
 
