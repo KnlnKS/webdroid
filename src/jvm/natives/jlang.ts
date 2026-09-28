@@ -980,6 +980,8 @@ rt.register({
   name: "java/lang/String",
   ctor: JStringStatics, // statics holder; instances are JS primitives
   ifaces: ["java/lang/CharSequence", "java/lang/Comparable", "java/io/Serializable"],
+  // strings travel as TC_STRING; their class descriptor (a Class<String> written on its own) has no fields
+  serialization: { uid: -6849794470754667710n, fields: [] },
   methods: {
     "static valueOf(I)Ljava/lang/String;": (v: number) => String(v),
     "static valueOf(J)Ljava/lang/String;": (v: bigint) => String(v),
