@@ -253,6 +253,11 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   the first frame otherwise land in the later chunk and the next startup runs 12-17k cold calls.
   A pagehide save that awaited one write lost the second, and a reload inside 30 s saved nothing;
   both chunks are now written together, and the first save follows startup.
+  Rejected: the frame loop's 50 ms back-edge yield gap (draw only) extended over insets and layout.
+  Cold Mihon's slow `light` mode (a full recomposition, 15k cold calls, resumable bodies compiled
+  as the deep measure stack suspends at each yield) moved from 144-159 to 141-148 ms over eight
+  runs each, while `dark` gained 144 and 269 ms outliers against at most 83 ms: pointer events
+  wait for the next yield.
 
 ## Java, storage and framework semantics
 
