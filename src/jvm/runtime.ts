@@ -957,6 +957,8 @@ export class Runtime {
   }
 
   npe(): never { throw this.mkThrowable("java/lang/NullPointerException", null); }
+  /** a compiled body dispatched to a pc that is not a block leader */
+  badPc(pc: number): never { throw new Error("bad pc " + pc); }
   dz(): never { throw this.mkThrowable("java/lang/ArithmeticException", "divide by zero"); }
   aio(i: number, len: number): never {
     throw this.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `length=${len}; index=${i}`);

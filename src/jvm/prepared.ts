@@ -23,6 +23,8 @@ export interface PreparedMethod {
   readonly params: readonly string[];
   readonly widths: readonly number[];
   readonly sync: boolean;
+  /** registers a numeric constant may reach: only these can hold 0 standing for null */
+  readonly nullable: ReadonlySet<number>;
 }
 
 export type PreparationPhase = "decode" | "cfg" | "type";
@@ -33,6 +35,7 @@ type Defs = Map<number, ReadonlySet<MutableInstruction>>;
 type ArrayKinds = Map<number, "F" | "D">;
 
 const NO_REGS: readonly number[] = [];
+const NO_CARRIERS: ReadonlySet<number> = new Set();
 const s4 = (value: number) => (value << 28) >> 28;
 const s8 = (value: number) => (value << 24) >> 24;
 const s16 = (value: number) => (value << 16) >> 16;
@@ -223,8 +226,7 @@ function constantCarriers(instructions: readonly MutableInstruction[]): Set<numb
  *  be a null constant (nullRecv). The reaching-definition analysis runs only when some float read
  *  can see a constant; otherwise receivers are marked flow-insensitively, which only over-marks. */
 function annotateConstants(dex: DexFile, code: CodeItem, signature: ReturnType<typeof parseMethodDesc>,
-  isStatic: boolean, instructions: MutableInstruction[], leaders: Uint8Array): void {
-  const carriers = constantCarriers(instructions);
+  isStatic: boolean, instructions: MutableInstruction[], leaders: Uint8Array, carriers: Set<number> | null): void {
   if (!carriers) return;
   let floatSeesConstant = false;
   for (const instruction of instructions) {
@@ -409,7 +411,8 @@ export function prepareMethod(
 
   started = observe ? performance.now() : 0;
   const signature = parseMethodDesc(desc);
-  annotateConstants(dex, code, signature, isStatic, instructions, leaders);
+  const carriers = constantCarriers(instructions);
+  annotateConstants(dex, code, signature, isStatic, instructions, leaders, carriers);
   if (observe) observe("type", performance.now() - started);
 
   return {
@@ -418,6 +421,7 @@ export function prepareMethod(
     params: signature.params,
     widths: signature.params.map((param) => isWide(param) ? 2 : 1),
     sync: instructions.every((instruction) => !maySuspend(instruction.op)),
+    nullable: carriers ?? NO_CARRIERS,
   };
 }
 

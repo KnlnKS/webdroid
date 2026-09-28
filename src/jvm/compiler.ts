@@ -25,7 +25,6 @@ const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
 const holder = (isStatic: boolean) => (isStatic ? "C" : "C.prototype");
 const paramList = (desc: string) => parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
 const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
-const ref = (r: string) => `(${r}===0?null:${r})`;
 
 // Compile on first call; smoke compilation disables laziness to surface every method failure.
 let lazyMethods = true;
@@ -208,7 +207,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   if (prepared.sync) return install(compile(source(prepared, true)));
   if (profiled || jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
-    .compileCold(prepared.widths, coldInstructions(code, prepared));
+    .compileCold(prepared, coldInstructions(code, prepared));
   if (persist) recordLater(entryKey, () => source(prepare(), false));
   let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
@@ -360,6 +359,9 @@ class MethodEmitter {
   private sync = false;
 
   private reg(index: number): string { return this.cold ? `F.v[${this.literal(index)}]` : `v${index}`; }
+  /** registers a constant may reach, the only ones a reference read normalizes from 0 to null */
+  private nullable: ReadonlySet<number> = new Set();
+  private ref(index: number): string { const r = this.reg(index); return this.nullable.has(index) ? `(${r}===0?null:${r})` : r; }
   private literal(value: string | number | bigint): string {
     if (!this.cold) return typeof value === "string" ? JSON.stringify(value) : typeof value === "bigint" ? `${value}n` : litOf(value);
     const index = this.constants.length;
@@ -373,7 +375,9 @@ class MethodEmitter {
   private get ex(): string { return this.temp("ex"); }
 
   /** Handlers are built per instruction when it first runs. */
-  compileCold(widths: readonly number[], instructionAt: (pc: number) => Ins): ColdMethod {
+  compileCold(prepared: PreparedMethod, instructionAt: (pc: number) => Ins): ColdMethod {
+    const widths = prepared.widths;
+    this.nullable = prepared.nullable;
     perf.asyncMethods++;
     const name = `${this.info.name}.${this.mname}${this.desc}`;
     const ops: ColdMethod["ops"] = new Array(this.code.insns.length);
@@ -404,6 +408,7 @@ class MethodEmitter {
   compile(prepared: PreparedMethod, count: boolean, form: HotForm): string {
     this.resuming = form === "resumable";
     this.sync = prepared.sync;
+    this.nullable = prepared.nullable;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
@@ -434,8 +439,8 @@ class MethodEmitter {
     const allRegs = Array.from({ length: regs }, (_, i) => `v${i}`);
     const locals = [...paramInit, ...allRegs.filter((_, i) => !paramRegs.has(i))];
     const init = this.sync ? `let ${[...locals, "$t", "$u", "$ex", "pc=0"].join(",")};`
-      : !this.resuming ? `let ${[...locals, "$t", "$u", "$ex", "$fu", "$p", "$r=0", "pc=0"].join(",")};const $th=R.th();`
-      : `let ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "$p", "pc=$F.next", "$r=$F.r"].join(",")};` +
+      : !this.resuming ? `let ${[...locals, "$t", "$u", "$ex", "$fu", "$r=0", "pc=0"].join(",")};const $th=R.th();`
+      : `let ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "pc=$F.next", "$r=$F.r"].join(",")};` +
         `const $th=$F.$th,$s=$F.$s;R.st($th);`;
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
@@ -444,31 +449,34 @@ class MethodEmitter {
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.resuming ? "" : "P.entry($pn);"}try{`
       : "";
     const profileEnd = jvmProfiler.enabled ? `}finally{P.add($pn,"hotRun",performance.now()-$pt);}` : "";
-    const source = `function ${frameName(this.info.name, this.mname)}(${this.resuming ? "$F" : jsParams.join(",")}){
-${this.resuming ? "" : coverageProbeSource(profileName)}
-${profileStart}
-${init}
-for(;;){
-try{${this.sync ? "" : "$d:"}switch(${this.resuming ? "$r?-$r:pc" : "pc"}){
-${blocks.join("\n")}
-default: throw new Error("bad pc "+pc);
-}
+    // One block that never branches (a text test: a string constant holding "continue" only
+    // keeps the loop) needs no dispatch; a resumable body re-enters mid-block, so it always does.
+    const straight = blocks.length === 1 && !this.hasTries && !this.resuming && !blocks[0].includes("continue");
+    const dispatch = straight ? `{\n${blocks[0].slice(blocks[0].indexOf(":") + 1)}\n}`
+      : `switch(${this.resuming ? "$r?-$r:pc" : "pc"}){\n${blocks.join("\n")}\ndefault:R.badPc(pc);\n}`;
+    const body = `try{${this.sync ? "" : "$d:"}${dispatch}
 ${this.sync ? "" : this.saveFrame()}
 }catch($e){
 ${this.resuming ? "R.st($th);$r=0;" : ""}$e=R.jx($e);
 ${catchBody}
-}
-}
+}`;
+    const source = `function ${frameName(this.info.name, this.mname)}(${this.resuming ? "$F" : jsParams.join(",")}){
+${this.resuming ? "" : coverageProbeSource(profileName)}
+${profileStart}
+${init}
+${straight ? body : `for(;;){\n${body}\n}`}
 ${profileEnd}
 }`;
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "hotEmit", performance.now() - started);
     return source;
   }
 
-  /** One save point per method: suspension sites set `$p`, `$r` and `pc`, then break to it. */
+  /** One save point per method: suspension sites set `$r` (0 for a back-edge yield) and `pc`, then
+   *  break to it. The pending Promise is the one they tested: a suspended value is replaced by its
+   *  result on resume, so `$t` and `$u` never hold a stale one. */
   private saveFrame(): string {
     const profiled = jvmProfiler.enabled ? `P.suspension($pn);` : "";
-    return `${profiled}return R.dfr(${this.resuming ? "$m" : "$R()"},this,$p,$r,pc,[${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")}],$th,$t,$u,$ex);`;
+    return `${profiled}return R.dfr(${this.resuming ? "$m" : "$R()"},this,$r?$u instanceof Promise?$u:$t:$fu,$r,pc,[${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")}],$th,$t,$u,$ex);`;
   }
 
   /** A resumed frame finishing hands the main looper back its thread: its caller re-pins its own
@@ -508,7 +516,7 @@ ${profileEnd}
       // handler (F.$w); a class-init or resolution wait reruns it once its cache is filled.
       return `if(${value} instanceof Promise){F.$w=${value === this.t ? 1 : 0};return ${value};}`;
     }
-    const resume = ++this.resumes, save = `if(${value} instanceof Promise){$p=${value};$r=${resume};break $d;}`;
+    const resume = ++this.resumes, save = `if(${value} instanceof Promise){$r=${resume};break $d}`;
     return this.resuming ? `${save}case -${resume}:if($r){$r=0;if($F.e)throw $F.x;${value}=$F.val;}` : save;
   }
 
@@ -529,7 +537,7 @@ ${profileEnd}
       case "move-exception": out.push(`${this.reg(i.a)}=${this.ex};`); break;
       case "return-void": out.push(this.cold ? "F.done=true;" : this.leave() + "return;"); break;
       case "return": case "return-wide": out.push(`${this.cold ? "F.done=true;F.value=" : this.leave() + "return "}${this.reg(i.a)};`); break;
-      case "return-object": out.push(`${this.cold ? "F.done=true;F.value=" : this.leave() + "return "}${ref(this.reg(i.a))};`); break;
+      case "return-object": out.push(`${this.cold ? "F.done=true;F.value=" : this.leave() + "return "}${this.ref(i.a)};`); break;
       case "const/4": case "const/16": case "const":
         out.push(`${this.reg(i.a)}=${this.literal(i.constKind === "F" ? intBitsToFloat(i.b) : i.b)};`);
         break;
@@ -583,7 +591,7 @@ ${profileEnd}
         const elem = dex.type(i.b).slice(1);
         const vals = i.regs.map((r) => this.reg(r)).join(",");
         if (isRef(elem)) {
-          out.push(`${this.t}=R.oa(${this.literal(i.regs.length)},${this.literal(elem)});${i.regs.map((r, j) => `${this.t}[${this.literal(j)}]=${ref(this.reg(r))};`).join("")}`);
+          out.push(`${this.t}=R.oa(${this.literal(i.regs.length)},${this.literal(elem)});${i.regs.map((r, j) => `${this.t}[${this.literal(j)}]=${this.ref(r)};`).join("")}`);
         } else {
           out.push(`${this.t}=${typedArrayCtor(elem)}.of(${vals});`);
         }
@@ -634,12 +642,12 @@ ${profileEnd}
         if (i.name.startsWith("aget")) {
           out.push(`if((${this.reg(i.c)}>>>0)>=${this.reg(i.b)}.length)R.aio(${this.reg(i.c)},${this.reg(i.b)}.length);${this.reg(i.a)}=${this.reg(i.b)}[${this.reg(i.c)}];`);
         } else if (i.name.startsWith("aput")) {
-          const val = i.name === "aput-object" ? ref(this.reg(i.a)) : this.reg(i.a);
+          const val = i.name === "aput-object" ? this.ref(i.a) : this.reg(i.a);
           out.push(`if((${this.reg(i.c)}>>>0)>=${this.reg(i.b)}.length)R.aio(${this.reg(i.c)},${this.reg(i.b)}.length);${this.reg(i.b)}[${this.reg(i.c)}]=${val};`);
         } else if (i.name.startsWith("iget")) {
           out.push(`${this.reg(i.a)}=${this.reg(i.b)}${this.prop(this.fieldProp(i.c))};`);
         } else if (i.name.startsWith("iput")) {
-          out.push(`${this.reg(i.b)}${this.prop(this.fieldProp(i.c))}=${isRef(this.dex.type(this.dex.field(i.c).type)) ? ref(this.reg(i.a)) : this.reg(i.a)};`);
+          out.push(`${this.reg(i.b)}${this.prop(this.fieldProp(i.c))}=${isRef(this.dex.type(this.dex.field(i.c).type)) ? this.ref(i.a) : this.reg(i.a)};`);
         } else if (i.name.startsWith("sget")) {
           this.emitStaticField(i, out, true);
         } else if (i.name.startsWith("sput")) {
@@ -657,7 +665,7 @@ ${profileEnd}
       const fuel = target <= from ? `if(--R.fuel<0){F.$fu=R.refuel();if(F.$fu){F.$w=0;return F.$fu;}}` : "";
       return `${fuel}F.next=${this.literal(target)};return;`;
     }
-    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){$p=$fu;pc=${target};break $d;}}` : "";
+    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){pc=${target};break $d}}` : "";
     return `${fuel}pc=${target};continue;`;
   }
 
@@ -674,7 +682,7 @@ ${profileEnd}
     } else {
       this.guard(`D.fs[${this.literal(i.b)}]??D.rsf(${this.literal(i.b)}${this.fromArg})`, out, this.u);
     }
-    out.push(isGet ? `${this.reg(i.a)}=${this.u}${this.prop(prop)};` : `${this.u}${this.prop(prop)}=${isRef(this.dex.type(this.dex.field(i.b).type)) ? ref(this.reg(i.a)) : this.reg(i.a)};`);
+    out.push(isGet ? `${this.reg(i.a)}=${this.u}${this.prop(prop)};` : `${this.u}${this.prop(prop)}=${isRef(this.dex.type(this.dex.field(i.b).type)) ? this.ref(i.a) : this.reg(i.a)};`);
   }
 
   /** an instruction we cannot compile: throw here, so the rest of the method still runs */
@@ -688,8 +696,7 @@ ${profileEnd}
     const args: string[] = [];
     let ri = first;
     for (const p of params) {
-      const r = this.reg(i.regs[ri]);
-      args.push(isRef(p) ? ref(r) : r);
+      args.push(isRef(p) ? this.ref(i.regs[ri]) : this.reg(i.regs[ri]));
       ri += isWide(p) ? 2 : 1;
     }
     return args;
@@ -709,7 +716,7 @@ ${profileEnd}
     const clsName = descToName(dex.type(mref.cls));
     const kind = i.name.replace("/range", "");
     const isInstance = kind !== "invoke-static";
-    const recv = isInstance ? (i.nullRecv ? ref(this.reg(i.regs[0])) : this.reg(i.regs[0])) : "";
+    const recv = isInstance ? (i.nullRecv ? this.ref(i.regs[0]) : this.reg(i.regs[0])) : "";
     if (kind === "invoke-polymorphic") return this.emitPolymorphic(i, clsName, mref.name, recv, out);
     const argStr = this.args(i, dex.protoParamTypes(mref.proto), isInstance ? 1 : 0).join(",");
 
