@@ -1,7 +1,7 @@
 // Tap latency gate (docs/bytecode-first-plan.md §4.8): pointerup to the first presented frame
 // that shows the app's response, for every gated tap of a scenario.
 //
-//   bun run lat [scenario ...] [--gpu] [--warm] [--json <file>]
+//   bun run lat [scenario ...] [--gpu] [--warm] [--json <file>] [--query jvmProfile=1]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -24,11 +24,13 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 const args = process.argv.slice(2);
 const flag = (name: string) => { const i = args.indexOf(name); return i < 0 ? false : (args.splice(i, 1), true); };
 const option = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args.splice(i, 2)[1]; };
-const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json");
+const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json"), query = option("--query");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
-const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "coldCalls", "layoutMs", "drawMs", "frameMs", "presentations"];
+const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "coldCalls", "layoutMs", "drawMs", "frameMs", "presentations",
+  // populated under ?jvmProfile=1 only
+  "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
 type Tap = { m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number> };
 
@@ -151,7 +153,7 @@ async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: `if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS)} });` }, sessionId);
-  await send("Page.navigate", { url: `${BASE}/?apk=${encodeURIComponent(apk)}&screen=${encodeURIComponent(SCREEN)}` }, sessionId);
+  await send("Page.navigate", { url: `${BASE}/?apk=${encodeURIComponent(apk)}&screen=${encodeURIComponent(SCREEN)}${query ? "&" + query : ""}` }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
       await Bun.sleep(500);
