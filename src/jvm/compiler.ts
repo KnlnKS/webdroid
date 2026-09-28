@@ -113,6 +113,32 @@ function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
   if (to.$c) to.$c.push(...cells);
 }
 
+// Promotion compiles synchronously within a budget per window; past it, a method waits for idle
+// time and keeps running cold, so a burst of first calls (an interaction's recomposition) does not
+// stall the frame that answers it. Without idle callbacks (Bun, tests) every promotion is immediate.
+const PROMOTE_BUDGET_MS = 4, PROMOTE_WINDOW_MS = 50;
+let windowStart = -Infinity, windowSpent = 0;
+const waiting = new Set<() => unknown>();
+function promoteWithinBudget(promote: () => JvmFunction | undefined): JvmFunction | undefined {
+  const now = performance.now();
+  if (now - windowStart > PROMOTE_WINDOW_MS) { windowStart = now; windowSpent = 0; }
+  if (windowSpent >= PROMOTE_BUDGET_MS && typeof requestIdleCallback !== "undefined") {
+    if (!waiting.size) requestIdleCallback(promoteWaiting);
+    waiting.add(promote);
+    return undefined;
+  }
+  const compiled = promote();
+  windowSpent += performance.now() - now;
+  return compiled;
+}
+function promoteWaiting(deadline: IdleDeadline): void {
+  for (const promote of waiting) {
+    if (deadline.timeRemaining() < 2) { requestIdleCallback(promoteWaiting); return; }
+    waiting.delete(promote);
+    promote();
+  }
+}
+
 /** `profiled` installs the fast body at once, skipping the cold tier, for a method a profile names */
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profiled = false): JvmFunction {
   const info = C.$i, rec = info.lazy![i], dex = rec.dex;
@@ -222,7 +248,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
       if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
       return runCold(cold!, this, args);
     }
-    const compiled = promote();
+    const compiled = promoteWithinBudget(promote);
     if (compiled) return compiled.apply(this, args);
     if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
     return runCold(cold!, this, args);
