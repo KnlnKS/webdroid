@@ -1149,6 +1149,14 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   },
   "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
 };
+/** the sizing constructors mapMethods() shares that each map does not declare */
+const IFI = "<init>(IFI)V", IFZ = "<init>(IFZ)V";
+const mapCtorOmits: Record<string, string[]> = {
+  "java/util/HashMap": [IFI, IFZ], "java/util/LinkedHashMap": [IFI], "java/util/concurrent/ConcurrentHashMap": [IFZ],
+  "java/util/WeakHashMap": [IFI, IFZ], "java/util/IdentityHashMap": ["<init>(IF)V", IFI, IFZ], "java/util/Hashtable": [IFI, IFZ],
+  "java/util/EnumMap": ["<init>()V", "<init>(I)V", "<init>(IF)V", IFI, IFZ],
+  "android/util/ArrayMap": ["<init>(IF)V", IFI, IFZ, "<init>(Ljava/util/Map;)V"],
+};
 function newKeySet() { return rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"); }
 function hashtableKeys(this: JMap) { return mkIter(bucketKeys(this)); }
 function hashtableElements(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.v)); }
@@ -1160,7 +1168,7 @@ function hashtableContains(this: JMap, v: unknown) {
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
   "android/util/ArrayMap"]) {
-  const methods = { ...mapMethods(), ...mapExtras[n] };
+  const methods = { ...without(mapMethods(), mapCtorOmits[n]), ...mapExtras[n] };
   if (n === "java/util/EnumMap") {
     methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
     methods["<init>(Ljava/util/EnumMap;)V"] = methods["<init>(Ljava/util/Map;)V"];
@@ -1352,6 +1360,14 @@ for (let count = 0; count <= 10; count++) {
   const descriptor = `(${"Ljava/lang/Object;".repeat(count)})Ljava/util/Set;`;
   setFactories[`static of${descriptor}`] = (...items: unknown[]) => immutableSet(items);
 }
+/** setMethods() entries only sorted sets declare, and the constructors the others do not */
+const SORTED_ONLY = ["<init>(Ljava/util/Comparator;)V", "first()Ljava/lang/Object;", "last()Ljava/lang/Object;"];
+const setOmits: Record<string, string[][]> = {
+  "java/util/HashSet": [SORTED_ONLY], "java/util/LinkedHashSet": [SORTED_ONLY],
+  "java/util/concurrent/CopyOnWriteArraySet": [SORTED_ONLY, ["<init>(I)V", "<init>(IF)V"]],
+  "java/util/EnumSet": [SORTED_ONLY, ["<init>()V", "<init>(I)V", "<init>(IF)V", "<init>(Ljava/util/Collection;)V"]],
+  "java/util/concurrent/ConcurrentHashMap$KeySetView": [SORTED_ONLY, ["<init>()V", "<init>(I)V", "<init>(IF)V", "<init>(Ljava/util/Collection;)V"]],
+};
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
@@ -1360,7 +1376,7 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
       : n === "java/util/LinkedHashSet" ? { uid: -2851667679971038690n, fields: [] } : undefined,
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
-    methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : { ...setMethods(), ...(n === "java/util/HashSet" ? setSerialization : {}) },
+    methods: { ...without(setMethods(), ...setOmits[n]), ...(n === "java/util/EnumSet" ? enumSetStatics() : n === "java/util/HashSet" ? setSerialization : {}) },
   });
 }
 function enumSetStatics() {
@@ -1573,7 +1589,7 @@ for (const n of ["java/util/TreeMap", "java/util/concurrent/ConcurrentSkipListMa
   rt.register({
     name: n, ctor: class extends JTreeMap {}, typeVars: "K,V",
     ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...mapMethods(), ...treeMapMethods() },
+    methods: { ...without(mapMethods(), ["<init>(I)V", "<init>(IF)V", IFI, IFZ]), ...treeMapMethods() },
   });
 }
 for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSet"]) {
@@ -1581,7 +1597,7 @@ for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSe
     name: n, ctor: class extends JTreeSet {}, typeVars: "E",
     serialization: n === "java/util/TreeSet" ? { uid: -2479143000061671589n, fields: [] } : undefined,
     ifaces: ["java/util/NavigableSet", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...setMethods(), ...treeSetMethods(), ...(n === "java/util/TreeSet" ? {
+    methods: { ...without(setMethods(), ["<init>(I)V", "<init>(IF)V"]), ...treeSetMethods(), ...(n === "java/util/TreeSet" ? {
       "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
         yield vcall(stream, "defaultWriteObject", "()V");
         yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.cmp);
