@@ -628,6 +628,9 @@ export class Runtime {
       // statics and private methods belong to their class; the rest may be inherited
       const own = isStatic || list === def.directMethods && name !== "<init>";
       if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target)) continue;
+      // a spec whose JS class does not extend its declared superclass's still inherits from it
+      const inherited = !own && info.superInfo?.ctor?.prototype?.[mangled];
+      if (inherited) { target[mangled] = inherited; continue; }
       if (!isStatic) info.ownMethods.push(mangled);
       if (!(m.flags & ACC.NATIVE)) { installLazy(this, dex, info, m, true); continue; }
       const R = this, cls = info.name;
@@ -808,6 +811,24 @@ export class Runtime {
   }
 
   /** copy inherited interface defaults so both class dispatch and interface super calls resolve */
+  /** the default body an interface of `info` gives `mangled`: what a platform body that cannot
+   *  run on a native class yields to, as HashMap's computeIfAbsent does to Map's */
+  interfaceDefault(info: ClassInfo, mangled: string): unknown {
+    const seen = new Set<ClassInfo>();
+    const walk = (i: ClassInfo): unknown => {
+      for (const iface of i.interfaces) {
+        if (seen.has(iface)) continue;
+        seen.add(iface);
+        this.ensureCompiled(iface);
+        if (iface.ownMethods.includes(mangled)) return iface.ctor.prototype[mangled];
+        const body = walk(iface);
+        if (body) return body;
+      }
+      return i.superInfo ? walk(i.superInfo) : undefined;
+    };
+    return walk(info);
+  }
+
   private copyDefaults(info: ClassInfo) {
     if (!info.ctor || info.defaultsCopied) return;
     info.defaultsCopied = true;

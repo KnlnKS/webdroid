@@ -120,6 +120,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   const target = rec.isStatic ? C : C.prototype;
   if (rec.fallthrough) {
     const absent = R.absentFields(dex, rec.m);
+    const fallback = absent.length && !rec.isStatic ? R.interfaceDefault(info, rec.mangled) as JvmFunction | undefined : undefined;
+    if (fallback) {
+      retarget(rec.stub, fallback);
+      return target[rec.mangled] = fallback;
+    }
     if (absent.length) {
       const what = `unsafe-fallthrough ${profileName} ${absent.join(",")}`;
       const fail: JvmFunction & Cells = () => {
