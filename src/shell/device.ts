@@ -137,7 +137,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.
-  rt.linkNatives((name, e) => console.warn("[link native]", name, e));
+  await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();
   await vfs.prepare(pkg);

@@ -10,7 +10,13 @@ if (chan) {
   // an open port keeps a bun/node process alive after its work is done (tests, scripts)
   (chan.port1 as unknown as { unref?: () => void }).unref?.();
 }
+/** A realm the user is not looking at: its yields wait for the page's own work to finish, since
+ *  every realm shares the page's one main thread and input goes to the presented one. */
+let background = false;
+export function setBackgroundRealm(value: boolean): void { background = value; }
+const scheduler = (globalThis as { scheduler?: { postTask(task: () => void, options: { priority: string }): Promise<void> } }).scheduler;
 export function yieldToLoop(): Promise<void> {
+  if (background && scheduler) return scheduler.postTask(() => {}, { priority: "background" });
   if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { yieldStats.pushes++; if (waiters.push(r) === 1) chan.port2.postMessage(0); });
 }

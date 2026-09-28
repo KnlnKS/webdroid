@@ -287,8 +287,19 @@ export class Runtime {
   }
   markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
   make(cls: string): any { return new (this.link(cls).ctor)(); }
-  linkNatives(onError?: (name: string, e: unknown) => void) {
-    for (const name of [...this.natives.keys()]) { try { this.link(name); } catch (e) { onError?.(name, e); } }
+  /** Link every native spec, yielding to the event loop every `sliceMs` when one is given: a
+   *  process realm's boot shares the page's main thread with the presented app. */
+  linkNatives(onError?: (name: string, e: unknown) => void): void;
+  linkNatives(onError: ((name: string, e: unknown) => void) | undefined, sliceMs: number): Promise<void>;
+  linkNatives(onError?: (name: string, e: unknown) => void, sliceMs?: number): void | Promise<void> {
+    const names = [...this.natives.keys()];
+    const link = (from: number, until: number): number => {
+      let i = from;
+      for (; i < names.length && performance.now() < until; i++) { try { this.link(names[i]); } catch (e) { onError?.(names[i], e); } }
+      return i;
+    };
+    if (sliceMs === undefined) { link(0, Infinity); return; }
+    return (async () => { for (let i = 0; i < names.length; await yieldToLoop()) i = link(i, performance.now() + sliceMs); })();
   }
 
   dexLink(dex: DexFile): DexLink {

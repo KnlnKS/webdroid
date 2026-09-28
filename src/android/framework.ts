@@ -6,6 +6,7 @@
 // against (`bun run gen-framework` checks the pairing). android.R and com.android.internal.R
 // come from framework.jar.
 
+import { yieldToLoop } from "../jvm/yield";
 import { Arsc } from "./arsc";
 import { DEVICE_COLORS } from "./device-colors";
 
@@ -58,7 +59,8 @@ export function fetchPlatformJars(): Promise<Uint8Array[]> {
  *  Indexing 40,860 classes costs ~20ms and compiling is lazy per class. */
 export function loadPlatformDex(): Promise<void> {
   return pendingDex ??= fetchPlatformJars().then(async (bytes) => {
-    bytes.forEach(loadPlatformJar);
+    // a jar at a time: a process realm's boot shares the page's main thread with the presented app
+    for (let i = 0; i < bytes.length; i++) { loadPlatformJar(bytes[i], i); await yieldToLoop(); }
     await zygoteInit();
   });
 }

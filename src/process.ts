@@ -10,6 +10,7 @@ import { apkCertificates, packageArchive } from "./android/packagearchive";
 import { zipTree } from "./jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
+import { setBackgroundRealm } from "./jvm/yield";
 import { overlays } from "./android/popup";
 import { jitStats } from "./native/core";
 import { openInstallApks, type Install } from "./shell/install";
@@ -43,6 +44,7 @@ setScreenCanvas(canvas);
 setWebLayer(document.getElementById("weblayer")!);
 attachIme(canvas, document.getElementById("kbd") as HTMLTextAreaElement);
 processPresentation.visible = false;
+setBackgroundRealm(true);
 let frameId = 0, ticking = false, ticks = 0;
 function frame(time: number): void {
   frameId = 0;
@@ -56,6 +58,7 @@ function frame(time: number): void {
   frameId = requestAnimationFrame(frame);
 }
 processPresentation.changed = (visible) => {
+  setBackgroundRealm(!visible);
   if (visible && !frameId) frameId = requestAnimationFrame(frame);
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
