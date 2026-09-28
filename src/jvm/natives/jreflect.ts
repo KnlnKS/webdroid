@@ -190,6 +190,8 @@ rt.register({
       return s ? parseTypeSig(s, { pos: 0 }, classScope(this.owner)) : classForDesc(this.desc, this.owner.owner);
     },
     "getModifiers()I": function (this: JField) { return this.flags; },
+    // ART's field offset, which jdk.internal.misc.Unsafe.objectFieldOffset reads
+    "getOffset()I": function (this: JField) { return Number(fieldOffset(this)); },
     "isSynthetic()Z": function (this: JField) { return (this.flags >> 12) & 1; },
     "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
     ...accessibleMethods,
@@ -520,6 +522,40 @@ rt.register({
     },
   },
 });
+// jdk.internal.misc.Unsafe is libcore's own bytecode (ClassValue, VarHandle-free atomics): its
+// natives are sun.misc.Unsafe's operations under the JDK's names, where an object is a "Reference".
+// A realm is one thread, so the fences order nothing.
+{
+  const sun = rt.natives.get("sun/misc/Unsafe")!.methods!;
+  const fence = () => {};
+  const natives: Record<string, unknown> = {
+    "addressSize()I": () => 4,
+    "pageSize()I": () => 4096,
+    "getArrayBaseOffsetForComponentType(Ljava/lang/Class;)I": () => 0,
+    "getArrayIndexScaleForComponentType(Ljava/lang/Class;)I": (c: JClass) => arrayIndexScale(rt.classFor("[" + classDesc(c)) as JClass),
+    "fullFence()V": fence, "loadFence()V": fence, "storeFence()V": fence,
+  };
+  for (const [sig, fn] of Object.entries(sun)) {
+    const jdk = sig.replace(/Object(Volatile)?\(/, "Reference$1(").replace(/^compareAndSwap(\w+)/, "compareAndSet$1").replace("compareAndSetObject", "compareAndSetReference");
+    for (const name of new Set([sig, jdk])) natives[name] = fn;
+  }
+  const declared = new Set(["allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;", "compareAndSetInt(Ljava/lang/Object;JII)Z",
+    "compareAndSetLong(Ljava/lang/Object;JJJ)Z", "compareAndSetReference(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+    "compareAndSwapInt(Ljava/lang/Object;JII)Z", "compareAndSwapLong(Ljava/lang/Object;JJJ)Z",
+    "compareAndSwapObject(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", "getIntVolatile(Ljava/lang/Object;J)I",
+    "getLongVolatile(Ljava/lang/Object;J)J", "getReference(Ljava/lang/Object;J)Ljava/lang/Object;",
+    "getReferenceVolatile(Ljava/lang/Object;J)Ljava/lang/Object;", "putIntVolatile(Ljava/lang/Object;JI)V",
+    "putLongVolatile(Ljava/lang/Object;JJ)V", "putOrderedInt(Ljava/lang/Object;JI)V", "putOrderedLong(Ljava/lang/Object;JJ)V",
+    "putOrderedObject(Ljava/lang/Object;JLjava/lang/Object;)V", "putReference(Ljava/lang/Object;JLjava/lang/Object;)V",
+    "putReferenceVolatile(Ljava/lang/Object;JLjava/lang/Object;)V", "addressSize()I", "pageSize()I",
+    "getArrayBaseOffsetForComponentType(Ljava/lang/Class;)I", "getArrayIndexScaleForComponentType(Ljava/lang/Class;)I",
+    "fullFence()V", "loadFence()V", "storeFence()V",
+    ...["Boolean Z", "Byte B", "Char C", "Short S", "Int I", "Long J", "Float F", "Double D"].flatMap((t) => {
+      const [n, d] = t.split(" ");
+      return [`get${n}(Ljava/lang/Object;J)${d}`, `put${n}(Ljava/lang/Object;J${d})V`];
+    })]);
+  for (const sig of declared) if (natives[sig]) rt.registerJni("jdk/internal/misc/Unsafe", sig, natives[sig] as (...a: never[]) => unknown);
+}
 // Unsafe "offsets" index this table of fields, with a stride of 8 so the word arithmetic
 // protobuf's Android accessor applies to them (offset & ~3, (offset & 3) << 3) is an identity.
 // An access wider or narrower than the field's own type moves the bits, as memory would: that

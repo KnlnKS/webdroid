@@ -125,8 +125,6 @@ rt.register({ name: "android/location/LocationManager", ctor: class extends JObj
           void vcallUncaught(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
         });
       },
-    "requestLocationUpdates(Ljava/lang/String;Landroid/location/LocationRequest;Landroid/os/Looper;Landroid/location/LocationListener;)V":
-      (provider: string, request: JLocationRequest, looper: typeof mainLooper, listener: JObj) => subscribe(provider, request, listener, onLooper(looper ?? mainLooper)),
     "removeUpdates(Landroid/location/LocationListener;)V": (listener: JObj) => remove(listener),
   },
 });

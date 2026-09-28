@@ -26,7 +26,4 @@ export function isBytecode(name: string): boolean {
   return false;
 }
 
-/** The reference build's BOOTCLASSPATH under vendor/aosp, in class-path order: every class with
- *  neither a native spec nor a definition in the app resolves through it. */
-export const PLATFORM_JARS = ["boot/core-oj.jar", "boot/core-libart.jar", "boot/okhttp.jar", "boot/bouncycastle.jar",
-  "boot/apache-xml.jar", "framework.jar", "boot/core-icu4j.jar"];
+export { PLATFORM_JARS } from "./bootclasspath";
