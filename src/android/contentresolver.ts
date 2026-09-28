@@ -444,6 +444,12 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
       },
       "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;J)J": (_r: unknown, _n: string, d: bigint) => d,
       "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => stringSetting(table, n),
+      // the framework's per-user reads; this device has the one user
+      "static getStringForUser(Landroid/content/ContentResolver;Ljava/lang/String;I)Ljava/lang/String;": (_r: unknown, n: string) => stringSetting(table, n),
+      "static getIntForUser(Landroid/content/ContentResolver;Ljava/lang/String;II)I": (_r: unknown, n: string, d: number) => intSetting(table, n) ?? d,
+      "static getIntForUser(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, n: string) => intSetting(table, n) ?? settingNotFound(_r, n),
+      "static getLongForUser(Landroid/content/ContentResolver;Ljava/lang/String;JI)J": (_r: unknown, _n: string, d: bigint) => d,
+      "static getFloatForUser(Landroid/content/ContentResolver;Ljava/lang/String;FI)F": (_r: unknown, _n: string, d: number) => d,
       "static getUriFor(Ljava/lang/String;)Landroid/net/Uri;": (n: string) => settingsUri(table, n),
       ...stubs(0, "static putFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)Z", "static putInt(Landroid/content/ContentResolver;Ljava/lang/String;I)Z",
         "static putLong(Landroid/content/ContentResolver;Ljava/lang/String;J)Z", "static putString(Landroid/content/ContentResolver;Ljava/lang/String;Ljava/lang/String;)Z"),

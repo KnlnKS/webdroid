@@ -197,6 +197,9 @@ rt.register({
     "static getScrollBarFadeDuration()I": () => 250,
     "static getKeyRepeatDelay()I": () => 50,
     "static getTouchSlop()I": () => 16,
+    // haptic scroll feedback is for rotary encoders, which this device lacks
+    "isHapticScrollFeedbackEnabled(III)Z": () => 0,
+    "getHapticScrollFeedbackTickInterval(III)I": () => 0x7fffffff,
   },
 });
 
