@@ -12,24 +12,27 @@ import type { ClassDef } from "../src/jvm/dex";
 import { prepareMethod } from "../src/jvm/prepared";
 import { PLATFORM_JARS } from "../src/jvm/provenance";
 
-// the file registering each spec, whose helpers a method's source reaches
-const specFile = new Map<string, string>();
-const register = rt.register.bind(rt);
-rt.register = ((spec: { name: string }) => {
-  const file = /(\/[^\s():]+\.ts):\d+/.exec(new Error().stack!.split("\n").slice(2).join("\n"))?.[1];
-  if (file) specFile.set(spec.name, file);
-  return register(spec as never);
-}) as typeof rt.register;
-// natives register as their modules load, so everything that imports them comes after the wrapper
-await import("../src/natives");
-const { jarDexes } = await import("../src/android/framework");
-const { openDexes } = await import("./lib");
+import "../src/natives";
+import { jarDexes } from "../src/android/framework";
+import { openDexes } from "./lib";
+
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dir, "..");
 export const OVERRIDES = resolve(root, "tests/fixtures/app-overrides.json");
 export const BASELINE = resolve(root, "tests/fixtures/bypass-baseline.json");
 export const hasPlatformJars = () => PLATFORM_JARS.every((jar) => existsSync(resolve(root, "vendor/aosp", jar)));
+
+const sources = [...new Bun.Glob("src/**/*.ts").scanSync(root)].map((file) => [resolve(root, file), readFileSync(resolve(root, file), "utf8")] as const);
+/** the file registering a spec, whose helpers a method's source reaches: the one naming it as a
+ *  spec, else one quoting its name, else (a name built in a loop) one quoting its simple name */
+function specFile(cls: string): string | undefined {
+  const simple = cls.slice(Math.max(cls.lastIndexOf("/"), cls.lastIndexOf("$")) + 1);
+  for (const needle of [`name: "${cls}"`, `"${cls}"`, `"${simple}"`]) {
+    const hit = sources.find(([, text]) => text.includes(needle));
+    if (hit) return hit[0];
+  }
+}
 
 function platformDefs(): Map<string, ClassDef> {
   const defs = new Map<string, ClassDef>();
@@ -65,7 +68,7 @@ function declarations(text: string): Map<string, string> {
 const moduleDecls = new Map<string, Map<string, string>>();
 /** `source` with the module-level helpers it names, three calls deep */
 function withHelpers(cls: string, source: string): string {
-  const file = specFile.get(cls);
+  const file = specFile(cls);
   if (!file) return source;
   let decls = moduleDecls.get(file);
   if (!decls) moduleDecls.set(file, decls = declarations(readFileSync(file, "utf8")));
