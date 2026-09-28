@@ -397,10 +397,38 @@ const loadClass = driven(function* (this: JClassLoader, n: string): Gen<JClass> 
   } catch (e) { if (!rt.iof(e, "java/lang/ClassNotFoundException")) throw e; }
   return rememberLoaded(this, n, (yield vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)) as JClass);
 });
+const packages = new Map<string, unknown>();
+/** libcore's Package for `name`, one per name as a class loader keeps them. Package's initializer
+ *  and constructor never suspend, so a caller does not suspend on its first package either. */
+export function packageNamed(name: string): unknown {
+  const known = packages.get(name);
+  if (known) return known;
+  const info = rt.link("java/lang/Package"), pending = rt.initClass(info);
+  if (pending) return pending.then(() => packageNamed(name));
+  const p = new info.ctor();
+  vcall(p, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V",
+    name, null, null, null, null, null, null, null, null);
+  packages.set(name, p);
+  return p;
+}
+const loaderPackages = new WeakMap<Runtime, { classes: number; names: Set<string> }>();
+/** the packages whose classes a loader's runtime can define */
+function definesPackage(runtime: Runtime, name: string): boolean {
+  let known = loaderPackages.get(runtime);
+  if (!known || known.classes !== runtime.dexIndex.size) {
+    const names = new Set<string>();
+    for (const cls of runtime.dexIndex.keys()) names.add(cls.slice(0, Math.max(0, cls.lastIndexOf("/"))));
+    loaderPackages.set(runtime, known = { classes: runtime.dexIndex.size, names });
+  }
+  return known.names.has(slashName(name)) || !!runtime.parent && definesPackage(runtime.parent, name);
+}
 rt.register({
   name: "java/lang/ClassLoader",
   ctor: JClassLoader,
   methods: {
+    "getPackage(Ljava/lang/String;)Ljava/lang/Package;": function (this: JClassLoader, name: string) {
+      return definesPackage(this.runtime, name) ? packageNamed(name) : null;
+    },
     "static getSystemClassLoader()Ljava/lang/ClassLoader;": systemClassLoader,
     "<init>()V": function (this: JClassLoader) { this.parent = bootLoader; },
     "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },

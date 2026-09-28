@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
+import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import type { Cells } from "../compiler";
 
@@ -78,7 +78,11 @@ rt.register({ name: "java/lang/reflect/AccessibleObject", ctor: JAccessibleObjec
   "trySetAccessible()Z": function (this: JAccessibleObject) { this.accessible = 1; return 1; },
 } });
 
-export class JMethod extends JAccessibleObject {
+/** Method's and Constructor's common superclass (API 26), whose platform methods they share */
+class JExecutable extends JAccessibleObject {}
+rt.register({ name: "java/lang/reflect/Executable", ctor: JExecutable, sup: "java/lang/reflect/AccessibleObject",
+  ifaces: ["java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"] });
+export class JMethod extends JExecutable {
   owner!: ClassInfo;
   name = "";
   desc = "";
@@ -670,7 +674,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
 
 rt.register({
   name: "java/lang/reflect/Method", ctor: JMethod,
-  sup: "java/lang/reflect/AccessibleObject",
+  sup: "java/lang/reflect/Executable",
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JMethod) { return this.name; },
@@ -738,7 +742,7 @@ function invocationTarget(e: unknown): JThrowable {
 }
 // ── reflect Constructor. <init> mangles to i$<hash(desc)> with NO class component, so a
 // ctor must always be invoked through the prototype of the class that DECLARES it.
-export class JCtor extends JAccessibleObject {
+export class JCtor extends JExecutable {
   owner!: ClassInfo;
   desc = "()V";
   flags = 1;
@@ -769,7 +773,7 @@ export function classCtors(info: ClassInfo): JCtor[] {
 }
 rt.register({
   name: "java/lang/reflect/Constructor", ctor: JCtor,
-  sup: "java/lang/reflect/AccessibleObject",
+  sup: "java/lang/reflect/Executable",
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JCtor) { return dotName(this.owner.name); },
@@ -1076,11 +1080,8 @@ function installClassReflection() {
   };
   M["getEnclosingMethod()Ljava/lang/reflect/Method;"] = () => null;
   M["getPackage()Ljava/lang/Package;"] = function (this: JClass) {
-    const info = rt.link("java/lang/Package");
-    const p = new info.ctor() as any;
     const n = this.ci?.name ?? "";
-    p.pname = n.includes("/") ? dotName(n.slice(0, n.lastIndexOf("/"))) : "";
-    return p;
+    return this.ci && n.includes("/") ? packageNamed(dotName(n.slice(0, n.lastIndexOf("/")))) : null;
   };
   M["getTypeParameters()[Ljava/lang/reflect/TypeVariable;"] = function (this: JClass) {
     return jarray(this.ci ? typeVarsOf(this.ci).slice() : [], "Ljava/lang/reflect/TypeVariable;");
@@ -1145,6 +1146,15 @@ function installClassReflection() {
     const out = Array.isArray(v) ? v.map((e) => (e && typeof e === "object" && "idx" in e ? (ci!.owner ?? rt).classFor(descToName(ci!.dex!.type(e.idx))) : null)).filter(Boolean) : [];
     return jarray(out, "Ljava/lang/Class;");
   };
+  // the public member classes of this class and its superclasses
+  M["getClasses()[Ljava/lang/Class;"] = function (this: JClass) {
+    const out: JClass[] = [];
+    for (let ci = this.ci; ci; ci = ci.superInfo) {
+      for (const member of (M["getDeclaredClasses()[Ljava/lang/Class;"] as (this: JClass) => JClass[]).call((ci.owner ?? rt).classFor(ci.name)))
+        if (vcall(member, "getModifiers", "()I") & 1) out.push(member);
+    }
+    return jarray(out, "Ljava/lang/Class;");
+  };
   M["getDeclaredMethods()[Ljava/lang/reflect/Method;"] = function (this: JClass) {
     return jarray(this.ci ? classMethods(this.ci, true) : [], "Ljava/lang/reflect/Method;");
   };
@@ -1200,11 +1210,6 @@ export function classDesc(c: JClass): string {
 rt.link("java/lang/reflect/Method");
 rt.link("java/lang/reflect/Constructor");
 installClassReflection();
-
-rt.register({
-  name: "java/lang/Package", ctor: class extends JObj { pname = ""; },
-  methods: { "getName()Ljava/lang/String;": function (this: any) { return this.pname; } },
-});
 
 // ── java.lang.reflect.Proxy: one synthetic class per interface set. Every interface method, and
 // Object's equals/hashCode/toString which Java routes the same way, boxes its arguments into the
