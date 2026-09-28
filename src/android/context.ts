@@ -298,6 +298,14 @@ const contextMethods: NativeSpec["methods"] = {
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
   "getMainLooper()Landroid/os/Looper;": () => mainLooper,
   "getMainExecutor()Ljava/util/concurrent/Executor;": mainExecutor,
+  // API 34: the context stays on the default device, so its device id never changes
+  "getDeviceId()I": () => 0,
+  "registerDeviceIdChangeListener(Ljava/util/concurrent/Executor;Ljava/util/function/IntConsumer;)V": () => {},
+  "unregisterDeviceIdChangeListener(Ljava/util/function/IntConsumer;)V": () => {},
+  "createDeviceContext(I)Landroid/content/Context;": function (this: JContext, id: number) {
+    if (id !== 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a valid ID of the default device or any virtual device: " + id);
+    return this;
+  },
   "getSystemService(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContext, name: string) {
     return systemService(this, name);
   },

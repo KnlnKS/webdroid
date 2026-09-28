@@ -65,6 +65,7 @@ class JActivityOptions extends JObj {
   animationType = -1;
   packageName: string | null = null;
   bounds: number[] | null = null;
+  shareIdentity = false;
 }
 const boundsAnimation = (type: 2 | 11) => async (view: JView, x: number, y: number, width: number, height: number) => {
   const options = new JActivityOptions();
@@ -95,8 +96,11 @@ rt.register({
       if (this.animationType !== -1) bundle.map.set("android:activity.animType", this.animationType);
       if (this.bounds) for (const [i, key] of ["animStartX", "animStartY", "animWidth", "animHeight"].entries())
         bundle.map.set("android:activity." + key, this.bounds[i]);
+      if (this.shareIdentity) bundle.map.set("android:activity.shareIdentity", 1);
       return bundle;
     },
+    "setShareIdentityEnabled(Z)Landroid/app/ActivityOptions;": function (this: JActivityOptions, on: number) { this.shareIdentity = !!on; return this; },
+    "isShareIdentityEnabled()Z": function (this: JActivityOptions) { return this.shareIdentity ? 1 : 0; },
   },
 });
 rt.register({
@@ -654,6 +658,8 @@ for (const [name, methods, statics] of [
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
     "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
+    // API 35: no start records are kept for this process
+    "getHistoricalProcessStartReasons(I)Ljava/util/List;": () => newArrayList(),
     "getAppTasks()Ljava/util/List;": () => newArrayList(appTasks()),
     "getRunningServices(I)Ljava/util/List;": (max: number) => {
       const all = [...runningServices.values()];
@@ -752,6 +758,8 @@ for (const [name, methods, statics] of [
     PROPERTY_OUTPUT_SAMPLE_RATE: "android.media.property.OUTPUT_SAMPLE_RATE", PROPERTY_OUTPUT_FRAMES_PER_BUFFER: "android.media.property.OUTPUT_FRAMES_PER_BUFFER",
     STREAM_VOICE_CALL: 0, STREAM_SYSTEM: 1, STREAM_RING: 2, STREAM_MUSIC: 3, STREAM_ALARM: 4, STREAM_NOTIFICATION: 5,
     AUDIOFOCUS_GAIN: 1, AUDIOFOCUS_LOSS: -1, AUDIOFOCUS_REQUEST_GRANTED: 1, AUDIOFOCUS_REQUEST_FAILED: 0,
+    // AOSP's getService() caches the audio service binder here, which servicemanager answers for
+    sService: null,
   }],
   // the CellLocation family an app type-checks a (null) cell against; a device with no radio reports none
   ["android/telephony/CellLocation", {
@@ -875,6 +883,10 @@ for (const [name, methods, statics] of [
       appHost?.setApplicationNightMode(mode);
     },
     "getCurrentModeType()I": () => 1,
+    // API 34: the device's contrast setting is standard, and it does not change underneath an app
+    "getContrast()F": () => 0,
+    "addContrastChangeListener(Ljava/util/concurrent/Executor;Landroid/app/UiModeManager$ContrastChangeListener;)V": () => {},
+    "removeContrastChangeListener(Landroid/app/UiModeManager$ContrastChangeListener;)V": () => {},
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(),
