@@ -1,6 +1,6 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { type JFile, mkFile, readStreamFully } from "../jvm/natives/jio";
+import { newFile, pathOf, readStreamFully } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { i8 } from "../jvm/abi";
 
@@ -12,8 +12,8 @@ async function openRead(this: JAtomicFile): Promise<unknown> {
   return newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", this.base);
 }
 rt.register({ name: "android/util/AtomicFile", ctor: JAtomicFile, methods: {
-  "<init>(Ljava/io/File;)V": function (this: JAtomicFile, base: JFile) { this.base = base.path; },
-  "getBaseFile()Ljava/io/File;": function (this: JAtomicFile) { return mkFile(this.base); },
+  "<init>(Ljava/io/File;)V": function (this: JAtomicFile, base: JObj) { this.base = pathOf(base); },
+  "getBaseFile()Ljava/io/File;": function (this: JAtomicFile) { return newFile(this.base); },
   "startWrite()Ljava/io/FileOutputStream;": function (this: JAtomicFile) {
     recover(this);
     vfs.mkdir(this.base.slice(0, this.base.lastIndexOf("/")));

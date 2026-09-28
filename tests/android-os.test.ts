@@ -8,7 +8,7 @@ import { TV, type XmlAttr } from "../src/android/axml";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { vcall, newObj, vcallAsync, JThread, curThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
-import { loadFrameworkJar } from "./java";
+import { loadFrameworkJar, loadLibcore } from "./java";
 import { onMain } from "../src/android/mainloop";
 import { JBitmap } from "../src/android/graphics";
 import { BridgeCalls } from "../src/shell/bridgecalls";
@@ -393,6 +393,7 @@ describe("process-user-handle", () => {
 
 describe("procfs", () => {
   test("Java and native-facing procfs expose the current process cmdline", async () => {
+    await loadLibcore();
     setProcessIdentity(2468, 10001);
     setProcessName("com.example.app");
     for (const path of ["/proc/self/cmdline", "/proc/2468/cmdline"]) {

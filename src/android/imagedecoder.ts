@@ -1,6 +1,6 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { type JFile, readStreamFully } from "../jvm/natives/jio";
+import { readStreamFully } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
 import { decodeBytes } from "./graphics";
 import { u8 } from "../jvm/abi";
@@ -45,7 +45,7 @@ rt.register({ name: "android/graphics/ImageDecoder$ImageInfo", ctor: JImageInfo,
 for (const name of ["OnHeaderDecodedListener", "OnPartialImageListener"])
   rt.register({ name: "android/graphics/ImageDecoder$" + name, ctor: class extends JObj {} });
 rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, methods: {
-  "static createSource(Ljava/io/File;)Landroid/graphics/ImageDecoder$Source;": (file: JFile) =>
+  "static createSource(Ljava/io/File;)Landroid/graphics/ImageDecoder$Source;": (file: unknown) =>
     streamSource(() => newObj("java/io/FileInputStream", "(Ljava/io/File;)V", file)),
   "static createSource(Landroid/content/res/Resources;I)Landroid/graphics/ImageDecoder$Source;": (res: unknown, id: number) =>
     streamSource(() => vcall(res, "openRawResource", "(I)Ljava/io/InputStream;", id)),

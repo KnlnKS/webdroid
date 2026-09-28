@@ -36,7 +36,7 @@ import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
 import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
 import { JActivity } from "../src/android/app";
-import { scall } from "./java";
+import { scall, loadLibcore } from "./java";
 
 describe("adservices", () => {
   rt.linkNatives();
@@ -162,6 +162,7 @@ describe("file-system-provider", () => {
   rt.linkNatives();
 
   test("FileSystemProvider performs file operations through the VFS", async () => {
+    await loadLibcore();
     const provider = await newObj("java/nio/file/spi/FileSystemProvider", "()V");
     const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/data/provider-test.txt");
     const path = await vcall(file, "toPath", "()Ljava/nio/file/Path;");
@@ -484,6 +485,7 @@ describe("provider-file-ipc", () => {
 describe("resolver-file", () => {
   rt.linkNatives();
   test("resolver file opens decode paths and reject missing files without creating them", async () => {
+    await loadLibcore();
     const resolver = rt.make("android/content/ContentResolver");
     const path = "/resolver file?x=1", uri = mkUri("file:///resolver%20file%3Fx%3D1?ignored=2#fragment");
     vfs.write(path, Uint8Array.of(7, 8));

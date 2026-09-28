@@ -1847,6 +1847,8 @@ const ownProps: Record<string, string> = {
   // The loader indexes every DEX before application initialization, as ART 2.1 does.
   "java.vm.version": "2.1.0",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/", "os.name": "Linux",
+  // System.initUnchangeableSystemProperties: $JAVA_HOME, unset on a device
+  "java.home": "/system",
   // libcore reads these from uname and the app's passwd entry
   "os.arch": "aarch64", "os.version": "3.10.0", "user.home": "/data",
   // RuntimeInit's default user agent from Build.VERSION.RELEASE, MODEL and ID

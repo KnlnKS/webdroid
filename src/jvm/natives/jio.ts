@@ -1,154 +1,26 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
+import { mangleStaticField, mangleMethod, charsToString, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
 import { charsetName, encodeModifiedUtf8, encodeString, streamDecoder, type StreamDecoder } from "../charset";
-import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
+import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { csText } from "./jchars";
 import { readFully, writable, type FileSource } from "../../shell/lazyfile";
 import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
 import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer, type JCharsetDecoder } from "./jnio";
-import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd } from "../../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
 
-export class JFile extends JObj {
-  /** the absolute path the VFS reads */
-  path = "";
-  /** a relative path as Java reports it; it resolves against user.dir, "/" */
-  rel: string | null = null;
-  get javaPath(): string { return this.rel ?? this.path; }
-}
-/** java.io.File's normalization: repeated and trailing separators go, a relative path stays relative */
-function initFile(f: JFile, p: string | null): void {
-  if (p === null) return rt.npe();
-  let j = p.replace(/\/+/g, "/");
-  if (j.length > 1 && j.endsWith("/")) j = j.slice(0, -1);
-  f.path = vfs.norm(j);
-  f.rel = j.startsWith("/") ? null : j;
-}
-function compareFile(this: JFile, other: unknown): number {
-  if (other === null) throw rt.mkThrowable("java/lang/NullPointerException", "pathname");
-  if (!(other instanceof JFile)) throw rt.mkThrowable("java/lang/ClassCastException", "Not a File");
-  return stringCompare(this.javaPath, other.javaPath);
-}
-export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
-/** `new File(p)`: File's own methods return a plain File, whatever the receiver's class */
-function fileOf(p: string): JFile { const f = new JFile(); initFile(f, p); return f; }
-const childOf = (d: JFile, name: string) => fileOf(d.javaPath + "/" + name);
-const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => childOf(d, n)), "Ljava/io/File;");
-// apps implement these to pick over a directory listing (File.listFiles(filter))
-rt.markers("java/io/FilenameFilter", "java/io/FileFilter");
-// Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
-function createTempFile(prefix: string, suffix: string | null, dir: JFile | null): JFile {
-  if (prefix.length < 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Prefix string too short");
-  for (;;) {
-    const f = mkFile(`${dir?.path ?? "/data/local/tmp"}/${prefix}${Math.floor(Math.random() * 1e9)}${suffix ?? ".tmp"}`);
-    if (!vfs.exists(f.path)) { vfs.write(f.path, new Uint8Array(0)); return f; }
-  }
-}
-function filePath(this: JFile) { return this.javaPath; }
-function absolutePath(this: JFile) { return this.path; }
-/** File.getParent: the path before its last separator, the root for a top-level absolute path */
-function parentOf(f: JFile): string | null {
-  const p = f.javaPath, i = p.lastIndexOf("/"), prefix = f.rel === null ? 1 : 0;
-  if (i >= prefix) return p.slice(0, i);
-  return prefix && p.length > prefix ? "/" : null;
-}
-function absoluteFile(this: JFile) { return this.rel === null ? this : mkFile(this.path); }
-function makeDirs(this: JFile) { vfs.mkdir(this.path); return 1; }
+/** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
+export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
+/** `new File(path)` */
+export const newFile = (path: string): Promise<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
 const markUnsupported = (): never => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); };
 /** the mark/reset trio of a stream that cannot rewind */
 export const noMark = { "markSupported()Z": () => 0, "mark(I)V": () => {}, "reset()V": markUnsupported };
-rt.register({
-  name: "java/io/File", ctor: JFile,
-  ifaces: ["java/io/Serializable", "java/lang/Comparable"],
-  statics: { separator: "/", separatorChar: 47, pathSeparator: ":", pathSeparatorChar: 58 },
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JFile, p: string | null) { initFile(this, p); },
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JFile, d: string | null, n: string | null) {
-      if (n === null) return rt.npe();
-      initFile(this, d === null ? n : d + "/" + n);
-    },
-    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JFile, d: JFile | null, n: string | null) {
-      if (n === null) return rt.npe();
-      initFile(this, d === null ? n : d.javaPath + "/" + n);
-    },
-    "getPath()Ljava/lang/String;": filePath,
-    "getAbsolutePath()Ljava/lang/String;": absolutePath,
-    "getCanonicalPath()Ljava/lang/String;": absolutePath,
-    "isAbsolute()Z": function (this: JFile) { return +(this.rel === null); },
-    "toURI()Ljava/net/URI;": function (this: JFile) {
-      let path = this.path.startsWith("/") ? this.path : "/" + this.path;
-      if (vfs.isDir(this.path) && !path.endsWith("/")) path += "/";
-      if (path.startsWith("//")) path = "//" + path;
-      return newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "file", null, path, null);
-    },
-    "getName()Ljava/lang/String;": function (this: JFile) { return this.javaPath.slice(this.javaPath.lastIndexOf("/") + 1); },
-    "isHidden()Z": function (this: JFile) { return this.path.slice(this.path.lastIndexOf("/") + 1).startsWith(".") ? 1 : 0; },
-    "getParent()Ljava/lang/String;": function (this: JFile) { return parentOf(this); },
-    "getParentFile()Ljava/io/File;": function (this: JFile) {
-      const parent = parentOf(this);
-      return parent === null ? null : fileOf(parent);
-    },
-    "getAbsoluteFile()Ljava/io/File;": absoluteFile,
-    "getCanonicalFile()Ljava/io/File;": absoluteFile,
-    "exists()Z": function (this: JFile) { return vfs.exists(this.path) ? 1 : 0; },
-    "isDirectory()Z": function (this: JFile) { return vfs.isDir(this.path) ? 1 : 0; },
-    "isFile()Z": function (this: JFile) { return vfs.stat(this.path) ? 1 : 0; },
-    "length()J": function (this: JFile) { return BigInt(vfs.stat(this.path)?.size ?? 0); },
-    "lastModified()J": function () { return BigInt(Date.now()); },
-    "setLastModified(J)Z": () => 1,
-    "mkdir()Z": makeDirs,
-    "mkdirs()Z": makeDirs,
-    "createNewFile()Z": function (this: JFile) {
-      if (vfs.exists(this.path)) return 0;
-      vfs.write(this.path, new Uint8Array(0));
-      return 1;
-    },
-    "static createTempFile(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;": (p: string, s: string | null) => createTempFile(p, s, null),
-    "static createTempFile(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;": createTempFile,
-    // a directory goes only when empty, as unlink/rmdir decide
-    "delete()Z": function (this: JFile) { return +(vfs.isDir(this.path) ? !vfs.list(this.path).length && vfs.rmdir(this.path) : vfs.delete(this.path)); },
-    "deleteOnExit()V": function () {},
-    "renameTo(Ljava/io/File;)Z": function (this: JFile, dst: JFile) {
-      return renamePath(null, this.path, dst.path) === 0 ? 1 : 0;
-    },
-    "list()[Ljava/lang/String;": function (this: JFile) {
-      return jarray(vfs.list(this.path), "Ljava/lang/String;");
-    },
-    "listFiles()[Ljava/io/File;": function (this: JFile) { return listFiles(this); },
-    "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": driven(function* (this: JFile, f: unknown): Gen {
-      const out: JFile[] = [];
-      for (const n of vfs.list(this.path)) if (f === null || (yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n))) out.push(childOf(this, n));
-      return jarray(out, "Ljava/io/File;");
-    }),
-    "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": driven(function* (this: JFile, f: unknown): Gen {
-      const out: JFile[] = [];
-      for (const c of listFiles(this)) if (f === null || (yield vcall(f, "accept", "(Ljava/io/File;)Z", c))) out.push(c);
-      return jarray(out, "Ljava/io/File;");
-    }),
-    "list(Ljava/io/FilenameFilter;)[Ljava/lang/String;": driven(function* (this: JFile, f: unknown): Gen {
-      const out: string[] = [];
-      for (const n of vfs.list(this.path)) if (!f || (yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n))) out.push(n);
-      return jarray(out, "Ljava/lang/String;");
-    }),
-    "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
-    "setReadOnly()Z": () => 1,
-    "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
-    "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
-    "toString()Ljava/lang/String;": filePath,
-    "compareTo(Ljava/io/File;)I": compareFile,
-    "compareTo(Ljava/lang/Object;)I": compareFile,
-    "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.javaPath === this.javaPath ? 1 : 0; },
-    "hashCode()I": function (this: JFile) { return stringHash(this.javaPath) ^ 1234321; },
-    "toPath()Ljava/nio/file/Path;": function (this: JFile) { return mkPath(this.path); },
-    "getFreeSpace()J": () => 1073741824n,
-    "getUsableSpace()J": () => 1073741824n,
-    "getTotalSpace()J": () => 2147483648n,
-  },
-});
+
 
 export class JInputStream extends JObj {
   buf: Uint8Array = new Uint8Array(0);
@@ -322,7 +194,7 @@ rt.register({
   methods: {
     "getFD()Ljava/io/FileDescriptor;": function (this: JFileInputStream) { return this.fd; },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "<init>(Ljava/io/File;)V": function (this: JFileInputStream, f: JFile) { if (!f) return rt.npe(); openRead.call(this, f.path); },
+    "<init>(Ljava/io/File;)V": function (this: JFileInputStream, f: JObj | null) { if (!f) return rt.npe(); openRead.call(this, pathOf(f)); },
     "<init>(Ljava/lang/String;)V": openRead,
     "<init>(Ljava/io/FileDescriptor;)V": adoptFd,
     "<init>(Ljava/io/FileDescriptor;Z)V": adoptFd,
@@ -598,8 +470,8 @@ rt.register({
         this.offset = d.fd >= 0 ? checkedFdResult(javaSeekFd(d.fd, 0, 1)) : this.append ? vfs.stat(d.path)?.size ?? 0 : 0;
       }
     },
-    "<init>(Ljava/io/File;)V": function (this: JFOS, f: JFile) { openWrite.call(this, f.path); },
-    "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
+    "<init>(Ljava/io/File;)V": function (this: JFOS, f: JObj) { openWrite.call(this, pathOf(f)); },
+    "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JObj, app: number) { openWrite.call(this, pathOf(f), app); },
     "<init>(Ljava/lang/String;)V": openWrite,
     "<init>(Ljava/lang/String;Z)V": openWrite,
     "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this); },
@@ -653,7 +525,7 @@ rt.register({
   name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
-    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
+    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JObj, m: string) { rafOpen.call(this, pathOf(f), m); },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
     "length()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.file.len); },
     "getFilePointer()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.pos); },
@@ -1155,7 +1027,7 @@ rt.register({
   name: "java/io/FileReader", ctor: class extends JReader {}, sup: "java/io/InputStreamReader",
   methods: {
     "<init>(Ljava/lang/String;)V": openReader,
-    "<init>(Ljava/io/File;)V": function (this: JReader, f: JFile) { openReader.call(this, f.path); },
+    "<init>(Ljava/io/File;)V": function (this: JReader, f: JObj) { openReader.call(this, pathOf(f)); },
   },
 });
 /** A buffering Reader over another Reader, which may be the app's own subclass. */
@@ -1418,8 +1290,8 @@ rt.register({
   },
 });
 
-const openWriter = async function (this: JOSW, f: JFile | string, append = 0) {
-  this.sink = await newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", typeof f === "string" ? f : f.path, append);
+const openWriter = async function (this: JOSW, f: JObj | string, append = 0) {
+  this.sink = await newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", typeof f === "string" ? f : pathOf(f), append);
 };
 rt.register({
   name: "java/io/FileWriter", ctor: class extends JOSW {}, sup: "java/io/OutputStreamWriter",
@@ -1636,7 +1508,7 @@ rt.register({
   methods: {
     "static of(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": (first: string, more: string[] | null) => joinPath(first, more),
     "toString()Ljava/lang/String;": function (this: JNioPath) { return this.p; },
-    "toFile()Ljava/io/File;": function (this: JNioPath) { return mkFile(this.p); },
+    "toFile()Ljava/io/File;": function (this: JNioPath) { return newFile(this.p); },
     "getFileSystem()Ljava/nio/file/FileSystem;": () => nioFileSystem,
     "getParent()Ljava/nio/file/Path;": function (this: JNioPath) {
       const i = this.p.lastIndexOf("/");
@@ -1648,6 +1520,11 @@ rt.register({
 });
 rt.markers("java/nio/file/CopyOption", "java/nio/file/OpenOption", "java/nio/file/attribute/FileAttribute", "java/nio/file/attribute/FileAttributeView");
 const joinPath = (first: string, more: string[] | null) => mkPath(vfs.norm([first, ...(more ?? [])].join("/")));
+// File.toPath asks the default file system; java.nio.file is still served here, over the VFS
+rt.register({
+  name: "java/nio/file/FileSystems", ctor: class extends JObj {},
+  methods: { "static getDefault()Ljava/nio/file/FileSystem;": () => nioFileSystem },
+});
 rt.register({
   name: "java/nio/file/Paths", ctor: class extends JObj {},
   methods: {
@@ -1831,7 +1708,7 @@ rt.register({
     "<init>(Ljava/io/InputStream;)V": scanStream,
     "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": scanStream,
     "<init>(Ljava/lang/String;)V": function (this: JScanner, s: string) { this.text = s; },
-    "<init>(Ljava/io/File;)V": driven(function* (this: JScanner, f: JFile): Gen { this.text = yield fileText(f.path); }),
+    "<init>(Ljava/io/File;)V": driven(function* (this: JScanner, f: JObj): Gen { this.text = yield fileText(pathOf(f)); }),
     "useDelimiter(Ljava/lang/String;)Ljava/util/Scanner;": function (this: JScanner, p: string) { this.delim = new RegExp(p, "y"); this.delimAll = new RegExp(p, "g"); return this; },
     "hasNext()Z": function (this: JScanner) { return peekToken(this) !== null ? 1 : 0; },
     "next()Ljava/lang/String;": function (this: JScanner) { return nextToken(this); },

@@ -2,6 +2,7 @@ import { slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
 import { JObj, rt, type Runtime, driven, type Gen } from "../runtime";
 import { zipTree } from "./jzip";
+import { pathOf } from "./jio";
 import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
 import { vfs } from "../../shell/vfs";
@@ -47,7 +48,7 @@ rt.register({
   name: "dalvik/system/DexFile", ctor: JDexFile,
   methods: {
     "<init>(Ljava/lang/String;)V": openDexFile,
-    "<init>(Ljava/io/File;)V": function (this: JDexFile, f: { path: string }) { openDexFile.call(this, f.path); },
+    "<init>(Ljava/io/File;)V": function (this: JDexFile, f: JObj) { openDexFile.call(this, pathOf(f)); },
     "static loadDex(Ljava/lang/String;Ljava/lang/String;I)Ldalvik/system/DexFile;": (source: string) => { const d = new JDexFile(); openDexFile.call(d, source); return d; },
     "getName()Ljava/lang/String;": function (this: JDexFile) { return this.path; },
     "toString()Ljava/lang/String;": function (this: JDexFile) { return this.path; },

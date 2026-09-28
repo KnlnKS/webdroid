@@ -11,7 +11,7 @@ import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } fr
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
-import { readStreamFully, type JFileDescriptor } from "../jvm/natives/jio";
+import { pathOf, readStreamFully, type JFileDescriptor } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
@@ -330,7 +330,7 @@ rt.register({
     "static create(Ljava/lang/String;I)Landroid/graphics/Typeface;": typefaceFor,
     "static createFromAsset(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": assetFont,
     "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": driven(function* (p: string): Gen { return loadTypeface(yield vfs.readFile(p)); }),
-    "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": driven(function* (f: { path: string } | null): Gen { return loadTypeface(f ? yield vfs.readFile(f.path) : null); }),
+    "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": driven(function* (f: JObj | null): Gen { return loadTypeface(f ? yield vfs.readFile(pathOf(f)) : null); }),
     "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) =>
       mkTypeface(base?.family ?? ROBOTO, weight >= 600, !!italic, weight),
     "static create(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;": (base: JTypeface | null, style: number) =>

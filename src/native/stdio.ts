@@ -139,7 +139,7 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
   vfs.rename(from, to);
   return 0;
 }
-function accessPath(cpu: Cpu, path: string, mode: number): number {
+export function accessPath(cpu: Cpu | null, path: string, mode: number): number {
   if (mode & ~7) return fail(cpu, E.INVAL);
   const p = vfs.norm(path);
   return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
@@ -150,15 +150,28 @@ export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: numbe
   return typeof path === "string" ? accessPath(cpu, path, mode) : path;
 }
 /** a name for a new entry at normalized `p`: EEXIST if taken, ENOENT without its parent directory */
-function newName(cpu: Cpu, p: string): number {
+function newName(cpu: Cpu | null, p: string): number {
   if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST);
   const parent = p.slice(0, p.lastIndexOf("/")) || "/";
   return parent !== "/" && !vfs.isDir(parent) ? fail(cpu, E.NOENT) : 0;
 }
-function mkdirPath(cpu: Cpu, path: string): number {
+export function mkdirPath(cpu: Cpu | null, path: string): number {
   const p = vfs.norm(path), taken = newName(cpu, p);
   if (taken) return taken;
   vfs.mkdir(p); return 0;
+}
+/** open(O_CREAT|O_EXCL) and close: an empty file where nothing was */
+export function createPath(cpu: Cpu | null, path: string): number {
+  const p = vfs.norm(path), taken = newName(cpu, p);
+  if (taken) return taken;
+  vfs.write(p, new Uint8Array(0)); return 0;
+}
+/** remove(3): unlink a file, or rmdir an empty directory */
+export function removePath(cpu: Cpu | null, path: string): number {
+  const p = vfs.norm(path);
+  if (!vfs.isDir(p)) return vfs.delete(p) ? 0 : fail(cpu, E.NOENT);
+  if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY);
+  vfs.rmdir(p); return 0;
 }
 function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   path = vfs.norm(path);

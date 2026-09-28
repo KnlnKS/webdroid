@@ -4,7 +4,7 @@ import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, 
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, newObj, defineException, checkFromIndexSize } from "./jlang";
-import { JFile, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
+import { pathOf, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { JBuffer } from "./jnio";
 import { mkIter } from "./jutil";
@@ -535,7 +535,7 @@ async function openZip(this: JZipFile, path: string) {
   if (source) { this.entries = await centralDirOfSource(source); this.data = (e) => entryBytesOfSource(source, e); return; }
   throw rt.mkThrowable("java/io/FileNotFoundException", path + " (No such file or directory)");
 }
-const openZipFile = function (this: JZipFile, f: JFile) { return openZip.call(this, f.path); };
+const openZipFile = function (this: JZipFile, f: JObj) { return openZip.call(this, pathOf(f)); };
 rt.register({
   name: "java/util/zip/ZipFile", ctor: JZipFile, ifaces: ["java/io/Closeable"],
   methods: {

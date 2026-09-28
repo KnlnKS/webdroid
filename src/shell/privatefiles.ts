@@ -2,7 +2,7 @@ import type { vfs } from "./vfs";
 import { openDb, txDone } from "./idb";
 import { DiskFile, DiskStore } from "./diskstore";
 
-type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" };
+type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number };
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
 const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
 const FLUSH_SETTLE_MS = 100, FLUSH_MAX_MS = 2000;
@@ -43,15 +43,15 @@ export class PrivateFiles {
   detach(pid: number): void { this.views.delete(pid); }
   /** what `view` holds at `path`; a file grown through a descriptor past SPILL_BYTES moves to disk */
   private valueOf(view: typeof vfs, path: string, streamed: boolean): FileValue | null {
-    const bytes = view.files.get(path), source = view.lazyFiles.get(path);
+    const bytes = view.files.get(path), source = view.lazyFiles.get(path), mtime = view.mtimes.get(path);
     if (bytes && streamed && bytes.length >= SPILL_BYTES) {
       const disk = this.disk.create();
       disk.write(0, bytes.slice());
-      return { kind: "disk", id: disk.id, size: disk.size };
+      return { kind: "disk", id: disk.id, size: disk.size, mtime };
     }
-    if (bytes) return { kind: "file", bytes };
-    if (source instanceof DiskFile) return { kind: "disk", id: source.id, size: source.size };
-    return view.dirs.has(path) ? { kind: "directory" } : null;
+    if (bytes) return { kind: "file", bytes, mtime };
+    if (source instanceof DiskFile) return { kind: "disk", id: source.id, size: source.size, mtime };
+    return view.dirs.has(path) ? { kind: "directory", mtime } : null;
   }
   /** A burst of writes (a download's chunks) settles into one transaction, and a steady stream
    *  still persists every FLUSH_MAX_MS: each flush stores whole files, so per-write flushing is
@@ -68,6 +68,7 @@ export class PrivateFiles {
     if (value?.kind === "file") view.write(path, value.bytes, false);
     else if (value?.kind === "disk") view.adopt(path, this.disk.file(value.id, value.size));
     else { view.delete(path, false); if (value) view.dirs.add(path); }
+    if (value?.mtime !== undefined) view.mtimes.set(path, value.mtime);
   }
   private update(path: string, value: FileValue | null): void {
     const previous = this.values.get(path);
@@ -90,9 +91,10 @@ export class PrivateFiles {
             if (!cursor) return;
             const path = cursor.key, value: unknown = cursor.value;
             if (typeof path === "string" && include(path) && !this.values.has(path) && !this.pending.has(path) && value && typeof value === "object" && "kind" in value) {
-              if (value.kind === "directory") this.update(path, { kind: "directory" });
-              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") this.update(path, { kind: "disk", id: value.id, size: value.size });
-              else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes });
+              const mtime = "mtime" in value && typeof value.mtime === "number" ? value.mtime : undefined;
+              if (value.kind === "directory") this.update(path, { kind: "directory", mtime });
+              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") this.update(path, { kind: "disk", id: value.id, size: value.size, mtime });
+              else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes, mtime });
             }
             cursor.continue();
           };
@@ -124,7 +126,7 @@ export class PrivateFiles {
       // a view into a larger growing buffer would otherwise clone the whole buffer
       for (const [path, value] of pending) {
         if (!value) store.delete(path);
-        else store.put(value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength ? { kind: "file", bytes: value.bytes.slice() } : value, path);
+        else store.put(value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength ? { ...value, bytes: value.bytes.slice() } : value, path);
       }
       await txDone(transaction);
       await Promise.all(orphans.map((id) => this.disk.remove(id)));

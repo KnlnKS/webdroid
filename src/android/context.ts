@@ -1,5 +1,5 @@
 import type { JIntentFilter } from "./intent-filter";
-import { type JFile, mkFile } from "../jvm/natives/jio";
+import { newFile } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
@@ -20,7 +20,7 @@ import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages } from "./packages";
 
-const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
+const privDir = (p: string) => { vfs.mkdir(p); return newFile(p); };
 
 export class JContext extends JObj {
   declare $host: AppHost;
@@ -353,14 +353,14 @@ const contextMethods: NativeSpec["methods"] = {
   "getExternalCacheDir()Ljava/io/File;": function (this: JContext) { return extCacheDir(this); },
   "getObbDir()Ljava/io/File;": function (this: JContext) { return obbDir(this); },
   // the array forms: one emulated volume, so each is the singleton of its scalar form
-  "getExternalFilesDirs(Ljava/lang/String;)[Ljava/io/File;": function (this: JContext, type: string | null) { return jarray([extFilesDir(this, type)], "Ljava/io/File;"); },
-  "getExternalCacheDirs()[Ljava/io/File;": function (this: JContext) { return jarray([extCacheDir(this)], "Ljava/io/File;"); },
-  "getObbDirs()[Ljava/io/File;": function (this: JContext) { return jarray([obbDir(this)], "Ljava/io/File;"); },
+  "getExternalFilesDirs(Ljava/lang/String;)[Ljava/io/File;": async function (this: JContext, type: string | null) { return jarray([await extFilesDir(this, type)], "Ljava/io/File;"); },
+  "getExternalCacheDirs()[Ljava/io/File;": async function (this: JContext) { return jarray([await extCacheDir(this)], "Ljava/io/File;"); },
+  "getObbDirs()[Ljava/io/File;": async function (this: JContext) { return jarray([await obbDir(this)], "Ljava/io/File;"); },
   "getDir(Ljava/lang/String;I)Ljava/io/File;": function (this: JContext, name: string) {
     return privDir(`/data/data/${this.$host.pkg}/app_${name}`);
   },
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
-    return mkFile(dbPath(this.$host.pkg, name));
+    return newFile(dbPath(this.$host.pkg, name));
   },
   "openOrCreateDatabase(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;": contextOpenDatabase,
   "openOrCreateDatabase(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;Landroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;": contextOpenDatabase,
@@ -372,7 +372,7 @@ const contextMethods: NativeSpec["methods"] = {
   },
   "getFileStreamPath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     privDir(`/data/data/${this.$host.pkg}/files`);
-    return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
+    return newFile(`/data/data/${this.$host.pkg}/files/${name}`);
   },
   "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": function (this: JContext, name: string) {
     return newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);

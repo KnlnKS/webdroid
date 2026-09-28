@@ -7,7 +7,7 @@ import { rt, JObj, type NativeSpec, fieldGetters, driven, type Gen } from "../jv
 import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
-import { type JFile } from "../jvm/natives/jio";
+import { pathOf } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader } from "./graphics";
@@ -123,7 +123,7 @@ class JFont extends JObj {
   ttcIndex = 0;
   style: JFontStyle = mkFontStyle(400, UPRIGHT);
   axes: JFontVariationAxis[] | null = null;
-  file: JFile | null = null;
+  file: JObj | null = null;
   srcId = 0;
   /** the CSS family this face was registered under (set when its FontFamily is built) */
   css = "";
@@ -162,7 +162,7 @@ class JFontBuilder extends JObj {
   err: string | null = null;
   weight = -1; slant = -1; ttcIndex = 0;
   axes: JFontVariationAxis[] | null = null;
-  file: JFile | null = null;
+  file: JObj | null = null;
   srcId = 0;
 }
 function fromBytes(this: JFontBuilder, b: Uint8Array | null, what: string) {
@@ -184,9 +184,9 @@ rt.register({
     "<init>(Landroid/graphics/fonts/Font;)V": function (this: JFontBuilder, f: JFont) {
       this.bytes = f.bytes; this.weight = f.style.weight; this.slant = f.style.slant; this.ttcIndex = f.ttcIndex; this.axes = f.axes; this.file = f.file; this.srcId = f.srcId;
     },
-    "<init>(Ljava/io/File;)V": driven(function* (this: JFontBuilder, f: JFile): Gen {
+    "<init>(Ljava/io/File;)V": driven(function* (this: JFontBuilder, f: JObj): Gen {
       this.file = f;
-      fromBytes.call(this, yield fileBytes(f.path), "Failed to read " + f.path);
+      fromBytes.call(this, yield fileBytes(pathOf(f)), "Failed to read " + pathOf(f));
     }),
     "<init>(Landroid/os/ParcelFileDescriptor;)V": driven(function* (this: JFontBuilder, pfd: any): Gen {
       fromBytes.call(this, yield fileBytes(pfd?.path ?? pfd?.fd?.path), "Failed to read file descriptor");
@@ -318,7 +318,7 @@ class JTypefaceBuilder extends JObj {
 }
 function tfbFrom(this: JTypefaceBuilder, b: Uint8Array | null) { this.bytes = b; }
 const tfbMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/io/File;)V": driven(function* (this: JTypefaceBuilder, f: JFile): Gen { tfbFrom.call(this, yield fileBytes(f.path)); }),
+  "<init>(Ljava/io/File;)V": driven(function* (this: JTypefaceBuilder, f: JObj): Gen { tfbFrom.call(this, yield fileBytes(pathOf(f))); }),
   "<init>(Ljava/lang/String;)V": driven(function* (this: JTypefaceBuilder, p: string): Gen { tfbFrom.call(this, yield fileBytes(p)); }),
   "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JTypefaceBuilder, fd: any): Gen { tfbFrom.call(this, yield fileBytes(fd?.path)); }),
   "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JTypefaceBuilder, am: JAssetManager, p: string) { tfbFrom.call(this, am.host.zip["assets/" + p] ?? null); },

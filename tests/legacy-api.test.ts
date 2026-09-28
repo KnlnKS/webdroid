@@ -264,6 +264,7 @@ test("security providers retain their constructor metadata", async () => {
 });
 
 test("reached JDK utility primitives preserve their Java behavior", async () => {
+  await loadLibcore();
   const reverse = scall("java/util/Collections", "reverseOrder", "()Ljava/util/Comparator;");
   expect(await vcall(reverse, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "a", "b")).toBeGreaterThan(0);
   expect(scall("java/util/Collections", "reverseOrder", "(Ljava/util/Comparator;)Ljava/util/Comparator;", reverse)).not.toBeNull();
@@ -288,6 +289,8 @@ test("reached JDK utility primitives preserve their Java behavior", async () => 
   expect(await vcall(writer, "toString", "()Ljava/lang/String;")).toBe("");
 
   const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/data/read-only");
+  expect(await vcall(file, "setReadOnly", "()Z")).toBe(0);
+  vfs.write("/data/read-only", new Uint8Array(0));
   expect(await vcall(file, "setReadOnly", "()Z")).toBe(1);
 });
 

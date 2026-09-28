@@ -4,7 +4,7 @@ import "../src/natives";
 import { mkPfd } from "../src/android/os";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, type JObj } from "../src/jvm/runtime";
-import { mkFile, JFileDescriptor, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
+import { newFile, JFileDescriptor, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
@@ -46,7 +46,7 @@ describe("android-pfd", () => {
 });
 
 describe("atomicfile", () => {
-  const make = (path: string) => newObj("android/util/AtomicFile", "(Ljava/io/File;)V", mkFile(path));
+  const make = async (path: string) => { await loadLibcore(); return newObj("android/util/AtomicFile", "(Ljava/io/File;)V", await newFile(path)); };
   const write = async (file: unknown, text: string) => {
     const stream = await vcall(file, "startWrite", "()Ljava/io/FileOutputStream;");
     const bytes = new TextEncoder().encode(text);
@@ -247,26 +247,9 @@ describe("file-input-descriptor", () => {
   });
 });
 
-describe("file-order", () => {
-  test("File natural ordering sorts paths case-sensitively and collapses equal paths", async () => {
-    const files = await newObj("java/util/TreeSet");
-    for (const path of ["/cache/z", "/cache/a", "/cache/Z", "/cache/a"])
-      await vcall(files, "add", "(Ljava/lang/Object;)Z", mkFile(path));
-    const iterator = await vcall(files, "iterator", "()Ljava/util/Iterator;");
-    const paths: string[] = [];
-    while (await vcall(iterator, "hasNext", "()Z"))
-      paths.push(await vcall(await vcall(iterator, "next", "()Ljava/lang/Object;"), "getPath", "()Ljava/lang/String;"));
-    expect(paths).toEqual(["/cache/Z", "/cache/a", "/cache/z"]);
-    expect(await vcall(mkFile("/cache/a"), "compareTo", "(Ljava/io/File;)I", mkFile("/cache/z"))).toBe(-25);
-    for (const [other, exception] of [[null, "NullPointerException"], ["/cache/a", "ClassCastException"]]) {
-      const error = await vcallAsync(mkFile("/cache/a"), "compareTo", "(Ljava/lang/Object;)I", other).then(() => null, e => e);
-      expect(rt.iof(error, `java/lang/${exception}`)).toBeTruthy();
-    }
-  });
-});
-
 describe("file-relative", () => {
   test("a relative directory lists relative children and reports a plain File parent", async () => {
+    await loadLibcore();
     vfs.write("/relative-list/child", new Uint8Array(0));
     const dir = await newObj("java/io/File", "(Ljava/lang/String;)V", "relative-list");
     const [child] = await vcall(dir, "listFiles", "()[Ljava/io/File;") as JObj[];
@@ -380,10 +363,11 @@ describe("parcel-file", () => {
     javaCloseFd(copyFd);
   });
   test("read-only file opens load lazy bytes and AutoCloseInputStream owns the descriptor", async () => {
+    await loadLibcore();
     const path = "/data/local/tmp/pfd-lazy-test";
     vfs.mount(path, { size: 3, read: async (offset, length) => Uint8Array.of(7, 8, 9).slice(offset, offset + length) });
     try {
-      const pfd = await vcall(rt.link("android/os/ParcelFileDescriptor").ctor, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(path), 0x10000000);
+      const pfd = await vcall(rt.link("android/os/ParcelFileDescriptor").ctor, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", await newFile(path), 0x10000000);
       const input = await newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", pfd);
       expect(await vcall(input, "read", "()I")).toBe(7);
       expect(await vcall(pfd, "getStatSize", "()J")).toBe(3n);
@@ -444,10 +428,10 @@ describe("rename", () => {
     });
 
     test("Java and native renames carry directory entries", async () => {
-      rt.link("java/io/File");
+      await loadLibcore();
       vfs.write("/data/t/old/sub/x", new Uint8Array([4]));
       vfs.mkdir("/data/t/old/empty");
-      expect(await vcall(mkFile("/data/t/old"), "renameTo", "(Ljava/io/File;)Z", mkFile("/data/t/new"))).toBe(1);
+      expect(await vcall(await newFile("/data/t/old"), "renameTo", "(Ljava/io/File;)Z", await newFile("/data/t/new"))).toBe(1);
       expect(vfs.exists("/data/t/old")).toBe(false);
       expect([...vfs.read("/data/t/new/sub/x")!]).toEqual([4]);
       expect(vfs.isDir("/data/t/new/empty")).toBe(true);

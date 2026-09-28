@@ -7,7 +7,7 @@ import {
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
 import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle } from "./os";
-import { mkFile, streamOf } from "../jvm/natives/jio";
+import { newFile, streamOf } from "../jvm/natives/jio";
 import { mkAssetFd, rawResourceBytes } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
 import { mkCursor, contentValues, type JContentValues } from "./sqlite";
@@ -177,7 +177,7 @@ function fileOf(u: JUri): string {
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
 async function openFilePfd(path: string, mode: string) {
   const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
-  return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(path),
+  return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", await newFile(path),
     await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
 }
 export async function openPfd(u: JUri, mode: string) {

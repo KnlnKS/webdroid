@@ -6,7 +6,7 @@ import { rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, curThread, stringHash, mkEnumSet } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
-import type { JFile } from "../jvm/natives/jio";
+import { pathOf } from "../jvm/natives/jio";
 import { reportUncaught } from "./os";
 import { type JParcel, parcelCreator } from "./parcel";
 
@@ -141,7 +141,7 @@ rt.register({
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JUri, p: JParcel): Gen { yield writeUri(p, this); }),
     "static writeToParcel(Landroid/os/Parcel;Landroid/net/Uri;)V": writeUri,
     "static parse(Ljava/lang/String;)Landroid/net/Uri;": (s: string) => mkUri(s),
-    "static fromFile(Ljava/io/File;)Landroid/net/Uri;": (f: JFile) => mkUri("file://" + uriEncode(f.path, "/")),
+    "static fromFile(Ljava/io/File;)Landroid/net/Uri;": (f: JObj) => mkUri("file://" + uriEncode(pathOf(f), "/")),
     "static fromParts(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;": (scheme: string | null, ssp: string | null, frag: string | null) => {
       if (scheme === null) throw rt.mkThrowable("java/lang/NullPointerException", "scheme");
       if (ssp === null) throw rt.mkThrowable("java/lang/NullPointerException", "ssp");

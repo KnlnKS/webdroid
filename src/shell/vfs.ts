@@ -39,6 +39,9 @@ export const vfs = {
   files: new Map<string, Uint8Array>(),
   lazyFiles: new Map<string, FileSource>(),
   dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
+  /** each path's last modification, epoch ms: when its bytes last changed or it appeared */
+  mtimes: new Map<string, number>(),
+  mtime(p: string): number { return this.mtimes.get(this.norm(p)) ?? 0; },
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
@@ -83,6 +86,7 @@ export const vfs = {
   opened(p: string): VfsFile | null { return openFiles.get(this.norm(p)) ?? null; },
   publish(file: VfsFile) {
     if (file.path === null || openFiles.get(file.path) !== file) return;
+    this.mtimes.set(file.path, Date.now());
     if (!file.source) this.files.set(file.path, file.data.subarray(0, file.len));
     if (!volatileFiles.has(file.path)) this.onWrite(file.path, "modify");
   },
@@ -110,6 +114,7 @@ export const vfs = {
     const path = this.norm(p), file = openFiles.get(path);
     this.files.delete(path);
     this.lazyFiles.set(path, source);
+    this.mtimes.set(path, Date.now());
     if (file) { file.data = EMPTY; file.len = source.size; file.source = source; }
   },
   write(p: string, data: Uint8Array, notify = true) {
@@ -117,6 +122,7 @@ export const vfs = {
     const existed = this.files.has(path) || this.lazyFiles.has(path);
     this.lazyFiles.delete(path);
     this.files.set(path, data);
+    this.mtimes.set(path, Date.now());
     const file = openFiles.get(path);
     if (file) {
       setData(file, data);
@@ -129,6 +135,7 @@ export const vfs = {
     const path = this.norm(p);
     this.delete(path, false);
     this.lazyFiles.set(path, source);
+    this.mtimes.set(path, Date.now());
   },
   under(p: string): boolean {
     if (this.dirs.has(p)) return true;
@@ -151,6 +158,7 @@ export const vfs = {
     const file = openFiles.get(path);
     if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
+    this.mtimes.delete(path);
     if (removed && notify && !volatile) this.onWrite(path, "delete");
     return removed;
   },
@@ -159,7 +167,7 @@ export const vfs = {
     if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
     if (from === to) return true;
     this.delete(to, false);
-    for (const files of [this.files, this.lazyFiles]) {
+    for (const files of [this.files, this.lazyFiles, this.mtimes]) {
       const value = files.get(from);
       if (value) { files.delete(from); files.set(to, value as never); }
     }
@@ -168,8 +176,8 @@ export const vfs = {
     this.onWrite(from, "delete"); this.onWrite(to, "create");
     return true;
   },
-  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path, "create"); } },
-  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path, "delete"); return removed; },
+  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.mtimes.set(path, Date.now()); this.onWrite(path, "create"); } },
+  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) { this.mtimes.delete(path); this.onWrite(path, "delete"); } return removed; },
   list(p: string): string[] {
     p = this.norm(p);
     const dir = p === "/" ? "/" : p + "/";

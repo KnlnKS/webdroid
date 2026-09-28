@@ -19,10 +19,10 @@ export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
-import { mkFile, JInputStream, JOutputStream, type JFileDescriptor, type JFile } from "../jvm/natives/jio";
+import { newFile, pathOf, JInputStream, JOutputStream, type JFileDescriptor } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdFile } from "../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdFile, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
@@ -835,8 +835,9 @@ rt.register({
     get CREATOR() { return parcelCreator("android/os/ParcelFileDescriptor", async (parcel) => readObject(parcel)); },
   },
   methods: {
-    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: { path: string }, mode: number): Gen {
-      const path = f?.path ?? "";
+    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: JObj | null, mode: number): Gen {
+      if (!f) rt.npe();
+      const path = pathOf(f!);
       if (!vfs.exists(path) && !(mode & 0x08000000)) throw rt.mkThrowable("java/io/FileNotFoundException", path);
       if (mode & 0x04000000) vfs.write(path, new Uint8Array(0));
       const source = vfs.source(path);
@@ -982,16 +983,17 @@ rt.register({
     "isEncrypted(Ljava/io/File;)Z": () => 0,
     "getStorageVolumes()Ljava/util/List;": () => newArrayList([primaryVolume()]),
     "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": primaryVolume,
-    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": (file: JFile | null) => {
+    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": (file: JObj | null) => {
       if (!file) rt.npe();
-      return file!.path === SHARED || file!.path.startsWith(SHARED + "/") ? primaryVolume() : null;
+      const path = pathOf(file!);
+      return path === SHARED || path.startsWith(SHARED + "/") ? primaryVolume() : null;
     },
   },
 });
 rt.register({
   name: "android/os/storage/StorageVolume", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
   methods: {
-    "getDirectory()Ljava/io/File;": () => mkFile(SHARED),
+    "getDirectory()Ljava/io/File;": () => newFile(SHARED),
     "getDescription(Landroid/content/Context;)Ljava/lang/String;": () => frameworkString("storage_internal") ?? "",
     "getState()Ljava/lang/String;": () => "mounted",
     "getMediaStoreVolumeName()Ljava/lang/String;": () => "external_primary",
@@ -1160,11 +1162,11 @@ rt.register({
   statics: { MEDIA_MOUNTED: "mounted", MEDIA_MOUNTED_READ_ONLY: "mounted_ro", MEDIA_UNMOUNTED: "unmounted", MEDIA_REMOVED: "removed", MEDIA_UNKNOWN: "unknown",
     DIRECTORY_DOWNLOADS: "Download", DIRECTORY_PICTURES: "Pictures", DIRECTORY_DCIM: "DCIM", DIRECTORY_MUSIC: "Music", DIRECTORY_MOVIES: "Movies", DIRECTORY_DOCUMENTS: "Documents" },
   methods: {
-    "static getExternalStorageDirectory()Ljava/io/File;": () => mkFile("/sdcard"),
-    "static getExternalStoragePublicDirectory(Ljava/lang/String;)Ljava/io/File;": (t: string) => mkFile("/sdcard/" + (t ?? "")),
-    "static getDataDirectory()Ljava/io/File;": () => mkFile("/data"),
-    "static getRootDirectory()Ljava/io/File;": () => mkFile("/system"),
-    "static getDownloadCacheDirectory()Ljava/io/File;": () => mkFile("/cache"),
+    "static getExternalStorageDirectory()Ljava/io/File;": () => newFile("/sdcard"),
+    "static getExternalStoragePublicDirectory(Ljava/lang/String;)Ljava/io/File;": (t: string) => newFile("/sdcard/" + (t ?? "")),
+    "static getDataDirectory()Ljava/io/File;": () => newFile("/data"),
+    "static getRootDirectory()Ljava/io/File;": () => newFile("/system"),
+    "static getDownloadCacheDirectory()Ljava/io/File;": () => newFile("/cache"),
     "static getExternalStorageState()Ljava/lang/String;": () => "mounted",
     "static getExternalStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
     "static getStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
@@ -1227,11 +1229,11 @@ rt.register({
   },
 });
 const FD = "Ljava/io/FileDescriptor;";
-function statOf(size: number, dir: boolean): JStructStat {
+function statOf(size: number, dir: boolean, mtimeMs: number): JStructStat {
   const s = new JStructStat();
   s.st_mode = dir ? 0o40755 : 0o100644;
   s.st_size = BigInt(size);
-  s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
+  s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(mtimeMs / 1000));
   s.st_blocks = (s.st_size + 511n) / 512n;
   return s;
 }
@@ -1258,7 +1260,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`fstat(${FD})Landroid/system/StructStat;`]: (d: JFileDescriptor) => {
       const fd = descriptorFd(d), file = fdFile(fd), source = file ? null : javaFdSource(fd);
       if (!file && !source) throw errno("fstat", E.BADF);
-      return statOf(file ? file.len : source!.size, false);
+      return statOf(file ? file.len : source!.size, false, file?.path ? vfs.mtime(file.path) : 0);
     },
     [`lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
       const r = javaSeekFd(descriptorFd(d), Number(off), whence);
@@ -1315,7 +1317,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = existing("stat", path);
-      return statOf(st?.size ?? 0, !st);
+      return statOf(st?.size ?? 0, !st, vfs.mtime(path));
     },
     // the VFS keeps no permission bits: an existing file takes any mode
     "chmod(Ljava/lang/String;I)V": (path: string) => {
@@ -1331,8 +1333,55 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return storageStatVfs();
     },
     "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
+    "access(Ljava/lang/String;I)Z": (path: string, mode: number) => { if (path === null) rt.npe(); sys("access", accessPath(null, path, mode)); return 1; },
+    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); sys("remove", removePath(null, path)); },
+    "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
+      if (from === null || to === null) rt.npe();
+      sys("rename", renamePath(null, from, to));
+    },
 };
+/** a -errno result as the ErrnoException libcore's Os methods throw */
+function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
 for (const [sig, fn] of Object.entries(linux)) rt.registerJni("libcore/io/Linux", sig, fn);
+
+// java.io.UnixFileSystem: java.io.File's natives over the VFS. It keeps no permission bits and
+// no hard links, so a mode change on an existing path succeeds, as chmod does above.
+const BA_EXISTS = 1, BA_REGULAR = 2, BA_DIRECTORY = 4;
+const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
+  "initIDs()V": () => {},
+  "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.norm(path),
+  "getBooleanAttributes0(Ljava/lang/String;)I": (path: string) => {
+    const p = vfs.norm(path);
+    return vfs.isDir(p) ? BA_EXISTS | BA_DIRECTORY : vfs.exists(p) ? BA_EXISTS | BA_REGULAR : 0;
+  },
+  "list0(Ljava/io/File;)[Ljava/lang/String;": (file: JObj) => {
+    const p = pathOf(file);
+    return vfs.isDir(p) ? jarray(vfs.list(p), "Ljava/lang/String;") : null;
+  },
+  "createFileExclusively0(Ljava/lang/String;)Z": (path: string) => {
+    const r = createPath(null, path);
+    if (r === -E.EXIST) return 0;
+    // JNU_ThrowIOExceptionWithLastError: an IOException carrying strerror
+    if (r < 0) throw rt.mkThrowable("java/io/IOException", ERRSTR[-r] ?? path);
+    return 1;
+  },
+  "createDirectory0(Ljava/io/File;)Z": (file: JObj) => +(mkdirPath(null, pathOf(file)) === 0),
+  "getLastModifiedTime0(Ljava/io/File;)J": (file: JObj) => BigInt(vfs.mtime(pathOf(file))),
+  "setLastModifiedTime0(Ljava/io/File;J)Z": (file: JObj, ms: bigint) => {
+    const p = pathOf(file);
+    if (!vfs.exists(p)) return 0;
+    vfs.mtimes.set(p, Number(ms)); return 1;
+  },
+  "setPermission0(Ljava/io/File;IZZ)Z": (file: JObj) => +vfs.exists(pathOf(file)),
+  "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => +vfs.exists(pathOf(file)),
+  // FileSystem.SPACE_TOTAL, SPACE_FREE, SPACE_USABLE
+  "getSpace0(Ljava/io/File;I)J": driven(function* (_file: JObj, kind: number): Gen {
+    const s: JStructStatVfs = yield storageStatVfs();
+    return kind === 0 ? s.f_blocks * s.f_frsize : kind === 1 ? s.f_bfree * s.f_frsize : s.f_bavail * s.f_bsize;
+  }),
+  "getNameMax0(Ljava/lang/String;)J": () => 255n,
+};
+for (const [sig, fn] of Object.entries(unixFileSystem)) rt.registerJni("java/io/UnixFileSystem", sig, fn);
 // libcore's OsConstants fills its fields from native initConstants(); these are the reference
 // device's values (bun run gen-framework)
 rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
