@@ -207,9 +207,18 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   });
 }
 
-export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc: string; mangled: string } {
-  const name = dex.method(methodIdx).name, desc = dex.methodDesc(methodIdx);
-  return { name, desc, mangled: mangleMethod(name, desc) };
+type MethodKey = { name: string; desc: string; mangled: string };
+const methodKeys = new WeakMap<DexFile, MethodKey[]>();
+/** a method ref's name, descriptor and mangled property: every class compile needs them */
+export function methodKey(dex: DexFile, methodIdx: number): MethodKey {
+  let keys = methodKeys.get(dex);
+  if (!keys) methodKeys.set(dex, keys = []);
+  let key = keys[methodIdx];
+  if (!key) {
+    const name = dex.method(methodIdx).name, desc = dex.methodDesc(methodIdx);
+    key = keys[methodIdx] = { name, desc, mangled: mangleMethod(name, desc) };
+  }
+  return key;
 }
 
 /** Resolved on first call, not when the class body is generated: a JNI_OnLoad run later may

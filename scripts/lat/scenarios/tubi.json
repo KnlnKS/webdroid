@@ -1,1 +1,0 @@
-{"apk": "new/Tubi.xapk", "steps": [{"wait": 10000}, {"m": "skip", "tap": [940, 77]}, {"wait": 6000}, {"m": "explore", "tap": [405, 1990]}, {"wait": 2000}, {"m": "mystuff", "tap": [945, 1990]}, {"wait": 2000}, {"m": "explore", "tap": [405, 1990]}, {"wait": 2000}, {"m": "mystuff", "tap": [945, 1990]}, {"wait": 2000}, {"m": "home", "tap": [135, 1990]}, {"wait": 3000}]}

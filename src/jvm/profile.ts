@@ -28,9 +28,6 @@ interface JvmMethodProfile {
 const MAX_METHODS = 8192;
 const records = new Map<string, JvmMethodProfile>();
 const dropped = new Set<string>();
-let enabled = false;
-let tier: JvmTier = "auto";
-let hotThreshold = 4096;
 
 const phaseCounter = {
   decode: "jvmDecodeMs",
@@ -66,7 +63,7 @@ function makeRecord(name: string): JvmMethodProfile {
 }
 
 function record(name: string): JvmMethodProfile | undefined {
-  if (!enabled) return undefined;
+  if (!jvmProfiler.enabled) return undefined;
   const existing = records.get(name);
   if (existing) return existing;
   if (records.size < MAX_METHODS) {
@@ -82,9 +79,9 @@ function record(name: string): JvmMethodProfile | undefined {
 }
 
 export function configureJvm(options: { profile: boolean; tier: JvmTier; hotThreshold?: number }): void {
-  enabled = options.profile;
-  tier = options.tier;
-  hotThreshold = options.hotThreshold ?? 4096;
+  jvmProfiler.enabled = options.profile;
+  jvmProfiler.tier = options.tier;
+  jvmProfiler.hotThreshold = options.hotThreshold ?? 4096;
 }
 
 export function parseJvmTier(value: string | null): JvmTier {
@@ -96,9 +93,10 @@ export function parseJvmTier(value: string | null): JvmTier {
 }
 
 export const jvmProfiler = {
-  get enabled(): boolean { return enabled; },
-  get tier(): JvmTier { return tier; },
-  get hotThreshold(): number { return hotThreshold; },
+  // plain properties: compiled code and the cold tier read them on every call
+  enabled: false,
+  tier: "auto" as JvmTier,
+  hotThreshold: 4096,
   entry(name: string): void { const r = record(name); if (r) r.entries++; },
   backedge(name: string, instructions: number): void {
     const r = record(name);
@@ -108,19 +106,19 @@ export const jvmProfiler = {
   promoted(name: string): void { const r = record(name); if (r) r.coldToHot++; },
   bytes(name: string, value: number): void { const r = record(name); if (r) r.generatedBytes += value; },
   add(name: string, phase: JvmMethodProfilePhase, ms: number): void {
-    if (!enabled) return;
+    if (!jvmProfiler.enabled) return;
     perf[phaseCounter[phase]] += ms;
     const r = record(name);
     if (r) r[phaseField[phase]] += ms;
   },
   addAggregate(phase: JvmProfilePhase, ms: number): void {
-    if (enabled) perf[phaseCounter[phase]] += ms;
+    if (jvmProfiler.enabled) perf[phaseCounter[phase]] += ms;
   },
   snapshot() {
     const methods = [...records.values()].sort((a, b) =>
       (b.coldRunMs + b.hotRunMs + b.decodeMs + b.cfgMs + b.typeMs + b.coldBuildMs + b.hotEmitMs + b.jsCompileMs) -
       (a.coldRunMs + a.hotRunMs + a.decodeMs + a.cfgMs + a.typeMs + a.coldBuildMs + a.hotEmitMs + a.jsCompileMs));
-    return { enabled, tier, droppedMethods: perf.jvmProfileDroppedMethods, methods };
+    return { enabled: jvmProfiler.enabled, tier: jvmProfiler.tier, droppedMethods: perf.jvmProfileDroppedMethods, methods };
   },
   reset(): void { records.clear(); dropped.clear(); perf.jvmProfileDroppedMethods = 0; },
 };
