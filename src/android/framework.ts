@@ -7,6 +7,9 @@
 // come from framework.jar.
 
 import { Arsc } from "./arsc";
+import { DEVICE_COLORS } from "./device-colors";
+
+const TYPE_INT_COLOR_ARGB8 = 0x1c;
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt } from "../jvm/runtime";
 import { dexesIn, type DexFile } from "../jvm/dex";
@@ -80,6 +83,12 @@ export function loadFramework(): Promise<Arsc> {
       packages.set(platform.pkg, platform);
     }
 
+    // the reference device's overlays (SystemUI's Monet palette) replace these defaults
+    const colors = arsc.names("color");
+    for (const [name, argb] of Object.entries(DEVICE_COLORS)) {
+      const id = colors.get(name);
+      if (id !== undefined) arsc.overlay(id, { type: TYPE_INT_COLOR_ARGB8, data: argb | 0 });
+    }
     setFramework(arsc);
     return arsc;
   })();

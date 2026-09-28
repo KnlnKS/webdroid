@@ -270,7 +270,16 @@ export class Arsc {
   }
 
   /** best-config entry for resId, or null */
+  /** values a device overlay replaces in every configuration, as fabricated overlays do */
+  private overlaid = new Map<number, ResEntry>();
+  overlay(resId: number, value: { type: number; data: number }): void {
+    const key = this.entry(resId)?.key;
+    if (key !== undefined) this.overlaid.set(resId, { key, value });
+  }
+
   entry(resId: number, selected?: { density: number }, density = this.device.density): ResEntry | null {
+    const overlaid = this.overlaid.get(resId);
+    if (overlaid) return overlaid;
     const pkgId = resId >>> 24;
     const typeId = (resId >> 16) & 0xff;
     const entryIdx = resId & 0xffff;
