@@ -136,7 +136,7 @@ export class Relay {
                 this.applicationProtocol = typeof message.alpn === "string" ? message.alpn : "";
                 this.localEndpoint = { family: message.localFamily, address: message.localAddress, port: Number(message.localPort) };
               }
-            } catch { /* old relays send plain "ok" */ }
+            } catch { /* plain "ok": the worker relay could not parse its local address */ }
             this.applicationProtocol ??= "";
             settled = true; this.connected = true; resolve(); wake();
           }

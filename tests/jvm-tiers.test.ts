@@ -197,7 +197,6 @@ test("JVM profiling follows installed hot methods through suspension", async () 
     const method = jvmProfiler.snapshot().methods.find((entry) => entry.name === "JvmTierProbe.suspended(II)I");
     expect(method?.entries).toBe(1);
     expect(method?.suspensions).toBe(1);
-    expect(method && method.hotRunMs >= method.suspendMs).toBe(true);
   } finally {
     configureJvm({ profile: false, tier: "auto" });
     jvmProfiler.reset();

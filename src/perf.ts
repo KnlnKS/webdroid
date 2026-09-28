@@ -32,7 +32,7 @@ export const perf = {
   coldCalls: 0, coldHandlers: 0, hotMethods: 0, osrMethods: 0,
   // Detailed JVM attribution is populated only under ?jvmProfile=1.
   jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,
-  jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0, jvmSuspendMs: 0,
+  jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0,
   jvmProfileDroppedMethods: 0,
   // Surface frames (GL, native windows and decoded video), and Renderer wall time up to the swap.
   glFrames: 0, glFrameMs: 0,

@@ -5,6 +5,8 @@ import { decodeModifiedUtf8, descToName } from "./abi";
 
 export const NO_INDEX = 0xffffffff;
 
+export const isDexEntry = (name: string): boolean => /^classes\d*\.dex$/.test(name);
+
 /** The logical dex files in one physical file. Before v41 that is always exactly one; the v41
  *  container format (Android 15) packs several into a file and is what an apk built against a
  *  current SDK now ships, so a reader that assumes one header sees only the first classes'

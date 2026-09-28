@@ -9,6 +9,7 @@ import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
 import { environmentScript, performAction } from "../tests/e2e/lib/actions";
 import { readProcesses } from "../tests/e2e/lib/processes";
 import { BASE_URL } from "../tests/e2e/lib/util";
+import { DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "../src/jvm/profile";
 import { probeScript } from "../tests/e2e/lib/probe";
 import { executionFlow, PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } from "../tests/e2e/types";
 
@@ -23,7 +24,7 @@ const { values } = parseArgs({ options: {
   // renderer main-thread totals by trace event (V8 compile, GC, script, frames) for the measured window
   trace: { type: "boolean", default: false },
   "native-profile": { type: "boolean", default: false },
-  "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
+  "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: String(DEFAULT_HOT_THRESHOLD) },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
   "setup-settle-cap": { type: "string" }, "setup-min-wait": { type: "string", default: "0" },
 } });
@@ -47,7 +48,7 @@ if (after < 0) throw new Error("Unknown setup step");
 const gpu = values.gpu;
 if (gpu !== "software" && gpu !== "hardware") throw new Error("--gpu must be software or hardware");
 if (!values["jvm-tier"] || !["auto", "cold", "js"].includes(values["jvm-tier"])) throw new Error("--jvm-tier must be auto, cold or js");
-if (!values["jvm-hotness"] || !["1024", "4096", "16384"].includes(values["jvm-hotness"])) throw new Error("--jvm-hotness must be 1024, 4096 or 16384");
+if (!values["jvm-hotness"] || !JVM_HOT_THRESHOLDS.includes(Number(values["jvm-hotness"]))) throw new Error(`--jvm-hotness must be one of ${JVM_HOT_THRESHOLDS.join(", ")}`);
 const ms = Number(values.ms), warmup = Number(values.warmup);
 const setupSettleCap = values["setup-settle-cap"] === undefined ? undefined : Number(values["setup-settle-cap"]);
 if (setupSettleCap !== undefined && (!Number.isFinite(setupSettleCap) || setupSettleCap < 0 || setupSettleCap > 60000)) throw new Error("Invalid setup settle cap");
@@ -92,7 +93,7 @@ try {
   url.searchParams.set("statusBarDp", String(screen.statusBarDp));
   if (values["jvm-profile"]) url.searchParams.set("jvmProfile", "1");
   if (values["jvm-tier"] !== "auto") url.searchParams.set("jvmTier", values["jvm-tier"]);
-  if (values["jvm-hotness"] !== "4096") url.searchParams.set("jvmHotness", values["jvm-hotness"]);
+  if (Number(values["jvm-hotness"]) !== DEFAULT_HOT_THRESHOLD) url.searchParams.set("jvmHotness", values["jvm-hotness"]);
   await page.goto(url.href, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => !!globalThis.wd);
   await page.evaluate(() => document.fonts.ready);

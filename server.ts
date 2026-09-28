@@ -131,7 +131,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
   // Java sockets can ask the relay to terminate TLS; native stacks pass their own TLS bytes
   // through the same relay unchanged.
   // A text control frame means connected and carries the relay's local endpoint; a close before
-  // that means the connect failed. Relay still accepts the old plain "ok" frame.
+  // that means the connect failed. A plain "ok" (worker/tcp.ts, local address unparsed) also means connected.
   //
   // This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
   // as /proxy above, and the same reason both are dev-server-only: bound to loopback, never

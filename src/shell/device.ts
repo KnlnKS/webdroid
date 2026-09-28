@@ -1,11 +1,11 @@
 // Device shell: APK boot, display and configuration, frame loop, touch routing. The activity
 // stack is activities.ts.
 
-import { dexesIn } from "../jvm/dex";
+import { dexesIn, isDexEntry } from "../jvm/dex";
 import { rt, type Gen, type JObj, driven } from "../jvm/runtime";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
-import { openInstall, type Install } from "./install";
+import type { Install } from "./install";
 import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
 import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
@@ -102,11 +102,10 @@ function launcherOrientation(root: XmlNode): number {
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
 export function currentApp(): BootedApp | null { return booted; }
-export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
+export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   onStatus("Reading package…");
-  const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
@@ -126,12 +125,11 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     else vfs.mount(apkPath(sp.name), sp.source);
   }
   onStatus("Loading app code…");
-  const isDex = (name: string) => /^classes\d*\.dex$/.test(name);
-  await inflateTree(zip, isDex);
+  await inflateTree(zip, isDexEntry);
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
   for (const name of Object.keys(zip)) {
-    if (isDex(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
+    if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
   await Promise.all([loadPlatformDex(), loadCode(processName ?? pkg)]);
   const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);

@@ -3,7 +3,7 @@ import { perf } from "../perf";
 type JvmTier = "auto" | "cold" | "js";
 type JvmProfilePhase =
   "decode" | "cfg" | "type" | "coldBuild" | "hotEmit" | "jsCompile" | "classLink" |
-  "coldRun" | "hotRun" | "suspend";
+  "coldRun" | "hotRun";
 type JvmMethodProfilePhase = Exclude<JvmProfilePhase, "classLink">;
 
 interface JvmMethodProfile {
@@ -22,7 +22,6 @@ interface JvmMethodProfile {
   jsCompileMs: number;
   coldRunMs: number;
   hotRunMs: number;
-  suspendMs: number;
 }
 
 const MAX_METHODS = 8192;
@@ -39,7 +38,6 @@ const phaseCounter = {
   classLink: "jvmClassLinkMs",
   coldRun: "jvmColdRunMs",
   hotRun: "jvmHotRunMs",
-  suspend: "jvmSuspendMs",
 } as const satisfies Record<JvmProfilePhase, keyof typeof perf>;
 const phaseField = {
   decode: "decodeMs",
@@ -50,7 +48,6 @@ const phaseField = {
   jsCompile: "jsCompileMs",
   coldRun: "coldRunMs",
   hotRun: "hotRunMs",
-  suspend: "suspendMs",
 } as const satisfies Record<JvmMethodProfilePhase, keyof JvmMethodProfile>;
 
 function makeRecord(name: string): JvmMethodProfile {
@@ -58,7 +55,7 @@ function makeRecord(name: string): JvmMethodProfile {
     name, entries: 0, backedges: 0, instructions: 0, suspensions: 0,
     coldToHot: 0, generatedBytes: 0,
     decodeMs: 0, cfgMs: 0, typeMs: 0, coldBuildMs: 0, hotEmitMs: 0,
-    jsCompileMs: 0, coldRunMs: 0, hotRunMs: 0, suspendMs: 0,
+    jsCompileMs: 0, coldRunMs: 0, hotRunMs: 0,
   };
 }
 
@@ -78,10 +75,13 @@ function record(name: string): JvmMethodProfile | undefined {
   return undefined;
 }
 
+export const JVM_HOT_THRESHOLDS: readonly number[] = [1024, 4096, 16384];
+export const DEFAULT_HOT_THRESHOLD = 4096;
+
 export function configureJvm(options: { profile: boolean; tier: JvmTier; hotThreshold?: number }): void {
   jvmProfiler.enabled = options.profile;
   jvmProfiler.tier = options.tier;
-  jvmProfiler.hotThreshold = options.hotThreshold ?? 4096;
+  jvmProfiler.hotThreshold = options.hotThreshold ?? DEFAULT_HOT_THRESHOLD;
 }
 
 export function parseJvmTier(value: string | null): JvmTier {
@@ -96,7 +96,7 @@ export const jvmProfiler = {
   // plain properties: compiled code and the cold tier read them on every call
   enabled: false,
   tier: "auto" as JvmTier,
-  hotThreshold: 4096,
+  hotThreshold: DEFAULT_HOT_THRESHOLD,
   entry(name: string): void { const r = record(name); if (r) r.entries++; },
   backedge(name: string, instructions: number): void {
     const r = record(name);

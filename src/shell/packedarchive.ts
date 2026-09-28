@@ -1,6 +1,7 @@
 import { zipTree } from "../jvm/natives/jzip";
 import type { FileSource } from "./lazyfile";
 import { u8 } from "../jvm/abi";
+import { isDexEntry } from "../jvm/dex";
 
 type PackedFile = { file: string; size: number; sha256: string };
 export type PackedArchiveIndex = {
@@ -31,7 +32,7 @@ export class PackedArchive implements FileSource {
   async prepare(code = false): Promise<void> {
     const bootstrap = await this.file(this.index.bootstrap);
     zipTree(bootstrap, this.zip);
-    if (code) await Promise.all(Object.keys(this.index.entries).filter((n) => /^classes\d*\.dex$/.test(n)).map((n) => this.entry(n)));
+    if (code) await Promise.all(Object.keys(this.index.entries).filter(isDexEntry).map((n) => this.entry(n)));
   }
   has(name: string): boolean { return Object.hasOwn(this.index.entries, name); }
   names(): string[] { return Object.keys(this.index.entries); }

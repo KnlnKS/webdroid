@@ -553,7 +553,7 @@ A graphics operation crosses three lockstep boundaries:
    `tests/fuzz-probe/src/org/webdroid/fuzz/ProbeActivity.java`.
 6. Decide whether its externally visible state must be added to the normalized graphics result.
 7. Rebuild the probe.
-8. Run `tests/fuzz-core.test.ts`; it requires the TypeScript manifest and Java switch to agree.
+8. Run `tests/fuzz.test.ts`; it requires the TypeScript manifest and Java switch to agree.
 9. Run a small fixed seed on Android and webdroid before starting a long campaign.
 
 Do not represent arguments as an untyped array or accept unknown operations. Strict validation is

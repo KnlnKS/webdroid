@@ -1,13 +1,11 @@
 import { existsSync } from "node:fs";
-import { dexesIn, DexFile } from "../src/jvm/dex";
+import { dexesIn, isDexEntry, DexFile } from "../src/jvm/dex";
 import { zipTree } from "../src/jvm/natives/jzip";
 import { openInstall } from "../src/shell/install";
 import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
 
 type Zip = Record<string, Uint8Array>;
-
-const DEX_RE = /^classes\d*\.dex$/;
 
 /** an apk or a split install, as the one merged tree the shell boots — entries materialise on
  *  read, so there is nothing for a caller to filter down to */
@@ -17,14 +15,14 @@ export async function openApk(path: string): Promise<Zip> {
 
 export function dexesOf(zip: Zip): DexFile[] {
   return Object.keys(zip)
-    .filter((name) => DEX_RE.test(name))
+    .filter(isDexEntry)
     .flatMap((name) => dexesIn(zip[name], name));
 }
 
 export async function openDexes(path: string): Promise<DexFile[]> {
   const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
   const zip = zipTree(bytes);
-  return dexesOf(Object.keys(zip).some((name) => DEX_RE.test(name)) ? zip : openInstall(bytes).zip);
+  return dexesOf(Object.keys(zip).some(isDexEntry) ? zip : openInstall(bytes).zip);
 }
 
 export async function loadDexes(path: string): Promise<DexFile[]> {

@@ -19,6 +19,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium } from "playwright";
+import { consume } from "../args";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
@@ -26,8 +27,7 @@ const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
 const SCENARIOS = join(import.meta.dir, "scenarios");
 
 const args = process.argv.slice(2);
-const flag = (name: string) => { const i = args.indexOf(name); return i < 0 ? false : (args.splice(i, 1), true); };
-const option = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args.splice(i, 2)[1]; };
+const { flag, option } = consume(args);
 const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 

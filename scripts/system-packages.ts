@@ -7,6 +7,7 @@ import { parsePackageArchive } from "../src/android/packagearchive";
 import { verifyApkSignature } from "../src/android/apksignature";
 import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages";
 import type { PackedArchiveIndex } from "../src/shell/packedarchive";
+import { isDexEntry } from "../src/jvm/dex";
 
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 async function writeFile(path: string, data: Uint8Array | string): Promise<void> {
@@ -48,7 +49,7 @@ async function packArchive(bytes: Uint8Array, directory: string): Promise<Packed
     const file = await write(payload, extension);
     index.spans.push([start, raw.length, file, skip]); position = start + raw.length;
     index.entries[entry.name] = { file, size: decoded.length, sha256: hash(decoded) };
-    if (!/^classes\d*\.dex$/.test(entry.name) && !entry.name.startsWith("lib/")) bootstrap[entry.name] = decoded;
+    if (!isDexEntry(entry.name) && !entry.name.startsWith("lib/")) bootstrap[entry.name] = decoded;
   }
   gap(bytes.length);
   const metadata = await write(new Uint8Array(Buffer.concat(headers)), ".bin");

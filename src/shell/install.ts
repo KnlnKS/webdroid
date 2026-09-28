@@ -2,6 +2,7 @@
 // everywhere or nowhere.
 
 import { parseAXML, attrStr } from "../android/axml";
+import { isDexEntry } from "../jvm/dex";
 import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip";
 import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
 
@@ -37,7 +38,7 @@ export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "
   for (const o of opened) {
     if (o.kind === "resident") zipTree(o.bytes, merged, (path) => {
       const target = path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
-        : /^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path;
+        : isDexEntry(path) ? `classes${1000 + extra++}.dex` : path;
       return target && !lazyEntries.has(target) ? target : null;
     });
     else for (const [path, entry] of o.entries) {
@@ -91,7 +92,7 @@ async function openedApk(source: FileSource): Promise<OpenedApk> {
   const split = xml ? attrStr(xml, "split") : null;
   const assetPack = xml?.children.some((node) => node.name === "module" && attrStr(node, "type") === "asset-pack") ?? false;
   const resident = !assetPack || !split || [...entries.keys()].some((name) =>
-    /^classes\d*\.dex$/.test(name) || name === "resources.arsc" || name.startsWith("lib/"));
+    isDexEntry(name) || name === "resources.arsc" || name.startsWith("lib/"));
   if (!resident) return { kind: "lazy", source, bytes: null, zip: null, entries, split, hasManifest: !!manifest };
   const bytes = await readFully(source);
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };

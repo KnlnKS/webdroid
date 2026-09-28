@@ -12,7 +12,7 @@ import { DEVICE_COLORS } from "./device-colors";
 const TYPE_INT_COLOR_ARGB8 = 0x1c;
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt } from "../jvm/runtime";
-import { dexesIn, type DexFile } from "../jvm/dex";
+import { dexesIn, isDexEntry, type DexFile } from "../jvm/dex";
 import { Resources, setFramework } from "./res";
 import { PLATFORM_JARS } from "../jvm/provenance";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
@@ -29,7 +29,7 @@ let pendingDex: Promise<void> | null = null;
 /** a jar's classes*.dex, in load order */
 export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
   const dir = centralDir(jar);
-  return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
+  return [...dir.keys()].filter(isDexEntry).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
 }
 
 /** the `i`th boot class path jar: at its device path, with its classes indexed behind the app's
@@ -40,7 +40,7 @@ export function loadPlatformJar(bytes: Uint8Array, i: number): void {
   vfs.mount(jar, new BytesFile(bytes));
   for (const d of jarDexes(bytes, PLATFORM_JARS[i])) rt.loadDex(d, true);
   for (const [name, entry] of centralDir(bytes)) {
-    if (!name.endsWith("/") && !/^classes\d*\.dex$/.test(name) && !rt.bootResources.has(name)) rt.bootResources.set(name, { jar, read: () => entryBytes(bytes, entry) });
+    if (!name.endsWith("/") && !isDexEntry(name) && !rt.bootResources.has(name)) rt.bootResources.set(name, { jar, read: () => entryBytes(bytes, entry) });
   }
 }
 

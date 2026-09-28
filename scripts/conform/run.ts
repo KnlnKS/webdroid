@@ -8,9 +8,10 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { androidPlatform, androidTool } from "../android-sdk";
 import { SUITES } from "./suites";
+import { consume } from "../args";
 
 const [suiteName, ...rest] = process.argv.slice(2);
-const option = (name: string) => { const i = rest.indexOf(name); return i < 0 ? undefined : rest.splice(i, 2)[1]; };
+const { option } = consume(rest);
 const cut = option("--bytecode"), one = option("--one");
 const update = rest.includes("--update"), filter = rest.find((a) => !a.startsWith("--")) ?? "";
 const suite = SUITES[suiteName as keyof typeof SUITES];
