@@ -252,9 +252,11 @@ async function writeValue(p: JParcel, v: unknown) {
   if (Array.isArray(v)) {
     const t = (v as { $t?: string }).$t;
     if (t === "Ljava/lang/String;") { tag(V.STRINGARRAY); return writeStrings(p, v); }
-    tag(t === "Landroid/os/Parcelable;" ? V.PARCELABLEARRAY : V.OBJECTARRAY);
+    // AOSP tests instanceof Parcelable[], which an Account[] passes too
+    const parcelables = !!rt.arrayIof(v, "[Landroid/os/Parcelable;");
+    tag(parcelables ? V.PARCELABLEARRAY : V.OBJECTARRAY);
     writeInt(p, v.length);
-    for (const x of v) await (t === "Landroid/os/Parcelable;" ? writeParcelable(p, x, 0) : writeValue(p, x));
+    for (const x of v) await (parcelables ? writeParcelable(p, x, 0) : writeValue(p, x));
     return;
   }
   if (v instanceof JBundle) { tag(V.BUNDLE); return writeBundle(p, v); }
