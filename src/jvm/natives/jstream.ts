@@ -1,7 +1,6 @@
 import { JObj, rt, driven, type Gen, type NativeSpec } from "../runtime";
-import { JList, mkIter, newArrayList, toJsArray, sortInPlace, newLinkedHashSet } from "./jutil";
-import { vcall, after, box, boxInt, JLong, JDouble, mkEnumSet } from "./jlang";
-import { csText } from "./jchars";
+import { mkIter, newArrayList, toJsArray, sortInPlace, newLinkedHashSet } from "./jutil";
+import { vcall, after, box, boxInt, JLong, JDouble } from "./jlang";
 import { jarray } from "../abi";
 import { JStream, JIntStream, JLongStream, JDoubleStream, mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
 
@@ -516,78 +515,3 @@ rt.register({
   },
 });
 
-// ── Collector and Collectors
-class JCollector extends JObj { supplier: unknown = null; accumulator: unknown = null; combiner: unknown = null; finisher: unknown = null; }
-const collector = (supplier: unknown, accumulator: unknown, combiner: unknown, finisher: unknown) =>
-  Object.assign(new JCollector(), { supplier, accumulator, combiner, finisher });
-const identityFn = () => lambda("Function", (v) => v);
-function mkCollector(make: Fn, add: Fn, combine: Fn, finish: Fn = (v) => v): JCollector {
-  return collector(lambda("Supplier", make), lambda("BiConsumer", add), lambda("BinaryOperator", combine), lambda("Function", finish));
-}
-const listBox = (v: unknown): JList => { if (!(v instanceof JList)) throw new Error("collector expected a list accumulator"); return v; };
-const stringBox = (v: unknown): unknown[] => { if (!Array.isArray(v)) throw new Error("collector expected a string accumulator"); return v; };
-const addAll = async (left: unknown, right: unknown) => { await vcall(left, "addAll", "(Ljava/util/Collection;)Z", right); return left; };
-/** toMap: a duplicate key merges through `merge`, or fails as Collectors.uniqKeysMapAccumulator does */
-function toMap(key: unknown, value: unknown, merge: unknown, make: () => unknown): JCollector {
-  const put = driven(function* (map: unknown, x: unknown): Gen {
-    const k = yield invoke("Function", key, x), v = yield invoke("Function", value, x);
-    if (v == null) npe();
-    const old = yield vcall(map, "get", `(${O})${O}`, k);
-    if (old == null) return vcall(map, "put", `(${O}${O})${O}`, k, v);
-    if (merge == null) {
-      const [ks, os, vs] = [yield vcall(k, "toString", "()Ljava/lang/String;"), yield vcall(old, "toString", "()Ljava/lang/String;"), yield vcall(v, "toString", "()Ljava/lang/String;")];
-      throw rt.mkThrowable("java/lang/IllegalStateException", `Duplicate key ${ks} (attempted merging values ${os} and ${vs})`);
-    }
-    return vcall(map, "put", `(${O}${O})${O}`, k, yield invoke("BinaryOperator", merge, old, v));
-  });
-  return mkCollector(make, put, async (left, right) => { await vcall(left, "putAll", "(Ljava/util/Map;)V", right); return left; });
-}
-const TO_MAP = `(${fnDesc("Function")}${fnDesc("Function")}`;
-/** Collectors.joining: each element's text gathered into an array that `finish` joins */
-const joiner = (finish: (parts: unknown[]) => string) => mkCollector(() => [], async (b, x) => { stringBox(b).push(await csText(x)); },
-  (l, r) => { stringBox(l).push(...stringBox(r)); return l; }, (b) => finish(stringBox(b)));
-rt.register({
-  name: S + "Collector", ctor: JCollector,
-  methods: {
-    [`supplier()${fnDesc("Supplier")}`]: function (this: JCollector) { return this.supplier; },
-    [`accumulator()${fnDesc("BiConsumer")}`]: function (this: JCollector) { return this.accumulator; },
-    [`combiner()${fnDesc("BinaryOperator")}`]: function (this: JCollector) { return this.combiner; },
-    [`finisher()${fnDesc("Function")}`]: function (this: JCollector) { return this.finisher; },
-    "characteristics()Ljava/util/Set;": () => rt.make("java/util/HashSet"),
-    [`static of(${fnDesc("Supplier")}${fnDesc("BiConsumer")}${fnDesc("BinaryOperator")}[L${S}Collector$Characteristics;)L${S}Collector;`]:
-      (s: unknown, a: unknown, c: unknown) => collector(s, a, c, identityFn()),
-    [`static of(${fnDesc("Supplier")}${fnDesc("BiConsumer")}${fnDesc("BinaryOperator")}${fnDesc("Function")}[L${S}Collector$Characteristics;)L${S}Collector;`]:
-      (s: unknown, a: unknown, c: unknown, f: unknown) => collector(s, a, c, f ?? identityFn()),
-  },
-});
-mkEnumSet(S + "Collector$Characteristics", ["CONCURRENT", "UNORDERED", "IDENTITY_FINISH"]);
-rt.register({
-  name: S + "Collectors", ctor: class extends JObj {},
-  methods: {
-    [`static toList()L${S}Collector;`]: () => mkCollector(() => newArrayList([]), (b, x) => { listBox(b).a.push(x); },
-      (l, r) => { listBox(l).a.push(...listBox(r).a); return l; }),
-    [`static toSet()L${S}Collector;`]: () => mkCollector(() => rt.make("java/util/HashSet"), (b, x) => vcall(b, "add", `(${O})Z`, x), addAll),
-    [`static toCollection(${fnDesc("Supplier")})L${S}Collector;`]: (sup: unknown) =>
-      mkCollector(() => invoke("Supplier", sup), (b, x) => vcall(b, "add", `(${O})Z`, x), addAll),
-    [`static toMap${TO_MAP})L${S}Collector;`]: (k: unknown, v: unknown) => toMap(k, v, null, () => rt.make("java/util/HashMap")),
-    [`static toMap${TO_MAP}${fnDesc("BinaryOperator")})L${S}Collector;`]: (k: unknown, v: unknown, m: unknown) => toMap(k, v, m, () => rt.make("java/util/HashMap")),
-    [`static toMap${TO_MAP}${fnDesc("BinaryOperator")}${fnDesc("Supplier")})L${S}Collector;`]: (k: unknown, v: unknown, m: unknown, s: unknown) =>
-      toMap(k, v, m, () => invoke("Supplier", s)),
-    [`static collectingAndThen(L${S}Collector;${fnDesc("Function")})L${S}Collector;`]: driven(function* (downstream: unknown, finish: unknown): Gen {
-      const inner = yield vcall(downstream, "finisher", `()${fnDesc("Function")}`);
-      return collector(yield vcall(downstream, "supplier", `()${fnDesc("Supplier")}`), yield vcall(downstream, "accumulator", `()${fnDesc("BiConsumer")}`),
-        yield vcall(downstream, "combiner", `()${fnDesc("BinaryOperator")}`),
-        lambda("Function", (b) => after(invoke("Function", inner, b), (r) => invoke("Function", finish, r))));
-    }),
-    [`static joining()L${S}Collector;`]: () => joiner((parts) => parts.join("")),
-    [`static joining(Ljava/lang/CharSequence;)L${S}Collector;`]: driven(function* (delimiter: unknown): Gen {
-      const separator = yield csText(delimiter);
-      return joiner((parts) => parts.join(separator));
-    }),
-    [`static joining(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)L${S}Collector;`]:
-      driven(function* (delimiter: unknown, prefix: unknown, suffix: unknown): Gen {
-        const [separator, before, end] = yield Promise.all([csText(delimiter), csText(prefix), csText(suffix)]);
-        return joiner((parts) => before + parts.join(separator) + end);
-      }),
-  },
-});

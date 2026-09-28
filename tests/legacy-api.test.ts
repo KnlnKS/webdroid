@@ -255,18 +255,6 @@ test("finite number checks and stream flattening preserve Java semantics", async
   expect((await vcall(flattened, "toList", "()Ljava/util/List;")).a).toEqual(["a", "a", "b", "b"]);
 });
 
-test("Collectors use the Java Collector protocol and CharSequence text", async () => {
-  const text = (value: string) => Object.assign(new CharSequenceValue(), { value });
-  const values = Object.assign([text("a"), text("b")], { $t: "Ljava/lang/Object;" });
-  const stream = await scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", values);
-  const joining = await scall("java/util/stream/Collectors", "joining",
-    "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;",
-    text(","), text("["), text("]"));
-  expect(await vcall(stream, "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;", joining)).toBe("[a,b]");
-  expect(await vcall(joining, "supplier", "()Ljava/util/function/Supplier;")).not.toBeNull();
-  expect(await vcall(joining, "combiner", "()Ljava/util/function/BinaryOperator;")).not.toBeNull();
-});
-
 test("JSONObject copies only the named keys that exist", async () => {
   const source = await newObj("org/json/JSONObject", "(Ljava/lang/String;)V", '{"a":1,"b":"two","c":null}');
   const names = Object.assign(["a", "c", "missing"], { $t: "Ljava/lang/String;" });
