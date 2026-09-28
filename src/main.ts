@@ -1,4 +1,5 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
+import { codeStats } from "./jvm/codecache";
 import "./natives";
 import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
@@ -52,6 +53,8 @@ setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();
 void fetchPlatformJars();
+// the worker serves persisted compiled code (src/jvm/codecache.ts), so V8 can cache it
+void navigator.serviceWorker?.register("/webview-worker.js").catch(() => {});
 
 if (process.env.NODE_ENV !== "production") {
   mountDiagnostics(document.querySelector<HTMLElement>("#side")!);
@@ -146,7 +149,7 @@ const wd = {
   nativeRequirements,
   layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
-  newObj, vcall,
+  newObj, vcall, code: codeStats,
   /** a static on a bytecode class: statics live on the constructor, mangled the same way */
   scall: async (cls: string, name: string, desc: string, ...args: unknown[]) => {
     const fn = ((await linkInit(cls)).ctor as Record<string, unknown>)[mangleMethod(name, desc)];

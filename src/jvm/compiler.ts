@@ -10,6 +10,7 @@ import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
 import { coverageProbeSource, jvmCoverage } from "./coverage";
+import { codeKey, persistedBody, recordBody, type Factory } from "./codecache";
 import {
   coldInstructions,
   ifTarget,
@@ -133,23 +134,43 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const prepare = () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName);
   const source = (prepared: PreparedMethod, count: boolean) =>
     emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}.${rec.name}.js`;
+  // instrumented bodies differ from plain ones, so only plain ones persist
+  const persist = !jvmProfiler.enabled && !jvmCoverage.enabled;
+  const entryKey = codeKey(dex.id, rec.m.methodIdx, "e"), resumeKey = codeKey(dex.id, rec.m.methodIdx, "r");
+  const bind = (factory: Factory, $R?: unknown) => factory(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
   let resumable: ResumeBody | undefined;
   /** The body that continues a suspended frame: only built once a frame actually suspends. */
-  const resume = (): ResumeBody => resumable ??= new Function("C", "D", "R", "S", "P",
-    `return ${resumableSource(R, dex, info, rec.m, prepare())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`,
-  )(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
+  const resume = (): ResumeBody => {
+    if (resumable) return resumable;
+    const persisted = persist ? persistedBody(resumeKey) : undefined;
+    if (persisted) return resumable = bind(persisted) as ResumeBody;
+    const body = `${resumableSource(R, dex, info, rec.m, prepare())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`;
+    if (persist) recordBody(resumeKey, body, "r");
+    return resumable = new Function("C", "D", "R", "S", "P", "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
+  };
+  const installed = (): JvmFunction => {
+    const fn = target[rec.mangled];
+    if (typeof fn !== "function") throw new Error("invalid compiled method");
+    return fn as JvmFunction;
+  };
   const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
     new Function("C", "D", "R", "S", "P", "$R", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
-    const installed = target[rec.mangled];
-    if (typeof installed !== "function") throw new Error("invalid compiled method");
-    return installed as JvmFunction;
+    if (persist) recordBody(entryKey, src, "e");
+    return installed();
   };
   const install = (fn: JvmFunction): JvmFunction => {
     retarget(rec.stub, fn);
     return fn;
   };
+  // A body the last launch compiled runs hot from its first call: no preparation, cold tier or compile.
+  const persisted = persist && jvmProfiler.tier !== "cold" ? persistedBody(entryKey) : undefined;
+  if (persisted) {
+    bind(persisted, resume);
+    perf.hotMethods++;
+    return install(installed());
+  }
   const prepared = prepare();
   // Leaf methods cannot suspend and go straight to their only (sync) form.
   if (prepared.sync) return install(compile(source(prepared, true)));

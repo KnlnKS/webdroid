@@ -103,6 +103,8 @@ export class DexFile {
   private fieldCache: PagedCache<FieldRef>;
   private methodCache: PagedCache<MethodRef>;
 
+  /** the header's SHA-1 signature: names this dex's contents across page loads */
+  readonly id: string;
   get cachedStrings(): readonly (string | undefined)[] { return this.stringCache; }
 
   /** `headerOff` is where this logical dex's header sits inside the physical file. It is 0 for
@@ -117,6 +119,7 @@ export class DexFile {
     if (magic !== "dex\n") throw new Error(`bad dex magic in ${name}`);
     this.version = Number(String.fromCharCode(...bytes.subarray(h + 4, h + 7))) || 0;
     this.fileSize = v.getUint32(h + 32, true);
+    this.id = Array.from(bytes.subarray(h + 12, h + 32), (b) => b.toString(16).padStart(2, "0")).join("") + (h ? "@" + h : "");
     this.containerSize = this.version >= 41 ? v.getUint32(h + 112, true) : this.fileSize;
     this.stringCount = v.getUint32(h + 56, true); this.stringIdsOff = v.getUint32(h + 60, true);
     this.typeCount = v.getUint32(h + 64, true); this.typeIdsOff = v.getUint32(h + 68, true);

@@ -189,6 +189,10 @@ async function context(client) {
 }
 self.addEventListener("fetch", event => {
   const request = event.request, original = new URL(request.url);
+  if (original.origin === self.location.origin && original.pathname.startsWith("/wd-code/")) {
+    event.respondWith(caches.open("wd-code").then(cache => cache.match(request)).then(hit => hit || new Response("", {status: 404})));
+    return;
+  }
   if (original.origin === self.location.origin && original.pathname.startsWith("/asset/")) {
     event.respondWith((async () => {
       const client = await self.clients.get(event.clientId);
@@ -207,6 +211,8 @@ self.addEventListener("fetch", event => {
     const navigation = localProxy && request.mode === "navigate" && original.searchParams.get("frame") === "1";
     const client = navigation ? null : await self.clients.get(event.clientId);
     if (!client && !navigation) return fetch(request);
+    // the shell's own pages (its Java networking) are no WebView: nothing to rewrite
+    if (client && !client.url.includes("__wd_bridge") && ["/", "/process"].includes(new URL(client.url).pathname)) return fetch(request);
     const {page, agent, id, intercept} = client ? await context(client) : frameContext(original.searchParams), isolated = !!id;
     const headers = new Headers();
     // client hints describe the host browser, not the WebView the user agent names

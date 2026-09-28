@@ -6,9 +6,10 @@
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
 // runs inside the page and reports through document.title. `--warm` launches each scenario twice
-// in one browser profile and gates the second launch, which runs with whatever the first persisted.
+// in one browser profile and gates the second: it starts from fresh app data (wd.reset) but with
+// the compiled code the first launch persisted.
 // A scenario is scripts/lat/scenarios/<name>.json:
-//   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"m":"name","tap":[x,y]} | {"wait":ms}
+//   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo)
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
@@ -96,7 +97,13 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
       await sleep(300); await idle();
       continue;
     }
-    const [x, y] = s.tap;
+    let [x, y] = s.tap ?? [];
+    if (s.text) {
+      let at = null;
+      for (let tries = 0; !at && tries < 30; tries++) { at = w.wd.locateText(s.text); if (!at) await sleep(100); }
+      if (!at) throw new Error(`no text "${s.text}" on screen`);
+      ({ x, y } = at);
+    }
     const base = sig(screen());
     if (s.m) frames = [];
     const t0 = performance.now();
@@ -172,6 +179,22 @@ async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
+/** wipe app data (installs, preferences, databases, files) and keep everything else */
+async function resetData(send: Awaited<ReturnType<typeof openBrowser>>["send"]): Promise<void> {
+  const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+  await send("Page.enable", {}, sessionId);
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: `addEventListener("DOMContentLoaded", async () => {
+    while (!globalThis.wd) await new Promise((r) => setTimeout(r, 50));
+    await globalThis.wd.reset(); document.title = "RESET"; });` }, sessionId);
+  await send("Page.navigate", { url: `${BASE}/?screen=${encodeURIComponent(SCREEN)}` }, sessionId);
+  try {
+    for (const deadline = Date.now() + 60_000; Date.now() < deadline; await Bun.sleep(200))
+      if ((await send("Target.getTargetInfo", { targetId })).targetInfo.title === "RESET") return;
+    throw new Error("reset timed out");
+  } finally { await send("Target.closeTarget", { targetId }); }
+}
+
 const report: { scenario: string; taps: Tap[] }[] = [];
 let failed = false;
 for (const name of names) {
@@ -179,7 +202,7 @@ for (const name of names) {
   const profile = mkdtempSync(join(tmpdir(), "wdlat-"));
   const browser = await openBrowser(profile);
   try {
-    if (warm) await launch(browser.send, apk, steps);
+    if (warm) { await launch(browser.send, apk, steps); await resetData(browser.send); }
     const taps = await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`);
     report.push({ scenario: name, taps });
     for (const t of taps) {
