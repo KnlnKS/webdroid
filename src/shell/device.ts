@@ -10,7 +10,7 @@ import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "
 import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
-import { loadCode } from "../jvm/codecache";
+import { loadCode, startupDone } from "../jvm/codecache";
 import { parseBaselineProfile, precompileProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
@@ -63,7 +63,7 @@ export function present(): void {
   if (!screen) return;
   latchSurfaces();
   screen.transferFromImageBitmap(fb.transferToImageBitmap());
-  perf.presentations++;
+  if (!perf.presentations++) startupDone();
   notePresent();
 }
 

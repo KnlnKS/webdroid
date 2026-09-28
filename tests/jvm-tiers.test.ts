@@ -252,7 +252,7 @@ test("persisted bodies install hot from the first call and behave as compiled on
   const recorded = await fixture("promoted"), wide = await recorded.warm("wide", "(J)J", [1n]);
   const expected = await wide(9007199254740993n);
   const text = codeText();
-  expect(text).toContain(":e\":(C,D,R,S,P,$R)=>{");
+  expect(text).toContain(":e\":((C,D,R,S,P,$R)=>{");
   useCode((await import(URL.createObjectURL(new Blob([text], { type: "text/javascript" })))).default);
   try {
     const cold = perf.coldCalls, persisted = await fixture("cold"), call = persisted.fn("wide", "(J)J");
