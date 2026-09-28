@@ -152,6 +152,36 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Yelp spins >70 G instructions (calloc/free churn in flattened control flow)
   under both interpreter and JIT; its cause is not known.
 
+- 2026-09-27, bytecode-first Stage A (docs/bytecode-first-plan.md). `invoke-polymorphic` and
+  `invoke-custom` compile in both tiers: AOSP's 428 polymorphic sites are VarHandle access
+  modes plus four `MethodHandle.invoke` calls, and its 15 call sites are record
+  `ObjectMethods.bootstrap`; d8 keeps both only with `--no-desugaring`. Every class without a
+  native spec or app definition now resolves through the reference build's boot jars and
+  framework.jar (indexing 40,860 classes costs ~20 ms; all dex entries are stored). A native
+  spec missing a platform method gets the platform body when every field it touches on native
+  classes exists, else an `unsafe-fallthrough` report; reflection hides such bodies, because
+  Room's reflective `SQLiteDatabase.getThreadSession` otherwise replaced its own fallback with
+  a crash. Constructors and inherited virtual methods keep the prototype chain's answer: TS
+  classes rely on an inherited no-op `<init>()V`. The fallback surfaced hidden-API paths that
+  previously met a missing class: Shizuku's reflective `ServiceManager.getService` (flagged
+  `unsupported`, so allowed on a device) now reaches a servicemanager context object that
+  returns the documented null for services not hosted behind binder, reported as `[binder]`
+  gaps; `SystemProperties` runs AOSP bytecode over the existing delegates. BOOT_COMPLETED
+  resolved the paired framework-res manifest's system_server receivers, so broadcasts skip the
+  `android` package. Live flows (TikTok, YouTube, Genshin) report further unsafe fallthroughs,
+  binder services and natives (`UnixNativeDispatcher.init`, `AudioManager.getService`); TikTok's
+  reply-side "Parcelable protocol requires CREATOR on android.content.Intent" was not reproduced
+  outside its process. Advertising SDK 35 was measured and deferred: Calculator M's golden is
+  API 33, and Mihon's dynamic-color tile needs the reference device's Monet overlay values,
+  which differ from the paired framework-res defaults (for example `system_primary_container_light`).
+  Komikku's backup/restore steps fail intermittently under five parallel jobs on the starting
+  commit too ("handleLifecycleEvent must be called on the main thread").
+- 2026-09-27 latency gate (`bun run lat`, raw CDP, pointerup to first changed frame): FitNotes'
+  taps took 12-41 ms. Tubi's first skip, explore and home taps took 155-385 ms across runs, with
+  12-70 ms compiling 280-960 classes and 22-146 ms in layout before the answering frame; under
+  `?jvmProfile=1`, V8 compilation was about 45% of compile time, cold-handler building 35% and
+  constant typing 17%.
+
 ## Java, storage and framework semantics
 
 - Collection views remain live. Copying `subList` or map views broke Compose
