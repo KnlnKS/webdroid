@@ -617,11 +617,11 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,377 pass);
+- `bun run test` (1,376 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time`. Baselines are 38,088, 2,538 and 26,163; jsr166
-  takes about 8 minutes;
+- `bun run conform guava|jsr166|ojluni-time`. Baselines are 38,088, 2,538 and 27,514; jsr166
+  takes about 5 minutes and ojluni-time about 2.5;
 - `bun run lat` cold and `--warm`;
 - `bun run smoke apks/FitNotes.apk` (0 method failures).
 
@@ -655,9 +655,10 @@ These classes now run from AOSP bytecode, with their TS code deleted:
     worker serves byte ranges of split files;
   - `zygoteInit()` (`src/android/delegates.ts`): RuntimeHooks' time-zone supplier reads
     `persist.sys.timezone`, which `device.timezone` (the host zone) answers.
-- **java.util.Locale stays TS.** Paint, LocaleList, TextView and Configuration read `JLocale`
-  fields synchronously. It gained empty extension sets so ICU can use it. Flipping it too cost
-  3x the java.time suite time.
+- **java.util.Locale.** libcore's Locale starts from `user.locale` (`device.locale`). TS reads a
+  Locale through its Java API (`localeTag`, `localeDirection`, `defaultLocale` in `jvalues.ts`);
+  LocaleList keeps its Locales' tags for synchronous readers. The "3x suite time" was
+  TestZoneTextPrinterParser's full workload, not a hang.
 - **XML** (`javax/xml`, `org/w3c`, `org/xml`). DOM is libcore's KXmlParser and transforms are
   xalan. SAX is ExpatParser over new expat natives (`jexpat.ts`, an incremental tokenizer).
   The Apache HTTP classes stay TS: they are the optional `org.apache.http.legacy` library, not
@@ -693,23 +694,41 @@ Fixes that apply to every mode:
 
 ### Next steps, in plan order
 
-1. **B.4 collections.** This is not viable as a cut: about 250 TS call sites build and read the
-   TS maps, lists and sets directly (`.m`, `newArrayList`, `newStringSet`, `toJsArray`,
-   `JMapEntry`). Those need converting to the Java API first, and JS-backed collections are
-   likely faster, so measure before committing to it.
-2. **Locale flip.** Convert the `JLocale` field readers (Paint, LocaleList, resnative, TextView,
-   geocoder, bidiformatter, jutil ResourceBundle, text) to the Java API, then cut `java/util/Locale`.
-3. **B.7 io/nio/net/security.** `libcore.io.Linux` has only the subset TS Os had plus open and
-   fstat. The rest of the 134 natives map onto `src/native/stdio.ts`'s descriptor table; Java
-   callers now receive `-errno` from it. The `java/nio` cut failed on the TS FileChannel.
-4. **§4 performance.** Cold Mihon's first theme switch is about 90 ms of real
-   recomposition plus cold-tier cost. Of what's left, resumable-body compilation (about 11 ms)
-   happens on suspension. Starting leaf methods cold was tried and was worse; FitNotes once went
-   unresponsive. Build-time AOT and the boot image (§4.1, §4.3) are the structural fixes.
-5. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap,
-   because `FileChannel.map` copies it (`jio.ts`). A lazily paged mapping would match the
-   device's mmap.
-6. **Known limits.**
+1. **B.7 io/nio/net**, in cuts. A read-only inventory (2026-09-28) found:
+   - **Blockers.** `isBytecode` matches prefixes, so `java/io/File` also cuts FileInputStream and
+     the rest; single classes need an exact-match form. About 60 TS sites read TS layout
+     (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
+     blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
+   - **Cut order.** (1) zip codecs (CRC32, Adler32, Inflater, Deflater and their streams; 26
+     natives over fflate; ZipFile stays TS). (2) File (12 UnixFileSystem natives over `vfs`).
+     (3) FileDescriptor and the file streams over Linux read/write/pread/pwrite (`stdio.ts` needs
+     Uint8Array `java*` wrappers for write, pread, pwrite and truncate). (4) the rest of java/io,
+     ObjectStreams last. (5) NIO channels, after deciding whether Buffers stay a TS boundary
+     (§4.7), together with a lazily paged `mmap` (the ICU file). (6) java/nio/file, then ZipFile.
+     (7) java.net value classes (URI blocks the cookie classes: AOSP's cookie store needs
+     `URI.compareTo`). (8) sockets over `native/net.ts`.
+   - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
+     streams (`streamOfSource`), and probably the Buffers and charset codecs.
+   - Add an ojluni io/zip conformance suite before cut 3.
+2. **B.4 collections.** Not viable as a cut: about 250 TS call sites build and read the TS maps,
+   lists and sets directly (`.m`, `newArrayList`, `newStringSet`, `toJsArray`, `JMapEntry`). Those
+   need converting to the Java API first, and JS-backed collections are likely faster; measure.
+3. **§4 performance.**
+   - **First launch.** Cold Mihon's first theme switch is about 90 ms of real recomposition plus
+     cold-tier cost, and libcore's first-use code (the Locale flip's LanguageTag parse adds about
+     20 ms to the cold `dark` tap). Platform bodies are about 14% of Mihon's persisted code today,
+     so a build-time platform image (§4.1) pays more as the view stack moves to bytecode.
+     Resumable-body compilation (about 11 ms) happens on suspension. Two experiments were
+     rejected: starting leaf methods cold, and a 50 ms yield gap over layout (see the history).
+   - **Persisted code.** Warm launches load 49 MB of emitted JS for Mihon (63 MB more for
+     microG). Suspension checks are 23% of those bytes, and 60% of bodies are single-block
+     methods that still carry the full dispatch loop, so a leaner emitter shrinks both import and
+     compile time.
+   - Keep org.json in TS as an intrinsic candidate: libcore's is 2.3x slower on a 237 KB
+     document. That needs a differential test (§4.7).
+4. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap, because
+   `FileChannel.map` copies it (`jio.ts`). A lazily paged mapping would match the device's mmap.
+5. **Known limits.**
    - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
    - TS `eraseThreadLocals` does not clear the TS locals.
    - Regex `hitEnd`/`requireEnd` are approximations, and UNIX_LINES is ignored.
