@@ -1,6 +1,6 @@
 import { rt, JObj } from "../jvm/runtime";
 /** the edges Gravity.apply reads and writes, which an android.graphics.Rect has */
-export type Box = { left: number; top: number; right: number; bottom: number };
+type Box = { left: number; top: number; right: number; bottom: number };
 
 export const G = {
   LEFT: 3, RIGHT: 5, TOP: 48, BOTTOM: 80, CENTER_H: 1, CENTER_V: 16, CENTER: 17,

@@ -22,7 +22,7 @@ export function argbLerp(f: number, s: number, e: number): number {
   return ((Math.round(a * 255) << 24) | (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)) | 0;
 }
 
-export class JInterpolator extends JObj {
+class JInterpolator extends JObj {
   a = 0; b = 0;
   f: (t: number) => number = (t) => t;
 }
@@ -118,7 +118,7 @@ for (const name of Object.keys(CURVES)) {
 
 const number = (res: Resources, node: XmlNode, name: string, fallback: number) => rvFloat(res, namedAttrRV(res, node, name), fallback);
 /** an interpolator resource's root element */
-export function interpolatorFromXml(res: Resources, node: XmlNode): JInterpolator {
+function interpolatorFromXml(res: Resources, node: XmlNode): JInterpolator {
   const name = node.name[0].toUpperCase() + node.name.slice(1);
   if (!CURVES[name]) throw rt.mkThrowable("java/lang/RuntimeException", "Unknown interpolator name: " + node.name);
   const it = interpolatorOf(name, number(res, node, name === "CycleInterpolator" ? "cycles" : name.endsWith("celerateInterpolator") ? "factor" : "tension", DEFAULTS[name]?.[0] ?? 1),

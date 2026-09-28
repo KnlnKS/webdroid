@@ -159,7 +159,7 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
 // ── servicemanager: the context object BinderInternal hands AOSP's ServiceManager. It answers
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
 // returns for an absent service, and is reported as a boundary gap.
-export const binderServices = new Map<string, JObj>();
+const binderServices = new Map<string, JObj>();
 class JServiceManager extends JObj { binder: JBinder | null = null; }
 function hostedService(name: string): JObj | null {
   const service = binderServices.get(name);

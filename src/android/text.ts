@@ -1142,7 +1142,7 @@ type SpanMetrics = { top: number; ascent: number; descent: number; bottom: numbe
 type Run = { start: number; end: number; paint: JTextPaint; metrics: SpanMetrics; width?: number };
 type Replacement = SpanRec & Run & { width: number };
 /** A text's runs, sorted and disjoint, and the replacements among them. */
-export type PreparedSpans = { replacements: Replacement[]; runs: Run[] };
+type PreparedSpans = { replacements: Replacement[]; runs: Run[] };
 export const NO_SPANS: PreparedSpans = { replacements: [], runs: [] };
 const isReplacement = (s: SpanRec) => rt.iof(s.span, "android/text/style/ReplacementSpan");
 export function prepareSpans(cs: unknown, paint: JTextPaint): PreparedSpans | Promise<PreparedSpans> {

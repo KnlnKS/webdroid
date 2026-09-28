@@ -21,7 +21,7 @@ export interface VPath {
 }
 /** the vector's root: its android:alpha animates as the root's "alpha" */
 export interface VRoot extends VGroup { alpha: number }
-export const isPath = (n: VGroup | VPath): n is VPath => "nodes" in n;
+const isPath = (n: VGroup | VPath): n is VPath => "nodes" in n;
 
 export function cloneTree<T extends VGroup>(g: T): T {
   return { ...g, children: g.children.map((c) => isPath(c) ? { ...c } : cloneTree(c)) };
@@ -106,7 +106,7 @@ function pathHolders(res: Resources, node: XmlNode, data: string): Holder[] {
   });
 }
 /** an animator resource's root: <set>, <objectAnimator> or its <propertyValuesHolder>s */
-export function timelineFromXml(res: Resources, node: XmlNode): Timeline {
+function timelineFromXml(res: Resources, node: XmlNode): Timeline {
   if (node.name === "set") {
     return { set: true, sequential: rvInt(res, namedAttrRV(res, node, "ordering")) === 1, children: node.children.map((c) => timelineFromXml(res, c)) };
   }

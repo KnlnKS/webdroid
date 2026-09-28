@@ -2422,7 +2422,7 @@ export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array 
   return t;
 }
 /** a colour filter applied in place to the w x h pixels `c` holds at (x, y) */
-export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN", x = 0, y = 0) {
+function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN", x = 0, y = 0) {
   if (matrix) {
     const img = c.getImageData(x, y, w, h), d = img.data, k = matrix;
     for (let i = 0; i < d.length; i += 4) {

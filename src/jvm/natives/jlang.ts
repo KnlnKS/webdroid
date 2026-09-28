@@ -186,7 +186,7 @@ export function javaRegex(source: string, flags: string): RegExp {
   return re;
 }
 /** String.matches / Pattern.matches: whole-input match, invalid pattern → false */
-export function javaMatches(p: string, s: string): number {
+function javaMatches(p: string, s: string): number {
   try { return javaRegex("^(?:" + p + ")$", "su").test(s) ? 1 : 0; } catch { return 0; }
 }
 export function stringHash(s: string): number {
@@ -935,7 +935,7 @@ sm("split(Ljava/lang/String;I)[Ljava/lang/String;", function (p: string, l: numb
 const M_TO_STRING = mangleMethod("toString", "()Ljava/lang/String;");
 /** A value's OWN toString — %s prints that, and so does every CharSequence a synchronous
  *  native is handed. A body that suspends cannot be awaited here and falls back to JS. */
-export function jToString(v: unknown): string {
+function jToString(v: unknown): string {
   if (v === null || v === undefined) return "null";
   if (typeof v !== "object") return String(v);
   const f = jmethod(v, M_TO_STRING);
@@ -1089,7 +1089,7 @@ function fmtFloat(v: number): string {
   return fmtDouble(Number(v.toPrecision(9)));
 }
 
-export class JSB extends JObj {
+class JSB extends JObj {
   s = "";
 }
 function sbSpec(name: string): NativeSpec {
@@ -1249,10 +1249,10 @@ export const bitCount32 = (v: number) => {
   v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
   return Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
 };
-export function reverseBytes32(v: number): number {
+function reverseBytes32(v: number): number {
   return (v >>> 24) | ((v >>> 8) & 0xff00) | ((v & 0xff00) << 8) | (v << 24);
 }
-export function reverseBytes64(v: bigint): bigint {
+function reverseBytes64(v: bigint): bigint {
   const u = BigInt.asUintN(64, v);
   let r = 0n;
   for (let i = 0; i < 8; i++) r |= ((u >> BigInt(i * 8)) & 0xffn) << BigInt((7 - i) * 8);

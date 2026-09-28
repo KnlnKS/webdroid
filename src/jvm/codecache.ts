@@ -131,7 +131,7 @@ function idle(): void {
 let saving: Promise<void> = Promise.resolve(), lastSave = 0;
 /** append the pending bodies as a startup and a later chunk; a load that found too many chunks
  *  rewrites them all, once the later ones have loaded */
-export function saveCode(): Promise<void> {
+function saveCode(): Promise<void> {
   return saving = saving.then(async () => {
     const rewrite = compact && !later;
     if (!dir || !(pending.size || rewrite) || typeof caches === "undefined") return;

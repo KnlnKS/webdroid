@@ -198,7 +198,7 @@ export async function mediaUpdate(uri: JUri, values: Map<string, unknown>, selec
   return count;
 }
 /** MediaStore.QUERY_ARG_MATCH_*: MATCH_DEFAULT (0), MATCH_INCLUDE (1), MATCH_EXCLUDE (2), MATCH_ONLY (3) */
-export interface MediaMatch { trashed?: number; pending?: number; favorite?: number }
+interface MediaMatch { trashed?: number; pending?: number; favorite?: number }
 function matchPredicate(column: string, match: number, fallback: number): string | null {
   const m = match || fallback;
   return m === 2 ? `${column} = 0` : m === 3 ? `${column} = 1` : null;
