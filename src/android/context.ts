@@ -301,9 +301,11 @@ const contextMethods: NativeSpec["methods"] = {
   "getSystemService(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContext, name: string) {
     return systemService(this, name);
   },
-  "getSystemService(Ljava/lang/Class;)Ljava/lang/Object;": function (this: JContext, cls: any) {
-    const n = cls?.ci?.name ?? "";
-    return vcall(this, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", SERVICE_NAME.get(n) ?? n.split("/").pop() ?? "");
+  // An unregistered class has no service name, and AOSP answers null for it
+  "getSystemService(Ljava/lang/Class;)Ljava/lang/Object;": function (this: JContext, cls: { ci?: { name?: string } } | null) {
+    const name = SERVICE_NAME.get(cls?.ci?.name ?? "");
+    if (!name) { rt.noteMissing("systemService " + cls?.ci?.name); return null; }
+    return vcall(this, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", name);
   },
   "getSystemServiceName(Ljava/lang/Class;)Ljava/lang/String;": (cls: { ci?: { name?: string } } | null) => {
     const name = cls?.ci?.name ?? "";

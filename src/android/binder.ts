@@ -2,6 +2,7 @@ import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { curThread, JThread, setCurThread, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
+import { jarray } from "../jvm/abi";
 
 /** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
@@ -99,6 +100,8 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {}, statics: { FIRST_CALL_TRANSACTION: 1, FLAG_ONEWAY: 1, INTERFACE_TRANSACTION } });
 rt.markers("android/os/IBinder$DeathRecipient");
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
+  // blocking-call warnings are StrictMode reporting, which is not modelled
+  "static allowBlocking(Landroid/os/IBinder;)Landroid/os/IBinder;": (binder: unknown) => binder,
   "static getCallingUid()I": () => callingIdentity().uid,
   "static getCallingPid()I": () => callingIdentity().pid,
   "static clearCallingIdentity()J": () => {
@@ -152,3 +155,33 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
     cancel(); this.deaths.delete(recipient); return 1;
   },
 } });
+
+// ── servicemanager: the context object BinderInternal hands AOSP's ServiceManager. It answers
+// from the services hosted behind binder; a name nobody hosts gets the null servicemanager
+// returns for an absent service, and is reported as a boundary gap.
+export const binderServices = new Map<string, JObj>();
+class JServiceManager extends JObj { binder: JBinder | null = null; }
+function hostedService(name: string): JObj | null {
+  const service = binderServices.get(name);
+  if (!service) rt.noteMissing(`service ${name} [binder]`);
+  return service ?? null;
+}
+rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["android/os/IServiceManager"], methods: {
+  "asBinder()Landroid/os/IBinder;": function (this: JServiceManager) { return this.binder; },
+  "getService(Ljava/lang/String;)Landroid/os/IBinder;": hostedService,
+  "checkService(Ljava/lang/String;)Landroid/os/IBinder;": hostedService,
+  "isDeclared(Ljava/lang/String;)Z": (name: string) => binderServices.has(name) ? 1 : 0,
+  "listServices(I)[Ljava/lang/String;": () => jarray([...binderServices.keys()], "Ljava/lang/String;"),
+  "addService(Ljava/lang/String;Landroid/os/IBinder;ZI)V": () => {
+    throw rt.mkThrowable("java/lang/SecurityException", "an app may not register a system service");
+  },
+} });
+let contextObject: JBinder | null = null;
+rt.registerJni("com/android/internal/os/BinderInternal", "getContextObject()Landroid/os/IBinder;", () => {
+  if (contextObject) return contextObject;
+  const manager = rt.make("webdroid/ServiceManager") as JServiceManager;
+  contextObject = manager.binder = rt.make("android/os/Binder") as JBinder;
+  contextObject.owner = manager;
+  contextObject.descriptor = "android.os.IServiceManager";
+  return contextObject;
+});

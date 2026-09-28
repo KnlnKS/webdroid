@@ -20,7 +20,7 @@ import {
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
-import { newObj } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits, i8, u8, jarray } from "../jvm/abi";
 import { JPath, appendPath, copyPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
 import type { JTextPaint, TLine } from "./text";
@@ -747,18 +747,23 @@ delegate("android/graphics/text/LineBreaker", {
 });
 
 // ── android.os.SystemProperties ────────────────────────────────────────────────────────
-// Reached the moment any framework class runs: Typeface, Paint and the view stack all read
-// debug and persist properties from their <clinit>. Every property is ABSENT here, so every
-// read gets the caller's own default — which is what a device that has not set one reports,
-// and is the difference between "this device does not do that" and a made-up answer a library
-// will branch on. A property that turns out to need a real value belongs in the one device
-// profile (src/shell/config.ts), not in a table here.
+// Every property is ABSENT here, so every read gets the caller's own default — which is what a
+// device that has not set one reports, and is the difference between "this device does not do
+// that" and a made-up answer a library will branch on. A property that turns out to need a real
+// value belongs in the one device profile (src/shell/config.ts), not in a table here. An app
+// process may not set properties, and a change report runs the registered callbacks, as the
+// property service's own notification does.
 delegate("android/os/SystemProperties", {
   "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_k: string, def: string | null) => def ?? "",
   "native_get_boolean(Ljava/lang/String;Z)Z": (_k: string, def: number) => def,
   "native_get_int(Ljava/lang/String;I)I": (_k: string, def: number) => def,
   "native_get_long(Ljava/lang/String;J)J": (_k: string, def: bigint) => def,
-  ...noops("native_set(Ljava/lang/String;Ljava/lang/String;)V", "native_report_sysprop_change()V"),
+  "native_set(Ljava/lang/String;Ljava/lang/String;)V": () => {
+    throw rt.mkThrowable("java/lang/RuntimeException", "failed to set system property (check logcat for reason)");
+  },
+  "native_add_change_callback()V": () => {},
+  // reached only from SystemProperties itself, which is therefore initialized
+  "native_report_sysprop_change()V": () => vcall(rt.link("android/os/SystemProperties").ctor, "callChangeCallbacks", "()V"),
 });
 
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────

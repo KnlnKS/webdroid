@@ -27,17 +27,6 @@ import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { clockIn, offsetOf, unavailableClock } from "../jvm/natives/jtime";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
-rt.register({
-  name: "android/os/SystemProperties", ctor: class extends JObj {},
-  methods: {
-    // No property service is installed; use the caller's default, as the framework delegates do.
-    "static get(Ljava/lang/String;)Ljava/lang/String;": () => "",
-    "static get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_key: string, fallback: string | null) => fallback ?? "",
-    "static getInt(Ljava/lang/String;I)I": (_key: string, fallback: number) => fallback,
-    "static getLong(Ljava/lang/String;J)J": (_key: string, fallback: bigint) => fallback,
-    "static getBoolean(Ljava/lang/String;Z)Z": (_key: string, fallback: number) => fallback,
-  },
-});
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
 
 class JMessageQueue extends JObj {
@@ -310,6 +299,7 @@ rt.register({
     "static uptimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
     "static elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
     "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
+    "static uptimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
     "static currentGnssTimeClock()Ljava/time/Clock;": () => unavailableClock("Gnss based time is not available."),
     // the host's wall clock is network-synchronized

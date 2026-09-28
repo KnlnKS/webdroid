@@ -36,7 +36,9 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
     if (step.settleTimedOut) errors.push(`${prefix}: completion timed out`);
     if (step.error) errors.push(`${prefix}: ${brief(step.error)}`);
     if (step.evidence === "motion" && (step.perf?.presentations ?? 0) < 2) errors.push(`${prefix}: motion checkpoint presented no motion`);
-    for (const item of step.newMissing ?? []) (live ? gaps : errors).push(`${prefix}: missing ${item}`);
+    // a service lookup that got servicemanager's documented null is a boundary gap the app
+    // handles, not a failure; it stays reported until a binder service answers for it
+    for (const item of step.newMissing ?? []) (live || item.endsWith(" [binder]") ? gaps : errors).push(`${prefix}: missing ${item}`);
     for (const item of step.nativeRequired ?? []) (live ? gaps : errors).push(`${prefix}: native code required ${item}`);
     for (const item of step.newErrors ?? []) if (!expectedError(flow, item)) (live ? gaps : errors).push(`${prefix}: ${brief(item)}`);
     const processes = step.processes ?? [];
