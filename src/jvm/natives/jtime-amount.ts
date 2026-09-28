@@ -107,7 +107,6 @@ rt.register({
     "toNanosPart()I": durationNano,
     "isNegative()Z": function (this: JDuration) { return +(this.s < 0); },
     "isZero()Z": function (this: JDuration) { return +(this.s === 0 && this.ns === 0); },
-    "isPositive()Z": function (this: JDuration) { return +(this.s > 0 || (this.s === 0 && this.ns > 0)); },
     [`addTo(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "plus", durationSteps(this)); },
     [`subtractFrom(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "minus", durationSteps(this)); },
     ...compareOnly(ordering(`L${T}Duration;`, (a: JDuration, b: JDuration) => a.s - b.s || a.ns - b.ns)),

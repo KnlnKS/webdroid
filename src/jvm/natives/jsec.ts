@@ -199,7 +199,6 @@ rt.register({
   name: "java/security/Provider", ctor: JProvider, sup: "java/util/Properties",
   methods: {
     "<init>(Ljava/lang/String;DLjava/lang/String;)V": function (this: JProvider, name: string, version: number, info: string) { this.pname = name; this.version = version; this.info = info; },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JProvider, name: string, version: string, info: string) { this.pname = name; this.version = Number(version); this.info = info; },
     "getName()Ljava/lang/String;": function (this: JProvider) { return this.pname; },
     "getVersion()D": function (this: JProvider) { return this.version; },
     "getInfo()Ljava/lang/String;": function (this: JProvider) { return this.info; },
