@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Runtime, JObj } from "../src/jvm/runtime";
+import { Runtime, JObj, stubs, isPlaceholderMethod } from "../src/jvm/runtime";
 import { DexFile } from "../src/jvm/dex";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 import { setLazyMethods } from "../src/jvm/compiler";
@@ -230,4 +230,19 @@ test("a native class's absent field throws on read until something writes it", a
   obj[prop] = 7;
   expect(obj[prop]).toBe(7);
   expect(() => R.make("InvokeProbe")[prop]).toThrow();
+});
+
+test("each placeholder records its first caller, then answers as before", () => {
+  const R = new Runtime();
+  R.register({ name: "java/lang/Object", ctor: class extends JObj {} });
+  R.register({ name: "PlaceholderProbe", ctor: class extends JObj {}, methods: stubs(7, "a()I", "static b()I") });
+  R.javaFrames = () => ["Caller.run()V"];
+  const ctor = R.link("PlaceholderProbe").ctor, obj = R.make("PlaceholderProbe"), a = mangleMethod("a", "()I");
+  expect(isPlaceholderMethod(obj[a])).toBe(true);
+  expect(obj[a]()).toBe(7);
+  expect(obj[a]()).toBe(7);
+  expect(ctor[mangleMethod("b", "()I")]()).toBe(7);
+  expect([...R.placeholders]).toEqual(["PlaceholderProbe.a()I", "PlaceholderProbe.b()I"]);
+  expect(R.placeholderAt.get("PlaceholderProbe.a()I")).toEqual(["Caller.run()V"]);
+  expect(isPlaceholderMethod(obj[a])).toBe(true);
 });

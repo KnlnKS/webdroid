@@ -373,7 +373,10 @@ export class Runtime {
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, (...a: never[]) => unknown>();
-  registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown) { this.jni.set(cls + "|" + sig, fn); }
+  registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown) {
+    const key = cls + "|" + sig;
+    this.jni.set(key, this.trackPlaceholder(`${cls}.${sig}`, fn, (f) => { if (this.jni.get(key) === f) this.jni.set(key, fn); }));
+  }
   jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null { return this.jni.get(cls + "|" + sig) ?? this.jniResolver?.(cls, sig) ?? null; }
   /** set by the native tier: resolve a native by its JNI short-name export (`Java_pkg_Cls_m`) in a loaded library */
   jniResolver: ((cls: string, sig: string) => ((...a: never[]) => unknown) | null) | null = null;
@@ -414,6 +417,23 @@ export class Runtime {
     this.nativeRequired.set(lib, abi);
     console.warn("[webdroid native required]", lib, abi);
     this.onNativeRequired(lib, abi);
+  }
+
+  /** placeholders (`stubs`/`noops`) reached, as "cls.name(desc)", and the Java frames first reaching each */
+  placeholders = new Set<string>();
+  placeholderAt = new Map<string, string[]>();
+  /** `fn` itself, or for a placeholder a wrapper that records its first hit and then asks
+   *  `uninstall` to put `fn` back, so later calls cost what they did before */
+  private trackPlaceholder<F extends Function>(what: string, fn: F, uninstall: (wrapper: F) => void): F {
+    if (!placeholderMethods.has(fn)) return fn;
+    const R = this;
+    const wrapper = function (this: unknown, ...args: unknown[]) {
+      uninstall(wrapper as unknown as F);
+      if (!R.placeholders.has(what)) { R.placeholders.add(what); R.placeholderAt.set(what, R.javaFrames().slice(0, 12)); }
+      return fn.apply(this, args);
+    };
+    placeholderMethods.add(wrapper);
+    return wrapper as unknown as F;
   }
 
   /** placeholder for a missing super method: logs + returns a thrower for .call() */
@@ -536,7 +556,7 @@ export class Runtime {
       const target: Record<string, unknown> = isStatic ? ctorAny : proto;
       const fn = typeof impl === "string" ? proto[impl] : impl;
       if (typeof fn !== "function") throw new Error(`bad native impl ${spec.name}.${key}`);
-      target[mangled] = fn;
+      target[mangled] = this.trackPlaceholder(`${spec.name}.${k}`, fn, (f) => { if (target[mangled] === f) target[mangled] = fn; });
       if (!isStatic) info.ownMethods.push(mangled);
     }
     // A static written as a getter is resolved on first READ, not here: link order is
