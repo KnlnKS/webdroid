@@ -1,7 +1,7 @@
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
-  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy
+  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy, scrollViewTo,
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
@@ -12,7 +12,7 @@ import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } 
 import { device } from "../shell/config";
 import { TV } from "./axml";
 import { inflateLayout } from "./inflate";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, after } from "../jvm/natives/jlang";
 
 /** ViewGroup.generateLayoutParams(LayoutParams): keep ours, else copy size (and margins) into a fresh one */
 function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | null): T {
@@ -674,10 +674,12 @@ class JScrollView extends JViewGroup {
       ? Math.max(0, c.measuredW + this.padL + this.padR - this.width())
       : Math.max(0, c.measuredH + this.padT + this.padB - this.height());
   }
-  clampScroll() {
-    if (this.horizontal) this.scrollX = Math.max(0, Math.min(this.maxScroll(), this.scrollX));
-    else this.scrollY = Math.max(0, Math.min(this.maxScroll(), this.scrollY));
+  /** (x, y) within the child's scroll range */
+  clamped(x: number, y: number): [number, number] {
+    const max = this.maxScroll();
+    return this.horizontal ? [Math.max(0, Math.min(max, x)), y] : [x, Math.max(0, Math.min(max, y))];
   }
+  clampScroll() { [this.scrollX, this.scrollY] = this.clamped(this.scrollX, this.scrollY); }
 }
 const scrollInit = async function (this: JScrollView, c: unknown, set: JAttrSet | null) {
   await initViewFromCtx(this, c, set);
@@ -789,21 +791,13 @@ const scrollMethods: NativeSpec["methods"] = {
     if (this.horizontal) return 0;
     return dir > 0 ? (this.scrollY < this.maxScroll() ? 1 : 0) : (this.scrollY > 0 ? 1 : 0);
   },
-  "scrollTo(II)V": function (this: JScrollView, x: number, y: number) {
-    this.scrollX = x; this.scrollY = y;
-    this.clampScroll();
-    invalidate();
-  },
+  "scrollTo(II)V": function (this: JScrollView, x: number, y: number) { return scrollViewTo(this, ...this.clamped(x, y)); },
   "smoothScrollTo(II)V": function (this: JScrollView, x: number, y: number) {
-    this.scrollX = this.horizontal ? x : this.scrollX;
-    this.scrollY = this.horizontal ? this.scrollY : y;
-    this.clampScroll();
-    invalidate();
+    return vcall(this, "scrollTo", "(II)V", this.horizontal ? x : this.scrollX, this.horizontal ? this.scrollY : y);
   },
   "fullScroll(I)Z": function (this: JScrollView, dir: number) {
-    if (!this.horizontal) this.scrollY = dir === 130 ? this.maxScroll() : 0;
-    invalidate();
-    return 1;
+    if (this.horizontal) return 1;
+    return after(vcall(this, "scrollTo", "(II)V", this.scrollX, dir === 130 ? this.maxScroll() : 0), () => 1);
   },
   "setSmoothScrollingEnabled(Z)V": () => {},
 };

@@ -103,8 +103,12 @@ const drawableMethods: NativeSpec["methods"] = {
   "setAlpha(I)V": function (this: JDrawable, a: number) { this.alpha = a; },
   "getAlpha()I": function (this: JDrawable) { return this.alpha; },
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; this.tintMatrix = f?.matrix ?? null; },
-  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, c: number) { this.tint = c; this.tintMatrix = null; },
-  "clearColorFilter()V": function (this: JDrawable) { this.tint = null; this.tintMatrix = null; },
+  // both go through setColorFilter(ColorFilter), which an app's own Drawable implements
+  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, color: number, mode: unknown) {
+    return after(newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", color, mode),
+      (filter) => vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", filter));
+  },
+  "clearColorFilter()V": function (this: JDrawable) { return vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
   "setTint(I)V": function (this: JDrawable, c: number) { this.tint = c; },
   "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
     this.tintCsl = csl; this.tint = csl ? cslColor(csl, this.stateSet) : null;

@@ -223,8 +223,9 @@ rt.register({
     "<init>()V": function () {},
     "hashCode()I": function () { return idHash(this); },
     "equals(Ljava/lang/Object;)Z": function (o: unknown) { return this === o ? 1 : 0; },
-    "toString()Ljava/lang/String;": function () {
-      return dotName(jclsName(this)) + "@" + idHash(this).toString(16);
+    // Class@hex(hashCode()), through an app's hashCode override; an array cannot override it
+    "toString()Ljava/lang/String;": function (this: JObj) {
+      return after(this instanceof JObj ? vcall(this, "hashCode", "()I") : idHash(this), (hash: number) => dotName(jclsName(this)) + "@" + (hash >>> 0).toString(16));
     },
     "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return info?.jclass ?? (info?.owner ?? rt).classFor(jclsName(this)); },
     "clone()Ljava/lang/Object;": function (this: any) {

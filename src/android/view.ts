@@ -4,7 +4,7 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, saveCanvas, saveLayer, restoreCanvasToCount, type JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -1067,27 +1067,15 @@ const viewMethods: NativeSpec["methods"] = {
   "getOutlineAmbientShadowColor()I": function (this: JView) { return this.outlineAmbientShadowColor; },
   "setOutlineSpotShadowColor(I)V": function (this: JView, color: number) { this.outlineSpotShadowColor = color; invalidate(); },
   "getOutlineSpotShadowColor()I": function (this: JView) { return this.outlineSpotShadowColor; },
-  "setScrollX(I)V": function (this: JView, x: number) {
-    const old = this.scrollX;
-    this.scrollX = x; invalidate();
-    if (old !== x) fireScrollChanged(this, old, this.scrollY);
-  },
-  "setScrollY(I)V": function (this: JView, y: number) {
-    const old = this.scrollY;
-    this.scrollY = y; invalidate();
-    if (old !== y) fireScrollChanged(this, this.scrollX, old);
-  },
+  "setScrollX(I)V": function (this: JView, x: number) { return vcall(this, "scrollTo", "(II)V", x, this.scrollY); },
+  "setScrollY(I)V": function (this: JView, y: number) { return vcall(this, "scrollTo", "(II)V", this.scrollX, y); },
   "getScrollX()I": function (this: JView) { return this.scrollX; },
   "getScrollY()I": function (this: JView) { return this.scrollY; },
-  "scrollTo(II)V": function (this: JView, x: number, y: number) {
-    const ox = this.scrollX, oy = this.scrollY;
-    this.scrollX = x; this.scrollY = y; invalidate();
-    if (ox !== x || oy !== y) fireScrollChanged(this, ox, oy);
-  },
-  "scrollBy(II)V": function (this: JView, x: number, y: number) {
-    const ox = this.scrollX, oy = this.scrollY;
-    this.scrollX += x; this.scrollY += y; invalidate();
-    if (x || y) fireScrollChanged(this, ox, oy);
+  "scrollTo(II)V": function (this: JView, x: number, y: number) { return scrollViewTo(this, x, y); },
+  "scrollBy(II)V": function (this: JView, x: number, y: number) { return vcall(this, "scrollTo", "(II)V", this.scrollX + x, this.scrollY + y); },
+  "onScrollChanged(IIII)V": function (this: JView, l: number, t: number, oldl: number, oldt: number) {
+    void getVTO(this).dispatchScrollChanged();
+    if (this.scrollChangeL) return vcall(this.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", this, l, t, oldl, oldt);
   },
   "setOnScrollChangeListener(Landroid/view/View$OnScrollChangeListener;)V": function (this: JView, listener: unknown) { this.scrollChangeL = listener; },
   "isEnabled()Z": function (this: JView) { return this.enabled ? 1 : 0; },
@@ -1652,7 +1640,7 @@ const viewMethods: NativeSpec["methods"] = {
     "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setOnGenericMotionListener(Landroid/view/View$OnGenericMotionListener;)V",
     "setVerticalFadingEdgeEnabled(Z)V", "setHorizontalFadingEdgeEnabled(Z)V",
     "setScrollbarFadingEnabled(Z)V", "setScrollIndicators(II)V", "setFrameContentVelocity(F)V",
-    "setAnimationMatrix(Landroid/graphics/Matrix;)V", "onScrollChanged(IIII)V",
+    "setAnimationMatrix(Landroid/graphics/Matrix;)V",
     "onVisibilityChanged(Landroid/view/View;I)V", "onVisibilityAggregated(Z)V", "onWindowVisibilityChanged(I)V",
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
     "drawableHotspotChanged(FF)V", "setLayoutDirection(I)V", "setTextDirection(I)V"),
@@ -2275,9 +2263,12 @@ function getVTO(v: JView): JVTO {
   return o;
 }
 /** fire-and-forget: scroll setters are synchronous void natives, same shape as refreshDrawableState */
-function fireScrollChanged(v: JView, oldX: number, oldY: number) {
-  if (v.scrollChangeL) void vcallUncaught(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY);
-  void getVTO(v).dispatchScrollChanged();
+/** View.scrollTo: move, then tell onScrollChanged, which an app's view may override */
+export function scrollViewTo(v: JView, x: number, y: number): unknown {
+  const ox = v.scrollX, oy = v.scrollY;
+  if (ox === x && oy === y) return;
+  v.scrollX = x; v.scrollY = y; invalidate();
+  return vcall(v, "onScrollChanged", "(IIII)V", x, y, ox, oy);
 }
 rt.markers("android/view/autofill/AutofillId");
 class JTouchDelegate extends JObj {
