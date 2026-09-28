@@ -34,8 +34,10 @@ for (const [name, events] of Object.entries(sessionTypes)) {
   const methods: NonNullable<NativeSpec["methods"]> = {
     "getSessionId()Landroid/media/metrics/LogSessionId;": function (this: JMetricSession) { return this.id; },
     "close()V": function (this: JMetricSession) { this.closed = true; sessions.delete(this.id.id); },
-    "reportBundleMetrics(Landroid/os/PersistableBundle;)V": function (this: JMetricSession, value: unknown) { this.report("BundleMetrics", value); },
   };
+  if (name === "BundleSession") {
+    methods["reportBundleMetrics(Landroid/os/PersistableBundle;)V"] = function (this: JMetricSession, value: unknown) { this.report("BundleMetrics", value); };
+  }
   for (const event of events) {
     methods[`report${event}(L${root}${event};)V`] = function (this: JMetricSession, value: unknown) { this.report(event, value); };
   }
@@ -74,9 +76,11 @@ const eventSetters: Record<string, string[]> = {
 for (const [name, setters] of Object.entries(eventSetters)) {
   const eventName = root + name;
   rt.register({ name: eventName, ctor: class extends JMetricEvent {}, ifaces: ["android/os/Parcelable"] });
+  // the builders of events that carry a required value take it as their constructor's argument
   const methods: NonNullable<NativeSpec["methods"]> = {
-    "<init>()V": function () {},
-    "<init>(I)V": function (this: JMetricBuilder, initial: number) { this.values.set("initial", initial); },
+    ...name === "EditingEndedEvent" || name === "TrackChangeEvent"
+      ? { "<init>(I)V": function (this: JMetricBuilder, initial: number) { this.values.set("initial", initial); } }
+      : { "<init>()V": function () {} },
     [`build()L${eventName};`]: function (this: JMetricBuilder) {
       const event: JMetricEvent = rt.make(eventName);
       event.values = new Map(this.values);

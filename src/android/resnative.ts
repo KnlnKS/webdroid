@@ -1,6 +1,6 @@
 // Java-facing android.content.res.* on top of res.ts + drawable.ts
 
-import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser, newXmlSerializer } from "./xmlpull";
 import { parseSax } from "./sax";
@@ -772,7 +772,7 @@ const xmlParserMethods: NativeSpec["methods"] = {
 rt.register({
   name: "android/content/res/XmlResourceParser", ctor: JXmlParser,
   ifaces: ["org/xmlpull/v1/XmlPullParser", "android/util/AttributeSet"],
-  methods: xmlParserMethods,
+  methods: without(xmlParserMethods, ["getSourceResId()I"]),
 });
 
 class JXmlBlock extends JObj {

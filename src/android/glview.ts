@@ -539,7 +539,7 @@ rt.register({
     // setPreserveEGLContextOnPause(true) behaviour and the only one we can offer.
     "onResume()V": function (this: JGLSurfaceView) { this.paused = false; this.signal(); },
     "onPause()V": function (this: JGLSurfaceView) { this.paused = true; },
-    ...noops("setEGLConfigChooser(ZZ)V", "setEGLConfigChooser(IIIIII)V",
+    ...noops("setEGLConfigChooser(IIIIII)V",
       "setEGLWindowSurfaceFactory(Landroid/opengl/GLSurfaceView$EGLWindowSurfaceFactory;)V",
       "setPreserveEGLContextOnPause(Z)V", "setDebugFlags(I)V"),
     "onDetachedFromWindow()V": function (this: JGLSurfaceView) { this.destroySurface(); this.signal(); },

@@ -1,5 +1,5 @@
 import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj, noops, stubs, driven, type Gen } from "../jvm/runtime";
+import { rt, type NativeSpec, JObj, stubs, driven, type Gen } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
@@ -380,7 +380,6 @@ rt.register({
     "isReadPermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 1)); },
     "isWritePermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 2)); },
     "getPersistedTime()J": function (this: JUriPermission) { return BigInt(this.time); },
-    ...noops("<init>()V"),
   },
 });
 

@@ -3,7 +3,7 @@ import { JObj, noops, rt } from "../jvm/runtime";
 
 defineException("android/media/MediaDrmException", "java/lang/Exception", ["(Ljava/lang/String;)V"]);
 defineException("android/media/UnsupportedSchemeException", "android/media/MediaDrmException", ["(Ljava/lang/String;)V"]);
-defineException("android/media/MediaDrm$MediaDrmStateException", "java/lang/IllegalStateException", ["(Ljava/lang/String;)V"]);
+defineException("android/media/MediaDrm$MediaDrmStateException", "java/lang/IllegalStateException");
 
 rt.register({
   name: "android/media/MediaDrm", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"],

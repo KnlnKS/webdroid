@@ -188,9 +188,6 @@ rt.register({
       this.file = f;
       fromBytes.call(this, yield fileBytes(f.path), "Failed to read " + f.path);
     }),
-    "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JFontBuilder, fd: any): Gen {
-      fromBytes.call(this, yield fileBytes(fd?.path), "Failed to read file descriptor");
-    }),
     "<init>(Landroid/os/ParcelFileDescriptor;)V": driven(function* (this: JFontBuilder, pfd: any): Gen {
       fromBytes.call(this, yield fileBytes(pfd?.path ?? pfd?.fd?.path), "Failed to read file descriptor");
     }),

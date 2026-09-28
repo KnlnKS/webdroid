@@ -85,10 +85,10 @@ rt.register({
   statics: { get CREATOR() { return parcelCreator("android/database/CursorWindow", fromParcel); } },
   methods: {
     // the size and legacy-flag arguments are allocation hints; rows grow as they are allocated
-    ...fieldSetters({ "<init>(Ljava/lang/String;)V": "name", "<init>(Ljava/lang/String;Z)V": "name", "<init>(Ljava/lang/String;J)V": "name",
+    ...fieldSetters({ "<init>(Ljava/lang/String;)V": "name", "<init>(Ljava/lang/String;J)V": "name",
       "setStartPosition(I)V": "start" }),
     "<init>(Z)V": function () {},
-    ...fieldGetters({ "getName()Ljava/lang/String;": "name", "getStartPosition()I": "start", "getNumColumns()I": "columns" }),
+    ...fieldGetters({ "getName()Ljava/lang/String;": "name", "getStartPosition()I": "start" }),
     "getNumRows()I": function (this: JCursorWindow) { return this.rows.length; },
     "setNumColumns(I)Z": function (this: JCursorWindow, count: number) {
       if (this.readOnly || count < 0 || (this.rows.length > 0 && this.columns !== count)) return 0;

@@ -287,7 +287,6 @@ rt.register({
     "<init>(Ljavax/net/ssl/X509TrustManager;)V": function (this: { tm: unknown }, tm: unknown) { this.tm = tm; },
     // the platform verifier walks the chain; hostname and pins are the caller's (Cronet checks both natively)
     "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": trustedPath,
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;[B[BLjava/lang/String;Ljava/lang/String;)Ljava/util/List;": trustedPath,
     "isUserAddedCertificate(Ljava/security/cert/X509Certificate;)Z": () => 0,
     "isSameTrustConfiguration(Ljava/lang/String;Ljava/lang/String;)Z": () => 1,
   },

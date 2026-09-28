@@ -1,7 +1,7 @@
 // java.text NumberFormat/DecimalFormat, android.icu.text's NumberFormat family and android.icu.number.
 // Each carries a locale tag, style, currency, fraction digits and grouping over shared Intl formatters.
 
-import { rt, JObj, type NativeSpec, driven, type Gen, fieldGetters, fieldSetters } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen, fieldGetters, fieldSetters, without } from "../runtime";
 import { vcall, box, JDouble, mkEnumSet, type JSimpleEnum } from "./jlang";
 import { defaultLocale, localeTag, currency, currencyDigits, localeCurrency, intlNumber, type JCurrency, type JLocale } from "./jvalues";
 
@@ -166,19 +166,21 @@ function compactInstance(locale: JLocale, style: JSimpleEnum): JCompactDecimalFo
   return new JCompactDecimalFormat(locale, style === compactStyles[0] ? "short" : "long");
 }
 rt.register({ name: "android/icu/text/UFormat", ctor: class extends JObj {}, sup: "java/text/Format" });
+/** ICU's formats take its own Currency and an int rounding mode, not java.util's and java.math's */
+const icuMethods = without(nfMethods, ["getCurrency()Ljava/util/Currency;", "setCurrency(Ljava/util/Currency;)V", "setRoundingMode(Ljava/math/RoundingMode;)V"]);
 rt.register({
   name: "android/icu/text/NumberFormat", ctor: JIcuNumberFormat, sup: "android/icu/text/UFormat",
   methods: {
-    ...nfMethods,
+    ...icuMethods,
     "static getPercentInstance()Landroid/icu/text/NumberFormat;": icuPercent,
     "static getPercentInstance(Ljava/util/Locale;)Landroid/icu/text/NumberFormat;": icuPercent,
   },
 });
-rt.register({ name: "android/icu/text/DecimalFormat", ctor: class extends JIcuNumberFormat {}, sup: "android/icu/text/NumberFormat", methods: nfMethods });
+rt.register({ name: "android/icu/text/DecimalFormat", ctor: class extends JIcuNumberFormat {}, sup: "android/icu/text/NumberFormat", methods: icuMethods });
 rt.register({
   name: "android/icu/text/CompactDecimalFormat", ctor: JCompactDecimalFormat, sup: "android/icu/text/DecimalFormat",
   methods: {
-    ...nfMethods,
+    ...icuMethods,
     "static getInstance(Ljava/util/Locale;Landroid/icu/text/CompactDecimalFormat$CompactStyle;)Landroid/icu/text/CompactDecimalFormat;": compactInstance,
     "static getInstance(Landroid/icu/util/ULocale;Landroid/icu/text/CompactDecimalFormat$CompactStyle;)Landroid/icu/text/CompactDecimalFormat;":
       (locale: { locale: JLocale }, style: JSimpleEnum) => compactInstance(locale?.locale, style),

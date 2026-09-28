@@ -3,7 +3,7 @@
 import { displayListLength, isRecording, nestedRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
-import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
@@ -2503,7 +2503,6 @@ rt.register({
   },
 });
 export class JRecordingCanvas extends JCanvas {}
-rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas", methods: canvasMethods });
 
 // RenderNode: Compose GraphicsLayer (API 29+) records layers here. Each node keeps a display
 // list that drawRenderNode replays with the node's transform props.
@@ -2691,7 +2690,6 @@ rt.register({
       invalidateHook?.(); return 1;
     },
     "setHasOverlappingRendering(Z)Z": rn1,
-    "isValid()Z": function (this: JRenderNode) { return this.hasDL ? 1 : 0; },
     "getMatrix(Landroid/graphics/Matrix;)V": function (this: JRenderNode, m: JMatrix) {
       const px = Number.isNaN(this.px) ? this.w / 2 : this.px;
       const py = Number.isNaN(this.py) ? this.h / 2 : this.py;
@@ -2715,6 +2713,8 @@ canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this
   if (!n) return;
   replayWithSemantics(this, () => recordOrRun(this.ctx, ctx => drawNodeInto(ctx, n)));
 };
+rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas",
+  methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V"]) });
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);
 const regionOps = mkEnumSet("android/graphics/Region$Op", ["DIFFERENCE", "INTERSECT", "REPLACE", "REVERSE_DIFFERENCE", "UNION", "XOR"]);

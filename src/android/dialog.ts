@@ -1,6 +1,6 @@
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
-import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import {
@@ -526,7 +526,7 @@ builderMethods["setAdapter(Landroid/widget/ListAdapter;Landroid/content/DialogIn
 rt.register({ name: "android/app/AlertDialog$Builder", ctor: JAlertBuilder, methods: builderMethods });
 rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDialog {}, sup: "android/app/AlertDialog",
   methods: {
-    ...alertMethods,
+    ...without(alertMethods, ["<init>(Landroid/content/Context;ZLandroid/content/DialogInterface$OnCancelListener;)V"]),
     ...noops("setIndeterminate(Z)V", "setProgressStyle(I)V"),
     "static show(Landroid/content/Context;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/app/ProgressDialog;":
       driven(function* (c: any, t: unknown, m: unknown): Gen {

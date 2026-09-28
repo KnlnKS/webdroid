@@ -104,19 +104,18 @@ const rotateM = (deg: number): Mat => sinCosM(Math.sin(deg * Math.PI / 180), Mat
 /** the same transform taken about (px, py) rather than the origin */
 const about = (m: Mat, px: number, py: number): Mat => mul(translateM(px, py), mul(m, translateM(-px, -py)));
 
-/** pre/post/set are the same three compositions for every transform AOSP names */
-function matrixOps(name: string, make: (...a: number[]) => Mat, arity: number): Record<string, unknown> {
+/** pre/post/set are the same three compositions for every transform AOSP names; Translate has
+ *  no pivoted form and SinCos only the set ones */
+function matrixOps(name: string, make: (...a: number[]) => Mat, arity: number, pivot = true, compose = true): Record<string, unknown> {
   const plain = `(J${"F".repeat(arity)})V`;
   const pivoted = `(J${"F".repeat(arity + 2)})V`;
   const at = (a: number[]) => (a.length > arity ? about(make(...a.slice(0, arity)), a[arity], a[arity + 1]) : make(...a));
   const set = (h: bigint, ...a: number[]) => { replace(h, at(a)); };
   const pre = (h: bigint, ...a: number[]) => { replace(h, mul(deref<Mat>(h), at(a))); };
   const post = (h: bigint, ...a: number[]) => { replace(h, mul(at(a), deref<Mat>(h))); };
-  return {
-    [`nSet${name}${plain}`]: set, [`nSet${name}${pivoted}`]: set,
-    [`nPre${name}${plain}`]: pre, [`nPre${name}${pivoted}`]: pre,
-    [`nPost${name}${plain}`]: post, [`nPost${name}${pivoted}`]: post,
-  };
+  const forms = pivot ? [plain, pivoted] : [plain];
+  return Object.fromEntries(forms.flatMap((desc) => [[`nSet${name}${desc}`, set],
+    ...compose ? [[`nPre${name}${desc}`, pre], [`nPost${name}${desc}`, post]] : []]));
 }
 
 function invert(m: Mat): Mat | null {
@@ -143,11 +142,11 @@ delegate("android/graphics/Matrix$ExtraNatives", {
   "nGetNativeFinalizer()J": () => FINALIZER,
 });
 delegate("android/graphics/Matrix", {
-  ...matrixOps("Translate", translateM, 2),
+  ...matrixOps("Translate", translateM, 2, false),
   ...matrixOps("Scale", scaleM, 2),
   ...matrixOps("Skew", skewM, 2),
   ...matrixOps("Rotate", rotateM, 1),
-  ...matrixOps("SinCos", sinCosM, 2),
+  ...matrixOps("SinCos", sinCosM, 2, true, false),
   "nReset(J)V": (h: bigint) => { replace(h, identity()); },
   "nSet(JJ)V": (h: bigint, s: bigint) => { replace(h, s ? Float64Array.from(deref<Mat>(s)) : identity()); },
   "nSetConcat(JJJ)V": (h: bigint, a: bigint, b: bigint) => { replace(h, mul(deref<Mat>(a), deref<Mat>(b))); },
@@ -236,7 +235,6 @@ delegate("android/graphics/Typeface", {
   "nativeCreateFromArray([JJII)J": (_fonts: BigInt64Array, fallback: bigint) => handle(deref<JTypeface>(fallback) ?? tfDefault),
   // the serialised typeface cache a process shares with the system; there is no other process
   "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
-  ...stubs(1, "nativeGetFamilySize(J)I"),
   ...stubs(null, "nativeGetSupportedAxes(J)[I"),
   ...noops("nativeSetDefault(J)V", "nativeRegisterGenericFamily(Ljava/lang/String;J)V",
     "nativeRegisterLocaleList(Ljava/lang/String;)V", "nativeAddFontCollections(J)V",
@@ -532,7 +530,6 @@ const withPaint = (desc: string, arity: number) => {
 };
 
 delegate("android/graphics/Canvas", {
-  "nInitRaster(JJ)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
   "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
   "nGetNativeFinalizer()J": () => FINALIZER,
   "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<JBitmap>(b))); },
