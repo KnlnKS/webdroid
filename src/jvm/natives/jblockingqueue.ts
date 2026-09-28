@@ -1,6 +1,6 @@
-import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../runtime";
 import { vcall } from "./jlang";
-import { JList, mkIter, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
+import { JList, mkIter, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray, LIST_ONLY, INDEX_OF, DEQUE_ONLY, CAPACITY } from "./jutil";
 import type { JTimeUnit } from "./jconc";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
@@ -111,15 +111,21 @@ async function removeOccurrence(this: JBlockingQueue, value: unknown, last = fal
   if (index < 0) return 0;
   this.removeAt(index); return 1;
 }
-const queueMethods: NonNullable<NativeSpec["methods"]> = {
-  ...Object.fromEntries(Object.entries(listMethods()).filter(([k]) => !k.startsWith("<init>"))),
-  "<init>()V": function () {},
-  "<init>(I)V": queueCapacity,
-  "<init>(IZ)V": queueCapacity,
-  "<init>(Z)V": function () {},
-  "<init>(Ljava/util/Collection;)V": driven(function* (this: JBlockingQueue, c: unknown): Gen {
+const queueCtors: NonNullable<NativeSpec["methods"]> = {
+  "()V": function () {},
+  "(I)V": queueCapacity,
+  "(IZ)V": queueCapacity,
+  "(Z)V": function () {},
+  "(Ljava/util/Collection;)V": driven(function* (this: JBlockingQueue, c: unknown): Gen {
     for (const v of yield toJsArray(c)) this.enqueue(v);
   }),
+};
+const QUEUE_CTORS: Record<string, string[]> = {
+  LinkedBlockingQueue: ["()V", "(I)V", "(Ljava/util/Collection;)V"], LinkedBlockingDeque: ["()V", "(I)V", "(Ljava/util/Collection;)V"],
+  ArrayBlockingQueue: ["(I)V", "(IZ)V"], LinkedTransferQueue: ["()V", "(Ljava/util/Collection;)V"], SynchronousQueue: ["()V", "(Z)V"],
+};
+const queueMethods: NonNullable<NativeSpec["methods"]> = {
+  ...Object.fromEntries(Object.entries(without(listMethods(), LIST_ONLY, INDEX_OF, CAPACITY)).filter(([k]) => !k.startsWith("<init>"))),
   "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, value: unknown) { return this.put(value); },
   "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, value: unknown) { return this.enqueue(value); },
   "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, value: unknown, duration: bigint, unit: JTimeUnit) { return this.put(value, false, Number(duration) * unit.ms); },
@@ -166,7 +172,10 @@ for (const name of ["LinkedBlockingQueue", "SynchronousQueue", "ArrayBlockingQue
     ctor: class extends JBlockingQueue { override capacity = name === "SynchronousQueue" ? 0 : 0x7fffffff; },
     ifaces: [...(name === "LinkedBlockingDeque" ? ["java/util/concurrent/BlockingDeque", "java/util/Deque"] : []),
       "java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-    methods: name === "LinkedBlockingDeque" ? { ...queueMethods, ...dequeMethods } : queueMethods,
+    methods: {
+      ...Object.fromEntries(QUEUE_CTORS[name].map((desc) => ["<init>" + desc, queueCtors[desc]])),
+      ...(name === "LinkedBlockingDeque" ? { ...queueMethods, ...dequeMethods } : without(queueMethods, DEQUE_ONLY)),
+    },
   });
 }
 // PriorityBlockingQueue: the sorted queue with a parking take(); a parked taker receives the
@@ -196,7 +205,7 @@ rt.register({
   name: "java/util/concurrent/PriorityBlockingQueue", ctor: JPriorityBlockingQueue, sup: "java/util/AbstractQueue",
   ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
   methods: {
-    ...priorityMethods,
+    ...without(priorityMethods, ["<init>(Ljava/util/Comparator;)V"]),
     "put(Ljava/lang/Object;)V": pbqPut,
     "offer(Ljava/lang/Object;)Z": pbqPut,
     "add(Ljava/lang/Object;)Z": pbqPut,
@@ -236,7 +245,8 @@ rt.register({
 
 rt.register({
   name: "java/util/concurrent/ConcurrentLinkedQueue", ctor: class extends JList {}, sup: "java/util/AbstractQueue",
-  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"], methods: listMethods(),
+  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
+  methods: without(listMethods(), ["<init>(I)V"], LIST_ONLY, INDEX_OF, CAPACITY, DEQUE_ONLY),
 });
 rt.register({ name: "java/util/concurrent/BlockingQueue", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });
 rt.register({ name: "java/util/concurrent/BlockingDeque", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Deque"] });

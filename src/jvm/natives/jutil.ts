@@ -2,7 +2,7 @@ import { readStreamFully } from "./jio";
 import { mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
-import { JObj, rt, type NativeSpec, type ClassInfo, driven, type Gen } from "../runtime";
+import { JObj, rt, type NativeSpec, type ClassInfo, driven, without, type Gen } from "../runtime";
 import { defaultLocale, JLocale } from "./jvalues";
 import {
   synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet, synchronizedSortedMap,
@@ -352,6 +352,19 @@ function listStream(this: JList) { return mkStream(this.a.slice()); }
 function listAppend(this: JList, v: unknown) { this.a.push(v); return 1; }
 function listPeek(this: JList) { return this.a.length ? this.a[0] : null; }
 function listPoll(this: JList) { return this.a.length ? this.a.shift() : null; }
+/** listMethods() entries only List declares, those only Queue or Deque declare, and ArrayList's capacity hints */
+export const LIST_ONLY = ["add(ILjava/lang/Object;)V", "addAll(ILjava/util/Collection;)Z", "get(I)Ljava/lang/Object;",
+  "lastIndexOf(Ljava/lang/Object;)I", "listIterator()Ljava/util/ListIterator;", "listIterator(I)Ljava/util/ListIterator;",
+  "remove(I)Ljava/lang/Object;", "set(ILjava/lang/Object;)Ljava/lang/Object;", "sort(Ljava/util/Comparator;)V",
+  "subList(II)Ljava/util/List;"];
+export const INDEX_OF = ["indexOf(Ljava/lang/Object;)I"];
+const QUEUE_ONLY = ["offer(Ljava/lang/Object;)Z", "peek()Ljava/lang/Object;", "poll()Ljava/lang/Object;", "remove()Ljava/lang/Object;"];
+export const DEQUE_ONLY = ["addFirst(Ljava/lang/Object;)V", "addLast(Ljava/lang/Object;)V", "descendingIterator()Ljava/util/Iterator;",
+  "getFirst()Ljava/lang/Object;", "getLast()Ljava/lang/Object;", "offerFirst(Ljava/lang/Object;)Z", "offerLast(Ljava/lang/Object;)Z",
+  "peekFirst()Ljava/lang/Object;", "peekLast()Ljava/lang/Object;", "pollFirst()Ljava/lang/Object;", "pollLast()Ljava/lang/Object;",
+  "pop()Ljava/lang/Object;", "push(Ljava/lang/Object;)V", "removeFirst()Ljava/lang/Object;",
+  "removeFirstOccurrence(Ljava/lang/Object;)Z", "removeLast()Ljava/lang/Object;", "removeLastOccurrence(Ljava/lang/Object;)Z"];
+export const CAPACITY = ["ensureCapacity(I)V", "trimToSize()V"];
 export function listMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -618,7 +631,6 @@ function vectorMethods(base: Methods): Methods {
     return this.a[i < 0 ? this.a.length + i : i];
   };
   return {
-    "<init>(II)V": function () {},
     "copyInto([Ljava/lang/Object;)V": function (this: JList, out: unknown[]) {
       if (out === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       if (out.length < this.a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `length=${out.length}; index=${out.length}`);
@@ -679,8 +691,15 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
       for (let i = 0; i < this.a.length; i++) this.a[i] = yield vcall(stream, "readObject", "()Ljava/lang/Object;");
     }),
   }),
-  "java/util/Vector": vectorMethods,
+  "java/util/Vector": (base) => ({ "<init>(II)V": function () {}, ...vectorMethods(base) }),
   "java/util/Stack": (base) => ({ ...vectorMethods(base), ...stackMethods }),
+};
+const listOmits: Record<string, string[][]> = {
+  "java/util/ArrayList": [QUEUE_ONLY, DEQUE_ONLY],
+  "java/util/Vector": [QUEUE_ONLY, DEQUE_ONLY],
+  "java/util/Stack": [QUEUE_ONLY, DEQUE_ONLY, ["<init>(I)V", "<init>(Ljava/util/Collection;)V"]],
+  "java/util/LinkedList": [CAPACITY, ["<init>(I)V"]],
+  "java/util/ArrayDeque": [LIST_ONLY, INDEX_OF, CAPACITY],
 };
 for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vector", "java/util/Stack", "java/util/ArrayDeque"]) {
   const base = listMethods();
@@ -690,7 +709,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
     sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection"
       : n === "java/util/LinkedList" ? "java/util/AbstractSequentialList" : "java/util/AbstractList",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...base, ...listExtras[n]?.(base) },
+    methods: { ...without(base, ...listOmits[n]), ...listExtras[n]?.(base) },
   });
 }
 
@@ -1601,7 +1620,7 @@ export const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown)
   }
 });
 export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
-  ...listMethods(),
+  ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, CAPACITY),
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
@@ -1653,7 +1672,8 @@ for (const n of ["java/util/concurrent/CopyOnWriteArrayList", "java/util/concurr
     ifaces: n === "java/util/concurrent/CopyOnWriteArrayList"
       ? ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"]
       : ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque"],
-    methods: { ...listMethods(), ...concurrentListExtras[n] },
+    methods: { ...without(listMethods(), ["<init>(I)V"], CAPACITY, ...(n === "java/util/concurrent/CopyOnWriteArrayList"
+      ? [QUEUE_ONLY, DEQUE_ONLY] : [LIST_ONLY, INDEX_OF])), ...concurrentListExtras[n] },
   });
 }
 

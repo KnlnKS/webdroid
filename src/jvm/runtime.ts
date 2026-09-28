@@ -68,6 +68,13 @@ export const flagGetters = (t: Record<string, string>) => accessors(t, (f) => fu
 export const fieldSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = v; });
 export const flagSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = !!v; });
 
+/** a shared table less the entries a class does not declare */
+export function without(methods: NativeSpec["methods"], ...keys: string[][]): NonNullable<NativeSpec["methods"]> {
+  const out = { ...methods };
+  for (const key of keys.flat()) delete out[key];
+  return out;
+}
+
 export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
   return (m![sig] as (this: unknown, ...a: unknown[]) => unknown).call(self, ...args);
 }
