@@ -4,6 +4,7 @@ This file defines webdroid's target architecture, the migration to it, the requi
 performance program, the verification program and the development process. Read it with
 [AGENTS.md](../AGENTS.md) (working rules) and [PLAN.md](../PLAN.md) (current app status). Where
 this file and older plans disagree about direction, this file wins; AGENTS.md rules still apply.
+Where the work stands, and how to resume it, is in [§9](#9-progress-and-handoff).
 
 ## 0. Hard requirements
 
@@ -577,3 +578,186 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 - **Hand-adding fuzz recipes** with hand-picked value pools.
 - **Assigning one agent per app.**
 - **Treating e2e content-difference percentages as a quality signal.**
+
+## 9. Progress and handoff
+
+Last updated 2026-09-28. The branch is `bytecode-first`, worktree
+`/Users/kunalan/Projects/webdroid-bytecode`, 88 commits ahead of `main`, with a clean tree. Each
+commit message states what it measured. The implementation history (the 2026-09-27 and
+2026-09-28 Stage A/B entries) records failure mechanisms.
+
+### Standing constraints from the user
+
+- Nothing app-specific. Performance is the top priority. Keep commits focused, and add tests
+  only for core behavior and comments only where essential.
+- Never test with anything in `apks/new/`, Genshin, Clash Royale or Clash of Clans. For live
+  flows use `--live --test harmonic,lichess,reddit,tiktok,youtube,chatgpt`.
+- Downloads are pre-approved.
+
+### Environment
+
+- `JAVA_HOME=/opt/homebrew/opt/openjdk@21`. The Android SDK is at
+  `/opt/homebrew/share/android-commandlinetools`, which `scripts/android-sdk.ts` finds.
+- Reference AVD: `webdroid_api35_ref`. Boot it headless with
+  `$SDK/emulator/emulator -avd webdroid_api35_ref -no-window -no-snapshot -no-boot-anim -no-audio`.
+  `bun run gen-framework` needs it running. gen-framework pulls:
+  - the boot jars, and records their device paths (`BOOT_JAR_PATHS`);
+  - every file under `/apex/com.android.{i18n,tzdata}/etc` into `vendor/aosp/apex/`
+    (`PLATFORM_DATA`);
+  - the Monet colors;
+  - the `OsConstants` values, by running `scripts/DumpOsConstants.java` under `app_process`,
+    into `src/android/os-constants.ts`.
+- Dev server: `PORT=4217 bun run server.ts` from this worktree. Restart it after changing
+  `server.ts` or vendor files; a stale server once served 404s and made flows fail.
+- Baseline worktree `/Users/kunalan/Projects/webdroid-base` is at the old commit 31c9f8d9. For an
+  A/B at HEAD, use `git worktree add ../x HEAD`, symlink `vendor/{aosp,microg}` and `apks`, run
+  `bun install`, then start the server on another port. Never `git stash -u` while a server
+  runs from this tree.
+
+### Gates
+
+Run all of these before committing a flip:
+- `bun run typecheck`;
+- `bun run test` (1,393 pass);
+- `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
+- the live set above;
+- `bun run conform guava|jsr166|ojluni-time`. Baselines are 37,276, 1,448 and 26,163; jsr166
+  takes about 8 minutes;
+- `bun run lat` cold and `--warm`;
+- `bun run smoke apks/FitNotes.apk` (0 method failures).
+
+To A/B a flip without deleting code, set `WEBDROID_BYTECODE=<prefixes>` for e2e and conform
+(`--bytecode`), and `--query bytecode=<prefixes>` for lat.
+
+Known flakes, which are not regressions:
+- TikTok `swipe-again` wedges under parallel load and passes alone.
+- YouTube `video-open` passes about 2 times in 5, with or without changes.
+- Komikku's restore step rarely throws a DOM "file not found" error; it was not shown to be new.
+- Resy times out.
+- `TCKInstant` has one test whose name embeds `Instant.now()`.
+- Cold Mihon `light` in `lat` sits around 150 ms and fails the 150 ms gate about 2 times in 7;
+  warm passes. See the latency section below.
+
+### Done in Stage B
+
+These classes now run from AOSP bytecode, with their TS code deleted:
+- **java.time, java.text, ICU, java.util date classes, java.sql, android.text.format.** This
+  covers `android/icu`, `com/android/icu`, `libcore/icu`, and java.util's TimeZone, Calendar,
+  GregorianCalendar, Date and Currency. It removed about 4,400 lines. ojluni-time went from
+  16,698 to 26,163 passes. The pieces it needed:
+  - libcore's ICU4C natives answered by ICU4J (`src/jvm/natives/jicu.ts`);
+  - `libcore.io.Linux` natives: the old `android.system.Os` TS bodies plus open and fstat, in
+    `src/android/os.ts`; android.system.Os itself is now libcore's;
+  - `libcore.io.Memory` and the i18n `Memory` natives (`jmemory.ts`);
+  - OsConstants from the device;
+  - boot-jar resources: jars mounted at their device paths, `rt.bootResources`, and
+    `ClassLoader.findResource`;
+  - the `/apex` ICU and tz files mounted in every realm (`src/shell/apex.ts`). The production
+    worker serves byte ranges of split files;
+  - `zygoteInit()` (`src/android/delegates.ts`): RuntimeHooks' time-zone supplier reads
+    `persist.sys.timezone`, which `device.timezone` (the host zone) answers.
+- **java.util.Locale stays TS.** Paint, LocaleList, TextView and Configuration read `JLocale`
+  fields synchronously. It gained empty extension sets so ICU can use it. Flipping it too cost
+  3x the java.time suite time.
+- **XML** (`javax/xml`, `org/w3c`, `org/xml`). DOM is libcore's KXmlParser and transforms are
+  xalan. SAX is ExpatParser over new expat natives (`jexpat.ts`, an incremental tokenizer).
+  The Apache HTTP classes stay TS: they are the optional `org.apache.http.legacy` library, not
+  boot class path.
+- **java.util.regex.** libcore's Pattern and Matcher run over PatternNative/MatcherNative,
+  implemented on the JS RegExp translation (`jregex.ts`).
+- **ThreadLocalRandom.** It needed Thread fields reached through Unsafe offsets, and `Random`
+  implementing `RandomGenerator`.
+
+Fixes that apply to every mode:
+- Fallthrough ordering. A platform body that cannot run on a TS class yields to the spec's
+  interface default (`Runtime.interfaceDefault`). A spec whose JS class does not extend its
+  declared superclass's inherits that superclass's methods first; the fix was Properties.put.
+- Service callbacks name the main thread (`runningservices.ts`). This fixed Komikku's
+  "handleLifecycleEvent must be called on the main thread", which failed 3 of 5 gates at HEAD
+  before it.
+- `NativeAllocationRegistry` frees through a `FinalizationRegistry`. Graphics handles previously
+  leaked forever.
+- Compiled bodies are named functions (`frameName`/`frameOf` in `abi.ts`), and persisted bodies
+  drop their sourceURL. Warm starts had misattributed every persisted frame, which broke
+  caller-sensitive APIs.
+- Exception superclasses are fixed: AIOOBE/SIOOBE, NumberFormatException, SocketTimeoutException.
+- Promotion compiles within a 4 ms per 50 ms budget, with the rest deferred to idle. Cold Mihon
+  `light` improved from 0/6 to 5/7 under 150 ms.
+- Properties has its defaults chain, with Hashtable as its superclass.
+- Settings `get*ForUser`.
+
+### In progress: java.util.concurrent flip (B.5)
+
+All enabling work is committed (025430ef): Unsafe park/unpark, LockSupport interrupt semantics,
+the Thread fields, `sleep(JI)`, `VMSupportsCS8`, `Class.getAccessFlags`, and eager Field linking.
+
+- **Whole package cut** (`WEBDROID_BYTECODE=java/util/concurrent/`): JSR-166 passes 2,916 of
+  3,106 (baseline 1,448), the gate is 7/7, and live flows pass. Cold Mihon was slower, with one
+  dark tap at 191 ms and warm light at 89–118 ms.
+- **Selective cut:** everything except ConcurrentHashMap, the atomics, CopyOnWrite*,
+  ConcurrentLinkedQueue, the executors, FutureTask, LinkedBlockingQueue and TimeUnit. JSR-166
+  passes 2,538 with 0 regressions, the gate is 7/7, and live flows pass apart from the YouTube
+  flake. Its prefix list:
+  ```
+  java/util/concurrent/{BlockingDeque,BrokenBarrierException,CompletableFuture,CompletionStage,
+  ConcurrentLinkedDeque,ConcurrentNavigableMap,ConcurrentSkipListMap,ConcurrentSkipListSet,
+  CountDownLatch,CyclicBarrier,LinkedBlockingDeque,LinkedTransferQueue,Semaphore,SynchronousQueue,
+  ArrayBlockingQueue,PriorityBlockingQueue},
+  java/util/concurrent/locks/{AbstractOwnableSynchronizer,AbstractQueuedSynchronizer,Condition,
+  Lock,LockSupport,ReadWriteLock,ReentrantLock,ReentrantReadWriteLock (+$ReadLock,$WriteLock)}
+  ```
+  (expand to comma-separated full prefixes).
+- **Open question when stopped:** warm Mihon `light` measured 114/118 ms under the selective cut,
+  against 18/20 ms in TS mode. That measurement is bimodal (a fast first frame at about 20 ms
+  versus a full recomposition at 90–170 ms). I was collecting more TS-mode warm samples
+  (`bun run lat mihon --warm`, x3) to tell noise from regression. Resolve that before deleting
+  code.
+- **If the flip holds:** delete the TS classes in `jsync.ts` (all but `webdroid/Condition`), six
+  in `jblockingqueue.ts`, `CompletableFuture` in `jconc.ts`, and the ConcurrentSkipList/
+  ConcurrentLinkedDeque specs in `jutil.ts`. `mkExecutor` (jconc) is used by `android/os.ts` and
+  `intentservice.ts`; keep it. Then update the JSR-166 baseline.
+- **If Mihon regresses,** profile it (`lat --cpuprofile`, then `scripts/lat/profsum.ts ...
+  tap=1 window=200`) before deciding. Candidates for the cost are platform AQS or locks on the
+  coroutine and OkHttp paths.
+
+### Next steps, in plan order
+
+1. Finish B.5 as above.
+2. **B.4 collections.** This is not viable as a cut: about 250 TS call sites build and read the
+   TS maps, lists and sets directly (`.m`, `newArrayList`, `newStringSet`, `toJsArray`,
+   `JMapEntry`). Those need converting to the Java API first, and JS-backed collections are
+   likely faster, so measure before committing to it.
+3. **Locale flip.** Convert the `JLocale` field readers (Paint, LocaleList, resnative, TextView,
+   geocoder, bidiformatter, jutil ResourceBundle, text) to the Java API, then cut `java/util/Locale`.
+4. **B.7 io/nio/net/security.** `libcore.io.Linux` has only the subset TS Os had plus open and
+   fstat. The rest of the 134 natives map onto `src/native/stdio.ts`'s descriptor table; Java
+   callers now receive `-errno` from it. The `java/nio` cut failed on the TS FileChannel.
+5. **§4 performance.** Cold Mihon's first theme switch is about 90 ms of real
+   recomposition plus cold-tier cost. Of what's left, resumable-body compilation (about 11 ms)
+   happens on suspension. Starting leaf methods cold was tried and was worse; FitNotes once went
+   unresponsive. Build-time AOT and the boot image (§4.1, §4.3) are the structural fixes.
+6. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap,
+   because `FileChannel.map` copies it (`jio.ts`). A lazily paged mapping would match the
+   device's mmap.
+7. **Known limits.**
+   - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
+   - TS `eraseThreadLocals` does not clear the TS locals.
+   - Regex `hitEnd`/`requireEnd` are approximations, and UNIX_LINES is ignored.
+   - The expat natives skip external entities.
+
+### Tools and pitfalls learned
+
+- Scratch probes: load platform jars with `loadPlatformJar(bytes, i)` and call
+  `rt.linkNatives()` before use. The conform runner links all natives eagerly, but the browser
+  links lazily, so a TS object created with `new` before its class links has no methods. Use
+  `rt.make`, or link at module end, as jreflect does for Method, Constructor and Field.
+- `CONFORM_DEBUG=<regex> bun scripts/conform/run.ts <suite> --one <class> [test]` prints the
+  first matching throwable's trace.
+- `rt.jx` maps JS errors to Java ones. When a trace is unhelpful, wrap `rt.jx` in a scratch
+  script to see the original JS stack.
+- `bun scripts/dis.ts <jar> <class> [method]` disassembles.
+- Inventories: list the registrations by prefix from `rt.natives`, and wrap `rt.register` to
+  record the registering file.
+- `git commit` takes the whole index. Anything already `git rm`'d is included, so commit
+  deletions with the change they belong to.
+
