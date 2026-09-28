@@ -50,10 +50,12 @@ export function recordLater(key: string, make: () => string): void {
 /** install persisted bodies: what loadCode imports from codeText's modules */
 export function useCode(bodies: Record<string, Factory>): void { loaded = bodies; }
 
-/** a module whose default export is `bodies` (the pending ones by default) */
+/** a module whose default export is `bodies` (the pending ones by default); each factory is
+ *  parenthesized so V8 compiles it with the module, off the launch's critical calls, rather than
+ *  preparsing it there and compiling it again when the method is first called */
 export function codeText(bodies: Iterable<[string, string]> = pending): string {
   let text = "export default {\n";
-  for (const [key, source] of bodies) text += `${JSON.stringify(key)}:${source},\n`;
+  for (const [key, source] of bodies) text += `${JSON.stringify(key)}:(${source}),\n`;
   return text + "};\n";
 }
 
