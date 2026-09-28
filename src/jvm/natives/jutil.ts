@@ -352,18 +352,19 @@ function listStream(this: JList) { return mkStream(this.a.slice()); }
 function listAppend(this: JList, v: unknown) { this.a.push(v); return 1; }
 function listPeek(this: JList) { return this.a.length ? this.a[0] : null; }
 function listPoll(this: JList) { return this.a.length ? this.a.shift() : null; }
-/** listMethods() entries only List declares, those only Queue or Deque declare, and ArrayList's capacity hints */
+/** listMethods() entries only List declares, those only Queue or Deque declare, the SequencedCollection
+ *  ends List and Deque share, and ArrayList's capacity hints */
 export const LIST_ONLY = ["add(ILjava/lang/Object;)V", "addAll(ILjava/util/Collection;)Z", "get(I)Ljava/lang/Object;",
   "lastIndexOf(Ljava/lang/Object;)I", "listIterator()Ljava/util/ListIterator;", "listIterator(I)Ljava/util/ListIterator;",
   "remove(I)Ljava/lang/Object;", "set(ILjava/lang/Object;)Ljava/lang/Object;", "sort(Ljava/util/Comparator;)V",
   "subList(II)Ljava/util/List;"];
 export const INDEX_OF = ["indexOf(Ljava/lang/Object;)I"];
 const QUEUE_ONLY = ["offer(Ljava/lang/Object;)Z", "peek()Ljava/lang/Object;", "poll()Ljava/lang/Object;", "remove()Ljava/lang/Object;"];
-export const DEQUE_ONLY = ["addFirst(Ljava/lang/Object;)V", "addLast(Ljava/lang/Object;)V", "descendingIterator()Ljava/util/Iterator;",
-  "getFirst()Ljava/lang/Object;", "getLast()Ljava/lang/Object;", "offerFirst(Ljava/lang/Object;)Z", "offerLast(Ljava/lang/Object;)Z",
+export const DEQUE_ONLY = ["descendingIterator()Ljava/util/Iterator;", "offerFirst(Ljava/lang/Object;)Z", "offerLast(Ljava/lang/Object;)Z",
   "peekFirst()Ljava/lang/Object;", "peekLast()Ljava/lang/Object;", "pollFirst()Ljava/lang/Object;", "pollLast()Ljava/lang/Object;",
-  "pop()Ljava/lang/Object;", "push(Ljava/lang/Object;)V", "removeFirst()Ljava/lang/Object;",
-  "removeFirstOccurrence(Ljava/lang/Object;)Z", "removeLast()Ljava/lang/Object;", "removeLastOccurrence(Ljava/lang/Object;)Z"];
+  "pop()Ljava/lang/Object;", "push(Ljava/lang/Object;)V", "removeFirstOccurrence(Ljava/lang/Object;)Z", "removeLastOccurrence(Ljava/lang/Object;)Z"];
+export const SEQUENCED = ["addFirst(Ljava/lang/Object;)V", "addLast(Ljava/lang/Object;)V", "getFirst()Ljava/lang/Object;",
+  "getLast()Ljava/lang/Object;", "removeFirst()Ljava/lang/Object;", "removeLast()Ljava/lang/Object;"];
 export const CAPACITY = ["ensureCapacity(I)V", "trimToSize()V"];
 export function listMethods(): Methods {
   return {
@@ -1636,7 +1637,7 @@ export const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown)
   }
 });
 export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
-  ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, CAPACITY),
+  ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, SEQUENCED, CAPACITY),
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },

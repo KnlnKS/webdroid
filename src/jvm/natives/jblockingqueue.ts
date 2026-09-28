@@ -1,6 +1,6 @@
 import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../runtime";
 import { vcall } from "./jlang";
-import { JList, mkIter, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray, LIST_ONLY, INDEX_OF, DEQUE_ONLY, CAPACITY } from "./jutil";
+import { JList, mkIter, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray, LIST_ONLY, INDEX_OF, DEQUE_ONLY, SEQUENCED, CAPACITY } from "./jutil";
 import type { JTimeUnit } from "./jconc";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
@@ -174,7 +174,7 @@ for (const name of ["LinkedBlockingQueue", "SynchronousQueue", "ArrayBlockingQue
       "java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
     methods: {
       ...Object.fromEntries(QUEUE_CTORS[name].map((desc) => ["<init>" + desc, queueCtors[desc]])),
-      ...(name === "LinkedBlockingDeque" ? { ...queueMethods, ...dequeMethods } : without(queueMethods, DEQUE_ONLY)),
+      ...(name === "LinkedBlockingDeque" ? { ...queueMethods, ...dequeMethods } : without(queueMethods, DEQUE_ONLY, SEQUENCED)),
     },
   });
 }
@@ -246,7 +246,7 @@ rt.register({
 rt.register({
   name: "java/util/concurrent/ConcurrentLinkedQueue", ctor: class extends JList {}, sup: "java/util/AbstractQueue",
   ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-  methods: without(listMethods(), ["<init>(I)V"], LIST_ONLY, INDEX_OF, CAPACITY, DEQUE_ONLY),
+  methods: without(listMethods(), ["<init>(I)V"], LIST_ONLY, INDEX_OF, CAPACITY, DEQUE_ONLY, SEQUENCED),
 });
 rt.register({ name: "java/util/concurrent/BlockingQueue", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });
 rt.register({ name: "java/util/concurrent/BlockingDeque", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Deque"] });
