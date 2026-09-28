@@ -208,7 +208,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   if (profiled || jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
     .compileCold(prepared, coldInstructions(code, prepared));
-  if (persist) recordLater(entryKey, () => source(prepare(), false));
+  if (persist) {
+    recordLater(entryKey, () => source(prepare(), false));
+    // a method whose cold frames suspend will suspend hot next launch too: persist that body as well
+    cold.suspended = () => recordLater(resumeKey, () => resumableSource(R, dex, info, rec.m, prepare()));
+  }
   let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;

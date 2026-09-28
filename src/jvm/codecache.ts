@@ -54,7 +54,7 @@ export function recordBody(key: string, body: string, form: "e" | "r"): void {
   idle();
 }
 
-/** a method that ran without a hot body; `make` emits one */
+/** a body a method has not compiled yet but the next launch will want; `make` emits it */
 export function recordLater(key: string, make: () => string): void {
   if (loaded[key] || pending.has(key)) return;
   deferred.set(key, make);
@@ -120,7 +120,7 @@ function idle(): void {
     for (const [key, make] of deferred) {
       if (deadline.timeRemaining() < 1) { requestIdleCallback(work); return; }
       deferred.delete(key);
-      try { recordBody(key, make(), "e"); } catch { /* it compiles on demand instead */ }
+      try { recordBody(key, make(), key.endsWith(":r") ? "r" : "e"); } catch { /* it compiles on demand instead */ }
     }
     idling = false;
     // the first save follows startup, so a launch that ends early keeps it without a pagehide write
