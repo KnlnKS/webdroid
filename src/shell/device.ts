@@ -10,6 +10,7 @@ import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { loadCode } from "../jvm/codecache";
+import { parseBaselineProfile, precompileProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, type JLocaleList } from "../android/resnative";
@@ -133,6 +134,8 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     if (isDex(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
   await Promise.all([loadPlatformDex(), loadCode(processName ?? pkg)]);
+  const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);
+  if (profile) precompileProfile(rt, profile);
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.

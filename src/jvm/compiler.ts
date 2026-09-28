@@ -113,7 +113,8 @@ function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
   if (to.$c) to.$c.push(...cells);
 }
 
-export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
+/** `profiled` installs the fast body at once, skipping the cold tier, for a method a profile names */
+export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profiled = false): JvmFunction {
   const info = C.$i, rec = info.lazy![i], dex = rec.dex;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
@@ -174,7 +175,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const prepared = prepare();
   // Leaf methods cannot suspend and go straight to their only (sync) form.
   if (prepared.sync) return install(compile(source(prepared, true)));
-  if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
+  if (profiled || jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
     .compileCold(prepared.widths, coldInstructions(code, prepared));
   if (persist) recordLater(entryKey, () => source(prepare(), false));
@@ -232,6 +233,14 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
 type MethodKey = { name: string; desc: string; mangled: string };
 const methodKeys = new WeakMap<DexFile, MethodKey[]>();
 /** a method ref's name, descriptor and mangled property: every class compile needs them */
+/** compile a profiled method's hot body ahead of its first call, if nothing has compiled it yet */
+export function precompile(R: Runtime, info: ClassInfo, methodIdx: number): void {
+  const i = info.lazy?.findIndex((rec) => rec.m.methodIdx === methodIdx) ?? -1;
+  if (i < 0) return;
+  const rec = info.lazy![i];
+  if ((rec.isStatic ? info.ctor : info.ctor.prototype)[rec.mangled] === rec.stub) compileLazyMethod(R, info.ctor, i, true);
+}
+
 export function methodKey(dex: DexFile, methodIdx: number): MethodKey {
   let keys = methodKeys.get(dex);
   if (!keys) methodKeys.set(dex, keys = []);
