@@ -663,18 +663,20 @@ const lang = (n: string) => (n.includes("/") ? n : "java/lang/" + n);
 for (const [sup, names] of [
   ["Throwable", "Error Exception"],
   ["Exception", "RuntimeException InterruptedException CloneNotSupportedException ReflectiveOperationException org/xmlpull/v1/XmlPullParserException"],
-  ["RuntimeException", "NullPointerException ClassCastException ArithmeticException ArrayIndexOutOfBoundsException StringIndexOutOfBoundsException " +
-    "IndexOutOfBoundsException IllegalArgumentException IllegalStateException UnsupportedOperationException NumberFormatException " +
+  ["RuntimeException", "NullPointerException ClassCastException ArithmeticException " +
+    "IndexOutOfBoundsException IllegalArgumentException IllegalStateException UnsupportedOperationException " +
     "NegativeArraySizeException ArrayStoreException SecurityException IllegalMonitorStateException java/util/NoSuchElementException " +
     "java/util/ConcurrentModificationException"],
   ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
-  ["IllegalArgumentException", "IllegalThreadStateException"],
+  ["IndexOutOfBoundsException", "ArrayIndexOutOfBoundsException StringIndexOutOfBoundsException"],
+  ["IllegalArgumentException", "IllegalThreadStateException NumberFormatException"],
   ["Error", "StackOverflowError OutOfMemoryError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
-    "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException " +
+    "java/net/UnknownHostException java/io/InterruptedIOException " +
     "java/net/UnknownServiceException java/io/CharConversionException"],
   ["java/net/SocketException", "java/net/ConnectException java/net/BindException"],
+  ["java/io/InterruptedIOException", "java/net/SocketTimeoutException"],
 ]) {
   if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));
