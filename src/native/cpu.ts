@@ -9,7 +9,7 @@ import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
-import { yieldToLoop, yieldStats } from "../jvm/yield";
+import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
 export { NativeFault, yieldToLoop, yieldStats };
 
@@ -23,10 +23,8 @@ const isSignalFrame = (label: string | undefined): boolean => label?.startsWith(
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence
 const SLICE_INSTR = 3_000_000;
 const RESPONSIVE_SLICE_INSTR = 300_000;
-const RESPONSIVE_WINDOW_MS = 250;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
-let responsiveUntil = 0;
 let lastPresentAt = -Infinity;
 const FRAME_ACTIVE_MS = 500;
 
@@ -38,12 +36,8 @@ export function noteNativeFrame(cpu: Cpu): void {
   for (let c: Cpu | null = cpu; c; c = c.parent) c.lastFrameAt = now;
 }
 
-export function requestResponsiveSlices(): void {
-  responsiveUntil = Math.max(responsiveUntil, performance.now() + RESPONSIVE_WINDOW_MS);
-}
-
 function sliceBudget(): number {
-  return performance.now() < responsiveUntil ? Math.min(slice.instr, RESPONSIVE_SLICE_INSTR) : slice.instr;
+  return answeringInput() ? Math.min(slice.instr, RESPONSIVE_SLICE_INSTR) : slice.instr;
 }
 
 /** an argument to a guest function: a float or double travels in a V register on AAPCS64 and as
@@ -568,7 +562,7 @@ export class Cpu {
         // (not the UI thread, not a frame producer) gets about a quarter of it. Back-to-back slices
         // would otherwise hold off rendering until Chrome's 100 ms starvation limit.
         const now = performance.now();
-        if (!this.foreground(now) && (now < responsiveUntil || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
+        if (!this.foreground(now) && (answeringInput(now) || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };

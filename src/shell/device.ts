@@ -45,7 +45,8 @@ import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { resolveSystemBars, drawSystemBarBackgrounds } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame, latchSurfaces } from "../android/glview";
-import { notePresent, requestResponsiveSlices } from "../native/cpu";
+import { notePresent } from "../native/cpu";
+import { noteInput } from "../jvm/yield";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
@@ -307,6 +308,7 @@ globalThis.matchMedia?.("(prefers-color-scheme: dark)")
 // (handleLifecycleEvent inside the finish path) see the main thread, not whichever worker
 // last set curThread.
 export function pressBack(): Promise<void> {
+  noteInput();
   return onMain(pressBack0);
 }
 const pressBack0 = driven(function* pressBack0(): Gen<void> {
@@ -529,7 +531,7 @@ let downTime = 0;
 export function dispatchPointer(action: number, x: number, y: number, at = guestNow()): Promise<void> {
   // charged to perf.inputMs: the wall time a tap costs is otherwise in no counter at all.
   const t0 = performance.now();
-  requestResponsiveSlices();
+  noteInput();
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: number, y: number, t: number): Gen<void> {
