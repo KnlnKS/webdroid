@@ -160,6 +160,7 @@ class JIter extends JObj {
   i = 0;
   last = -1; // index next()/previous() returned, the target of set()/remove(); -1 once consumed
   readOnly = false;
+  fixedSize = false; // set() writes through, remove() and add() throw
   expectedMod: number | null = null; // fail-fast snapshot, only set when owner exposes modCount
   constructor(public arr: unknown[], public owner: IterOwner | null = null) {
     super();
@@ -191,7 +192,7 @@ rt.register({
       }
     }),
     "remove()V": driven(function* (this: JIter): Gen {
-      if (this.readOnly) uoe();
+      if (this.readOnly || this.fixedSize) uoe();
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
       if (this.owner?.removeAt) yield this.owner.removeAt(this.last);
@@ -216,7 +217,7 @@ rt.register({
       this.arr[this.last] = v;
     },
     "add(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
-      if (this.readOnly) uoe();
+      if (this.readOnly || this.fixedSize) uoe();
       checkMod(this);
       this.arr.splice(this.i++, 0, v);
       this.last = -1;
@@ -343,6 +344,7 @@ function subView(parent: unknown[], from: number, to: number): unknown[] {
   });
 }
 type Methods = NonNullable<NativeSpec["methods"]>;
+type Fn = (this: unknown, ...args: unknown[]) => unknown;
 function removeHead(this: JList): unknown {
   if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
   return this.a.shift();
@@ -604,6 +606,7 @@ rt.register({
   ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/io/Serializable"],
   methods: listMethods(),
 });
+/** List.of/copyOf (ImmutableCollections): every write throws, and so does asking about null */
 class JImmutableList extends JList {}
 function immutableList(items: unknown[]): JImmutableList {
   if (items.some((item) => item === null)) rt.npe();
@@ -611,13 +614,22 @@ function immutableList(items: unknown[]): JImmutableList {
   result.a = items.slice();
   return result;
 }
-const immutableListMethods = listMethods();
+const SEQUENCED_WRITES = SEQUENCED.filter((m) => !m.startsWith("get"));
+const immutableListMethods = without(listMethods(), QUEUE_ONLY, DEQUE_ONLY, CAPACITY, ["clone()Ljava/lang/Object;"]);
 for (const method of [
   "set(ILjava/lang/Object;)Ljava/lang/Object;", "add(Ljava/lang/Object;)Z", "add(ILjava/lang/Object;)V",
   "remove(I)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Z", "removeIf(Ljava/util/function/Predicate;)Z", "clear()V",
   "addAll(Ljava/util/Collection;)Z", "addAll(ILjava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "retainAll(Ljava/util/Collection;)Z",
-  "sort(Ljava/util/Comparator;)V", "replaceAll(Ljava/util/function/UnaryOperator;)V",
+  "sort(Ljava/util/Comparator;)V", "replaceAll(Ljava/util/function/UnaryOperator;)V", ...SEQUENCED_WRITES,
 ]) immutableListMethods[method] = uoe;
+for (const method of ["contains(Ljava/lang/Object;)Z", "indexOf(Ljava/lang/Object;)I", "lastIndexOf(Ljava/lang/Object;)I"]) {
+  const query = immutableListMethods[method] as Fn;
+  immutableListMethods[method] = function (this: JImmutableList, v: unknown) { return v === null ? rt.npe() : query.call(this, v); };
+}
+immutableListMethods["containsAll(Ljava/util/Collection;)Z"] = driven(function* (this: JImmutableList, c: unknown): Gen {
+  for (const v of yield toJsArray(c)) if (v === null ? rt.npe() : (yield indexIn(this.a, v)) < 0) return 0;
+  return 1;
+});
 immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) { return snapshotIterator(this); };
 immutableListMethods["listIterator()Ljava/util/ListIterator;"] = immutableListMethods["iterator()Ljava/util/Iterator;"];
 immutableListMethods["listIterator(I)Ljava/util/ListIterator;"] = function (this: JImmutableList, at: number) {
@@ -635,13 +647,78 @@ rt.register({
 const listFactories: Methods = {
   "static copyOf(Ljava/util/Collection;)Ljava/util/List;": driven(function* (collection: unknown): Gen {
     if (collection === null) rt.npe();
-    return immutableList(yield toJsArray(collection));
+    return collection instanceof JImmutableList ? collection : immutableList(yield toJsArray(collection));
   }),
   "static of([Ljava/lang/Object;)Ljava/util/List;": (items: unknown[]) => immutableList(items),
 };
 for (let count = 0; count <= 10; count++) {
   const descriptor = `(${"Ljava/lang/Object;".repeat(count)})Ljava/util/List;`;
   listFactories[`static of${descriptor}`] = (...items: unknown[]) => immutableList(items);
+}
+
+/** Collections' AbstractList-based lists (emptyList, singletonList, nCopies) and Arrays.asList: a structural write
+ *  throws only when it would change the list, since AbstractList's bodies reach add/remove only then. Arrays.asList
+ *  writes elements through set(); the others refuse it. */
+class JFixedList extends JList {
+  get serialElements() { return jarray(this.a.slice()); }
+  set serialElements(items: unknown[]) { this.a = items ? items.slice() : []; }
+}
+class JReadOnlyList extends JFixedList {}
+const changes = (changed: unknown): number => changed ? uoe() : 0;
+const fixedBulk = (remove: boolean) => driven(function* (this: JList, c: unknown): Gen {
+  if (c === null) rt.npe();
+  for (const x of this.a) changes(((yield vcall(c, "contains", "(Ljava/lang/Object;)Z", x)) !== 0) === remove);
+  return 0;
+});
+function fixedIter(list: JList, at: number, settable: boolean): JIter {
+  if (at < 0 || at > list.a.length) ioobe(at, list.a.length);
+  const it = mkIter(list.a);
+  it.i = at;
+  if (settable) it.fixedSize = true; else it.readOnly = true;
+  return it;
+}
+function fixedListMethods(settable: boolean): Methods {
+  const methods: Methods = {
+    ...without(listMethods(), QUEUE_ONLY, DEQUE_ONLY, CAPACITY, ["clone()Ljava/lang/Object;"]),
+    "remove(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return after(indexIn(this.a, v), (i) => changes(i >= 0)); },
+    "clear()V": function (this: JList) { changes(this.a.length); },
+    "addAll(Ljava/util/Collection;)Z": function (this: JList, c: unknown) { return after(toJsArray(c), (src) => changes(src.length)); },
+    "addAll(ILjava/util/Collection;)Z": function (this: JList, i: number, c: unknown) {
+      if (i >>> 0 > this.a.length) ioobe(i, this.a.length);
+      return after(toJsArray(c), (src) => changes(src.length));
+    },
+    "removeAll(Ljava/util/Collection;)Z": fixedBulk(true),
+    "retainAll(Ljava/util/Collection;)Z": fixedBulk(false),
+    "removeIf(Ljava/util/function/Predicate;)Z": driven(function* (this: JList, p: unknown): Gen {
+      if (p === null) rt.npe();
+      for (const x of this.a) changes(yield vcall(p, "test", "(Ljava/lang/Object;)Z", x));
+      return 0;
+    }),
+    "iterator()Ljava/util/Iterator;": function (this: JList) { return fixedIter(this, 0, settable); },
+    "listIterator()Ljava/util/ListIterator;": function (this: JList) { return fixedIter(this, 0, settable); },
+    "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return fixedIter(this, at, settable); },
+  };
+  for (const method of ["add(Ljava/lang/Object;)Z", "add(ILjava/lang/Object;)V", "remove(I)Ljava/lang/Object;", ...SEQUENCED_WRITES]) methods[method] = uoe;
+  if (!settable) {
+    methods["set(ILjava/lang/Object;)Ljava/lang/Object;"] = uoe;
+    methods["replaceAll(Ljava/util/function/UnaryOperator;)V"] = function (this: JList, op: unknown) { if (op === null) rt.npe(); changes(this.a.length); };
+    methods["sort(Ljava/util/Comparator;)V"] = function (this: JList) { changes(this.a.length > 1); };
+  }
+  return methods;
+}
+const FIXED_LIST_IFACES = ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/io/Serializable"];
+const fixedListSerialization = (uid: bigint) => ({ uid, fields: [{ name: "a", desc: "[Ljava/lang/Object;", prop: "serialElements" }] });
+rt.register({ name: "webdroid/ArraysList", ctor: JFixedList, sup: "java/util/AbstractList", typeVars: "E", ifaces: FIXED_LIST_IFACES,
+  serialization: fixedListSerialization(-2764017481108945198n), methods: fixedListMethods(true) });
+rt.register({ name: "webdroid/ReadOnlyList", ctor: JReadOnlyList, sup: "java/util/AbstractList", typeVars: "E", ifaces: FIXED_LIST_IFACES,
+  serialization: fixedListSerialization(8842843931221139166n), methods: {
+    ...fixedListMethods(false),
+    "readResolve()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this : EMPTY_LIST; },
+  } });
+function fixedList(items: unknown[], settable: boolean): JList {
+  const list = new (rt.link(settable ? "webdroid/ArraysList" : "webdroid/ReadOnlyList").ctor as new () => JList)();
+  list.a = items;
+  return list;
 }
 // Vector's pre-Collections API, which Stack inherits.
 function vectorMethods(base: Methods): Methods {
@@ -1002,10 +1079,42 @@ const immutableMap = driven(function* immutableMap(entries: readonly (readonly [
   for (const [key, value] of entries) yield callOn(thread, () => addImmutableMapping(map, key, value));
   return map;
 });
+const MAP_WRITES = ["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "putAll(Ljava/util/Map;)V",
+  "remove(Ljava/lang/Object;)Ljava/lang/Object;", "remove(Ljava/lang/Object;Ljava/lang/Object;)Z", "clear()V",
+  "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "replaceAll(Ljava/util/function/BiFunction;)V",
+  "replace(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "replace(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+  "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;",
+  "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;",
+  "computeIfPresent(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;",
+  "merge(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;"];
+function readOnlyMapMethods(): Methods {
+  const methods = without(mapMethods(), ["<init>()V", "<init>(I)V", "<init>(IF)V", "<init>(IFI)V", "<init>(IFZ)V", "<init>(Ljava/util/Map;)V", "clone()Ljava/lang/Object;"]);
+  for (const method of MAP_WRITES) methods[method] = uoe;
+  return methods;
+}
+/** Map.of/copyOf (ImmutableCollections): every write throws, and so does asking about null */
+const immutableMapMethods = readOnlyMapMethods();
+for (const method of ["get(Ljava/lang/Object;)Ljava/lang/Object;", "containsKey(Ljava/lang/Object;)Z", "containsValue(Ljava/lang/Object;)Z",
+  "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"]) {
+  const query = immutableMapMethods[method] as Fn;
+  immutableMapMethods[method] = function (this: JMap, v: unknown, d: unknown) { return v === null ? rt.npe() : query.call(this, v, d); };
+}
 rt.register({
   name: "webdroid/ImmutableMap", ctor: JImmutableMap, sup: "java/util/AbstractMap", typeVars: "K,V",
-  ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods(),
+  ifaces: ["java/util/Map", "java/io/Serializable"], methods: immutableMapMethods,
 });
+/** Collections.emptyMap and singletonMap: AbstractMap's remove and clear throw only when they would change the map */
+class JReadOnlyMap extends JMap { mutable = false; }
+const readOnlyMap = readOnlyMapMethods();
+readOnlyMap["remove(Ljava/lang/Object;)Ljava/lang/Object;"] = function (this: JMap, k: unknown) {
+  return after(vcall(this, "containsKey", "(Ljava/lang/Object;)Z", k) as number | Promise<number>, (has) => changes(has) || null);
+};
+readOnlyMap["clear()V"] = function (this: JMap) { changes(this.m.size + this.slow.length); };
+rt.register({
+  name: "webdroid/ReadOnlyMap", ctor: JReadOnlyMap, sup: "java/util/AbstractMap", typeVars: "K,V",
+  ifaces: ["java/util/Map", "java/io/Serializable"], methods: readOnlyMap,
+});
+const EMPTY_MAP = new JReadOnlyMap();
 
 const mapFactories: Methods = {
   "static entry(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map$Entry;": (key: unknown, value: unknown) => {
@@ -1016,6 +1125,7 @@ const mapFactories: Methods = {
   },
   "static copyOf(Ljava/util/Map;)Ljava/util/Map;": driven(function* (source: unknown): Gen {
     if (source === null) rt.npe();
+    if (source instanceof JImmutableMap) return source;
     const entries: [unknown, unknown][] = [];
     if (source instanceof JMap) for (const entry of allEnts(source)) entries.push([entry.k, entry.v]);
     else {
@@ -1121,7 +1231,13 @@ const mapViewMethods: Methods = {
     for (const v of yield toJsArray(c)) if ((yield indexIn(snap, v)) < 0) return 0;
     return 1;
   }),
-  "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
+  "clear()V": function (this: JSetView) {
+    if (!this.map.mutable) return vcall(this.map, "clear", "()V");
+    this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++;
+  },
+  // AbstractCollection's: a map view never adds
+  "add(Ljava/lang/Object;)Z": uoe,
+  "addAll(Ljava/util/Collection;)Z": function (this: JSetView, c: unknown) { return after(toJsArray(c), (src) => changes(src.length)); },
   "toString()Ljava/lang/String;": function (this: JSetView) { return seqText(this, this.snapshot()); },
 };
 rt.register({
@@ -1388,30 +1504,69 @@ const setSerialization: Methods = {
   }),
 };
 
+/** Set.of/copyOf (ImmutableCollections): every write throws, and so does asking about null */
 class JImmutableSet extends JSet {}
-const immutableSet = driven(function* immutableSet(items: unknown[]): Gen<JImmutableSet> {
+const immutableSet = driven(function* immutableSet(items: unknown[], distinct = true): Gen<JImmutableSet> {
   const result = new JImmutableSet();
   for (const item of items) {
     if (item === null) rt.npe();
-    if (!(yield addToSet(result, item))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate element: " + String(item));
+    if (!(yield addToSet(result, item)) && distinct) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate element: " + String(item));
   }
   return result;
 });
-const immutableSetMethods = setMethods();
-for (const method of ["add(Ljava/lang/Object;)Z", "remove(Ljava/lang/Object;)Z", "clear()V", "addAll(Ljava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "removeIf(Ljava/util/function/Predicate;)Z"])
-  immutableSetMethods[method] = uoe;
-immutableSetMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableSet) {
+const SET_WRITES = ["add(Ljava/lang/Object;)Z", "remove(Ljava/lang/Object;)Z", "clear()V", "addAll(Ljava/util/Collection;)Z",
+  "removeAll(Ljava/util/Collection;)Z", "retainAll(Ljava/util/Collection;)Z", "removeIf(Ljava/util/function/Predicate;)Z"];
+function readOnlySetIterator(this: JSet) {
   const iterator = mkIter(bucketKeys(this));
   iterator.readOnly = true;
   return iterator;
-};
+}
+const immutableSetMethods = without(setMethods(), ["clone()Ljava/lang/Object;"]);
+for (const method of SET_WRITES) immutableSetMethods[method] = uoe;
+const setContains = immutableSetMethods["contains(Ljava/lang/Object;)Z"] as Fn;
+immutableSetMethods["contains(Ljava/lang/Object;)Z"] = function (this: JImmutableSet, v: unknown) { return v === null ? rt.npe() : setContains.call(this, v); };
+immutableSetMethods["iterator()Ljava/util/Iterator;"] = readOnlySetIterator;
 rt.register({
   name: "webdroid/ImmutableSet", ctor: JImmutableSet, sup: "java/util/AbstractSet", typeVars: "E",
   ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: immutableSetMethods,
 });
+/** Collections.emptySet and singleton, AbstractSet-based: a write throws only when it would change the set */
+class JReadOnlySet extends JSet {}
+const readOnlySetMethods: Methods = {
+  ...without(setMethods(), ["clone()Ljava/lang/Object;"]),
+  "add(Ljava/lang/Object;)Z": uoe,
+  "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) { return after(setContains.call(this, v) as number | Promise<number>, changes); },
+  "clear()V": function (this: JSet) { changes(this.m.size + this.slow.length); },
+  "addAll(Ljava/util/Collection;)Z": function (this: JSet, c: unknown) { return after(toJsArray(c), (src) => changes(src.length)); },
+  "removeAll(Ljava/util/Collection;)Z": driven(function* (this: JSet, c: unknown): Gen {
+    for (const v of yield toJsArray(c)) changes(yield setContains.call(this, v));
+    return 0;
+  }),
+  "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JSet, c: unknown): Gen {
+    if (c === null) rt.npe();
+    for (const v of bucketKeys(this)) changes(!(yield vcall(c, "contains", "(Ljava/lang/Object;)Z", v)));
+    return 0;
+  }),
+  "removeIf(Ljava/util/function/Predicate;)Z": driven(function* (this: JSet, p: unknown): Gen {
+    if (p === null) rt.npe();
+    for (const v of bucketKeys(this)) changes(yield vcall(p, "test", "(Ljava/lang/Object;)Z", v));
+    return 0;
+  }),
+  "iterator()Ljava/util/Iterator;": readOnlySetIterator,
+  ...setSerialization,
+  "readResolve()Ljava/lang/Object;": function (this: JSet) { return this.m.size + this.slow.length ? this : EMPTY_SET; },
+};
+rt.register({
+  name: "webdroid/ReadOnlySet", ctor: JReadOnlySet, sup: "java/util/AbstractSet", typeVars: "E", serialization: { uid: 1582296315990362920n, fields: [] },
+  ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: readOnlySetMethods,
+});
+const EMPTY_SET = new JReadOnlySet();
 
 const setFactories: Methods = {
-  "static copyOf(Ljava/util/Collection;)Ljava/util/Set;": driven(function* (collection: unknown): Gen { return immutableSet(yield toJsArray(collection)); }),
+  "static copyOf(Ljava/util/Collection;)Ljava/util/Set;": driven(function* (collection: unknown): Gen {
+    if (collection === null) rt.npe();
+    return collection instanceof JImmutableSet ? collection : immutableSet(yield toJsArray(collection), false);
+  }),
   "static of([Ljava/lang/Object;)Ljava/util/Set;": (items: unknown[]) => immutableSet(items),
 };
 for (let count = 0; count <= 10; count++) {
@@ -2524,19 +2679,10 @@ function deepArrayEquals(a: unknown[], b: unknown[], start: number): number | Pr
   }
   return 1;
 }
-class JArraysList extends JList {}
-rt.register({
-  name: "webdroid/ArraysList", ctor: JArraysList,
-  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/io/Serializable"],
-  methods: listMethods(),
-});
 rt.register({
   name: "java/util/Arrays", ctor: JArrays,
   methods: {
-    "static asList([Ljava/lang/Object;)Ljava/util/List;": (arr: unknown[]) => {
-      rt.link("webdroid/ArraysList");
-      const l = new JArraysList(); l.a = arr; return l;
-    },
+    "static asList([Ljava/lang/Object;)Ljava/util/List;": (arr: unknown[]) => arr === null ? rt.npe() : fixedList(arr, true),
     "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {
       return mkStream(arr.slice());
     },
@@ -2702,28 +2848,34 @@ const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
   return best;
 };
 const collMax = extreme(1), collMin = extreme(-1);
-const emptyList = new JList();
 const emptyIterator = mkIter([]);
+const EMPTY_LIST = new JReadOnlyList();
+const emptyList = () => { rt.link("webdroid/ReadOnlyList"); return EMPTY_LIST; };
+const emptySet = () => { rt.link("webdroid/ReadOnlySet"); return EMPTY_SET; };
+const emptyMap = () => { rt.link("webdroid/ReadOnlyMap"); return EMPTY_MAP; };
 rt.register({
   name: "java/util/Collections", ctor: JCollections,
   clinit: () => {
     const c = rt.link("java/util/Collections").ctor as any;
-    c.s$EMPTY_LIST = emptyList;
-    c.s$EMPTY_MAP = rt.make("java/util/HashMap");
-    c.s$EMPTY_SET = rt.make("java/util/HashSet");
+    c.s$EMPTY_LIST = emptyList();
+    c.s$EMPTY_MAP = emptyMap();
+    c.s$EMPTY_SET = emptySet();
   },
   methods: {
-    "static emptyList()Ljava/util/List;": () => newArrayList(),
+    "static emptyList()Ljava/util/List;": emptyList,
     "static emptyIterator()Ljava/util/Iterator;": () => emptyIterator,
-    "static emptyMap()Ljava/util/Map;": () => new JMap(),
-    "static emptySet()Ljava/util/Set;": () => new JSet(),
-    "static singletonList(Ljava/lang/Object;)Ljava/util/List;": (v: unknown) => { const l = new JList(); l.a = [v]; return l; },
-    "static singleton(Ljava/lang/Object;)Ljava/util/Set;": driven(function* (v: unknown): Gen { const s = new JSet(); yield addToSet(s, v); return s; }),
-    "static singletonMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;": driven(function* (k: unknown, v: unknown): Gen {
-      const m = new JMap();
-      yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
-      return m;
-    }),
+    "static emptyMap()Ljava/util/Map;": emptyMap,
+    "static emptySet()Ljava/util/Set;": emptySet,
+    "static singletonList(Ljava/lang/Object;)Ljava/util/List;": (v: unknown) => fixedList([v], false),
+    "static singleton(Ljava/lang/Object;)Ljava/util/Set;": function (v: unknown) {
+      const s = new (rt.link("webdroid/ReadOnlySet").ctor as new () => JSet)();
+      return after(addToSet(s, v), () => s);
+    },
+    "static singletonMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;": function (k: unknown, v: unknown) {
+      const m = new (rt.link("webdroid/ReadOnlyMap").ctor as new () => JMap)(), key = mapKey(k);
+      if (key !== SLOW) { m.m.set(key, { k, v, seq: ++entSeq }); return m; }
+      return after(putSlow(m, k, v, false), () => m);
+    },
     "static unmodifiableList(Ljava/util/List;)Ljava/util/List;": unmodifiableList,
     "static list(Ljava/util/Enumeration;)Ljava/util/ArrayList;": driven(function* (e: unknown): Gen {
       const out: unknown[] = [];
@@ -2783,7 +2935,8 @@ rt.register({
     }),
 
     "static nCopies(ILjava/lang/Object;)Ljava/util/List;": (n: number, v: unknown) => {
-      const l = new JList(); l.a = new Array(n).fill(v); return l;
+      if (n < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "List length = " + n);
+      return fixedList(new Array(n).fill(v), false);
     },
     "static max(Ljava/util/Collection;)Ljava/lang/Object;": collMax,
     "static min(Ljava/util/Collection;)Ljava/lang/Object;": collMin,

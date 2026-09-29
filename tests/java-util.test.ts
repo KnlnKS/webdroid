@@ -695,6 +695,25 @@ describe("set-equality", () => {
     expect(await vcall(immutable, "get", "(I)Ljava/lang/Object;", 1)).toBe("b");
     await rejects(() => vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"), "UnsupportedOperationException");
     await rejects(() => of("a", null), "NullPointerException");
+    await rejects(() => vcall(immutable, "contains", "(Ljava/lang/Object;)Z", null), "NullPointerException");
+  });
+
+  test("Collections and Arrays.asList lists refuse only the writes that would change them", async () => {
+    const empty = await scall("java/util/Collections", "emptyList", "()Ljava/util/List;");
+    expect(await scall("java/util/Collections", "emptyList", "()Ljava/util/List;")).toBe(empty);
+    await rejects(() => vcall(empty, "add", "(Ljava/lang/Object;)Z", "a"), "UnsupportedOperationException");
+    expect(await vcall(empty, "remove", "(Ljava/lang/Object;)Z", "a")).toBe(0);
+    const single = await scall("java/util/Collections", "singletonList", "(Ljava/lang/Object;)Ljava/util/List;", "a");
+    await rejects(() => vcall(single, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "b"), "UnsupportedOperationException");
+    await rejects(() => vcall(single, "remove", "(Ljava/lang/Object;)Z", "a"), "UnsupportedOperationException");
+    const array = ["a", "b"];
+    const fixed = await scall("java/util/Arrays", "asList", "([Ljava/lang/Object;)Ljava/util/List;", array);
+    expect(await vcall(fixed, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "z")).toBe("a");
+    expect(array[0]).toBe("z");
+    await rejects(() => vcall(fixed, "add", "(Ljava/lang/Object;)Z", "c"), "UnsupportedOperationException");
+    const map = await scall("java/util/Collections", "singletonMap", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;", "k", "v");
+    expect(await vcall(map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", "x")).toBe(null);
+    await rejects(() => vcall(map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", "k"), "UnsupportedOperationException");
   });
 
   test("unordered and insertion-ordered sets do not implement SortedSet", () => {
