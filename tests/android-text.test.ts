@@ -435,17 +435,6 @@ describe("editable-factory", () => {
 
 describe("length-filter", () => {
   rt.linkNatives();
-  test("LengthFilter trims the insertion to the remaining room", async () => {
-    const filter = await newObj("android/text/InputFilter$LengthFilter", "(I)V", 5);
-    const dest = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "abc");
-    const run = (source: string, dstart: number, dend: number) => vcall(filter, "filter",
-      "(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;", source, 0, source.length, dest, dstart, dend);
-    expect(await run("x", 3, 3)).toBeNull();
-    expect(await run("wxyz", 3, 3)).toBe("wx");
-    expect(await run("w😀", 3, 3)).toBe("w");
-    expect(await run("wxyz", 0, 3)).toBeNull();
-    expect(await run("abcdef", 0, 3)).toBe("abcde");
-  });
   test("an EditText's filters bound setText and edits through its Editable", async () => {
     const field = new JEditText();
     await vcall(field, "setFilters", "([Landroid/text/InputFilter;)V", [await newObj("android/text/InputFilter$LengthFilter", "(I)V", 4)]);

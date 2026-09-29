@@ -4,8 +4,10 @@ import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JCanvas, JPaint, copyPaint } from "../../../src/android/graphics";
 import { JTextView } from "../../../src/android/textview";
+import { loadPlatformDex } from "../../../src/android/framework";
 
 async function probe() {
+  await loadPlatformDex();
   rt.linkNatives();
   const paint = rt.make("android/graphics/Paint");
   if (!(paint instanceof JPaint)) throw new Error("Invalid Paint");
