@@ -5,7 +5,6 @@ import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type G
 import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
-import { javaClassSets } from "../regex-sets";
 import { coldStack, type ColdMethod } from "../cold";
 import { mangleMethod, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
@@ -14,6 +13,7 @@ import { vfs, apkPath } from "../../shell/vfs";
 import { appUserName, procIdentity } from "../../shell/procfs";
 import { csText } from "./jchars";
 import { mkIntStream } from "./jstream-values";
+import { stringMatches, stringReplace, stringSplit } from "./jregex";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
   if (separator == null || parts == null) rt.npe();
@@ -98,101 +98,6 @@ export function idHash(o: unknown): number {
   let h = hashes.get(o as object);
   if (h === undefined) { h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff); hashes.set(o as object, h); }
   return h;
-}
-const regexMemo = new Map<string, RegExp>();
-const POSIX: Record<string, string> = {
-  Lower: "a-z", Upper: "A-Z", ASCII: "\\x00-\\x7F", Alpha: "a-zA-Z", Digit: "0-9", Alnum: "a-zA-Z0-9",
-  Punct: "!-\\/:-@\\[-`{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
-  javaLowerCase: "\\p{Ll}", javaUpperCase: "\\p{Lu}", javaWhitespace: "\\s", javaLetter: "\\p{L}", javaDigit: "\\p{Nd}", javaLetterOrDigit: "\\p{L}\\p{Nd}",
-};
-/**
- * java.util.regex syntax that JS RegExp lacks, rewritten in place: embedded flag groups
- * `(?ismx)` (folded into the flags — Java scopes them from that point on, JS cannot), `\Q...\E`
- * literals, `\A`/`\Z`/`\z` anchors, `\h`, possessive quantifiers (made greedy), and the
- * POSIX/java.lang.Character classes `\p{Alpha}`. Returns the JS source plus extra flags.
- */
-function javaToJs(src: string): [string, string] {
-  let extra = "";
-  let out = src.replace(/\(\?([a-zA-Z]+)(?:-[a-zA-Z]+)?\)/g, (_m, on: string) => {
-    for (const c of on) if ("ims".includes(c) && !extra.includes(c)) extra += c;
-    return "";
-  });
-  out = out.replace(/\\Q([\s\S]*?)(?:\\E|$)/g, (_m, lit: string) => lit.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&"));
-  out = out.replace(/\\([AZzh])/g, (_m, c: string) => c === "A" ? "^" : c === "h" ? "[ \\t\\xA0]" : "$");
-  out = out.replace(/([*+?]|\{\d+(?:,\d*)?\})\+/g, "$1");
-  out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
-    const cls = POSIX[name];
-    return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
-  });
-  if (out.includes("(?>")) out = atomicGroups(out);
-  return [out, extra];
-}
-function atomicGroups(src: string): string {
-  // A lookahead fixes the chosen alternative before its backreference consumes it.
-  // Synthetic captures would shift Java group numbers, so leave those patterns unsupported.
-  let escaped = false, inClass = false, depth = 0, atomic = 0, captures = false;
-  const opens: number[] = [];
-  const pairs = new Map<number, number>();
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
-    if (escaped) { escaped = false; continue; }
-    if (c === "\\") { escaped = true; continue; }
-    if (c === "[") { inClass = true; continue; }
-    if (c === "]" && inClass) { inClass = false; continue; }
-    if (inClass) continue;
-    if (c === "(") {
-      if (src.startsWith("(?>", i)) atomic++;
-      else if (src[i + 1] !== "?" || (src.startsWith("(?<", i) && !/[=!]/.test(src[i + 3] ?? ""))) captures = true;
-      opens.push(i); depth++;
-    } else if (c === ")") {
-      if (depth) pairs.set(opens.pop()!, i);
-      depth--;
-    }
-  }
-  if (!atomic) return src;
-  if (captures) throw new SyntaxError("Atomic group with capturing groups is unsupported");
-  let n = 0;
-  const rewrite = (start: number, end: number): string => {
-    let result = "";
-    for (let i = start; i < end; i++) {
-      const close = pairs.get(i);
-      if (close === undefined) { result += src[i]; continue; }
-      const body = rewrite(i + (src.startsWith("(?>", i) ? 3 : 1), close);
-      if (src.startsWith("(?>", i)) {
-        const name = `__wdAtomic${n++}`;
-        result += `(?:(?=(?<${name}>${body}))\\k<${name}>)`;
-      } else result += `(${body})`;
-      i = close;
-    }
-    return result;
-  };
-  return rewrite(0, src.length);
-}
-/** Java regex source + JS flags → RegExp, memoised: String.matches and Pattern.compile would rebuild theirs per call.
- *  Callers that use sticky/global flags must set lastIndex before every exec. */
-export function javaRegex(source: string, flags: string): RegExp {
-  const key = flags + "/" + source;
-  let re = regexMemo.get(key);
-  if (!re) {
-    if (regexMemo.size > 4096) regexMemo.clear();
-    try { re = new RegExp(source, flags); }
-    catch (e) {
-      const [js, extra] = javaToJs(source);
-      let f = flags;
-      for (const c of extra) if (!f.includes(c)) f += c;
-      try { re = new RegExp(js, f); }
-      catch {
-        try { re = new RegExp(javaClassSets(js), f.replace(/[uv]/g, "") + "v"); }
-        catch { re = new RegExp(js, f.replace("u", "")); }
-      }
-    }
-    regexMemo.set(key, re);
-  }
-  return re;
-}
-/** String.matches: whole-input match, invalid pattern → false */
-function javaMatches(p: string, s: string): number {
-  try { return javaRegex("^(?:" + p + ")$", "su").test(s) ? 1 : 0; } catch { return 0; }
 }
 export function stringHash(s: string): number {
   let h = 0;
@@ -899,52 +804,11 @@ sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCod
 sm("chars()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
 sm("codePoints()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from(this, char => char.codePointAt(0)!)); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
-sm("matches(Ljava/lang/String;)Z", function (p: string) { return javaMatches(p, this as string); });
-sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) {
-  return this.replace(javaRegex(p, "gsu"), r.replace(/\\\$/g, "$$$$"));
-});
-sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) {
-  return this.replace(javaRegex(p, "su"), r);
-});
-function javaSplit(s: string, pattern: string, limit: number): string[] {
-  const plain = /^[^\\\[\](){}.*+?^$|]+$/.test(pattern);
-  if (limit === 1) return jarray([s], "Ljava/lang/String;");
-  const parts: string[] = [];
-  let end = 0, matched = false;
-  if (plain) {
-    for (;;) {
-      if (limit > 0 && parts.length === limit - 1) break;
-      const at = s.indexOf(pattern, end);
-      if (at < 0) break;
-      matched = true;
-      parts.push(s.slice(end, at));
-      end = at + pattern.length;
-    }
-  } else {
-    const regex = javaRegex(pattern, "gsu");
-    regex.lastIndex = 0;
-    for (;;) {
-      if (limit > 0 && parts.length === limit - 1) break;
-      const match = regex.exec(s);
-      if (!match) break;
-      if (match.index === 0 && match[0].length === 0 && end === 0) {
-        regex.lastIndex = 1;
-        continue;
-      }
-      matched = true;
-      parts.push(s.slice(end, match.index));
-      end = match.index + match[0].length;
-      if (!match[0].length) regex.lastIndex = match.index + 1;
-    }
-    regex.lastIndex = 0;
-  }
-  if (!matched) return jarray([s], "Ljava/lang/String;");
-  parts.push(s.slice(end));
-  if (limit === 0) { while (parts.length > 1 && parts[parts.length - 1] === "") parts.pop(); }
-  return jarray(parts, "Ljava/lang/String;");
-}
-sm("split(Ljava/lang/String;)[Ljava/lang/String;", function (p: string) { return javaSplit(this as string, p, 0); });
-sm("split(Ljava/lang/String;I)[Ljava/lang/String;", function (p: string, l: number) { return javaSplit(this as string, p, l); });
+sm("matches(Ljava/lang/String;)Z", function (p: string) { return stringMatches(this as string, p); });
+sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, true); });
+sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, false); });
+sm("split(Ljava/lang/String;)[Ljava/lang/String;", function (p: string) { return stringSplit(this as string, p, 0); });
+sm("split(Ljava/lang/String;I)[Ljava/lang/String;", function (p: string, l: number) { return stringSplit(this as string, p, l); });
 
 const M_TO_STRING = mangleMethod("toString", "()Ljava/lang/String;");
 /** A value's OWN toString — %s prints that, and so does every CharSequence a synchronous

@@ -219,6 +219,17 @@ describe("pattern-split", () => {
     expect(Array.from(await split(await compile(":"), ":a", -1))).toEqual(["", "a"]);
   });
 
+  test("String's regex methods follow Pattern's line terminators, split and replacement rules", async () => {
+    const S = "Ljava/lang/String;";
+    expect(await vcall("a\nb", "matches", `(${S})Z`, "a.b")).toBe(0);
+    expect(await vcall("a\nb", "matches", `(${S})Z`, "(?s)a.b")).toBe(1);
+    expect(await vcall("a\nb", "replaceAll", `(${S}${S})${S}`, ".", "x")).toBe("x\nx");
+    expect(Array.from(await vcall("a\r\nb", "split", `(${S})[${S}`, "."))).toEqual(["", "\r\n"]);
+    expect(Array.from(await vcall(",", "split", `(${S})[${S}`, ","))).toEqual([]);
+    expect(await vcall("a1b2", "replaceAll", `(${S}${S})${S}`, "(?<d>\\d)", "[${d}\\$\\\\]")).toBe("a[1$\\]b[2$\\]");
+    await expect(vcallAsync("abc", "replaceAll", `(${S}${S})${S}`, "b", "$2")).rejects.toBeDefined();
+  });
+
   test("atomic groups commit alternatives and hide internal captures", async () => {
     const matcher = async (pattern: string, input: string) => vcall(await compile(pattern), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", input);
     expect(await vcall(await matcher("^(?>a+)a$", "aaa"), "matches", "()Z")).toBe(0);

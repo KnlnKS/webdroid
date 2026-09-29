@@ -1,6 +1,7 @@
 // libcore's java.util.regex runs over ICU's regex natives (com.android.icu.util.regex): these
-// answer them with JS RegExp, via jlang's translation of the Java syntax. A match reports every
-// group's [start, end) into the caller's offsets array, -1 for a group that did not take part.
+// answer them with JS RegExp translated from the Java syntax, and so do String's regex methods.
+// A match reports every group's [start, end) into the caller's offsets array, -1 for a group
+// that did not take part.
 //
 // ICU's `.`, `^` and `$` see the line terminators \n \v \f \r U+0085 U+2028 U+2029 (only \n under
 // UNIX_LINES), so they are rewritten here rather than left to JS's own set. hitEnd/requireEnd
@@ -12,7 +13,9 @@
 // so its first match in ICU's search order uses the sentinel exactly when the flag was set.
 
 import { rt, driven, type Gen } from "../runtime";
-import { javaRegex, newObj } from "./jlang";
+import { jarray } from "../abi";
+import { javaClassSets } from "../regex-sets";
+import { newObj } from "./jlang";
 import { handle, deref, release } from "../../android/handles";
 
 interface Derived { find: RegExp; sticky: RegExp; whole: RegExp }
@@ -92,7 +95,7 @@ function captures(source: string): (string | null)[] {
 }
 
 /** what a first pass over the Java source learns: its groups, and flags set by embedded groups
- *  (applied pattern-wide, as jlang folds them) */
+ *  (applied pattern-wide, as javaToJs folds them) */
 interface Shape { names: (string | null)[]; multiline: boolean; dotall: boolean; unix: boolean; anchored: boolean }
 const enum Mode { Main, Hit, Req, Plain }
 interface Ctx extends Shape {
@@ -100,6 +103,8 @@ interface Ctx extends Shape {
   depth: number; first: boolean; anchorDepth: number; closedBelow: number;
 }
 const LT = "\\n-\\r\\x85\\u2028\\u2029";
+/** ICU's \h: tab and the space separators */
+const HSPACE = "\\t \\xA0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000";
 
 function classEnd(src: string, i: number): number {
   let depth = 0;
@@ -170,7 +175,7 @@ function dollar(c: Ctx, multiline: boolean, unix: boolean): string {
   return c.mode === Mode.Plain ? `(?:${end}|${beforeLine})` : `(?:${s}|${PAST}|${beforeLine})`;
 }
 function caret(c: Ctx, multiline: boolean): string {
-  // jlang folds an embedded (?m) into the JS flags, so a multi-line pattern spells out its start
+  // javaToJs folds an embedded (?m) into the JS flags, so a multi-line pattern spells out its start
   if (!multiline) return assertion(c, "^");
   const nl = c.unix ? "\\n" : LT;
   // ICU's multi-line `^` does not match at the end of input, except in UNIX_LINES mode
@@ -203,11 +208,16 @@ function unit(c: Ctx, names: (string | null)[]): string {
     case "Z": return dollar(c, false, false);
     case "b": case "B": return c.mode === Mode.Hit ? `(?:${c.s}|${PAST}|\\${e})` : assertion(c, "\\" + e);
     case "G": return "\\G";
+    case "h": return consume(c, `[${HSPACE}]`);
+    case "H": return consume(c, `[^${HSPACE}]`);
+    case "v": return consume(c, `[${LT}]`);
+    case "V": return consume(c, `[^${LT}]`);
+    case "R": return consume(c, `(?:\\r\\n|[${LT}])`);
     case "Q": {
       const end = src.indexOf("\\E", c.i), stop = end < 0 ? src.length : end;
       const lit = src.slice(c.i, stop);
       c.i = end < 0 ? stop : stop + 2;
-      if (c.mode === Mode.Main) return src.slice(i, c.i);
+      if (c.mode === Mode.Main) return lit.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
       let out = "";
       for (const ch of lit) out += consume(c, ch.replace(/[.*+?^${}()|[\]\\\/]/, "\\$&"));
       return out;
@@ -286,6 +296,96 @@ function group(c: Ctx, names: (string | null)[]): string {
   if (src[c.i] === ")") c.i++;
   if (--c.depth < c.closedBelow && c.anchorDepth >= 0) c.closedBelow = c.depth + 1;
   return out;
+}
+
+const POSIX: Record<string, string> = {
+  Lower: "a-z", Upper: "A-Z", ASCII: "\\x00-\\x7F", Alpha: "a-zA-Z", Digit: "0-9", Alnum: "a-zA-Z0-9",
+  Punct: "!-\\/:-@\\[-`{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
+  javaLowerCase: "\\p{Ll}", javaUpperCase: "\\p{Lu}", javaWhitespace: "\\s", javaLetter: "\\p{L}", javaDigit: "\\p{Nd}", javaLetterOrDigit: "\\p{L}\\p{Nd}",
+};
+/**
+ * Translated syntax that JS RegExp still rejects, rewritten in place: embedded flag groups
+ * `(?imsx)` (folded into the flags — Java scopes them from that point on, JS cannot),
+ * possessive quantifiers (made greedy), the POSIX/java.lang.Character classes `\p{Alpha}` and
+ * atomic groups. Returns the JS source plus extra flags.
+ */
+function javaToJs(src: string): [string, string] {
+  let extra = "";
+  let out = src.replace(/\(\?([a-zA-Z]+)(?:-[a-zA-Z]+)?\)/g, (_m, on: string) => {
+    for (const c of on) if ("ims".includes(c) && !extra.includes(c)) extra += c;
+    return "";
+  });
+  out = out.replace(/([*+?]|\{\d+(?:,\d*)?\})\+/g, "$1");
+  out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
+    const cls = POSIX[name];
+    return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
+  });
+  if (out.includes("(?>")) out = atomicGroups(out);
+  return [out, extra];
+}
+function atomicGroups(src: string): string {
+  // A lookahead fixes the chosen alternative before its backreference consumes it.
+  // Synthetic captures would shift Java group numbers, so leave those patterns unsupported.
+  let escaped = false, inClass = false, depth = 0, atomic = 0, captures = false;
+  const opens: number[] = [];
+  const pairs = new Map<number, number>();
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === "\\") { escaped = true; continue; }
+    if (c === "[") { inClass = true; continue; }
+    if (c === "]" && inClass) { inClass = false; continue; }
+    if (inClass) continue;
+    if (c === "(") {
+      if (src.startsWith("(?>", i)) atomic++;
+      else if (src[i + 1] !== "?" || (src.startsWith("(?<", i) && !/[=!]/.test(src[i + 3] ?? ""))) captures = true;
+      opens.push(i); depth++;
+    } else if (c === ")") {
+      if (depth) pairs.set(opens.pop()!, i);
+      depth--;
+    }
+  }
+  if (!atomic) return src;
+  if (captures) throw new SyntaxError("Atomic group with capturing groups is unsupported");
+  let n = 0;
+  const rewrite = (start: number, end: number): string => {
+    let result = "";
+    for (let i = start; i < end; i++) {
+      const close = pairs.get(i);
+      if (close === undefined) { result += src[i]; continue; }
+      const body = rewrite(i + (src.startsWith("(?>", i) ? 3 : 1), close);
+      if (src.startsWith("(?>", i)) {
+        const name = `__wdAtomic${n++}`;
+        result += `(?:(?=(?<${name}>${body}))\\k<${name}>)`;
+      } else result += `(${body})`;
+      i = close;
+    }
+    return result;
+  };
+  return rewrite(0, src.length);
+}
+const regexMemo = new Map<string, RegExp>();
+/** translated source + JS flags → RegExp, memoised. Callers that use sticky/global flags must
+ *  set lastIndex before every exec. */
+function javaRegex(source: string, flags: string): RegExp {
+  const key = flags + "/" + source;
+  let re = regexMemo.get(key);
+  if (!re) {
+    if (regexMemo.size > 4096) regexMemo.clear();
+    try { re = new RegExp(source, flags); }
+    catch (e) {
+      const [js, extra] = javaToJs(source);
+      let f = flags;
+      for (const c of extra) if (!f.includes(c)) f += c;
+      try { re = new RegExp(js, f); }
+      catch {
+        try { re = new RegExp(javaClassSets(js), f.replace(/[uv]/g, "") + "v"); }
+        catch { re = new RegExp(js, f.replace("u", "")); }
+      }
+    }
+    regexMemo.set(key, re);
+  }
+  return re;
 }
 
 function compilePattern(source: string, flags: number): CompiledPattern {
@@ -437,9 +537,7 @@ const FREE = handle((address: bigint) => release(address));
 const patternNatives: Record<string, (...args: never[]) => unknown> = {
   "compileImpl(Ljava/lang/String;I)J": driven(function* (source: string, flags: number): Gen {
     try { return handle(compilePattern(source, flags)); }
-    catch (e) {
-      throw yield newObj("java/util/regex/PatternSyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", (e as Error).message, source, -1);
-    }
+    catch (e) { return yield* syntaxError(e, source); }
   }),
   "getMatchedGroupIndexImpl(JLjava/lang/String;)I": (address: bigint, name: string) => deref<CompiledPattern>(address).names.get(name) ?? -1,
   "openMatcherImpl(J)J": (address: bigint) => handle({ pattern: deref<CompiledPattern>(address), input: "", regionStart: 0, regionEnd: 0,
@@ -490,3 +588,114 @@ const matcherNatives: Record<string, (...args: never[]) => unknown> = {
   "getNativeFinalizer()J": () => FREE,
 };
 for (const [sig, fn] of Object.entries(matcherNatives)) rt.registerJni("com/android/icu/util/regex/MatcherNative", sig, fn);
+
+function* syntaxError(e: unknown, source: string): Gen<never> {
+  throw yield newObj("java/util/regex/PatternSyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", (e as Error).message, source, -1);
+}
+
+// String's regex methods, which libcore's String answers through Pattern and Matcher
+interface StringPattern { all: RegExp; first?: RegExp; whole: RegExp; groups: number[]; names: Map<string, number> }
+const stringPatterns = new Map<string, StringPattern>();
+/** Pattern.compile(source), cached per source, without the match indices only Matcher reads */
+function stringPattern(source: string): StringPattern | Promise<never> {
+  let p = stringPatterns.get(source);
+  if (p === undefined) {
+    let c: CompiledPattern;
+    try { c = compilePattern(source, 0); } catch (e) { return rt.drive(syntaxError(e, source)) as Promise<never>; }
+    const flags = c.re.flags.replace(/[dgy]/g, "");
+    p = { all: new RegExp(c.re.source, flags + "g"), whole: new RegExp(c.whole.source, flags + "y"), groups: c.groups, names: c.names };
+    if (stringPatterns.size >= 1024) stringPatterns.clear();
+    stringPatterns.set(source, p);
+  }
+  return p;
+}
+export function stringMatches(s: string, source: string): number | Promise<never> {
+  const p = stringPattern(source);
+  if (p instanceof Promise) return p;
+  p.whole.lastIndex = 0;
+  return p.whole.test(s) ? 1 : 0;
+}
+
+const iae = (msg: string) => rt.mkThrowable("java/lang/IllegalArgumentException", msg);
+/** Matcher's replacement syntax as literal text and JS capture indices */
+function replacementParts(r: string, p: StringPattern): (string | number)[] {
+  const parts: (string | number)[] = [];
+  const count = p.groups.length;
+  let text = "";
+  for (let i = 0; i < r.length; i++) {
+    const ch = r[i];
+    if (ch === "\\") {
+      if (++i === r.length) throw iae("character to be escaped is missing");
+      text += r[i];
+      continue;
+    }
+    if (ch !== "$") { text += ch; continue; }
+    if (++i === r.length) throw iae("Illegal group reference: group index is missing");
+    let group: number;
+    if (r[i] === "{") {
+      const name = /^[A-Za-z0-9]*/.exec(r.slice(i + 1))![0];
+      i += name.length + 1;
+      if (!name) throw iae("named capturing group has 0 length name");
+      if (r[i] !== "}") throw iae("named capturing group is missing trailing '}'");
+      if (name[0] <= "9") throw iae(`capturing group name {${name}} starts with digit character`);
+      const named = p.names.get(name);
+      if (named === undefined) throw iae(`No group with name {${name}}`);
+      group = named;
+    } else {
+      group = r.charCodeAt(i) - 48;
+      if (group < 0 || group > 9) throw iae("Illegal group reference");
+      for (let d; i + 1 < r.length && (d = r.charCodeAt(i + 1) - 48) >= 0 && d <= 9 && group * 10 + d <= count; i++) group = group * 10 + d;
+      if (group > count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `No group ${group}`);
+    }
+    if (text) parts.push(text);
+    text = "";
+    parts.push(group ? p.groups[group - 1] : 0);
+  }
+  if (text) parts.push(text);
+  return parts;
+}
+export function stringReplace(s: string, source: string, replacement: string, all: boolean): string | Promise<never> {
+  const p = stringPattern(source);
+  if (p instanceof Promise) return p;
+  const re = all ? p.all : p.first ??= new RegExp(p.all.source, p.all.flags.replace("g", ""));
+  if (replacement.indexOf("$") < 0 && replacement.indexOf("\\") < 0) return s.replace(re, replacement);
+  // Matcher reads the replacement only for a match, so a malformed one fails only then
+  let parts: (string | number)[] | null = null, error: unknown;
+  try { parts = replacementParts(replacement, p); } catch (e) { error = e; }
+  return s.replace(re, (...match: (string | undefined)[]) => {
+    if (!parts) throw error;
+    let out = "";
+    for (const part of parts) out += typeof part === "string" ? part : match[part] ?? "";
+    return out;
+  });
+}
+
+const LITERAL = /^[^\\[\](){}.*+?^$|]+$/;
+export function stringSplit(s: string, source: string, limit: number): string[] | Promise<never> {
+  const parts: string[] = [];
+  let end = 0;
+  // String.split's fastpath also takes an escaped non-alphanumeric character
+  const literal = source.length === 2 && source[0] === "\\" ? (/[^0-9A-Za-z]/.test(source[1]) ? source[1] : null) : LITERAL.test(source) ? source : null;
+  if (literal !== null) {
+    for (let at; (limit <= 0 || parts.length < limit - 1) && (at = s.indexOf(literal, end)) >= 0; end = at + literal.length) parts.push(s.slice(end, at));
+  } else {
+    const p = stringPattern(source);
+    if (p instanceof Promise) return p;
+    const re = p.all;
+    re.lastIndex = 0;
+    for (let m; (limit <= 0 || parts.length < limit - 1) && (m = re.exec(s));) {
+      const at = m.index, length = m[0].length;
+      if (!length) {
+        re.lastIndex = nextIndex(s, at);
+        // a zero-width match at the start gives no leading empty string
+        if (!at) continue;
+      }
+      parts.push(s.slice(end, at));
+      end = at + length;
+    }
+  }
+  if (!end) return jarray([s], "Ljava/lang/String;");
+  parts.push(s.slice(end));
+  if (!limit) while (parts.length && !parts[parts.length - 1]) parts.pop();
+  return jarray(parts, "Ljava/lang/String;");
+}
