@@ -560,16 +560,26 @@ rt.register({
 class JCharset extends JObj { cname = "UTF-8"; }
 const charset = (n: string) => { const c = new JCharset(); c.cname = n; return c; };
 const utf8 = charset("UTF-8");
+/** Charset.lookup: the canonical name of a charset served here */
+function lookupCharset(name: string | null): string {
+  if (name === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Null charset name");
+  if (!/^[A-Za-z0-9][A-Za-z0-9+\-.:_]*$/.test(name)) throw rt.mkThrowable("java/nio/charset/IllegalCharsetNameException", name);
+  try { return charsetName(name); }
+  catch (e) { if (rt.iof(e, "java/io/UnsupportedEncodingException")) throw rt.mkThrowable("java/nio/charset/UnsupportedCharsetException", name); throw e; }
+}
 rt.register({
   name: "java/nio/charset/Charset", ctor: JCharset,
   methods: {
     "<init>(Ljava/lang/String;[Ljava/lang/String;)V": function (this: JCharset, name: string) { this.cname = name; },
-    "static forName(Ljava/lang/String;)Ljava/nio/charset/Charset;": charset,
+    "static forName(Ljava/lang/String;)Ljava/nio/charset/Charset;": (name: string | null) => charset(lookupCharset(name)),
     "static defaultCharset()Ljava/nio/charset/Charset;": () => utf8,
     "name()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
     "toString()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
     "displayName()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
-    "static isSupported(Ljava/lang/String;)Z": () => 1,
+    "static isSupported(Ljava/lang/String;)Z": (name: string | null) => {
+      try { lookupCharset(name); return 1; }
+      catch (e) { if (rt.iof(e, "java/nio/charset/UnsupportedCharsetException")) return 0; throw e; }
+    },
     "canEncode()Z": () => 1,
     "equals(Ljava/lang/Object;)Z": function (this: JCharset, o: unknown) {
       return o instanceof JCharset && o.cname.toUpperCase() === this.cname.toUpperCase() ? 1 : 0;
