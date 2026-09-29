@@ -4,7 +4,9 @@ import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
-import { JAttrSet, type JXmlParser, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs, obtainStyled, rvInt } from "./res";
+import { JAttrSet, JXmlParser, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs, obtainStyled, rvInt, attrSet } from "./res";
+import { aospResources } from "./resources";
+import { parserRoot } from "./assetmanager";
 import { JView, JViewGroup, type JLayoutParams, guardCall, guardMaybe, resolveLp } from "./view";
 import type { JContext } from "./context";
 
@@ -29,7 +31,7 @@ async function createViewByName(name: string, jctx: unknown, set: JAttrSet): Pro
   let clsName: string;
   // <view class="a.b.C"/> is how AOSP writes a tag whose class name is not a legal element
   // name -- an inner class, above all. The framework's own layouts use it.
-  const asClass = name === "view" ? set.node?.attrs.find((a) => a.name === "class" && !a.ns)?.str : null;
+  const asClass = name === "view" ? attrSet(set)?.node?.attrs.find((a) => a.name === "class" && !a.ns)?.str : null;
   if (asClass) clsName = asClass.replaceAll(".", "/");
   else if (name === "view" || name === "View") clsName = "android/view/View";
   else if (name.includes(".")) clsName = name.replaceAll(".", "/");
@@ -91,44 +93,48 @@ const M_generateLP = mangleMethod("generateLayoutParams", "(Landroid/util/Attrib
 const M_addView = mangleMethod("addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
 const M_onFinishInflate = mangleMethod("onFinishInflate", "()V");
 
-/** the AttributeSet of a layout tag, resolving against `ctx`'s theme */
-function attrSetFor(node: XmlNode, ctx: JContext): JAttrSet {
-  const set = new JAttrSet();
+/** The AttributeSet of a layout tag, resolving against `ctx`'s theme. With AOSP's resources it
+ *  is the layout's parser itself, advanced to the tag as LayoutInflater's rInflate advances it:
+ *  their Theme.obtainStyledAttributes takes nothing else. */
+async function attrSetFor(node: XmlNode, ctx: JContext, parser: unknown): Promise<JAttrSet> {
+  const set = parser ? attrSet(parser)! : new JAttrSet();
+  if (parser) while (set.node !== node) if (await vcall(parser, "next", "()I") === 1) throw rt.mkThrowable("android/view/InflateException", "tag " + node.name + " not in its layout");
   set.node = node;
   set.res = ctx.$host.res;
   set.theme = themeOf(ctx) ?? ctx.$host.theme;
-  return set;
+  return (parser ?? set) as JAttrSet;
 }
 
 const A_value = 0x01010024;
 /** AOSP parseViewTag: a <tag> child keys its android:value on the enclosing view under android:id */
-async function applyViewTag(view: JView, node: XmlNode, jctx: JContext) {
-  const set = attrSetFor(node, jctx);
+async function applyViewTag(view: JView, node: XmlNode, jctx: JContext, parser: unknown) {
+  const set = attrSet(await attrSetFor(node, jctx, parser))!;
   const ta = obtainStyled(set.res, set.theme, set, [A_id, A_value], 0, 0);
   const key = await vcall(ta, "getResourceId", "(II)I", 0, 0);
   await vcall(view, "setTag", "(ILjava/lang/Object;)V", key, await vcall(ta, "getText", "(I)Ljava/lang/CharSequence;", 1));
 }
 
-async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentView: JView, jctx: JContext) {
+async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentView: JView, jctx: JContext, parser: unknown) {
   const host = jctx.$host;
   for (const child of node.children) {
-    if (child.name === "tag") { await applyViewTag(parentView, child, jctx); continue; }
+    if (child.name === "tag") { await applyViewTag(parentView, child, jctx, parser); continue; }
     if (child.name === "requestFocus") continue;
     if (child.name === "include") {
       if (!(parentView instanceof JViewGroup)) throw rt.mkThrowable("android/view/InflateException", "<include /> can only be used inside of a ViewGroup");
       const layoutAttr = child.attrs.find((a) => a.name === "layout" || a.resId === A_layout);
       const layoutId = layoutAttr?.data ?? 0;
       if (layoutId) {
-        const file = host.res.fileOf(layoutId);
-        if (!file) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "layout 0x" + layoutId.toString(16));
-        const incView = await inflateNode(jctx, parseAXML(file.bytes), parentView, false, inflater);
+        const included = await includedLayout(jctx, layoutId);
+        let incView: JView | null;
+        try { incView = await inflateNode(jctx, included.root, parentView, false, inflater, included.parser); }
+        finally { if (included.parser) await vcall(included.parser, "close", "()V"); }
         // a <merge> include inflates straight into parentView and returns it
         if (incView === parentView) continue;
         if (incView) {
-          const set = attrSetFor(child, jctx);
+          const set = await attrSetFor(child, jctx, parser);
           const idAttr = child.attrs.find((a) => a.resId === A_id);
           if (idAttr) (incView as JView).idNum = idAttr.data;
-          const visibility = rvInt(host.res, obtainStyled(host.res, set.theme, set, [A_visibility], 0, 0).vals[0], -1);
+          const visibility = rvInt(host.res, obtainStyled(host.res, attrSet(set)!.theme, set, [A_visibility], 0, 0).vals[0], -1);
           if (visibility >= 0 && visibility <= 2) await vcall(incView, "setVisibility", "(I)V", visibility * 4);
           // AOSP: the <include> tag's layout params win only when it declares them; otherwise
           // the included root keeps its own (inflateNode already put them on incView.lp).
@@ -141,32 +147,42 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
       continue;
     }
     const cctx = await themedCtx(jctx, child);
-    const set = attrSetFor(child, cctx);
+    const set = await attrSetFor(child, cctx, parser);
     const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
     noteUnreadAttrs(child, child.name);
     let lp = v.lp;
     if (!lp) lp = await guardCall(parentView, M_generateLP, set) as JLayoutParams;
     await guardCall(parentView, M_addView, v, lp);
-    if (child.children.length) await inflateChildren(inflater, child, v, cctx);
+    if (child.children.length) await inflateChildren(inflater, child, v, cctx, parser);
     await guardMaybe(v, M_onFinishInflate);
   }
 }
 
 let inflateDepth = 0;
-async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inflater: JLayoutInflater): Promise<JView | null> {
+/** an <include>d layout: AOSP's resources open it as a parser of its own */
+async function includedLayout(jctx: JContext, id: number): Promise<{ root: XmlNode; parser: unknown }> {
+  if (aospResources()) {
+    const parser = await vcall(await vcall(jctx, "getResources", "()Landroid/content/res/Resources;"), "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id);
+    return { root: parserRoot(parser)!, parser };
+  }
+  const file = jctx.$host.res.fileOf(id);
+  if (!file) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "layout 0x" + id.toString(16));
+  return { root: parseAXML(file.bytes), parser: null };
+}
+async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inflater: JLayoutInflater, parser: unknown): Promise<JView | null> {
   if (++inflateDepth > 60) { inflateDepth--; throw rt.mkThrowable("java/lang/StackOverflowError", "inflate recursion at " + root.name); }
-  try { return await inflateNodeInner(jctx, root, parent, attach, inflater); }
+  try { return await inflateNodeInner(jctx, root, parent, attach, inflater, parser); }
   finally { inflateDepth--; }
 }
-async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inf: JLayoutInflater): Promise<JView | null> {
+async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inf: JLayoutInflater, parser: unknown): Promise<JView | null> {
   const ctx = jctx as JContext;
   if (root.name === "merge") {
     if (!parent) throw rt.mkThrowable("java/lang/IllegalStateException", "<merge> needs a parent");
-    await inflateChildren(inf, root, parent, ctx);
+    await inflateChildren(inf, root, parent, ctx, parser);
     return parent;
   }
   const rctx = await themedCtx(ctx, root);
-  const set = attrSetFor(root, rctx);
+  const set = await attrSetFor(root, rctx, parser);
   const v = await createViewFromTag(inf, parent, root.name, rctx, set);
   noteUnreadAttrs(root, root.name);
   if (parent) {
@@ -174,7 +190,7 @@ async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup
     if (attach) await guardCall(parent, M_addView, v, lp);
     else { v.lp = lp; await resolveLp(lp); }
   }
-  if (root.children.length) await inflateChildren(inf, root, v, rctx);
+  if (root.children.length) await inflateChildren(inf, root, v, rctx, parser);
   await guardMaybe(v, M_onFinishInflate);
   return attach && parent ? parent : v;
 }
@@ -183,8 +199,12 @@ export function inflateLayout(jctx: unknown, layoutId: number, parent: unknown, 
   return vcall(getInflater(jctx), "inflate", "(ILandroid/view/ViewGroup;Z)Landroid/view/View;", layoutId, parent, +attach);
 }
 async function inflateParser(this: JLayoutInflater, parser: JXmlParser, root: JViewGroup | null, attach: number) {
+  if (!(parser instanceof JXmlParser)) {
+    const node = parserRoot(parser);
+    return node ? inflateNode(this.jctx, node, root, !!attach, this, parser) : null;
+  }
   const node = parser.events.find((event) => event.type === 2)?.node;
-  return node ? inflateNode(this.jctx, node, root, !!attach, this) : null;
+  return node ? inflateNode(this.jctx, node, root, !!attach, this, null) : null;
 }
 
 const inflaterCache = new WeakMap<object, JLayoutInflater>();

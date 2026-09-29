@@ -1,7 +1,8 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates } from "./view";
 import {
-  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize
+  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize,
+  cslBoundary,
 } from "./drawable";
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
@@ -87,7 +88,7 @@ const initImageView = driven(function* initImageView(view: JImageView, c: unknow
 });
 /** this.invalidate(), which an app's view may override */
 const invalidateV = (v: JView): unknown => vcallOn(curThread, v, "invalidate", "()V");
-const imageViewMethods: NativeSpec["methods"] = {
+const imageViewMethods: NativeSpec["methods"] = cslBoundary({
   "<init>(Landroid/content/Context;)V": function (this: JImageView, c: unknown) { return initImageView(this, c, null, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JImageView, c: unknown, set: JAttrSet | null) { return initImageView(this, c, set, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number) { return initImageView(this, c, set, style); },
@@ -233,7 +234,7 @@ const imageViewMethods: NativeSpec["methods"] = {
       if (draw instanceof Promise) yield draw;
     } finally { restoreCanvasToCount(cv, saveCount); }
   }),
-};
+});
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });
 rt.register({
   name: "android/widget/ImageButton", ctor: class extends JImageView {

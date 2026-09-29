@@ -1,5 +1,5 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
-import { JDrawable, JColorStateList } from "./drawable";
+import { JDrawable, JColorStateList, cslBoundary } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
@@ -584,7 +584,7 @@ const appearanceMeasure = driven(function* appearanceMeasure(this: JTextAppearan
   if (this.features !== null) yield call("setFontFeatureSettings", "(Ljava/lang/String;)V", this.features);
   if (this.variations !== null) yield call("setFontVariationSettings", "(Ljava/lang/String;)Z", this.variations);
 });
-rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearanceSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
+rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearanceSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: cslBoundary({
   "<init>(Landroid/content/Context;I)V": appearanceInit,
   "<init>(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V": function (this: JTextAppearanceSpan, family: string | null, style: number, size: number, color: JColorStateList | null, link: JColorStateList | null) {
     this.family = family; this.style = style; this.size = size; this.color = color; this.linkColor = link;
@@ -614,7 +614,7 @@ rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearan
     if (this.linkColor) paint.linkColor = Number(yield vcallOn(thread, this.linkColor, "getColorForState", "([II)I", paint.drawableState, 0));
     if (this.shadowColor) yield vcallOn(thread, paint, "setShadowLayer", "(FFFI)V", this.shadowRadius, this.shadowDx, this.shadowDy, this.shadowColor);
   }),
-} });
+}) });
 class JLocaleSpan extends JMetricAffectingSpan { locales!: JLocaleList; }
 function localeState(this: JLocaleSpan, paint: JTextPaint) { return vcall(paint, "setTextLocales", "(Landroid/os/LocaleList;)V", this.locales); }
 function writeLocaleSpan(this: JLocaleSpan, parcel: JParcel, flags: number) { return vcall(this.locales, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags); }

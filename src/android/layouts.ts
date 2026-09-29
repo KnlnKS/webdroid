@@ -4,7 +4,7 @@ import {
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy, scrollViewTo,
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops, driven, type Gen } from "../jvm/runtime";
-import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
+import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework, attrSet } from "./res";
 import { type JDrawable, loadDrawableRV, drawChild } from "./drawable";
 import type { JCanvas } from "./graphics";
 import { gravityH, gravityV, G } from "./gravity";
@@ -454,7 +454,7 @@ function alignInCell(kind: JGridAlignment["kind"], start: number, extent: number
 const gridAttrs = ["layout_row", "layout_column", "layout_rowSpan", "layout_columnSpan", "layout_rowWeight", "layout_columnWeight"] as const;
 function gridLpFromAttrs(res: Resources, set: JAttrSet, lp = new JGridLP()): JGridLP {
   lpFromAttrs(lp, res, set);
-  const vals = obtainStyled(res, set.theme, set, gridAttrs.map(AID), 0, 0).vals;
+  const vals = obtainStyled(res, attrSet(set)?.theme ?? null, set, gridAttrs.map(AID), 0, 0).vals;
   const integer = (i: number, d: number) => vals[i] ? rvInt(res, vals[i], d) : d;
   const weight = (i: number) => vals[i] ? rvFloat(res, vals[i], 0) : 0;
   lp.rowSpec = gridSpec(integer(0, GRID_UNDEFINED), integer(2, 1), GRID_LEADING, weight(4));
@@ -565,7 +565,7 @@ rt.register({
     "<init>(Landroid/widget/GridLayout$Spec;Landroid/widget/GridLayout$Spec;)V": function (this: JGridLP, row: JGridSpec, col: JGridSpec) { this.rowSpec = row; this.columnSpec = col; },
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JGridLP, o: JLayoutParams) { Object.assign(this, copyGridLp(o)); },
     "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": function (this: JGridLP, o: JMarginLP) { Object.assign(this, copyGridLp(o)); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JGridLP, _c: unknown, set: JAttrSet) { gridLpFromAttrs(set.res, set, this); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JGridLP, _c: unknown, set: JAttrSet) { gridLpFromAttrs(attrSet(set)!.res, set, this); },
   },
 });
 
@@ -590,7 +590,7 @@ rt.register({
       yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 1;
       for (const [attr, cols, all] of [["stretchColumns", "stretchCols", "stretchAll"], ["shrinkColumns", "shrinkCols", "shrinkAll"]] as const) {
-        const value = set?.node?.attrs.find(a => a.resId === AID(attr));
+        const value = attrSet(set)?.node?.attrs.find(a => a.resId === AID(attr));
         const text = value?.str ?? (value ? String(value.data) : "");
         this[all] = text.startsWith("*");
         for (const part of text.split(",")) if (/^\s*\d+\s*$/.test(part)) this[cols].add(Number(part));
@@ -914,8 +914,9 @@ const relativeMethods: NativeSpec["methods"] = {
   },
   "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JRelativeLayout, set: JAttrSet) {
     const lp = lpFromAttrs(new JRelativeLP(), this.jres!, set);
-    if (set.node) {
-      for (const a of set.node.attrs) {
+    const node = attrSet(set)?.node;
+    if (node) {
+      for (const a of node.attrs) {
         for (const [aid, verb] of rlAttrIds) {
           if (aid && a.resId === aid) {
             lp.addRule(verb, a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.data > 1 ? a.data : -1) : 0) : a.data);

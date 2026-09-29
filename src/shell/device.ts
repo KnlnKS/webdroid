@@ -6,7 +6,7 @@ import { rt, type Gen, type JObj, driven } from "../jvm/runtime";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
-import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText, scall, after } from "../jvm/natives/jlang";
 import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
@@ -14,9 +14,11 @@ import { zygoteInit } from "../android/delegates";
 import { loadCode, loadLinkTable, saveLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
-import { Resources, JTheme } from "../android/res";
+import { Resources, JTheme, nativeRes } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
 import { setAppHost, type AppHost } from "../android/apphost";
+import { aospResources, loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
+import { registerApk } from "../android/assetmanager";
 import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { windowDim, windowParams } from "../android/window";
 import { absGravity, gravityApply } from "../android/gravity";
@@ -179,14 +181,24 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
-  const res = new Resources(arsc, zip, install.lazyEntries);
-  const jres = mkJResources(res);
+  const tables = new Resources(arsc, zip, install.lazyEntries);
   const themeResId = themeAttr?.data ?? 0;
-  const theme = new JTheme();
-  theme.res = res;
-  const fwMaterial = fwPkg.findId("style", "Theme.Material.Light.DarkActionBar");
-  if (fwMaterial) theme.apply(fwMaterial);
-  if (themeResId) theme.apply(themeResId);
+  const { target } = usesSdk(manifest);
+  let res = tables, jres: JObj, theme: JTheme;
+  if (aospResources()) {
+    // ContextImpl.getTheme: the manifest's theme, or the platform default for the target SDK
+    registerApk(apkPath(), tables);
+    jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
+    res = nativeRes(jres);
+    theme = await newTheme(res, jres, null, await scall("android/content/res/Resources", "selectDefaultTheme", "(II)I", themeResId, target));
+  } else {
+    jres = mkJResources(res);
+    theme = new JTheme();
+    theme.res = res;
+    const fwMaterial = fwPkg.findId("style", "Theme.Material.Light.DarkActionBar");
+    if (fwMaterial) theme.apply(fwMaterial);
+    if (themeResId) theme.apply(themeResId);
+  }
 
   const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
@@ -205,7 +217,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
-  const { target } = usesSdk(manifest);
   setViewTargetSdk(target);
   setTargetSdkVersion(target);
   prepared?.();
@@ -277,9 +288,17 @@ function changeActivityOrientation(act: JActivity, request: number): void {
  *  every changed bit, through a relaunch otherwise. */
 function deliverConfigChange(act: JActivity, bits: number): void {
   requestLayoutAll();
-  if (activityHandlesConfig(act, bits)) {
-    void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
-  } else recreateActivity(act);
+  if (!aospResources()) {
+    if (activityHandlesConfig(act, bits)) {
+      void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
+    } else recreateActivity(act);
+    return;
+  }
+  // AOSP's resources take the change first, as ActivityThread applies it before the activity sees it
+  void onMain(() => after(applyDeviceConfiguration(), (config) => {
+    if (activityHandlesConfig(act, bits)) return vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", config);
+    recreateActivity(act);
+  })).catch(reportUncaught);
 }
 function applyConfigChange(bits: number): void {
   if (!booted) return;

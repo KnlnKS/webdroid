@@ -2,12 +2,14 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
-import { mangleMethod, jmethod } from "../jvm/abi";
+import { mangleMethod, jmethod, jarray, parseMethodDesc } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvString, xmlParserAtNode, nodeAttrRV, xmlAttrRV, resolveStyleValue } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvString, xmlParserAtNode, nodeAttrRV, xmlAttrRV, resolveStyleValue, attrSet, nativeTheme, JXmlParser, javaField, nativeRes } from "./res";
+import { aospResources } from "./resources";
+import { parserRoot } from "./assetmanager";
 import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode } from "./axml";
@@ -103,7 +105,7 @@ function unscheduleSelf(this: JDrawable, r: unknown) {
 function invalidateSelf(this: JDrawable) {
   withCallback(this, (c) => void vcall(c, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", this));
 }
-const drawableMethods: NativeSpec["methods"] = {
+const drawableMethods: NativeSpec["methods"] = cslBoundary({
   "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JCanvas) { return this.paint(cv); },
   "setBounds(IIII)V": setBounds,
   // AOSP forwards through the virtual setBounds(IIII), which a subclass may override
@@ -120,6 +122,18 @@ const drawableMethods: NativeSpec["methods"] = {
     (res: unknown, value: JTypedValue | null, is: unknown, name: string | null) => createFromResourceStream(res, value, is, name, null),
   "static createFromResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Ljava/lang/String;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/drawable/Drawable;":
     (res: unknown, value: JTypedValue | null, is: unknown, name: string | null, opts: JBFOptions | null) => createFromResourceStream(res, value, is, name, opts),
+  // what AOSP's ResourcesImpl.loadXmlDrawable and an app's XML parsing call: the document or the
+  // element the parser stands on, inflated by our own drawable stack
+  "static createFromXml(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, parser: unknown) => xmlDrawable(res, parser, null, false),
+  "static createFromXml(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, parser: unknown, theme: unknown) => xmlDrawable(res, parser, theme, false),
+  "static createFromXmlForDensity(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, parser: unknown, _density: number, theme: unknown) => xmlDrawable(res, parser, theme, false),
+  "static createFromXmlInner(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, parser: unknown) => xmlDrawable(res, parser, null, true),
+  "static createFromXmlInner(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, parser: unknown, _attrs: unknown, theme: unknown) => xmlDrawable(res, parser, theme, true),
   "getIntrinsicWidth()I": function (this: JDrawable) { return this.size(false); },
   "getIntrinsicHeight()I": function (this: JDrawable) { return this.size(true); },
   "getMinimumWidth()I": function (this: JDrawable) { return after(drawableSize(this, false), n => Math.max(0, n)); },
@@ -222,10 +236,18 @@ const drawableMethods: NativeSpec["methods"] = {
   },
   ...noops("<init>()V", "applyTheme(Landroid/content/res/Resources$Theme;)V",
     "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
-    "setChangingConfigurations(I)V", "setHotspot(FF)V"),
+    "setChangingConfigurations(I)V", "setHotspot(FF)V", "clearMutated()V"),
   ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z"),
-};
+});
+/** Drawable.createFromXml*: `inner` inflates the element the parser stands on, else the document's
+ *  root, as the AOSP methods do, throwing what they throw for a document with no element */
+function xmlDrawable(res: unknown, parser: unknown, theme: unknown, inner: boolean) {
+  const set = attrSet(parser);
+  const node = inner ? set?.node : parser instanceof JXmlParser ? parser.events.find((e) => e.type === 2)?.node : parserRoot(parser);
+  if (!node) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "No start tag found");
+  return inflateDrawableNode(nativeRes(res), node, nativeTheme(theme));
+}
 // BlendMode.fromValue and blendModeToPorterDuffMode where the names differ; a blend mode with no
 // Porter-Duff form becomes the default SRC_IN
 const BLEND_OF_TINT: Record<string, string> = { ADD: "PLUS", MULTIPLY: "MODULATE" };
@@ -587,7 +609,7 @@ class JGradientDrawable extends JDrawable {
 }
 rt.register({
   name: "android/graphics/drawable/GradientDrawable", ctor: JGradientDrawable, sup: "android/graphics/drawable/Drawable",
-  methods: {
+  methods: cslBoundary({
     "<init>()V": function () {},
     "setColor(I)V": function (this: JGradientDrawable, c: number) { this.solid = c; },
     "setColors([I)V": function (this: JGradientDrawable, cs: Int32Array | null) { this.gradColors = cs && [...cs]; this.gradOffsets = null; },
@@ -623,7 +645,7 @@ rt.register({
       this.solid = csl ? cslColor(csl, this.stateSet) : null;
     },
     "getColor()Landroid/content/res/ColorStateList;": function (this: JGradientDrawable) { return this.solidCsl ?? (this.solid !== null ? mkCsl(this.solid) : null); },
-  },
+  }),
 });
 // GradientDrawable.Orientation ordinals (TOP_BOTTOM first) as the angle each one means
 const ORIENT_ANGLE = [270, 225, 180, 135, 90, 45, 0, 315];
@@ -1158,7 +1180,7 @@ function cloneDrawable(d: JDrawable): JDrawable {
 }
 rt.register({
   name: "android/graphics/drawable/RippleDrawable", ctor: JRippleDrawable, sup: "android/graphics/drawable/LayerDrawable",
-  methods: {
+  methods: cslBoundary({
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
         if (content) this.pushLayer(content);
@@ -1180,7 +1202,7 @@ rt.register({
       state.create = () => cloneDrawable(source);
       return state;
     },
-  },
+  }),
 });
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
@@ -1266,7 +1288,7 @@ const wrapSet = driven(function* wrapSet(this: JDrawableWrapper, d: JDrawable | 
 rt.register({
   name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
   ifaces: ["android/graphics/drawable/Drawable$Callback"],
-  methods: {
+  methods: cslBoundary({
     "<init>(Landroid/graphics/drawable/Drawable;)V": wrapSet,
     "setDrawable(Landroid/graphics/drawable/Drawable;)V": wrapSet,
     "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
@@ -1298,7 +1320,7 @@ rt.register({
       "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V"),
     ...stubs(0, "canApplyTheme()Z", "getChangingConfigurations()I"),
     ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
-  },
+  }),
 });
 class JClipDrawable extends JDrawableWrapper {
   gravity = 3;
@@ -1656,9 +1678,57 @@ export class JColorStateList extends JObj {
   defColor = -16777216;
 }
 export function cslColor(csl: JColorStateList, states: ArrayLike<number>): number {
-  const items = csl.items;
+  const items = (tsCsl(csl) ?? csl).items;
   for (let i = 0; i < items.length; i++) if (matchesState(items[i], states)) return items[i].color ?? csl.defColor;
   return csl.defColor;
+}
+// Our own stack keeps its colour lists as JColorStateList. When AOSP's android.content.res
+// answers, Java holds AOSP's ColorStateList, so a list crosses at the spec methods that take or
+// return one: read out of its states and colours coming in, built through its constructor going out.
+const fromJava = new WeakMap<object, JColorStateList>(), toJava = new WeakMap<JColorStateList, unknown>();
+/** our own list for a ColorStateList, which may be AOSP's */
+export function tsCsl(c: unknown): JColorStateList | null {
+  if (!c || c instanceof JColorStateList) return (c as JColorStateList | null) ?? null;
+  let t = fromJava.get(c as object);
+  if (!t) {
+    t = new JColorStateList();
+    const cls = "android/content/res/ColorStateList";
+    const specs = javaField<Int32Array[]>(c, cls, "mStateSpecs"), colors = javaField<Int32Array>(c, cls, "mColors");
+    for (let i = 0; i < specs.length; i++) t.items.push({ ...splitStates(specs[i]), color: colors[i] });
+    t.defColor = javaField<number>(c, cls, "mDefaultColor");
+    fromJava.set(c as object, t);
+    toJava.set(t, c);
+  }
+  return t;
+}
+/** the ColorStateList Java code sees for one of ours */
+export function javaCsl(c: JColorStateList | null): unknown {
+  if (!c || !aospResources() || !(c instanceof JColorStateList)) return c;
+  const known = toJava.get(c);
+  if (known) return known;
+  const specs = jarray(c.items.map((i) => Int32Array.from([...i.states, ...i.negStates.map((s) => -s)])), "[I");
+  return after(newObj("android/content/res/ColorStateList", "([[I[I)V", specs, Int32Array.from(c.items, (i) => i.color)), (j: object) => {
+    toJava.set(c, j); fromJava.set(j, c);
+    return j;
+  });
+}
+/** the colour-list parameters and results of a spec's methods, crossing as tsCsl/javaCsl say */
+export function cslBoundary(methods: NonNullable<NativeSpec["methods"]>): NonNullable<NativeSpec["methods"]> {
+  if (!aospResources()) return methods;
+  // evaluated while the modules that declare specs load, so it reads nothing this module has yet to define
+  const CSL = "Landroid/content/res/ColorStateList;";
+  const out = { ...methods };
+  for (const [key, fn] of Object.entries(methods)) {
+    if (typeof fn !== "function" || !key.includes(CSL)) continue;
+    const { params, ret } = parseMethodDesc(key.slice(key.indexOf("(")));
+    const at = params.flatMap((p, i) => (p === CSL ? [i] : []));
+    out[key] = function (this: unknown, ...args: unknown[]) {
+      for (const i of at) args[i] = tsCsl(args[i]);
+      const r = (fn as (...a: unknown[]) => unknown).apply(this, args);
+      return ret === CSL ? after(r as JColorStateList | null, (c) => javaCsl(c)) : r;
+    };
+  }
+  return out;
 }
 export function mkCsl(color: number): JColorStateList {
   const c = new JColorStateList();

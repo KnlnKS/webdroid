@@ -23,6 +23,7 @@ import { JTypedValue, type JDisplayMetrics } from "./util";
 import { parcelCreator } from "./parcelable";
 import type { JParcel } from "./parcel";
 import { decodeHeif, isHeif } from "./heif";
+import { nativeAssets } from "./res";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -314,8 +315,13 @@ export const tfMedium = typefaceFor("sans-serif-medium");
 // fonts.ts owns font parsing and imports this module, so the loader arrives from there
 let loadTypeface: (bytes: Uint8Array | null) => Promise<JTypeface | null> = async () => null;
 export const setTypefaceLoader = (f: typeof loadTypeface) => { loadTypeface = f; };
-const assetFont = (am: { host: { zip: Record<string, Uint8Array> } } | null, path: string) => {
-  const bytes = am?.host.zip["assets/" + path];
+/** fonts.ts's answers for the statics AOSP's ResourcesImpl.loadFont calls, set as it loads */
+export const resourceTypefaces = {
+  find: (_am: unknown, _path: string): JTypeface | null => null,
+  create: (_entry: unknown, _am: unknown, _path: string): JTypeface | Promise<JTypeface> => tfDefault,
+};
+const assetFont = (am: unknown, path: string) => {
+  const bytes = am ? nativeAssets(am).zip["assets/" + path] : undefined;
   if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Font asset not found " + path);
   return loadTypeface(bytes);
 };
@@ -329,6 +335,9 @@ rt.register({
   methods: {
     "static create(Ljava/lang/String;I)Landroid/graphics/Typeface;": typefaceFor,
     "static createFromAsset(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": assetFont,
+    "static findFromCache(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": (am: unknown, path: string) => resourceTypefaces.find(am, path),
+    "static createFromResources(Landroid/content/res/FontResourcesParser$FamilyResourceEntry;Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;":
+      (entry: unknown, am: unknown, path: string) => resourceTypefaces.create(entry, am, path),
     "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": driven(function* (p: string): Gen { return loadTypeface(yield vfs.readFile(p)); }),
     "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": driven(function* (f: JObj | null): Gen { return loadTypeface(f ? yield vfs.readFile(pathOf(f)) : null); }),
     "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) =>

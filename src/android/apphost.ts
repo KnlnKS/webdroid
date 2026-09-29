@@ -1,6 +1,7 @@
 import type { Resources, JTheme } from "./res";
 import type { JApplication, JActivity } from "./app";
-import type { JResources, JLocaleList } from "./resnative";
+import type { JLocaleList } from "./resnative";
+import type { JObj } from "../jvm/runtime";
 import type { JIntent, ActivityResultTarget } from "./intent";
 
 export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: ActivityResultTarget; remoteId?: number; activityId?: number; taskId?: number };
@@ -18,7 +19,8 @@ export interface AppHost {
   /** the names of the config/feature splits installed beside the base, empty for a plain apk */
   splits: string[];
   application: JApplication | null;
-  jresources: JResources;
+  /** the app's android.content.res.Resources: ours, or AOSP's over `res` */
+  jresources: JObj;
   launch: (component: string, intent: JIntent | null, options?: ActivityLaunch) => Promise<void>;
   /** the pause/resume a modal system window (the permission dialog) leaves behind */
   roundTrip: (activity: JActivity) => Promise<void>;

@@ -86,7 +86,7 @@ export class JConfiguration extends JObj {
   fontWeightAdjustment = 0;  // accessibility "bold text" is off, so no weight is added
   colorMode = 1 | 4;         // WIDE_COLOR_GAMUT_NO | HDR_NO: a plain sRGB canvas
 }
-const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", "smallestScreenWidthDp", "densityDpi", "fontScale", "uiMode",
+export const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", "smallestScreenWidthDp", "densityDpi", "fontScale", "uiMode",
   "mcc", "mnc", "touchscreen", "keyboard", "keyboardHidden", "navigation", "navigationHidden", "hardKeyboardHidden", "screenLayout",
   "fontWeightAdjustment", "colorMode"] as const;
 /** AOSP compareTo(...) == 0: every public field, not identity (appcompat's resource caches keep a

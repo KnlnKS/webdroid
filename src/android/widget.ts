@@ -1,6 +1,6 @@
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor, cslBoundary } from "./drawable";
 import { rt, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
@@ -112,7 +112,7 @@ function setProgressValue(this: JProgressBar, p: number) {
 }
 rt.register({
   name: "android/widget/ProgressBar", ctor: JProgressBar, sup: "android/view/View",
-  methods: {
+  methods: cslBoundary({
     "<init>(Landroid/content/Context;)V": initProgressBar,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initProgressBar,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initProgressBar,
@@ -165,7 +165,7 @@ rt.register({
       const d = this.current();
       return !d ? undefined : this.indeterminate ? drawIndeterminate(this, cv, d) : drawTrack(this, cv, d);
     },
-  },
+  }),
 });
 class JAbsSeekBar extends JProgressBar { keyProgressIncrement = 5; }
 const seekBarMethods: NativeSpec["methods"] = {
@@ -275,7 +275,7 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
 rt.markers("android/widget/SeekBar$OnSeekBarChangeListener", "android/widget/RatingBar$OnRatingBarChangeListener");
 rt.register({
   name: "android/widget/RatingBar", ctor: JRatingBar, sup: "android/widget/AbsSeekBar",
-  methods: {
+  methods: cslBoundary({
     "setNumStars(I)V": function (this: JRatingBar, n: number) { this.stars = n; this.max = Math.round(n / this.step); },
     "setStepSize(F)V": function (this: JRatingBar, s: number) { this.step = s || 1; this.max = Math.round(this.stars / this.step); },
     "setRating(F)V": function (this: JRatingBar, r: number) { this.progress = Math.round(r / this.step); invalidate(); },
@@ -285,7 +285,7 @@ rt.register({
     ...fieldGetters({ "getNumStars()I": "stars", "getStepSize()F": "step",
       "getOnRatingBarChangeListener()Landroid/widget/RatingBar$OnRatingBarChangeListener;": "ratingL" }),
     ...fieldSetters({ "setOnRatingBarChangeListener(Landroid/widget/RatingBar$OnRatingBarChangeListener;)V": "ratingL" }),
-  },
+  }),
 });
 
 export function themeAccent(v: JView): number {
@@ -389,7 +389,7 @@ const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv
   if (sx || sy) cv.ctx.translate(sx, sy);
   try { yield drawChild(d, cv, thread); } finally { if (sx || sy) cv.ctx.translate(-sx, -sy); }
 });
-const compoundMethods: NativeSpec["methods"] = {
+const compoundMethods: NativeSpec["methods"] = cslBoundary({
   ...textViewMethods,
   ...compoundCtors(""),
   "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setChecked(!!c); },
@@ -422,7 +422,7 @@ const compoundMethods: NativeSpec["methods"] = {
   }),
   "getCompoundPaddingLeft()I": compoundPadLeft,
   "onDraw(Landroid/graphics/Canvas;)V": compoundOnDraw,
-};
+});
 rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods });
 rt.markers("android/widget/CompoundButton$OnCheckedChangeListener");
 rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: {
@@ -518,7 +518,7 @@ const setSwitchTextAppearance = driven(function* setSwitchTextAppearance(v: JSwi
   if (color) p.setColorValue(cslColor(yield rvCsl(res, resolveStyleValue(res, v.theme, color)!, v.theme), v.drawableState()));
   requestLayout(v);
 });
-rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget/CompoundButton", methods: {
+rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget/CompoundButton", methods: cslBoundary({
   ...compoundMethods,
   ...compoundCtors<JSwitch>("switchStyle", driven(function* (v: JSwitch, set: JAttrSet | null, dsa: number, dsr: number): Gen {
     const res = v.jres!;
@@ -676,7 +676,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     yield vcallOn(thread, cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,
       cx - measureText(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, paint);
   }),
-} });
+}) });
 class JRadioGroup extends JLinearLayout {
   checkL: unknown = null;
   checkedId = -1;
@@ -824,7 +824,7 @@ function setCheckedTextPadding(this: JCheckedTextView, l: number, t: number, r: 
 rt.register({
   name: "android/widget/CheckedTextView", ctor: JCheckedTextView, sup: "android/widget/TextView",
   ifaces: ["android/widget/Checkable"],
-  methods: {
+  methods: cslBoundary({
     ...textViewMethods,
     ...textViewCtors<JCheckedTextView>("checkedTextViewStyle", initCheckedText),
     "setChecked(Z)V": function (this: JCheckedTextView, v: number) {
@@ -860,5 +860,5 @@ rt.register({
       yield vcallOn(thread, d, "setBounds", "(IIII)V", this.scrollX + left, top, this.scrollX + left + this.checkMarkW, top + h);
       yield drawChild(d, cv, thread);
     }),
-  },
+  }),
 });

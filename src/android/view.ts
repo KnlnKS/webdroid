@@ -5,10 +5,10 @@ import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize, cslBoundary } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
+import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
 import { mainHandler, reportUncaught, uptimeMillis } from "./os";
 import { keyDispatcherState } from "./keyevent";
 import { JProperty, type JDisplayMetrics } from "./util";
@@ -626,6 +626,7 @@ const viewDispatchInsets = driven(function* viewDispatchInsets(this: JView, ins:
  *  widget's own style attribute (buttonStyle, editTextStyle, ...): tiers 3 and 4 of the cascade
  *  resolve base-View attributes such as Widget.Material.Button's background through it. */
 const applyViewAttrs = driven(function* applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr: number = 0, defStyleRes: number = 0): Gen {
+  set = attrSet(set);
   if (!v.jres || (!set?.node && !defStyleAttr && !defStyleRes)) return;
   const res = v.jres;
   const ta = obtainStyled(res, v.theme, set, [
@@ -1026,7 +1027,7 @@ function setInherited(field: "selected" | "activated", setter: string) {
     if (this instanceof JViewGroup) for (const c of [...this.children]) yield vcall(c, setter, "(Z)V", on);
   });
 }
-const viewMethods: NativeSpec["methods"] = {
+const viewMethods: NativeSpec["methods"] = cslBoundary({
   ...viewConstructors,
   ...rareMethods,
   "getContext()Landroid/content/Context;": function (this: JView) { return this.ctx; },
@@ -1799,7 +1800,7 @@ const viewMethods: NativeSpec["methods"] = {
     const { inflateLayout } = yield import("./inflate");
     return inflateLayout(ctx, id, root, !!root);
   }),
-};
+});
 
 function setPadding(this: JView, l: number, t: number, r: number, b: number) {
   if (this.padL === l && this.padT === t && this.padR === r && this.padB === b) return;
@@ -2340,6 +2341,7 @@ export const vgMethods: NativeSpec["methods"] = {
 };
 
 export function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrSet | null): T {
+  set = attrSet(set);
   if (!set?.node) return lp;
   const ta = obtainStyled(res, set.theme, set, [
     AT.layout_width, AT.layout_height, AT.layout_margin, AT.layout_marginLeft, AT.layout_marginTop,
@@ -2499,7 +2501,7 @@ export const fireDrawPass = driven(function* fireDrawPass(root: JView): Gen {
   yield o.dispatchOnDraw();
 });
 
-export const lpAttrs = function (this: JLayoutParams, _c: unknown, set: JAttrSet) { lpFromAttrs(this, set.res, set); };
+export const lpAttrs = function (this: JLayoutParams, _c: unknown, set: JAttrSet) { lpFromAttrs(this, attrSet(set)!.res, set); };
 export const marginCopy = function (this: JMarginLP, o: JLayoutParams | null) {
   if (!o) return;
   this.width = o.width; this.height = o.height;

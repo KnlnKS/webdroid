@@ -3,7 +3,8 @@ import { guestNow } from "../guest-clock";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, rvCsl, loadDrawableRV, cslColor, loadDrawable,
-  drawChild, drawableSize
+  drawChild, drawableSize,
+  cslBoundary,
 } from "./drawable";
 import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, csText, textSelection, setTextSelection, passwordTransformation, applyInputFilters } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
@@ -383,7 +384,7 @@ function compoundPadRelative(view: JTextView, start: boolean) {
   return after(vcallOn(thread, view, "getLayoutDirection", "()I"), direction =>
     vcallOn(thread, view, start !== (direction === 1) ? "getCompoundPaddingLeft" : "getCompoundPaddingRight", "()I"));
 }
-export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
+export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   ...textViewCtors("textViewStyle"),
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
   // Material's Chip hands the text to its ChipDrawable there and nowhere else, and without it
@@ -840,7 +841,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       yield draw(cursor, contentL + left, cy - this.ascent() - padding.top);
     }
   }),
-};
+});
 
 rt.register({
   name: "android/widget/TextView", ctor: JTextView, sup: "android/view/View",

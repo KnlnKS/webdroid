@@ -11,9 +11,9 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
 import {
-  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
+  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES, attrSet,
 } from "./res";
-import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent } from "./axml";
+import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml";
 import { sizeClass, type Arsc } from "./arsc";
 import { packages } from "./packages";
 import { mkPfd } from "./os";
@@ -44,6 +44,10 @@ function apkAt(path: string): Apk | null {
     }
   }
   return apk ?? null;
+}
+/** an apk the shell installed, before the package registry records it */
+export function registerApk(path: string, res: Resources): void {
+  if (!loaded.has(path)) loaded.set(path, { path, table: res.arsc, zip: res.zip, lazyEntries: res.lazyEntries });
 }
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {
@@ -127,6 +131,11 @@ class ParseState extends JAttrSet {
     this.node = null;
   }
   get ev(): XmlEvent { return this.blk.doc.events[this.pos]; }
+}
+/** the root element of the document an XmlBlock$Parser reads */
+export function parserRoot(parser: unknown): XmlNode | null {
+  const st = attrSet(parser);
+  return st instanceof ParseState ? st.blk.doc.root : null;
 }
 const block = (h: bigint) => deref<Block>(h);
 const state = (h: bigint) => deref<ParseState>(h);

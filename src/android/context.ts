@@ -3,7 +3,7 @@ import { newFile } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
-import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, type JAttrSet } from "./res";
+import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, nativeTheme, nativeRes, type JAttrSet } from "./res";
 import { newObj, vcall, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
@@ -14,6 +14,8 @@ import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources, mkJResources } from "./resnative";
 import { dbPath, openDatabase } from "./sqlite";
+import { aospResources, javaTheme, newTheme, loadResources, configuredResources, javaConfiguration } from "./resources";
+import { deviceConfiguration } from "./resnative";
 import { type JIntent, launchIntent } from "./intent";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
@@ -219,9 +221,11 @@ function contextSender(this: JContext, sender: JIntentSender, fill: JIntent | nu
  *  instead loses every ThemeOverlay — which is how Material passes a widget its shape and
  *  colours — and resolves `?attr` references against the wrong stack. */
 function contextStyled(this: JContext, set: JAttrSet | null, attrs: Int32Array, dsa = 0, dsr = 0) {
+  if (aospResources()) return after(vcall(this, "getTheme", "()Landroid/content/res/Resources$Theme;"), (theme) =>
+    vcall(theme, "obtainStyledAttributes", "(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;", set, attrs, dsa, dsr));
   return after(contextTheme(this), (theme) => obtainStyled(this.$host.res, theme, set, attrs, dsa, dsr));
 }
-const contextTheme = (c: JContext): JTheme | Promise<JTheme> => vcall(c, "getTheme", "()Landroid/content/res/Resources$Theme;");
+const contextTheme = (c: JContext): JTheme | Promise<JTheme> => after(vcall(c, "getTheme", "()Landroid/content/res/Resources$Theme;"), (t) => nativeTheme(t)!);
 const extFilesDir = (c: JContext, type: string | null) => privDir(`/sdcard/Android/data/${c.$host.pkg}/files` + (type ? "/" + type : ""));
 const extCacheDir = (c: JContext) => privDir(`/sdcard/Android/data/${c.$host.pkg}/cache`);
 const obbDir = (c: JContext) => privDir(`/sdcard/Android/obb/${c.$host.pkg}`);
@@ -233,16 +237,12 @@ function contextOpenDatabase(this: JContext, name: string) {
 const contextMethods: NativeSpec["methods"] = {
   "getResources()Landroid/content/res/Resources;": function (this: JContext) { return this.$host.jresources; },
   "getTheme()Landroid/content/res/Resources$Theme;": function (this: JContext) {
-    return themeOf(this) ?? this.$host.theme;
+    return javaTheme(themeOf(this) ?? this.$host.theme);
   },
   // AOSP layers the style over whatever theme this context already resolves to, so a
   // ThemeOverlay on an already-themed context keeps everything underneath it
   "setTheme(I)V": function (this: JContext, id: number) {
-    const t = new JTheme();
-    t.res = this.$host.res;
-    t.setTo(themeOf(this) ?? this.$host.theme);
-    t.apply(id);
-    (this as any).ownTheme = t;
+    return after(newTheme(this.$host.res, this.$host.jresources, themeOf(this) ?? this.$host.theme, id), (t) => { (this as { ownTheme?: JTheme }).ownTheme = t; });
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getAttributionSource()Landroid/content/AttributionSource;": contextAttributionSource,
@@ -263,11 +263,10 @@ const contextMethods: NativeSpec["methods"] = {
       const caller = this.$host;
       ready = (async () => {
         const info = await vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 128);
-        const theme = new JTheme();
-        theme.res = record.res;
-        if (info.theme) await theme.apply(info.theme);
-        const context = newContextImpl({ ...caller, pkg, res: record.res, zip: record.res.zip,
-          jresources: mkJResources(record.res, false), theme, themeResId: info.theme, iconRes: info.icon, splits: [] });
+        const jresources = aospResources() ? await loadResources(record.path, await javaConfiguration(deviceConfiguration())) : mkJResources(record.res, false);
+        const theme = await newTheme(nativeRes(jresources), jresources, null, info.theme);
+        const context = newContextImpl({ ...caller, pkg, res: nativeRes(jresources), zip: record.res.zip,
+          jresources, theme, themeResId: info.theme, iconRes: info.icon, splits: [] });
         if (flags & 1) context.packageLoader = await newObj("webdroid/PackageClassLoader", "(Ljava/lang/String;)V", record.path);
         return context;
       })();
@@ -336,6 +335,7 @@ const contextMethods: NativeSpec["methods"] = {
   "getColorStateList(I)Landroid/content/res/ColorStateList;": viaResources("getColorStateList", "(ILandroid/content/res/Resources$Theme;)Landroid/content/res/ColorStateList;", true),
   "getDrawable(I)Landroid/graphics/drawable/Drawable;": viaResources("getDrawable", "(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;", true),
   "getAssets()Landroid/content/res/AssetManager;": function (this: JContext) {
+    if (aospResources()) return vcall(this.$host.jresources, "getAssets", "()Landroid/content/res/AssetManager;");
     const a = new JAssetManager();
     a.host = this.$host.res;
     return a;
@@ -428,6 +428,8 @@ const contextMethods: NativeSpec["methods"] = {
   "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JContext, styleId: number, attrs: Int32Array) {
+    if (aospResources()) return after(vcall(this, "getTheme", "()Landroid/content/res/Resources$Theme;"), (theme) =>
+      vcall(theme, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", styleId, attrs));
     return after(contextTheme(this), (theme) => obtainStyleAttributes(this.$host.res, theme, styleId, attrs));
   },
   "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {
@@ -447,6 +449,11 @@ rt.register({ name: "android/content/Context", ctor: JContext, methods: contextM
 export class JContextWrapper extends JContext { base: JContext | null = null; }
 class JAttributionContext extends JContextWrapper {}
 function configurationContext(source: JContext, config: JConfiguration): JContext | Promise<JContext> {
+  if (aospResources()) return (async () => {
+    const jresources = await configuredResources(source.$host.jresources, config);
+    const theme = await newTheme(nativeRes(jresources), jresources, themeOf(source) ?? source.$host.theme, 0);
+    return newContextImpl(Object.assign(Object.create(source.$host), { res: nativeRes(jresources), jresources, theme }));
+  })();
   return after(scopedResources(source.$host.res, config), (jresources) => {
     const theme = new JTheme();
     theme.res = jresources.host;
@@ -531,11 +538,11 @@ rt.register({
     ...themeWrapperMethods,
     "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
-      if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);
+      if (themeId) return callSelf(contextMethods, "setTheme(I)V", this, themeId);
     },
     "<init>(Landroid/content/Context;Landroid/content/res/Resources$Theme;)V": function (this: JContextWrapper, base: JContext, theme: unknown) {
       attachBase.call(this, base);
-      if (theme) (this as { ownTheme?: unknown }).ownTheme = theme;
+      if (theme) (this as { ownTheme?: unknown }).ownTheme = nativeTheme(theme);
     },
   },
 });

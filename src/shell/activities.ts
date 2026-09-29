@@ -147,7 +147,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
     const baseCtx = newContextImpl(host);
     yield vcall(act, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
     const actTheme = manifestActivityTheme(cls);
-    if (actTheme) vcall(act, "setTheme", "(I)V", actTheme);
+    if (actTheme) yield vcall(act, "setTheme", "(I)V", actTheme);
     act.window.activity = act;
     getInflater(act).privateFactory = act;
     act.intent = intent;

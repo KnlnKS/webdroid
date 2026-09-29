@@ -12,9 +12,8 @@ import { vfs } from "../shell/vfs";
 import { readFully } from "../shell/lazyfile";
 import { javaFdSource } from "../native/stdio";
 import { JBuffer, bufferView, resident } from "../jvm/natives/jnio";
-import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader } from "./graphics";
-import type { Resources } from "./res";
-import type { JResources, JAssetManager } from "./resnative";
+import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader, resourceTypefaces, tfDefault } from "./graphics";
+import { type Resources, nativeRes, nativeAssets } from "./res";
 
 const UPRIGHT = 0, ITALIC = 1;
 const fileBytes = (path: string | null | undefined) => path ? vfs.readFile(path) : null;
@@ -170,8 +169,14 @@ class JFontBuilder extends JObj {
 function fromBytes(this: JFontBuilder, b: Uint8Array | null, what: string) {
   if (b) this.bytes = b; else this.err = what;
 }
-function fromAsset(this: JFontBuilder, am: JAssetManager, p: string) {
-  fromBytes.call(this, am.host.zip["assets/" + p] ?? null, "Failed to read asset " + p);
+/** a file an AssetManager opens: under assets/, or a resource file of its packages (isAsset false) */
+function assetFile(am: unknown, path: string, isAsset = true): Uint8Array | null {
+  const res = nativeAssets(am);
+  if (isAsset) return res.zip["assets/" + path] ?? null;
+  return res.zip[path] ?? res.arsc?.files(path) ?? res.tbl(0x01000000)?.files(path) ?? null;
+}
+function fromAsset(this: JFontBuilder, am: unknown, p: string, isAsset = 1) {
+  fromBytes.call(this, assetFile(am, p, !!isAsset), "Failed to read asset " + p);
 }
 function resourceBytes(res: Resources, id: number): Uint8Array | null {
   return res.fileOf(id)?.bytes ?? null;
@@ -179,9 +184,9 @@ function resourceBytes(res: Resources, id: number): Uint8Array | null {
 rt.register({
   name: "android/graphics/fonts/Font$Builder", ctor: JFontBuilder,
   methods: {
-    "<init>(Landroid/content/res/Resources;I)V": function (this: JFontBuilder, r: JResources, id: number) {
+    "<init>(Landroid/content/res/Resources;I)V": function (this: JFontBuilder, r: unknown, id: number) {
       this.srcId = id;
-      fromBytes.call(this, resourceBytes(r.host, id), "Failed to read font resource 0x" + (id >>> 0).toString(16));
+      fromBytes.call(this, resourceBytes(nativeRes(r), id), "Failed to read font resource 0x" + (id >>> 0).toString(16));
     },
     "<init>(Landroid/graphics/fonts/Font;)V": function (this: JFontBuilder, f: JFont) {
       this.bytes = f.bytes; this.weight = f.style.weight; this.slant = f.style.slant; this.ttcIndex = f.ttcIndex; this.axes = f.axes; this.file = f.file; this.srcId = f.srcId;
@@ -328,7 +333,10 @@ const tfbMethods: NonNullable<NativeSpec["methods"]> = {
     const source = javaFdSource(fdInt(fd));
     tfbFrom.call(this, source ? yield readFully(source) : null);
   }),
-  "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JTypefaceBuilder, am: JAssetManager, p: string) { tfbFrom.call(this, am.host.zip["assets/" + p] ?? null); },
+  "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JTypefaceBuilder, am: unknown, p: string) { tfbFrom.call(this, assetFile(am, p)); },
+  "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": function (this: JTypefaceBuilder, am: unknown, p: string, isAsset: number) {
+    tfbFrom.call(this, assetFile(am, p, !!isAsset));
+  },
   "setWeight(I)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, w: number) { this.weight = w; return this; },
   "setItalic(Z)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, i: number) { this.italic = i ? 1 : 0; return this; },
   "setTtcIndex(I)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, i: number) { this.ttcIndex = i; return this; },
@@ -367,20 +375,54 @@ export function fontResource(res: Resources, id: number): Promise<JTypeface | nu
   return p;
 }
 
+/** a family member: `weight` and `italic` as a font resource declares them, else the font's own */
+function familyFont(fonts: JFont[], b: Uint8Array | null, weight: number, italic: number, srcId: number, ttcIndex = 0, axes: JFontVariationAxis[] | null = null) {
+  if (!b) return;
+  const f = new JFont();
+  f.bytes = b; f.srcId = srcId; f.ttcIndex = ttcIndex; f.axes = axes;
+  const st = sfntStyle(b, ttcIndex);
+  f.style = mkFontStyle(weight > 0 ? weight : st?.weight || 400, italic >= 0 ? italic : st?.italic ? ITALIC : UPRIGHT);
+  fonts.push(f);
+}
+/** one family over these members, carrying its regular member's style */
+async function familyTypeface(fonts: JFont[]): Promise<JTypeface> {
+  const fam = await mkFamily(fonts);
+  const regular = fonts.find((f) => f.style.weight === 400 && f.style.slant === UPRIGHT) ?? fonts[0];
+  return typefaceOver([fam], null, regular.style);
+}
+// AOSP's ResourcesImpl.loadFont: Typeface.findFromCache, then createFromResources over
+// FontResourcesParser's entry, remembered per AssetManager and file.
+const byFile = new WeakMap<Resources, Map<string, JTypeface>>();
+const fileCache = (am: unknown) => { const res = nativeAssets(am); let m = byFile.get(res); if (!m) byFile.set(res, m = new Map()); return m; };
+resourceTypefaces.find = (am, path) => fileCache(am).get(path) ?? null;
+resourceTypefaces.create = driven(function* createFromResources(entry: unknown, am: unknown, path: string): Gen<JTypeface> {
+  if (rt.iof(entry, "android/content/res/FontResourcesParser$ProviderResourceEntry")) {
+    const system: string | null = yield vcall(entry, "getSystemFontFamilyName", "()Ljava/lang/String;");
+    // no font provider is installed, so FontsContract finds none and AOSP answers DEFAULT
+    return system ? typefaceFor(system, 0) : tfDefault;
+  }
+  const cached = fileCache(am).get(path);
+  if (cached) return cached;
+  const E = "Landroid/content/res/FontResourcesParser$FontFileResourceEntry;";
+  const fonts: JFont[] = [];
+  for (const e of yield vcall(entry, "getEntries", `()[${E}`)) {
+    const name: string = yield vcall(e, "getFileName", "()Ljava/lang/String;");
+    familyFont(fonts, assetFile(am, name, false), yield vcall(e, "getWeight", "()I"), yield vcall(e, "getItalic", "()I"), 0,
+      yield vcall(e, "getTtcIndex", "()I"), parseVariationSettings(yield vcall(e, "getVariationSettings", "()Ljava/lang/String;")));
+  }
+  // a member that cannot be read fails the family, and AOSP caches DEFAULT for it
+  const typeface = fonts.length ? yield familyTypeface(fonts) : tfDefault;
+  fileCache(am).set(path, typeface);
+  return typeface;
+});
+
 /** Resources.getFont(id): a font file resource, or a <font-family> XML whose members become one
  *  family; the Typeface carries the regular member's style. */
 async function loadFontResource(res: Resources, id: number): Promise<JTypeface | null> {
   const path = res.value(id).s;
   if (!path) return null;
   const fonts: JFont[] = [];
-  const add = (b: Uint8Array | null, weight: number, italic: number, srcId: number) => {
-    if (!b) return;
-    const f = new JFont();
-    f.bytes = b; f.srcId = srcId;
-    const st = sfntStyle(b);
-    f.style = mkFontStyle(weight > 0 ? weight : st?.weight || 400, italic >= 0 ? italic : st?.italic ? ITALIC : UPRIGHT);
-    fonts.push(f);
-  };
+  const add = (b: Uint8Array | null, weight: number, italic: number, srcId: number) => familyFont(fonts, b, weight, italic, srcId);
   if (path.endsWith(".xml")) {
     const root = parseAXML(res.zip[path]);
     if (root.name !== "font-family") return null;
@@ -392,7 +434,5 @@ async function loadFontResource(res: Resources, id: number): Promise<JTypeface |
     }
   } else add(res.zip[path] ?? null, 0, -1, id);
   if (!fonts.length) return null;
-  const fam = await mkFamily(fonts);
-  const regular = fonts.find((f) => f.style.weight === 400 && f.style.slant === UPRIGHT) ?? fonts[0];
-  return typefaceOver([fam], null, regular.style);
+  return familyTypeface(fonts);
 }

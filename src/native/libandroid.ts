@@ -11,6 +11,7 @@ import { onMain } from "../android/mainloop";
 import { mainThread, reportUncaught } from "../jvm/natives/jlang";
 import { nativePoll } from "./net";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
+import { nativeAssets } from "../android/res";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
 class NativeWindow {
@@ -231,9 +232,9 @@ export function ndkInit(): void {
     ASensor_getName: () => cstr(""), ASensor_getVendor: () => cstr(""),
 
     AAssetManager_fromJava: (cpu, a) => {
-      a.p(); const am = deref(a.i(), cpu) as { host?: AssetSet } | null;
-      if (!am?.host) return 0;
-      zips.push(am.host);
+      a.p(); const am = deref(a.i(), cpu);
+      if (!am) return 0;
+      zips.push(nativeAssets(am));
       return zips.length - 1;
     },
     AAssetManager_open: (_c, a) => {

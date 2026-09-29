@@ -3,7 +3,8 @@
 
 import { Arsc } from "./arsc";
 import { TV, parseAXML, attr, type XmlNode, type XmlAttr } from "./axml";
-import { JObj } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
+import { deref } from "./handles";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./util";
 import { mangleMethod, intBitsToFloat, floatToIntBits } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
@@ -421,6 +422,8 @@ interface ThemeEntry { t: number; d: number; pkg: number; flags: number }
  *  merged as Theme::ApplyStyle merges them. */
 export class JTheme extends JObj {
   res!: Resources;
+  /** the Resources.Theme this is the native half of, when AOSP's answers */
+  jobj: unknown = null;
   entries = new Map<number, ThemeEntry>();
   /** the styles applied so far, with their force flags, in pairs */
   applied: number[] = [];
@@ -656,8 +659,7 @@ export function obtainStyled(
   attrIds: Int32Array | number[], defStyleAttr: number, defStyleRes: number,
 ): JTypedArray {
   // an XmlResourceParser used as AttributeSet carries its live JAttrSet in .set
-  const inner = (set as unknown as { set?: JAttrSet } | null)?.set;
-  if (inner instanceof JAttrSet) set = inner;
+  set = attrSet(set);
   const ta = new JTypedArray();
   ta.res = res; ta.theme = theme;
   ta.attrIds = attrIds;
@@ -781,9 +783,49 @@ export async function askTheme(ctx: unknown): Promise<JTheme | null> {
   if (typeof f === "function") {
     const r = (f as () => unknown).call(ctx);
     const t = r instanceof Promise ? await r : r;
-    if (t instanceof JTheme) { (ctx as { ownTheme?: JTheme }).ownTheme = t; return t; }
+    const native = nativeTheme(t);
+    if (native) { (ctx as { ownTheme?: JTheme }).ownTheme = native; return native; }
   }
   return themeOf(ctx);
+}
+const props = new Map<string, string>();
+/** a Java instance field of `cls`, on a bytecode object or a spec's */
+export function javaField<T>(o: unknown, cls: string, name: string): T {
+  const key = cls + "." + name;
+  let p = props.get(key);
+  if (p === undefined) props.set(key, p = rt.fieldProp(cls, name) ?? "");
+  return (o as Record<string, T>)[p];
+}
+/** the AssetManager2 behind a Resources, ours or AOSP's */
+export function nativeRes(jres: unknown): Resources {
+  const host = (jres as { host?: Resources }).host;
+  if (host instanceof Resources) return host;
+  const impl = javaField<object>(jres, "android/content/res/Resources", "mResourcesImpl");
+  const res = nativeAssets(javaField(impl, "android/content/res/ResourcesImpl", "mAssets"));
+  res.dm = javaField<JDisplayMetrics>(impl, "android/content/res/ResourcesImpl", "mMetrics");
+  res.jobj ??= jres;
+  return res;
+}
+/** the AssetManager2 behind an AssetManager, ours or AOSP's */
+export function nativeAssets(am: unknown): Resources {
+  const host = (am as { host?: Resources }).host;
+  return host instanceof Resources ? host : deref<Resources>(javaField(am, "android/content/res/AssetManager", "mObject"));
+}
+/** the native theme behind a Resources.Theme, ours or AOSP's */
+export function nativeTheme(theme: unknown): JTheme | null {
+  if (!theme || theme instanceof JTheme) return (theme as JTheme | null) ?? null;
+  if (!rt.iof(theme, "android/content/res/Resources$Theme")) return null;
+  const t = deref<JTheme>(javaField(javaField(theme, "android/content/res/Resources$Theme", "mThemeImpl"), "android/content/res/ResourcesImpl$ThemeImpl", "mTheme"));
+  t.jobj = theme;
+  return t;
+}
+/** the element an AttributeSet stands on: our own, a parser of ours, or AOSP's XmlBlock$Parser */
+export function attrSet(set: unknown): JAttrSet | null {
+  if (!set) return null;
+  if (set instanceof JAttrSet) return set;
+  if (set instanceof JXmlParser) return set.set;
+  if (!rt.iof(set, "android/content/res/XmlBlock$Parser")) return null;
+  return deref<JAttrSet>(javaField(set, "android/content/res/XmlBlock$Parser", "mParseState"));
 }
 export function themeOf(ctx: unknown): JTheme | null {
   for (let c = ctx as { ownTheme?: JTheme; base?: unknown } | null | undefined; c; c = c.base as typeof c) {

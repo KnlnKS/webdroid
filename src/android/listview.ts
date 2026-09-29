@@ -6,7 +6,7 @@ import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
-import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
+import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources, attrSet } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
@@ -484,7 +484,7 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("divider"), AID("dividerHeight"), AID("choiceMode")], 0, 0);
       if (ta.vals[0]) this.divDraw = yield loadDrawableRV(this.jres, ta.vals[0], this.theme);
       // an explicit @null reads like an absent attribute; only the latter takes the theme's listDivider
-      else if (!(set.node && attr(set.node, "divider"))) yield themeDivider(this);
+      else if (!(attrSet(set)?.node && attr(attrSet(set)!.node!, "divider"))) yield themeDivider(this);
       if (ta.vals[1]) this.divH = Math.round(rvDimen(this.jres, ta.vals[1], this.divH));
       else if (this.divDraw) { const h = yield drawableSize(this.divDraw, true); if (h > 0) this.divH = h; }
       if (ta.vals[2]) this.choiceMode = rvInt(this.jres, ta.vals[2], 0);
