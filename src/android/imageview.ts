@@ -7,7 +7,7 @@ import {
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
-import { JMatrix, restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas } from "./graphics";
+import { restoreCanvasToCount, saveCanvas, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JBitmap, type JCanvas } from "./graphics";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
@@ -31,12 +31,14 @@ export class JImageView extends JView {
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
   cropToPadding = false;
-  imageMatrix = new JMatrix();
-  drawMatrix(): JMatrix | null {
+  imageMatrix = identity();
+  /** the Java Matrix over imageMatrix, made on first getImageMatrix */
+  jImageMatrix: unknown = null;
+  drawMatrix(): Mat | null {
     const dw = this.drawableW, dh = this.drawableH, st = this.scaleType;
     if (!this.drawable || !this.width() || !this.height() || dw <= 0 || dh <= 0 || st === 1) return null;
-    const m = this.imageMatrix.m;
-    if (st === 0) return m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 ? null : this.imageMatrix;
+    const m = this.imageMatrix;
+    if (st === 0) return isIdentity(m) ? null : m;
     const aw = this.width() - this.padL - this.padR, ah = this.height() - this.padT - this.padB;
     if (aw === dw && ah === dh) return null;
     let scale = st === 5 ? 1 : st === 6 ? Math.max(aw / dw, ah / dh) : Math.min(aw / dw, ah / dh);
@@ -44,8 +46,8 @@ export class JImageView extends JView {
     const fraction = st === 2 ? 0 : st === 4 ? 1 : 0.5;
     let dx = (aw - dw * scale) * fraction, dy = (ah - dh * scale) * fraction;
     if (st >= 5) { dx = Math.round(dx); dy = Math.round(dy); }
-    m[0] = m[3] = scale; m[1] = m[2] = 0; m[4] = dx; m[5] = dy;
-    return this.imageMatrix;
+    setAffine(m, scale, 0, 0, scale, dx, dy);
+    return m;
   }
   tintCsl: JColorStateList | null = null;
   tintMode: JSimpleEnum | null = null;
@@ -178,11 +180,14 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
       (changed) => changed ? vcallOn(curThread, this, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d) : undefined);
   },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },
-  "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) { return this.drawMatrix() ?? new JMatrix(); },
-  "setImageMatrix(Landroid/graphics/Matrix;)V": function (this: JImageView, matrix: JMatrix | null) {
-    const src = matrix?.m ?? [1, 0, 0, 1, 0, 0], dst = this.imageMatrix.m;
+  "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) {
+    if (!this.drawMatrix()) return newObj("android/graphics/Matrix", "()V");
+    return this.jImageMatrix ?? after(javaMatrix(this.imageMatrix), (m) => (this.jImageMatrix = m));
+  },
+  "setImageMatrix(Landroid/graphics/Matrix;)V": function (this: JImageView, matrix: object | null) {
+    const src = matrix ? matrixOf(matrix) : IDENTITY, dst = this.imageMatrix;
     let changed = false;
-    for (let i = 0; i < 6; i++) if (dst[i] !== src[i]) { dst[i] = src[i]; changed = true; }
+    for (let i = 0; i < 9; i++) if (dst[i] !== src[i]) { dst[i] = src[i]; changed = true; }
     if (changed) { this.drawMatrix(); return invalidateV(this); }
   },
   "setCropToPadding(Z)V": function (this: JImageView, crop: number) { this.cropToPadding = !!crop; return invalidateV(this); },
@@ -227,7 +232,7 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
         ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
       }
       ctx.translate(this.padL, this.padT);
-      if (matrix) ctx.transform(...matrix.m);
+      if (matrix) applyMatrix(ctx, matrix);
       const bounds = vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, dw, dh);
       if (bounds instanceof Promise) yield bounds;
       const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);

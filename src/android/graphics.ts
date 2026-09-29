@@ -721,18 +721,18 @@ export class JShader extends JObj {
   /** setLocalMatrix: maps shader space into the canvas; null = identity */
   local: [number, number, number, number, number, number] | null = null;
 }
-const isIdentityM = (m: number[]) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
 const shaderIdentity: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
 rt.register({
   name: "android/graphics/Shader", ctor: JShader,
   methods: {
     "<init>()V": function () {},
-    "setLocalMatrix(Landroid/graphics/Matrix;)V": function (this: JShader, m: JMatrix | null) {
-      this.local = m && !isIdentityM(m.m) ? [...m.m] : null;
+    "setLocalMatrix(Landroid/graphics/Matrix;)V": function (this: JShader, m: object | null) {
+      const mat = m && matrixOf(m);
+      this.local = mat && !isIdentity(mat) ? affineOf(mat) : null;
       if (this.grad instanceof CanvasPattern) this.grad.setTransform(this.local ? new DOMMatrix(this.local) : new DOMMatrix());
     },
-    "getLocalMatrix(Landroid/graphics/Matrix;)Z": function (this: JShader, m: JMatrix) {
-      m.m = this.local ? [...this.local] : [1, 0, 0, 1, 0, 0];
+    "getLocalMatrix(Landroid/graphics/Matrix;)Z": function (this: JShader, m: object) {
+      setAffine(matrixOf(m), ...this.local ?? shaderIdentity);
       return this.local ? 1 : 0;
     },
   },
@@ -938,174 +938,6 @@ export function applyMatrix(ctx: Ctx2D, m: ArrayLike<number>, set = false): void
   if (set) ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
   else ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
-
-// ── Matrix (affine 2x3: [a, b, c, d, tx, ty] as in canvas transform(a,b,c,d,e,f))
-export class JMatrix extends JObj {
-  m: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
-}
-/** rotation by `deg` about (px, py) as an affine [a, b, c, d, tx, ty] */
-export function rotM(deg: number, px = 0, py = 0): [number, number, number, number, number, number] {
-  const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
-  return [c, s, -s, c, px - c * px + s * py, py - s * px - c * py];
-}
-export function matMul(a: number[], b: number[]): [number, number, number, number, number, number] {
-  return [
-    a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
-    a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
-    a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5],
-  ];
-}
-const translateA = (x: number, y: number): JMatrix["m"] => [1, 0, 0, 1, x, y];
-const scaleA = (sx: number, sy: number, px = 0, py = 0): JMatrix["m"] => [sx, 0, 0, sy, px - sx * px, py - sy * py];
-const skewA = (kx: number, ky: number, px = 0, py = 0): JMatrix["m"] => [1, ky, kx, 1, -kx * py, -ky * px];
-function affineOps(name: string, make: (a: number, b: number, c?: number, d?: number) => JMatrix["m"], sigs: string[]) {
-  const ops: NativeSpec["methods"] = {};
-  for (const s of sigs) {
-    ops[`set${name}(${s})V`] = function (this: JMatrix, a: number, b?: number, c?: number, d?: number) { this.m = make(a, b as number, c, d); };
-    ops[`pre${name}(${s})Z`] = function (this: JMatrix, a: number, b?: number, c?: number, d?: number) { this.m = matMul(this.m, make(a, b as number, c, d)); return 1; };
-    ops[`post${name}(${s})Z`] = function (this: JMatrix, a: number, b?: number, c?: number, d?: number) { this.m = matMul(make(a, b as number, c, d), this.m); return 1; };
-  }
-  return ops;
-}
-export function affineFromPoints(src: Float32Array, si: number, dst: Float32Array, di: number, count: number): JMatrix["m"] | null {
-  if (!count) return [1, 0, 0, 1, 0, 0];
-  const x = src[si], y = src[si + 1], u = dst[di], v = dst[di + 1];
-  if (count === 1) return [1, 0, 0, 1, u - x, v - y];
-  const sx = src[si + 2] - x, sy = src[si + 3] - y;
-  const dx = dst[di + 2] - u, dy = dst[di + 3] - v;
-  let a: number, b: number, c: number, d: number;
-  if (count === 2) {
-    const det = sx * sx + sy * sy;
-    if (!det) return null;
-    a = d = (dx * sx + dy * sy) / det; b = (dy * sx - dx * sy) / det; c = -b;
-  } else {
-    let third = 4, sx2 = src[si + third] - x, sy2 = src[si + third + 1] - y;
-    let det = sx * sy2 - sx2 * sy;
-    if (!det && count === 4) { third = 6; sx2 = src[si + third] - x; sy2 = src[si + third + 1] - y; det = sx * sy2 - sx2 * sy; }
-    if (!det) return null;
-    const dx2 = dst[di + third] - u, dy2 = dst[di + third + 1] - v;
-    a = (dx * sy2 - dx2 * sy) / det; c = (dx2 * sx - dx * sx2) / det;
-    b = (dy * sy2 - dy2 * sy) / det; d = (dy2 * sx - dy * sx2) / det;
-  }
-  const tx = u - a * x - c * y, ty = v - b * x - d * y;
-  const matrix: JMatrix["m"] = [a, b, c, d, tx, ty];
-  if (!matrix.every(Number.isFinite)) return null;
-  if (count === 4) for (let i = 2; i < 4; i++) {
-    const px = src[si + i * 2], py = src[si + i * 2 + 1], qx = dst[di + i * 2], qy = dst[di + i * 2 + 1];
-    const tolerance = 1e-6 * Math.max(1, Math.abs(qx), Math.abs(qy), Math.abs(a * px), Math.abs(c * py), Math.abs(b * px), Math.abs(d * py), Math.abs(tx), Math.abs(ty));
-    if (Math.abs(a * px + c * py + tx - qx) > tolerance || Math.abs(b * px + d * py + ty - qy) > tolerance) return null;
-  }
-  return matrix;
-}
-/** Matrix.mapPoints/mapVectors in their three forms; a vector ignores the translation */
-function mapFamily(kind: string, points: boolean): NativeSpec["methods"] {
-  const map = function (this: JMatrix, dst: Float32Array, di: number, src: Float32Array, si: number, n: number) {
-    if (!dst || !src) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    if ((di | si | n) < 0 || si + n * 2 > src.length || di + n * 2 > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
-    if (src === dst && si !== di) src = src.slice(si, si + n * 2), si = 0;
-    const [a, b, c, d] = this.m, tx = points ? this.m[4] : 0, ty = points ? this.m[5] : 0;
-    for (let i = 0; i < n * 2; i += 2) {
-      const x = src[si + i], y = src[si + i + 1];
-      dst[di + i] = a * x + c * y + tx;
-      dst[di + i + 1] = b * x + d * y + ty;
-    }
-  };
-  return {
-    [`map${kind}([FI[FII)V`]: map,
-    [`map${kind}([F[F)V`]: function (this: JMatrix, dst: Float32Array, src: Float32Array) {
-      if (dst && src && dst.length !== src.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
-      return map.call(this, dst, 0, src, 0, dst?.length >> 1);
-    },
-    [`map${kind}([F)V`]: function (this: JMatrix, pts: Float32Array) { return map.call(this, pts, 0, pts, 0, pts?.length >> 1); },
-  };
-}
-function mapMatrixRect(this: JMatrix, dst: JRectF | null, src: JRectF | null): number {
-  if (!dst || !src) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  const m = this.m, l = src.left, t = src.top, r = src.right, b = src.bottom;
-  const x0 = m[0] * l + m[2] * t + m[4], y0 = m[1] * l + m[3] * t + m[5];
-  const x1 = m[0] * r + m[2] * t + m[4], y1 = m[1] * r + m[3] * t + m[5];
-  const x2 = m[0] * l + m[2] * b + m[4], y2 = m[1] * l + m[3] * b + m[5];
-  const x3 = m[0] * r + m[2] * b + m[4], y3 = m[1] * r + m[3] * b + m[5];
-  dst.left = Math.min(x0, x1, x2, x3); dst.right = Math.max(x0, x1, x2, x3);
-  dst.top = Math.min(y0, y1, y2, y3); dst.bottom = Math.max(y0, y1, y2, y3);
-  return (m[1] === 0 && m[2] === 0) || (m[0] === 0 && m[3] === 0) ? 1 : 0;
-}
-rt.register({
-  name: "android/graphics/Matrix", ctor: JMatrix,
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix) { if (o) this.m = [...o.m]; },
-    "reset()V": function (this: JMatrix) { this.m = [1, 0, 0, 1, 0, 0]; },
-    "set(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix | null) {
-      if (!o) return vcall(this, "reset", "()V");
-      this.m = [...o.m];
-    },
-    "isIdentity()Z": function (this: JMatrix) { return isIdentityM(this.m) ? 1 : 0; },
-    "setPolyToPoly([FI[FII)Z": function (this: JMatrix, src: Float32Array, si: number, dst: Float32Array, di: number, count: number) {
-      if (count > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-      if (count < 0 || si < 0 || di < 0 || si + count * 2 > src.length || di + count * 2 > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
-      const matrix = affineFromPoints(src, si, dst, di, count);
-      if (!matrix) return 0;
-      this.m = matrix; return 1;
-    },
-    ...affineOps("Translate", translateA, ["FF"]),
-    ...affineOps("Scale", scaleA, ["FF", "FFFF"]),
-    ...affineOps("Skew", skewA, ["FF", "FFFF"]),
-    ...affineOps("Rotate", rotM, ["F", "FFF"]),
-    "postConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
-      this.m = matMul(o.m, this.m);
-      return 1;
-    },
-    "preConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
-      this.m = matMul(this.m, o.m);
-      return 1;
-    },
-    "setConcat(Landroid/graphics/Matrix;Landroid/graphics/Matrix;)Z": function (this: JMatrix, a: JMatrix, b: JMatrix) {
-      this.m = matMul(a.m, b.m);
-      return 1;
-    },
-    // AOSP Matrix.setRectToRect: an empty source resets and fails; FILL scales each axis to
-    // the destination, the others scale uniformly and place the result at START/CENTER/END
-    "setRectToRect(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z": function (this: JMatrix, src: JRectF, dst: JRectF, fit: JSimpleEnum) {
-      if (!src || !dst) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const sw = src.right - src.left, sh = src.bottom - src.top;
-      if (!(sw > 0 && sh > 0)) { this.m = [1, 0, 0, 1, 0, 0]; return 0; }
-      const dw = dst.right - dst.left, dh = dst.bottom - dst.top;
-      let sx = dw / sw, sy = dh / sh, tx = 0, ty = 0;
-      if (fit.ord !== 0) {
-        const s = Math.min(sx, sy); sx = sy = s;
-        const extraX = dw - sw * s, extraY = dh - sh * s, share = fit.ord === 2 ? 0.5 : fit.ord === 3 ? 1 : 0;
-        tx = extraX * share; ty = extraY * share;
-      }
-      this.m = [sx, 0, 0, sy, dst.left - src.left * sx + tx, dst.top - src.top * sy + ty];
-      return 1;
-    },
-    "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, rect: JRectF) { return mapMatrixRect.call(this, rect, rect); },
-    "mapRect(Landroid/graphics/RectF;Landroid/graphics/RectF;)Z": mapMatrixRect,
-    ...mapFamily("Points", true),
-    ...mapFamily("Vectors", false),
-    // SkMatrix::mapRadius: the geometric mean of the mapped (r, 0) and (0, r) vectors' lengths
-    "mapRadius(F)F": function (this: JMatrix, r: number) {
-      const [a, b, c, d] = this.m;
-      return Math.fround(Math.sqrt(Math.hypot(a * r, b * r) * Math.hypot(c * r, d * r)));
-    },
-    "invert(Landroid/graphics/Matrix;)Z": function (this: JMatrix, out: JMatrix) {
-      const [a, b, c, d, e, f] = this.m;
-      const det = a * d - b * c;
-      if (!det) return 0;
-      out.m = [d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det];
-      return 1;
-    },
-    "setValues([F)V": function (this: JMatrix, v: Float32Array) {
-      this.m = [v[0], v[3], v[1], v[4], v[2], v[5]];
-    },
-    "getValues([F)V": function (this: JMatrix, v: Float32Array) {
-      const m = this.m;
-      v[0] = m[0]; v[1] = m[2]; v[2] = m[4]; v[3] = m[1]; v[4] = m[3]; v[5] = m[5];
-      v[6] = 0; v[7] = 0; v[8] = 1;
-    },
-  },
-});
 
 /** unpremultiplied RGBA bytes <-> the ARGB int Bitmap's pixel API speaks */
 type RGBA = Uint8ClampedArray<ArrayBuffer>;
@@ -1387,7 +1219,6 @@ rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/
     if (bytes) b.pixels().set(u8(bytes));
     return b;
   }); } } });
-mkEnumSet("android/graphics/Matrix$ScaleToFit", ["FILL", "START", "CENTER", "END"]);
 const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"], {}, undefined, ["nativeInt"]);
 bitmapConfigs.forEach((config, i) => Object.assign(config, { nativeInt: i === 0 ? 1 : i + 2 }));
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP", "WEBP_LOSSY", "WEBP_LOSSLESS"]);
@@ -1406,11 +1237,10 @@ export class JCanvas extends JObj {
   clipPolygonStack: ([number, number][] | null)[] = [];
   bmp: JBitmap | null = null;
   semanticOwner: DrawnTextOwner | null = null;
-  semanticBase: [number, number, number, number, number, number] | null = null;
-  semanticTransform(): [number, number, number, number, number, number] {
+  semanticBase: DOMMatrix | null = null;
+  semanticTransform(): DOMMatrix {
     const m = this.ctx.getTransform();
-    const current = [m.a, m.b, m.c, m.d, m.e, m.f];
-    return this.semanticBase ? matMul(this.semanticBase, current) : current as [number, number, number, number, number, number];
+    return this.semanticBase ? this.semanticBase.multiply(m) : m;
   }
   recordText(text: string, x: number, y: number, size: number, align: number) {
     recordOrRun(this.ctx, ctx => {
@@ -1430,8 +1260,8 @@ export class JCanvas extends JObj {
       if (canvas.semanticBase) {
         const b = canvas.semanticBase;
         const px = sx;
-        sx = b[0] * px + b[2] * sy + b[4];
-        sy = b[1] * px + b[3] * sy + b[5];
+        sx = b.a * px + b.c * sy + b.e;
+        sy = b.b * px + b.d * sy + b.f;
       }
       owner.drawnTextPoints[i * 2] = sx;
       owner.drawnTextPoints[i * 2 + 1] = sy;
@@ -1980,9 +1810,9 @@ function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ct
   } else draw(canvas.ctx, tintedBmp(b, paint?.filterColor ?? null, paint?.filterMatrix ?? null));
 }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
-function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m: JMatrix | null = null) {
+function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m: object | null = null) {
   const b = JBitmap.create(w, h);
-  if (m) b.ctx.setTransform(...m.m);
+  if (m) applyMatrix(b.ctx, matrixOf(m), true);
   b.ctx.drawImage(src.canvas, x, y, w, h, 0, 0, w, h);
   if (m) b.ctx.setTransform(1, 0, 0, 1, 0, 0);
   return b;
@@ -2007,9 +1837,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   "getMaximumBitmapWidth()I": () => 32766,
   "getMaximumBitmapHeight()I": () => 32766,
   "getDensity()I": () => device.densityDpi,
-  "getMatrix(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix) {
+  "getMatrix(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: object) {
     const t = this.ctx.getTransform();
-    m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
+    setAffine(matrixOf(m), t.a, t.b, t.c, t.d, t.e, t.f);
   },
   "save()I": canvasSave,
   "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": function (this: JCanvas, r: JRectF | null, p: JPaint | null) {
@@ -2045,15 +1875,15 @@ export const canvasMethods: NativeSpec["methods"] = {
     return aboutPivotV(this, px, py, () => vcall(this, "rotate", "(F)V", d));
   },
   "skew(FF)V": function (this: JCanvas, sx: number, sy: number) { this.ctx.transform(1, sy, sx, 1, 0, 0); },
-  "concat(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix) {
-    if (m) this.ctx.transform(...m.m);
+  "concat(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: object | null) {
+    if (m) applyMatrix(this.ctx, matrixOf(m));
   },
-  "setMatrix(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix | null) {
-    this.ctx.setTransform(...(m?.m ?? [1, 0, 0, 1, 0, 0]));
+  "setMatrix(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: object | null) {
+    if (m) applyMatrix(this.ctx, matrixOf(m), true);
+    else this.ctx.setTransform(1, 0, 0, 1, 0, 0);
   },
   "getMatrix()Landroid/graphics/Matrix;": function (this: JCanvas) {
-    const m = rt.make("android/graphics/Matrix") as JMatrix;
-    return after(vcall(this, "getMatrix", "(Landroid/graphics/Matrix;)V", m), () => m);
+    return after(newObj("android/graphics/Matrix", "()V"), (m: object) => after(vcall(this, "getMatrix", "(Landroid/graphics/Matrix;)V", m), () => m));
   },
   "clipRect(FFFF)Z": clipRect,
   "clipRect(IIII)Z": clipRect,
@@ -2162,9 +1992,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/Rect;Landroid/graphics/Paint;)V": drawBitmapRect,
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V": drawBitmapRect,
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Matrix;Landroid/graphics/Paint;)V":
-    function (this: JCanvas, b: JBitmap, m: JMatrix, p: JPaint | null) {
+    function (this: JCanvas, b: JBitmap, m: object | null, p: JPaint | null) {
       this.ctx.save();
-      if (m) this.ctx.transform(...m.m);
+      if (m) applyMatrix(this.ctx, matrixOf(m));
       try { drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, 0, 0)); }
       finally { this.ctx.restore(); }
     },
@@ -2520,13 +2350,13 @@ rt.register({
       invalidateHook?.(); return 1;
     },
     "setHasOverlappingRendering(Z)Z": rn1,
-    "getMatrix(Landroid/graphics/Matrix;)V": function (this: JRenderNode, m: JMatrix) {
+    "getMatrix(Landroid/graphics/Matrix;)V": function (this: JRenderNode, m: object) {
       const px = Number.isNaN(this.px) ? this.w / 2 : this.px;
       const py = Number.isNaN(this.py) ? this.h / 2 : this.py;
       const r = (this.rot * Math.PI) / 180;
       const cos = Math.cos(r), sin = Math.sin(r);
       const a = cos * this.sx, b = sin * this.sx, c = -sin * this.sy, d = cos * this.sy;
-      m.m = [a, b, c, d, this.tx + px - a * px - c * py, this.ty + py - b * px - d * py];
+      setAffine(matrixOf(m), a, b, c, d, this.tx + px - a * px - c * py, this.ty + py - b * px - d * py);
     },
     "getPivotX()F": function (this: JRenderNode) { return Number.isNaN(this.px) ? this.w / 2 : this.px; },
     "getPivotY()F": function (this: JRenderNode) { return Number.isNaN(this.py) ? this.h / 2 : this.py; },

@@ -7,7 +7,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, JThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JBitmap, JMatrix, JRect } from "./graphics";
+import { JBitmap, JRect, matrixOf, javaMatrix, identity } from "./graphics";
 import { gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler, vsync } from "./os";
 import { perf } from "../perf";
@@ -354,13 +354,14 @@ rt.register({
     "isAvailable()Z": function (this: JTextureView) { return +(this.texture !== null); },
     "setOpaque(Z)V": function (this: JTextureView, opaque: number) { this.opaque = !!opaque; },
     "isOpaque()Z": function (this: JTextureView) { return +this.opaque; },
-    "setTransform(Landroid/graphics/Matrix;)V": function (this: JTextureView, matrix: JMatrix | null) {
-      this.surfaceTransform = matrix ? [...matrix.m] : null;
+    "setTransform(Landroid/graphics/Matrix;)V": function (this: JTextureView, matrix: object | null) {
+      this.surfaceTransform = matrix ? Float64Array.from(matrixOf(matrix)) : null;
       invalidate(this);
     },
-    "getTransform(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;": function (this: JTextureView, matrix: JMatrix | null) {
-      matrix ??= new JMatrix();
-      matrix.m = this.surfaceTransform ? [...this.surfaceTransform] : [1, 0, 0, 1, 0, 0];
+    "getTransform(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;": function (this: JTextureView, matrix: object | null) {
+      const values = this.surfaceTransform ?? identity();
+      if (!matrix) return javaMatrix(Float64Array.from(values));
+      matrixOf(matrix).set(values);
       return matrix;
     },
     "onLayout(ZIIII)V": function (this: JTextureView) { this.ensureSurface(); },

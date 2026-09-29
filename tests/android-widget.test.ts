@@ -2,7 +2,6 @@ import { expect, test, spyOn, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
-import { JMatrix } from "../src/android/graphics";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { JEditText, editorAction } from "../src/android/textview";
@@ -187,18 +186,19 @@ describe("platform-construction", () => {
   rt.linkNatives();
   test("TextureView copies content transforms and resets them without changing its bounds", async () => {
     const view = rt.make("android/view/TextureView");
-    const matrix = new JMatrix();
-    matrix.m = [2, 0, 0, 3, 10, 20];
+    const values = async (m: unknown) => { const v = new Float32Array(9); await vcall(m, "getValues", "([F)V", v); return [...v]; };
+    const matrix = await newObj("android/graphics/Matrix", "()V");
+    await vcall(matrix, "setValues", "([F)V", Float32Array.of(2, 0, 10, 0, 3, 20, 0, 0, 1));
     await vcall(view, "setTransform", "(Landroid/graphics/Matrix;)V", matrix);
-    matrix.m[4] = 100;
-    const copy: JMatrix = await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", null);
-    expect(copy.m).toEqual([2, 0, 0, 3, 10, 20]);
-    copy.m[0] = 9;
+    await vcall(matrix, "setTranslate", "(FF)V", 100, 0);
+    const copy = await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", null);
+    expect(await values(copy)).toEqual([2, 0, 10, 0, 3, 20, 0, 0, 1]);
+    await vcall(copy, "setScale", "(FF)V", 9, 9);
     expect(await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", matrix)).toBe(matrix);
-    expect(matrix.m[0]).toBe(2);
+    expect(await values(matrix)).toEqual([2, 0, 10, 0, 3, 20, 0, 0, 1]);
     expect(await vcall(view, "getWidth", "()I")).toBe(0);
     await vcall(view, "setTransform", "(Landroid/graphics/Matrix;)V", null);
-    expect((await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", matrix)).m).toEqual([1, 0, 0, 1, 0, 0]);
+    expect(await values(await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", matrix))).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
   test("FrameLayout declares its view constructors for reflection", () => {
     expect(classCtors(rt.link("android/widget/FrameLayout")).map(c => c.desc)).toEqual([

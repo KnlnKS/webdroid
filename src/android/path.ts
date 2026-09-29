@@ -1,10 +1,10 @@
 // android.graphics.Path: a Path2D op list rebuilt on demand, plus Path.op set operations.
-// graphics.ts imports JPath for Canvas and this file imports JMatrix/JRectF back; the cycle
+// graphics.ts imports JPath for Canvas and this file imports JRectF and the Matrix bridge back; the cycle
 // is benign because nothing here touches those bindings before its own module body has run.
 
 import { rt, JObj } from "../jvm/runtime";
 import { mkEnumSet } from "../jvm/natives/jlang";
-import { JMatrix, JRectF } from "./graphics";
+import { JRectF, matrixOf, affineOf, setAffine } from "./graphics";
 
 const pathFillTypes = mkEnumSet("android/graphics/Path$FillType", ["WINDING", "EVEN_ODD", "INVERSE_WINDING", "INVERSE_EVEN_ODD"]);
 mkEnumSet("android/graphics/Path$Op", ["DIFFERENCE", "INTERSECT", "REVERSE_DIFFERENCE", "UNION", "XOR"]);
@@ -270,12 +270,12 @@ rt.register({
       if (tan) { tan[0] = r[2]; tan[1] = r[3]; }
       return 1;
     },
-    "getMatrix(FLandroid/graphics/Matrix;I)Z": function (this: JPathMeasure, d: number, m: JMatrix, flags: number) {
+    "getMatrix(FLandroid/graphics/Matrix;I)Z": function (this: JPathMeasure, d: number, m: object, flags: number) {
       const r = this.at(d);
       if (!r) return 0;
       const rot = flags & 2 ? Math.atan2(r[3], r[2]) : 0, c = Math.cos(rot), s = Math.sin(rot);
       const tx = flags & 1 ? r[0] : 0, ty = flags & 1 ? r[1] : 0;
-      m.m = [c, s, -s, c, tx, ty]; // canvas affine [a, b, c, d, tx, ty]: rotation then translate
+      setAffine(matrixOf(m), c, s, -s, c, tx, ty); // rotation then translate
       return 1;
     },
     "getSegment(FFLandroid/graphics/Path;Z)Z": function (this: JPathMeasure, start: number, stop: number, dst: JPath, moveTo: number) {
@@ -551,8 +551,8 @@ rt.register({
     "addPath(Landroid/graphics/Path;FF)V": function (this: JPath, o: JPath, dx: number, dy: number) {
       appendPath(this, o, [1, 0, 0, 1, dx, dy]);
     },
-    "addPath(Landroid/graphics/Path;Landroid/graphics/Matrix;)V": function (this: JPath, o: JPath, matrix: JMatrix) {
-      appendPath(this, o, matrix.m);
+    "addPath(Landroid/graphics/Path;Landroid/graphics/Matrix;)V": function (this: JPath, o: JPath, matrix: object) {
+      appendPath(this, o, affineOf(matrixOf(matrix)));
     },
 
     // addArc starts a new contour at the arc's first point
@@ -579,8 +579,8 @@ rt.register({
     "isConvex()Z": function (this: JPath) { return pathIsConvex(this); },
     "computeBounds(Landroid/graphics/RectF;Z)V": function (this: JPath, r: JRectF) { pathBounds(this, r); },
     "offset(FF)V": function (this: JPath, dx: number, dy: number) { pathOffset(this, dx, dy); },
-    "transform(Landroid/graphics/Matrix;)V": function (this: JPath, mt: JMatrix) {
-      pathTransform(this, mt.m);
+    "transform(Landroid/graphics/Matrix;)V": function (this: JPath, mt: object) {
+      pathTransform(this, affineOf(matrixOf(mt)));
     },
   },
 });

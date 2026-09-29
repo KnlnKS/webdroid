@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, dr
 import { vcall, newObj, after } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
-import { JMatrix, rotM } from "./graphics";
+import { identity, javaMatrix, about, rotateM, scaleM, translateM, IDENTITY } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
 import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -236,19 +236,23 @@ rt.register({
 // to exist is the timeline: normalized time, interpolation, repeat, and the listener edges.
 class JTransformation extends JObj {
   alpha = 1;
-  matrix = new JMatrix();
+  mat = identity();
+  /** the Java Matrix over `mat`, made on first getMatrix */
+  jmatrix: unknown = null;
 }
 rt.register({
   name: "android/view/animation/Transformation", ctor: JTransformation,
   methods: {
     "<init>()V": function () {},
-    "clear()V": function (this: JTransformation) { this.alpha = 1; this.matrix.m = [1, 0, 0, 1, 0, 0]; },
+    "clear()V": function (this: JTransformation) { this.alpha = 1; this.mat.set(IDENTITY); },
     "getAlpha()F": function (this: JTransformation) { return this.alpha; },
     "setAlpha(F)V": function (this: JTransformation, a: number) { this.alpha = a; },
-    "getMatrix()Landroid/graphics/Matrix;": function (this: JTransformation) { return this.matrix; },
+    "getMatrix()Landroid/graphics/Matrix;": function (this: JTransformation) {
+      return this.jmatrix ?? after(javaMatrix(this.mat), (m) => (this.jmatrix = m));
+    },
     ...stubs(3, "getTransformationType()I"),
     ...noops("setTransformationType(I)V"),
-    "set(Landroid/view/animation/Transformation;)V": function (this: JTransformation, o: JTransformation) { this.alpha = o.alpha; this.matrix.m = [...o.matrix.m]; },
+    "set(Landroid/view/animation/Transformation;)V": function (this: JTransformation, o: JTransformation) { this.alpha = o.alpha; this.mat.set(o.mat); },
   },
 });
 
@@ -317,7 +321,7 @@ async function stepViewAnim(v: JView): Promise<boolean> {
     await vcall(a, "initialize", "(IIII)V", v.width(), v.height(), p ? p.width() : v.width(), p ? p.height() : v.height());
   }
   const tf = (v.animTf ??= new JTransformation()) as JTransformation;
-  tf.alpha = 1; tf.matrix.m = [1, 0, 0, 1, 0, 0];
+  tf.alpha = 1; tf.mat.set(IDENTITY);
   a.target = v;
   let more: boolean;
   try {
@@ -417,7 +421,7 @@ const SUBCLASS: Record<string, {
     apply: (a, t, out) => {
       const sx = a.p[0] + (a.p[1] - a.p[0]) * t, sy = a.p[2] + (a.p[3] - a.p[2]) * t;
       const px = a.p[4], py = a.p[5];
-      out.matrix.m = [sx, 0, 0, sy, px - sx * px, py - sy * py];
+      out.mat.set(about(scaleM(sx, sy), px, py));
     },
     init: (a, w, h, pw, ph) => { a.p[4] = resolveDim(a.pt[4], a.p[4], w, pw); a.p[5] = resolveDim(a.pt[5], a.p[5], h, ph); },
   },
@@ -427,7 +431,7 @@ const SUBCLASS: Record<string, {
       "(IFIFIFIF)V": (a, fxt, fx, txt, tx, fyt, fy, tyt, ty) => setDesc(a, [fx, tx, fy, ty], [fxt, txt, fyt, tyt]),
     },
     apply: (a, t, out) => {
-      out.matrix.m = [1, 0, 0, 1, a.p[0] + (a.p[1] - a.p[0]) * t, a.p[2] + (a.p[3] - a.p[2]) * t];
+      out.mat.set(translateM(a.p[0] + (a.p[1] - a.p[0]) * t, a.p[2] + (a.p[3] - a.p[2]) * t));
     },
     init: (a, w, h, pw, ph) => {
       a.p[0] = resolveDim(a.pt[0], a.p[0], w, pw); a.p[1] = resolveDim(a.pt[1], a.p[1], w, pw);
@@ -442,7 +446,7 @@ const SUBCLASS: Record<string, {
     },
     apply: (a, t, out) => {
       const deg = a.p[0] + (a.p[1] - a.p[0]) * t, px = a.p[2], py = a.p[3];
-      out.matrix.m = rotM(deg, px, py);
+      out.mat.set(about(rotateM(deg), px, py));
     },
     init: (a, w, h, pw, ph) => { a.p[2] = resolveDim(a.pt[2], a.p[2], w, pw); a.p[3] = resolveDim(a.pt[3], a.p[3], h, ph); },
   },

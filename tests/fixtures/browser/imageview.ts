@@ -1,11 +1,20 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
-import { vcall } from "../../../src/jvm/natives/jlang";
+import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JImageView } from "../../../src/android/imageview";
-import { JCanvas, JMatrix } from "../../../src/android/graphics";
+import { JCanvas } from "../../../src/android/graphics";
+import { loadPlatformDex } from "../../../src/android/framework";
+
+/** a Matrix as a 2D context's affine [a, b, c, d, e, f] */
+async function affine(m: unknown) {
+  const v = new Float32Array(9);
+  await vcall(m, "getValues", "([F)V", v);
+  return [v[0], v[3], v[1], v[4], v[2], v[5]];
+}
 
 async function probe() {
+  await loadPlatformDex();
   rt.linkNatives();
   const view = rt.make("android/widget/ImageView");
   if (!(view instanceof JImageView)) throw new Error("Invalid ImageView");
@@ -26,23 +35,25 @@ async function probe() {
   const results = [];
   for (const type of types) {
     await vcall(view, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", type);
-    const source = new JMatrix(); source.m = [2, 0, 0, 3, 5, 7];
+    const source = await newObj("android/graphics/Matrix", "()V");
+    await vcall(source, "setValues", "([F)V", Float32Array.of(2, 0, 5, 0, 3, 7, 0, 0, 1));
     if (!type.ord) {
       await vcall(view, "setImageMatrix", "(Landroid/graphics/Matrix;)V", source);
-      source.m[4] = 99;
+      await vcall(source, "setTranslate", "(FF)V", 99, 0);
     }
     const ctx = new OffscreenCanvas(100, 80).getContext("2d")!;
     await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, 80));
     const matrix = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
     const bounds = await vcall(drawable, "getBounds", "()Landroid/graphics/Rect;");
     results.push({ type: (await vcall(view, "getScaleType", "()Landroid/widget/ImageView$ScaleType;")).ord,
-      matrix: [...matrix.m], transform, bounds: [bounds.left, bounds.top, bounds.right, bounds.bottom],
+      matrix: await affine(matrix), transform, bounds: [bounds.left, bounds.top, bounds.right, bounds.bottom],
       restored: ctx.getTransform().isIdentity, pixel: [...ctx.getImageData(8, 11, 1, 1).data] });
   }
   await vcall(view, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", types[0]);
   await vcall(view, "setImageMatrix", "(Landroid/graphics/Matrix;)V", null);
-  const first = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;"); first.m[4] = 99;
+  const first = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
+  await vcall(first, "setTranslate", "(FF)V", 99, 0);
   const reset = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
-  return { results, reset: reset.m };
+  return { results, reset: await affine(reset) };
 }
 export default probe;
