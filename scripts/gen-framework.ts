@@ -52,6 +52,14 @@ if (!process.argv.includes("--verify")) {
   }
   pull("/system/framework/framework-res.apk", "framework-res.apk");
   pull("/system/etc/preloaded-classes", "preloaded-classes");
+  // ART's boot image profile as text: the framework methods the platform measured hot (§4.3).
+  // Only root may run profman.
+  sh("root");
+  await Bun.sleep(2000); // adbd restarts as root
+  sh("wait-for-device");
+  sh("shell", `/apex/com.android.art/bin/profman --profile-file=/system/etc/boot-image.prof ${bootJars.map((j) => `--apk=${j} --dex-location=${j}`).join(" ")}` +
+    " --dump-classes-and-methods > /data/local/tmp/boot-image-profile.txt");
+  pull("/data/local/tmp/boot-image-profile.txt", "boot-image-profile.txt");
   // ICU data and the time zone module's files, at their device paths under apex/
   const data: Record<string, number> = {};
   for (const src of sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "-type", "f").split(/\s+/)) {

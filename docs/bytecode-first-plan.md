@@ -830,6 +830,14 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
    - **Compile worker (done for first launches with a baseline profile).** Launches with persisted
      code skip it; apps without a profile still start cold. Open: resumable bodies (about 14 ms in a
      cold Mihon tap, built on suspension and OSR) could come from the worker too.
+   - **Platform image (§4.1, §4.3), measured, not built.** FitNotes (no baseline profile) enters
+     platform methods 535k times against 49k for its own on first launch, and platform code is
+     about 3/4 of its cold-tier build and JS compile. gen-framework now dumps the device's ART
+     boot image profile with profman (root) to `vendor/aosp/boot-image-profile.txt`: 32,506 hot
+     methods, of which 18,993 are in classes served from bytecode today (22 MB emitted, 0.5 s in
+     Bun) and 13,197 in TS-spec classes (the view stack). Build it as package chunks served like
+     the compile worker's output, loaded after the first frame, once Stage C/D puts those classes
+     on tap paths; the gated taps today spend little in platform bytecode.
    - **Persisted code.** Warm launches load 49 MB of emitted JS for Mihon (63 MB more for
      microG). Suspension checks are 23% of those bytes, and 60% of bodies are single-block
      methods that still carry the full dispatch loop, so a leaner emitter shrinks both import and
