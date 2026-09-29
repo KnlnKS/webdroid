@@ -2,9 +2,9 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JOutline, clipEmptyCanvas, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, clipToOutline, clipEmptyCanvas, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, after, newObj, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize, cslBoundary } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -410,7 +410,7 @@ export class JView extends JObj {
   clipToOutline = false;
   /** no other app's window can obscure this one, so the flag never filters a touch */
   filterTouchesWhenObscured = false;
-  outline: JOutline | null = null;
+  outline: object | null = null;
   outlineDirty = true;
   outlineW = -1; outlineH = -1;
   foregroundGravity = G.FILL;
@@ -848,13 +848,15 @@ export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?
     // the image and nothing underneath it.
     const w = v.width(), h = v.height();
     if (v.clipToOutline && v.outlineProvider !== null) {
-      const outline = v.outline ??= new JOutline();
+      const outline: object = v.outline ??= yield newObj("android/graphics/Outline", "()V");
       if (v.outlineDirty || v.outlineW !== w || v.outlineH !== h) {
         v.outlineDirty = false; v.outlineW = w; v.outlineH = h;
-        outline.kind = 0; outline.path = null; outline.alpha = 1;
+        // View.rebuildOutline: setEmpty keeps the alpha
+        yield vcall(outline, "setEmpty", "()V");
+        yield vcall(outline, "setAlpha", "(F)V", 1);
         yield guardCall(v.outlineProvider ?? bgOutline, M_getOutline, v, outline);
       }
-      if (outline.kind) outline.trace(ctx);
+      clipToOutline(ctx, outline);
     }
     if (w <= 0 || h <= 0) clipEmptyCanvas(ctx);
     else {

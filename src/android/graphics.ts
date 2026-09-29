@@ -16,7 +16,7 @@ import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
-import { NativePath, inversePath, nativePathOf } from "./path";
+import { type NativePath, inversePath, nativePathOf } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
@@ -2081,54 +2081,25 @@ export function matrixColor(k: Float32Array, color: number): number {
     | (clamp(k[5] * r + k[6] * g + k[7] * b + k[8] * a + k[9]) << 8) | clamp(k[10] * r + k[11] * g + k[12] * b + k[13] * a + k[14])) | 0;
 }
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
-// android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's
-// Modifier.clip(shape) is exactly this, so a round button's ripple and children stay inside it.
-export class JOutline extends JObj {
-  kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
-  l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
-  path: NativePath | null = null;
-  setRR(l: number, t: number, r: number, b: number, rad: number) { this.kind = 1; this.l = l; this.t = t; this.r = r; this.b = b; this.rad = rad; this.path = null; }
-  /** intersect ctx's clip with the outline shape */
-  trace(ctx: Ctx2D) {
-    ctx.beginPath();
-    if (this.kind === 3 && this.path) { ctx.clip(this.path.path(), this.path.fillRule); return; }
-    if (this.kind === 2) ctx.ellipse((this.l + this.r) / 2, (this.t + this.b) / 2, (this.r - this.l) / 2, (this.b - this.t) / 2, 0, 0, Math.PI * 2);
-    else if (this.rad > 0) ctx.roundRect(this.l, this.t, this.r - this.l, this.b - this.t, this.rad);
-    else ctx.rect(this.l, this.t, this.r - this.l, this.b - this.t);
-    ctx.clip();
-  }
+// android.graphics.Outline is AOSP's own (pure Java): the shape a RenderNode or view clips to
+// (clipToOutline), which is what Compose's Modifier.clip(shape) sets.
+let outlineFields: { mode: string; rect: string; radius: string; path: string } | null = null;
+/** intersect ctx's clip with a Java Outline's shape; an empty outline does not clip */
+export function clipToOutline(ctx: Ctx2D, outline: object): void {
+  const f = outlineFields ??= {
+    mode: declaredField("android/graphics/Outline", "mMode"), rect: declaredField("android/graphics/Outline", "mRect"),
+    radius: declaredField("android/graphics/Outline", "mRadius"), path: declaredField("android/graphics/Outline", "mPath"),
+  };
+  const o = outline as Record<string, unknown>, mode = o[f.mode];
+  if (!mode) return;
+  ctx.beginPath();
+  // MODE_PATH, else MODE_ROUND_RECT
+  if (mode === 2) { const p = nativePathOf(o[f.path] as object); ctx.clip(p.path(), p.fillRule); return; }
+  const r = o[f.rect] as JRect, radius = o[f.radius] as number;
+  if (radius > 0) ctx.roundRect(r.left, r.top, r.right - r.left, r.bottom - r.top, radius);
+  else ctx.rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+  ctx.clip();
 }
-/** Outline.setPath copies the path into the outline's own */
-function setOutlinePath(this: JOutline, p: object) {
-  this.kind = 3;
-  (this.path ??= new NativePath()).set(nativePathOf(p));
-}
-rt.register({
-  name: "android/graphics/Outline", ctor: JOutline,
-  methods: {
-    "<init>()V": () => {},
-    "setRoundRect(IIIIF)V": function (this: JOutline, l: number, t: number, r: number, b: number, rad: number) { this.setRR(l, t, r, b, asF(rad)); },
-    "setRoundRect(Landroid/graphics/Rect;F)V": function (this: JOutline, rc: JRect, rad: number) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, asF(rad)); },
-    "setRect(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); },
-    "setRect(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); },
-    "setOval(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); this.kind = 2; },
-    "setOval(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); this.kind = 2; },
-    "setPath(Landroid/graphics/Path;)V": setOutlinePath,
-    "setConvexPath(Landroid/graphics/Path;)V": setOutlinePath,
-    "setEmpty()V": function (this: JOutline) { this.kind = 0; this.path = null; },
-    "offset(II)V": function (this: JOutline, dx: number, dy: number) { this.l += dx; this.r += dx; this.t += dy; this.b += dy; },
-    "canClip()Z": () => 1,
-    "isEmpty()Z": function (this: JOutline) { return this.kind === 0 ? 1 : 0; },
-    "getAlpha()F": function (this: JOutline) { return this.alpha; },
-    "setAlpha(F)V": function (this: JOutline, a: number) { this.alpha = asF(a); },
-    "getRadius()F": function (this: JOutline) { return this.kind === 1 ? this.rad : -1; },
-    "getRect(Landroid/graphics/Rect;)Z": function (this: JOutline, rc: JRect) {
-      if (this.kind !== 1) return 0;
-      rc.left = this.l; rc.top = this.t; rc.right = this.r; rc.bottom = this.b;
-      return 1;
-    },
-  },
-});
 export class JRecordingCanvas extends JCanvas {}
 
 // RenderNode: Compose GraphicsLayer (API 29+) records layers here. Each node keeps a display
@@ -2140,7 +2111,7 @@ class JRenderNode extends JObj {
   alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0; camera = 8;
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)
   clip = true;
-  clipOutline = false; outline: JOutline | null = null;
+  clipOutline = false; outline: object | null = null;
   octx: OffscreenCanvasRenderingContext2D | null = null;
   // deferred display list: replayed against the target ctx each draw so child layers
   // re-recorded AFTER this layer keep showing fresh content (real RenderNode semantics)
@@ -2190,7 +2161,7 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
     ctx.translate(-px, -py);
   }
   if (n.clip) { ctx.beginPath(); ctx.rect(0, 0, n.w, n.h); ctx.clip(); }
-  if (n.clipOutline && n.outline && n.outline.kind) n.outline.trace(ctx);
+  if (n.clipOutline && n.outline) clipToOutline(ctx, n.outline);
   perf.rnReplay += displayListLength(n.ops);
   // The display list stays a deferred command list (recorded ops replayed against the real
   // target). A bad op must not abandon this node's save, or its clip leaks into the frame.
@@ -2297,7 +2268,7 @@ rt.register({
     },
     "setClipToBounds(Z)Z": function (this: JRenderNode, c: number) { this.clip = !!c; return 1; },
     "setClipToOutline(Z)Z": function (this: JRenderNode, c: number) { this.clipOutline = !!c; return 1; },
-    "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
+    "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: object | null) { this.outline = o; return 1; },
     "setAmbientShadowColor(I)Z": rn1, "setSpotShadowColor(I)Z": rn1,
     "setUseCompositingLayer(ZLandroid/graphics/Paint;)Z": function (this: JRenderNode, force: number, paint: JPaint | null) {
       this.layer = force ? paint ?? true : null;

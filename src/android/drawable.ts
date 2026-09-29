@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, jarray, parseMethodDesc } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
@@ -910,12 +910,12 @@ export class JLayerDrawable extends JDrawable {
 rt.register({
   name: "android/graphics/drawable/LayerDrawable", ctor: JLayerDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
-    "getOutline(Landroid/graphics/Outline;)V": driven(function* (this: JLayerDrawable, outline: JOutline): Gen {
+    "getOutline(Landroid/graphics/Outline;)V": driven(function* (this: JLayerDrawable, outline: object): Gen {
       const thread = curThread;
       for (const { d } of this.layers) {
         if (!d) continue;
         yield vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline);
-        if (outline.kind) return;
+        if (!(yield vcall(outline, "isEmpty", "()Z"))) return;
       }
     }),
     // AOSP: each layer's inset plus that layer's own padding, the widest of each edge. This is
