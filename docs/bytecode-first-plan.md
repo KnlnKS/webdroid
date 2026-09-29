@@ -582,43 +582,26 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-29 (night). The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
+Last updated 2026-09-30. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
 read "Handoff state" first. Each
 commit message states what it measured. The implementation history (the 2026-09-27 to
-2026-09-29 Stage A/B entries) records failure mechanisms.
+2026-09-30 Stage A/B/C entries) records failure mechanisms.
 
-### Handoff state (2026-09-29, night): start here
+### Handoff state (2026-09-30): start here
 
-- **`knlnks/bytecode` tip `4d5b9ac2` is gated and pushed.** Gated on it (and on each merge before
-  it): typecheck; `bun run test` 1,393 pass; FitNotes smoke 0 method failures; fast e2e 7/7 twice;
-  the live set; `lat` cold and warm; every conform suite (guava 40,085, jsr166 2,544, ojluni-time
-  27,514, luni-io 1,277, luni-net 537, luni-nio-file 173). The resource switch
-  `?bytecode=android/content/res/` also passes there (fast e2e twice; live set but YouTube's known
-  `video-open` flake; Lichess and TikTok 2/2 alone).
-- **First task: gate and merge `c1-resources` tip `f48221b3` (pushed, not merged).** It makes
-  `android/content/res/` AOSP bytecode by default and deletes about 1,050 lines of TS (the Resources,
-  Theme, TypedArray, AssetManager, Configuration, XmlBlock/XmlResourceParser, AssetFileDescriptor and
-  ColorStateList specs and every `aospResources()` branch); `resnative.ts` keeps only the device
-  configuration and locales, LocaleManager/LocaleList and `android.util.Xml`. Headless: typecheck,
-  `bun run test` 1,391/0, smoke, `fwtest android/content/res/` (94/97 natives, 6/6 exercises), and 20
-  apks boot with view trees identical to the switch path. **Not run: browser e2e, the live set,
-  `lat`, conform.** Merge it (`git merge c1-resources`), run the full gate with no query (the default
-  is now the cut), then conform from a gate worktree. If a flow regresses, compare with `4d5b9ac2`
-  under `?bytecode=android/content/res/`, which is the same code path before the deletion.
-- **Then: the cold-launch cost of the resource cut.** In the browser, `lat` showed cold Calculator
-  launching in about 1.73 s under the switch against 1.35-1.5 s before (warm launches unchanged,
-  every tap within the gate). Headless V8 shows only 20-35 ms (resource setup 1.7 -> 20.9 ms,
-  classes compiled 1,755 -> 1,810, cold calls 35,976 -> 37,531), so find the rest in the browser:
-  compare `lat --json` launch counters (`compileMs`, `classesCompiled`, `clinitMs`, `coldCalls`) and a
-  `lat --cpuprofile` of both paths. Each realm pays `AssetManager.getSystem()`'s OverlayConfig
-  partition scan (about 27 ms in V8, mostly first-use compile and cold code; it logs "partition_order.xml
-  does not exist" once per realm), and an app runs 2-3 realms on one main thread. Candidate fixes:
-  feed `vendor/aosp/boot-image-profile.txt` (see §4 "Platform image") to the compile worker, or the
-  build-time platform image (§4.1/§4.3).
-- **Then continue Stage C** (C.2 graphics is the next cut; `audit ... --cut android/graphics/`
-  reports 121 native specs and 1,963 TS references to re-home) and the rest of the plan, under the
-  standing constraints and gates below. Record C.1's history entry (f136d416, 33424e7e, 0c998fc6,
-  2ce12bbe, 4d5b9ac2, f48221b3; the failure mechanisms are summarized in "Stage C.1" below).
+- **`knlnks/bytecode` has `android/content/res/` on AOSP bytecode by default** (merge 131efb48 of
+  `c1-resources`, then a dead-code sweep). Gated on the merge: typecheck; `bun run test` 1,391 pass;
+  FitNotes smoke 0 method failures; fast e2e 7/7 twice; the live set (TikTok wedged once at `feed`,
+  then passed 4 of 5 alone); `lat` cold and warm; every conform suite at its baseline. The sweep
+  (398b7297..61084dea, 118 lines) passed typecheck, test (1,390) and smoke.
+- **The resource cut's cold-launch cost is gone.** Interleaved `lat` runs against 44da4521 (TS
+  resources): cold Calculator first frame median 1,645 ms against 1,612 (5 pairs, within noise) and
+  idle 2,296 against 2,507; FitNotes and Mihon launches and Mihon's taps level. The 1.73 s measured
+  under the switch predates 2ce12bbe/4d5b9ac2. `presentations=2` in a launch snapshot is `lat`'s
+  poll seeing the second frame too, not a starting window.
+- **Next: Stage C.2 graphics** (`audit ... --cut android/graphics/` reports 121 native specs and
+  1,963 TS references to re-home), then the rest of the plan, under the standing constraints and
+  gates below.
 - **Open follow-ups.**
   - TikTok reaches `ActivityThread.installProvider` by reflection (unsafe fallthrough).
   - No system service is hosted behind binder (`binderServices` in `src/android/binder.ts` is empty),
@@ -684,7 +667,7 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,393 pass; 1,391 on `c1-resources`, which deletes spec-only tests);
+- `bun run test` (1,390 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file`. Baselines are 40,085,
@@ -943,7 +926,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      lookaheads) fall back to "the match reached the end".
    - The expat natives skip external entities.
 
-### Stage C.1: resources (default on `c1-resources`, awaiting the browser gate)
+### Stage C.1: resources (default since 131efb48)
 
 Inventory taken 2026-09-29 (`fwscan`, `fwtest`, `audit apks/FitNotes.apk --framework --cut
 android/content/res/`):
@@ -978,8 +961,7 @@ android/content/res/`):
   `nativeList` of the framework apk's assets (its archive is not listed) and fd-backed ApkAssets
   (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
   runs AOSP's Resources end to end headless. Measurements are in the history entry.
-- **Done (steps 2-5), on `knlnks/bytecode` behind `?bytecode=android/content/res/` and on
-  `c1-resources` as the default:** apps boot through AOSP's ApkAssets, AssetManager and Resources
+- **Done (steps 2-5), the default since 131efb48:** apps boot through AOSP's ApkAssets, AssetManager and Resources
   (`src/android/resources.ts`), Contexts hold the Java Resources and Theme, and the system Resources
   get the device configuration and metrics at boot (as ActivityThread's
   `applyConfigurationToResources` does). The TS view stack reaches native state through bridges;
@@ -996,8 +978,7 @@ android/content/res/`):
     never completed, and Flutter's sound plugin blocks Dart init on it. The visible symptom was Cronet
     never loading (4d5b9ac2). Lesson: diff the page's logcat between paths (headless Chrome console)
     to find where init diverges; a blank Flutter surface says nothing on its own.
-- **Left:** the browser gate of `f48221b3` and the cold-launch cost (see "Handoff state"); ObbScanner,
-  ResourceTimer, resolution logging, `nativeList` of the framework apk and fd-backed ApkAssets.
+- **Left:** ObbScanner, ResourceTimer, resolution logging, `nativeList` of the framework apk and fd-backed ApkAssets.
 
 ### Tools and pitfalls learned
 

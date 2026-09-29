@@ -656,6 +656,25 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   6.7 / 6.4 / 8.6 us. First calls cost more on bytecode (3.6 against 1.3 ms for the layout) and
   `AssetManager.getSystem()` takes about 35 ms once per process (OverlayConfig's partition scan).
   Before the theme memoised resolved values the TS path had regressed to 47 us.
+- 2026-09-29/30, android.content.res from AOSP's bytecode (Stage C.1; f136d416, 33424e7e, 0c998fc6,
+  2ce12bbe, 4d5b9ac2, f48221b3, merged as 131efb48). Apps boot through AOSP's ApkAssets,
+  AssetManager and Resources (`src/android/resources.ts`), Contexts hold the Java Resources and
+  Theme, and the TS specs for Resources, Theme, TypedArray, AssetManager, Configuration, XmlBlock,
+  AssetFileDescriptor and ColorStateList are gone (about 1,050 lines). Headless view trees matched
+  on 20 apks; every failure was browser-only. A file resource (`@font/...`) resolved to a fresh
+  reference per call, so `rvString`, which resolves until the value stops changing, recursed
+  forever (Harmonic). Context's resource getters awaited between `getResources`, `getTheme` and the
+  final call and could resume on another Java thread, so a background load pushed its id onto the
+  main thread's ThreadLocal LookupStack ("Recursive reference in drawable", TikTok); the getters now
+  pin every call to the caller's thread. `Resources.getSystem()` had 0x0 metrics and an empty
+  Configuration until the boot applied the device's, as `applyConfigurationToResources` does.
+  `SoundPool.load(AssetFileDescriptor)` read a TS-only field and never completed, and Flutter's
+  sound plugin blocks Dart init on it, so Lichess stayed blank; its visible symptom was Cronet never
+  loading, found by diffing the page's logcat between the two paths. The cold-launch cost measured
+  under the switch (Calculator 1.73 s against 1.35-1.5) did not survive those fixes: 5 interleaved
+  `lat` pairs against 44da4521 give first frame 1,645 against 1,612 ms and idle 2,296 against 2,507;
+  FitNotes and Mihon are level. Each realm still pays `AssetManager.getSystem()`'s OverlayConfig
+  partition scan (about 27 ms in V8, mostly first-use code).
 
 ## Java, storage and framework semantics
 
