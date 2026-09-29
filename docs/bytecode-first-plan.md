@@ -604,14 +604,22 @@ commit message states what it measured. The implementation history (the 2026-09-
   handle slots are reused (b6a038f3). Cold `lat` against 44da4521: Calculator 1,468 against 1,620 ms,
   FitNotes 1,421 against 1,581, Mihon 2,127 against 2,346; warm Calculator 871, FitNotes 879, Mihon
   1,785 ms.
-- **Next: the rest of Stage C.2.** `fwtest android/graphics/` lists what the natives lack; the TS
-  references left to re-home are dominated by Drawable (222), Canvas (207), Paint (195), Rect's
-  fields (167, which stay a layout), Bitmap (144) and Typeface (52). Smaller cuts first: Region,
-  Outline, Camera, Interpolator, NinePatch, Picture; then Typeface and fonts; Paint, Canvas and
-  Bitmap last, with the view stack (Stage D).
-- **Finalizers do not run.** AOSP's PathMeasure frees its native state only in `finalize()`, so a
-  PathMeasure made per draw grows the handle table (the TS spec did not). Classes that clean up in
-  `finalize()` need a runtime mechanism (a FinalizationRegistry holding what the finalizer frees).
+- **Since the gate on 2d4ac175** (typecheck, test, smoke and fast e2e twice on each; conform on
+  5eb441da): the served link table (5536ffbb); the text spans, Annotation, LengthFilter and AllCaps
+  from AOSP (C.3's first cut, -578 lines); Character's properties from ICU through libcore's 24
+  `*Impl` natives, with `platformClinit` letting a spec class run its platform `<clinit>` and
+  `Class.getPrimitiveClass` (5eb441da); Region (a real rect-list SkRegion), RegionIterator,
+  Outline, NinePatch and Picture from AOSP, with Camera's and Interpolator's natives; owned handles
+  for the classes that free native state in `finalize()` (fb3e6a2f). Not yet run on these: the live
+  set and `lat`.
+- **Next: the rest of Stage C.2/C.3.** `fwtest android/graphics/` lists what the natives lack; the
+  TS references left are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields (167,
+  which stay a layout), Bitmap (144) and Typeface (52). Next: the fonts (Font, FontFamily,
+  FontStyle, FontVariationAxis: 85 references) and Typeface, then Layout/StaticLayout with the
+  minikin natives; Paint, Canvas and Bitmap last, with the view stack (Stage D).
+- **Finalizers do not run**, and cannot as such: a JS finalizer cannot see the object it
+  finalizes. Platform classes whose `finalize()` frees a handle in a long field get owned handles
+  instead (`ownedHandle`, `Runtime.claimOnStore`); any other finalize() is not run.
 - **Memory, measured 2026-09-30.** A realm starts at about 91 MB of heap plus the jars; the native
   core reserves 256 MiB of wasm memory per realm (untouched pages are not resident, and in V8 it
   adds full GCs only when allocated, not in steady state). TikTok runs 5 realms and its JS heap is

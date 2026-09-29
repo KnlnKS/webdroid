@@ -738,6 +738,22 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   starts after the apk and the platform are loaded, so it could not deliver that ahead of a
   one-second first frame. The link table (5536ffbb) was the cheaper win: every realm of a first
   launch found its fallthrough gaps itself (93 ms of the cold Calculator launch).
+- 2026-09-30, Character from ICU, and platform statics for spec classes. The TS Character answered
+  classification with JS regexes and case mappings: isWhitespace and isSpaceChar were both `\s`
+  (so NBSP was whitespace and tab a space char), getNumericValue parsed base 36, and isLowerCase
+  compared case mappings. AOSP's Character now runs over libcore's 24 `*Impl` natives, each the ICU4C
+  call java_lang_Character.cpp makes, answered by ICU4J's UCharacter (u_islower is general category
+  Ll, so `ª` is not lower case on Android although it is on OpenJDK). A spec class can now run its
+  platform `<clinit>` (`platformClinit`; Character needs TYPE and DIRECTIONALITY), which needed
+  ART's `Class.getPrimitiveClass`. Conform unchanged.
+- 2026-09-30, owned handles in place of finalizers. Region, RegionIterator, Interpolator, NinePatch,
+  Camera, Picture and PathMeasure free their native state in `finalize()`. A JS finalizer cannot
+  run it: FinalizationRegistry never hands back the object, and holding the fields finalize() reads
+  keeps the object alive through any field that leads back to it (a Picture's recording canvas).
+  What those finalizers free is a handle in a long field, so the creating natives return owned
+  handles and a platform class declaring finalize() routes its long fields through a setter that
+  makes the first object to store one its owner; the slot is released when the owner is collected,
+  unless an explicit destroy freed or reused it first (401 of 401 released after GC headless).
 
 ## Java, storage and framework semantics
 
