@@ -40,6 +40,18 @@ export const SUITES: Record<string, Suite> = {
       exclude: /\/net\/(\w*(Datagram|Multicast|ServerSocket|SocketImpl|JarURLConnection|URLClassLoader|NetworkInterface)\w*|(Old)?Socket(Timeout)?Test|OldSocketTest\w*|OldUnixSocketTest|InterfaceAddressTest|InetAddressThreadTest|ConcurrentCloseTest|FtpURLConnectionTest|URLConnectionTest|DelegatingSocketFactory|OldCookieHandlerTest)\.java$|libcore\/java\/net\/InetAddressTest\.java$|harmony\/tests\/java\/net\/URLDecoderTest\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
     },
   },
+  // libcore's java.nio.file tests at the same commit, without those needing mockito, junitparams or
+  // hidden sun.nio.fs classes
+  "luni-nio-file": {
+    maven: JUNIT,
+    source: {
+      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      include: /^(luni\/src\/test\/java\/(libcore|tests)\/java\/nio\/file|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
+      tests: /^\w+Test\.java$/,
+      exclude: /\/nio\/file\/(Files2?Test|SimpleFileVisitorTest|DefaultFileSystemProvider2Test|FileSystemsTest|LinuxFileSystemTest|LinuxPathTest|spi\/FileTypeDetectorTest)\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
+    },
+  },
   "ojluni-time": {
     maven: ["org.testng:testng:7.4.0", "com.beust:jcommander:1.78", ...JUNIT],
     source: {

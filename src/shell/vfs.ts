@@ -47,6 +47,8 @@ export const vfs = {
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
   markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
   norm(p: string): string {
+    // already normal: absolute, with no empty, "." or ".." segment
+    if (p.charCodeAt(0) === 47 && !/\/\.{0,2}(?:\/|$)/.test(p)) return p;
     const parts: string[] = [];
     for (const seg of p.split("/")) {
       if (seg === "" || seg === ".") continue;

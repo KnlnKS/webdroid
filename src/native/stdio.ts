@@ -115,8 +115,9 @@ function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
 }
 /** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
 export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): number {
-  const from = vfs.norm(fromPath), to = vfs.norm(toPath);
+  const from = vfs.norm(fromPath), to = vfs.norm(toPath), parent = to.slice(0, to.lastIndexOf("/")) || "/";
   if (from === to) return vfs.exists(from) ? 0 : fail(cpu, E.NOENT);
+  if (!vfs.isDir(parent)) return fail(cpu, vfs.exists(parent) ? E.NOTDIR : E.NOENT);
   if (vfs.isDir(from)) {
     if (to === from || to.startsWith(from + "/")) return fail(cpu, E.INVAL);
     if (vfs.exists(to)) {
@@ -274,7 +275,7 @@ export function javaIoctlIntFd(fd: number, request: number): number {
 export function javaFdStat(fd: number): { mode: number; size: number; path: string | null } | null {
   const f = fds.get(fd);
   if (!f) return isNativeSocket(fd) ? { mode: S_IFSOCK | 0o777, size: 0, path: null } : null;
-  return { mode: fdMode(f), size: f.content.len, path: f.content.path };
+  return { mode: fdMode(f), size: f.content.len, path: f.dir ? f.path : f.content.path };
 }
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
@@ -505,7 +506,7 @@ function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): numbe
   return np;
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
-function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
+export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
 function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path)): void {
   mem.memset(buf, 0, LAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev

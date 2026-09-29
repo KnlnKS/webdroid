@@ -497,6 +497,76 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   little-endian after FF FE 00 00 and decodes big-endian without a mark, unlike OpenJDK. The device
   lists 226 charsets (ICU converters); the TS boundary serves the 9 Unicode, ASCII and Latin-1 ones,
   and `availableCharsets()` still falls through to libcore's NativeConverter natives.
+- 2026-09-29, java.nio.file from libcore (B.7 cut 6). The TS layer answered `FileSystems.getDefault()`,
+  Paths and a few Path, Files and FileSystemProvider methods over the VFS. It had no directory
+  streams, walk, relativize, toRealPath, link queries or attribute views. readAttributes reported
+  zero times, Files.move ignored its options and isWritable answered existence. The corpus reaches
+  far more: Paths.get in 21 apps, readAttributes in 19 (okio's NioSystemFileSystem, under OkHttp's
+  and Coil's disk caches), readSymbolicLink in 17 and move in 17. libcore's classes now run over the
+  natives of UnixNativeDispatcher, LinuxNativeDispatcher and UnixCopyFile (`os.ts`).
+  - **Paths.** NativeBuffers copies each path into native memory with `Unsafe.allocateMemory` and
+    `putByte`, now served from the process heap.
+  - **Errors.** Failures throw `UnixException(errno)`. It is created without a stack, since its
+    fillInStackTrace records none, and `init()` initializes the class, because the natives throw it
+    synchronously.
+  - **Capabilities.** `init()` reports SUPPORTS_OPENAT | SUPPORTS_FUTIMES, since bionic exports
+    openat64, fstatat64, unlinkat, renameat, futimesat and fdopendir (NDK API 35 libc.so). Directory
+    streams are therefore the secure kind, over dup'd directory descriptors. `javaFdStat` now names a
+    directory descriptor's path.
+  - **VFS limits.** symlink and link fail with EPERM, as the libc does, and readlink fails with
+    EINVAL. chmod succeeds on an existing path. chown succeeds only to the app's own ids (EPERM
+    otherwise). No extended attributes are listed, and fsetxattr fails with EOPNOTSUPP. Android's
+    provider throws SecurityException from getFileStore itself, and getFileStores finds no
+    `/proc/mounts`.
+  - **rename.** rename(2) now fails with ENOENT or ENOTDIR when the target's parent is not a
+    directory. Before, it created the path.
+
+  Two costs showed up in V8.
+  - **Suspension.** Channels' stream adapters wrapped every read and write in an `async` helper, so
+    each Files.read and Files.write suspended its caller. A Java loop over such calls nests one
+    promise per suspension, and V8's async stack capture walks that chain on every `new Error()`. One
+    exception after 4,000 readAllBytes calls cost 200 µs instead of 14 (`node
+    --no-async-stack-traces` confirmed it). The helper is synchronous now; on the tip the same
+    effect made a throw-and-catch cost 110 µs after the earlier workloads, against 18 µs.
+  - **Path normalization.** `vfs.norm` now returns an already-normal path unchanged. It had cost
+    0.5 µs of a 4 µs readAllBytes. `fdInt` caches its field name.
+
+  Measurement: V8 (node), tip against branch, 5 interleaved runs, median µs per operation, steady
+  (cold):
+  - readAllBytes of 4 KB: 1.03 against 5.27 (25.7 cold);
+  - write of 4 KB: 6.14 against 4.91;
+  - newBufferedReader over 100 lines: 31.0 against 25.3;
+  - exists(file) + isDirectory + exists(missing): 1.89 against 16.8;
+  - exists on a hit: 0.30 against 0.54;
+  - Paths.get + resolve: 0.64 against 2.38;
+  - File.toPath: 0.63 against 1.96;
+  - Files.list of 25 entries: 31.1 on the branch;
+  - Files.walk of 31 entries: 125 on the branch.
+
+  Files.list and Files.walk failed on the tip. Exceptions stay the dominant cost of a
+  miss: Files.exists on a missing path builds a NoSuchFileException with a stack (about 14 µs),
+  where the TS layer answered without one. The new `luni-nio-file` conform suite (libcore's
+  java.nio.file tests, without the mockito, junitparams and hidden-API classes) went from 109 to 173
+  of 195. The remaining failures are permission bits, symbolic links, WatchService (the inotify
+  natives are not wired) and IOException serialization. luni-io, luni-net and guava are unchanged.
+- 2026-09-29, ZipFile measured against libcore's, not flipped. Withholding the TS
+  `java/util/zip/Zip*` specs (`WEBDROID_BYTECODE`) fails first in ZipUtils' static initializer. It
+  takes Unsafe offsets of ByteBuffer's `hb` and `offset`, which the TS ByteBuffer does not declare.
+  InflaterInputStream, a TS stub without fields, has to move too, since ZipFile's inflating stream
+  extends it. With both worked around in the harness only, libcore's ZipInputStream over the TS
+  Inflater read FitNotes' 682 entries to the same bytes. It pushes back `getRemaining()` after each
+  entry, so the codec boundary holds for containers. V8, Mihon's 67 MB apk on an async source
+  (1,832 entries), TS against libcore:
+  - ZipFile open: 420 against 179 µs (libcore hashes the CEN lazily);
+  - JarFile reopen: 419 against 49 µs (libcore caches its Source per file);
+  - getEntry: 0.28 against 0.85 µs;
+  - entries(): 279 against 1,351 µs;
+  - deflated manifest read: 102 against 117 µs;
+  - stored resources.arsc read: 574 against 1,081 µs;
+  - ZipInputStream over all of FitNotes' 4 MB: 34 against 140 ms (TS drains and inflates in one
+    call).
+
+  ZipFile stays TS until cut 5 settles the Buffers.
 - 2026-09-29, rejected: per-site `$ic` caches for string constants, static calls and static fields.
   The dex-wide link tables are sparse `new Array(typeCount)`, so the hypothesis was dictionary-mode
   lookups behind the ~2 ns per compiled call the B.4 measurement found. V8 A/B showed ±10% both

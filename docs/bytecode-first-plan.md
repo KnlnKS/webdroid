@@ -686,8 +686,7 @@ These classes now run from AOSP bytecode, with their TS code deleted:
     java.util.logging is reset onto AndroidConfig's AndroidHandler, as RuntimeInit.commonInit does.
 - **java.io.File (B.7 cut 2).** libcore's File over `java/io/UnixFileSystem` natives and Linux
   access/remove/rename (`src/android/os.ts`), with VFS modification times. TS reads a File with
-  `pathOf` and makes one with `newFile` (`jio.ts`). The TS java.nio.file layer stays and answers
-  `FileSystems.getDefault()` for `File.toPath`.
+  `pathOf` and makes one with `newFile` (`jio.ts`).
 - **java.io file streams (B.7 cut 3).** libcore's FileDescriptor, FileInputStream,
   FileOutputStream and RandomAccessFile over the Linux read/write/pread/pwrite/fstat natives. TS
   reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel stays TS, as
@@ -695,6 +694,13 @@ These classes now run from AOSP bytecode, with their TS code deleted:
 - **java.io Writer, Reader and DataOutputStream (B.7 cut 4, partial).** Writer and Reader and their
   subclasses run from libcore, with BufferedReader over them staying TS; an InputStream subclass is
   read through its own `read()`. luni-io went from 1,014 to 1,219.
+- **java.nio.file (B.7 cut 6).** libcore's FileSystems, UnixPath, Files, the Unix provider, its
+  (secure) directory streams, UnixChannelFactory and UnixCopyFile over `sun.nio.fs`'s
+  UnixNativeDispatcher, LinuxNativeDispatcher and UnixCopyFile natives (`src/android/os.ts`); paths
+  cross in native memory through `Unsafe.allocateMemory`/`putByte`. The VFS has no links,
+  permission bits or extended attributes, and there is no `/proc/mounts`. FileChannelImpl stays TS
+  and takes UnixChannelFactory's descriptor. The new `luni-nio-file` suite (libcore's
+  java.nio.file tests without mockito and junitparams) went from 109 to 173 of 195.
 - **android.text.Html.** AOSP's HtmlToSpannedConverter over TagSoup from ext.jar, so a TagHandler
   gets the real XMLReader. It needed getSpans to report zero-length marks at query edges. About
   260 µs per 2 KB comment against 60 µs in TS, and about 50 ms on the first call.
@@ -782,8 +788,13 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
    - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 4 in part (Writer, Reader,
-     DataOutputStream), 7a (java.net leaf classes), 7b (URI and cookies) and 7c (URL and its
-     handlers). **Next in cut 7:** URLConnection's base (`getContentHandler`, the content handler
+     DataOutputStream), 6 (java.nio.file), 7a (java.net leaf classes), 7b (URI and cookies) and 7c
+     (URL and its handlers). **ZipFile stays TS for now** (measured 2026-09-29): libcore's
+     ZipUtils takes Unsafe offsets of ByteBuffer's `hb` and `offset` in its static initializer,
+     which the TS ByteBuffer lacks, so ZipFile moves with or after cut 5's Buffers decision, and
+     InflaterInputStream (a field-less TS stub) has to move with it. The TS Inflater is not the
+     blocker: libcore's ZipInputStream over it reads FitNotes' 682 entries identically. Speed is
+     mixed (history entry). **Next in cut 7:** URLConnection's base (`getContentHandler`, the content handler
      statics) and InetAddress/InetSocketAddress, then sockets (cut 8). Moving ByteArrayInputStream
      to libcore unblocks JarVerifier, after which ClassPathURLStreamHandler's TS constructor goes.
      **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
@@ -794,7 +805,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      (3) FileDescriptor and the file streams over Linux read/write/pread/pwrite (`stdio.ts` needs
      Uint8Array `java*` wrappers for write, pread, pwrite and truncate). (4) the rest of java/io,
      ObjectStreams last. (5) NIO channels, after deciding whether Buffers stay a TS boundary
-     (§4.7); the paged mapping is done (item 4). (6) java/nio/file, then ZipFile.
+     (§4.7); the paged mapping is done (item 4). (6) java/nio/file (done), then ZipFile (after 5).
      (7) java.net value classes (URI blocks the cookie classes: AOSP's cookie store needs
      `URI.compareTo`). (8) sockets over `native/net.ts`.
    - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
@@ -868,3 +879,10 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
 - `git commit` takes the whole index. Anything already `git rm`'d is included, so commit
   deletions with the change they belong to.
 
+- A TS native that always returns a Promise (an `async` helper) suspends its Java caller on every
+  call. In a loop this nests one promise per call, and every later Java exception then pays for
+  V8's async stack capture over that chain (200 µs instead of 14 in the cut 6 measurement). Compare
+  with `node --no-async-stack-traces`, and count suspensions with `configureJvm({ profile: true })`
+  before the code compiles.
+- A native that throws a bytecode exception class must see that class initialized, or the
+  instance has no methods. `rt.make`/`rt.mkThrowable` only link it.
