@@ -3,7 +3,7 @@
 
 import { Arsc } from "./arsc";
 import { TV, parseAXML, attr, type XmlNode, type XmlAttr } from "./axml";
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, declaredField } from "../jvm/runtime";
 import { deref } from "./handles";
 import { JDisplayMetrics, complexToPx } from "./util";
 import { mangleMethod, intBitsToFloat } from "../jvm/abi";
@@ -744,13 +744,9 @@ export async function askTheme(ctx: unknown): Promise<JTheme | null> {
   }
   return themeOf(ctx);
 }
-const props = new Map<string, string>();
 /** a Java instance field of `cls`, on a bytecode object or a spec's */
 export function javaField<T>(o: unknown, cls: string, name: string): T {
-  const key = cls + "." + name;
-  let p = props.get(key);
-  if (p === undefined) props.set(key, p = rt.fieldProp(cls, name) ?? "");
-  return (o as Record<string, T>)[p];
+  return (o as Record<string, T>)[declaredField(cls, name)];
 }
 /** the AssetManager2 behind AOSP's Resources */
 export function nativeRes(jres: unknown): Resources {
