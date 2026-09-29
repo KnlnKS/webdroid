@@ -1706,7 +1706,7 @@ export function cslColor(csl: JColorStateList, states: ArrayLike<number>): numbe
 // colours coming in, built through its constructor going out.
 const fromJava = new WeakMap<object, JColorStateList>(), toJava = new WeakMap<JColorStateList, unknown>();
 /** our own list for a ColorStateList, which may be AOSP's */
-export function tsCsl(c: unknown): JColorStateList | null {
+function tsCsl(c: unknown): JColorStateList | null {
   if (!c || c instanceof JColorStateList) return (c as JColorStateList | null) ?? null;
   let t = fromJava.get(c as object);
   if (!t) {

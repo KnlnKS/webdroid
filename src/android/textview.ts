@@ -216,7 +216,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(2)) tv.colors = yield rvCsl(res, g(2)!, tv.theme, -16777216);
   if (g(3)) tv.styleBits = rvInt(res, g(3), tv.styleBits);
   const maxLength = g(37) ? rvInt(res, g(37), -1) : -1;
-  if (maxLength >= 0) { const filter = rt.make("android/text/InputFilter$LengthFilter") as JLengthFilter; filter.max = maxLength; tv.filters = [filter]; }
+  if (maxLength >= 0) tv.filters = [yield newObj("android/text/InputFilter$LengthFilter", "(I)V", maxLength)];
   if (g(0)) {
     const v = g(0)!;
     const text = v.t === TV.REFERENCE ? rvString(res, res.resolveRefs(v)) ?? "" : rvString(res, v) ?? "";
@@ -975,26 +975,6 @@ const filterText = driven(function* filterText(tv: JTextView, cs: unknown): Gen 
   return (yield applyInputFilters(tv.filters, cs, 0, (yield csText(cs)).length, emptySpanned, 0, 0))[0];
 });
 
-// ── InputFilter + common implementations (maxLength, allCaps). Needed for EditText inflation.
-class JLengthFilter extends JObj { max = 0; }
-rt.register({
-  name: "android/text/InputFilter$LengthFilter", ctor: JLengthFilter,
-  ifaces: ["android/text/InputFilter"],
-  methods: {
-    "<init>(I)V": function (this: JLengthFilter, m: number) { this.max = m; },
-    "getMax()I": function (this: JLengthFilter) { return this.max; },
-    "filter(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;": driven(function* (this: JLengthFilter,
-      source: unknown, start: number, end: number, dest: unknown, dstart: number, dend: number): Gen {
-      let keep = this.max - ((yield vcall(dest, "length", "()I")) - (dend - dstart));
-      if (keep <= 0) return "";
-      if (keep >= end - start) return null;
-      keep += start;
-      const c = yield vcall(source, "charAt", "(I)C", keep - 1);
-      if (c >= 0xd800 && c <= 0xdbff && --keep === start) return "";
-      return vcall(source, "subSequence", "(II)Ljava/lang/CharSequence;", start, keep);
-    }),
-  },
-});
 rt.register({
   name: "android/text/InputFilter$AllCaps", ctor: class extends JObj {},
   ifaces: ["android/text/InputFilter"],

@@ -437,6 +437,11 @@ const contextMethods: NativeSpec["methods"] = {
     "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V"),
   "getAttributionTag()Ljava/lang/String;": function (this: JContext) { return this.attributionTag; },
   ...stubs(0, "isDeviceProtectedStorage()Z", "isRestricted()Z"),
+  // ContextImpl's test; no context here is created with CONTEXT_IGNORE_SECURITY
+  "canLoadUnsafeResources()Z": driven(function* (this: JContext): Gen {
+    const pkg: string = yield vcall(this, "getPackageName", "()Ljava/lang/String;");
+    return pkg === (yield vcall(this, "getOpPackageName", "()Ljava/lang/String;")) ? 1 : 0;
+  }),
 };
 
 rt.register({ name: "android/content/Context", ctor: JContext, methods: contextMethods,

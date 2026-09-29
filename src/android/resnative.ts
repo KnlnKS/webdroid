@@ -110,7 +110,7 @@ rt.register({
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JLocaleList, parcel: JParcel) { writeString(parcel, this.tags.join(",")); },
   },
 });
-export function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
+function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
   return vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", readString(parcel));
 }
 /**
