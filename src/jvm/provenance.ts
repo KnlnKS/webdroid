@@ -19,11 +19,12 @@
 const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode")
   : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
-/** class-name prefixes served by AOSP bytecode instead of a native spec */
+/** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
+ *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone) */
 export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
 export function isBytecode(name: string): boolean {
-  for (const p of BYTECODE) if (name.startsWith(p)) return true;
+  for (const p of BYTECODE) if (name.startsWith(p) || p.endsWith("$") && name === p.slice(0, -1)) return true;
   return false;
 }
 

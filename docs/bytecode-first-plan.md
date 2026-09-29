@@ -627,7 +627,7 @@ Run all of these before committing a flip:
 - `bun run lat` cold and `--warm`;
 - `bun run smoke apks/FitNotes.apk` (0 method failures).
 
-To A/B a flip without deleting code, set `WEBDROID_BYTECODE=<prefixes>` for e2e and conform
+To A/B a flip without deleting code, set `WEBDROID_BYTECODE=<prefixes>` (`Class$` for one class and its inner classes) for e2e and conform
 (`--bytecode`), and `--query bytecode=<prefixes>` for lat.
 
 Known flakes, which are not regressions:
