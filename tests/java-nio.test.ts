@@ -91,6 +91,19 @@ describe("charbuffer-sequence", () => {
     await vcall(output, "flip", "()Ljava/nio/Buffer;");
     expect(await vcall(output, "toString", "()Ljava/lang/String;")).toBe("🐈");
   });
+
+  test("streaming encode stops before a character that does not fit and keeps a split surrogate pair", async () => {
+    const encoder = await vcall(rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8, "newEncoder", "()Ljava/nio/charset/CharsetEncoder;");
+    const input = await vcall(rt.link("java/nio/CharBuffer").ctor, "wrap", "([C)Ljava/nio/CharBuffer;", Uint16Array.from("aé🗺\ud83d".split(""), (c) => c.charCodeAt(0)));
+    const output = await vcall(rt.link("java/nio/ByteBuffer").ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 4);
+    const encode = (end: number) => vcall(encoder, "encode", "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;", input, output, end);
+    expect(await vcall(await encode(0), "isOverflow", "()Z")).toBe(1);
+    expect([input.pos, output.pos]).toEqual([2, 3]);
+    await vcall(output, "clear", "()Ljava/nio/Buffer;");
+    expect(await vcall(await encode(0), "isUnderflow", "()Z")).toBe(1);
+    expect([input.pos, output.pos]).toEqual([4, 4]);
+    expect(await vcall(await encode(1), "isMalformed", "()Z")).toBe(1);
+  });
 });
 
 describe("intbuffer-bulk", () => {

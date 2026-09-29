@@ -560,16 +560,26 @@ rt.register({
 class JCharset extends JObj { cname = "UTF-8"; }
 const charset = (n: string) => { const c = new JCharset(); c.cname = n; return c; };
 const utf8 = charset("UTF-8");
+/** Charset.lookup: the canonical name of a charset served here */
+function lookupCharset(name: string | null): string {
+  if (name === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Null charset name");
+  if (!/^[A-Za-z0-9][A-Za-z0-9+\-.:_]*$/.test(name)) throw rt.mkThrowable("java/nio/charset/IllegalCharsetNameException", name);
+  try { return charsetName(name); }
+  catch (e) { if (rt.iof(e, "java/io/UnsupportedEncodingException")) throw rt.mkThrowable("java/nio/charset/UnsupportedCharsetException", name); throw e; }
+}
 rt.register({
   name: "java/nio/charset/Charset", ctor: JCharset,
   methods: {
     "<init>(Ljava/lang/String;[Ljava/lang/String;)V": function (this: JCharset, name: string) { this.cname = name; },
-    "static forName(Ljava/lang/String;)Ljava/nio/charset/Charset;": charset,
+    "static forName(Ljava/lang/String;)Ljava/nio/charset/Charset;": (name: string | null) => charset(lookupCharset(name)),
     "static defaultCharset()Ljava/nio/charset/Charset;": () => utf8,
     "name()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
     "toString()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
     "displayName()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
-    "static isSupported(Ljava/lang/String;)Z": () => 1,
+    "static isSupported(Ljava/lang/String;)Z": (name: string | null) => {
+      try { lookupCharset(name); return 1; }
+      catch (e) { if (rt.iof(e, "java/nio/charset/UnsupportedCharsetException")) return 0; throw e; }
+    },
     "canEncode()Z": () => 1,
     "equals(Ljava/lang/Object;)Z": function (this: JCharset, o: unknown) {
       return o instanceof JCharset && o.cname.toUpperCase() === this.cname.toUpperCase() ? 1 : 0;
@@ -604,11 +614,18 @@ function mkCoder(n: string, cs: JCharset) {
   c.cs = cs;
   return c;
 }
-class JCharsetCoder extends JObj { cs: JCharset = utf8; malformed = "REPORT"; unmappable = "REPORT"; replacementBytes = Int8Array.of(63); }
+class JCharsetCoder extends JObj {
+  cs: JCharset = utf8; malformed = "REPORT"; unmappable = "REPORT"; replacementBytes = Int8Array.of(63);
+  marked = false;   // a UTF-16 encoder has written its byte-order mark
+}
 const coderChain = (ret: string): NativeSpec["methods"] => ({
   [`charset()Ljava/nio/charset/Charset;`]: function (this: JCharsetCoder) { return this.cs; },
   // implReset/implFlush: the protected hooks a coding subclass overrides
-  [`reset()${ret}`]: function (this: JCharsetCoder) { if (this instanceof JCharsetDecoder) this.endian = null; return after(vcall(this, "implReset", "()V"), () => this); },
+  [`reset()${ret}`]: function (this: JCharsetCoder) {
+    if (this instanceof JCharsetDecoder) this.endian = null;
+    this.marked = false;
+    return after(vcall(this, "implReset", "()V"), () => this);
+  },
   "implReset()V": () => {},
   [`implFlush(${ret === "Ljava/nio/charset/CharsetEncoder;" ? "Ljava/nio/ByteBuffer;" : "Ljava/nio/CharBuffer;"})Ljava/nio/charset/CoderResult;`]: () => CODER_UNDERFLOW,
   [`onMalformedInput(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.malformed = action.name; return this; },
@@ -666,12 +683,8 @@ rt.register({
             return true;
           });
         }
-        const text = yield charText(src);
-        const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
-        for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
-        dst.pos += n;
-        src.pos = src.lim;
-        return n < bytes.length ? CODER_OVERFLOW : CODER_UNDERFLOW;
+        const text: string | null = src.sequence !== null && typeof src.sequence !== "string" ? yield charText(src) : null;
+        return encodeChars(this, src, dst, end, text);
       }),
     "canEncode(Ljava/lang/CharSequence;)Z": driven(function* (this: JCharsetCoder, cs: unknown): Gen {
       const s = typeof cs === "string" ? cs : String(yield vcall(cs, "toString", "()Ljava/lang/String;"));
@@ -680,16 +693,89 @@ rt.register({
     }),
   },
 });
-export class JCharsetDecoder extends JCharsetCoder {
+class JCharsetDecoder extends JCharsetCoder {
   replacement = "\ufffd";
   endian: boolean | null = null;
 }
+/** a char buffer's code units as a typed array, when its storage is one in native order */
+function charUnits(b: JBuffer): Uint16Array | null {
+  const view = b.dv;
+  return b.little && !(view.byteOffset & 1) ? new Uint16Array(view.buffer, view.byteOffset, b.cap) : null;
+}
+/** encode(in, out, endOfInput) for the built-in charsets: it stops before a character that does
+ *  not fit, and applies the coder's error actions to what an encodeLoop would report. `text` holds
+ *  the remaining characters of a buffer over an app's CharSequence. */
+function encodeChars(coder: JCharsetCoder, src: JCharBuffer, dst: JBuffer, end: number, text: string | null): JCoderResult {
+  if (dst.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+  const name = charsetName(coder.cs), wide = name.startsWith("UTF-16"), little = name === "UTF-16LE";
+  const max = name === "US-ASCII" ? 0x7f : name === "ISO-8859-1" ? 0xff : 0x10ffff;
+  const seq = src.sequence, units = seq === null ? charUnits(src) : null, view = src.dv, order = src.little;
+  const first = src.pos, offset = src.sequenceOffset;
+  const at = text !== null ? (i: number) => text.charCodeAt(i - first) : typeof seq === "string" ? (i: number) => seq.charCodeAt(offset + i)
+    : units ? (i: number) => units[i] : (i: number) => view.getUint16(i << 1, order);
+  const out = dst.dv, bytes = new Uint8Array(out.buffer, out.byteOffset, dst.cap), limit = src.lim, room = dst.lim;
+  let sp = first, dp = dst.pos, result = CODER_UNDERFLOW;
+  if (name === "UTF-16" && !coder.marked && sp < limit) {
+    if (room - dp < 2) return CODER_OVERFLOW;
+    bytes[dp++] = 0xfe; bytes[dp++] = 0xff; coder.marked = true;
+  }
+  while (sp < limit) {
+    const c = at(sp);
+    if (c < 0x80 && !wide) {
+      if (dp >= room) { result = CODER_OVERFLOW; break; }
+      bytes[dp++] = c; sp++; continue;
+    }
+    let cp = c, width = 1, error: "malformed" | "unmappable" | null = null;
+    if (c >= 0xd800 && c <= 0xdbff) {
+      if (sp + 1 >= limit) { if (!end) break; error = "malformed"; }
+      else {
+        const low = at(sp + 1);
+        if (low >= 0xdc00 && low <= 0xdfff) { cp = 0x10000 + ((c - 0xd800) << 10) + low - 0xdc00; width = 2; }
+        else error = "malformed";
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) error = "malformed";
+    if (!error && cp > max) error = "unmappable";
+    if (error) {
+      const action = error === "malformed" ? coder.malformed : coder.unmappable;
+      if (action === "REPORT") { result = new JCoderResult(error, width); break; }
+      if (action === "REPLACE") {
+        const replacement = coder.replacementBytes;
+        if (room - dp < replacement.length) { result = CODER_OVERFLOW; break; }
+        for (let i = 0; i < replacement.length; i++) bytes[dp++] = replacement[i];
+      }
+      sp += width;
+      continue;
+    }
+    const n = wide ? width * 2 : max <= 0xff || cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (room - dp < n) { result = CODER_OVERFLOW; break; }
+    if (wide) {
+      for (let i = 0; i < width; i++) {
+        const unit = at(sp + i);
+        bytes[dp + (little ? 1 : 0)] = unit >> 8; bytes[dp + (little ? 0 : 1)] = unit; dp += 2;
+      }
+    } else if (n === 1) bytes[dp++] = cp;
+    else if (n === 2) { bytes[dp++] = 0xc0 | cp >> 6; bytes[dp++] = 0x80 | cp & 63; }
+    else if (n === 3) { bytes[dp++] = 0xe0 | cp >> 12; bytes[dp++] = 0x80 | cp >> 6 & 63; bytes[dp++] = 0x80 | cp & 63; }
+    else { bytes[dp++] = 0xf0 | cp >> 18; bytes[dp++] = 0x80 | cp >> 12 & 63; bytes[dp++] = 0x80 | cp >> 6 & 63; bytes[dp++] = 0x80 | cp & 63; }
+    sp += width;
+  }
+  src.pos = sp; dst.pos = dp;
+  return result;
+}
 function decodeBuffer(coder: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) {
   const name = charsetName(coder.cs), wide = name.startsWith("UTF-16");
-  const input = src.dv;
-  while (src.pos < src.lim) {
-    const pos = src.pos, remaining = src.lim - pos;
-    let width = 1, cp = input.getUint8(pos), malformed = 0, incomplete = false;
+  const input = src.dv, bytes = new Uint8Array(input.buffer, input.byteOffset, src.cap);
+  const out = dst.dv, units = charUnits(dst), little = dst.little, limit = src.lim, room = dst.lim;
+  let sp = src.pos, dp = dst.pos, result = CODER_UNDERFLOW;
+  const put = (unit: number) => { if (units) units[dp++] = unit; else out.setUint16(dp++ << 1, unit, little); };
+  while (sp < limit) {
+    if (!wide && units) {
+      let b = 0;
+      while (sp < limit && dp < room && (b = bytes[sp]) < 0x80) { units[dp++] = b; sp++; }
+      if (sp >= limit) break;
+    }
+    const pos = sp, remaining = limit - pos;
+    let width = 1, cp = bytes[pos], malformed = 0, incomplete = false;
     if (wide) {
       if (remaining < 2) incomplete = true;
       else {
@@ -698,7 +784,7 @@ function decodeBuffer(coder: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: n
           if (name === "UTF-16") {
             const bom = input.getUint16(pos);
             if (bom === 0xfeff || bom === 0xfffe) {
-              coder.endian = bom === 0xfffe; src.pos += 2; continue;
+              coder.endian = bom === 0xfffe; sp += 2; continue;
             }
           }
         }
@@ -722,7 +808,7 @@ function decodeBuffer(coder: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: n
         cp &= (1 << (7 - width)) - 1;
         for (let i = 1; i < width; i++) {
           if (i >= remaining) { incomplete = true; break; }
-          const byte = input.getUint8(pos + i);
+          const byte = bytes[pos + i];
           if ((byte & 0xc0) !== 0x80 || i === 1 && (lead === 0xe0 && byte < 0xa0 || lead === 0xf0 && byte < 0x90 || lead === 0xf4 && byte > 0x8f)) {
             malformed = i; break;
           }
@@ -732,16 +818,25 @@ function decodeBuffer(coder: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: n
       }
     }
     if (incomplete) {
-      if (!end) return CODER_UNDERFLOW;
+      if (!end) break;
       malformed = remaining;
     }
-    if (malformed && coder.malformed === "REPORT") return new JCoderResult("malformed", malformed);
-    const text = malformed ? coder.malformed === "IGNORE" ? "" : coder.replacement : String.fromCodePoint(cp);
-    if (text.length > dst.lim - dst.pos) return CODER_OVERFLOW;
-    for (let i = 0; i < text.length; i++) dst.dv.setUint16(dst.pos++ << 1, text.charCodeAt(i), dst.little);
-    src.pos += malformed || width;
+    if (malformed && coder.malformed === "REPORT") { result = new JCoderResult("malformed", malformed); break; }
+    if (malformed) {
+      const text = coder.malformed === "IGNORE" ? "" : coder.replacement;
+      if (text.length > room - dp) { result = CODER_OVERFLOW; break; }
+      for (let i = 0; i < text.length; i++) put(text.charCodeAt(i));
+    } else if (cp > 0xffff) {
+      if (room - dp < 2) { result = CODER_OVERFLOW; break; }
+      put(0xd7c0 + (cp >> 10)); put(0xdc00 | cp & 0x3ff);
+    } else {
+      if (dp >= room) { result = CODER_OVERFLOW; break; }
+      put(cp);
+    }
+    sp += malformed || width;
   }
-  return CODER_UNDERFLOW;
+  src.pos = sp; dst.pos = dp;
+  return result;
 }
 rt.register({
   name: "java/nio/charset/CharsetDecoder", ctor: JCharsetDecoder,

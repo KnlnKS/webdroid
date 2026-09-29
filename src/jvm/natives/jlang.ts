@@ -750,11 +750,12 @@ sm("substring(I)Ljava/lang/String;", function (i: number) {
   if (i < 0 || i > this.length) sioobe(i);
   return this.slice(i);
 });
-sm("substring(II)Ljava/lang/String;", function (a: number, b: number) {
+const substring = function (this: string, a: number, b: number) {
   if (a < 0 || b > this.length || a > b) sioobe(a);
   return this.slice(a, b);
-});
-sm("subSequence(II)Ljava/lang/CharSequence;", function (a: number, b: number) { return this.slice(a, b); });
+};
+sm("substring(II)Ljava/lang/String;", substring);
+sm("subSequence(II)Ljava/lang/CharSequence;", substring);
 sm("startsWith(Ljava/lang/String;)Z", function (s: string) { return this.startsWith(s) ? 1 : 0; });
 sm("startsWith(Ljava/lang/String;I)Z", function (s: string, i: number) { return this.startsWith(s, i) ? 1 : 0; });
 sm("endsWith(Ljava/lang/String;)Z", function (s: string) { return this.endsWith(s) ? 1 : 0; });
@@ -780,6 +781,9 @@ sm("toCharArray()[C", function () {
   return a;
 });
 sm("getChars(II[CI)V", function (srcBegin: number, srcEnd: number, dst: Uint16Array, dstBegin: number) {
+  if (srcBegin < 0 || srcBegin > srcEnd || srcEnd > this.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `begin ${srcBegin}, end ${srcEnd}, length ${this.length}`);
+  if (!dst) rt.npe();
+  if (dstBegin < 0 || dstBegin > dst.length - (srcEnd - srcBegin)) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${dstBegin}, count ${srcEnd - srcBegin}, length ${dst.length}`);
   for (let i = srcBegin; i < srcEnd; i++) dst[dstBegin + i - srcBegin] = this.charCodeAt(i);
 });
 const utf8Bytes = function (this: string) { return new Int8Array(utf8.enc.encode(this).buffer); };
@@ -1664,6 +1668,9 @@ rt.register({ name: "java/lang/StrictMath", ctor: class extends JObj {}, statics
 class JSystem extends JObj {}
 function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
   if (src === null || dst === null) rt.npe();
+  if (sp < 0 || dp < 0 || len < 0 || sp > src.length - len || dp > dst.length - len) {
+    throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `src.length=${src.length} srcPos=${sp} dst.length=${dst.length} dstPos=${dp} length=${len}`);
+  }
   if (len === 0) return;
   if (ArrayBuffer.isView(src)) {
     (dst as { set(a: unknown, o: number): void }).set((src as Uint8Array).subarray(sp, sp + len), dp);
