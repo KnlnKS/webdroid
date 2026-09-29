@@ -31,7 +31,7 @@ rt.register({ name: "webdroid/OutputStreamChannel", ctor: class extends JStreamC
 } });
 class JChannelInput extends JInputStream { channel: unknown = null; }
 class JChannelOutput extends JOutputStream { channel: unknown = null; }
-async function wrap(bytes: Int8Array, offset: number, count: number): Promise<JBuffer> {
+function wrap(bytes: Int8Array, offset: number, count: number): JBuffer | Promise<JBuffer> {
   if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
   checkFromIndexSize(offset, count, bytes.length);
   return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([BII)Ljava/nio/ByteBuffer;", bytes, offset, count);

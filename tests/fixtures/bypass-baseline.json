@@ -269,7 +269,6 @@
  "java/net/Socket.shutdownOutput()V → isClosed()Z",
  "java/net/Socket.shutdownOutput()V → isConnected()Z",
  "java/net/Socket.shutdownOutput()V → isOutputShutdown()Z",
- "java/nio/file/spi/FileSystemProvider.newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream; → newByteChannel(Ljava/nio/file/Path;Ljava/util/Set;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/channels/SeekableByteChannel;",
  "java/security/MessageDigest.getDigestLength()I → clone()Ljava/lang/Object;",
  "java/util/AbstractQueue.element()Ljava/lang/Object; → peek()Ljava/lang/Object;",
  "java/util/AbstractQueue.remove()Ljava/lang/Object; → poll()Ljava/lang/Object;",

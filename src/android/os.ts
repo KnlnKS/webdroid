@@ -2,12 +2,12 @@
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import type { JMessenger } from "./messenger";
-import { procIdentity, processTid, sysconf } from "../shell/procfs";
+import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
-import { jarray, jmethod, mangleMethod } from "../jvm/abi";
+import { i8, jarray, jmethod, mangleMethod, utf8 } from "../jvm/abi";
 import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
@@ -22,7 +22,7 @@ import { mkExecutor } from "../jvm/natives/jconc";
 import { newFile, pathOf, JInputStream, JOutputStream, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer, resident } from "../jvm/natives/jnio";
@@ -1481,6 +1481,178 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "getNameMax0(Ljava/lang/String;)J": () => 255n,
 };
 for (const [sig, fn] of Object.entries(unixFileSystem)) rt.registerJni("java/io/UnixFileSystem", sig, fn);
+
+// sun.nio.fs.UnixNativeDispatcher (UnixNativeDispatcher.c): java.nio.file's syscalls over the VFS.
+// Paths arrive as NUL-terminated strings in native memory; failures throw UnixException(errno).
+// The VFS has no symbolic or hard links and keeps no permission bits, as the libc above.
+// UnixException's fillInStackTrace records nothing, so none is captured
+const unixError = (e: number) => {
+  const x = rt.make("sun/nio/fs/UnixException");
+  x[declaredField("sun/nio/fs/UnixException", "errno")] = e;
+  return x;
+};
+const unixSys = (result: number): number => { if (result < 0) throw unixError(-result); return result; };
+const cpath = (address: bigint) => mem.cstr(mem.txVa(BigInt.asUintN(64, address)));
+const bytesOf = (s: string) => i8(utf8.enc.encode(s));
+const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, AT_FDCWD = -100, AT_REMOVEDIR = 0x200;
+/** a name relative to directory descriptor `dfd`, as the *at calls resolve it */
+function atPath(dfd: number, address: bigint): string {
+  const name = cpath(address);
+  if (name.startsWith("/") || dfd === AT_FDCWD) return name;
+  const st = javaFdStat(dfd);
+  if (!st) throw unixError(E.BADF);
+  if ((st.mode & S_IFMT) !== S_IFDIR || st.path === null) throw unixError(E.NOTDIR);
+  return st.path + "/" + name;
+}
+const ATTR_FIELDS = ["st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size",
+  "st_atime_sec", "st_atime_nsec", "st_mtime_sec", "st_mtime_nsec", "st_ctime_sec", "st_ctime_nsec"] as const;
+let attrProps: string[] | undefined;
+function fillAttrs(attrs: JObj, path: string, mode: number, size: number): void {
+  const a = attrs as unknown as Record<string, number | bigint>;
+  const p = attrProps ??= ATTR_FIELDS.map((name) => declaredField("sun/nio/fs/UnixFileAttributes", name));
+  const ms = vfs.mtime(path), sec = BigInt(Math.floor(ms / 1000)), nsec = BigInt((ms % 1000) * 1e6);
+  a[p[0]] = mode; a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = a[p[5]] = procIdentity.uid; a[p[6]] = BigInt(size);
+  for (let i = 7; i < 13; i += 2) { a[p[i]] = sec; a[p[i + 1]] = nsec; }
+}
+/** stat(2) of a path: a directory, or a file (procfs included) */
+function statPath(path: string, attrs: JObj | null): number {
+  const p = vfs.norm(path), dir = vfs.isDir(p), st = dir ? null : vfs.stat(p);
+  if (!dir && !st) throw unixError(E.NOENT);
+  const mode = dir ? S_IFDIR | 0o755 : S_IFREG | 0o644;
+  if (attrs) fillAttrs(attrs, p, mode, dir ? 4096 : st!.size);
+  return mode;
+}
+function unlinkPath(path: string): void {
+  const p = vfs.norm(path);
+  if (vfs.isDir(p)) throw unixError(E.ISDIR);
+  if (!vfs.delete(p)) throw unixError(E.NOENT);
+}
+function rmdirPath(path: string): void {
+  const p = vfs.norm(path);
+  if (!vfs.isDir(p)) throw unixError(vfs.exists(p) ? E.NOTDIR : E.NOENT);
+  if (vfs.list(p).length) throw unixError(E.NOTEMPTY);
+  vfs.rmdir(p);
+}
+/** utimes(2): times in microseconds; the VFS keeps modification times only */
+function setTimes(path: string, modified: bigint): void {
+  const p = vfs.norm(path);
+  if (!vfs.exists(p)) throw unixError(E.NOENT);
+  vfs.mtimes.set(p, Number(modified / 1000n));
+}
+/** chown(2) as an app's uid may: to its own ids, or -1 to keep one */
+function chownPath(path: string, uid: number, gid: number): void {
+  statPath(path, null);
+  if (![-1, procIdentity.uid].includes(uid) || ![-1, procIdentity.uid].includes(gid)) throw unixError(E.PERM);
+}
+const fdPath = (fd: number): string => { const st = javaFdStat(fd); if (!st) throw unixError(E.BADF); return st.path ?? ""; };
+/** open DIR streams: the entries as readdir(3) returns them, and the descriptor closedir closes */
+const dirStreams = new Map<bigint, { names: string[]; i: number; fd: number }>();
+let nextDir = 0n;
+function openDirStream(path: string, fd: number): bigint {
+  const p = vfs.norm(path);
+  if (!vfs.isDir(p)) throw unixError(vfs.exists(p) ? E.NOTDIR : E.NOENT);
+  dirStreams.set(++nextDir, { names: [".", "..", ...vfs.list(p)], i: 0, fd });
+  return nextDir;
+}
+const passwdName = (id: number) => bytesOf(appUserName(id));
+const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
+  // SUPPORTS_OPENAT | SUPPORTS_FUTIMES: bionic has openat64, fstatat64, unlinkat, renameat, futimesat
+  // and fdopendir. UnixException is initialized first, since the natives throw it synchronously.
+  "init()I": () => after(rt.initClass(rt.link("sun/nio/fs/UnixException")), () => 6),
+  "getcwd()[B": () => bytesOf("/"),
+  "strerror(I)[B": (e: number) => bytesOf(ERRSTR[e] ?? `Unknown error ${e}`),
+  "dup(I)I": (fd: number) => unixSys(javaDupFd(fd)),
+  "open0(JII)I": (path: bigint, flags: number) => unixSys(javaOpenFd(cpath(path), flags)),
+  "openat0(IJII)I": (dfd: number, path: bigint, flags: number) => unixSys(javaOpenFd(atPath(dfd, path), flags)),
+  "close(I)V": (fd: number) => { unixSys(javaCloseFd(fd)); },
+  "link0(JJ)V": () => { throw unixError(E.PERM); },
+  "symlink0(JJ)V": () => { throw unixError(E.PERM); },
+  "unlink0(J)V": (path: bigint) => unlinkPath(cpath(path)),
+  "unlinkat0(IJI)V": (dfd: number, path: bigint, flags: number) => (flags & AT_REMOVEDIR ? rmdirPath : unlinkPath)(atPath(dfd, path)),
+  "rename0(JJ)V": (from: bigint, to: bigint) => { unixSys(renamePath(null, cpath(from), cpath(to))); },
+  "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { unixSys(renamePath(null, atPath(fromDir, from), atPath(toDir, to))); },
+  "mkdir0(JI)V": (path: bigint) => { unixSys(mkdirPath(null, cpath(path))); },
+  "rmdir0(J)V": (path: bigint) => rmdirPath(cpath(path)),
+  // an existing path is never a link
+  "readlink0(J)[B": (path: bigint) => { statPath(cpath(path), null); throw unixError(E.INVAL); },
+  "realpath0(J)[B": (path: bigint) => { const p = vfs.norm(cpath(path)); statPath(p, null); return bytesOf(p); },
+  "stat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => { statPath(cpath(path), attrs); },
+  "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => { statPath(cpath(path), attrs); },
+  "stat1(J)I": (path: bigint) => { try { return statPath(cpath(path), null); } catch { return 0; } },
+  "fstatat0(IJILsun/nio/fs/UnixFileAttributes;)V": (dfd: number, path: bigint, _flag: number, attrs: JObj) => { statPath(atPath(dfd, path), attrs); },
+  "fstat(ILsun/nio/fs/UnixFileAttributes;)V": (fd: number, attrs: JObj) => {
+    const st = javaFdStat(fd);
+    if (!st) throw unixError(E.BADF);
+    fillAttrs(attrs, st.path ?? "", st.mode, (st.mode & S_IFMT) === S_IFDIR ? 4096 : st.size);
+  },
+  "chmod0(JI)V": (path: bigint) => { statPath(cpath(path), null); },
+  "fchmod(II)V": (fd: number) => { fdPath(fd); },
+  "chown0(JII)V": (path: bigint, uid: number, gid: number) => chownPath(cpath(path), uid, gid),
+  "lchown0(JII)V": (path: bigint, uid: number, gid: number) => chownPath(cpath(path), uid, gid),
+  "fchown(III)V": (fd: number, uid: number, gid: number) => chownPath(fdPath(fd), uid, gid),
+  "utimes0(JJJ)V": (path: bigint, _accessed: bigint, modified: bigint) => setTimes(cpath(path), modified),
+  "futimes(IJJ)V": (fd: number, _accessed: bigint, modified: bigint) => setTimes(fdPath(fd), modified),
+  "opendir0(J)J": (path: bigint) => openDirStream(cpath(path), -1),
+  "fdopendir(I)J": (fd: number) => openDirStream(fdPath(fd), fd),
+  "closedir(J)V": (dir: bigint) => {
+    const stream = dirStreams.get(dir);
+    if (!stream) throw unixError(E.BADF);
+    dirStreams.delete(dir);
+    if (stream.fd >= 0) unixSys(javaCloseFd(stream.fd));
+  },
+  "readdir(J)[B": (dir: bigint) => {
+    const stream = dirStreams.get(dir);
+    if (!stream) throw unixError(E.BADF);
+    return stream.i < stream.names.length ? bytesOf(stream.names[stream.i++]) : null;
+  },
+  "access0(JI)V": (path: bigint, mode: number) => { unixSys(accessPath(null, cpath(path), mode)); },
+  "exists0(J)Z": (path: bigint) => +(accessPath(null, cpath(path), 0) === 0),
+  "getpwuid(I)[B": passwdName,
+  "getgrgid(I)[B": passwdName,
+  "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V": driven(function* (path: bigint, attrs: JObj): Gen {
+    statPath(cpath(path), null);
+    const s: JStructStatVfs = yield storageStatVfs(), a = attrs as unknown as Record<string, bigint>;
+    const f = (name: string) => declaredField("sun/nio/fs/UnixFileStoreAttributes", name);
+    a[f("f_frsize")] = s.f_frsize; a[f("f_blocks")] = s.f_blocks; a[f("f_bfree")] = s.f_bfree; a[f("f_bavail")] = s.f_bavail;
+  }),
+};
+for (const [sig, fn] of Object.entries(unixNativeDispatcher)) rt.registerJni("sun/nio/fs/UnixNativeDispatcher", sig, fn);
+// LinuxNativeDispatcher.c: the VFS stores no extended attributes, and its only mount table would be
+// a file some app wrote (there is no /proc/mounts)
+const mountTables = new Map<bigint, string[][]>();
+let nextMountTable = 0n;
+const linuxNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
+  "init()V": () => {},
+  "flistxattr(IJI)I": (fd: number) => { fdPath(fd); return 0; },
+  "fgetxattr0(IJJI)I": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.ENODATA); },
+  "fremovexattr0(IJ)V": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.ENODATA); },
+  "fsetxattr0(IJJI)V": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.EOPNOTSUPP); },
+  "setmntent0(JJ)J": (path: bigint) => {
+    const text = vfs.read(cpath(path));
+    if (!text) throw unixError(E.NOENT);
+    mountTables.set(++nextMountTable, utf8.dec.decode(text).split("\n").map((line) => line.trim().split(/\s+/)).filter((f) => f.length >= 4 && !f[0].startsWith("#")));
+    return nextMountTable;
+  },
+  "getmntent(JLsun/nio/fs/UnixMountEntry;)I": (table: bigint, entry: JObj) => {
+    const fields = mountTables.get(table)?.shift();
+    if (!fields) return -1;
+    const e = entry as unknown as Record<string, Int8Array>;
+    ["name", "dir", "fstype", "opts"].forEach((name, i) => { e[declaredField("sun/nio/fs/UnixMountEntry", name)] = bytesOf(fields[i]); });
+    return 0;
+  },
+  "endmntent(J)V": (table: bigint) => { mountTables.delete(table); },
+};
+for (const [sig, fn] of Object.entries(linuxNativeDispatcher)) rt.registerJni("sun/nio/fs/LinuxNativeDispatcher", sig, fn);
+// UnixCopyFile.c: read(2) and write(2) until the source's end, checking the cancel flag between reads
+rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (dst: number, src: number, cancel: bigint): Gen {
+  const buffer = new Uint8Array(1 << 16);
+  for (;;) {
+    const n = unixSys(yield javaReadFd(src, buffer));
+    if (!n) return;
+    if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(OS_CONSTANTS.ECANCELED);
+    for (let at = 0; at < n;) at += unixSys(javaWriteFd(dst, buffer.subarray(at, n)));
+  }
+}));
 // libcore's OsConstants fills its fields from native initConstants(); these are the reference
 // device's values (bun run gen-framework)
 rt.registerJni("android/system/OsConstants", "initConstants()V", () => {

@@ -6,6 +6,7 @@ import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import type { Cells } from "../compiler";
 import { device } from "../../shell/config";
+import { mem } from "../../native/mem";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -474,12 +475,22 @@ rt.register({
 
 // ── sun.misc.Unsafe: enough for kotlinx-coroutines' artificial stack frames
 class JUnsafe extends JObj {}
+const rawAddress = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
 const unsafe = new JUnsafe();
 rt.register({
   name: "sun/misc/Unsafe", ctor: JUnsafe,
   statics: { theUnsafe: unsafe },
   methods: {
     "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
+    // raw memory is the process's native heap (sun.nio.fs passes paths through it)
+    "allocateMemory(J)J": (size: bigint) => {
+      if (size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      const p = mem.malloc(Number(size));
+      if (!p) throw rt.mkThrowable("java/lang/OutOfMemoryError", null);
+      return BigInt(mem.va(p));
+    },
+    "freeMemory(J)V": (address: bigint) => mem.free(rawAddress(address)),
+    "putByte(JB)V": (address: bigint, value: number) => mem.st8(rawAddress(address), value),
     "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
       const info = cls.ci!;
       const p = rt.initClass(info); if (p) yield p;
