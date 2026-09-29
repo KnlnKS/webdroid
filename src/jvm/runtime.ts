@@ -195,7 +195,8 @@ export class Runtime {
   /**
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
    * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a
-   * resumed native runs on the thread that entered it and releases that thread when it finishes.
+   * resumed native runs on the thread that entered it and releases that thread when it finishes
+   * or suspends again.
    */
   drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.th(), false); }
   private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, thread: unknown, resumed: boolean): T | Promise<T> {
@@ -205,7 +206,10 @@ export class Runtime {
       catch (e) { if (resumed) this.su(thread); throw e; }
       if (step.done) { if (resumed) this.su(thread); return step.value; }
       const value = step.value;
-      if (value instanceof Promise) return suspendWith(value, (v, threw) => { this.st(thread); return this.driveStep(g, v, threw, thread, true); }) as Promise<T>;
+      if (value instanceof Promise) {
+        if (resumed) this.su(thread);
+        return suspendWith(value, (v, threw) => { this.st(thread); return this.driveStep(g, v, threw, thread, true); }) as Promise<T>;
+      }
       input = value; threw = false;
     }
   }

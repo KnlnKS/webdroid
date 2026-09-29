@@ -1,5 +1,5 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { curThread, JThread, setCurThread, vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
 import { jarray } from "../jvm/abi";
@@ -67,11 +67,13 @@ let nextIdentity = 1n;
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 const oneWay = new Map<number, Promise<unknown>>();
+/** Java frames entered by `call` keep the binder thread across suspensions; the thread is
+ *  released as soon as `call` returns, so no other job resumes on it */
 export async function withCallingIdentity<T>(caller: Caller, call: () => Promise<T>): Promise<T> {
-  const thread = new JThread(), previous = curThread;
-  thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller); setCurThread(thread);
-  try { return await call(); }
-  finally { callers.delete(thread); if (curThread === thread) setCurThread(previous); }
+  const thread = new JThread();
+  thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller);
+  try { return await callOn(thread, call); }
+  finally { callers.delete(thread); }
 }
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);

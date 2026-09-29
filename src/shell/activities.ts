@@ -2,7 +2,7 @@
 // relaunches for configuration changes, finishing, and the task's place behind the home screen.
 
 import { rt, type Gen, driven } from "../jvm/runtime";
-import { vcall, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { vcall, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode, manifestTaskAffinity } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
@@ -62,11 +62,9 @@ export function launchMain(): Promise<void> {
 }
 function launchActivity(cls: string, intent: JIntent | null, options?: ActivityLaunch): Promise<void> {
   // Startup and Java callbacks already hold the main queue; queuing again would deadlock.
-  const run = async () => {
-    const prev = curThread;
-    setCurThread(mainThread);
-    try { if (!await reuseActivity(cls, intent, options)) await launchActivity0(cls, intent, undefined, options); } finally { setCurThread(prev); }
-  };
+  const run = () => callOn(mainThread, async () => {
+    if (!await reuseActivity(cls, intent, options)) await launchActivity0(cls, intent, undefined, options);
+  });
   return inMainJob() ? run() : onMain(run);
 }
 const FLAG_ACTIVITY_CLEAR_TASK = 0x8000, FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, FLAG_ACTIVITY_NEW_TASK = 0x10000000, FLAG_ACTIVITY_SINGLE_TOP = 0x20000000;

@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc, jmethod } from "../jvm/abi";
-import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
+import { vcall, callOn, mkEnumSet, JThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jutil";
 import { JViewGroup, initViewFromCtx, defaultSize, rootOf, type JView } from "./view";
@@ -206,12 +206,8 @@ function bridge(o: JObj, thread: JThread): WebInterfaces[string] {
       const name = dex.method(m.methodIdx).name;
       if ((m.flags & 9) !== 1 || name in out || !annos.get(m.methodIdx)?.some((a) => a.type === "android/webkit/JavascriptInterface")) continue;
       const desc = dex.methodDesc(m.methodIdx), { params, ret } = parseMethodDesc(desc);
-      out[name] = async (...args: unknown[]) => {
-        const previous = curThread;
-        setCurThread(thread);
-        try { return fromJava(ret, await vcall(o, name, desc, ...params.map((d, i) => toJava(d, args[i])))); }
-        finally { if (curThread === thread) setCurThread(previous); }
-      };
+      out[name] = async (...args: unknown[]) =>
+        fromJava(ret, await callOn(thread, () => vcall(o, name, desc, ...params.map((d, i) => toJava(d, args[i])))));
     }
   }
   return out;
@@ -436,30 +432,28 @@ export class JWebView extends JViewGroup {
     this.go({ url, src: srcFor(url, this) });
   }
   private async intercept(request: WebRequest): Promise<WebResponse | null> {
-    const previous = curThread;
-    setCurThread(this.requestThread);
-    try {
-      const req = mkRequest(request.url);
-      req.main = request.main; req.method = request.method;
-      req.headers = inst("java/util/HashMap");
-      for (const [key, value] of Object.entries(request.headers)) await vcall(req.headers, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
-      const response = await vcall(this.client, "shouldInterceptRequest", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;", this, req) as JWebResourceResponse | null;
-      if (!response) return null;
-      const headers: Record<string, string> = {};
-      if (response.headers) for (const entry of await toJsArray(await vcall(response.headers, "entrySet", "()Ljava/util/Set;"))) {
-        const key = await vcall(entry, "getKey", "()Ljava/lang/Object;") as string;
-        headers[key] = await vcall(entry, "getValue", "()Ljava/lang/Object;") as string;
-      }
-      if (response.mime) headers["content-type"] = response.mime + (response.enc ? "; charset=" + response.enc : "");
-      let binary = "";
-      if (response.data) {
-        try {
-          const bytes = await readStreamFully(response.data);
-          for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-        } finally { await vcall(response.data, "close", "()V"); }
-      }
-      return { body: btoa(binary), status: response.status, reason: response.reason, headers };
-    } finally { if (curThread === this.requestThread) setCurThread(previous); }
+    const on = <T>(call: () => T) => callOn(this.requestThread, call);
+    const req = mkRequest(request.url);
+    req.main = request.main; req.method = request.method;
+    req.headers = inst("java/util/HashMap");
+    for (const [key, value] of Object.entries(request.headers)) await on(() => vcall(req.headers, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value));
+    const response = await on(() => vcall(this.client, "shouldInterceptRequest", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;", this, req)) as JWebResourceResponse | null;
+    if (!response) return null;
+    const headers: Record<string, string> = {};
+    const entries = response.headers ? await on(() => vcall(response.headers, "entrySet", "()Ljava/util/Set;")) : null;
+    if (entries) for (const entry of await on(() => toJsArray(entries))) {
+      const key = await on(() => vcall(entry, "getKey", "()Ljava/lang/Object;")) as string;
+      headers[key] = await on(() => vcall(entry, "getValue", "()Ljava/lang/Object;")) as string;
+    }
+    if (response.mime) headers["content-type"] = response.mime + (response.enc ? "; charset=" + response.enc : "");
+    let binary = "";
+    if (response.data) {
+      try {
+        const bytes = await on(() => readStreamFully(response.data));
+        for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+      } finally { await on(() => vcall(response.data, "close", "()V")); }
+    }
+    return { body: btoa(binary), status: response.status, reason: response.reason, headers };
   }
   step(n: number) {
     const i = this.idx + n;
