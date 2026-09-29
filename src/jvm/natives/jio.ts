@@ -1,14 +1,15 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
 import { charsetName, encodeModifiedUtf8, encodeString, streamDecoder, type StreamDecoder } from "../charset";
 import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { csText } from "./jchars";
+import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable, type FileSource } from "../../shell/lazyfile";
 import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
 import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer, type JCharsetDecoder } from "./jnio";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd } from "../../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
@@ -346,6 +347,50 @@ rt.register({
   },
 });
 rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
+// OpenJDK tests the bits of F_GETFL's result as is, so a failure reads as appending
+rt.registerJni("java/io/FileDescriptor", "getAppend(I)Z", (fd: number) => +((javaFcntlFd(fd, 3 /* F_GETFL */, 0) & O_APPEND) !== 0));
+rt.registerJni("java/io/FileDescriptor", "sync()V", function (this: JObj) {
+  if (javaSyncFd(descriptorInt(this)) < 0) throw rt.mkThrowable("java/io/SyncFailedException", "sync failed");
+});
+const descriptorInt = (d: JObj | null): number => d ? (d as unknown as Record<string, number>)[declaredField("java/io/FileDescriptor", "descriptor")] : -1;
+/** OpenJDK's FileInputStream natives (io_util_md.c) over the stream's descriptor */
+function streamFd(stream: JObj): number {
+  const fd = descriptorInt((stream as unknown as Record<string, JObj | null>)[declaredField("java/io/FileInputStream", "fd")]);
+  if (fd < 0) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
+  return fd;
+}
+/** JNU_ThrowIOExceptionWithLastError: the errno's text, else the caller's detail */
+function lastError(result: number, detail: string | null): number {
+  if (result < 0) throw rt.mkThrowable("java/io/IOException", ERRSTR[-result] ?? detail);
+  return result;
+}
+const S_IFMT = 0o170000, S_IFCHR = 0o020000, S_IFIFO = 0o010000, S_IFSOCK = 0o140000, FIONREAD = 0x541b;
+const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
+  // a character device, FIFO or socket answers FIONREAD; anything else, the distance to its end
+  "available0()I": function () {
+    const fd = streamFd(this), type = (javaFdStat(fd)?.mode ?? 0) & S_IFMT;
+    if (type === S_IFCHR || type === S_IFIFO || type === S_IFSOCK) {
+      const n = javaIoctlIntFd(fd, FIONREAD);
+      if (n >= 0) return n;
+    }
+    const cur = lastError(javaSeekFd(fd, 0, 1), null), end = lastError(javaSeekFd(fd, 0, 2), null);
+    lastError(javaSeekFd(fd, cur, 0), null);
+    return Math.max(0, Math.min(0x7fffffff, end - cur));
+  },
+  "length0()J": function () {
+    const st = javaFdStat(streamFd(this));
+    if (!st) lastError(-E.BADF, "GetLength failed");
+    return BigInt(st!.size);
+  },
+  "position0()J": function () { return BigInt(lastError(javaSeekFd(streamFd(this), 0, 1), "Seek failed")); },
+  "skip0(J)J": function (n: bigint) {
+    const fd = streamFd(this), cur = javaSeekFd(fd, 0, 1);
+    if (cur === -E.SPIPE) throw rt.mkThrowable("java/io/FileInputStream$UseManualSkipException", null);
+    lastError(cur, "Seek error");
+    return BigInt(lastError(javaSeekFd(fd, Number(n), 1), "Seek error") - cur);
+  },
+};
+for (const [sig, fn] of Object.entries(fisNatives)) rt.registerJni("java/io/FileInputStream", sig, fn);
 export class JOutputStream extends JObj {
   chunks: number[] = [];
 }

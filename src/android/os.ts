@@ -6,13 +6,13 @@ import { procIdentity, processTid, sysconf } from "../shell/procfs";
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
-import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { jarray, jmethod, mangleMethod } from "../jvm/abi";
 import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught, after } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught, after, checkFromIndexSize } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
@@ -22,7 +22,8 @@ import { mkExecutor } from "../jvm/natives/jconc";
 import { newFile, pathOf, JInputStream, JOutputStream, type JFileDescriptor } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdFile, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
+import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
@@ -1248,9 +1249,9 @@ rt.register({
   },
 });
 const FD = "Ljava/io/FileDescriptor;";
-function statOf(size: number, dir: boolean, mtimeMs: number): JStructStat {
+function statOf(size: number, mode: number, mtimeMs: number): JStructStat {
   const s = new JStructStat();
-  s.st_mode = dir ? 0o40755 : 0o100644;
+  s.st_mode = mode;
   s.st_size = BigInt(size);
   s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(mtimeMs / 1000));
   s.st_blocks = (s.st_size + 511n) / 512n;
@@ -1276,17 +1277,63 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       d.fd = fd;
       return d;
     },
-    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JFileDescriptor) => {
-      const fd = descriptorFd(d), file = fdFile(fd), source = file ? null : javaFdSource(fd);
-      if (!file && !source) throw errno("fstat", E.BADF);
-      return statOf(file ? file.len : source!.size, false, file?.path ? vfs.mtime(file.path) : 0);
+    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JFileDescriptor | null) => {
+      const st = javaFdStat(fdOf(d));
+      if (!st) throw errno("fstat", E.BADF);
+      return statOf(st.size, st.mode, st.path ? vfs.mtime(st.path) : 0);
+    },
+    [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number) =>
+      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdOf(d), target)),
+    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdOf(d), target, Number(position))),
+    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number) =>
+      ioResult("write", javaWriteFd(fdOf(d), ioRegion(buffer, offset, count))),
+    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      ioResult("pwrite", javaPwriteFd(fdOf(d), ioRegion(buffer, offset, count), Number(position))),
+    [`ftruncate(${FD}J)V`]: (d: JFileDescriptor | null, length: bigint) => sys("ftruncate", javaTruncateFd(fdOf(d), Number(length))),
+    [`fsync(${FD})V`]: (d: JFileDescriptor | null) => sys("fsync", javaSyncFd(fdOf(d))),
+    [`fdatasync(${FD})V`]: (d: JFileDescriptor | null) => sys("fdatasync", javaSyncFd(fdOf(d))),
+    [`ioctlInt(${FD}I)I`]: (d: JFileDescriptor | null, request: number) => ioResult("ioctl", javaIoctlIntFd(fdOf(d), request)),
+    [`fcntlInt(${FD}II)I`]: (d: JFileDescriptor | null, cmd: number, arg: number) => ioResult("fcntl", javaFcntlFd(fdOf(d), cmd, arg)),
+    [`fcntlVoid(${FD}I)I`]: (d: JFileDescriptor | null, cmd: number) => ioResult("fcntl", javaFcntlFd(fdOf(d), cmd, 0)),
+    [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JFileDescriptor | null, expected: bigint, tag: bigint) =>
+      fdsanExchangeOwnerTag(fdOf(d), expected, tag),
+    [`android_fdsan_get_owner_tag(${FD})J`]: (d: JFileDescriptor | null) => fdsanOwnerTag(fdOf(d)),
+    "android_fdsan_get_tag_type(J)Ljava/lang/String;": (tag: bigint) => fdsanTagType(tag),
+    "android_fdsan_get_tag_value(J)J": (tag: bigint) => fdsanTagValue(tag),
+    // no descriptor here is a terminal
+    [`isatty(${FD})Z`]: () => 0,
+    "pipe2(I)[Ljava/io/FileDescriptor;": (flags: number) => jarray(javaPipeFds(flags).map((fd) => {
+      const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
+      d.fd = fd;
+      return d;
+    }), FD),
+    [`sendfile(${FD}${FD}Landroid/system/Int64Ref;J)J`]: (out: JFileDescriptor | null, input: JFileDescriptor | null, offset: JObj | null, count: bigint) => {
+      const value = offset && declaredField("android/system/Int64Ref", "value");
+      const start = value ? Number((offset as unknown as Record<string, bigint>)[value]) : 0;
+      const n = count < 0n ? -1 : Math.min(Number(count), SENDFILE_CHUNK);
+      if (n < 0 || start < 0) throw errno("sendfile", E.INVAL);
+      if (!javaFdStat(fdOf(out))) throw errno("sendfile", E.BADF);
+      const scratch = new Uint8Array(n), from = fdOf(input);
+      return after(value ? javaPreadFd(from, scratch, start) : javaReadFd(from, scratch), (read) => {
+        sys("sendfile", read);
+        const written = read ? javaWriteFd(fdOf(out), scratch.subarray(0, read)) : 0;
+        sys("sendfile", written);
+        if (value) (offset as unknown as Record<string, bigint>)[value] = BigInt(start + written);
+        return BigInt(written);
+      });
     },
     [`lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
       const r = javaSeekFd(descriptorFd(d), Number(off), whence);
       if (r < 0) throw errno("lseek", -r);
       return BigInt(r);
     },
-    [`close(${FD})V`]: (d: JFileDescriptor) => { javaCloseFd(d.fd); d.fd = -1; },
+    [`close(${FD})V`]: (d: JFileDescriptor | null) => {
+      if (d === null) return rt.npe();
+      const fd = descriptorFd(d), owner = (d as unknown as Record<string, bigint | undefined>)[declaredField("java/io/FileDescriptor", "ownerId")];
+      d.fd = -1;
+      sys("close", fdsanClose(fd, owner ?? 0n, javaCloseFd));
+    },
     [`dup(${FD})${FD}`]: (d: JFileDescriptor) => {
       const n = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       n.fd = javaDupFd(descriptorFd(d));
@@ -1336,7 +1383,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = existing("stat", path);
-      return statOf(st?.size ?? 0, !st, vfs.mtime(path));
+      return statOf(st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
     },
     // the VFS keeps no permission bits: an existing file takes any mode
     "chmod(Ljava/lang/String;I)V": (path: string) => {
@@ -1361,7 +1408,33 @@ const linux: Record<string, (...args: never[]) => unknown> = {
 };
 /** a -errno result as the ErrnoException libcore's Os methods throw */
 function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
+const ioResult = (fn: string, result: number): number => { sys(fn, result); return result; };
+/** the descriptor libcore's JNI reads from a FileDescriptor: -1 for none */
+const fdOf = (d: JFileDescriptor | null): number => d ? descriptorFd(d) : -1;
+/** sendfile moves at most this much a call, which its callers loop over as Linux allows */
+const SENDFILE_CHUNK = 1 << 20;
+/** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
+type IoBuffer = Int8Array | JBuffer | null;
+function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
+  if (buffer === null) return rt.npe();
+  const view = buffer instanceof JBuffer ? buffer.dv : buffer;
+  checkFromIndexSize(offset, count, view.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
+  return new Uint8Array(view.buffer, view.byteOffset + offset, count);
+}
+/** A direct buffer may live in guest memory, which can move while a read waits: it takes the
+ *  bytes once they have arrived. */
+function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
+  const target = ioRegion(buffer, offset, count);
+  if (!(buffer instanceof JBuffer)) return after(read(target), (n) => ioResult(fn, n));
+  const scratch = new Uint8Array(count);
+  return after(read(scratch), (n) => {
+    if (n > 0) ioRegion(buffer, offset, n).set(scratch.subarray(0, n));
+    return ioResult(fn, n);
+  });
+}
 for (const [sig, fn] of Object.entries(linux)) rt.registerJni("libcore/io/Linux", sig, fn);
+// Android interrupts threads blocked on the descriptor; a reader parked on a pipe here stays parked
+rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD})V`, () => {});
 
 // java.io.UnixFileSystem: java.io.File's natives over the VFS. It keeps no permission bits and
 // no hard links, so a mode change on an existing path succeeds, as chmod does above.

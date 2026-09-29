@@ -1119,6 +1119,15 @@ const STRING_TYPES = new Set(["java/lang/String", "java/lang/Object", "java/lang
 const BOX_UNIVERSE = new Set(["java/lang/Object", "java/io/Serializable", "java/lang/Comparable", "java/lang/Number"]);
 
 export const rt = new Runtime();
+const declaredFields = new Map<string, string>();
+/** the property holding `cls`'s instance field `name`, whether a spec maps it or bytecode keeps it;
+ *  "" when the class has none */
+export function declaredField(cls: string, name: string): string {
+  const key = cls + "." + name;
+  let prop = declaredFields.get(key);
+  if (prop === undefined) declaredFields.set(key, prop = instanceFieldOf(rt.link(cls), name) ?? "");
+  return prop;
+}
 
 /** A native implemented as a generator (see Runtime.drive), callable like any other method.
  *  It forwards every argument: caller-sensitive natives receive the caller's Runtime past their
