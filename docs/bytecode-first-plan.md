@@ -788,9 +788,15 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      8x; 8 KB and buffered patterns match. Streams nobody closes keep their descriptor, since no
      finalizer runs. Each write publishes to the VFS, and a disk-backed file posts one worker
      message per write.
-2. **B.4 collections.** Performance does not rule it out: 20,000 mixed String/Integer keys through
-   HashMap put/get, ArrayList add/get and an entrySet walk took 12.3 ms from libcore against 11.3 ms
-   in TS at steady state (Bun), and 29.9 against 15.4 ms on the first, cold run. The blocker is TS
+2. **B.4 collections.** Measured in V8 on 2026-09-29, after structured hot entries (history entry):
+   libcore wins the 20,000-key mix (2.63 against 2.98 ms steady) and is 2x to 6x faster on removal,
+   ArrayDeque, TreeMap and Integer-keyed HashMap, but 1.4x to 2.5x slower on ArrayList get/add,
+   String-keyed HashMap, LinkedHashMap, HashSet and small allocations, and first use costs 5 to
+   16 ms more. Not flipped, and the refactor below is not started: the loss is about 2 ns per
+   compiled frame (`ArrayList.get` is four), so the next step is cheaper leaf frames in the hot tier
+   (§4.6), then remeasure the same workloads in V8. With the cut guava's Maps
+   suite runs (213,181 passes; TS fails its initialization) and jsr166 gains 72; the 9,469 guava
+   regressions are TS consumers (reserialization, `Collections.reverse` on `l.a`). The blocker is TS
    code built on the TS objects: `newArrayList` (83 sites in 28 files; a bytecode ArrayList needs
    class init and a constructor that can suspend), `toJsArray` (42, already Java-call based),
    `mkIter` (12) and about 130 direct `.a`/`.m` reads, mostly in jstream, jjson, worksource, sqlite
