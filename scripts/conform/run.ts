@@ -138,7 +138,9 @@ async function runClass(cls: string): Promise<void> {
 const queue = [...(named.length ? named : classes)];
 await Promise.all(Array.from({ length: JOBS }, async () => { while (queue.length) await runClass(queue.shift()!); }));
 
-const hash = (name: string) => Bun.hash.crc32(name).toString(16).padStart(8, "0");
+// a parameter taken from the clock (Instant.now()) would rename its test on every run
+const clockFree = (name: string) => name.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, (t) => Math.abs(Date.parse(t) - Date.now()) < 864e5 ? "<now>" : t);
+const hash = (name: string) => Bun.hash.crc32(clockFree(name)).toString(16).padStart(8, "0");
 const baselinePath = `tests/conformance/${suiteName}.json`;
 const baseline: Record<string, string[]> = existsSync(baselinePath) ? await Bun.file(baselinePath).json() : {};
 let passes = 0, total = 0, before = 0;
