@@ -92,16 +92,15 @@ const M_generateLP = mangleMethod("generateLayoutParams", "(Landroid/util/Attrib
 const M_addView = mangleMethod("addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
 const M_onFinishInflate = mangleMethod("onFinishInflate", "()V");
 
-/** The AttributeSet of a layout tag, resolving against `ctx`'s theme. With AOSP's resources it
- *  is the layout's parser itself, advanced to the tag as LayoutInflater's rInflate advances it:
- *  their Theme.obtainStyledAttributes takes nothing else. */
+/** The AttributeSet of a layout tag, resolving against `ctx`'s theme: the layout's parser itself,
+ *  advanced to the tag as LayoutInflater's rInflate advances it, since AOSP's
+ *  Theme.obtainStyledAttributes takes nothing else. */
 export async function tagAttributes(node: XmlNode, ctx: JContext, parser: unknown): Promise<JAttrSet> {
-  const set = parser ? attrSet(parser)! : new JAttrSet();
-  if (parser) while (set.node !== node) if (await vcall(parser, "next", "()I") === 1) throw rt.mkThrowable("android/view/InflateException", "tag " + node.name + " not in its layout");
-  set.node = node;
+  const set = attrSet(parser)!;
+  while (set.node !== node) if (await vcall(parser, "next", "()I") === 1) throw rt.mkThrowable("android/view/InflateException", "tag " + node.name + " not in its layout");
   set.res = ctx.$host.res;
   set.theme = themeOf(ctx) ?? ctx.$host.theme;
-  return (parser ?? set) as JAttrSet;
+  return parser as JAttrSet;
 }
 
 const A_value = 0x01010024;
@@ -129,7 +128,7 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
         const included = await includedLayout(jctx, layoutId);
         let incView: JView | null;
         try { incView = await inflateNode(jctx, included.root, parentView, false, inflater, included.parser); }
-        finally { if (included.parser) await vcall(included.parser, "close", "()V"); }
+        finally { await vcall(included.parser, "close", "()V"); }
         // a <merge> include inflates straight into parentView and returns it
         if (incView === parentView) continue;
         if (incView) {

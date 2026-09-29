@@ -163,7 +163,7 @@ rt.register({
 rt.register({
   name: "android/util/Xml", ctor: class extends JObj {},
   methods: {
-    // our XmlResourceParser already implements AttributeSet
+    // XmlBlock's parser already implements AttributeSet
     "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
     "static newPullParser()Lorg/xmlpull/v1/XmlPullParser;": () => newXmlPullParser(),
     "static newSerializer()Lorg/xmlpull/v1/XmlSerializer;": () => newXmlSerializer(),

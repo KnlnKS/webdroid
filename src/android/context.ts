@@ -12,7 +12,6 @@ import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermi
 import type { JUri } from "./net";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
-import type { JConfiguration } from "./resnative";
 import { dbPath, openDatabase } from "./sqlite";
 import { javaTheme, newTheme, loadResources, configuredResources, javaConfiguration } from "./resources";
 import { deviceConfiguration } from "./resnative";
@@ -429,7 +428,7 @@ const contextMethods: NativeSpec["methods"] = {
     return after(vcall(this, "getTheme", "()Landroid/content/res/Resources$Theme;"), (theme) =>
       vcall(theme, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", styleId, attrs));
   },
-  "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {
+  "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: unknown) {
     return configurationContext(this, config);
   },
   "createDeviceProtectedStorageContext()Landroid/content/Context;": function (this: JContext) { return this; },
@@ -445,7 +444,7 @@ rt.register({ name: "android/content/Context", ctor: JContext, methods: contextM
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
 class JAttributionContext extends JContextWrapper {}
-const configurationContext = driven(function* (source: JContext, config: JConfiguration): Gen<JContext> {
+const configurationContext = driven(function* (source: JContext, config: unknown): Gen<JContext> {
   const jresources = yield configuredResources(source.$host.jresources, config);
   const theme: JTheme = yield newTheme(jresources, themeOf(source) ?? source.$host.theme, 0);
   return newContextImpl(Object.assign(Object.create(source.$host), { res: nativeRes(jresources), jresources, theme }));
@@ -514,7 +513,7 @@ const resourcesViaBase = wrapperMethods["getResources()Landroid/content/res/Reso
 export const themeWrapperMethods: NativeSpec["methods"] = {
   ...wrapperMethods,
   "getResources()Landroid/content/res/Resources;": function (this: JContextThemeWrapper) { return this.overrideResources ?? resourcesViaBase.call(this); },
-  "applyOverrideConfiguration(Landroid/content/res/Configuration;)V": function (this: JContextThemeWrapper, config: JConfiguration) {
+  "applyOverrideConfiguration(Landroid/content/res/Configuration;)V": function (this: JContextThemeWrapper, config: unknown) {
     return after(configurationContext(this, config), (context) => {
       this.$host = context.$host;
       this.overrideResources = this.$host.jresources;

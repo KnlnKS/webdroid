@@ -106,7 +106,7 @@ function parseColor(raw: string): number {
 export interface SV { t: number; d: number; pkg: number; flags: number; resid: number; density: number }
 export const newSV = (): SV => ({ t: TV.NULL, d: 0, pkg: -1, flags: 0, resid: 0, density: 0 });
 /** Res_value::DATA_NULL_EMPTY: @empty, a TYPE_NULL that still counts as a value */
-export const DATA_NULL_EMPTY = 1;
+const DATA_NULL_EMPTY = 1;
 const isValidResid = (id: number) => (id & 0x00ff0000) !== 0 && (id & 0xff000000) !== 0;
 
 /** A bag with its parents merged in, keys ascending, child entries winning (AssetManager2::GetBag):
@@ -146,7 +146,7 @@ const SEL = { density: 0 };
 let configGen = 0;
 const allResources: Resources[] = [];
 /** the booted app's Resources — the framework package is an Arsc, not one of these, so the
- *  most recent is the app's. AOSP's AssetManager handle is this (src/android/delegates.ts). */
+ *  most recent is the app's. */
 export function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
 /** Re-resolve entries under changed qualifiers in every live resource table. */
 function setDeviceQualifiers(qualifiers: Partial<Arsc["device"]>): void {
@@ -190,8 +190,7 @@ export class Resources {
   selectorCache = new Map<number, number>();
   private framework: Arsc | null | undefined;
   jobj: any = null; // android.content.res.Resources instance
-  /** an AssetManager's apks in cookie order; null for the stack's own, whose framework is
-   *  cookie 1 and app cookie 2 */
+  /** an AssetManager's apks in cookie order; null for a package's own tables */
   apks: Apk[] | null = null;
   private cookies: Int8Array | null = null;
   private qualifiers: Partial<Arsc["device"]> = {};
@@ -204,13 +203,6 @@ export class Resources {
   }
 
   invalidate(): void { this.bagCache.clear(); this.selectorCache.clear(); configGen++; }
-
-  scoped(qualifiers: Partial<Arsc["device"]>): Resources {
-    const res = new Resources(scopeTable(this.arsc, qualifiers), this.zip, this.lazyEntries, true);
-    res.framework = scopeTable(this.tbl(0x01000000), qualifiers);
-    Object.assign(res.dm, this.dm);
-    return res;
-  }
 
   /** AssetManager2::SetApkAssets: the last package that is not the framework is the app's */
   setApks(apks: Apk[]): void {
@@ -232,8 +224,7 @@ export class Resources {
   }
   /** the Java cookie of the apk a package id's table came from: 1-based, -1 for none */
   cookieOf(pkg: number): number {
-    if (pkg < 0) return -1;
-    return this.cookies ? this.cookies[pkg] : pkg === 0x01 ? 1 : 2;
+    return pkg < 0 ? -1 : this.cookies![pkg];
   }
 
   /** the table a resource id belongs to: package 0x01 is the framework, anything else the app */
@@ -267,8 +258,6 @@ export class Resources {
     }
     return this.arsc?.findId(type, name) || fwPkg?.findId(type, name) || 0;
   }
-
-  idPackage(resId: number): string { return this.tbl(resId)?.packageName(resId >>> 24) ?? "app"; }
 
   idType(resId: number): string {
     const a = this.tbl(resId);
@@ -763,20 +752,17 @@ export function javaField<T>(o: unknown, cls: string, name: string): T {
   if (p === undefined) props.set(key, p = rt.fieldProp(cls, name) ?? "");
   return (o as Record<string, T>)[p];
 }
-/** the AssetManager2 behind a Resources, ours or AOSP's */
+/** the AssetManager2 behind AOSP's Resources */
 export function nativeRes(jres: unknown): Resources {
-  const host = (jres as { host?: Resources }).host;
-  if (host instanceof Resources) return host;
   const impl = javaField<object>(jres, "android/content/res/Resources", "mResourcesImpl");
   const res = nativeAssets(javaField(impl, "android/content/res/ResourcesImpl", "mAssets"));
   res.dm = javaField<JDisplayMetrics>(impl, "android/content/res/ResourcesImpl", "mMetrics");
   res.jobj ??= jres;
   return res;
 }
-/** the AssetManager2 behind an AssetManager, ours or AOSP's */
+/** the AssetManager2 behind AOSP's AssetManager */
 export function nativeAssets(am: unknown): Resources {
-  const host = (am as { host?: Resources }).host;
-  return host instanceof Resources ? host : deref<Resources>(javaField(am, "android/content/res/AssetManager", "mObject"));
+  return deref<Resources>(javaField(am, "android/content/res/AssetManager", "mObject"));
 }
 /** the native theme behind a Resources.Theme, ours or AOSP's */
 export function nativeTheme(theme: unknown): JTheme | null {

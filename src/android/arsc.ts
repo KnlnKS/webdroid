@@ -288,13 +288,6 @@ export class Arsc {
     return out;
   }
 
-  /** every type name the table defines, each once */
-  allTypes(): string[] {
-    const s = new Set<string>();
-    for (const chunks of this.types.values()) for (const ch of chunks) s.add(ch.name);
-    return [...s];
-  }
-
   /** the configuration axes the entry's values vary over (ResTable_typeSpec flags) */
   specFlags(resId: number): number { return this.specs.get(resId >>> 16)?.[resId & 0xffff] ?? 0; }
 

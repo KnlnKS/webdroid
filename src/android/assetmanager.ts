@@ -55,18 +55,8 @@ function loadApk(path: string, flags: number): bigint {
   if (!apk) throw rt.mkThrowable("java/io/IOException", "Failed to load asset path " + path);
   return handle({ ...apk, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
 }
-/** the apks behind an AssetManager; our own stack's Resources has the framework's and the app's */
-const stackApks = new WeakMap<Resources, Apk[]>();
-function apksOf(res: Resources): Apk[] {
-  if (res.apks) return res.apks;
-  let apks = stackApks.get(res);
-  if (!apks) {
-    apks = [{ path: "/system/framework/framework-res.apk", table: res.tbl(0x01000000), zip: {}, lazyEntries: new Map() },
-      { path: "", table: res.arsc, zip: res.zip, lazyEntries: res.lazyEntries }];
-    stackApks.set(res, apks);
-  }
-  return apks;
-}
+/** the apks behind an AssetManager */
+const apksOf = (res: Resources) => res.apks as ApkN[];
 /** an archive entry's bytes, when they are in memory */
 const entryBytes = (apk: Apk, path: string): Uint8Array | null => apk.zip[path] ?? apk.table?.files(path) ?? null;
 function entrySource(apk: Apk, path: string): FileSource | null {
@@ -264,10 +254,7 @@ function resourceId(res: Resources, name: string, defType: string | null, defPkg
 /** the locales the tables hold resources for, as BCP-47 tags */
 function localesOf(res: Resources, excludeSystem: boolean): string[] {
   const out = new Set<string>();
-  apksOf(res).forEach((apk, i) => {
-    const system = (apk as Partial<ApkN>).system ?? (!res.apks && i === 0);
-    if (!(excludeSystem && system)) for (const l of apk.table?.locales ?? []) out.add(l);
-  });
+  for (const apk of apksOf(res)) if (!(excludeSystem && apk.system)) for (const l of apk.table?.locales ?? []) out.add(l);
   return [...out];
 }
 /** the qualifiers selection reads, out of nativeSetConfiguration's arguments */
