@@ -1,7 +1,7 @@
 import { readStreamFully } from "./jio";
 import { mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
 import { jarray, mangleMethod, charsToString, dotName, slashName, utf8 } from "../abi";
-import { vcall, vcallOn, callOn, curThread, type JThread, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
+import { vcall, vcallOn, callOn, curThread, type JThread, after, scall, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo, driven, without, type Gen } from "../runtime";
 import { defaultLocale, localeForTag, JLocale } from "./jvalues";
 import {
@@ -805,6 +805,7 @@ const stackMethods: Methods = {
     return -1;
   }),
 };
+const SPLITERATOR_ORDERED = 0x10, SPLITERATOR_NONNULL = 0x100;
 const listExtras: Record<string, (base: Methods) => Methods> = {
   "java/util/ArrayList": () => ({
     "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JList, stream: unknown): Gen {
@@ -836,7 +837,13 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
   }),
   "java/util/Vector": (base) => ({ "<init>(II)V": function () {}, ...vectorMethods(base) }),
   "java/util/Stack": (base) => ({ ...vectorMethods(base), ...stackMethods }),
-  "java/util/ArrayDeque": () => IDENTITY_EQUALITY,
+  "java/util/ArrayDeque": () => ({
+    ...IDENTITY_EQUALITY,
+    // DeqSpliterator's characteristics; its body reads ArrayDeque's own fields
+    "spliterator()Ljava/util/Spliterator;": function (this: JList) {
+      return scall("java/util/Spliterators", "spliterator", "(Ljava/util/Collection;I)Ljava/util/Spliterator;", this, SPLITERATOR_ORDERED | SPLITERATOR_NONNULL);
+    },
+  }),
 };
 const listOmits: Record<string, string[][]> = {
   "java/util/ArrayList": [QUEUE_ONLY, DEQUE_ONLY],
@@ -853,7 +860,8 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
     sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection"
       : n === "java/util/LinkedList" ? "java/util/AbstractSequentialList" : "java/util/AbstractList",
     ifaces: [...n === "java/util/ArrayDeque" ? [] : ["java/util/List"], "java/util/Collection", "java/lang/Iterable",
-      "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
+      ...n === "java/util/ArrayDeque" || n === "java/util/LinkedList" ? ["java/util/Queue", "java/util/Deque"] : ["java/util/RandomAccess"],
+      "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...without(base, ...listOmits[n]), ...listExtras[n]?.(base) },
   });
 }
@@ -1900,6 +1908,9 @@ const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown): Gen {
 const priorityQueueMethods: NonNullable<NativeSpec["methods"]> = {
   ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, SEQUENCED, CAPACITY),
   ...IDENTITY_EQUALITY,
+  "spliterator()Ljava/util/Spliterator;": function (this: JList) {
+    return scall("java/util/Spliterators", "spliterator", "(Ljava/util/Collection;I)Ljava/util/Spliterator;", this, SPLITERATOR_NONNULL);
+  },
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
@@ -2592,11 +2603,6 @@ const collDefaults: Methods = {
   "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
   "stream()Ljava/util/stream/Stream;": collectionStream,
   "parallelStream()Ljava/util/stream/Stream;": collectionStream,
-  "spliterator()Ljava/util/Spliterator;": driven(function* (this: JObj): Gen {
-    const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
-    spliterator.a = yield toJsArray(this);
-    return spliterator;
-  }),
 };
 const listDefaults: Methods = {
   "sort(Ljava/util/Comparator;)V": driven(function* (this: JObj, cmp: unknown): Gen {

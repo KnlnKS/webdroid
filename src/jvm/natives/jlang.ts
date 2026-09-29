@@ -636,14 +636,6 @@ rt.register({
       const it = yield vcall(this, "iterator", "()Ljava/util/Iterator;");
       while (yield vcall(it, "hasNext", "()Z")) yield vcall(c, "accept", "(Ljava/lang/Object;)V", yield vcall(it, "next", "()Ljava/lang/Object;"));
     }),
-    "spliterator()Ljava/util/Spliterator;": driven(function* (this: JObj): Gen {
-      const values: unknown[] = [];
-      const it = yield vcall(this, "iterator", "()Ljava/util/Iterator;");
-      while (yield vcall(it, "hasNext", "()Z")) values.push(yield vcall(it, "next", "()Ljava/lang/Object;"));
-      const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
-      spliterator.a = values;
-      return spliterator;
-    }),
   },
 });
 // marker interfaces (registered early so link of String/implementors works + iof)
