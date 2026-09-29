@@ -427,6 +427,28 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   BufferedInput/OutputStream from libcore passes all 99 Buffered tests but is 1.13x slower on byte
   streams and 8x under the TS DataInputStream; PrintStream is blocked on `System.out`/`err`, which
   are TS console streams set at module load.
+- 2026-09-29, B.4 collections measured in V8 after structured hot entries, not flipped. Node 24,
+  one process per workload and side, 7 interleaved reps, medians; the cut is ArrayList, LinkedList,
+  HashMap, LinkedHashMap, HashSet, LinkedHashSet, ArrayDeque, TreeMap, TreeSet and the Abstract*
+  bases (`Class$` form). Steady ms per call (TS / libcore): the plan's 20,000 mixed-key mix 2.98 /
+  2.63; ArrayList add+5x get of 2,000 0.075 / 0.189; iterate 0.063 / 0.093; remove(0)/remove(Object)/
+  remove(last) 7.23 / 1.19; HashMap String keys 0.336 / 0.477, Integer keys 0.635 / 0.332; entrySet
+  and keySet walks 0.436 / 0.310; LinkedHashMap 0.277 / 0.440; HashSet 0.172 / 0.329; ArrayDeque
+  0.994 / 0.352; TreeMap 1.99 / 0.68; Collections.sort 1.60 / 1.54 (Integer), 2.35 / 2.54 (String,
+  reversed comparator); LinkedList 0.093 / 0.110; 500 two-element ArrayList+HashMap allocations
+  0.064 / 0.155. First use costs 5 to 16 ms more per workload (the mix 13.0 / 28.9 ms). libcore wins
+  where the TS structures are wrong-shaped (splice removal, TreeMap as a sorted array, ArrayDeque as
+  a JS array, a boxed key made into a `"I" + v` string per lookup), and loses 1.4x to 2.5x on the operations UI code does most:
+  indexed get/add, String-keyed get, small allocations and HashSet's extra HashMap layer. The loss is
+  frame count: a compiled frame costs about 2 ns in V8 (a 50,000-iteration array loop 3.8 ns per
+  element, one extra call 5.9, a four-frame chain 11), and `ArrayList.get` is four frames
+  (get, Objects.checkIndex, Preconditions.checkIndex, elementData). With the cut, guava runs its
+  Maps suite (0 passes in TS: `initializationError`, a ClassCastException of MapKeySetGenerator to
+  TestSortedSetGenerator in the suite builder) and totals 246,253 against 40,085, with 9,469
+  regressions: 7,396 reserialization tests (TS ObjectStreams need the TS `serialization:` specs) and
+  2,073 descending TreeSet views, where TS `Collections.reverse` reads `l.a`. jsr166 went from 2,544
+  to 2,616 with no regressions. Both losses are TS consumers of TS layout, the refactor the plan
+  names; neither is a libcore defect.
 
 ## Java, storage and framework semantics
 
