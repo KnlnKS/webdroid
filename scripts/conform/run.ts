@@ -66,7 +66,9 @@ if (!existsSync(`${dexDir}/classes.dex`)) {
   const hidden = `${dexDir}/hidden`;
   if (suite.source) run(["javac", "--release", "17", "-nowarn", "-cp", `${androidPlatform(35)}/android.jar`, "-d", hidden,
     ...[...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/hidden`)].map((f) => `${import.meta.dir}/hidden/${f}`)]);
-  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", "-cp", [...jars, `${androidPlatform(35)}/android.jar`, hidden].join(":"),
+  // hidden java.* classes cannot come from the class path; they patch java.base as sources javac only reads
+  const patch = suite.source ? ["--patch-module", `java.base=${import.meta.dir}/patch/java.base`] : [];
+  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", ...patch, "-cp", [...jars, `${androidPlatform(35)}/android.jar`, hidden].join(":"),
     "-d", out, `${import.meta.dir}/ConformRunner.java`, ...(suite.source ? stubs : []),
     ...(suite.testng ? [`${import.meta.dir}/NgRunner.java`] : []), ...sources]);
   run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,
