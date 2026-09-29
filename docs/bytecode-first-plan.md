@@ -855,6 +855,13 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      Cache Storage (`gapsOf`/`recordGaps` in codecache.ts) and replayed before platform indexing:
      192 -> 125 ms per realm in V8. The rest is the 23.5k stub closures and records; precomputing
      class hierarchy and field layouts is still open.
+   - **Throw cost (§4.6), measured.** In V8 a Java throw caught one frame up costs 2.9 µs, 2.2 of
+     them the 64-frame `new Error()` in `captureStack`; 30 frames deep it costs 9.6 µs, 5.8 without
+     capture, because every handler-free frame catches and rethrows to convert JS errors (about
+     170 ns a frame). Converting only at frames with handlers (taking an NPE's trace from the
+     original TypeError) would remove that catch from most bodies, and about 25 bytes of bytecode
+     each, but every TS boundary that inspects a caught value (166 catch sites) must then convert.
+     Cut 6 made a missing-file check throw internally, as on a device (about 13 µs each).
    - **Persisted code.** Warm launches load 49 MB of emitted JS for Mihon (63 MB more for
      microG). Suspension checks are 23% of those bytes, and 60% of bodies are single-block
      methods that still carry the full dispatch loop, so a leaner emitter shrinks both import and
