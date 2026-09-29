@@ -3,8 +3,9 @@
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { defineException, vcall, after, checkFromIndexSize } from "./jlang";
 import { mem } from "../../native/mem";
-import { charsToString, mangleMethod } from "../abi";
-import { charsetInfo, decodeString, encodeString } from "../charset";
+import { charsToString, jarray, mangleMethod } from "../abi";
+import { CHARSETS, charsetInfo, decodeString, encodeString } from "../charset";
+import { handle } from "../../android/handles";
 import { newStringSet } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
@@ -733,6 +734,8 @@ rt.register({
 });
 
 class JCharset extends JObj { cname = "UTF-8"; }
+/** no converter is ever opened, so nothing is freed */
+const NO_FINALIZER = handle(() => {});
 const charset = (n: string) => { const c = new JCharset(); c.cname = n; return c; };
 const utf8 = charset("UTF-8");
 /** Charset.lookup: the canonical name of a charset served here */
@@ -784,6 +787,14 @@ rt.register({
     }),
   },
 });
+// libcore's Charset.availableCharsets asks ICU's converter registry, which holds the charsets served here
+for (const [sig, fn] of Object.entries({
+  "getNativeFinalizer()J": () => NO_FINALIZER,
+  "getAvailableCharsetNames()[Ljava/lang/String;": () => jarray(CHARSETS.map((cs) => cs.name), "Ljava/lang/String;"),
+  "charsetForName(Ljava/lang/String;)Ljava/nio/charset/Charset;": (name: string) => {
+    try { return charset(charsetInfo(name).name); } catch { return null; }
+  },
+})) rt.registerJni("com/android/icu/charset/NativeConverter", sig, fn);
 rt.register({
   name: "java/nio/charset/spi/CharsetProvider", ctor: class extends JObj {},
   methods: { "<init>()V": function () {} },
