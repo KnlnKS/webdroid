@@ -19,6 +19,7 @@ export class PrivateFiles {
   private writes: Promise<void> = Promise.resolve();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pendingSince = 0;
+  private lastWrite = 0;
   private readonly disk = new DiskStore();
   /** disk files whose path changed, removed at the next flush unless another path took them */
   private orphans = new Set<string>();
@@ -57,13 +58,22 @@ export class PrivateFiles {
    *  still persists every FLUSH_MAX_MS: each flush stores whole files, so per-write flushing is
    *  quadratic in a growing file's size. */
   private schedule(): void {
-    const now = Date.now();
-    if (this.timer === null) this.pendingSince = now;
-    else clearTimeout(this.timer);
-    this.timer = setTimeout(() => { this.timer = null; void this.flush().catch((error) => console.error("[private files]", error)); },
-      now - this.pendingSince >= FLUSH_MAX_MS ? 0 : FLUSH_SETTLE_MS);
+    this.lastWrite = Date.now();
+    if (this.timer === null) { this.pendingSince = this.lastWrite; this.arm(FLUSH_SETTLE_MS); }
+  }
+  /** the timer is re-armed when it fires rather than on every write */
+  private arm(delay: number): void {
+    this.timer = setTimeout(() => {
+      const wait = Math.min(this.lastWrite + FLUSH_SETTLE_MS, this.pendingSince + FLUSH_MAX_MS) - Date.now();
+      if (wait > 0) return this.arm(wait);
+      this.timer = null;
+      void this.flush().catch((error) => console.error("[private files]", error));
+    }, delay);
   }
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
+    // the writing view already holds these bytes; reinstalling would trim its open file's
+    // spare capacity, so every append would copy the whole file
+    if (value?.kind === "file" && view.files.get(path) === value.bytes) return;
     view.dirs.delete(path);
     if (value?.kind === "file") view.write(path, value.bytes, false);
     else if (value?.kind === "disk") view.adopt(path, this.disk.file(value.id, value.size));
