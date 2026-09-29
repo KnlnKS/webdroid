@@ -726,13 +726,25 @@ sm("compareToIgnoreCase(Ljava/lang/String;)I", function (o: string) {
   const a = this.toLowerCase(), b = o.toLowerCase();
   return a < b ? -1 : a > b ? 1 : 0;
 });
-sm("indexOf(I)I", function (c: number) { return this.indexOf(String.fromCharCode(c)); });
-sm("indexOf(II)I", function (c: number, from: number) { return this.indexOf(String.fromCharCode(c), from); });
+/** String.indexOf(int): a char, a surrogate pair for a supplementary code point, never an invalid one.
+ *  Short strings (URI and parser delimiter sets) are scanned without allocating the needle. */
+function charIndex(s: string, c: number, from: number): number {
+  if (c >>> 0 < 0x10000 && s.length - from < 32) {
+    for (let i = from < 0 ? 0 : from; i < s.length; i++) if (s.charCodeAt(i) === c) return i;
+    return -1;
+  }
+  return c >>> 0 > 0x10ffff ? -1 : s.indexOf(String.fromCodePoint(c), from);
+}
+function charLastIndex(s: string, c: number, from: number): number {
+  return from < 0 || c >>> 0 > 0x10ffff ? -1 : s.lastIndexOf(String.fromCodePoint(c), from);
+}
+sm("indexOf(I)I", function (c: number) { return charIndex(this, c, 0); });
+sm("indexOf(II)I", function (c: number, from: number) { return charIndex(this, c, from); });
 sm("indexOf(Ljava/lang/String;)I", function (s: string) { return this.indexOf(s); });
 sm("indexOf(Ljava/lang/String;I)I", function (s: string, from: number) { return this.indexOf(s, from); });
-sm("lastIndexOf(I)I", function (c: number) { return this.lastIndexOf(String.fromCharCode(c)); });
+sm("lastIndexOf(I)I", function (c: number) { return charLastIndex(this, c, this.length); });
 sm("lastIndexOf(Ljava/lang/String;)I", function (s: string) { return this.lastIndexOf(s); });
-sm("lastIndexOf(II)I", function (c: number, from: number) { return this.lastIndexOf(String.fromCharCode(c), from); });
+sm("lastIndexOf(II)I", function (c: number, from: number) { return charLastIndex(this, c, from); });
 sm("lastIndexOf(Ljava/lang/String;I)I", function (v: string, from: number) { return this.lastIndexOf(v, from); });
 sm("substring(I)Ljava/lang/String;", function (i: number) {
   if (i < 0 || i > this.length) sioobe(i);

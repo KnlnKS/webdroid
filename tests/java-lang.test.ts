@@ -452,6 +452,16 @@ describe("string-codepoints", () => {
     expect(Array.from(await vcall(call("codePoints"), "toArray", "()[I"))).toEqual([65, 0x1f600, 66]);
   });
 
+  test("String.indexOf(int) finds supplementary code points and never an invalid one", () => {
+    const at = (name: string, desc: string, ...args: number[]) => (String.prototype as any)[mangleMethod(name, desc)].call("A😀B￿", ...args);
+    expect(at("indexOf", "(I)I", 0x1f600)).toBe(1);
+    expect(at("indexOf", "(I)I", 0xf600)).toBe(-1);
+    expect(at("indexOf", "(I)I", -1)).toBe(-1);
+    expect(at("indexOf", "(II)I", 0x42, -5)).toBe(3);
+    expect(at("lastIndexOf", "(I)I", 0x1f600)).toBe(1);
+    expect(at("lastIndexOf", "(II)I", 0x41, -1)).toBe(-1);
+  });
+
   test("String.valueOf(Object) accepts Webdroid primitive values", async () => {
     const valueOf = (rt.link("java/lang/String").ctor as any)[mangleMethod("valueOf", "(Ljava/lang/Object;)Ljava/lang/String;")];
     expect(await valueOf(1)).toBe("1");
