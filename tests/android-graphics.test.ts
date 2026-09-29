@@ -221,7 +221,8 @@ describe("drawable-size-overrides", () => {
     };
     await vcallOn(thread, view, "setColorFilter", "(I)V", -65536);
     const filter = await vcall(view, "getColorFilter", "()Landroid/graphics/ColorFilter;");
-    expect(filter.tint).toBe(-65536);
+    expect(await vcall(filter, "getColor", "()I")).toBe(-65536);
+    expect((await vcall(filter, "getMode", "()Landroid/graphics/PorterDuff$Mode;")).ename).toBe("SRC_ATOP");
     expect(events).toEqual([]);
     for (const d of [make(), make()]) {
       await vcallOn(thread, view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
@@ -470,10 +471,10 @@ describe("lighting-color-filter", () => {
     await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", filter);
     expect(await vcall(filter, "getColorMultiply", "()I")).toBe(0x0080ff00);
     expect(await vcall(filter, "getColorAdd", "()I")).toBe(0xff104020);
-    expect(matrixColor(paint.filterMatrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
+    expect(matrixColor(paint.colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
     await vcall(filter, "setColorMultiply", "(I)V", 0xffffffff);
     await vcall(filter, "setColorAdd", "(I)V", 0);
-    expect(matrixColor(paint.filterMatrix!, 0x8080ff80) >>> 0).toBe(0x8080ff80);
+    expect(matrixColor(paint.colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8080ff80);
   });
 });
 

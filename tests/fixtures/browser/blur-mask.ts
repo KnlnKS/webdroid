@@ -70,8 +70,8 @@ async function probe() {
   const bitmap = JBitmap.create(1, 1);
   bitmap.ctx.fillStyle = "#80402080"; bitmap.ctx.fillRect(0, 0, 1, 1);
   const pixel = (mode: string, color: number) => Array.from(tintedBmp(bitmap, color, null, mode).getContext("2d")!.getImageData(0, 0, 1, 1).data);
-  const tints = { identity: tintedBmp(bitmap, 0, null, "ADD") === bitmap.canvas,
-    clear: pixel("SRC_IN", 0), add: pixel("ADD", 0x40102040), multiply: pixel("MULTIPLY", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
+  const tints = { identity: tintedBmp(bitmap, 0, null, "PLUS") === bitmap.canvas,
+    clear: pixel("SRC_IN", 0), add: pixel("PLUS", 0x40102040), multiply: pixel("MODULATE", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
   bitmap.ctx.fillStyle = "#fff"; bitmap.ctx.fillRect(0, 0, 1, 1);
   const changed = pixel("SRC_IN", 0x80ff0000);
   return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed };

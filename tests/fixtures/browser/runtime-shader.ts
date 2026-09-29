@@ -2,8 +2,10 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JCanvas, JPaint, locateDrawnText } from "../../../src/android/graphics";
+import { loadPlatformDex } from "../../../src/android/framework";
 
 async function probe() {
+  await loadPlatformDex();
   rt.linkNatives();
   const shader = await newObj("android/graphics/RuntimeShader", "(Ljava/lang/String;)V", `
     layout(color) uniform half4 color;
