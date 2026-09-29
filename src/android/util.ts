@@ -355,10 +355,10 @@ rt.register({
   },
 });
 
-// android.util.TypedValue: res.ts fills one from a resolved value; the complex-unit math is here
+// android.util.TypedValue: the complex-unit math is here
 export class JTypedValue extends JObj {
   type = 0; data = 0; resourceId = 0; string: string | null = null; density = 0;
-  assetCookie = 0;            // set to 1 by fillTypedValue: the app apk is our only asset path
+  assetCookie = 0;
   changingConfigurations = 0; // resources resolve against one fixed config, so nothing varies
 }
 rt.register({

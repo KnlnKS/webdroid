@@ -223,7 +223,7 @@ describe("platform-construction", () => {
     expect(rt.iof(button, "android/widget/Checkable")).toBe(1);
     await vcall(button, "setChecked", "(Z)V", 1);
     expect(await vcall(button, "isChecked", "()Z")).toBe(1);
-    const colors = await vcall(rt.link("android/content/res/ColorStateList").ctor, "valueOf", "(I)Landroid/content/res/ColorStateList;", 0xff123456 | 0);
+    const colors = await scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", 0xff123456 | 0);
     await vcall(button, "setButtonTintList", "(Landroid/content/res/ColorStateList;)V", colors);
     expect(await vcall(button, "getButtonTintList", "()Landroid/content/res/ColorStateList;")).toBe(colors);
     const indicator = rt.make("android/graphics/drawable/StateListDrawable");

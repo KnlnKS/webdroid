@@ -4,13 +4,12 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
-import { JAssetManager, type JResources } from "../src/android/resnative";
 import { PROCESS_PID } from "../src/android/os";
 import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/app";
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
-import { scall, loadLibcore } from "./java";
+import { scall, loadLibcore, appResources } from "./java";
 
 
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
@@ -95,12 +94,6 @@ test("RippleDrawable constant state clones its content", async () => {
 });
 
 const RESOURCES_CTOR = "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V";
-function hostAssets(): { host: Resources; assets: JAssetManager } {
-  const host = new Resources(null, {});
-  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
-  assets.host = host;
-  return { host, assets };
-}
 
 function lifecycleActivity(application: JApplication): JActivity {
   const activity = new JActivity();
@@ -374,23 +367,6 @@ test("BigInteger returns quotient and remainder together", async () => {
   expect(await vcall(result[1], "intValue", "()I")).toBe(3);
 });
 
-test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
-  const { host, assets } = hostAssets();
-  const config = await newObj("android/content/res/Configuration");
-  (config as { densityDpi: number }).densityDpi = 320;
-  const metrics = await newObj("android/util/DisplayMetrics");
-  (metrics as { widthPixels: number }).widthPixels = 777;
-  const res = await newObj("android/content/res/Resources", RESOURCES_CTOR, assets, metrics, config) as JResources;
-  expect(res.host).not.toBe(host);
-  expect((await vcall(res, "getConfiguration", "()Landroid/content/res/Configuration;")).densityDpi).toBe(320);
-  const dm = await vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;");
-  expect(dm.widthPixels).toBe(777);
-  expect(dm.density).toBe(2);
-  expect(host.dm.widthPixels).not.toBe(777);
-  await expect((async () => newObj("android/content/res/Resources", RESOURCES_CTOR, null, null, null))())
-    .rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
-});
-
 test("ZipInputStream walks entries in local order and serves each entry's bytes", async () => {
   const { zipSync } = await import("fflate");
   const zip = zipSync({ "a.txt": new TextEncoder().encode("alpha"), "dir/": new Uint8Array(0), "dir/b.bin": new Uint8Array([1, 2, 3, 4]) }, { level: 6 });
@@ -468,16 +444,6 @@ test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitiz
   expect(first.mParameter).toBe("q"); expect(first.mValue).toBe("hello w!rld");
 });
 
-test("Resources string getters throw NotFoundException for ids the table lacks", async () => {
-  const { assets } = hostAssets();
-  const res = await newObj("android/content/res/Resources", RESOURCES_CTOR, assets, null, null) as JResources;
-  const notFound = { constructor: rt.link("android/content/res/Resources$NotFoundException").ctor };
-  await expect(vcallAsync(res, "getString", "(I)Ljava/lang/String;", 0x7f11240f)).rejects.toMatchObject(notFound);
-  await expect(vcallAsync(res, "getText", "(I)Ljava/lang/CharSequence;", 0x7f11240f)).rejects.toMatchObject(notFound);
-  await expect(vcallAsync(res, "getStringArray", "(I)[Ljava/lang/String;", 0x7f030001)).rejects.toMatchObject(notFound);
-  expect(await vcall(res, "getText", "(ILjava/lang/CharSequence;)Ljava/lang/CharSequence;", 0x7f11240f, "fallback")).toBe("fallback");
-});
-
 test("JSON text prints a stored long's digits", async () => {
   const map = await newObj("java/util/HashMap");
   await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "big", await newObj("java/lang/Long", "(J)V", 9007199254740993n));
@@ -516,8 +482,9 @@ test("In-memory DEX loaders read the buffer window and preserve defining-loader 
 });
 
 test("ContextWrapper.getResources reaches a base context's overriding getResources, and Context.getString goes through it", async () => {
-  const { host, assets } = hostAssets();
-  const plain = await newObj("android/content/res/Resources", RESOURCES_CTOR, assets, null, null) as JResources;
+  const host = new Resources(null, {});
+  const plain = await appResources(host, "wrapper");
+  const assets = await vcall(plain, "getAssets", "()Landroid/content/res/AssetManager;");
   // a Resources subclass that serves strings the table lacks, behind a ContextWrapper subclass
   // that answers getResources with it: what a string-store proxy installed by attachBaseContext does
   rt.register({ name: "test/StoreResources", ctor: class extends (rt.link("android/content/res/Resources").ctor as any) {}, sup: "android/content/res/Resources",

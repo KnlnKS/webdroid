@@ -7,9 +7,8 @@ import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decod
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvString, xmlParserAtNode, nodeAttrRV, xmlAttrRV, resolveStyleValue, attrSet, nativeTheme, JXmlParser, javaField, nativeRes } from "./res";
-import { aospResources } from "./resources";
-import { parserRoot } from "./assetmanager";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvString, nodeAttrRV, xmlAttrRV, resolveStyleValue, attrSet, nativeTheme, javaField, nativeRes } from "./res";
+import { parserRoot, reopenParser } from "./assetmanager";
 import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode } from "./axml";
@@ -243,10 +242,24 @@ const drawableMethods: NativeSpec["methods"] = cslBoundary({
 /** Drawable.createFromXml*: `inner` inflates the element the parser stands on, else the document's
  *  root, as the AOSP methods do, throwing what they throw for a document with no element */
 function xmlDrawable(res: unknown, parser: unknown, theme: unknown, inner: boolean) {
-  const set = attrSet(parser);
-  const node = inner ? set?.node : parser instanceof JXmlParser ? parser.events.find((e) => e.type === 2)?.node : parserRoot(parser);
+  const set = attrSet(parser), root = parserRoot(parser);
+  const node = inner ? set?.node : root;
   if (!node) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "No start tag found");
+  if (root) noteCustomTags(root, () => reopenParser(parser));
   return inflateDrawableNode(nativeRes(res), node, nativeTheme(theme));
+}
+/** A drawable document's elements that name an app class, each with how to open the document
+ *  as AOSP's XmlBlock parser and its start tag's place in it: DrawableInflater hands the class
+ *  the parser standing on its element. */
+const customTags = new WeakMap<XmlNode, { open: () => unknown; index: number }>();
+function noteCustomTags(root: XmlNode, open: () => unknown) {
+  let index = 0;
+  const walk = (node: XmlNode) => {
+    if (node.name.includes(".")) customTags.set(node, { open, index });
+    index++;
+    for (const child of node.children) walk(child);
+  };
+  walk(root);
 }
 // BlendMode.fromValue and blendModeToPorterDuffMode where the names differ; a blend mode with no
 // Porter-Duff form becomes the default SRC_IN
@@ -1678,13 +1691,13 @@ export class JColorStateList extends JObj {
   defColor = -16777216;
 }
 export function cslColor(csl: JColorStateList, states: ArrayLike<number>): number {
-  const items = (tsCsl(csl) ?? csl).items;
-  for (let i = 0; i < items.length; i++) if (matchesState(items[i], states)) return items[i].color ?? csl.defColor;
-  return csl.defColor;
+  const { items, defColor } = tsCsl(csl)!;
+  for (let i = 0; i < items.length; i++) if (matchesState(items[i], states)) return items[i].color ?? defColor;
+  return defColor;
 }
-// Our own stack keeps its colour lists as JColorStateList. When AOSP's android.content.res
-// answers, Java holds AOSP's ColorStateList, so a list crosses at the spec methods that take or
-// return one: read out of its states and colours coming in, built through its constructor going out.
+// Our own stack keeps its colour lists as JColorStateList while Java holds AOSP's ColorStateList,
+// so a list crosses at the spec methods that take or return one: read out of its states and
+// colours coming in, built through its constructor going out.
 const fromJava = new WeakMap<object, JColorStateList>(), toJava = new WeakMap<JColorStateList, unknown>();
 /** our own list for a ColorStateList, which may be AOSP's */
 export function tsCsl(c: unknown): JColorStateList | null {
@@ -1703,7 +1716,7 @@ export function tsCsl(c: unknown): JColorStateList | null {
 }
 /** the ColorStateList Java code sees for one of ours */
 export function javaCsl(c: JColorStateList | null): unknown {
-  if (!c || !aospResources() || !(c instanceof JColorStateList)) return c;
+  if (!c || !(c instanceof JColorStateList)) return c;
   const known = toJava.get(c);
   if (known) return known;
   const specs = jarray(c.items.map((i) => Int32Array.from([...i.states, ...i.negStates.map((s) => -s)])), "[I");
@@ -1714,7 +1727,6 @@ export function javaCsl(c: JColorStateList | null): unknown {
 }
 /** the colour-list parameters and results of a spec's methods, crossing as tsCsl/javaCsl say */
 export function cslBoundary(methods: NonNullable<NativeSpec["methods"]>): NonNullable<NativeSpec["methods"]> {
-  if (!aospResources()) return methods;
   // evaluated while the modules that declare specs load, so it reads nothing this module has yet to define
   const CSL = "Landroid/content/res/ColorStateList;";
   const out = { ...methods };
@@ -1736,28 +1748,6 @@ export function mkCsl(color: number): JColorStateList {
   c.items.push({ states: [], negStates: [], color });
   return c;
 }
-rt.register({
-  name: "android/content/res/ColorStateList", ctor: JColorStateList, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "<init>([[I[I)V": function (this: JColorStateList, states: Int32Array[], colors: Int32Array) {
-      for (let i = 0; i < states.length; i++) this.items.push({ ...splitStates(states[i]), color: colors[i] });
-      this.defColor = colors[colors.length - 1] ?? -16777216;
-    },
-    "static valueOf(I)Landroid/content/res/ColorStateList;": (c: number) => mkCsl(c),
-    "getDefaultColor()I": function (this: JColorStateList) { return this.defColor; },
-    "getColorForState([II)I": function (this: JColorStateList, st: Int32Array | null, d: number) {
-      return st ? cslColor(this, st) : this.defColor;
-    },
-    "isStateful()Z": function (this: JColorStateList) { return this.items.length > 1 ? 1 : 0; },
-    "withAlpha(I)Landroid/content/res/ColorStateList;": function (this: JColorStateList, a: number) {
-      const c = new JColorStateList();
-      c.defColor = ((a << 24) | (this.defColor & 0xffffff)) | 0;
-      c.items = this.items.map((i) => ({ ...i, color: ((a << 24) | (i.color & 0xffffff)) | 0 }));
-      return c;
-    },
-  },
-});
-
 // ─────────────────────────── drawable/CSL loading from resources
 
 const AT = attrTable(
@@ -1779,7 +1769,7 @@ const itemDrawable = driven(function* itemDrawable(res: Resources, node: XmlNode
   if (da) return yield loadDrawableRV(res, da, theme);
   return node.children.length ? yield inflateDrawableNode(res, node.children[0], theme) : null;
 });
-export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable> {
+const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable> {
   const get = (id: number, from = node) => resolveStyleValue(res, theme, nodeAttrRV(from, id));
   const dimen = (v: RV | null, fallback = 0) => rvDimen(res, resolveStyleValue(res, theme, v), fallback);
   const colorOf = (v: RV | null, d = 0) => {
@@ -2068,9 +2058,18 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       if (!(drawable instanceof JDrawable)) {
         throw rt.mkThrowable("android/view/InflateException", "Class is not a Drawable " + node.name);
       }
-      const parser = xmlParserAtNode(res, node);
-      yield vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
-        res.jobj, parser, parser, theme);
+      const at = customTags.get(node);
+      if (!at) throw rt.mkThrowable("android/view/InflateException", "Error inflating class " + node.name);
+      const parser = yield at.open();
+      try {
+        for (let starts = -1; starts < at.index;) {
+          const type = yield vcall(parser, "next", "()I");
+          if (type === 2) starts++;
+          else if (type === 1) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "No start tag found");
+        }
+        yield vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
+          res.jobj, parser, parser, theme?.jobj ?? null);
+      } finally { yield vcall(parser, "close", "()V"); }
       return drawable;
   }
 });
@@ -2122,8 +2121,13 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
 });
 
 /** `density` overrides the bitmap density its path's qualifier gives */
-export const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null, density?: number): Gen<JDrawable> {
-  if (path.endsWith(".xml")) return yield inflateDrawableNode(res, parseAXML(bytes), theme);
+const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null, density?: number): Gen<JDrawable> {
+  if (path.endsWith(".xml")) {
+    const root = parseAXML(bytes);
+    noteCustomTags(root, () => after(newObj("android/content/res/XmlBlock", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)),
+      (block) => vcall(block, "newParser", "()Landroid/content/res/XmlResourceParser;")));
+    return yield inflateDrawableNode(res, root, theme);
+  }
   const bmp: JBitmap | null = yield decodeBytes(bytes, null);
   if (!bmp) return new JBitmapDrawable();
   bmp.density = density ?? densityOfPath(path);
@@ -2139,7 +2143,7 @@ export function rvCsl(res: Resources, v: RV, theme: JTheme | null, dflt = 0): JC
 }
 const NO_THEME = {};
 const cslCache = new WeakMap<object, Map<number, JColorStateList>>();
-export const loadColorStateList = driven(function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
+const loadColorStateList = driven(function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
   if (!resId) return mkCsl(0);
   const key = theme ?? NO_THEME;
   let byId = cslCache.get(key);

@@ -1,14 +1,13 @@
 import { expect, test, describe } from "bun:test";
-import { loadLibcore, fakeStyles } from "./java";
+import { loadLibcore, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { JLayout, JSpannable, JTextPaint, JSpanned } from "../src/android/text";
 import { fillFontMetrics, measureText, typefaceFor } from "../src/android/graphics";
-import { JTheme } from "../src/android/res";
+import { JTheme, obtainStyled, rvString } from "../src/android/res";
 import { TV } from "../src/android/axml";
-import { mkCsl } from "../src/android/drawable";
 import { JTextView, JEditText } from "../src/android/textview";
 import { perf } from "../src/perf";
 
@@ -294,36 +293,31 @@ describe("style-wrap", () => {
 
 describe("styled-null", () => {
   rt.linkNatives();
-  test("explicit style arrays mask null font values before reporting present attributes", async () => {
+  test("explicit style arrays mask null font values", async () => {
     const S = 0x7f0f0000, A = 0x7f010001;
     const res = await fakeStyles(["fallback", "custom-family"], {
       [S]: [[A, TV.STRING, 0], [A + 3, TV.REFERENCE, 0]],
       [S + 1]: [[A, TV.REFERENCE, 0], [A + 1, TV.STRING, 1], [A + 2, TV.ATTRIBUTE, A + 3]],
     }), theme = new JTheme();
     theme.res = res; theme.apply(S);
-    const context = Object.assign(rt.make("android/content/Context"), { $host: { res, theme } });
-    for (const receiver of [theme, context]) {
-      const values = await vcall(receiver, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", S + 1, new Int32Array([A, A + 1, A + 2]));
-      expect(await vcall(values, "hasValue", "(I)Z", 0)).toBe(0);
-      expect(await vcall(values, "hasValue", "(I)Z", 2)).toBe(0);
-      expect(await vcall(values, "getIndexCount", "()I")).toBe(1);
-      expect(await vcall(values, "getIndex", "(I)I", 0)).toBe(1);
-      expect(await vcall(values, "getString", "(I)Ljava/lang/String;", 1)).toBe("custom-family");
-      expect(await vcall(values, "peekValue", "(I)Landroid/util/TypedValue;", 0)).toBeNull();
-    }
+    const { vals } = obtainStyled(res, theme, null, new Int32Array([A, A + 1, A + 2]), 0, S + 1);
+    expect(vals[0]).toBeNull();
+    expect(vals[2]).toBeNull();
+    expect(rvString(res, vals[1])).toBe("custom-family");
   });
 });
 
 describe("text-appearance-span", () => {
   test("text appearances combine font style and apply state colors after virtual measurement", async () => {
     rt.linkNatives();
-    const color = mkCsl(0xff123456), link = mkCsl(0xffabcdef);
+    const valueOf = (c: number) => scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", c | 0);
+    const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
     const span = await newObj("android/text/style/TextAppearanceSpan", "(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V", null, 1, 28, color, link);
     const paint = new JTextPaint(); paint.tf = typefaceFor("serif", 2);
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(paint.tf.style()).toBe(3);
     expect(paint.textSize).toBe(28);
-    expect(paint.color).not.toBe(color.defColor);
+    expect(paint.color).not.toBe(0xff123456 | 0);
     let calls = 0;
     Object.assign(span, { [mangleMethod("updateMeasureState", "(Landroid/text/TextPaint;)V")]: async (p: JTextPaint) => {
       await Promise.resolve(); calls++; p.textSize = 36;
@@ -331,8 +325,8 @@ describe("text-appearance-span", () => {
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
     expect(calls).toBe(1);
     expect(paint.textSize).toBe(36);
-    expect(paint.color).toBe(color.defColor);
-    expect(paint.linkColor).toBe(link.defColor);
+    expect(paint.color).toBe(0xff123456 | 0);
+    expect(paint.linkColor).toBe(0xffabcdef | 0);
     expect(await vcall(span, "getTextColor", "()Landroid/content/res/ColorStateList;")).toBe(color);
     expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
   });

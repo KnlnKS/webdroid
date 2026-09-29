@@ -3,9 +3,8 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { parseAXML, TV, type XmlNode } from "./axml";
-import { JAttrSet, JXmlParser, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs, obtainStyled, rvInt, attrSet } from "./res";
-import { aospResources } from "./resources";
+import { TV, type XmlNode } from "./axml";
+import { JAttrSet, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs, obtainStyled, rvInt, attrSet } from "./res";
 import { parserRoot } from "./assetmanager";
 import { JView, JViewGroup, type JLayoutParams, guardCall, guardMaybe, resolveLp } from "./view";
 import type { JContext } from "./context";
@@ -164,13 +163,8 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
 let inflateDepth = 0;
 /** an <include>d layout: AOSP's resources open it as a parser of its own */
 async function includedLayout(jctx: JContext, id: number): Promise<{ root: XmlNode; parser: unknown }> {
-  if (aospResources()) {
-    const parser = await vcall(await vcall(jctx, "getResources", "()Landroid/content/res/Resources;"), "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id);
-    return { root: parserRoot(parser)!, parser };
-  }
-  const file = jctx.$host.res.fileOf(id);
-  if (!file) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "layout 0x" + id.toString(16));
-  return { root: parseAXML(file.bytes), parser: null };
+  const parser = await vcall(await vcall(jctx, "getResources", "()Landroid/content/res/Resources;"), "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id);
+  return { root: parserRoot(parser)!, parser };
 }
 async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inflater: JLayoutInflater, parser: unknown): Promise<JView | null> {
   if (++inflateDepth > 60) { inflateDepth--; throw rt.mkThrowable("java/lang/StackOverflowError", "inflate recursion at " + root.name); }
@@ -201,13 +195,9 @@ async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup
 export function inflateLayout(jctx: unknown, layoutId: number, parent: unknown, attach: boolean): Promise<JView | null> {
   return vcall(getInflater(jctx), "inflate", "(ILandroid/view/ViewGroup;Z)Landroid/view/View;", layoutId, parent, +attach);
 }
-async function inflateParser(this: JLayoutInflater, parser: JXmlParser, root: JViewGroup | null, attach: number) {
-  if (!(parser instanceof JXmlParser)) {
-    const node = parserRoot(parser);
-    return node ? inflateNode(this.jctx, node, root, !!attach, this, parser) : null;
-  }
-  const node = parser.events.find((event) => event.type === 2)?.node;
-  return node ? inflateNode(this.jctx, node, root, !!attach, this, null) : null;
+async function inflateParser(this: JLayoutInflater, parser: unknown, root: JViewGroup | null, attach: number) {
+  const node = parserRoot(parser);
+  return node ? inflateNode(this.jctx, node, root, !!attach, this, parser) : null;
 }
 
 const inflaterCache = new WeakMap<object, JLayoutInflater>();

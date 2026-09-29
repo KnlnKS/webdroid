@@ -25,8 +25,6 @@
  "android/app/ProgressDialog.onCreate(Landroid/os/Bundle;)V → setProgress(I)V",
  "android/content/Context.registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V → getApplicationContext()Landroid/content/Context;",
  "android/content/Context.unregisterComponentCallbacks(Landroid/content/ComponentCallbacks;)V → getApplicationContext()Landroid/content/Context;",
- "android/content/res/Resources.getColorStateList(I)Landroid/content/res/ColorStateList; → getResourceName(I)Ljava/lang/String;",
- "android/content/res/Resources.getDrawable(I)Landroid/graphics/drawable/Drawable; → getResourceName(I)Ljava/lang/String;",
  "android/graphics/Canvas.restore()V → isHardwareAccelerated()Z",
  "android/graphics/Canvas.restoreToCount(I)V → isHardwareAccelerated()Z",
  "android/graphics/Canvas.setBitmap(Landroid/graphics/Bitmap;)V → isHardwareAccelerated()Z",

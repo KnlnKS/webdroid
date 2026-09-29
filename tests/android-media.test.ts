@@ -298,7 +298,7 @@ describe("sound-pool", () => {
     const pool = await newObj("android/media/SoundPool", "(III)V", 4, 3, 0);
     const listener = new LoadListener();
     await vcall(pool, "setOnLoadCompleteListener", "(Landroid/media/SoundPool$OnLoadCompleteListener;)V", listener);
-    const id = await vcallAsync(pool, "load", "(Landroid/content/res/AssetFileDescriptor;I)I", mkAssetFd(new Uint8Array(7)), 1);
+    const id = await vcallAsync(pool, "load", "(Landroid/content/res/AssetFileDescriptor;I)I", await mkAssetFd(new Uint8Array(7)), 1);
     expect(id).toBeGreaterThan(0);
     await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
     expect(decoded).toEqual([7]);
