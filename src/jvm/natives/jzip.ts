@@ -4,7 +4,7 @@ import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, 
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, newObj, after, defineException, checkFromIndexSize } from "./jlang";
-import { pathOf, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
+import { pathOf, readStreamFully, heldByteReads, filterOut, setFilterOut } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { JBuffer, resident } from "./jnio";
 import { mkIter, newArrayList } from "./jutil";
@@ -152,15 +152,15 @@ rt.register({
 
 // DeflaterOutputStream: feeds its Deflater and forwards whatever it produces to the wrapped
 // stream; close() finishes the deflate stream first (the zlib trailer), as the JDK does.
-class JDeflaterOut extends JOutputStream { out: unknown = null; def = new JDeflater(); closed = false; }
+class JDeflaterOut extends JObj { def = new JDeflater(); closed = false; }
 async function pump(s: JDeflaterOut) {
-  for (const c of s.def.out) await vcall(s.out, "write", "([BII)V", i8(c), 0, c.length);
+  for (const c of s.def.out) await vcall(filterOut(s), "write", "([BII)V", i8(c), 0, c.length);
   s.def.out = [];
 }
-function dosInit(this: JDeflaterOut, o: unknown, def?: JDeflater | null) { this.out = o; if (def) this.def = def; }
+function dosInit(this: JDeflaterOut, o: unknown, def?: JDeflater | null) { setFilterOut(this, o); if (def) this.def = def; }
 rt.register({
   name: "java/util/zip/DeflaterOutputStream", ctor: JDeflaterOut, sup: "java/io/FilterOutputStream",
-  fields: { out: "out", def: "def" },
+  fields: { def: "def" },
   methods: {
     "<init>(Ljava/io/OutputStream;)V": dosInit,
     "<init>(Ljava/io/OutputStream;Z)V": dosInit,
@@ -176,12 +176,12 @@ rt.register({
     "finish()V": driven(function* (this: JDeflaterOut): Gen {
       if (!this.def.done) { this.def.feed(new Uint8Array(0), true); yield pump(this); }
     }),
-    "flush()V": function (this: JDeflaterOut) { return vcall(this.out, "flush", "()V"); },
+    "flush()V": function (this: JDeflaterOut) { return vcall(filterOut(this), "flush", "()V"); },
     "close()V": driven(function* (this: JDeflaterOut): Gen {
       if (this.closed) return;
       this.closed = true;
       yield vcall(this, "finish", "()V");
-      yield vcall(this.out, "close", "()V");
+      yield vcall(filterOut(this), "close", "()V");
     }),
   },
 });
@@ -251,51 +251,6 @@ for (const [name, algo] of CHECKSUMS) {
     },
   });
 }
-class JCheckedIn extends JFilterInputStream { cksum: unknown = null; }
-rt.register({
-  name: "java/util/zip/CheckedInputStream", ctor: JCheckedIn, sup: "java/io/FilterInputStream",
-  methods: {
-    "<init>(Ljava/io/InputStream;Ljava/util/zip/Checksum;)V": function (this: JCheckedIn, s: unknown, c: unknown) { this.in_ = s; this.cksum = c; },
-    "read()I": driven(function* (this: JCheckedIn): Gen {
-      const b = yield vcall(this.in_, "read", "()I");
-      if (b >= 0) yield feed(this.cksum, Int8Array.of(b), 0, 1);
-      return b;
-    }),
-    "read([BII)I": driven(function* (this: JCheckedIn, buf: Int8Array, off: number, len: number): Gen {
-      const n = yield vcall(this.in_, "read", "([BII)I", buf, off, len);
-      if (n > 0) yield feed(this.cksum, buf, off, n);
-      return n;
-    }),
-    "skip(J)J": driven(function* (this: JCheckedIn, n: bigint): Gen {
-      const buf = new Int8Array(512);
-      let total = 0n;
-      while (total < n) {
-        const r = yield vcall(this, "read", "([BII)I", buf, 0, Number(n - total < 512n ? n - total : 512n));
-        if (r < 0) break;
-        total += BigInt(r);
-      }
-      return total;
-    }),
-    "getChecksum()Ljava/util/zip/Checksum;": function (this: JCheckedIn) { return this.cksum; },
-  },
-});
-class JCheckedOut extends JFilterOutputStream { cksum: unknown = null; }
-rt.register({
-  name: "java/util/zip/CheckedOutputStream", ctor: JCheckedOut, sup: "java/io/FilterOutputStream",
-  methods: {
-    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Checksum;)V": function (this: JCheckedOut, s: unknown, c: unknown) { this.out = s; this.cksum = c; },
-    "write(I)V": driven(function* (this: JCheckedOut, b: number): Gen {
-      yield vcall(this.out, "write", "(I)V", b);
-      yield feed(this.cksum, Int8Array.of(b), 0, 1);
-    }),
-    "write([BII)V": driven(function* (this: JCheckedOut, buf: Int8Array, off: number, len: number): Gen {
-      yield vcall(this.out, "write", "([BII)V", buf, off, len);
-      yield feed(this.cksum, buf, off, len);
-    }),
-    "getChecksum()Ljava/util/zip/Checksum;": function (this: JCheckedOut) { return this.cksum; },
-  },
-});
-
 defineException("java/util/zip/ZipException", "java/io/IOException");
 
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
@@ -450,8 +405,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
   },
 });
-class JZipOutputStream extends JOutputStream {
-  out: JOutputStream | null = null;
+class JZipOutputStream extends JDeflaterOut {
   archive: Zip | null = null;
   entry: ZipDeflate | ZipPassThrough | null = null;
   pendingChunks: Uint8Array[] = [];
@@ -461,7 +415,7 @@ class JZipOutputStream extends JOutputStream {
   level = 6;
   async flushChunks() {
     if (this.error) throw rt.mkThrowable("java/util/zip/ZipException", this.error.message);
-    for (const chunk of this.pendingChunks.splice(0)) await vcall(this.out, "write", "([BII)V", i8(chunk), 0, chunk.length);
+    for (const chunk of this.pendingChunks.splice(0)) await vcall(filterOut(this), "write", "([BII)V", i8(chunk), 0, chunk.length);
   }
   async closeEntry() {
     if (!this.entry) return;
@@ -470,9 +424,9 @@ class JZipOutputStream extends JOutputStream {
     await this.flushChunks();
   }
 }
-function zipOutInit(this: JZipOutputStream, out: JOutputStream | null) {
+function zipOutInit(this: JZipOutputStream, out: unknown) {
   if (!out) throw rt.mkThrowable("java/lang/NullPointerException", "out");
-  this.out = out;
+  setFilterOut(this, out);
   this.archive = new Zip((error, chunk) => {
     if (error) this.error = error;
     else if (chunk?.length) this.pendingChunks.push(chunk);
@@ -519,11 +473,11 @@ rt.register({
       this.finished = true;
       yield this.flushChunks();
     }),
-    "flush()V": driven(function* (this: JZipOutputStream): Gen { yield this.flushChunks(); yield vcall(this.out, "flush", "()V"); }),
+    "flush()V": driven(function* (this: JZipOutputStream): Gen { yield this.flushChunks(); yield vcall(filterOut(this), "flush", "()V"); }),
     "close()V": driven(function* (this: JZipOutputStream): Gen {
       if (!this.archive) return;
       yield vcall(this, "finish", "()V");
-      yield vcall(this.out, "close", "()V");
+      yield vcall(filterOut(this), "close", "()V");
       this.archive = null;
     }),
   },
@@ -599,8 +553,8 @@ rt.register({
 // ── ZipInputStream: the source is drained and indexed by its central directory, which is what
 // makes an entry with a data descriptor (sizes only after the data) readable without decoding
 // ahead; entries are then served in local-header order, one buffer-backed entry at a time.
-class JZipInputStream extends JInputStream { zip: Uint8Array | null = null; entries: ZEntry[] = []; next = 0; }
-async function openZipStream(this: JZipInputStream, src: JInputStream) {
+class JZipInputStream extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; zip: Uint8Array | null = null; entries: ZEntry[] = []; next = 0; }
+async function openZipStream(this: JZipInputStream, src: unknown) {
   if (src === null) throw rt.mkThrowable("java/lang/NullPointerException", "in == null");
   this.zip = await readStreamFully(src);
 }
@@ -609,6 +563,7 @@ rt.register({
   methods: {
     "<init>(Ljava/io/InputStream;)V": openZipStream,
     "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": openZipStream,
+    ...heldByteReads,
     "getNextEntry()Ljava/util/zip/ZipEntry;": function (this: JZipInputStream) {
       if (!this.zip) throw rt.mkThrowable("java/io/IOException", "Stream closed");
       if (!this.next && !this.entries.length) {
@@ -627,17 +582,18 @@ rt.register({
     "close()V": function (this: JZipInputStream) { this.zip = null; this.buf = new Uint8Array(0); this.pos = 0; },
   },
 });
-rt.register({ name: "java/util/zip/InflaterInputStream", ctor: class extends JInputStream {}, sup: "java/io/FilterInputStream" });
 
 // ── GZIPInputStream: the whole source is gunzipped up front and served like any buffer-backed stream
-async function gunzip(this: JInputStream, src: JInputStream) {
+class JGzipIn extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; }
+async function gunzip(this: JGzipIn, src: unknown) {
   const z = await readStreamFully(src);
   try { this.buf = gunzipSync(z); }
   catch (e) { throw rt.mkThrowable("java/util/zip/ZipException", (e as Error).message); }
 }
 rt.register({
-  name: "java/util/zip/GZIPInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  name: "java/util/zip/GZIPInputStream", ctor: JGzipIn, sup: "java/io/InputStream",
   methods: {
+    ...heldByteReads,
     "<init>(Ljava/io/InputStream;)V": gunzip,
     "<init>(Ljava/io/InputStream;I)V": gunzip,
   },

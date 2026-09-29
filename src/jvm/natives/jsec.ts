@@ -4,7 +4,6 @@ import { vcall, after, defineException } from "./jlang";
 import { jarray, concat, u8, mangleMethod } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
 import { JProps } from "./jutil";
-import { JFilterInputStream, JFilterOutputStream } from "./jio";
 import { md5, sha1, sha256 } from "./digest";
 
 defineException("java/security/GeneralSecurityException", "java/lang/Exception");
@@ -109,60 +108,6 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": function (this: JMessageDigest) { return this.algo; },
     // AOSP measures a provider that reports 0 by digesting a clone; that fallback is left out
     "getDigestLength()I": function (this: JMessageDigest) { return vcall(this, "engineGetDigestLength", "()I"); },
-  },
-});
-
-class JDigestOutputStream extends JFilterOutputStream {
-  digest: JMessageDigest | null = null;
-  enabled = true;
-}
-rt.register({
-  name: "java/security/DigestOutputStream", ctor: JDigestOutputStream, sup: "java/io/FilterOutputStream",
-  fields: { out: "out", digest: "digest" },
-  methods: {
-    "<init>(Ljava/io/OutputStream;Ljava/security/MessageDigest;)V": function (this: JDigestOutputStream, out: unknown, digest: JMessageDigest) {
-      this.out = out; this.digest = digest;
-    },
-    "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestOutputStream) { return this.digest; },
-    "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestOutputStream, digest: JMessageDigest) { this.digest = digest; },
-    "on(Z)V": function (this: JDigestOutputStream, enabled: number) { this.enabled = !!enabled; },
-    "write(I)V": driven(function* (this: JDigestOutputStream, b: number): Gen {
-      yield vcall(this.out, "write", "(I)V", b);
-      if (this.enabled) yield vcall(this.digest, "update", "(B)V", b);
-    }),
-    "write([BII)V": driven(function* (this: JDigestOutputStream, bytes: Int8Array, off: number, len: number): Gen {
-      if (bytes == null || off + len > bytes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "wrong parameters for write");
-      if (off < 0 || len < 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "wrong index for write");
-      yield vcall(this.out, "write", "([BII)V", bytes, off, len);
-      if (this.enabled) yield vcall(this.digest, "update", "([BII)V", bytes, off, len);
-    }),
-  },
-});
-
-class JDigestInputStream extends JFilterInputStream {
-  digest: JMessageDigest | null = null;
-  enabled = true;
-}
-rt.register({
-  name: "java/security/DigestInputStream", ctor: JDigestInputStream, sup: "java/io/FilterInputStream",
-  fields: { digest: "digest" },
-  methods: {
-    "<init>(Ljava/io/InputStream;Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, input: unknown, digest: JMessageDigest) {
-      this.in_ = input; this.digest = digest;
-    },
-    "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestInputStream) { return this.digest; },
-    "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, digest: JMessageDigest) { this.digest = digest; },
-    "on(Z)V": function (this: JDigestInputStream, enabled: number) { this.enabled = !!enabled; },
-    "read()I": driven(function* (this: JDigestInputStream): Gen {
-      const value: number = yield vcall(this.in_, "read", "()I");
-      if (value >= 0 && this.enabled) yield vcall(this.digest, "update", "(B)V", value);
-      return value;
-    }),
-    "read([BII)I": driven(function* (this: JDigestInputStream, bytes: Int8Array, off: number, len: number): Gen {
-      const count: number = yield vcall(this.in_, "read", "([BII)I", bytes, off, len);
-      if (count > 0 && this.enabled) yield vcall(this.digest, "update", "([BII)V", bytes, off, count);
-      return count;
-    }),
   },
 });
 

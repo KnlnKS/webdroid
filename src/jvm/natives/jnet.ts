@@ -13,7 +13,7 @@ import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8, sameBytes, mangleMethod } from "../abi";
-import { type JBAOS, noMark } from "./jio";
+import { baosBytes } from "./jio";
 import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
@@ -723,7 +723,6 @@ rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "ja
     return count > 0n ? count - left : 0n;
   }),
   "close()V": function (this: JHttpInputStream) { this.close(); },
-  ...noMark,
 } });
 type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: JHttpInputStream };
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
@@ -755,7 +754,7 @@ class JURLConnection extends JObj {
   connected = 0;
   cto = 0; rto = 0; ifMod = 0n;
   req: [string, string][] = [];
-  out: JBAOS | null = null;
+  out: JObj | null = null;
   ac: AbortController | null = null;
   res: HttpRes | null = null;
   pending: Promise<HttpRes> | null = null;
@@ -780,7 +779,7 @@ class JURLConnection extends JObj {
     // OkHttp's HttpUrl.getChecked
     if (!await vcall(this.url, "getHost", "()Ljava/lang/String;")) throw rt.mkThrowable("java/net/UnknownHostException", "Invalid host: " + spec);
     let method = this.method, target = spec, r: Response, hdrs: [string, string][], length: string | null;
-    let body = this.out && method !== "GET" && method !== "HEAD" ? this.out.bytes().slice() : undefined;
+    let body = this.out && method !== "GET" && method !== "HEAD" ? baosBytes(this.out).slice() : undefined;
     // Redirects are followed here, one proxy hop each, because the process CookieHandler that
     // Android's HttpURLConnection consults around every exchange must see each hop's URL.
     for (let hop = 0; ; hop++) {
@@ -878,12 +877,12 @@ rt.register({
       }
       return this.stream();
     }),
-    "getOutputStream()Ljava/io/OutputStream;": function (this: JURLConnection) {
+    "getOutputStream()Ljava/io/OutputStream;": async function (this: JURLConnection) {
       if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
       if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
       this.connected = 1;
-      return this.out ??= rt.make("java/io/ByteArrayOutputStream") as JBAOS;
+      return this.out ??= await newObj("java/io/ByteArrayOutputStream");
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
       if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");

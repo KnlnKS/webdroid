@@ -773,9 +773,11 @@ delegate("android/os/SystemProperties", {
   "native_report_sysprop_change()V": () => vcall(rt.link("android/os/SystemProperties").ctor, "callChangeCallbacks", "()V"),
 });
 
-/** What RuntimeInit.commonInit sets up in a zygote-forked process before app code runs: the
- *  default time zone follows persist.sys.timezone, and java.util.logging reaches logcat. */
+/** What ZygoteInit.zygoteInit sets up in a forked process before app code runs: System.out and
+ *  System.err reach logcat, the default time zone follows persist.sys.timezone, and
+ *  java.util.logging reaches logcat. */
 export async function zygoteInit(): Promise<void> {
+  await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
   await rt.initClass(hooks);
   await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("Supplier", deviceProperties["persist.sys.timezone"]));

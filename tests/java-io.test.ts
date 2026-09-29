@@ -3,8 +3,8 @@ import { unzipSync } from "fflate";
 import "../src/natives";
 import { mkPfd } from "../src/android/os";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
-import { rt, type JObj } from "../src/jvm/runtime";
-import { newFile, fdInt, setFdInt, mkFd, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
+import { rt, JObj } from "../src/jvm/runtime";
+import { newFile, fdInt, setFdInt, mkFd, readStreamFully, heldByteReads } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
@@ -259,7 +259,7 @@ describe("file-relative", () => {
 });
 
 describe("input-stream-wrapping", () => {
-  class ForwardOnlyStream extends JInputStream { cursor = 0; bytes = new TextEncoder().encode("<svg/>"); }
+  class ForwardOnlyStream extends JObj { cursor = 0; bytes = new TextEncoder().encode("<svg/>"); }
   rt.register({ name: "test/ForwardOnlyStream", ctor: ForwardOnlyStream, sup: "java/io/InputStream", methods: {
     "read()I": function (this: ForwardOnlyStream) { return this.cursor < this.bytes.length ? this.bytes[this.cursor++] : -1; },
     "read([BII)I": function (this: ForwardOnlyStream, out: Int8Array, offset: number, count: number) {
@@ -273,7 +273,7 @@ describe("input-stream-wrapping", () => {
   const data = (source: unknown) => newObj("java/io/DataInputStream", "(Ljava/io/InputStream;)V", source);
 
   test("forward-only subclasses request buffering before probing and rewinding a stream", async () => {
-    const source = new ForwardOnlyStream();
+    const source = rt.make("test/ForwardOnlyStream");
     expect(await vcall(source, "markSupported", "()Z")).toBe(0);
     await expect(vcallAsync(source, "reset", "()V")).rejects.toMatchObject({ msg: "mark/reset not supported" });
     const buffer = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;)V", source);
@@ -441,8 +441,9 @@ describe("rename", () => {
 });
 
 describe("sequence-input", () => {
-  class ClosingStream extends JInputStream { closed = false; }
+  class ClosingStream extends JObj { buf = new Uint8Array(0); pos = 0; closed = false; }
   rt.register({ name: "test/ClosingStream", ctor: ClosingStream, sup: "java/io/InputStream", methods: {
+    ...heldByteReads,
     "close()V": function (this: ClosingStream) { this.closed = true; },
   } });
   rt.linkNatives();

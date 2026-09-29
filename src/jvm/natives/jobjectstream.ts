@@ -1,9 +1,8 @@
 import { encodeModifiedUtf8 } from "../charset";
 import { streamClass, streamClassAny, type StreamClass } from "../serial-descriptor";
-import { rt, ClassInfo, driven, type Gen } from "../runtime";
+import { rt, JObj, ClassInfo, driven, type NativeSpec, type Gen } from "../runtime";
 import { i8, jmethod, mangleMethod, jarray, primElem, PRIM_ARRAYS, type PrimElem, decodeModifiedUtf8 } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, newObj, JClass, checkFromIndexSize } from "./jlang";
-import { JInputStream, JOutputStream, dataBytes, readers, writers } from "./jio";
 
 const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
 type FieldContext = { value: object; desc: StreamClass };
@@ -11,7 +10,27 @@ const M_WRITE_REPLACE = mangleMethod("writeReplace", "()Ljava/lang/Object;"), M_
 const M_WRITE_OBJECT = mangleMethod("writeObject", "(Ljava/io/ObjectOutputStream;)V"), M_READ_OBJECT = mangleMethod("readObject", "(Ljava/io/ObjectInputStream;)V");
 const M_INIT = mangleMethod("<init>", "()V");
 const PRIMITIVE_NAMES = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"]);
-class JObjectIn extends JInputStream {
+// the DataInput/DataOutput primitives, big-endian as the JDK reads and writes them
+type Get = (v: DataView) => unknown;
+type Put = (v: DataView, x: never) => void;
+const PRIMS: [string, string, number, Get, Put][] = [
+  ["Int", "I", 4, (v) => v.getInt32(0), (v, x: number) => v.setInt32(0, x)],
+  ["Short", "S", 2, (v) => v.getInt16(0), (v, x: number) => v.setInt16(0, x)],
+  ["Char", "C", 2, (v) => v.getUint16(0), (v, x: number) => v.setUint16(0, x)],
+  ["Byte", "B", 1, (v) => v.getInt8(0), (v, x: number) => v.setInt8(0, x)],
+  ["Boolean", "Z", 1, (v) => (v.getUint8(0) ? 1 : 0), (v, x: number) => v.setUint8(0, x ? 1 : 0)],
+  ["Long", "J", 8, (v) => v.getBigInt64(0), (v, x: bigint) => v.setBigInt64(0, x)],
+  ["Float", "F", 4, (v) => v.getFloat32(0), (v, x: number) => v.setFloat32(0, x)],
+  ["Double", "D", 8, (v) => v.getFloat64(0), (v, x: number) => v.setFloat64(0, x)],
+];
+const READS: [string, string, number, Get, Put?][] = [...PRIMS, ["UnsignedShort", "I", 2, (v) => v.getUint16(0)], ["UnsignedByte", "I", 1, (v) => v.getUint8(0)]];
+const readers = (read: (n: number, get: Get) => unknown) =>
+  Object.fromEntries(READS.map(([name, d, n, get]) => [`read${name}()${d}`, read(n, get)])) as NonNullable<NativeSpec["methods"]>;
+const writers = (write: (n: number, put: Put) => unknown) =>
+  Object.fromEntries(PRIMS.map(([name, d, n, , put]) => [`write${name}(${"SBC".includes(d) ? "I" : d})V`, write(n, put)])) as NonNullable<NativeSpec["methods"]>;
+
+class JObjectIn extends JObj {
+  source: unknown = null; pos = 0;
   blockEnd = 0; handles: unknown[] = []; descriptors = new Map<unknown, StreamClass>(); context: FieldContext | null = null; resolve = false;
 }
 /** `n` bytes of block data, crossing record boundaries the way a long writeUTF body does */
@@ -33,6 +52,21 @@ async function blockBytes(thread: JThread, s: JObjectIn, n: number): Promise<Uin
   }
   return out;
 }
+/** exactly `length` bytes of the underlying stream, else EOFException */
+async function dataBytes(s: JObjectIn, length: number, thread = curThread): Promise<Uint8Array> {
+  const out = new Int8Array(length);
+  for (let got = 0; got < length;) {
+    const n = Number(await vcallOn(thread, s.source, "read", "([BII)I", out, got, length - got));
+    if (n <= 0) throw rt.mkThrowable("java/io/EOFException", null);
+    got += n;
+  }
+  s.pos += length;
+  return new Uint8Array(out.buffer);
+}
+async function blockByte(thread: JThread, s: JObjectIn): Promise<number> {
+  try { return (await blockBytes(thread, s, 1))[0]; }
+  catch (e) { if (rt.iof(e, "java/io/EOFException")) return -1; throw e; }
+}
 const blockRead = (n: number, decode: (v: DataView) => unknown) =>
   async function (this: JObjectIn) {
     const b = await blockBytes(curThread, this, n);
@@ -43,8 +77,8 @@ rt.register({
   name: "java/io/ObjectInputStream", ctor: JObjectIn, sup: "java/io/InputStream",
   ifaces: ["java/io/ObjectInput", "java/io/DataInput"],
   methods: {
-    "<init>(Ljava/io/InputStream;)V": driven(function* (this: JObjectIn, src: JInputStream): Gen {
-      this.wrapped = src;
+    "<init>(Ljava/io/InputStream;)V": driven(function* (this: JObjectIn, src: unknown): Gen {
+      this.source = src;
       const head = yield dataBytes(this, 4);
       const magic = (head[0] << 8) | head[1], version = (head[2] << 8) | head[3];
       if (magic !== STREAM_MAGIC || version !== STREAM_VERSION) {
@@ -61,6 +95,20 @@ rt.register({
       const b = yield blockBytes(curThread, this, out.length);
       out.set(i8(b));
     }),
+    // reads of raw block data, -1 at the end of the stream
+    "read()I": function (this: JObjectIn) { return blockByte(curThread, this); },
+    "read([BII)I": driven(function* (this: JObjectIn, out: Int8Array, off: number, len: number): Gen {
+      const thread = curThread;
+      if (!out) rt.npe();
+      checkFromIndexSize(off, len, out.length);
+      if (!len) return 0;
+      const first: number = yield blockByte(thread, this);
+      if (first < 0) return -1;
+      out[off] = first;
+      const more = Math.min(len - 1, this.blockEnd - this.pos);
+      if (more > 0) out.set(i8(yield blockBytes(thread, this, more)), off + 1);
+      return 1 + Math.max(0, more);
+    }),
     "readObject()Ljava/lang/Object;": function (this: JObjectIn) { return readObject(curThread, this); },
     "enableResolveObject(Z)Z": function (this: JObjectIn, enabled: number) { const old = this.resolve; this.resolve = !!enabled; return +old; },
     "resolveObject(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) => value,
@@ -68,7 +116,8 @@ rt.register({
     "close()V": function () {},
   },
 });
-class JObjectOut extends JOutputStream {
+class JObjectOut extends JObj {
+  chunks: number[] = [];
   target: unknown = null;
   handles = new Map<unknown, number>();
   replacements = new Map<unknown, unknown>();
@@ -95,7 +144,7 @@ rt.register({
   name: "java/io/ObjectOutputStream", ctor: JObjectOut, sup: "java/io/OutputStream",
   ifaces: ["java/io/ObjectOutput", "java/io/DataOutput"],
   methods: {
-    "<init>(Ljava/io/OutputStream;)V": function (this: JObjectOut, out: JOutputStream) {
+    "<init>(Ljava/io/OutputStream;)V": function (this: JObjectOut, out: unknown) {
       this.target = out;
       this.chunks.push(STREAM_MAGIC >> 8, STREAM_MAGIC & 0xff, 0, STREAM_VERSION);
     },

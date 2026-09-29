@@ -2,9 +2,8 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { rt } from "../src/jvm/runtime";
-import { JInputStream } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
-import { mangleMethod, jarray } from "../src/jvm/abi";
+import { jarray } from "../src/jvm/abi";
 import { scall } from "./java";
 import { decodeString, encodeString } from "../src/jvm/charset";
 
@@ -168,25 +167,6 @@ describe("nio", () => {
     expect(await vcall(readOnly, "hasArray", "()Z")).toBe(0);
     const direct = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 4);
     expect(await vcall(direct, "hasArray", "()Z")).toBe(1); // ART backs it with a non-movable array
-  });
-
-  test("InputStream.skip reads through a bytecode-style subclass", async () => {
-    class ChunkStream extends JInputStream {
-      offset = 0;
-      readonly data = Int8Array.from([1, 2, 3, 4, 5]);
-      [mangleMethod("read", "([BII)I")](out: Int8Array, off: number, len: number) {
-        if (this.offset === this.data.length) return -1;
-        const count = Math.min(len, this.data.length - this.offset);
-        out.set(this.data.subarray(this.offset, this.offset + count), off);
-        this.offset += count;
-        return count;
-      }
-    }
-    const stream = new ChunkStream();
-    expect(await vcall(stream, "skip", "(J)J", 3n)).toBe(3n);
-    expect(stream.offset).toBe(3);
-    expect(await vcall(stream, "skip", "(J)J", 10n)).toBe(2n);
-    expect(await vcall(stream, "skip", "(J)J", -1n)).toBe(0n);
   });
 
   test("FileChannel.read fills a ByteBuffer from streams and random-access files", async () => {

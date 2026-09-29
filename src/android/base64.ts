@@ -3,7 +3,7 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { JOutputStream } from "../jvm/natives/jio";
+import { filterOut, setFilterOut, heldByteWrites } from "../jvm/natives/jio";
 
 const DEFAULT = 0, NO_PADDING = 1, NO_WRAP = 2, CRLF = 4, URL_SAFE = 8, NO_CLOSE = 16;
 
@@ -107,23 +107,21 @@ rt.register({
 // The stream forms buffer and encode on close: base64 of a concatenation is not the
 // concatenation of the base64s, so there is nothing to gain from emitting early, and the
 // one-shot path keeps line wrapping and the tail padding in a single place.
-class JB64OS extends JOutputStream { out: unknown = null; flags = 0; }
+class JB64OS extends JObj { chunks: number[] = []; flags = 0; }
 rt.register({
   name: "android/util/Base64OutputStream", ctor: JB64OS, sup: "java/io/FilterOutputStream",
   methods: {
-    "<init>(Ljava/io/OutputStream;I)V": function (this: JB64OS, o: unknown, f: number) { this.out = o; this.flags = f; },
-    "write(I)V": function (this: JB64OS, b: number) { this.chunks.push(b & 0xff); },
-    "write([BII)V": function (this: JB64OS, b: Int8Array, o: number, l: number) {
-      for (let i = 0; i < l; i++) this.chunks.push(b[o + i] & 0xff);
-    },
-    "flush()V": function (this: JB64OS) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
+    "<init>(Ljava/io/OutputStream;I)V": function (this: JB64OS, o: unknown, f: number) { setFilterOut(this, o); this.flags = f; },
+    ...heldByteWrites,
+    "flush()V": function (this: JB64OS) { const out = filterOut(this); return out ? vcall(out, "flush", "()V") : undefined; },
     "close()V": driven(function* (this: JB64OS): Gen {
       const body = enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags);
       this.chunks.length = 0;
-      if (!this.out) return;
-      yield vcall(this.out, "write", "([BII)V", body, 0, body.length);
-      yield vcall(this.out, "flush", "()V");
-      if (!(this.flags & NO_CLOSE)) yield vcall(this.out, "close", "()V");
+      const out = filterOut(this);
+      if (!out) return;
+      yield vcall(out, "write", "([BII)V", body, 0, body.length);
+      yield vcall(out, "flush", "()V");
+      if (!(this.flags & NO_CLOSE)) yield vcall(out, "close", "()V");
     }),
   },
 });
