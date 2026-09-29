@@ -502,6 +502,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   lookups behind the ~2 ns per compiled call the B.4 measurement found. V8 A/B showed ±10% both
   ways (`new URI` -5%), within noise. A synthetic 4-deep emitted call chain (try/catch, Promise
   checks, prologue) runs as fast as plain JS (about 3 ns), so the per-call cost lies elsewhere.
+- 2026-09-29, where the per-call cost lies. `--trace-turbo-inlining` on a loop over libcore's
+  `ArrayList.get` (15.9 ns per element against 7.3 for the TS list; a `long` accumulator is BigInt
+  and swamps both) showed V8 declining to inline `get`: 281 bytes of bytecode for three Java
+  statements, most of it suspension scaffolding, plus 486 bytes it had inlined itself, over the
+  460-byte limit. Shortening the save point, prologue and catch took it to 217 bytes (kept), not
+  enough. Rejected: proving call sites synchronous at runtime promotion (static and direct calls to
+  `$sync` hot bodies, classes already initialized) so small methods compile as leaves. Error paths
+  defeat it: `Preconditions.checkIndex` calls `outOfBoundsCheckIndex`, Kotlin's null checks call
+  `throwParameterIsNullNPE`, and exception construction can never be proven. The suite moved
+  within noise. Making it work needs a pending-exception protocol (a suspended throw unwinding
+  through try-free leaves to the first frame with handlers, cold frames and TS boundaries), and
+  persisted bodies would still run the conservative form.
 
 ## Java, storage and framework semantics
 
