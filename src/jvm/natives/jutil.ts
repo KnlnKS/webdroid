@@ -375,6 +375,52 @@ export const IDENTITY_EQUALITY: Methods = {
   "equals(Ljava/lang/Object;)Z": function (this: JObj, o: unknown) { return this === o ? 1 : 0; },
   "hashCode()I": function (this: JObj) { return idHash(this); },
 };
+
+/** iterator()/listIterator() bodies that walk a JList's own `a`: a list still answering with one of them
+ *  compares by storage, while an app's override is what List.equals walks */
+const storageIterators = new Set<unknown>();
+const storageIterator = <F>(f: F): F => { storageIterators.add(f); return f; };
+const listIter = storageIterator(function (this: JList) { return mkIter(this.a, this); });
+const ITERATOR = mangleMethod("iterator", "()Ljava/util/Iterator;"), LIST_ITERATOR = mangleMethod("listIterator", "()Ljava/util/ListIterator;");
+function seqEquals(a: unknown[], b: unknown[]): number | Promise<number> {
+  if (a.length !== b.length) return 0;
+  for (let i = 0; i < a.length; i++) {
+    const r = jeq(a[i], b[i]);
+    if (r instanceof Promise) return seqEqualsFrom(a, b, i, r);
+    if (!r) return 0;
+  }
+  return 1;
+}
+const seqEqualsFrom = driven(function* seqEqualsFrom(a: unknown[], b: unknown[], i: number, pending: Promise<number>): Gen<number> {
+  if (!(yield pending)) return 0;
+  for (i++; i < a.length; i++) {
+    const r = jeq(a[i], b[i]);
+    if (!(r instanceof Promise ? yield r : r)) return 0;
+  }
+  return 1;
+});
+const iteratedEquals = driven(function* iteratedEquals(a: unknown[], o: unknown, walk: "iterator" | "listIterator"): Gen<number> {
+  const it = yield vcall(o, walk, walk === "iterator" ? "()Ljava/util/Iterator;" : "()Ljava/util/ListIterator;");
+  for (let i = 0; i < a.length; i++) {
+    if (!(yield vcall(it, "hasNext", "()Z"))) return 0;
+    const r = jeq(a[i], yield vcall(it, "next", "()Ljava/lang/Object;"));
+    if (!(r instanceof Promise ? yield r : r)) return 0;
+  }
+  return (yield vcall(it, "hasNext", "()Z")) ? 0 : 1;
+});
+/** List.equals over this list's storage, walking the other list the way the JDK class does: ArrayList (and the
+ *  immutable and copy-on-write lists) with its iterator(), AbstractList's subclasses with listIterator(), which
+ *  also walks this list once an app overrides it */
+function listEquals(walk: "iterator" | "listIterator") {
+  const slot = walk === "iterator" ? ITERATOR : LIST_ITERATOR;
+  return function (this: JList, o: unknown) {
+    if (o === this) return 1;
+    if (!(o instanceof JObj) || !rt.iof(o, "java/util/List")) return 0;
+    if (walk === "listIterator" && !storageIterators.has((this as any)[slot])) return (absList["equals(Ljava/lang/Object;)Z"] as Fn).call(this, o);
+    if (o instanceof JList && storageIterators.has((o as any)[slot])) return seqEquals(this.a, o.a);
+    return iteratedEquals(this.a, o, walk);
+  };
+}
 export function listMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -443,8 +489,8 @@ export function listMethods(): Methods {
     "stream()Ljava/util/stream/Stream;": listStream,
     "parallelStream()Ljava/util/stream/Stream;": listStream,
     "clear()V": function (this: JList) { this.a.length = 0; },
-    "iterator()Ljava/util/Iterator;": function (this: JList) { return mkIter(this.a, this); },
-    "listIterator()Ljava/util/ListIterator;": function (this: JList) { return mkIter(this.a, this); },
+    "iterator()Ljava/util/Iterator;": listIter,
+    "listIterator()Ljava/util/ListIterator;": listIter,
     "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) {
       const it = mkIter(this.a, this);
       it.i = at;
@@ -481,26 +527,7 @@ export function listMethods(): Methods {
       return l;
     },
     "sort(Ljava/util/Comparator;)V": function (this: JList, cmp: unknown) { return sortInPlace(this.a, cmp); },
-    "equals(Ljava/lang/Object;)Z": driven(function* (this: JList, o: unknown): Gen {
-      if (o === this) return 1;
-      if (!(o instanceof JObj) || !rt.iof(o, "java/util/List")) return 0;
-      const a = this.a;
-      if (o instanceof JList) {
-        if (o.a.length !== a.length) return 0;
-        for (let i = 0; i < a.length; i++) {
-          const r = jeq(a[i], o.a[i]);
-          if (!(r instanceof Promise ? yield r : r)) return 0;
-        }
-        return 1;
-      }
-      const it = yield iterOf(o);
-      for (let i = 0; i < a.length; i++) {
-        if (!(yield vcall(it, "hasNext", "()Z"))) return 0;
-        const r = jeq(a[i], yield vcall(it, "next", "()Ljava/lang/Object;"));
-        if (!(r instanceof Promise ? yield r : r)) return 0;
-      }
-      return (yield vcall(it, "hasNext", "()Z")) ? 0 : 1;
-    }),
+    "equals(Ljava/lang/Object;)Z": listEquals("iterator"),
     "hashCode()I": function (this: JList) { return hashSeq(this.a); },
     "toString()Ljava/lang/String;": function (this: JList) { return seqText(this, this.a); },
     // Deque/Queue-ish extras (LinkedList/ArrayDeque share this)
@@ -630,8 +657,9 @@ immutableListMethods["containsAll(Ljava/util/Collection;)Z"] = driven(function* 
   for (const v of yield toJsArray(c)) if (v === null ? rt.npe() : (yield indexIn(this.a, v)) < 0) return 0;
   return 1;
 });
-immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) { return snapshotIterator(this); };
-immutableListMethods["listIterator()Ljava/util/ListIterator;"] = immutableListMethods["iterator()Ljava/util/Iterator;"];
+const snapshotIter = storageIterator(function (this: JList) { return snapshotIterator(this); });
+immutableListMethods["iterator()Ljava/util/Iterator;"] = snapshotIter;
+immutableListMethods["listIterator()Ljava/util/ListIterator;"] = snapshotIter;
 immutableListMethods["listIterator(I)Ljava/util/ListIterator;"] = function (this: JImmutableList, at: number) {
   if (at < 0 || at > this.a.length) ioobe(at, this.a.length);
   return snapshotIterator(this, at);
@@ -678,6 +706,7 @@ function fixedIter(list: JList, at: number, settable: boolean): JIter {
   return it;
 }
 function fixedListMethods(settable: boolean): Methods {
+  const iterate = storageIterator(function (this: JList) { return fixedIter(this, 0, settable); });
   const methods: Methods = {
     ...without(listMethods(), QUEUE_ONLY, DEQUE_ONLY, CAPACITY, ["clone()Ljava/lang/Object;"]),
     "remove(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return after(indexIn(this.a, v), (i) => changes(i >= 0)); },
@@ -694,8 +723,9 @@ function fixedListMethods(settable: boolean): Methods {
       for (const x of this.a) changes(yield vcall(p, "test", "(Ljava/lang/Object;)Z", x));
       return 0;
     }),
-    "iterator()Ljava/util/Iterator;": function (this: JList) { return fixedIter(this, 0, settable); },
-    "listIterator()Ljava/util/ListIterator;": function (this: JList) { return fixedIter(this, 0, settable); },
+    "iterator()Ljava/util/Iterator;": iterate,
+    "listIterator()Ljava/util/ListIterator;": iterate,
+    "equals(Ljava/lang/Object;)Z": listEquals("listIterator"),
     "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return fixedIter(this, at, settable); },
   };
   for (const method of ["add(Ljava/lang/Object;)Z", "add(ILjava/lang/Object;)V", "remove(I)Ljava/lang/Object;", ...SEQUENCED_WRITES]) methods[method] = uoe;
@@ -727,6 +757,7 @@ function vectorMethods(base: Methods): Methods {
     return this.a[i < 0 ? this.a.length + i : i];
   };
   return {
+    "equals(Ljava/lang/Object;)Z": listEquals("listIterator"),
     "copyInto([Ljava/lang/Object;)V": function (this: JList, out: unknown[]) {
       if (out === null) rt.npe();
       if (out.length < this.a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `length=${out.length}; index=${out.length}`);
@@ -792,6 +823,7 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
   }),
   // LinkedList's JDK bodies route through these overridable methods
   "java/util/LinkedList": () => ({
+    "equals(Ljava/lang/Object;)Z": listEquals("listIterator"),
     "contains(Ljava/lang/Object;)Z": listContains,
     "addAll(Ljava/util/Collection;)Z": function (this: JList, c: unknown) { return vcall(this, "addAll", "(ILjava/util/Collection;)Z", this.a.length, c); },
     "offer(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { return vcall(this, "add", "(Ljava/lang/Object;)Z", v); },
@@ -1873,8 +1905,8 @@ function snapshotIterator(list: JList, at = 0): JIter {
 }
 const cowExtras: Methods = {
   "<init>([Ljava/lang/Object;)V": function (this: JList, items: unknown[]) { this.a = items.slice(); },
-  "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
-  "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
+  "iterator()Ljava/util/Iterator;": snapshotIter,
+  "listIterator()Ljava/util/ListIterator;": snapshotIter,
   "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
   "contains(Ljava/lang/Object;)Z": listContains,
   "isEmpty()Z": function (this: JList) { return after(vcall(this, "size", "()I") as number | Promise<number>, (n) => (n === 0 ? 1 : 0)); },

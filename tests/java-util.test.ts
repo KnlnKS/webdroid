@@ -487,6 +487,19 @@ describe("map-equality", () => {
     expect(await equals(deque, await newObj("java/util/ArrayDeque"))).toBe(0);
   });
 
+  test("List equality walks an overriding subclass's iterator rather than its storage", async () => {
+    class Shadow extends rt.link("java/util/ArrayList").ctor {}
+    rt.register({ name: "test/ShadowList", ctor: Shadow, sup: "java/util/ArrayList", methods: {
+      "iterator()Ljava/util/Iterator;": () => vcall(newArrayList(["i"]), "iterator", "()Ljava/util/Iterator;"),
+    } });
+    rt.linkNatives();
+    const shadow = new Shadow() as { a: unknown[] };
+    shadow.a = ["a"];
+    expect(await equals(newArrayList(["a"]), shadow)).toBe(0);
+    expect(await equals(newArrayList(["i"]), shadow)).toBe(1);
+    expect(await equals(shadow, newArrayList(["a"]))).toBe(1);
+  });
+
   test("IdentityHashMap uses reference identity for keys and values", async () => {
     const target = await map("java/util/IdentityHashMap");
     const first = new Value(7), equalValue = new Value(7);
