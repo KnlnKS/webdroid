@@ -41,7 +41,7 @@ export function baosBytes(s: JObj): Uint8Array {
   return new Uint8Array(buf.buffer, buf.byteOffset, o[declaredField(BAOS, "count")] as number);
 }
 /** InputStream's reads over bytes a TS stream holds in `buf` from `pos` */
-export interface HeldBytes { buf: Uint8Array; pos: number }
+interface HeldBytes { buf: Uint8Array; pos: number }
 export const heldByteReads: NativeSpec["methods"] = {
   "read()I": function (this: HeldBytes) { return this.pos < this.buf.length ? this.buf[this.pos++] : -1; },
   "read([BII)I": function (this: HeldBytes, out: Int8Array, off: number, len: number) {
@@ -62,7 +62,7 @@ export const heldByteReads: NativeSpec["methods"] = {
   },
 };
 /** OutputStream's writes into bytes a TS stream collects in `chunks` */
-export interface HeldWrites { chunks: number[] }
+interface HeldWrites { chunks: number[] }
 export const heldByteWrites: NativeSpec["methods"] = {
   "write(I)V": function (this: HeldWrites, b: number) { this.chunks.push(b & 0xff); },
   "write([BII)V": function (this: HeldWrites, b: Int8Array, off: number, len: number) {

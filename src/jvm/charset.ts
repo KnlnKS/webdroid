@@ -63,7 +63,6 @@ export function charsetInfo(value: unknown): CharsetInfo {
   if (!cs) throw rt.mkThrowable("java/io/UnsupportedEncodingException", name);
   return cs;
 }
-export const charsetName = (value: unknown): string => charsetInfo(value).name;
 
 export function encodeString(text: string, charset: unknown): Int8Array {
   const cs = charsetInfo(charset);
