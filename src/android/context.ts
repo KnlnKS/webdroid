@@ -240,7 +240,7 @@ const contextMethods: NativeSpec["methods"] = {
   "setTheme(I)V": function (this: JContext, id: number) {
     const t = new JTheme();
     t.res = this.$host.res;
-    t.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
+    t.setTo(themeOf(this) ?? this.$host.theme);
     t.apply(id);
     (this as any).ownTheme = t;
   },
@@ -450,7 +450,7 @@ function configurationContext(source: JContext, config: JConfiguration): JContex
   return after(scopedResources(source.$host.res, config), (jresources) => {
     const theme = new JTheme();
     theme.res = jresources.host;
-    theme.styles = (themeOf(source) ?? source.$host.theme).styles.slice();
+    theme.setTo(themeOf(source) ?? source.$host.theme);
     return newContextImpl(Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme }));
   });
 }

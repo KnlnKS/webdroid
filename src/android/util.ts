@@ -237,13 +237,19 @@ export class JDisplayMetrics extends JObj {
   density = device.density; densityDpi = device.densityDpi; scaledDensity = device.density;
   widthPixels = device.width; heightPixels = device.height;
   xdpi = device.densityDpi; ydpi = device.densityDpi;
+  // AOSP's own fields, so its bodies (setToDefaults, setTo, equals) run on this object
+  noncompatWidthPixels = this.widthPixels; noncompatHeightPixels = this.heightPixels;
+  noncompatDensity = this.density; noncompatDensityDpi = this.densityDpi; noncompatScaledDensity = this.scaledDensity;
+  noncompatXdpi = this.xdpi; noncompatYdpi = this.ydpi;
+  fontScaleConverter: unknown = null;
 }
 rt.register({
   name: "android/util/DisplayMetrics", ctor: JDisplayMetrics,
-  statics: { DENSITY_DEFAULT: 160, DENSITY_DEVICE_STABLE: device.densityDpi, DENSITY_LOW: 120, DENSITY_MEDIUM: 160, DENSITY_TV: 213,
+  statics: { DENSITY_DEFAULT: 160, DENSITY_DEVICE: device.densityDpi, DENSITY_DEVICE_STABLE: device.densityDpi, DENSITY_LOW: 120, DENSITY_MEDIUM: 160, DENSITY_TV: 213,
     DENSITY_HIGH: 240, DENSITY_XHIGH: 320, DENSITY_XXHIGH: 480, DENSITY_XXXHIGH: 640 },
-  fields: ["density", "densityDpi", "scaledDensity", "widthPixels", "heightPixels", "xdpi", "ydpi"],
-  methods: { "<init>()V": function () {}, "setTo(Landroid/util/DisplayMetrics;)V": function (this: JDisplayMetrics, o: JDisplayMetrics) { Object.assign(this, o); } },
+  fields: ["density", "densityDpi", "scaledDensity", "widthPixels", "heightPixels", "xdpi", "ydpi", "noncompatWidthPixels",
+    "noncompatHeightPixels", "noncompatDensity", "noncompatDensityDpi", "noncompatScaledDensity", "noncompatXdpi", "noncompatYdpi", "fontScaleConverter"],
+  methods: { "<init>()V": function () {} },
 });
 
 // android.util.LruCache, as AOSP writes it: keys compare by equals() in an access-ordered

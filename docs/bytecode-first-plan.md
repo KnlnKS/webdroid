@@ -902,6 +902,59 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      lookaheads) fall back to "the match reached the end".
    - The expat natives skip external entities.
 
+### Stage C.1: resources (in progress, branch `c1-resources`)
+
+Inventory taken 2026-09-29 (`fwscan`, `fwtest`, `audit apks/FitNotes.apk --framework --cut
+android/content/res/`):
+- **Declared natives: 97** in `android/content/res/`: AssetManager 55, XmlBlock 22, ApkAssets 12,
+  StringBlock 5, ResourceTimer 2, ObbScanner 1. Configuration, Resources, ResourcesImpl, Theme,
+  TypedArray and ColorStateList declare none. FitNotes reaches 67 of them statically (every
+  AssetManager, XmlBlock and StringBlock native it can, and ApkAssets load, string block, open-xml,
+  path and destroy).
+- **Before this stage** 82 had delegates (`src/android/delegates.ts`), none for ApkAssets. They
+  answered off one shared TS `Resources`: `nativeCreate` returned the app's, `nativeSetApkAssets`
+  and `nativeSetConfiguration` were no-ops, every cookie was 0 and every density the device's, so
+  `TypedArray` string reads (`getPooledStringForCookie(0, …)`) and XML-literal strings (which AOSP
+  reports with cookie -1 and an index into the XML block's pool) could not work, and theme values
+  lost their changing-configuration flags.
+- **TS specs withheld by the cut: 11** (Resources, Resources$Theme, TypedArray, AssetManager,
+  Configuration, ColorStateList, XmlBlock, XmlBlock$Parser, XmlResourceParser,
+  AssetFileDescriptor, Resources$NotFoundException). The audit counts 349 references to their TS
+  classes; outside `res.ts`/`resnative.ts` they are JTheme (8 files), JColorStateList (drawable,
+  widget, textview, text, view, imageview), JResources (fonts, apphost), JConfiguration (context),
+  JTypedArray (delegates, text), JXmlParser (inflate) and JAssetManager (fonts, context). The TS view
+  stack reads resources below that line as well: `obtainStyled` (30 sites, 14 files),
+  `JTheme.lookup` (27, 8), `themeOf`/`askTheme` (15), `loadDrawable*` (50, 17),
+  `.jres` (115, 16) and `JResources.host` (59, 13).
+- **Hot paths.** `obtainStyledAttributes` (`AttributeResolution::ApplyStyle`): every widget
+  constructor, about 100 attributes for View's styleable. Theme attribute lookup
+  (`Theme::GetAttribute` + `ResolveReference`). `getValue` (`nativeGetResourceValue`). Layout XML
+  through XmlBlock (today the TS inflater parses AXML itself). String reads with spans
+  (StringBlock styles).
+- **Done (step 1): natives.** 94 of 97 have libandroidfw semantics over one AssetManager2
+  (`res.ts` `Resources`, `JTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
+  stack uses too. Left: ObbScanner and ResourceTimer (unreached), resolution logging (answers ""),
+  `nativeList` of the framework apk's assets (its archive is not listed) and fd-backed ApkAssets
+  (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
+  runs AOSP's Resources end to end headless. Measurements are in the history entry.
+- **Not yet flippable; next, in order:**
+  1. Boot under the switch: `device.ts`, `context.ts`, `pm.ts` build `JResources`/`JTheme`/
+     `JConfiguration` themselves. They must load ApkAssets, build the AssetManager and Resources
+     through AOSP (ResourcesManager, as LoadedApk does), and hand Contexts the Java Resources and
+     Theme; device configuration changes go through `Resources.updateConfiguration`.
+  2. Bridges for the TS view stack, which stays TS until Stage D: the native state behind a Java
+     object (`Resources.mResourcesImpl.mAssets.mObject` → `Resources`, `Theme.mThemeImpl.mTheme` →
+     `JTheme`, `XmlBlock$Parser.mParseState` → the element). AOSP's ThemeImpl casts the
+     AttributeSet to `XmlBlock$Parser`, so the TS inflater must pass the parser `getLayout` returns,
+     not `webdroid/AttrSet`.
+  3. Drawables: `ResourcesImpl.loadXmlDrawable` runs AOSP's DrawableInflater over the TS drawables,
+     which lack AOSP's fields (`Drawable.mSrcDensityOverride`); either a TS
+     `Drawable.createFromXmlForDensity` over the bridge or C.2 first. Bitmap drawables go through
+     `ImageDecoder.decodeDrawable` (added; needs a browser to decode).
+  4. ColorStateList consumers (69 references in drawable, widget, textview, text, view, imageview)
+     read the TS list's items; with the cut they get AOSP's and must call it.
+  5. Then e2e/lat under `?bytecode=android/content/res/`, and delete `resnative.ts`'s specs.
+
 ### Tools and pitfalls learned
 
 - Scratch probes: load platform jars with `loadPlatformJar(bytes, i)` and call

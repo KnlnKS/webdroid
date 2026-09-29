@@ -376,7 +376,9 @@ rt.register({
   // a release build: the codename is REL, so every RELEASE_OR_* name reads the release
   statics: { SDK_INT: device.sdk, RELEASE: device.release, RELEASE_OR_CODENAME: device.release, RELEASE_OR_PREVIEW_DISPLAY: device.release,
     CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0,
-    PREVIEW_SDK_FINGERPRINT: "REL", DEVICE_INITIAL_SDK_INT: device.sdk, MEDIA_PERFORMANCE_CLASS: 0 },
+    PREVIEW_SDK_FINGERPRINT: "REL", DEVICE_INITIAL_SDK_INT: device.sdk, MEDIA_PERFORMANCE_CLASS: 0,
+    // SDK_INT, plus one for a pre-release codename, which a release build has none of
+    RESOURCES_SDK_INT: device.sdk },
 });
 // API 33's codes, in the name order ART's getFields() reports for a dex class; apps index
 // the array by SDK_INT to read the release codename
@@ -1201,6 +1203,12 @@ rt.register({
     "static getExternalStoragePublicDirectory(Ljava/lang/String;)Ljava/io/File;": (t: string) => newFile("/sdcard/" + (t ?? "")),
     "static getDataDirectory()Ljava/io/File;": () => newFile("/data"),
     "static getRootDirectory()Ljava/io/File;": () => newFile("/system"),
+    // the device's partitions, which AOSP's statics read from the environment its init sets
+    "static getVendorDirectory()Ljava/io/File;": () => newFile("/vendor"),
+    "static getOdmDirectory()Ljava/io/File;": () => newFile("/odm"),
+    "static getOemDirectory()Ljava/io/File;": () => newFile("/oem"),
+    "static getProductDirectory()Ljava/io/File;": () => newFile("/product"),
+    "static getSystemExtDirectory()Ljava/io/File;": () => newFile("/system_ext"),
     "static getDownloadCacheDirectory()Ljava/io/File;": () => newFile("/cache"),
     "static getExternalStorageState()Ljava/lang/String;": () => "mounted",
     "static getExternalStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",

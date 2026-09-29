@@ -1,12 +1,12 @@
 import { expect, test, describe } from "bun:test";
-import { loadLibcore } from "./java";
+import { loadLibcore, fakeStyles } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { JLayout, JSpannable, JTextPaint, JSpanned } from "../src/android/text";
 import { fillFontMetrics, measureText, typefaceFor } from "../src/android/graphics";
-import { JTheme, Resources, T_STR } from "../src/android/res";
+import { JTheme } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import { mkCsl } from "../src/android/drawable";
 import { JTextView, JEditText } from "../src/android/textview";
@@ -295,20 +295,15 @@ describe("style-wrap", () => {
 describe("styled-null", () => {
   rt.linkNatives();
   test("explicit style arrays mask null font values before reporting present attributes", async () => {
-    const res = new Resources(null, {}), theme = new JTheme();
-    theme.res = res; theme.styles = [100];
-    res.bagCache.set(100, { parent: 0, map: new Map([
-      [1, { t: T_STR, d: 0, s: "fallback" }],
-      [4, { t: TV.REFERENCE, d: 0 }],
-    ]) });
-    res.bagCache.set(101, { parent: 0, map: new Map([
-      [1, { t: TV.REFERENCE, d: 0 }],
-      [2, { t: T_STR, d: 0, s: "custom-family" }],
-      [3, { t: TV.ATTRIBUTE, d: 4 }],
-    ]) });
+    const S = 0x7f0f0000, A = 0x7f010001;
+    const res = await fakeStyles(["fallback", "custom-family"], {
+      [S]: [[A, TV.STRING, 0], [A + 3, TV.REFERENCE, 0]],
+      [S + 1]: [[A, TV.REFERENCE, 0], [A + 1, TV.STRING, 1], [A + 2, TV.ATTRIBUTE, A + 3]],
+    }), theme = new JTheme();
+    theme.res = res; theme.apply(S);
     const context = Object.assign(rt.make("android/content/Context"), { $host: { res, theme } });
     for (const receiver of [theme, context]) {
-      const values = await vcall(receiver, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", 101, new Int32Array([1, 2, 3]));
+      const values = await vcall(receiver, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", S + 1, new Int32Array([A, A + 1, A + 2]));
       expect(await vcall(values, "hasValue", "(I)Z", 0)).toBe(0);
       expect(await vcall(values, "hasValue", "(I)Z", 2)).toBe(0);
       expect(await vcall(values, "getIndexCount", "()I")).toBe(1);

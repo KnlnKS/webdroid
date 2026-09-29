@@ -4,6 +4,8 @@ import { readStreamFully } from "../jvm/natives/jio";
 import { resident, type JBuffer } from "../jvm/natives/jnio";
 import { decodeBytes } from "./graphics";
 import { u8 } from "../jvm/abi";
+import { drawableFromBitmap } from "./drawable";
+import { device } from "../shell/config";
 
 class JImageSource extends JObj { read!: () => Promise<Uint8Array>; }
 class JImageInfo extends JObj { size: unknown = null; }
@@ -17,10 +19,19 @@ function streamSource(open: () => Promise<unknown>): JImageSource {
   };
   return source;
 }
+/** a source's bytes: our own sources read themselves; a resource's asset stream is AOSP's
+ *  AssetInputStreamSource, which ResourcesImpl builds over the asset it opened */
+async function sourceBytes(source: JImageSource): Promise<Uint8Array> {
+  if (typeof source.read === "function") return source.read();
+  const stream = (source as unknown as Record<string, unknown>)[rt.fieldProp("android/graphics/ImageDecoder$AssetInputStreamSource", "mAssetInputStream") ?? ""];
+  if (!stream) throw rt.mkThrowable("java/io/IOException", "Unsupported image source");
+  try { return await readStreamFully(stream); }
+  finally { await vcall(stream, "close", "()V"); }
+}
 async function decode(source: JImageSource, listener: unknown) {
   const decoder = rt.make("android/graphics/ImageDecoder") as JImageDecoder;
   try {
-    const bitmap = await decodeBytes(await source.read(), null, async (width, height) => {
+    const bitmap = await decodeBytes(await sourceBytes(source), null, async (width, height) => {
       decoder.width = width; decoder.height = height;
       const info = rt.make("android/graphics/ImageDecoder$ImageInfo") as JImageInfo;
       info.size = await newObj("android/util/Size", "(II)V", width, height);
@@ -60,6 +71,15 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
     return source;
   }),
   "static decodeBitmap(Landroid/graphics/ImageDecoder$Source;Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/Bitmap;": decode,
+  // a bitmap at its source's density, as a nine-patch when it carries a chunk
+  "static decodeDrawable(Landroid/graphics/ImageDecoder$Source;Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/drawable/Drawable;":
+    async (source: JImageSource, listener: unknown) => {
+      if (!listener) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener cannot be null! Use decodeDrawable(Source) to not have a listener");
+      const bitmap = await decode(source, listener);
+      const density: number = await vcall(source, "getDensity", "()I");
+      if (density) bitmap.density = density;
+      return drawableFromBitmap(bitmap, device.densityDpi, null);
+    },
   "setTargetSize(II)V": function (this: JImageDecoder, width: number, height: number) {
     if (width <= 0 || height <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Target size must be positive");
     this.width = width; this.height = height;
