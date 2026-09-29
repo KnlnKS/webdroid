@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { defineException, vcall, after, checkFromIndexSize } from "./jlang";
 import { mem } from "../../native/mem";
 import { charsToString, jarray, mangleMethod } from "../abi";
-import { CHARSETS, charsetInfo, decodeString, encodeString } from "../charset";
+import { CHARSETS, charsetInfo, decodeString, encodeByte, encodeString } from "../charset";
 import { handle } from "../../android/handles";
 import { newStringSet } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
@@ -823,7 +823,7 @@ const coderChain = (ret: string): NativeSpec["methods"] => ({
   [`onMalformedInput(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.malformed = action.name; return this; },
   [`onUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.unmappable = action.name; return this; },
 });
-const encodable = (cs: JCharset, c: number) => c <= charsetInfo(cs).max;
+const encodable = (cs: JCharset, c: number) => encodeByte(charsetInfo(cs), c) >= 0;
 const maxBytesPerChar = (cs: JCharset) => charsetInfo(cs).maxBytes;
 rt.register({
   name: "java/nio/charset/CharsetEncoder", ctor: JCharsetCoder,
@@ -900,7 +900,7 @@ const offsetIn = (b: JBuffer, array: ArrayBufferView) => (b.byteOffset - array.b
  *  the remaining characters of a buffer over an app's CharSequence. */
 function encodeChars(coder: JCharsetCoder, src: JCharBuffer, dst: JBuffer, end: number, text: string | null): JCoderResult {
   if (dst.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
-  const cs = charsetInfo(coder.cs), { unit, little, max } = cs, wide = unit > 1;
+  const cs = charsetInfo(coder.cs), { unit, little, max } = cs, wide = unit > 1, ascii = !cs.table || cs.ascii;
   const seq = src.sequence, units = seq === null ? heapArray(src, Uint16Array) : null, ubase = units ? offsetIn(src, units) : 0, order = src.little;
   const first = src.pos, offset = src.sequenceOffset;
   const at = text !== null ? (i: number) => text.charCodeAt(i - first) : typeof seq === "string" ? (i: number) => seq.charCodeAt(offset + i)
@@ -914,13 +914,13 @@ function encodeChars(coder: JCharsetCoder, src: JCharBuffer, dst: JBuffer, end: 
     dp = putUnit(bytes, dp, unit, 0xfeff, little); coder.marked = true;
   }
   while (sp < limit) {
-    if (units && !wide) {
+    if (units && !wide && ascii) {
       let c = 0;
       while (sp < limit && dp < room && (c = units[ubase + sp]) < 0x80) { bytes[dp++] = c; sp++; }
       if (sp >= limit) break;
     }
     const c = at(sp);
-    if (c < 0x80 && !wide) {
+    if (c < 0x80 && !wide && ascii) {
       if (dp >= room) { result = CODER_OVERFLOW; break; }
       bytes[dp++] = c; sp++; continue;
     }
@@ -933,7 +933,8 @@ function encodeChars(coder: JCharsetCoder, src: JCharBuffer, dst: JBuffer, end: 
         else error = "malformed";
       }
     } else if (c >= 0xdc00 && c <= 0xdfff) error = "malformed";
-    if (!error && cp > max) error = "unmappable";
+    const byte = cs.table ? encodeByte(cs, cp) : cp;
+    if (!error && (cs.table ? byte < 0 : cp > max)) error = "unmappable";
     if (error) {
       const action = error === "malformed" ? coder.malformed : coder.unmappable;
       if (action === "REPORT") { result = new JCoderResult(error, width); break; }
@@ -945,11 +946,11 @@ function encodeChars(coder: JCharsetCoder, src: JCharBuffer, dst: JBuffer, end: 
       sp += width;
       continue;
     }
-    const n = unit === 4 ? 4 : wide ? width * 2 : max <= 0xff || cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    const n = unit === 4 ? 4 : wide ? width * 2 : cs.table || max <= 0xff || cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
     if (room - dp < n) { result = CODER_OVERFLOW; break; }
     if (unit === 4) dp = putUnit(bytes, dp, 4, cp, little);
     else if (wide) for (let i = 0; i < width; i++) dp = putUnit(bytes, dp, 2, at(sp + i), little);
-    else if (n === 1) bytes[dp++] = cp;
+    else if (n === 1) bytes[dp++] = byte;
     else if (n === 2) { bytes[dp++] = 0xc0 | cp >> 6; bytes[dp++] = 0x80 | cp & 63; }
     else if (n === 3) { bytes[dp++] = 0xe0 | cp >> 12; bytes[dp++] = 0x80 | cp >> 6 & 63; bytes[dp++] = 0x80 | cp & 63; }
     else { bytes[dp++] = 0xf0 | cp >> 18; bytes[dp++] = 0x80 | cp >> 12 & 63; bytes[dp++] = 0x80 | cp >> 6 & 63; bytes[dp++] = 0x80 | cp & 63; }
@@ -964,14 +965,14 @@ function putUnit(bytes: Int8Array, dp: number, size: number, value: number, litt
   return dp + size;
 }
 function decodeBuffer(coder: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) {
-  const cs = charsetInfo(coder.cs), { unit, name } = cs, wide = unit > 1;
+  const cs = charsetInfo(coder.cs), { unit, name, table } = cs, wide = unit > 1, ascii = !table || cs.ascii;
   const input = src.dv, bytes = new Uint8Array(input.buffer, input.byteOffset, src.cap);
   // dp and room index `units`, or the buffer's own elements without them
   const units = heapArray(dst, Uint16Array), base = units ? offsetIn(dst, units) : 0, little = dst.little, limit = src.lim, room = base + dst.lim;
   let sp = src.pos, dp = base + dst.pos, result = CODER_UNDERFLOW;
   const put = (unit: number) => { if (units) units[dp++] = unit; else dst.dv.setUint16(dp++ << 1, unit, little); };
   while (sp < limit) {
-    if (!wide && units) {
+    if (!wide && units && ascii) {
       let b = 0;
       while (sp < limit && dp < room && (b = bytes[sp]) < 0x80) { units[dp++] = b; sp++; }
       if (sp >= limit) break;
@@ -1006,6 +1007,9 @@ function decodeBuffer(coder: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: n
           } else if (cp >= 0xdc00 && cp <= 0xdfff) malformed = 2;
         }
       }
+    } else if (table) {
+      cp = table.charCodeAt(cp);
+      if (cp === 0xfffd) malformed = 1;
     } else if (name === "US-ASCII") {
       if (cp > 127) malformed = 1;
     } else if (name === "UTF-8" && cp >= 128) {

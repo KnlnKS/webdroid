@@ -1,5 +1,6 @@
 import { utf8, charsToString } from "./abi";
 import { rt } from "./runtime";
+import { SINGLE_BYTE_CHARSETS } from "./charset-tables";
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, SURROGATE = /[\uD800-\uDFFF]/;
 
@@ -11,6 +12,20 @@ export interface CharsetInfo {
   /** the highest code point it encodes */
   max: number;
   replacement: number[]; maxBytes: number; averageBytes: number; averageChars: number;
+  /** a single-byte charset's decoding, byte by byte (U+FFFD for a byte that maps to nothing) */
+  table?: string;
+  /** its bytes below 0x80 are ASCII */
+  ascii?: boolean;
+  encoding?: Map<number, number>;
+}
+/** the byte a table charset encodes `c` as, or -1 */
+export function encodeByte(cs: CharsetInfo, c: number): number {
+  if (!cs.table) return c <= cs.max ? c : -1;
+  if (!cs.encoding) {
+    cs.encoding = new Map();
+    for (let b = 255; b >= 0; b--) if (cs.table.charCodeAt(b) !== 0xfffd) cs.encoding.set(cs.table.charCodeAt(b), b);
+  }
+  return cs.encoding.get(c) ?? -1;
 }
 const unicode = (name: string, unit: 2 | 4, little: boolean, marked: boolean, aliases: string[]): CharsetInfo => ({
   name, aliases, unit, little, marked, max: 0x10ffff, maxBytes: unit, averageBytes: unit, averageChars: 1 / unit,
@@ -29,6 +44,13 @@ export const CHARSETS: readonly CharsetInfo[] = [
   unicode("UTF-32BE", 4, false, false, []),
   unicode("UTF-32LE", 4, true, false, []),
 ];
+const served = new Set(CHARSETS.map((cs) => cs.name));
+for (const [name, aliases, replacement, table] of SINGLE_BYTE_CHARSETS) if (!served.has(name)) {
+  let ascii = true;
+  for (let b = 0; b < 0x80 && ascii; b++) ascii = table.charCodeAt(b) === b;
+  (CHARSETS as CharsetInfo[]).push({ name, aliases, unit: 1, little: false, marked: false, max: 0xffff, replacement,
+    maxBytes: 1, averageBytes: 1, averageChars: 1, table, ascii });
+}
 // ICU matches names ignoring case, '-' and '_'
 const key = (name: string) => name.replace(/[-_]/g, "").toUpperCase();
 const byName = new Map(CHARSETS.flatMap((cs) => [cs.name, ...cs.aliases].map((n) => [key(n), cs] as const)));
@@ -56,7 +78,11 @@ export function encodeString(text: string, charset: unknown): Int8Array {
     const lone = char.length === 1 && char.charCodeAt(0) >= 0xd800 && char.charCodeAt(0) <= 0xdfff;
     if (unit === 4) { view.setUint32(pos, lone ? 0xfffd : char.codePointAt(0)!, little); pos += 4; }
     else if (unit === 2) for (let i = 0; i < char.length; i++, pos += 2) view.setUint16(pos, lone ? 0xfffd : char.charCodeAt(i), little);
-    else { const cp = char.codePointAt(0)!; out[pos++] = cp <= cs.max ? cp : 0x3f; }
+    else {
+      const b = encodeByte(cs, char.codePointAt(0)!);
+      if (b >= 0) out[pos++] = b;
+      else for (const r of cs.replacement) out[pos++] = r;
+    }
   }
   return pos === out.length ? out : out.slice(0, pos);
 }
@@ -81,7 +107,7 @@ export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown): s
   const chars = new Uint16Array(Math.ceil((bytes.length - start) / unit));
   for (let i = 0, pos = start; i < chars.length; i++, pos += unit) {
     const cp = unit === 2 ? pos + 1 < bytes.length ? view.getUint16(pos, little) : 0xfffd : bytes[pos] & 255;
-    chars[i] = cp > cs.max ? 0xfffd : cp;
+    chars[i] = cs.table ? cs.table.charCodeAt(cp) : cp > cs.max ? 0xfffd : cp;
   }
   const text = charsToString(chars, 0, chars.length);
   return unit === 2 ? text.replace(LONE_SURROGATE, "\ufffd") : text;
