@@ -654,6 +654,20 @@ describe("scale-drawable", () => {
   });
 });
 
+test("a level list shows the first item whose range holds the level, passing the level on", async () => {
+  const d = await newObj("android/graphics/drawable/LevelListDrawable", "()V");
+  const low = rt.make("android/graphics/drawable/ColorDrawable") as JDrawable, high = rt.make("android/graphics/drawable/ColorDrawable") as JDrawable;
+  await vcall(d, "addLevel", "(IILandroid/graphics/drawable/Drawable;)V", 0, 5, low);
+  await vcall(d, "addLevel", "(IILandroid/graphics/drawable/Drawable;)V", 3, 10, high);
+  const current = () => vcall(d, "getCurrent", "()Landroid/graphics/drawable/Drawable;");
+  expect(await current()).toBe(low);
+  expect(await vcall(d, "setLevel", "(I)Z", 7)).toBe(1);
+  expect(await current()).toBe(high);
+  expect(high.level).toBe(7);
+  await vcall(d, "setLevel", "(I)Z", 11);
+  expect(await current()).toBe(null);
+});
+
 describe("transition-drawable", () => {
   class Child extends JDrawable {
     drawn: number[] = [];

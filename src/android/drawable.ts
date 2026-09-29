@@ -682,6 +682,17 @@ class JStateListDrawable extends JDrawableContainer {
   paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.items, vertical); }
 }
+/** AOSP LevelListDrawable: the first item whose range holds the level, else none */
+class JLevelListDrawable extends JDrawableContainer {
+  items: { min: number; max: number; d: JDrawable }[] = [];
+  shown: JDrawable | null = null;
+  current(): JDrawable | null {
+    for (const it of this.items) if (this.level >= it.min && this.level <= it.max) return it.d;
+    return null;
+  }
+  paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
+  size(vertical: boolean) { return containerSize(this.items, vertical); }
+}
 class JAnimationDrawable extends JDrawableContainer {
   frames: { d: JDrawable; ms: number }[] = [];
   cur = 0; oneShot = false; running = false; run = 0;
@@ -730,6 +741,27 @@ rt.register({
   methods: {
     "setEnterFadeDuration(I)V": function (this: JDrawableContainer, duration: number) { this.enterFadeDuration = Math.max(0, duration); },
     "setExitFadeDuration(I)V": function (this: JDrawableContainer, duration: number) { this.exitFadeDuration = Math.max(0, duration); },
+  },
+});
+rt.register({
+  name: "android/graphics/drawable/LevelListDrawable", ctor: JLevelListDrawable, sup: "android/graphics/drawable/DrawableContainer",
+  methods: {
+    "<init>()V": function () {},
+    "addLevel(IILandroid/graphics/drawable/Drawable;)V": function (this: JLevelListDrawable, min: number, max: number, d: JDrawable | null) {
+      if (d) { d.callback = this; this.items.push({ min, max, d }); }
+    },
+    "getCurrent()Landroid/graphics/drawable/Drawable;": function (this: JLevelListDrawable) { return this.current(); },
+    // selectDrawable, then DrawableContainer's: the shown child takes the level too
+    "onLevelChange(I)Z": driven(function* (this: JLevelListDrawable, level: number): Gen {
+      const d = this.current(), changed = d !== this.shown;
+      this.shown = d;
+      if (changed) invalidateSelf.call(this);
+      return (d ? yield vcall(d, "setLevel", "(I)Z", level) : 0) || changed ? 1 : 0;
+    }),
+    "onStateChange([I)Z": driven(function* (this: JLevelListDrawable, state: Int32Array): Gen {
+      for (const { d } of this.items) yield vcall(d, "setState", "([I)Z", state);
+      return 1;
+    }),
   },
 });
 rt.register({
@@ -1666,7 +1698,8 @@ const AT = attrTable(
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees", "name",
-  "trimPathStart", "trimPathEnd", "trimPathOffset", "strokeAlpha", "strokeLineCap", "strokeLineJoin", "strokeMiterLimit", "animation");
+  "trimPathStart", "trimPathEnd", "trimPathOffset", "strokeAlpha", "strokeLineCap", "strokeLineJoin", "strokeMiterLimit", "animation",
+  "minLevel", "maxLevel");
 const LINE_CAPS: CanvasLineCap[] = ["butt", "round", "square"], LINE_JOINS: CanvasLineJoin[] = ["miter", "round", "bevel"];
 /** Drawable.parseTintMode: android:tintMode's enum values */
 const TINT_MODES: Record<number, string> = { 3: "SRC_OVER", 5: "SRC_IN", 9: "SRC_ATOP", 14: "MULTIPLY", 15: "SCREEN", 16: "ADD" };
@@ -1942,11 +1975,14 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       return d;
     }
     case "level-list": {
+      const d = new JLevelListDrawable();
       for (const c of node.children) {
         const child = c.name === "item" ? yield itemDrawable(res, c, theme) : null;
-        if (child) return child;
+        if (!child) continue;
+        child.callback = d;
+        d.items.push({ min: xmlInt(res, get(AT.minLevel, c), 0), max: xmlInt(res, get(AT.maxLevel, c), 0), d: child });
       }
-      return new JColorDrawable();
+      return d;
     }
     default:
       if (!node.name.includes(".")) {
