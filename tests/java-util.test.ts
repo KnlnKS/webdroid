@@ -529,6 +529,8 @@ describe("map-equality", () => {
     expect(await vcall(target, "containsValue", `(${O})Z`, first)).toBe(1);
     await put(target, equalValue, equalValue);
     expect(await vcall(target, "size", "()I")).toBe(2);
+    expect(await vcall(await vcall(target, "values", "()Ljava/util/Collection;"), "remove", `(${O})Z`, equalValue)).toBe(1);
+    expect(await vcall(target, "containsKey", `(${O})Z`, first)).toBe(1);
   });
 
   test("a null mapping is distinct from an absent key", async () => {

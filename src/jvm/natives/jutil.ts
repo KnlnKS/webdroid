@@ -878,6 +878,7 @@ export class JMap extends JObj {
 }
 class JIdentityHashMap extends JMap { identity = true; }
 const mapKeyFor = (map: JMap, key: unknown): unknown => map.identity ? key ?? null : mapKey(key);
+const valueEq = (map: JMap, a: unknown, b: unknown): number | Promise<number> => map.identity ? +(a === b) : jeq(a, b);
 function ensureMapMutable(map: JMap): void {
   if (!map.mutable) uoe();
 }
@@ -964,7 +965,7 @@ function mapMethods(): Methods {
     }),
     "containsValue(Ljava/lang/Object;)Z": driven(function* (this: JMap, v: unknown): Gen {
       for (const e of allEnts(this)) {
-        const r = this.identity ? +(e.v === v) : jeq(e.v, v);
+        const r = valueEq(this, e.v, v);
         if (r instanceof Promise ? yield r : r) return 1;
       }
       return 0;
@@ -1012,13 +1013,9 @@ function mapMethods(): Methods {
         const old = entry.v;
         const finish = (equal: number) => {
           // User equality can suspend while another operation replaces this mapping.
-          if (!equal || entry.v !== old) return 0;
-          if (key !== SLOW) return this.m.get(key) === entry && this.m.delete(key) ? 1 : 0;
-          const index = this.slow.indexOf(entry);
-          if (index < 0) return 0;
-          this.slow.splice(index, 1); this.slowVersion++; return 1;
+          return !equal || entry.v !== old ? 0 : removeEnt(this, entry);
         };
-        const equal = this.identity ? +(value === old) : jeq(value, old);
+        const equal = valueEq(this, value, old);
         return equal instanceof Promise ? equal.then(finish) : finish(equal);
       };
       if (key !== SLOW) return remove(this.m.get(key));
@@ -1061,7 +1058,7 @@ function* allEnts(s: { m: Map<unknown, Ent>; slow: Ent[] }): Generator<Ent> {
 }
 /** AbstractCollection.remove over values(): the first mapping whose value `o` equals */
 const firstValue = driven(function* firstValue(map: JMap, o: unknown): Gen<Ent | undefined> {
-  for (const entry of [...allEnts(map)]) if (o === null ? entry.v === null : yield jeq(o, entry.v)) return entry;
+  for (const entry of [...allEnts(map)]) if (yield valueEq(map, o, entry.v)) return entry;
   return undefined;
 });
 function mapEquals(entries: Ent[], other: unknown, from = 0): number | Promise<number> {
@@ -1215,15 +1212,13 @@ class JSetView extends JObj {
 class JValuesView extends JSetView {}
 function setViewStream(this: JSetView) { return mkStream(this.snapshot()); }
 /** drop `entry` if it is still the map's mapping for its key */
-function removeEnt(map: JMap, entry: Ent): void {
+function removeEnt(map: JMap, entry: Ent): number {
   ensureMapMutable(map);
   const key = mapKeyFor(map, entry.k);
-  if (key !== SLOW) {
-    if (map.m.get(key) === entry) map.m.delete(key);
-  } else {
-    const index = map.slow.indexOf(entry);
-    if (index >= 0) { map.slow.splice(index, 1); map.slowVersion++; }
-  }
+  if (key !== SLOW) return map.m.get(key) === entry && map.m.delete(key) ? 1 : 0;
+  const index = map.slow.indexOf(entry);
+  if (index < 0) return 0;
+  map.slow.splice(index, 1); map.slowVersion++; return 1;
 }
 function entOf(map: JMap, k: unknown): Ent | undefined | Promise<Ent | undefined> {
   const key = mapKeyFor(map, k);
@@ -1233,7 +1228,7 @@ function entOf(map: JMap, k: unknown): Ent | undefined | Promise<Ent | undefined
 /** the mapping an entry-set member names: same key, and a value equal as the map's own entry judges it */
 function mappingOf(map: JMap, o: unknown): Ent | undefined | Promise<Ent | undefined> {
   const match = (k: unknown, v: unknown) => after(entOf(map, k), (entry) => entry === undefined ? undefined
-    : after(map.identity ? +(entry.v === v) : jeq(entry.v, v), (equal) => (equal ? entry : undefined)));
+    : after(valueEq(map, entry.v, v), (equal) => (equal ? entry : undefined)));
   if (o instanceof JMapEntry) return match(o.e.k, o.e.v);
   if (!(o instanceof JObj) || !rt.iof(o, "java/util/Map$Entry")) return undefined;
   return after(entryKey(o), (k) => after(entryVal(o), (v) => match(k, v)));
@@ -1292,10 +1287,7 @@ const mapViewMethods: Methods = {
     for (const o of yield toJsArray(c)) if (!(yield viewContains(this, o))) return 0;
     return 1;
   }),
-  "clear()V": function (this: JSetView) {
-    if (!this.map.mutable) return vcall(this.map, "clear", "()V");
-    this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++;
-  },
+  "clear()V": function (this: JSetView) { return vcall(this.map, "clear", "()V"); },
   // AbstractCollection's: a map view never adds
   "add(Ljava/lang/Object;)Z": uoe,
   "addAll(Ljava/util/Collection;)Z": function (this: JSetView, c: unknown) { return after(toJsArray(c), (src) => changes(src.length)); },
