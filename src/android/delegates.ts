@@ -29,6 +29,7 @@ import { lambda } from "../jvm/natives/jstream";
 import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
+import { recordingContext, replay, replayWithSemantics, type DisplayList } from "./recording";
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
@@ -858,6 +859,53 @@ delegate("android/graphics/NinePatch", {
     const r = new NativeRegion();
     r.setRects(rects);
     return handle(r);
+  },
+});
+
+// ── android.graphics.Picture: a recorded display list ──────────────────────────────────
+// The recording canvas records as a RenderNode's does, and drawing the picture replays it into
+// the target canvas inside a save/restore, as SkRecordDraw does. SkPicture's serialized form
+// (createFromStream, writeToStream) is not implemented.
+class NativePicture {
+  w = 0; h = 0;
+  ops: DisplayList | null = null;
+  /** while recording: the canvas handle and the list it records into */
+  canvas = 0n; recording: DisplayList | null = null;
+  endRecording() {
+    if (!this.recording) return;
+    this.ops = this.recording; this.recording = null;
+    release(this.canvas); this.canvas = 0n;
+  }
+}
+const picture = (h: bigint) => deref<NativePicture>(h);
+delegate("android/graphics/Picture", {
+  // a copy of a picture still recording holds what was recorded so far
+  "nativeConstructor(J)J": (src: bigint) => {
+    const p = new NativePicture();
+    if (src) { const s = picture(src); p.w = s.w; p.h = s.h; p.ops = s.recording ? s.recording.slice() : s.ops; }
+    return handle(p);
+  },
+  "nativeDestructor(J)V": (h: bigint) => { picture(h).endRecording(); release(h); },
+  "nativeBeginRecording(JII)J": (h: bigint, w: number, ht: number) => {
+    const p = picture(h), c = new JCanvas();
+    p.endRecording();
+    p.w = w; p.h = ht; p.ops = null; p.recording = [];
+    c.ctx = recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, p.recording);
+    c.w = w; c.h = ht;
+    return p.canvas = handle(c);
+  },
+  "nativeEndRecording(J)V": (h: bigint) => picture(h).endRecording(),
+  "nativeGetWidth(J)I": (h: bigint) => picture(h).w,
+  "nativeGetHeight(J)I": (h: bigint) => picture(h).h,
+  "nativeDraw(JJ)V": (c: bigint, h: bigint) => {
+    const p = picture(h), cv = canvas(c);
+    p.endRecording();
+    const ops = p.ops;
+    if (!ops) return;
+    replayWithSemantics(cv, () => {
+      cv.ctx.save();
+      try { replay(cv.ctx, ops); } finally { cv.ctx.restore(); }
+    });
   },
 });
 

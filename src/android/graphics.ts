@@ -1419,7 +1419,7 @@ export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   while (cv.saveCount > count) restoreCanvas(cv);
 }
 /** Canvas.drawPicture(Picture, Rect[F]): the picture's own size scaled onto dst */
-const drawPictureInto = driven(function* (this: JCanvas, picture: JPicture, dst: JRect | JRectF): Gen {
+const drawPictureInto = driven(function* (this: JCanvas, picture: object, dst: JRect | JRectF): Gen {
   yield vcall(this, "save", "()I");
   yield vcall(this, "translate", "(FF)V", dst.left, dst.top);
   const w: number = yield vcall(picture, "getWidth", "()I"), h: number = yield vcall(picture, "getHeight", "()I");
@@ -1796,6 +1796,12 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPaint(Landroid/graphics/Paint;)V": drawPaint,
   "<init>()V": function (this: JCanvas) { setCanvasBitmap(this, null); },
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
+  // Canvas(long): a subclass (Picture's recording canvas) over a native canvas, which it becomes
+  "<init>(J)V": function (this: JCanvas, h: bigint) {
+    const native = deref<JCanvas>(h);
+    this.ctx = native.ctx; this.w = native.w; this.h = native.h; this.bmp = native.bmp;
+    replace(h, this);
+  },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
   "getMaximumBitmapWidth()I": () => 32766,
@@ -1953,7 +1959,7 @@ export const canvasMethods: NativeSpec["methods"] = {
       try { drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, 0, 0)); }
       finally { this.ctx.restore(); }
     },
-  "drawPicture(Landroid/graphics/Picture;)V": driven(function* (this: JCanvas, picture: JPicture): Gen {
+  "drawPicture(Landroid/graphics/Picture;)V": driven(function* (this: JCanvas, picture: object): Gen {
     yield vcall(picture, "endRecording", "()V");
     const count: number = yield vcall(this, "save", "()I");
     yield vcall(picture, "draw", "(Landroid/graphics/Canvas;)V", this);
@@ -2125,30 +2131,6 @@ class JRenderNode extends JObj {
   /** setUseCompositingLayer: the content composites as one offscreen layer, through this paint */
   layer: JPaint | true | null = null;
 }
-// android.graphics.Picture is the same recording the render node already does, without the
-// transform properties: what it recorded is replayed into whatever canvas is drawing it.
-class JPicture extends JObj { node = new JRenderNode(); recording = false; }
-rt.register({
-  name: "android/graphics/Picture", ctor: JPicture,
-  methods: {
-    "<init>()V": function () {},
-    "beginRecording(II)Landroid/graphics/Canvas;": function (this: JPicture, w: number, h: number) {
-      this.node.w = w; this.node.h = h; this.recording = true;
-      return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
-    },
-    "endRecording()V": function (this: JPicture) {
-      if (!this.recording) return;
-      this.recording = false;
-      return vcall(this.node, "endRecording", "()V");
-    },
-    "getWidth()I": function (this: JPicture) { return this.node.w; },
-    "getHeight()I": function (this: JPicture) { return this.node.h; },
-    "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
-      return after(this.recording ? vcall(this, "endRecording", "()V") : undefined,
-        () => replayWithSemantics(cv, () => { if (this.node.hasDL) replay(cv.ctx, this.node.ops); }));
-    },
-  },
-});
 /** replay a node's display list into ctx with its transform props applied */
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
@@ -2308,7 +2290,7 @@ canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this
   replayWithSemantics(this, () => recordOrRun(this.ctx, ctx => drawNodeInto(ctx, n)));
 };
 rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas",
-  methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V"]) });
+  methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V", "<init>(J)V"]) });
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);
 export class JBFOptions extends JObj {
