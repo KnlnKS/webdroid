@@ -8,7 +8,10 @@ import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fie
 import { jarray, mangleMethod } from "../jvm/abi";
 import { vcall, newObj, vcallUncaught, after } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
-import { JAttrSet, xmlAttrRV, resString, rvString, type Resources, type RV, JTheme, bagStrings } from "./res";
+import { JAttrSet, xmlAttrRV, resString, rvString, type Resources, type RV, JTheme, bagStrings, attrSet } from "./res";
+import { tagAttributes } from "./inflate";
+import { aospResources } from "./resources";
+import { parserRoot } from "./assetmanager";
 import { JView, JLinearLP, addUnattachedView } from "./view";
 import { tfMedium } from "./graphics";
 import { JLinearLayout } from "./layouts";
@@ -106,7 +109,7 @@ function ensurePM(frag: JPreferenceFragment): JPreferenceManager {
 function initPrefCommon(pref: JPreference, jctx: any, set: JAttrSet | null) {
   pref.jctx = jctx;
   const res: Resources | null = jctx?.$host?.res ?? null;
-  const node = set?.node ?? null;
+  const node = attrSet(set)?.node ?? null;
   if (res && node) {
     pref.keyStr = attrText(res, node, "key");
     pref.titleStr = attrText(res, node, "title") ?? "";
@@ -206,7 +209,7 @@ const checkBoxMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JCheckBoxPreference, c: unknown, set: JAttrSet | null) {
     initPrefCommon(this, c, set);
     const res: Resources | null = (c as JContext | null)?.$host?.res ?? null;
-    const node = set?.node ?? null;
+    const node = attrSet(set)?.node ?? null;
     let dflt = false;
     if (res && node) {
       const v = attrRV(node, "defaultValue");
@@ -251,7 +254,7 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JListPreference, c: unknown, set: JAttrSet | null) {
     initPrefCommon(this, c, set);
     const res: Resources | null = (c as JContext | null)?.$host?.res ?? null;
-    const node = set?.node ?? null;
+    const node = attrSet(set)?.node ?? null;
     let dflt: string | null = null;
     if (res && node) {
       this.entries = attrStringArray(res, node, "entries");
@@ -418,15 +421,11 @@ async function createPreferenceByTag(name: string, jctx: any, set: JAttrSet): Pr
   const clsName = name.includes(".") ? name.replace(/\./g, "/") : "android/preference/" + name;
   return newObj(clsName, "(Landroid/content/Context;Landroid/util/AttributeSet;)V", jctx, set);
 }
-async function buildPreferenceNode(node: XmlNode, jctx: any, frag: JPreferenceFragment): Promise<JPreference> {
-  const set = new JAttrSet();
-  set.node = node;
-  set.res = jctx.$host.res;
-  set.theme = jctx.$host.theme;
-  const pref = await createPreferenceByTag(node.name, jctx, set);
+async function buildPreferenceNode(node: XmlNode, jctx: any, frag: JPreferenceFragment, parser: unknown): Promise<JPreference> {
+  const pref = await createPreferenceByTag(node.name, jctx, await tagAttributes(node, jctx, parser));
   pref.owner = frag;
   if (pref instanceof JPreferenceGroup) {
-    for (const child of node.children) pref.children.push(await buildPreferenceNode(child, jctx, frag));
+    for (const child of node.children) pref.children.push(await buildPreferenceNode(child, jctx, frag, parser));
   }
   return pref;
 }
@@ -443,9 +442,17 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
     const jctx: any = this.act;
     const host = jctx?.$host;
     if (!host) { rt.noteMissing("preference xml (no activity)"); return; }
-    const f = host.res.fileOf(resId);
-    if (!f) { rt.noteMissing("preference xml 0x" + resId.toString(16)); return; }
-    const screen = (yield buildPreferenceNode(parseAXML(f.bytes), jctx, this)) as JPreferenceScreen;
+    let screen: JPreferenceScreen;
+    if (aospResources()) {
+      // PreferenceInflater reads the resource's XmlBlock parser, which is the AttributeSet each item gets
+      const parser = yield vcall(yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;"), "getXml", "(I)Landroid/content/res/XmlResourceParser;", resId);
+      try { screen = yield buildPreferenceNode(parserRoot(parser)!, jctx, this, parser); }
+      finally { yield vcall(parser, "close", "()V"); }
+    } else {
+      const f = host.res.fileOf(resId);
+      if (!f) { rt.noteMissing("preference xml 0x" + resId.toString(16)); return; }
+      screen = yield buildPreferenceNode(parseAXML(f.bytes), jctx, this, null);
+    }
     if (this.root) { for (const c of screen.children) { this.root.children.push(c); bindTree(c, this); } }
     else this.root = screen;
   }),

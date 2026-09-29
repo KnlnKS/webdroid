@@ -96,7 +96,7 @@ const M_onFinishInflate = mangleMethod("onFinishInflate", "()V");
 /** The AttributeSet of a layout tag, resolving against `ctx`'s theme. With AOSP's resources it
  *  is the layout's parser itself, advanced to the tag as LayoutInflater's rInflate advances it:
  *  their Theme.obtainStyledAttributes takes nothing else. */
-async function attrSetFor(node: XmlNode, ctx: JContext, parser: unknown): Promise<JAttrSet> {
+export async function tagAttributes(node: XmlNode, ctx: JContext, parser: unknown): Promise<JAttrSet> {
   const set = parser ? attrSet(parser)! : new JAttrSet();
   if (parser) while (set.node !== node) if (await vcall(parser, "next", "()I") === 1) throw rt.mkThrowable("android/view/InflateException", "tag " + node.name + " not in its layout");
   set.node = node;
@@ -108,10 +108,13 @@ async function attrSetFor(node: XmlNode, ctx: JContext, parser: unknown): Promis
 const A_value = 0x01010024;
 /** AOSP parseViewTag: a <tag> child keys its android:value on the enclosing view under android:id */
 async function applyViewTag(view: JView, node: XmlNode, jctx: JContext, parser: unknown) {
-  const set = attrSet(await attrSetFor(node, jctx, parser))!;
-  const ta = obtainStyled(set.res, set.theme, set, [A_id, A_value], 0, 0);
+  const set = await tagAttributes(node, jctx, parser);
+  const context = await vcall(view, "getContext", "()Landroid/content/Context;");
+  const ta = await vcall(context, "obtainStyledAttributes", "(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;", set, Int32Array.of(A_id, A_value));
   const key = await vcall(ta, "getResourceId", "(II)I", 0, 0);
-  await vcall(view, "setTag", "(ILjava/lang/Object;)V", key, await vcall(ta, "getText", "(I)Ljava/lang/CharSequence;", 1));
+  const value = await vcall(ta, "getText", "(I)Ljava/lang/CharSequence;", 1);
+  await vcall(ta, "recycle", "()V");
+  await vcall(view, "setTag", "(ILjava/lang/Object;)V", key, value);
 }
 
 async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentView: JView, jctx: JContext, parser: unknown) {
@@ -131,7 +134,7 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
         // a <merge> include inflates straight into parentView and returns it
         if (incView === parentView) continue;
         if (incView) {
-          const set = await attrSetFor(child, jctx, parser);
+          const set = await tagAttributes(child, jctx, parser);
           const idAttr = child.attrs.find((a) => a.resId === A_id);
           if (idAttr) (incView as JView).idNum = idAttr.data;
           const visibility = rvInt(host.res, obtainStyled(host.res, attrSet(set)!.theme, set, [A_visibility], 0, 0).vals[0], -1);
@@ -147,7 +150,7 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
       continue;
     }
     const cctx = await themedCtx(jctx, child);
-    const set = await attrSetFor(child, cctx, parser);
+    const set = await tagAttributes(child, cctx, parser);
     const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
     noteUnreadAttrs(child, child.name);
     let lp = v.lp;
@@ -182,7 +185,7 @@ async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup
     return parent;
   }
   const rctx = await themedCtx(ctx, root);
-  const set = await attrSetFor(root, rctx, parser);
+  const set = await tagAttributes(root, rctx, parser);
   const v = await createViewFromTag(inf, parent, root.name, rctx, set);
   noteUnreadAttrs(root, root.name);
   if (parent) {

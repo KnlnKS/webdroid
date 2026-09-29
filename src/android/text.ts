@@ -1,14 +1,12 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
-import { JDrawable, JColorStateList, cslBoundary } from "./drawable";
+import { JDrawable, JColorStateList, cslBoundary, tsCsl } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, stringOf, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JPaint, JCanvas, cssColor, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
-import { AID, JTypedArray } from "./res";
-import { TV } from "./axml";
+import { AID } from "./res";
 import { jarray } from "../jvm/abi";
-import { fontResource } from "./fonts";
 import { device } from "../shell/config";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
@@ -527,17 +525,20 @@ const appearanceAttrs = ["textColor", "textColorLink", "textSize", "textStyle", 
   "shadowRadius", "shadowDx", "shadowDy", "shadowColor", "elegantTextHeight", "letterSpacing", "fontFeatureSettings", "fontVariationSettings"];
 const appearanceInit = driven(function* appearanceInit(this: JTextAppearanceSpan, context: JObj, style: number): Gen {
   const thread = curThread, a = yield vcallOn(thread, context, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", style, new Int32Array(appearanceAttrs.map(AID)));
-  if (!(a instanceof JTypedArray)) throw new Error("Invalid appearance attributes");
   const get = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, a, method, desc, ...args);
   const string = async (index: number) => { const value = await get("getString", "(I)Ljava/lang/String;", index); return typeof value === "string" ? value : null; };
-  const color = async (index: number) => { const value = await get("getColorStateList", "(I)Landroid/content/res/ColorStateList;", index); return value instanceof JColorStateList ? value : null; };
+  const color = async (index: number) => tsCsl(await get("getColorStateList", "(I)Landroid/content/res/ColorStateList;", index));
   try {
     this.color = yield color(0);
     this.linkColor = yield color(1);
     this.size = Number(yield get("getDimensionPixelSize", "(II)I", 2, -1));
     this.style = Number(yield get("getInt", "(II)I", 3, 0));
-    const font = a.vals[4];
-    if (font?.t === TV.REFERENCE && !(yield vcallOn(thread, context, "isRestricted", "()Z"))) this.typeface = yield fontResource(a.res, font.d);
+    // AOSP asks getFont first and takes a failure as no typeface
+    if (!(yield vcallOn(thread, context, "isRestricted", "()Z"))) {
+      try { this.typeface = yield get("getFont", "(I)Landroid/graphics/Typeface;", 4); } catch (e) {
+        if (!rt.iof(e, "java/lang/UnsupportedOperationException") && !rt.iof(e, "android/content/res/Resources$NotFoundException")) throw e;
+      }
+    }
     if (!this.typeface) this.family = (yield string(4)) ?? [null, "sans", "serif", "monospace"][Number(yield get("getInt", "(II)I", 5, 0))] ?? null;
     this.weight = Number(yield get("getInt", "(II)I", 6, -1));
     const locale = yield string(7);
