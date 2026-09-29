@@ -607,8 +607,8 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
   "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
   "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
   "HUE", "SATURATION", "COLOR", "LUMINOSITY"];
-/** PorterDuff.Mode's or BlendMode's constant `name`, once the (bytecode) enum has initialized */
-export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode", name: string): unknown {
+/** PorterDuff.Mode's, BlendMode's or Region.Op's constant `name`, once the (bytecode) enum has initialized */
+export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode" | "android/graphics/Region$Op", name: string): unknown {
   const info = rt.link(cls);
   return after(rt.initClass(info), () => (info.ctor as unknown as Record<string, unknown>)["s$" + name]);
 }
@@ -1782,11 +1782,14 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 type RectLike = { left: number; top: number; right: number; bottom: number };
 const clipRectObj = function (this: JCanvas, r: RectLike) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); };
-function clipRectOp(this: JCanvas, l: number, t: number, r: number, b: number, op: { ename?: string } | null) {
-  if (op?.ename === "DIFFERENCE") return clipOutRect.call(this, l, t, r, b);
-  return op && op.ename && op.ename !== "INTERSECT" ? 1 : clipRect.call(this, l, t, r, b);
+let opNativeInt = "";
+/** a Java Region.Op's SkRegion::Op: 0 DIFFERENCE, 1 INTERSECT (the only two a canvas clips with) */
+const regionOpOf = (op: object | null): number => op ? (op as Record<string, number>)[opNativeInt ||= declaredField("android/graphics/Region$Op", "nativeInt")] : 1;
+function clipRectOp(this: JCanvas, l: number, t: number, r: number, b: number, op: object | null) {
+  const code = regionOpOf(op);
+  return code === 0 ? clipOutRect.call(this, l, t, r, b) : code === 1 ? clipRect.call(this, l, t, r, b) : 1;
 }
-const clipRectObjOp = function (this: JCanvas, r: RectLike, op: { ename?: string } | null) { return clipRectOp.call(this, r.left, r.top, r.right, r.bottom, op); };
+const clipRectObjOp = function (this: JCanvas, r: RectLike, op: object | null) { return clipRectOp.call(this, r.left, r.top, r.right, r.bottom, op); };
 const clipOutRectObj = function (this: JCanvas, r: RectLike) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); };
 const drawRectObj = function (this: JCanvas, r: RectLike, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); };
 export const canvasMethods: NativeSpec["methods"] = {
@@ -1857,16 +1860,16 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipOutRect(Landroid/graphics/RectF;)Z": clipOutRectObj,
   "clipRect(Landroid/graphics/Rect;)Z": clipRectObj,
   "clipRect(Landroid/graphics/RectF;)Z": clipRectObj,
-  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: object, op: { ename?: string } | null) {
-    const name = op?.ename ?? "INTERSECT";
-    if (name !== "INTERSECT" && name !== "DIFFERENCE") return 1;
-    return clipPath(this, nativePathOf(path), name === "DIFFERENCE") ? 1 : 0;
+  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: object, op: object | null) {
+    const code = regionOpOf(op);
+    if (code > 1) return 1;
+    return clipPath(this, nativePathOf(path), code === 0) ? 1 : 0;
   },
   "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: object) {
-    return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[1]);
+    return after(modeConstant("android/graphics/Region$Op", "INTERSECT"), (op) => vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, op));
   },
   "clipOutPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: object) {
-    return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[0]);
+    return after(modeConstant("android/graphics/Region$Op", "DIFFERENCE"), (op) => vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, op));
   },
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
     return viewportClipBounds(this, r);
@@ -2334,71 +2337,6 @@ rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, 
   methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V"]) });
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);
-const regionOps = mkEnumSet("android/graphics/Region$Op", ["DIFFERENCE", "INTERSECT", "REPLACE", "REVERSE_DIFFERENCE", "UNION", "XOR"]);
-
-// Region: modelled by its bounds only. What reads a Region back here — a shape drawable's
-// transparent region, a clip op — needs the rectangle; a subtractive op cannot shrink the bounds
-// without real geometry, so it leaves them alone.
-class JRegion extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
-function setRegion(this: JRegion, l: number, t: number, r: number, b: number) {
-  if (l >= r || t >= b) { l = t = r = b = 0; }
-  this.left = l; this.top = t; this.right = r; this.bottom = b;
-  return l < r ? 1 : 0;
-}
-function regionOp(this: JRegion, l: number, t: number, r: number, b: number, op: JSimpleEnum | null) {
-  const empty = this.left >= this.right;
-  switch (op?.ename) {
-    case "REPLACE": return setRegion.call(this, l, t, r, b);
-    case "UNION": return empty ? setRegion.call(this, l, t, r, b)
-      : setRegion.call(this, Math.min(this.left, l), Math.min(this.top, t), Math.max(this.right, r), Math.max(this.bottom, b));
-    case "INTERSECT": return setRegion.call(this, Math.max(this.left, l), Math.max(this.top, t), Math.min(this.right, r), Math.min(this.bottom, b));
-    case "REVERSE_DIFFERENCE": return setRegion.call(this, l, t, r, b);
-    default: return empty ? 0 : 1;
-  }
-}
-const regionRect = (r: JRect) => [r.left, r.top, r.right, r.bottom] as const;
-rt.register({
-  name: "android/graphics/Region", ctor: JRegion, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "<init>()V": function () {},
-    "<init>(IIII)V": setRegion,
-    "<init>(Landroid/graphics/Rect;)V": function (this: JRegion, r: JRect) { setRegion.call(this, ...regionRect(r)); },
-    "<init>(Landroid/graphics/Region;)V": function (this: JRegion, r: JRegion) { setRegion.call(this, ...regionRect(r)); },
-    "set(IIII)Z": setRegion,
-    "set(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return setRegion.call(this, ...regionRect(r)); },
-    "set(Landroid/graphics/Region;)Z": function (this: JRegion, r: JRegion) { return setRegion.call(this, ...regionRect(r)); },
-    "setEmpty()V": function (this: JRegion) { setRegion.call(this, 0, 0, 0, 0); },
-    "isEmpty()Z": function (this: JRegion) { return this.left >= this.right ? 1 : 0; },
-    "isRect()Z": () => 1,
-    "isComplex()Z": () => 0,
-    "getBounds()Landroid/graphics/Rect;": function (this: JRegion) {
-      const r = rt.make("android/graphics/Rect") as JRect;
-      r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
-      return r;
-    },
-    "getBounds(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) {
-      r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
-      return this.left < this.right ? 1 : 0;
-    },
-    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": function (this: JRegion, p: object, clip: JRegion) {
-      const b = { left: 0, top: 0, right: 0, bottom: 0 };
-      nativePathOf(p).bounds(b);
-      return setRegion.call(this, Math.max(Math.floor(b.left), clip.left), Math.max(Math.floor(b.top), clip.top),
-        Math.min(Math.ceil(b.right), clip.right), Math.min(Math.ceil(b.bottom), clip.bottom));
-    },
-    "op(IIIILandroid/graphics/Region$Op;)Z": regionOp,
-    "op(Landroid/graphics/Rect;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRect, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
-    "op(Landroid/graphics/Region;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRegion, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
-    "union(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return regionOp.call(this, ...regionRect(r), regionOps[4]); },
-    "contains(II)Z": function (this: JRegion, x: number, y: number) { return x >= this.left && x < this.right && y >= this.top && y < this.bottom ? 1 : 0; },
-    "quickContains(IIII)Z": function (this: JRegion, l: number, t: number, r: number, b: number) { return l >= this.left && t >= this.top && r <= this.right && b <= this.bottom ? 1 : 0; },
-    "quickReject(IIII)Z": function (this: JRegion, l: number, t: number, r: number, b: number) { return r <= this.left || l >= this.right || b <= this.top || t >= this.bottom ? 1 : 0; },
-    "quickReject(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return r.right <= this.left || r.left >= this.right || r.bottom <= this.top || r.top >= this.bottom ? 1 : 0; },
-    "translate(II)V": function (this: JRegion, dx: number, dy: number) { this.left += dx; this.right += dx; this.top += dy; this.bottom += dy; },
-    "toString()Ljava/lang/String;": function (this: JRegion) { return `Region(${this.left}, ${this.top} - ${this.right}, ${this.bottom})`; },
-  },
-});
-
 export class JBFOptions extends JObj {
   inJustDecodeBounds = 0; inSampleSize = 1; outWidth = 0; outHeight = 0;
   inDensity = 0; inTargetDensity = 0; inScaled = 1; inPreferredConfig: unknown = null;

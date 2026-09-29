@@ -23,10 +23,11 @@ import {
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
-import { newObj, vcall, scall } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jstream";
 import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
+import { NativeRegion, nativeRegionOf } from "./region";
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
@@ -607,6 +608,70 @@ delegate("android/graphics/PathIterator", {
   "nGetFinalizer()J": () => FINALIZER,
   "nPeek(J)I": (h: bigint) => iterator(h).peek(),
   "nNext(JJ)I": (h: bigint, pts: bigint) => iterator(h).next(deref<Float32Array>(pts), 0),
+});
+
+// ── android.graphics.Region and RegionIterator ─────────────────────────────────────────
+// Both free their native state from finalize(), which never runs here.
+const region = (h: bigint) => deref<NativeRegion>(h);
+const scratch = new NativeRegion();
+delegate("android/graphics/Region", {
+  "nativeConstructor()J": () => handle(new NativeRegion()),
+  "nativeDestructor(J)V": release,
+  "nativeSetRegion(JJ)V": (h: bigint, src: bigint) => { region(h).set(region(src)); },
+  "nativeSetRect(JIIII)Z": (h: bigint, l: number, t: number, r: number, b: number) => +region(h).setRect(l, t, r, b),
+  "nativeSetPath(JJJ)Z": (h: bigint, p: bigint, clip: bigint) => +region(h).setPath(path(p), region(clip)),
+  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => +region(h).bounds(r),
+  "nativeGetBoundaryPath(JJ)Z": (h: bigint, p: bigint) => +region(h).boundaryPath(path(p)),
+  "nativeOp(JIIIII)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => {
+    scratch.setRect(l, t, r, b);
+    return +region(h).op(region(h), scratch, op);
+  },
+  "nativeOp(JLandroid/graphics/Rect;JI)Z": (h: bigint, r: Rect, other: bigint, op: number) => {
+    scratch.setRect(r.left, r.top, r.right, r.bottom);
+    return +region(h).op(scratch, region(other), op);
+  },
+  "nativeOp(JJJI)Z": (h: bigint, a: bigint, b: bigint, op: number) => +region(h).op(region(a), region(b), op),
+  // the rects as one int vector, which is Parcel's int-array form
+  "nativeWriteToParcel(JLandroid/os/Parcel;)Z": (h: bigint, parcel: object | null) =>
+    parcel ? after(vcall(parcel, "writeIntArray", "([I)V", Int32Array.from(region(h).rects())), () => 1) : 0,
+  "nativeCreateFromParcel(Landroid/os/Parcel;)J": (parcel: object | null) => parcel ? after(vcall(parcel, "createIntArray", "()[I"), (rects: Int32Array | null) => {
+    if (rects && rects.length % 4) return 0n;
+    const r = new NativeRegion();
+    if (rects) r.setRects(rects);
+    return handle(r);
+  }) : 0n,
+  "nativeEquals(JJ)Z": (a: bigint, b: bigint) => +region(a).equals(region(b)),
+  "nativeToString(J)Ljava/lang/String;": (h: bigint) => region(h).toString(),
+  "isEmpty()Z": function (this: object) { return +nativeRegionOf(this).isEmpty(); },
+  "isRect()Z": function (this: object) { return +nativeRegionOf(this).isRect(); },
+  "isComplex()Z": function (this: object) { return +nativeRegionOf(this).isComplex(); },
+  "contains(II)Z": function (this: object, x: number, y: number) { return +nativeRegionOf(this).contains(x, y); },
+  "quickContains(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickContains(l, t, r, b); },
+  "quickReject(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickReject(l, t, r, b); },
+  "quickReject(Landroid/graphics/Region;)Z": function (this: object, o: object) {
+    const b = { left: 0, top: 0, right: 0, bottom: 0 };
+    return +(!nativeRegionOf(o).bounds(b) || nativeRegionOf(this).quickReject(b.left, b.top, b.right, b.bottom));
+  },
+  "translate(IILandroid/graphics/Region;)V": function (this: object, dx: number, dy: number, dst: object | null) {
+    const r = nativeRegionOf(this);
+    r.translate(dx, dy, dst ? nativeRegionOf(dst) : r);
+  },
+  // hwui's scale_rgn: each rect's edges scaled and rounded half away from zero, then unioned
+  "scale(FLandroid/graphics/Region;)V": function (this: object, s: number, dst: object | null) {
+    const r = nativeRegionOf(this), round = (v: number) => Math.sign(v) * Math.round(Math.abs(v));
+    (dst ? nativeRegionOf(dst) : r).setRects(r.rects().map((v) => round(Math.fround(v * s))));
+  },
+});
+// the iterator walks its own copy of the region, as hwui's RgnIterPair does
+delegate("android/graphics/RegionIterator", {
+  "nativeConstructor(J)J": (h: bigint) => handle({ rects: region(h).rects(), at: 0 }),
+  "nativeDestructor(J)V": release,
+  "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
+    const it = deref<{ rects: number[]; at: number }>(h);
+    if (it.at >= it.rects.length) return 0;
+    [r.left, r.top, r.right, r.bottom] = it.rects.slice(it.at, it.at += 4);
+    return 1;
+  },
 });
 
 

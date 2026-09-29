@@ -14,12 +14,14 @@ import { type Mat, mapPoint } from "./graphics";
 type PathOp = [string, ...number[]];
 type Verb = number[];
 interface Box { left: number; top: number; right: number; bottom: number }
-/** what the pen writes to: Path2D itself, or the verb list */
-interface Sink {
+/** what the pen writes to: Path2D itself, the verb list, or a scan converter */
+export interface Sink {
   moveTo(x: number, y: number): void;
   lineTo(x: number, y: number): void;
   quadraticCurveTo(x1: number, y1: number, x2: number, y2: number): void;
   bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): void;
+  /** a sink that takes conics gets them as Skia stores them; the others get the cubic */
+  conicTo?(x1: number, y1: number, x2: number, y2: number, w: number): void;
   closePath(): void;
 }
 
@@ -97,7 +99,8 @@ class Pen {
   conic(x1: number, y1: number, x2: number, y2: number, w: number) {
     this.begin();
     const k = 4 * w / (3 * (1 + w));
-    this.sink?.bezierCurveTo(this.x + (x1 - this.x) * k, this.y + (y1 - this.y) * k, x2 + (x1 - x2) * k, y2 + (y1 - y2) * k, x2, y2);
+    if (this.sink?.conicTo) this.sink.conicTo(x1, y1, x2, y2, w);
+    else this.sink?.bezierCurveTo(this.x + (x1 - this.x) * k, this.y + (y1 - this.y) * k, x2 + (x1 - x2) * k, y2 + (y1 - y2) * k, x2, y2);
     this.pt(x1, y1); this.pt(x2, y2); this.x = x2; this.y = y2;
   }
   close() {
@@ -463,6 +466,11 @@ export class NativePath {
   }
 }
 const SIMPLE: Record<string, true> = { m: true, l: true, q: true, c: true, z: true };
+/** a path's verbs, as SkPath stores them, into `sink` */
+export function walkPath(path: NativePath, sink: Sink) {
+  const pen = new Pen(sink);
+  for (const op of path.ops) pen.op(op);
+}
 
 let mNativePath = "";
 /** the geometry behind a Java Path */
