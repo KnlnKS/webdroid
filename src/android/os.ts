@@ -19,7 +19,7 @@ export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
-import { newFile, pathOf, JInputStream, JOutputStream, type JFileDescriptor } from "../jvm/natives/jio";
+import { newFile, pathOf, JInputStream, JOutputStream, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
@@ -792,6 +792,7 @@ class JParcelFileDescriptor extends JObj {
   fd = -1;
   closed = false;
   backing: PfdBacking | null = null;
+  descriptor: JObj | null = null;
 }
 type PfdBacking = { path: string; refs: number; key: string; closing: Promise<void> | null; sink: ((b: Uint8Array, closed?: boolean) => unknown) | null };
 /** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
@@ -801,12 +802,6 @@ function pfdFd(p: JParcelFileDescriptor): number {
   if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
   else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd(p.bytes);
   return p.fd;
-}
-/** a java.io stream's descriptor opens its file into the native table when first asked (O_TRUNC
- *  and O_EXCL already happened when the stream opened it) */
-function descriptorFd(d: JFileDescriptor): number {
-  if (d.fd < 0 && d.path) d.fd = javaOpenFd(d.path, d.flags & ~0x280);
-  return d.fd;
 }
 let pfdBackingSeq = 0;
 const pfdBackings = new Map<string, PfdBacking>();
@@ -877,25 +872,27 @@ rt.register({
         default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad mode: " + m);
       }
     },
+    // AOSP keeps one FileDescriptor per ParcelFileDescriptor, invalidated when it closes
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
-      const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
-      d.fd = pfdFd(this);
-      d.path = this.path;
-      d.flags = this.flags;
-      d.owner = this;
-      return d;
+      if (this.descriptor) return this.descriptor;
+      return after(mkFd(pfdFd(this)), (d) => this.descriptor ??= d);
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
     "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
     "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd: javaDupFd(fd) }),
     // AOSP dup(FileDescriptor): a new descriptor on the same open file description
-    "static dup(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;": (d: JFileDescriptor | null) => {
-      if (!d || descriptorFd(d) < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor");
-      const fd = javaDupFd(d.fd);
+    "static dup(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;": (d: JObj | null) => {
+      if (fdInt(d) < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor");
+      const fd = javaDupFd(fdInt(d));
       if (fd < 0) throw rt.mkThrowable("java/io/IOException", "dup failed: EBADF (Bad file descriptor)");
       return Object.assign(new JParcelFileDescriptor(), { fd });
     },
-    "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; this.closed = true; return fd; },
+    "detachFd()I": function (this: JParcelFileDescriptor) {
+      const fd = pfdFd(this);
+      this.fd = -1; this.closed = true;
+      if (this.descriptor) setFdInt(this.descriptor, -1);
+      return fd;
+    },
     "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) {
       const p = Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)), backing: this.backing });
       if (p.backing) p.backing.refs++;
@@ -913,6 +910,7 @@ rt.register({
       if (this.closed) return;
       if (this.fd >= 0) javaCloseFd(this.fd);
       this.fd = -1; this.closed = true;
+      if (this.descriptor) setFdInt(this.descriptor, -1);
       if (this.backing && --this.backing.refs === 0) {
         const backing = this.backing, bytes = vfs.read(backing.path) ?? new Uint8Array(0);
         backing.closing = (async () => {
@@ -937,7 +935,12 @@ rt.register({
   },
 });
 class JPfdOut extends JOutputStream { pfd: JParcelFileDescriptor | null = null; }
-const pfdFlush = async function (this: JPfdOut, closed = false) { await this.pfd?.sink?.(Uint8Array.from(this.chunks), closed); };
+const pfdFlush = async function (this: JPfdOut, closed = false) {
+  const pfd = this.pfd, bytes = Uint8Array.from(this.chunks);
+  // a backed descriptor's sink takes its file when the last holder closes
+  if (pfd?.backing) vfs.write(pfd.backing.path, bytes, false);
+  else await pfd?.sink?.(bytes, closed);
+};
 rt.register({
   name: "android/os/ParcelFileDescriptor$AutoCloseOutputStream", ctor: JPfdOut, sup: "java/io/OutputStream",
   methods: {
@@ -1273,80 +1276,76 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (path === null) rt.npe();
       const fd = javaOpenFd(path, flags);
       if (fd < 0) throw errno("open", -fd);
-      const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
-      d.fd = fd;
-      return d;
+      return mkFd(fd);
     },
-    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JFileDescriptor | null) => {
-      const st = javaFdStat(fdOf(d));
+    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JObj | null) => {
+      const st = javaFdStat(fdInt(d));
       if (!st) throw errno("fstat", E.BADF);
       return statOf(st.size, st.mode, st.path ? vfs.mtime(st.path) : 0);
     },
-    [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number) =>
-      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdOf(d), target)),
-    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdOf(d), target, Number(position))),
-    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number) =>
-      ioResult("write", javaWriteFd(fdOf(d), ioRegion(buffer, offset, count))),
-    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JFileDescriptor | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      ioResult("pwrite", javaPwriteFd(fdOf(d), ioRegion(buffer, offset, count), Number(position))),
-    [`ftruncate(${FD}J)V`]: (d: JFileDescriptor | null, length: bigint) => sys("ftruncate", javaTruncateFd(fdOf(d), Number(length))),
-    [`fsync(${FD})V`]: (d: JFileDescriptor | null) => sys("fsync", javaSyncFd(fdOf(d))),
-    [`fdatasync(${FD})V`]: (d: JFileDescriptor | null) => sys("fdatasync", javaSyncFd(fdOf(d))),
-    [`ioctlInt(${FD}I)I`]: (d: JFileDescriptor | null, request: number) => ioResult("ioctl", javaIoctlIntFd(fdOf(d), request)),
-    [`fcntlInt(${FD}II)I`]: (d: JFileDescriptor | null, cmd: number, arg: number) => ioResult("fcntl", javaFcntlFd(fdOf(d), cmd, arg)),
-    [`fcntlVoid(${FD}I)I`]: (d: JFileDescriptor | null, cmd: number) => ioResult("fcntl", javaFcntlFd(fdOf(d), cmd, 0)),
-    [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JFileDescriptor | null, expected: bigint, tag: bigint) =>
-      fdsanExchangeOwnerTag(fdOf(d), expected, tag),
-    [`android_fdsan_get_owner_tag(${FD})J`]: (d: JFileDescriptor | null) => fdsanOwnerTag(fdOf(d)),
+    [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target)),
+    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position))),
+    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      ioResult("write", javaWriteFd(fdInt(d), ioRegion(buffer, offset, count))),
+    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      ioResult("pwrite", javaPwriteFd(fdInt(d), ioRegion(buffer, offset, count), Number(position))),
+    [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => sys("ftruncate", javaTruncateFd(fdInt(d), Number(length))),
+    [`fsync(${FD})V`]: (d: JObj | null) => sys("fsync", javaSyncFd(fdInt(d))),
+    [`fdatasync(${FD})V`]: (d: JObj | null) => sys("fdatasync", javaSyncFd(fdInt(d))),
+    [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => ioResult("ioctl", javaIoctlIntFd(fdInt(d), request)),
+    [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => ioResult("fcntl", javaFcntlFd(fdInt(d), cmd, arg)),
+    [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => ioResult("fcntl", javaFcntlFd(fdInt(d), cmd, 0)),
+    [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JObj | null, expected: bigint, tag: bigint) =>
+      fdsanExchangeOwnerTag(fdInt(d), expected, tag),
+    [`android_fdsan_get_owner_tag(${FD})J`]: (d: JObj | null) => fdsanOwnerTag(fdInt(d)),
     "android_fdsan_get_tag_type(J)Ljava/lang/String;": (tag: bigint) => fdsanTagType(tag),
     "android_fdsan_get_tag_value(J)J": (tag: bigint) => fdsanTagValue(tag),
     // no descriptor here is a terminal
     [`isatty(${FD})Z`]: () => 0,
-    "pipe2(I)[Ljava/io/FileDescriptor;": (flags: number) => jarray(javaPipeFds(flags).map((fd) => {
-      const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
-      d.fd = fd;
-      return d;
-    }), FD),
-    [`sendfile(${FD}${FD}Landroid/system/Int64Ref;J)J`]: (out: JFileDescriptor | null, input: JFileDescriptor | null, offset: JObj | null, count: bigint) => {
+    "pipe2(I)[Ljava/io/FileDescriptor;": (flags: number) => {
+      const [read, write] = javaPipeFds(flags);
+      return after(mkFd(read), (r) => after(mkFd(write), (w) => jarray([r, w], FD)));
+    },
+    [`sendfile(${FD}${FD}Landroid/system/Int64Ref;J)J`]: (out: JObj | null, input: JObj | null, offset: JObj | null, count: bigint) => {
       const value = offset && declaredField("android/system/Int64Ref", "value");
       const start = value ? Number((offset as unknown as Record<string, bigint>)[value]) : 0;
       const n = count < 0n ? -1 : Math.min(Number(count), SENDFILE_CHUNK);
       if (n < 0 || start < 0) throw errno("sendfile", E.INVAL);
-      if (!javaFdStat(fdOf(out))) throw errno("sendfile", E.BADF);
-      const scratch = new Uint8Array(n), from = fdOf(input);
+      if (!javaFdStat(fdInt(out))) throw errno("sendfile", E.BADF);
+      const scratch = new Uint8Array(n), from = fdInt(input);
       return after(value ? javaPreadFd(from, scratch, start) : javaReadFd(from, scratch), (read) => {
         sys("sendfile", read);
-        const written = read ? javaWriteFd(fdOf(out), scratch.subarray(0, read)) : 0;
+        const written = read ? javaWriteFd(fdInt(out), scratch.subarray(0, read)) : 0;
         sys("sendfile", written);
         if (value) (offset as unknown as Record<string, bigint>)[value] = BigInt(start + written);
         return BigInt(written);
       });
     },
-    [`lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
-      const r = javaSeekFd(descriptorFd(d), Number(off), whence);
+    [`lseek(${FD}JI)J`]: (d: JObj | null, off: bigint, whence: number) => {
+      const r = javaSeekFd(fdInt(d), Number(off), whence);
       if (r < 0) throw errno("lseek", -r);
       return BigInt(r);
     },
-    [`close(${FD})V`]: (d: JFileDescriptor | null) => {
+    [`close(${FD})V`]: (d: JObj | null) => {
       if (d === null) return rt.npe();
-      const fd = descriptorFd(d), owner = (d as unknown as Record<string, bigint | undefined>)[declaredField("java/io/FileDescriptor", "ownerId")];
-      d.fd = -1;
+      const fd = fdInt(d), owner = (d as unknown as Record<string, bigint | undefined>)[declaredField("java/io/FileDescriptor", "ownerId")];
+      setFdInt(d, -1);
       sys("close", fdsanClose(fd, owner ?? 0n, javaCloseFd));
     },
-    [`dup(${FD})${FD}`]: (d: JFileDescriptor) => {
-      const n = rt.make("java/io/FileDescriptor") as JFileDescriptor;
-      n.fd = javaDupFd(descriptorFd(d));
-      if (n.fd < 0) throw errno("dup", -n.fd);
-      return n;
+    [`dup(${FD})${FD}`]: (d: JObj | null) => {
+      const fd = javaDupFd(fdInt(d));
+      if (fd < 0) throw errno("dup", -fd);
+      return mkFd(fd);
     },
-    [`mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint): Gen {
+    [`mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JObj | null, offset: bigint): Gen {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
           (prot & ~7) !== 0 || ((flags & 3) !== 1 && (flags & 3) !== 2) || (flags & 0x10) !== 0 && (hint & 4095n) !== 0n)
         throw errno("mmap", E.INVAL);
       if (flags & 0x10) throw errno("mmap", E.NOTSUP);
-      const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : d ? descriptorFd(d) : -1;
+      const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : fdInt(d);
       const source = anonymous ? null : javaFdSource(fd);
       if (!anonymous && !source) throw errno("mmap", E.BADF);
       if (source && prot === 0) throw errno("mmap", E.NOTSUP);
@@ -1394,8 +1393,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       existing("statvfs", path);
       return storageStatVfs();
     },
-    [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JFileDescriptor) => {
-      if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
+    [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JObj | null) => {
+      if (fdInt(d) < 0) throw errno("fstatvfs", E.BADF);
       return storageStatVfs();
     },
     "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
@@ -1409,8 +1408,6 @@ const linux: Record<string, (...args: never[]) => unknown> = {
 /** a -errno result as the ErrnoException libcore's Os methods throw */
 function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
 const ioResult = (fn: string, result: number): number => { sys(fn, result); return result; };
-/** the descriptor libcore's JNI reads from a FileDescriptor: -1 for none */
-const fdOf = (d: JFileDescriptor | null): number => d ? descriptorFd(d) : -1;
 /** sendfile moves at most this much a call, which its callers loop over as Linux allows */
 const SENDFILE_CHUNK = 1 << 20;
 /** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */

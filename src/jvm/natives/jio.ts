@@ -6,10 +6,10 @@ import { charsetName, encodeModifiedUtf8, encodeString, streamDecoder, type Stre
 import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { csText } from "./jchars";
 import { E, ERRSTR } from "../../native/abi";
-import { readFully, writable, type FileSource } from "../../shell/lazyfile";
-import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
+import { readFully, type FileSource } from "../../shell/lazyfile";
+import { vfs } from "../../shell/vfs";
 import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer, type JCharsetDecoder } from "./jnio";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
@@ -45,7 +45,6 @@ export function streamOfSource(source: FileSource): JInputStream {
 const inputStreamMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "read()I": function (this: JInputStream) {
-    checkFileOpen(this);
     if (this.wrapped) return vcall(this.wrapped, "read", "()I");
     if (this.source) {
       return after(this.source.read(this.pos, 1), (bytes) => {
@@ -60,7 +59,6 @@ const inputStreamMethods: NativeSpec["methods"] = {
     return (this as any)[readBII](out, 0, out.length);
   },
   "read([BII)I": function (this: JInputStream, out: Int8Array, off: number, len: number) {
-    checkFileOpen(this);
     if (len === 0) return 0;
     if (this.wrapped) return vcall(this.wrapped, "read", "([BII)I", out, off, len);
     if (this.source) {
@@ -97,7 +95,6 @@ const inputStreamMethods: NativeSpec["methods"] = {
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
-const writeI = mangleMethod("write", "(I)V");
 async function skipThroughRead(stream: JInputStream, count: bigint): Promise<bigint> {
   const scratch = new Int8Array(Number(count < 2048n ? count : 2048n));
   let remaining = count;
@@ -134,7 +131,6 @@ export const writers = (write: (n: number, put: Put) => unknown) =>
 /** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
   if (usesReads(s) && !s.wrapped) {
-    checkFileOpen(s);
     const out = s.source ? await readFully(s.source, s.pos) : s.buf.subarray(s.pos);
     s.pos += out.length;
     return out;
@@ -159,63 +155,6 @@ rt.register({
     "mark(I)V": function (this: JInputStream) { this.markPos = this.pos; },
     "reset()V": function (this: JInputStream) { this.pos = this.markPos ?? 0; },
     "markSupported()Z": () => 1,
-  },
-});
-class JFileInputStream extends JInputStream { fd = new JFileDescriptor(); ownsFd = false; }
-function adoptFd(this: JFileInputStream, fd: JFileDescriptor | null, owner = 0) {
-  if (!fd) return rt.npe();
-  this.fd = fd; this.ownsFd = !!owner;
-  this.source = javaFdSource(fd.fd);
-  Object.defineProperty(this, "pos", {
-    get: () => checkedFdResult(javaSeekFd(fd.fd, 0, 1)),
-    set: (position: number) => { checkedFdResult(javaSeekFd(fd.fd, position, 0)); },
-    configurable: true,
-  });
-}
-function checkedFdResult(n: number): number {
-  if (n < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor operation");
-  return n;
-}
-function openRead(this: JFileInputStream, p: string) {
-  if (p == null) return rt.npe();
-  if (vfs.isDir(p)) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  const fd = javaOpenFd(p, 0);
-  if (fd < 0) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  this.fd.fd = fd;
-  adoptFd.call(this, this.fd, 1);
-}
-function readFile(this: JFileInputStream, out: Int8Array, off: number, len: number) {
-  checkFileOpen(this);
-  if (!out) return rt.npe();
-  checkFromIndexSize(off, len, out.length);
-  if (!len) return 0;
-  return after(javaReadFd(this.fd.fd, u8(out, off, len)), n => checkedFdResult(n) || -1);
-}
-rt.register({
-  name: "java/io/FileInputStream", ctor: JFileInputStream, sup: "java/io/InputStream",
-  methods: {
-    "getFD()Ljava/io/FileDescriptor;": function (this: JFileInputStream) { return this.fd; },
-    "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "<init>(Ljava/io/File;)V": function (this: JFileInputStream, f: JObj | null) { if (!f) return rt.npe(); openRead.call(this, pathOf(f)); },
-    "<init>(Ljava/lang/String;)V": openRead,
-    "<init>(Ljava/io/FileDescriptor;)V": adoptFd,
-    "<init>(Ljava/io/FileDescriptor;Z)V": adoptFd,
-    // both through read(byte[], int, int), which a subclass may override
-    "read()I": function (this: JFileInputStream) { const b = new Int8Array(1); return after((this as any)[readBII](b, 0, 1), n => n < 0 ? -1 : b[0] & 255); },
-    "read([B)I": function (this: JFileInputStream, out: Int8Array) { if (!out) return rt.npe(); return (this as any)[readBII](out, 0, out.length); },
-    "read([BII)I": readFile,
-    "available()I": function (this: JFileInputStream) { checkFileOpen(this); return Math.min(0x7fffffff, checkedFdResult(javaAvailableFd(this.fd.fd))); },
-    "skip(J)J": function (this: JFileInputStream, n: bigint) {
-      checkFileOpen(this);
-      const before = this.pos, next = checkedFdResult(javaSeekFd(this.fd.fd, Number(n), 1));
-      return BigInt(next - before);
-    },
-    ...noMark,
-    "close()V": function (this: JFileInputStream) {
-      if (closedFiles.has(this)) return;
-      closeFile(this);
-      if (this.ownsFd) { javaCloseFd(this.fd.fd); this.fd.fd = -1; }
-    },
   },
 });
 function adoptStream(this: JInputStream, src: JInputStream) {
@@ -300,7 +239,6 @@ function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
   return function (this: JInputStream) { return after(dataBytes(this, length), decode); };
 }
 export function dataBytes(stream: JInputStream, length: number, thread = curThread): Uint8Array | Promise<Uint8Array> {
-  checkFileOpen(stream);
   const take = (bytes: Uint8Array) => {
     if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
     stream.pos += length;
@@ -328,34 +266,28 @@ async function wrappedBytes(stream: JInputStream, length: number, thread: typeof
   return new Uint8Array(out.buffer, 0, got);
 }
 
-/** A stream's descriptor names its open file (`path`, open(2) `flags`); the native descriptor
- *  number is opened from those the first time something outside java.io asks for it. A
- *  RandomAccessFile's is kept so streams built on it write at its shared file pointer. */
-export class JFileDescriptor extends JObj { fd = -1; path = ""; flags = 0; owner: JObj | null = null; }
-const descriptors = new WeakMap<JObj, JFileDescriptor>();
-function descriptorOf(owner: JObj, path: string, flags: number): JFileDescriptor {
-  let d = descriptors.get(owner);
-  if (!d) { d = new JFileDescriptor(); d.path = path; d.flags = flags; d.owner = owner; descriptors.set(owner, d); }
-  return d;
+const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;
+/** a FileDescriptor's int, -1 for none (JNIHelp's jniGetFDFromFileDescriptor) */
+export const fdInt = (d: JObj | null): number => d ? (d as unknown as Record<string, number>)[declaredField(FILE_DESCRIPTOR, "descriptor")] : -1;
+export function setFdInt(d: JObj, fd: number): void { (d as unknown as Record<string, number>)[declaredField(FILE_DESCRIPTOR, "descriptor")] = fd; }
+/** jniCreateFileDescriptor: a `new FileDescriptor()` holding `fd` */
+export function mkFd(fd: number): JObj | Promise<JObj> {
+  const thread = curThread, info = rt.link(FILE_DESCRIPTOR), init = rt.initClass(info);
+  const make = () => {
+    const d = new info.ctor() as JObj;
+    return after(vcallOn(thread, d, "<init>", "()V"), () => { setFdInt(d, fd); return d; });
+  };
+  return init ? init.then(make) : make();
 }
-rt.register({
-  name: "java/io/FileDescriptor", ctor: JFileDescriptor,
-  fields: { descriptor: "fd", fd: "fd" },
-  methods: {
-    "<init>()V": () => {}, "sync()V": () => {},
-    "valid()Z": function (this: JFileDescriptor) { return this.fd >= 0 || (this.owner !== null && !closedFiles.has(this.owner)) ? 1 : 0; },
-  },
-});
 rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
 // OpenJDK tests the bits of F_GETFL's result as is, so a failure reads as appending
 rt.registerJni("java/io/FileDescriptor", "getAppend(I)Z", (fd: number) => +((javaFcntlFd(fd, 3 /* F_GETFL */, 0) & O_APPEND) !== 0));
 rt.registerJni("java/io/FileDescriptor", "sync()V", function (this: JObj) {
-  if (javaSyncFd(descriptorInt(this)) < 0) throw rt.mkThrowable("java/io/SyncFailedException", "sync failed");
+  if (javaSyncFd(fdInt(this)) < 0) throw rt.mkThrowable("java/io/SyncFailedException", "sync failed");
 });
-const descriptorInt = (d: JObj | null): number => d ? (d as unknown as Record<string, number>)[declaredField("java/io/FileDescriptor", "descriptor")] : -1;
 /** OpenJDK's FileInputStream natives (io_util_md.c) over the stream's descriptor */
 function streamFd(stream: JObj): number {
-  const fd = descriptorInt((stream as unknown as Record<string, JObj | null>)[declaredField("java/io/FileInputStream", "fd")]);
+  const fd = fdInt((stream as unknown as Record<string, JObj | null>)[declaredField("java/io/FileInputStream", "fd")]);
   if (fd < 0) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
   return fd;
 }
@@ -456,240 +388,6 @@ rt.register({
     "close()V": function () {},
   },
 });
-
-const O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x40, O_APPEND = 0x400;
-class JFOS extends JOutputStream {
-  shared: JFileDescriptor | null = null;
-  fpath = "";
-  append = false;
-  deleteOnClose = false;
-  offset = 0;
-  /** bytes written since the last publish to the file */
-  pend = new Uint8Array(0);
-  plen = 0;
-  /** the pending buffer, with room for n more bytes */
-  private room(n: number): Uint8Array {
-    if (this.plen + n > this.pend.length) {
-      const grown = new Uint8Array(Math.max(this.plen + n, this.pend.length * 2, 8192));
-      grown.set(this.pend.subarray(0, this.plen));
-      this.pend = grown;
-    }
-    return this.pend;
-  }
-  put(b: Uint8Array) { this.room(b.length).set(b, this.plen); this.plen += b.length; }
-  putByte(b: number) { this.room(1)[this.plen++] = b; }
-  get pos() {
-    const raf = this.shared?.owner;
-    if (raf instanceof JRAF) return raf.pos + this.plen;
-    const fd = this.shared?.fd ?? -1;
-    const base = fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1))
-      : this.append && this.plen ? vfs.stat(this.fpath)?.size ?? 0 : this.offset;
-    return base + this.plen;
-  }
-  set pos(value: number) {
-    flushFOS(this);
-    this.offset = value;
-    const raf = this.shared?.owner;
-    if (raf instanceof JRAF) { raf.pos = value; return; }
-    const fd = this.shared?.fd ?? -1;
-    if (fd >= 0) checkedFdResult(javaSeekFd(fd, value, 0));
-  }
-}
-function openWrite(this: JFOS, path: string, append = 0, truncate = true) {
-  this.fpath = vfs.norm(path);
-  this.append = !!append;
-  const size = vfs.stat(this.fpath)?.size;
-  if (size === undefined || (!this.append && truncate)) vfs.write(this.fpath, new Uint8Array(0));
-  this.offset = this.append ? size ?? 0 : 0;
-}
-function fosWrite(this: JFOS, b: Int8Array, off: number, len: number) {
-  checkFileOpen(this);
-  checkFromIndexSize(off, len, b.length);
-  this.put(u8(b, off, len));
-  if (this.shared) flushFOS(this);
-}
-rt.register({
-  name: "java/io/FileOutputStream", ctor: JFOS, sup: "java/io/OutputStream",
-  methods: {
-    "getFD()Ljava/io/FileDescriptor;": function (this: JFOS) { return descriptors.get(this) ?? this.shared ?? descriptorOf(this, this.fpath, O_WRONLY | O_CREAT | (this.append ? O_APPEND : 0)); },
-    "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    // AOSP: a stream over an open descriptor writes to that open file at its shared position
-    "<init>(Ljava/io/FileDescriptor;)V": function (this: JFOS, d: JFileDescriptor | null) {
-      if (!d) throw rt.mkThrowable("java/lang/NullPointerException", "fdObj == null");
-      if (!d.path) throw rt.mkThrowable("java/io/IOException", "descriptor has no file to write");
-      this.shared = d; this.fpath = d.path;
-      if (!(d.owner instanceof JRAF)) {
-        this.append = !!(d.flags & O_APPEND);
-        this.offset = d.fd >= 0 ? checkedFdResult(javaSeekFd(d.fd, 0, 1)) : this.append ? vfs.stat(d.path)?.size ?? 0 : 0;
-      }
-    },
-    "<init>(Ljava/io/File;)V": function (this: JFOS, f: JObj) { openWrite.call(this, pathOf(f)); },
-    "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JObj, app: number) { openWrite.call(this, pathOf(f), app); },
-    "<init>(Ljava/lang/String;)V": openWrite,
-    "<init>(Ljava/lang/String;Z)V": openWrite,
-    // write(byte[], int, int) of one byte, unless a subclass leaves that ours
-    "write(I)V": function (this: JFOS, b: number) {
-      if ((this as any)[writeBII] !== fosWrite) return (this as any)[writeBII](Int8Array.of(b), 0, 1);
-      checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this);
-    },
-    "write([BII)V": fosWrite,
-    "flush()V": function (this: JFOS) { checkFileOpen(this); flushFOS(this); },
-    "close()V": function (this: JFOS) {
-      if (closedFiles.has(this)) return;
-      flushFOS(this);
-      closeFile(this);
-      if (this.deleteOnClose) vfs.delete(this.fpath);
-    },
-  },
-});
-function flushFOS(s: JFOS) {
-  if (!s.plen) return;
-  const bytes = s.pend.subarray(0, s.plen);
-  s.plen = 0;
-  if (s.pend.length > 1 << 20) s.pend = new Uint8Array(0);
-  const raf = s.shared?.owner;
-  if (raf instanceof JRAF) { rafWrite(raf, i8(bytes), 0, bytes.length); return; }
-  if (!vfs.stat(s.fpath)) vfs.write(s.fpath, new Uint8Array(0));
-  const file = vfs.open(s.fpath)!, fd = s.shared?.fd ?? -1;
-  const start = s.append ? file.len : fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1)) : s.offset;
-  vfs.writeAt(file, start, bytes);
-  s.offset = start + bytes.length;
-  if (fd >= 0) checkedFdResult(javaSeekFd(fd, s.offset, 0));
-}
-
-// RandomAccessFile handles keep independent cursors over the path's shared open file.
-class JRAF extends JObj {
-  path = ""; file: VfsFile = { path: null, data: EMPTY, len: 0 }; pos = 0; write = false;
-  get source(): FileSource | null { return this.file.source ?? null; }
-  get buf(): Uint8Array { return this.file.data.subarray(0, this.file.len); }
-}
-const rafOpen = function (this: JRAF, p: string, mode: string) {
-  this.path = vfs.norm(p);
-  this.write = mode.includes("w");
-  if (!vfs.stat(this.path)) {
-    if (!this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-    vfs.write(this.path, new Uint8Array(0));
-  }
-  this.file = vfs.open(this.path)!;
-  if (this.write && this.file.source && !writable(this.file.source)) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
-};
-// AOSP's single-byte read and write are the ranged ones of one byte, which a subclass may override
-const rafReadByte = driven(function* (this: JRAF): Gen {
-  if ((this as any)[readBII] !== rafReadRange) {
-    const b = new Int8Array(1);
-    return (yield (this as any)[readBII](b, 0, 1)) < 0 ? -1 : b[0] & 255;
-  }
-  checkFileOpen(this);
-  vfs.sync(this.file);
-  if (!this.source) return this.pos < this.file.len ? this.file.data[this.pos++] : -1;
-  const bytes = yield this.source.read(this.pos, 1);
-  if (!bytes.length) return -1;
-  this.pos++;
-  return bytes[0];
-});
-function rafReadRange(this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); }
-function rafWriteRange(this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); }
-function rafWriteByte(this: JRAF, v: number) {
-  if ((this as any)[writeBII] !== rafWriteRange) return (this as any)[writeBII](Int8Array.of(v), 0, 1);
-  rafWrite(this, Int8Array.of(v), 0, 1);
-}
-const rafWriteEach = driven(function* (this: JRAF, b: Int8Array): Gen { for (const v of b) yield vcall(this, "write", "(I)V", v); });
-rt.register({
-  name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
-    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JObj, m: string) { rafOpen.call(this, pathOf(f), m); },
-    "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "length()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.file.len); },
-    "getFilePointer()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.pos); },
-    "seek(J)V": function (this: JRAF, p: bigint) { checkFileOpen(this); this.pos = Number(p); },
-    "skipBytes(I)I": function (this: JRAF, n: number) {
-      const step = Math.max(0, Math.min(n, this.file.len - this.pos));
-      this.pos += step;
-      return step;
-    },
-    "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
-    "read()I": rafReadByte,
-    "read([B)I": function(this: JRAF, b: Int8Array) { return rafRead(this, b, 0, b.length); },
-    "read([BII)I": rafReadRange,
-    "readLine()Ljava/lang/String;": driven(function* (this: JRAF): Gen {
-      checkFileOpen(this);
-      vfs.sync(this.file);
-      const parts: string[] = [], size = this.file.len;
-      if (this.pos >= size) return null;
-      while (this.pos < size) {
-        const n = Math.min(4096, size - this.pos), bytes = this.source ? yield this.source.read(this.pos, n) : this.buf.subarray(this.pos, this.pos + n);
-        if (!bytes.length) break;
-        let end = 0; while (end < bytes.length && bytes[end] !== 10 && bytes[end] !== 13) end++;
-        parts.push(charsToString(bytes, 0, end)); this.pos += end;
-        if (end < bytes.length) {
-          this.pos++;
-          if (bytes[end] === 13 && this.pos < size) {
-            const next = this.source ? (yield this.source.read(this.pos, 1))[0] : this.buf[this.pos];
-            if (next === 10) this.pos++;
-          }
-          break;
-        }
-      }
-      return parts.join("");
-    }),
-    "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
-    "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
-    // the DataInput/DataOutput primitives go byte by byte through a read()/write(int) a subclass overrides
-    ...readers((n, get) => async function (this: JRAF) {
-      const b = new Int8Array(n);
-      if ((this as any)[readI] === rafReadByte) await rafReadFully(this, b, 0, n);
-      else for (let i = 0; i < n; i++) { const v = await vcall(this, "read", "()I"); if (v < 0) throw rt.mkThrowable("java/io/EOFException", null); b[i] = v; }
-      return get(new DataView(b.buffer));
-    }),
-    "write(I)V": rafWriteByte,
-    "write([B)V": function (this: JRAF, b: Int8Array) { rafWrite(this, b, 0, b.length); },
-    "write([BII)V": rafWriteRange,
-    ...writers((n, put) => function (this: JRAF, x: never) {
-      const b = new Int8Array(n); put(new DataView(b.buffer), x);
-      if ((this as any)[writeI] === rafWriteByte) return rafWrite(this, b, 0, n);
-      return rafWriteEach.call(this, b);
-    }),
-    "setLength(J)V": function (this: JRAF, n: bigint) {
-      checkFileOpen(this);
-      const len = Number(n);
-      vfs.resize(this.file, len);
-      if (this.pos > len) this.pos = len;
-    },
-    "close()V": function (this: JRAF) { if (!closedFiles.has(this)) closeFile(this); },
-  },
-});
-function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Promise<number> {
-  checkFileOpen(f);
-  if (len === 0) return 0;
-  vfs.sync(f.file);
-  if (f.source) {
-    return after(f.source.read(f.pos, len), (bytes: Uint8Array) => {
-      if (!bytes.length) return -1;
-      b.set(i8(bytes), off);
-      f.pos += bytes.length;
-      return bytes.length;
-    });
-  }
-  const n = Math.min(len, f.file.len - f.pos);
-  if (n <= 0) return -1;
-  b.set(i8(f.file.data, f.pos, n), off);
-  f.pos += n;
-  return n;
-}
-async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Promise<void> {
-  let read = 0;
-  while (read < len) {
-    const n = await (f as any)[readBII](b, off + read, len - read);
-    if (n <= 0) throw rt.mkThrowable("java/io/EOFException", null);
-    read += n;
-  }
-}
-function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
-  checkFileOpen(f);
-  vfs.writeAt(f.file, f.pos, u8(b, off, len));
-  f.pos += len;
-}
 
 export class JFilterOutputStream extends JOutputStream { out: unknown = null; closed = false; }
 rt.register({
@@ -1420,142 +1118,146 @@ rt.register({
   },
 });
 
-// File locks remain advisory; byte mappings retain the opened stream's storage.
+// sun.nio.ch.FileChannelImpl over its stream's descriptor. libcore's needs NIO internals the TS
+// FileChannel lacks (AbstractInterruptibleChannel state, NativeThreadSet, address-based
+// dispatcher natives). Locks are advisory.
 const fileLock = () => rt.make("java/nio/channels/FileLock");
 class JFileChannel extends JObj {
-  file!: JInputStream | JRAF | JFOS;
+  fd: JObj | null = null;
+  parent: JObj | null = null;
+  readable = false;
+  writable = false;
   open = true;
-  opened() {
-    if (!this.open || closedFiles.has(this.file)) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-    return this.file;
+  opened(): number {
+    if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+    return fdInt(this.fd);
   }
-  readable(): JInputStream | JRAF {
-    this.opened();
-    if (this.file instanceof JInputStream || this.file instanceof JRAF) return this.file;
-    throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
+  reading(): number {
+    const fd = this.opened();
+    if (!this.readable) throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
+    return fd;
   }
-  writable(): JFOS | JRAF {
-    this.opened();
-    if (this.file instanceof JFOS || this.file instanceof JRAF && this.file.write) return this.file;
-    throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+  writing(): number {
+    const fd = this.opened();
+    if (!this.writable) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+    return fd;
   }
 }
-const fileChannels = new WeakMap<JObj, JFileChannel>();
-const closedFiles = new WeakSet<JObj>();
-function closeFile(file: JObj) {
-  closedFiles.add(file);
-  const channel = fileChannels.get(file);
-  if (channel) channel.open = false;
-}
-function checkFileOpen(file: JObj) {
-  if (closedFiles.has(file)) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-}
-function fileChannel(this: JInputStream | JRAF | JFOS): JFileChannel {
-  let channel = fileChannels.get(this);
-  if (!channel) {
-    rt.link("java/nio/channels/FileChannel");
-    channel = new JFileChannel(); channel.file = this; channel.open = !closedFiles.has(this); fileChannels.set(this, channel);
-  }
-  return channel;
-}
-function channelRead(channel: JFileChannel, dst: JBuffer): number | Promise<number> {
-  const file = channel.readable(), len = dst.lim - dst.pos;
+const fdSize = (fd: number): number => javaFdStat(fd)?.size ?? lastError(-E.BADF, null);
+function channelRead(channel: JFileChannel, dst: JBuffer, position = -1): number | Promise<number> {
+  const fd = channel.reading(), len = dst.lim - dst.pos;
   if (len === 0) return 0;
   dst.clampPut(0);
-  const view = remainingBytes(dst);
-  const n = file instanceof JRAF ? rafRead(file, view, 0, len) : (file as any)[readBII](view, 0, len);
-  return after(n, (n: number) => { if (n > 0) dst.pos += n; return n; });
+  const view = u8(remainingBytes(dst));
+  return after(position < 0 ? javaReadFd(fd, view) : javaPreadFd(fd, view, position), (n) => {
+    if (!lastError(n, null)) return -1;
+    dst.pos += n;
+    return n;
+  });
 }
-function channelWrite(channel: JFileChannel, src: JBuffer): number | Promise<number> {
+function channelWrite(channel: JFileChannel, src: JBuffer, position = -1): number {
   if (!src) throw rt.mkThrowable("java/lang/NullPointerException", "src");
-  const file = channel.writable(), len = src.lim - src.pos;
-  if (len === 0) return 0;
-  const view = remainingBytes(src);
-  const written = file instanceof JRAF ? rafWrite(file, view, 0, len) : vcall(file, "write", "([BII)V", view, 0, len);
-  return after(written, () => { src.pos += len; return len; });
+  const fd = channel.writing();
+  if (src.lim === src.pos) return 0;
+  const bytes = u8(remainingBytes(src));
+  const n = lastError(position < 0 ? javaWriteFd(fd, bytes) : javaPwriteFd(fd, bytes, position), null);
+  src.pos += n;
+  return n;
 }
+rt.register({ name: "java/nio/channels/FileChannel", ctor: class extends JObj {} });
 rt.register({
-  name: "java/nio/channels/FileChannel", ctor: JFileChannel,
+  name: "sun/nio/ch/FileChannelImpl", ctor: JFileChannel, sup: "java/nio/channels/FileChannel",
   methods: {
-    "close()V": function (this: JFileChannel) { if (this.open) { this.open = false; return vcall(this.file, "close", "()V"); } },
-    "isOpen()Z": function (this: JFileChannel) { return +this.open; },
-    "size()J": function (this: JFileChannel) {
-      const file = this.opened();
-      return BigInt(file instanceof JFOS
-        ? Math.max(vfs.stat(file.fpath)?.size ?? 0, file.plen ? file.pos : 0)
-        : file instanceof JRAF ? file.file.len : file.source?.size ?? file.buf.length);
+    "static open(Ljava/io/FileDescriptor;Ljava/lang/String;ZZLjava/lang/Object;)Ljava/nio/channels/FileChannel;":
+      (fd: JObj, _path: string | null, readable: number, writable: number, parent: JObj | null) =>
+        Object.assign(rt.make("sun/nio/ch/FileChannelImpl") as JFileChannel, { fd, parent, readable: !!readable, writable: !!writable }),
+    // AbstractInterruptibleChannel.close: closed first, so the parent stream's close finds it so
+    "close()V": function (this: JFileChannel) {
+      if (!this.open) return;
+      this.open = false;
+      if (this.parent) return vcall(this.parent, "close", "()V");
+      const fd = fdInt(this.fd);
+      if (fd >= 0) { setFdInt(this.fd!, -1); javaCloseFd(fd); }
     },
+    "isOpen()Z": function (this: JFileChannel) { return +this.open; },
+    "size()J": function (this: JFileChannel) { return BigInt(fdSize(this.opened())); },
     "truncate(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, size: bigint) {
-      if (size < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size");
-      const file = this.writable();
-      if (file instanceof JRAF) {
-        if (size < BigInt(file.file.len)) vfs.resize(file.file, Number(size));
-      } else {
-        flushFOS(file);
-        const open = vfs.open(file.fpath);
-        if (open && size < BigInt(open.len)) vfs.resize(open, Number(size));
-      }
-      if (BigInt(file.pos) > size) file.pos = Number(size);
+      const fd = this.opened();
+      if (size < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative size");
+      if (!this.writable) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+      if (size < BigInt(fdSize(fd))) lastError(javaTruncateFd(fd, Number(size)), null);
+      if (BigInt(lastError(javaSeekFd(fd, 0, 1), null)) > size) lastError(javaSeekFd(fd, Number(size), 0), null);
       return this;
     },
-    "position()J": function (this: JFileChannel) { return BigInt(this.opened().pos); },
+    // an appending channel's position is the file's end
+    "position()J": function (this: JFileChannel) {
+      const fd = this.opened();
+      return BigInt(javaFcntlFd(fd, 3 /* F_GETFL */, 0) & O_APPEND ? fdSize(fd) : lastError(javaSeekFd(fd, 0, 1), null));
+    },
     "position(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, position: bigint) {
+      const fd = this.opened();
       if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position");
-      this.opened().pos = Number(position); return this;
+      lastError(javaSeekFd(fd, Number(position), 0), null);
+      return this;
     },
     "map(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;": function (this: JFileChannel, mode: JSimpleEnum | null, position: bigint, size: bigint) {
-      const file = this.readable();
+      const fd = this.opened();
       if (!mode) return rt.npe();
       if (position < 0n || size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/size");
-      const start = Number(position), length = Number(size);
+      if (mode.ename !== "READ_ONLY" && !this.writable) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+      if (!this.readable) throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
+      const start = Number(position), length = Number(size), file = fdFile(fd), source = javaFdSource(fd);
+      if (!source) return lastError(-E.INVAL, null);
       if (mode.ename === "READ_ONLY") {
-        if (position + size > BigInt(file.source?.size ?? file.buf.length)) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
-        return file.source ? readFully(file.source, start, length).then(mappedReadOnlyBuffer) : mappedReadOnlyBuffer(file.buf.subarray(start, start + length));
+        if (start + length > source.size) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
+        if (file && !file.source) { vfs.sync(file); return mappedReadOnlyBuffer(file.data.subarray(start, start + length)); }
+        return readFully(source, start, length).then(mappedReadOnlyBuffer);
       }
-      if (!(file instanceof JRAF) || !file.write) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+      if (!file) return lastError(-E.INVAL, null);
       // a writable mapping past the end extends the file first (FileChannelImpl.map truncates it up to position + size)
-      const open = file.file;
-      if (start + length > open.len) vfs.resize(open, start + length);
-      if (open.source) {
+      if (start + length > file.len) vfs.resize(file, start + length);
+      if (file.source) {
         // a disk-backed file maps a copy of the region, written back when the mapping is forced
-        return readFully(open.source, start, length).then((bytes) =>
-          mappedBuffer(bytes.slice(), mode.ename === "PRIVATE" ? () => {} : () => vfs.writeAt(open, start, bytes)));
+        return readFully(file.source, start, length).then((bytes) =>
+          mappedBuffer(bytes.slice(), mode.ename === "PRIVATE" ? () => {} : () => vfs.writeAt(file, start, bytes)));
       }
-      if (mode.ename === "PRIVATE") return mappedBuffer(open.data.slice(start, start + length), () => {});
-      const buffer = mappedBuffer(open.data.subarray(start, start + length), () => vfs.publish(open));
-      (open.maps ??= []).push(buffer);
+      if (mode.ename === "PRIVATE") return mappedBuffer(file.data.slice(start, start + length), () => {});
+      const buffer = mappedBuffer(file.data.subarray(start, start + length), () => vfs.publish(file));
+      (file.maps ??= []).push(buffer);
       return buffer;
     },
     "read(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, dst: JBuffer) { return channelRead(this, dst); },
     "read(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, dst: JBuffer, position: bigint) {
-      const file = this.readable(), saved = file.pos;
-      file.pos = Number(position);
-      return after(channelRead(this, dst), (n) => { file.pos = saved; return n; });
+      if (position < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative position");
+      return channelRead(this, dst, Number(position));
     },
     "write(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, src: JBuffer) { return channelWrite(this, src); },
+    "write(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, src: JBuffer, position: bigint) {
+      if (position < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative position");
+      return channelWrite(this, src, Number(position));
+    },
     "transferTo(JJLjava/nio/channels/WritableByteChannel;)J": driven(function* (this: JFileChannel, position: bigint, count: bigint, target: JObj | null): Gen {
-      const file = this.readable(), thread = curThread;
+      const fd = this.reading(), thread = curThread;
       if (!target) return rt.npe();
       if (position < 0n || count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/count");
       if (!(yield vcallOn(thread, target, "isOpen", "()Z"))) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-      if (target instanceof JFileChannel) target.writable();
-      const available = BigInt(file.source?.size ?? file.buf.length) - position;
+      if (target instanceof JFileChannel) target.writing();
+      const available = BigInt(fdSize(fd)) - position;
       const length = Number(count < available ? count : available);
       if (length <= 0) return 0n;
       const buffer = mkByteBuffer(Math.min(length, 65536)), bytes = new Uint8Array(buffer.ab);
       let transferred = 0;
       while (transferred < length) {
-        this.readable();
-        const start = Number(position) + transferred, n = Math.min(length - transferred, bytes.length);
-        const data = file.source ? yield readFully(file.source, start, n) : file.buf.subarray(start, start + n);
-        bytes.set(data); buffer.pos = 0; buffer.lim = data.length;
+        const n = lastError(yield javaPreadFd(this.reading(), bytes.subarray(0, Math.min(length - transferred, bytes.length)), Number(position) + transferred), null);
+        if (!n) break;
+        buffer.pos = 0; buffer.lim = n;
         const written = Number(yield vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer));
         transferred += written;
         if (written < n) break;
       }
       return BigInt(transferred);
     }),
-    "force(Z)V": () => {},
+    "force(Z)V": function (this: JFileChannel) { this.opened(); },
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
     "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
     "lock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
@@ -1726,15 +1428,12 @@ rt.register({
       if (names.has("CREATE_NEW") && exists) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", p.p);
       if (!exists && !defaults && !names.has("CREATE") && !names.has("CREATE_NEW")) throw rt.mkThrowable("java/nio/file/NoSuchFileException", p.p);
       if (vfs.isDir(p.p)) throw rt.mkThrowable("java/nio/file/FileSystemException", p.p);
-      const truncate = defaults || names.has("TRUNCATE_EXISTING");
-      if (exists && !truncate && !vfs.read(p.p) && !writable(vfs.source(p.p))) {
-        const bytes = yield vfs.readFile(p.p);
-        if (bytes) vfs.write(p.p, bytes);
-      }
-      const stream = new JFOS();
-      openWrite.call(stream, p.p, names.has("APPEND") ? 1 : 0, truncate);
-      stream.deleteOnClose = names.has("DELETE_ON_CLOSE");
-      return stream;
+      const flags = 1 /* O_WRONLY */ | 0x40 /* O_CREAT */ | (names.has("APPEND") ? O_APPEND : 0) | (defaults || names.has("TRUNCATE_EXISTING") ? 0x200 /* O_TRUNC */ : 0);
+      const fd = javaOpenFd(p.p, flags);
+      if (fd < 0) throw rt.mkThrowable("java/nio/file/FileSystemException", `${p.p}: ${ERRSTR[-fd]}`);
+      // UnixChannelFactory unlinks a DELETE_ON_CLOSE file as soon as it is open
+      if (names.has("DELETE_ON_CLOSE")) vfs.delete(p.p);
+      return newObj("java/io/FileOutputStream", "(Ljava/io/FileDescriptor;Z)V", yield mkFd(fd), 1);
     }),
     "static readAllBytes(Ljava/nio/file/Path;)[B": driven(function* (p: JNioPath): Gen {
       const bytes = (yield vfs.readFile(p.p)) ?? new Uint8Array(0);

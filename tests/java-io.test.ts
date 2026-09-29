@@ -4,7 +4,7 @@ import "../src/natives";
 import { mkPfd } from "../src/android/os";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, type JObj } from "../src/jvm/runtime";
-import { newFile, JFileDescriptor, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
+import { newFile, fdInt, setFdInt, mkFd, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
@@ -158,7 +158,7 @@ describe("file-input-descriptor", () => {
       vfs.delete(renamed);
       expect(await vcall(borrowed, "read", "()I")).toBe(1);
       const byte = new Uint8Array(1);
-      expect(await javaReadFd(fd.fd, byte)).toBe(1);
+      expect(await javaReadFd(fdInt(fd), byte)).toBe(1);
       expect(byte[0]).toBe(2);
       const channel = await vcall(owner, "getChannel", "()Ljava/nio/channels/FileChannel;");
       expect(await vcall(channel, "position", "()J")).toBe(2n);
@@ -174,11 +174,11 @@ describe("file-input-descriptor", () => {
       expect([...dst]).toEqual([0, 2, 3, 4, 0]);
       expect(await vcall(owner, "read", "()I")).toBe(-1);
       await vcall(borrowed, "close", "()V");
-      expect(javaSeekFd(fd.fd, 0, 0)).toBe(0);
+      expect(javaSeekFd(fdInt(fd), 0, 0)).toBe(0);
       expect(await vcall(owner, "read", "()I")).toBe(1);
       await rejectsJava(vcallAsync(borrowed, "read", "()I"), "java/io/IOException");
       await vcall(channel, "close", "()V");
-      expect(fd.fd).toBe(-1);
+      expect(fdInt(fd)).toBe(-1);
       expect(await vcall(channel, "isOpen", "()Z")).toBe(0);
     } finally { await vcall(owner, "close", "()V"); vfs.delete(path); vfs.delete(renamed); }
   });
@@ -186,7 +186,7 @@ describe("file-input-descriptor", () => {
   test("descriptor streams serialize lazy reads and reject invalid input", async () => {
     const path = "/input-descriptor-lazy", bytes = Uint8Array.of(5, 6, 7, 8);
     vfs.lazyFiles.set(path, { size: 4, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
-    const fd = new JFileDescriptor(); fd.fd = javaOpenFd(path, 0);
+    const fd = await mkFd(javaOpenFd(path, 0));
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
       const a = new Int8Array(3), b = new Int8Array(3);
@@ -200,10 +200,10 @@ describe("file-input-descriptor", () => {
       ] satisfies [string, string, unknown[], string][]) {
         await rejectsJava(vcallAsync(input, method, desc, ...args), error);
       }
-      javaCloseFd(fd.fd);
+      javaCloseFd(fdInt(fd));
       await rejectsJava(vcallAsync(input, "read", "()I"), "java/io/IOException");
       await rejectsJava(vcallAsync(input, "available", "()I"), "java/io/IOException");
-    } finally { javaCloseFd(fd.fd); await vcall(input, "close", "()V"); vfs.delete(path); }
+    } finally { javaCloseFd(fdInt(fd)); await vcall(input, "close", "()V"); vfs.delete(path); }
   });
 
   test("descriptor streams wait for pipe bytes without closing borrowed descriptors", async () => {
@@ -215,7 +215,7 @@ describe("file-input-descriptor", () => {
       return cpu.call(fn, args);
     };
     expect(await call("pipe", buffer)).toBe(0);
-    const fd = new JFileDescriptor(); fd.fd = mem.ld32(buffer);
+    const fd = await mkFd(mem.ld32(buffer));
     const writer = mem.ld32(buffer + 4);
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
@@ -227,22 +227,22 @@ describe("file-input-descriptor", () => {
       javaCloseFd(writer);
       expect(await vcall(input, "read", "()I")).toBe(-1);
       await vcall(input, "close", "()V");
-      expect(await javaReadFd(fd.fd, new Uint8Array(1))).toBe(0);
-    } finally { javaCloseFd(fd.fd); javaCloseFd(writer); mem.free(buffer); cpu.dispose(); }
+      expect(await javaReadFd(fdInt(fd), new Uint8Array(1))).toBe(0);
+    } finally { javaCloseFd(fdInt(fd)); javaCloseFd(writer); mem.free(buffer); cpu.dispose(); }
   });
 
   test("descriptor constructors defer invalid descriptor failures and honor explicit ownership", async () => {
     await rejectsJava(newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", null), "java/lang/NullPointerException");
-    const fd = new JFileDescriptor();
+    const fd = await mkFd(-1);
     const invalid = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     await rejectsJava(vcallAsync(invalid, "read", "()I"), "java/io/IOException");
     await vcall(invalid, "close", "()V");
     const path = "/input-descriptor-owner";
     vfs.write(path, Uint8Array.of(1));
-    fd.fd = javaOpenFd(path, 0);
+    setFdInt(fd, javaOpenFd(path, 0));
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;Z)V", fd, 1);
     await vcall(input, "close", "()V");
-    expect(fd.fd).toBe(-1);
+    expect(fdInt(fd)).toBe(-1);
     vfs.delete(path);
   });
 });

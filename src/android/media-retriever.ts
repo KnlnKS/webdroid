@@ -1,7 +1,7 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { concat } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JFileDescriptor } from "../jvm/natives/jio";
+import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { JBuffer } from "../jvm/natives/jnio";
 import { javaFdSource } from "../native/stdio";
@@ -107,8 +107,8 @@ class JMediaMetadataRetriever extends JObj {
   }
 }
 
-async function openFd(this: JMediaMetadataRetriever, fd: JFileDescriptor, offset = 0n, length = 0x7fffffffffffffffn) {
-  const source = javaFdSource(fd.fd) ?? vfs.source(fd.path);
+async function openFd(this: JMediaMetadataRetriever, fd: JObj | null, offset = 0n, length = 0x7fffffffffffffffn) {
+  const source = javaFdSource(fdInt(fd));
   if (!source || offset < 0n || length <= 0n || offset > BigInt(source.size))
     throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid file descriptor or range");
   const start = Number(offset);

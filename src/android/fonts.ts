@@ -7,8 +7,10 @@ import { rt, JObj, type NativeSpec, fieldGetters, driven, type Gen } from "../jv
 import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
-import { pathOf } from "../jvm/natives/jio";
+import { pathOf, fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
+import { readFully } from "../shell/lazyfile";
+import { javaFdSource } from "../native/stdio";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader } from "./graphics";
 import type { Resources } from "./res";
@@ -189,7 +191,7 @@ rt.register({
       fromBytes.call(this, yield fileBytes(pathOf(f)), "Failed to read " + pathOf(f));
     }),
     "<init>(Landroid/os/ParcelFileDescriptor;)V": driven(function* (this: JFontBuilder, pfd: any): Gen {
-      fromBytes.call(this, yield fileBytes(pfd?.path ?? pfd?.fd?.path), "Failed to read file descriptor");
+      fromBytes.call(this, yield fileBytes(pfd?.path), "Failed to read file descriptor");
     }),
     "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": fromAsset,
     "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": fromAsset,
@@ -320,7 +322,10 @@ function tfbFrom(this: JTypefaceBuilder, b: Uint8Array | null) { this.bytes = b;
 const tfbMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Ljava/io/File;)V": driven(function* (this: JTypefaceBuilder, f: JObj): Gen { tfbFrom.call(this, yield fileBytes(pathOf(f))); }),
   "<init>(Ljava/lang/String;)V": driven(function* (this: JTypefaceBuilder, p: string): Gen { tfbFrom.call(this, yield fileBytes(p)); }),
-  "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JTypefaceBuilder, fd: any): Gen { tfbFrom.call(this, yield fileBytes(fd?.path)); }),
+  "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JTypefaceBuilder, fd: JObj | null): Gen {
+    const source = javaFdSource(fdInt(fd));
+    tfbFrom.call(this, source ? yield readFully(source) : null);
+  }),
   "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JTypefaceBuilder, am: JAssetManager, p: string) { tfbFrom.call(this, am.host.zip["assets/" + p] ?? null); },
   "setWeight(I)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, w: number) { this.weight = w; return this; },
   "setItalic(Z)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, i: number) { this.italic = i ? 1 : 0; return this; },

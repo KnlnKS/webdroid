@@ -23,9 +23,11 @@ export async function encodeProviderValue(value: unknown): Promise<Value> {
   await vcall(p, "writeValue", "(Ljava/lang/Object;)V", value);
   return { kind: values ? "values" : "value", data: exportParcel(p) };
 }
+let providerPfds = 0;
 export async function decodeProviderValue(value: Value, writeback: ((bytes: Uint8Array, closed?: boolean) => unknown) | null = null): Promise<unknown> {
   if (value.kind === "uri") return mkUri(value.value);
-  if (value.kind === "pfd") return mkPfd(value.bytes.slice(), writeback);
+  // a writable descriptor gets a file for its writes, which the writeback takes on the last close
+  if (value.kind === "pfd") return mkPfd(value.bytes.slice(), writeback, writeback ? `provider:${++providerPfds}` : undefined);
   const decoded: unknown = await vcall(importParcel(value.data), "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null);
   if (value.kind !== "values") return decoded;
   if (!(decoded instanceof JBundle)) throw rt.mkThrowable("android/os/BadParcelableException", "Expected ContentValues");

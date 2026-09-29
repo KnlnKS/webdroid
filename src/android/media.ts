@@ -3,7 +3,7 @@
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, stringHash, vcallUncaught } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
-import { type JFileDescriptor } from "../jvm/natives/jio";
+import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdSource } from "../native/stdio";
 import { readFully } from "../shell/lazyfile";
@@ -404,9 +404,9 @@ export function mpStart(mp: JMediaPlayer) {
   players.add(mp);
   void el?.play().then(() => { if (el instanceof HTMLVideoElement && mp.display) pumpFrames(mp, el); }).catch(() => { /* */ });
 }
-async function mpLoadFd(this: JMediaPlayer, fd: JFileDescriptor, offset = 0n, length = 0x7fffffffffffffffn) {
+async function mpLoadFd(this: JMediaPlayer, fd: JObj | null, offset = 0n, length = 0x7fffffffffffffffn) {
   if (fd === null) rt.npe();
-  const source = javaFdSource(fd.fd) ?? vfs.source(fd.path);
+  const source = javaFdSource(fdInt(fd));
   if (!source || offset < 0n || length <= 0n || offset >= BigInt(source.size)) {
     throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media file descriptor or range");
   }

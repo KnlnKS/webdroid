@@ -11,7 +11,7 @@ import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } fr
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
-import { pathOf, readStreamFully, type JFileDescriptor } from "../jvm/natives/jio";
+import { pathOf, readStreamFully, fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
@@ -2906,9 +2906,9 @@ const decodeStream = driven(function* decodeStream(stream: unknown, pad: JRect |
   if (bitmap && pad) setDecodePadding(bitmap, pad);
   return bitmap;
 });
-const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
+const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JObj | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
   if (!fd) throw rt.mkThrowable("java/lang/NullPointerException", "fd");
-  const bytes = yield javaFdBytes(fd.fd);
+  const bytes = yield javaFdBytes(fdInt(fd));
   const bitmap = yield decodeBytes(bytes ?? new Uint8Array(0), opts);
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   if (bitmap && pad) setDecodePadding(bitmap, pad);
@@ -2986,7 +2986,7 @@ rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionD
   "static newInstance(Ljava/lang/String;Z)Landroid/graphics/BitmapRegionDecoder;":
     driven(function* (path: string): Gen { return regionDecoder(yield vfs.readFile(path)); }),
   "static newInstance(Ljava/io/FileDescriptor;Z)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (fd: JFileDescriptor): Gen { return regionDecoder(yield javaFdBytes(fd.fd)); }),
+    driven(function* (fd: JObj | null): Gen { return regionDecoder(yield javaFdBytes(fdInt(fd))); }),
   "static newInstance([BIIZ)Landroid/graphics/BitmapRegionDecoder;":
     (bytes: Int8Array, offset: number, length: number) => regionDecoder(u8(bytes, offset, length)),
   "getWidth()I": function (this: JBitmapRegionDecoder) { return this.bitmap?.w ?? 0; },
