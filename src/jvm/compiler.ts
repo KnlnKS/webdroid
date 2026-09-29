@@ -362,6 +362,9 @@ class MethodEmitter {
   private get cold(): boolean { return this.backend === "cold"; }
   /** the hot body being compiled is a leaf: it has no suspension points */
   private sync = false;
+  /** the hot entry being compiled runs its blocks in pc order (see compile) */
+  private structured = false;
+  private targets = new Set<number>();
 
   private reg(index: number): string { return this.cold ? `F.v[${this.literal(index)}]` : `v${index}`; }
   /** registers a constant may reach, the only ones a reference read normalizes from 0 to null */
@@ -416,11 +419,17 @@ class MethodEmitter {
     this.nullable = prepared.nullable;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
-    const blocks: string[] = [];
+    // Forward-only control flow runs its blocks in pc order: a branch breaks out of the labelled
+    // block that ends where its target starts, so there is no dispatch loop to pay for. Depth is
+    // bounded for parsers; handlers and resumption re-enter by pc, so they keep the loop.
+    this.structured = !this.resuming && !this.hasTries && prepared.forward &&
+      prepared.instructions.reduce((n, ins) => n + prepared.leaders[ins.pc], 0) <= 256;
+    const blocks: string[] = [], starts: number[] = [];
     let cur: string[] | null = null;
     for (const ins of prepared.instructions) {
       if (prepared.leaders[ins.pc]) {
         if (cur) blocks.push(cur.join("\n"));
+        starts.push(ins.pc);
         cur = [`case ${ins.pc}:${this.hasTries ? `pc=${ins.pc};` : ""}`];
       }
       if (!cur) throw new Error(`instruction ${ins.pc} has no emitted block`);
@@ -454,10 +463,7 @@ class MethodEmitter {
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.resuming ? "" : "P.entry($pn);"}try{`
       : "";
     const profileEnd = jvmProfiler.enabled ? `}finally{P.add($pn,"hotRun",performance.now()-$pt);}` : "";
-    // One block that never branches (a text test: a string constant holding "continue" only
-    // keeps the loop) needs no dispatch; a resumable body re-enters mid-block, so it always does.
-    const straight = blocks.length === 1 && !this.hasTries && !this.resuming && !blocks[0].includes("continue");
-    const dispatch = straight ? `{\n${blocks[0].slice(blocks[0].indexOf(":") + 1)}\n}`
+    const dispatch = this.structured ? this.inOrder(blocks, starts)
       : `switch(${this.resuming ? "$r?-$r:pc" : "pc"}){\n${blocks.join("\n")}\ndefault:R.badPc(pc);\n}`;
     const body = `try{${this.sync ? "" : "$d:"}${dispatch}
 ${this.sync ? "" : this.saveFrame()}
@@ -469,11 +475,19 @@ ${catchBody}
 ${this.resuming ? "" : coverageProbeSource(profileName)}
 ${profileStart}
 ${init}
-${straight ? body : `for(;;){\n${body}\n}`}
+${this.structured ? body : `for(;;){\n${body}\n}`}
 ${profileEnd}
 }`;
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "hotEmit", performance.now() - started);
     return source;
+  }
+
+  /** Blocks in pc order, each branch target opening where the labelled block it closes ends. */
+  private inOrder(blocks: string[], starts: number[]): string {
+    const targets = [...this.targets].sort((a, b) => b - a);
+    let text = `{${targets.map((t) => `L${t}:{`).join("")}`;
+    for (let j = 0; j < blocks.length; j++) text += `${this.targets.has(starts[j]) ? "}" : ""}\n${blocks[j].slice(blocks[j].indexOf(":") + 1)}`;
+    return text + "\n}";
   }
 
   /** One save point per method: suspension sites set `$r` (0 for a back-edge yield) and `pc`, then
@@ -675,6 +689,7 @@ ${profileEnd}
       const fuel = target <= from ? `if(--R.fuel<0){F.$fu=R.refuel();if(F.$fu){F.$w=0;return F.$fu;}}` : "";
       return `${fuel}F.next=${this.literal(target)};return;`;
     }
+    if (this.structured) { this.targets.add(target); return `break L${target};`; }
     const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){pc=${target};break $d}}` : "";
     return `${fuel}pc=${target};continue;`;
   }

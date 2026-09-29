@@ -23,6 +23,8 @@ export interface PreparedMethod {
   readonly params: readonly string[];
   readonly widths: readonly number[];
   readonly sync: boolean;
+  /** every branch goes forward: blocks in pc order need no dispatch loop */
+  readonly forward: boolean;
   /** registers a numeric constant may reach: only these can hold 0 standing for null */
   readonly nullable: ReadonlySet<number>;
 }
@@ -396,9 +398,10 @@ export function prepareMethod(
   started = observe ? performance.now() : 0;
   const leaders = new Uint8Array(code.insns.length + 1);
   leaders[0] = 1;
+  let forward = true;
   for (const instruction of instructions) {
     const targets = branchTargets(code, instruction);
-    for (const target of targets) leaders[target] = 1;
+    for (const target of targets) { leaders[target] = 1; if (target <= instruction.pc) forward = false; }
     if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
   }
   for (const region of code.tries) {
@@ -421,6 +424,7 @@ export function prepareMethod(
     params: signature.params,
     widths: signature.params.map((param) => isWide(param) ? 2 : 1),
     sync: instructions.every((instruction) => !maySuspend(instruction.op)),
+    forward,
     nullable: carriers ?? NO_CARRIERS,
   };
 }
