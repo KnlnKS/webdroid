@@ -838,6 +838,13 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      Bun) and 13,197 in TS-spec classes (the view stack). Build it as package chunks served like
      the compile worker's output, loaded after the first frame, once Stage C/D puts those classes
      on tap paths; the gated taps today spend little in platform bytecode.
+   - **Link metadata (§4.1).** Every realm links all 1,904 native specs at boot (`linkNatives`,
+     310-340 ms per realm in the browser; a warm Mihon launch boots two realms on one main thread).
+     122 of its 154 ms in V8 is `fallThrough`, which installs a lazy stub for each of 23,542 AOSP
+     methods the specs lack, decoding each method's name and descriptor and mangling it. Linking
+     cannot be lazy (a virtual call on a TS object has no resolution hook), so persist the table:
+     per native class, the gap methods' indices, mangled names and flags, keyed by bundle and
+     platform dex ids in Cache Storage, and let `installLazy` defer name and descriptor to compile.
    - **Persisted code.** Warm launches load 49 MB of emitted JS for Mihon (63 MB more for
      microG). Suspension checks are 23% of those bytes, and 60% of bodies are single-block
      methods that still carry the full dispatch loop, so a leaner emitter shrinks both import and
