@@ -560,8 +560,13 @@ ${profileEnd}
         break;
       case "const-string": case "const-string/jumbo":
         out.push(`${this.reg(i.a)}=D.s[${this.literal(i.b)}]??D.gs(${this.literal(i.b)});`); break;
-      case "const-class":
-        out.push(`${this.reg(i.a)}=R.classForIdx(D,${this.literal(i.b)});`); break;
+      case "const-class": {
+        const load = `R.classForIdx(D,${this.literal(i.b)})`;
+        if (this.cold) { out.push(`${this.reg(i.a)}=${load};`); break; }
+        const k = this.ics++;
+        out.push(`${this.reg(i.a)}=$ic[${k}]??($ic[${k}]=${load});`);
+        break;
+      }
       case "monitor-enter": this.guard(`R.me(${this.reg(i.a)})`, out); break;
       case "monitor-exit": out.push(`R.mx(${this.reg(i.a)});`); break;
       case "check-cast": {
