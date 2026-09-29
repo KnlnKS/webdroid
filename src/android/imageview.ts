@@ -7,7 +7,7 @@ import {
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
-import { restoreCanvasToCount, saveCanvas, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JBitmap, type JCanvas } from "./graphics";
+import { restoreCanvasToCount, saveCanvas, modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JBitmap, type JCanvas } from "./graphics";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
@@ -136,7 +136,9 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
   "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : 0x7fffffff; },
   "setColorFilter(I)V": function (this: JImageView, c: number) {
-    return vcallOn(curThread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, rt.link("android/graphics/PorterDuff$Mode").ctor.s$SRC_ATOP);
+    const thread = curThread;
+    return after(modeConstant("android/graphics/PorterDuff$Mode", "SRC_ATOP"),
+      (mode) => vcallOn(thread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode));
   },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": driven(function* (this: JImageView, c: number, mode: unknown): Gen {
     const thread = curThread;
@@ -157,7 +159,7 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
     if (this.drawable) return vcallOn(curThread, this.drawable, "setTintList", "(Landroid/content/res/ColorStateList;)V", csl);
   },
   "getImageTintMode()Landroid/graphics/PorterDuff$Mode;": function (this: JImageView) {
-    return this.tintMode ?? rt.link("android/graphics/PorterDuff$Mode").ctor.s$SRC_IN;
+    return this.tintMode ?? modeConstant("android/graphics/PorterDuff$Mode", "SRC_IN");
   },
   "setImageTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, mode: JSimpleEnum | null) {
     this.tintMode = mode;

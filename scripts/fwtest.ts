@@ -58,12 +58,12 @@ console.log(`\ncoverage ${have}/${total} declared natives (${((have / (total || 
 const reached: string[] = [];
 rt.onMissing = (w) => { reached.push(w); };
 
-// Text measurement goes through an OffscreenCanvas 2D context, which bun does not have.
+// Text measurement and gradients go through an OffscreenCanvas 2D context, which bun does not have.
 // Say so rather than reporting a delegate failure for a missing DOM.
 const HAS_DOM = typeof (globalThis as { document?: unknown }).document !== "undefined";
 
 async function exercise(name: string, fn: () => Promise<void>, needsDom = false) {
-  if (needsDom && !HAS_DOM) { console.log(`skip ${name}  (needs a browser: Canvas2D text metrics)`); return; }
+  if (needsDom && !HAS_DOM) { console.log(`skip ${name}  (needs a browser: a Canvas2D context)`); return; }
   const before = reached.length;
   try {
     await fn();
@@ -140,6 +140,57 @@ await exercise("Matrix (compose, map, invert, fit, poly, values)", async () => {
   await vcall(copy, "postTranslate", "(FF)Z", 1, 0);
   same("and not once changed", await vcall(m, "equals", "(Ljava/lang/Object;)Z", copy), 0);
 });
+
+await exercise("ColorFilters (native instances, updated in place)", async () => {
+  const { deref } = await import("../src/android/handles");
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  const native = async (f: unknown) => deref<{ matrix: Float32Array | null; color: number; mode: string }>(await vcall(f, "getNativeInstance", "()J"));
+  const srcAtop = ((await linkInit("android/graphics/PorterDuff$Mode")).ctor as Record<string, unknown>).s$SRC_ATOP;
+  const porterDuff = await native(await newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", -65536, srcAtop));
+  same("PorterDuffColorFilter", [porterDuff.color, porterDuff.mode, porterDuff.matrix], [-65536, "SRC_ATOP", null]);
+  const multiply = ((await linkInit("android/graphics/BlendMode")).ctor as Record<string, unknown>).s$MULTIPLY;
+  same("BlendModeColorFilter", (await native(await newObj("android/graphics/BlendModeColorFilter", "(ILandroid/graphics/BlendMode;)V", 7, multiply))).mode, "MULTIPLY");
+  const lighting = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0x00104020);
+  const k = (await native(lighting)).matrix!;
+  same("Lighting", [k[0], k[6], k[12], k[4], k[9], k[14], k[18]], [128 / 255, 1, 0, 16, 64, 32, 1].map(Math.fround));
+  await vcall(lighting, "setColorAdd", "(I)V", 0x00010203);
+  same("setColorAdd reaches the instance", [k[4], k[9], k[14]], [1, 2, 3]);
+  const values = Float32Array.from({ length: 20 }, (_, i) => i);
+  const matrix = await newObj("android/graphics/ColorMatrixColorFilter", "([F)V", values);
+  const m = (await native(matrix)).matrix!;
+  same("ColorMatrixColorFilter", [...m], [...values]);
+  await vcall(matrix, "setColorMatrixArray", "([F)V", values.map((v) => -v));
+  same("setColorMatrixArray reaches the instance", m[19], -19);
+});
+
+await exercise("Shaders (gradients, bitmap, compose; setLocalMatrix replaces the instance)", async () => {
+  const { deref } = await import("../src/android/handles");
+  const { NativeGradient, NativeBitmapShader, NativeComposeShader } = await import("../src/android/graphics");
+  const clamp = ((await linkInit("android/graphics/Shader$TileMode")).ctor as Record<string, unknown>).s$CLAMP;
+  const native = async (s: unknown) => deref<{ local: number[] | null }>(await vcall(s, "getNativeInstance", "()J"));
+  const linear = await newObj("android/graphics/LinearGradient", "(FFFFIILandroid/graphics/Shader$TileMode;)V", 0, 0, 10, 0, -65536, -16776961, clamp);
+  const first = await native(linear);
+  if (!(first instanceof NativeGradient) || first.local) throw new Error("LinearGradient's instance is not an identity gradient");
+  const m = await newObj("android/graphics/Matrix", "()V");
+  await vcall(m, "setTranslate", "(FF)V", 5, 0);
+  await vcall(linear, "setLocalMatrix", "(Landroid/graphics/Matrix;)V", m);
+  const second = await native(linear);
+  if (second === first || String(second.local) !== "1,0,0,1,5,0") throw new Error(`setLocalMatrix gave ${second.local}`);
+  await newObj("android/graphics/RadialGradient", "(FFF[I[FLandroid/graphics/Shader$TileMode;)V", 5, 5, 5, Int32Array.of(-1, 0), null, clamp);
+  await newObj("android/graphics/SweepGradient", "(FFII)V", 5, 5, -1, 0);
+  const cfg = ((await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>).s$ARGB_8888;
+  const bitmap = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 2, 2, cfg);
+  const bitmapShader = await newObj("android/graphics/BitmapShader", "(Landroid/graphics/Bitmap;Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", bitmap, clamp, clamp);
+  if (!(await native(bitmapShader) instanceof NativeBitmapShader)) throw new Error("BitmapShader's instance is not a bitmap shader");
+  const srcOver = ((await linkInit("android/graphics/PorterDuff$Mode")).ctor as Record<string, unknown>).s$SRC_OVER;
+  const compose = await newObj("android/graphics/ComposeShader", "(Landroid/graphics/Shader;Landroid/graphics/Shader;Landroid/graphics/PorterDuff$Mode;)V", linear, bitmapShader, srcOver);
+  const composed = await native(compose);
+  if (!(composed instanceof NativeComposeShader) || composed.dst !== second || composed.op !== "source-over") throw new Error("ComposeShader's instance does not compose its shaders");
+  await vcall(m, "setTranslate", "(FF)V", 7, 0);
+  await vcall(linear, "setLocalMatrix", "(Landroid/graphics/Matrix;)V", m);
+  const recomposed = await native(compose);
+  if (recomposed === composed || String((recomposed as InstanceType<typeof NativeComposeShader>).dst.local) !== "1,0,0,1,7,0") throw new Error("ComposeShader kept a replaced child");
+}, true);
 
 await exercise("new Path()", async () => {
   const p = await newObj("android/graphics/Path", "()V");

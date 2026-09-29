@@ -145,6 +145,8 @@ rt.register({
   },
 });
 
+/** Shader.getNativeInstance(boolean filterFromPaint), which a draw calls per shaded paint */
+const SHADER_INSTANCE = mangleMethod("getNativeInstance", "(Z)J");
 export class JPaint extends JObj {
   color = -16777216;
   renderAlpha: number | null = null;
@@ -161,27 +163,39 @@ export class JPaint extends JObj {
   tf: JTypeface = tfDefault;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right
-  shaderObj: JShader | null = null;
+  /** the Java Shader the paint spec was given, whose native instance `shader` is */
+  shaderObj: object | null = null;
+  shader: NativeShader | null = null;
   maskFilter: JBlurMaskFilter | null = null;
   strokeCapN: CanvasLineCap = "butt";
   strokeJoinN: CanvasLineJoin = "miter";
   dash: number[] | null = null;
-  filterColor: number | null = null; // PorterDuff SRC_IN tint
-  filterMatrix: Float32Array | null = null; // ColorMatrixColorFilter
-  filterObj: JObj | null = null;     // kept only so getColorFilter() round-trips
-  /** Canvas2D form of the paint's Xfermode/BlendMode; null = plain source-over. */
+  colorFilter: NativeColorFilter | null = null;
+  filterObj: object | null = null;     // kept only so getColorFilter() round-trips
+  /** the paint's Xfermode/BlendMode by BlendMode's name, and its Canvas2D form; null = plain source-over */
+  blendName: string | null = null;
   blend: GlobalCompositeOperation | null = null;
-  xfermode: JObj | null = null;      // kept only so getXfermode() round-trips
+  xfermode: object | null = null;      // kept only so getXfermode() round-trips
   blendMode: JSimpleEnum | null = null;
+  setBlendName(name: string | null) { this.blendName = name; this.blend = name ? COMPOSITE[name] ?? null : null; }
+  /** the shader to draw with. As AOSP's Paint.getNativeInstance does per draw, this asks the Java
+   *  Shader for its current native instance: setLocalMatrix and the like replace it. If that call
+   *  suspends (it would only on a contended monitor), the draw keeps the instance it had. */
+  drawShader(): NativeShader | null {
+    const s = this.shaderObj as Record<string, (filter: number) => bigint | Promise<bigint>> | null;
+    if (s) {
+      const h = s[SHADER_INSTANCE](1);
+      if (typeof h === "bigint") this.shader = deref<NativeShader | undefined>(h) ?? null;
+    }
+    return this.shader;
+  }
   compositeOp(): GlobalCompositeOperation | null {
-    if (this.blend === "source-in" && !this.shaderObj &&
-      this.filterColor === null && !this.filterMatrix && (this.renderAlpha ?? this.color >>> 24) === 255)
+    if (this.blend === "source-in" && !this.shader && !this.colorFilter && (this.renderAlpha ?? this.color >>> 24) === 255)
       return "source-atop";
     return this.blend;
   }
   transparentSourceIn(): boolean {
-    return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 &&
-      !this.shaderObj && this.filterColor === null && !this.filterMatrix;
+    return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 && !this.shader && !this.colorFilter;
   }
   pathEffect: unknown = null;
   letterSpacingEm = 0;
@@ -217,14 +231,15 @@ export class JPaint extends JObj {
     return (this.fCache = `${it}${w} ${this.textSize}px ${family.replace(/, sans-serif$/, "")}, ${EMOJI_FALLBACK}, sans-serif`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
-    const shader = this.shaderObj, pattern = shader && (ctx && shader.pattern(ctx) || shader.grad);
+    const pattern = this.drawShader()?.pattern(ctx);
     if (pattern) return pattern;
-    const f = this.filterColor;
+    const filter = this.colorFilter;
     const color = this.renderAlpha === null ? this.color : (this.renderAlpha << 24) | (this.color & 0xffffff);
-    if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, color));
+    if (!filter) return cssColor(color);
+    if (filter.matrix) return cssColor(matrixColor(filter.matrix, color));
     // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
     // colour replaces the paint's, keeping the alpha the two agree on
-    if (f === null) return cssColor(color);
+    const f = filter.color;
     return cssColor(((f & 0xffffff) | ((((f >>> 24) * (color >>> 24) / 255) | 0) << 24)) | 0);
   }
 }
@@ -278,7 +293,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getXfermode()Landroid/graphics/Xfermode;": function (this: JPaint) { return this.xfermode; },
   "setBlendMode(Landroid/graphics/BlendMode;)V": function (this: JPaint, m: JSimpleEnum | null) {
     this.blendMode = m;
-    this.blend = m ? COMPOSITE[m.ename] ?? null : null;
+    this.setBlendName(m && m.ename);
   },
   "getBlendMode()Landroid/graphics/BlendMode;": function (this: JPaint) { return this.blendMode; },
   "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
@@ -307,9 +322,10 @@ const paintMethods: NativeSpec["methods"] = {
   "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: { ord: number }) { this.strokeJoinN = JOINS[j?.ord ?? 0]; },
   "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return paintCapEnum[CAPS.indexOf(this.strokeCapN)]; },
   "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return paintJoinEnum[JOINS.indexOf(this.strokeJoinN)]; },
-  "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: JShader | null) {
+  "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: object | null) {
     this.shaderObj = s ?? null;
-    return s;
+    if (!s) { this.shader = null; return s; }
+    return after(vcall(s, "getNativeInstance", "(Z)J", 1), (h: bigint) => { this.shader = deref<NativeShader | undefined>(h) ?? null; return s; });
   },
   "setPathEffect(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;": function (this: JPaint, e: any) {
     this.pathEffect = e ?? null;
@@ -318,16 +334,14 @@ const paintMethods: NativeSpec["methods"] = {
   },
   "getPathEffect()Landroid/graphics/PathEffect;": function (this: JPaint) { return this.pathEffect; },
   "getLetterSpacing()F": function (this: JPaint) { return this.letterSpacingEm; },
-  "setColorFilter(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;": function (this: JPaint, f: any) {
-    this.filterColor = f?.tint ?? null;
-    this.filterMatrix = f?.matrix ?? null;
+  "setColorFilter(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;": function (this: JPaint, f: object | null) {
     this.filterObj = f ?? null;
-    return f;
+    return after(colorFilterOf(f), (filter) => { this.colorFilter = filter; return f; });
   },
   "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JPaint) { return this.filterObj; },
-  "setXfermode(Landroid/graphics/Xfermode;)Landroid/graphics/Xfermode;": function (this: JPaint, x: JXfermode | null) {
+  "setXfermode(Landroid/graphics/Xfermode;)Landroid/graphics/Xfermode;": function (this: JPaint, x: object | null) {
     this.xfermode = x;
-    this.blend = x ? COMPOSITE[x.ename] ?? null : null;
+    this.setBlendName(x && xfermodeName(x));
     return x;
   },
   "setUnderlineText(Z)V": function (this: JPaint, v: number) { this.underline = !!v; },
@@ -440,15 +454,15 @@ export function castShadow(ctx: JCanvas["ctx"], trace: () => void, color: string
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
-  dst.textAlignN = src.textAlignN; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
+  dst.textAlignN = src.textAlignN; dst.shaderObj = src.shaderObj; dst.shader = src.shader; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
-  dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj;
+  dst.colorFilter = src.colorFilter; dst.filterObj = src.filterObj;
   dst.underline = src.underline; dst.strikeThru = src.strikeThru; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm; dst.textScaleX = src.textScaleX; dst.textSkewX = src.textSkewX;
   dst.fontFeatureSettings = src.fontFeatureSettings;
   dst.fontVariationSettings = src.fontVariationSettings;
   dst.locales = src.locales; dst.language = src.language;
-  dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
+  dst.blendName = src.blendName; dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
   dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
 }
 class JFontMetrics extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
@@ -572,9 +586,8 @@ const paintAlignEnum = mkEnumSet("android/graphics/Paint$Align", ["LEFT", "CENTE
 const paintCapEnum = mkEnumSet("android/graphics/Paint$Cap", ["BUTT", "ROUND", "SQUARE"]);
 const paintJoinEnum = mkEnumSet("android/graphics/Paint$Join", ["MITER", "ROUND", "BEVEL"]);
 /**
- * Xfermode/BlendMode → the Canvas2D composite operation with the same meaning. PorterDuff.Mode
- * and BlendMode spell the shared modes identically, so one table by name serves both; modes
- * Canvas2D cannot express are absent and fall back to plain source-over.
+ * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
+ * modes Canvas2D cannot express are absent and fall back to plain source-over.
  * CLEAR maps to destination-out, which clears only where the source is opaque: prep() fills a
  * CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes with a
  * transparent one).
@@ -582,85 +595,41 @@ const paintJoinEnum = mkEnumSet("android/graphics/Paint$Join", ["MITER", "ROUND"
 const COMPOSITE: Record<string, GlobalCompositeOperation> = {
   CLEAR: "destination-out", SRC: "copy", SRC_OVER: "source-over", DST_OVER: "destination-over",
   SRC_IN: "source-in", DST_IN: "destination-in", SRC_OUT: "source-out", DST_OUT: "destination-out",
-  SRC_ATOP: "source-atop", DST_ATOP: "destination-atop", XOR: "xor", ADD: "lighter", PLUS: "lighter",
+  SRC_ATOP: "source-atop", DST_ATOP: "destination-atop", XOR: "xor", PLUS: "lighter",
   MODULATE: "multiply", MULTIPLY: "multiply", SCREEN: "screen", OVERLAY: "overlay",
   DARKEN: "darken", LIGHTEN: "lighten", COLOR_DODGE: "color-dodge", COLOR_BURN: "color-burn",
   HARD_LIGHT: "hard-light", SOFT_LIGHT: "soft-light", DIFFERENCE: "difference",
   EXCLUSION: "exclusion", HUE: "hue", SATURATION: "saturation", COLOR: "color", LUMINOSITY: "luminosity",
 };
-mkEnumSet("android/graphics/PorterDuff$Mode",
-  ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
-    "SRC_ATOP", "DST_ATOP", "XOR", "DARKEN", "LIGHTEN", "MULTIPLY", "SCREEN", "ADD", "OVERLAY"]);
-rt.markers("android/graphics/PorterDuff");
-rt.register({
-  name: "android/graphics/PorterDuffColorFilter", ctor: class extends JObj { tint = 0; },
-  sup: "android/graphics/ColorFilter",
-  methods: {
-    "<init>(ILandroid/graphics/PorterDuff$Mode;)V": function (this: any, c: number) { this.tint = c; },
-  },
-});
-rt.markers("android/graphics/ColorFilter");
-// ── ColorMatrix: AOSP's row-major 4x5, and the filter that carries a copy of one
-function identityMatrix(): Float32Array { const m = new Float32Array(20); m[0] = m[6] = m[12] = m[18] = 1; return m; }
-function setMatrix(dst: Float32Array, src: Float32Array): void {
-  if (src.length < 20) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(src.length));
-  dst.set(src.subarray(0, 20));
+/** SkBlendMode by value, in BlendMode's names: PorterDuff.Mode.nativeInt, Xfermode.porterDuffMode
+ *  and the ColorFilter and ComposeShader natives all number modes this way */
+export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
+  "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
+  "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
+  "HUE", "SATURATION", "COLOR", "LUMINOSITY"];
+/** PorterDuff.Mode's or BlendMode's constant `name`, once the (bytecode) enum has initialized */
+export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode", name: string): unknown {
+  const info = rt.link(cls);
+  return after(rt.initClass(info), () => (info.ctor as unknown as Record<string, unknown>)["s$" + name]);
 }
-/** a ColorMatrix's 4x5 row-major array */
-const colorMatrixArray = (m: unknown) => (m as Record<string, Float32Array>)[declaredField("android/graphics/ColorMatrix", "mArray")];
-class JColorMatrixColorFilter extends JObj { matrix = identityMatrix(); }
-class JLightingColorFilter extends JObj {
-  mul = 0; add = 0; matrix = identityMatrix();
-  update() {
-    const m = this.matrix;
-    m[0] = ((this.mul >>> 16) & 255) / 255; m[6] = ((this.mul >>> 8) & 255) / 255; m[12] = (this.mul & 255) / 255;
-    m[4] = (this.add >>> 16) & 255; m[9] = (this.add >>> 8) & 255; m[14] = this.add & 255;
-  }
+let porterDuffMode = "";
+/** the mode a Java Xfermode names */
+const xfermodeName = (x: object) =>
+  BLEND_MODES[(x as Record<string, number>)[porterDuffMode ||= declaredField("android/graphics/Xfermode", "porterDuffMode")]];
+/**
+ * A ColorFilter's native instance, as hwui builds its SkColorFilter: AOSP's row-major 4x5 colour
+ * `matrix` with its offsets in 0..255 (SkColorFilters::Matrix and Lighting), or, when that is null,
+ * `color` blended into what is drawn by the mode named `mode` (SkColorFilters::Blend).
+ * The Lighting and ColorMatrix setters update `matrix` in place, and a paint holding it sees them.
+ */
+export class NativeColorFilter {
+  constructor(readonly matrix: Float32Array | null, readonly color = 0, readonly mode = "DST") {}
 }
-rt.register({
-  name: "android/graphics/LightingColorFilter", ctor: JLightingColorFilter, sup: "android/graphics/ColorFilter",
-  methods: {
-    "<init>(II)V": function (this: JLightingColorFilter, mul: number, add: number) { this.mul = mul; this.add = add; this.update(); },
-    "getColorMultiply()I": function (this: JLightingColorFilter) { return this.mul; },
-    "getColorAdd()I": function (this: JLightingColorFilter) { return this.add; },
-    "setColorMultiply(I)V": function (this: JLightingColorFilter, mul: number) { this.mul = mul; this.update(); },
-    "setColorAdd(I)V": function (this: JLightingColorFilter, add: number) { this.add = add; this.update(); },
-  },
-});
-rt.register({
-  name: "android/graphics/ColorMatrixColorFilter", ctor: JColorMatrixColorFilter, sup: "android/graphics/ColorFilter",
-  methods: {
-    "<init>(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, m: unknown) { this.matrix.set(colorMatrixArray(m)); },
-    "<init>([F)V": function (this: JColorMatrixColorFilter, src: Float32Array) { setMatrix(this.matrix, src); },
-    "getColorMatrix(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, out: unknown) { colorMatrixArray(out).set(this.matrix); },
-  },
-});
+/** the native instance behind a Java ColorFilter: null for none, and for a base ColorFilter */
+export const colorFilterOf = (f: object | null): NativeColorFilter | null | Promise<NativeColorFilter | null> =>
+  f && after(vcall(f, "getNativeInstance", "()J"), (h: bigint) => deref<NativeColorFilter | undefined>(h) ?? null);
 /** ColorSpace.get(Named.SRGB), what a 2D context's pixels are in */
 const srgb = () => scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 0);
-mkEnumSet("android/graphics/BlendMode",
-  ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
-    "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
-    "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
-    "HUE", "SATURATION", "COLOR", "LUMINOSITY"]);
-rt.register({
-  name: "android/graphics/BlendModeColorFilter", ctor: class extends JObj { tint = 0; },
-  sup: "android/graphics/ColorFilter",
-  methods: {
-    "<init>(ILandroid/graphics/BlendMode;)V": function (this: any, c: number) { this.tint = c; },
-    "getColor()I": function (this: any) { return this.tint; },
-    "getMode()Landroid/graphics/BlendMode;": () => null,
-  },
-});
-class JXfermode extends JObj { ename = "SRC_OVER"; }
-rt.register({
-  name: "android/graphics/PorterDuffXfermode", ctor: class extends JXfermode {}, sup: "android/graphics/Xfermode",
-  methods: {
-    "<init>(Landroid/graphics/PorterDuff$Mode;)V": function (this: JXfermode, m: JSimpleEnum | null) {
-      this.ename = m?.ename ?? "SRC_OVER";
-    },
-  },
-});
-rt.register({ name: "android/graphics/Xfermode", ctor: JXfermode });
 rt.register({
   name: "android/graphics/DashPathEffect", ctor: class extends JObj { intervals: number[] = []; }, sup: "android/graphics/PathEffect",
   methods: {
@@ -714,36 +683,28 @@ rt.register({
   },
 });
 
-export class JShader extends JObj {
-  pattern(_ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasGradient | CanvasPattern | null { return this.grad; }
-  deferredPattern(): ((ctx: Ctx2D) => CanvasPattern) | null { return null; }
-  grad: CanvasGradient | CanvasPattern | null = null;
-  /** setLocalMatrix: maps shader space into the canvas; null = identity */
-  local: [number, number, number, number, number, number] | null = null;
+export type Affine = [number, number, number, number, number, number];
+/** a native shader's local matrix: the 3x3 behind the handle Shader passes, null for identity */
+export function localMatrix(h: bigint): Affine | null {
+  const m = deref<Mat | undefined>(h);
+  return m && !isIdentity(m) ? affineOf(m) : null;
 }
-const shaderIdentity: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
-rt.register({
-  name: "android/graphics/Shader", ctor: JShader,
-  methods: {
-    "<init>()V": function () {},
-    "setLocalMatrix(Landroid/graphics/Matrix;)V": function (this: JShader, m: object | null) {
-      const mat = m && matrixOf(m);
-      this.local = mat && !isIdentity(mat) ? affineOf(mat) : null;
-      if (this.grad instanceof CanvasPattern) this.grad.setTransform(this.local ? new DOMMatrix(this.local) : new DOMMatrix());
-    },
-    "getLocalMatrix(Landroid/graphics/Matrix;)Z": function (this: JShader, m: object) {
-      setAffine(matrixOf(m), ...this.local ?? shaderIdentity);
-      return this.local ? 1 : 0;
-    },
-  },
-});
-mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR", "DECAL"]);
+/**
+ * A Shader's native instance: what it paints, under the local matrix it was created with (null
+ * for identity). It never changes; Shader discards it and makes another when the Java side does.
+ */
+export class NativeShader {
+  constructor(readonly local: Affine | null) {}
+  pattern(_ctx?: Ctx2D): CanvasGradient | CanvasPattern | null { return null; }
+  deferredPattern(): ((ctx: Ctx2D) => CanvasPattern) | null { return null; }
+}
+const shaderIdentity: Affine = [1, 0, 0, 1, 0, 0];
 const bitmapShaderTiles = new WeakMap<JBitmap, { generation: number; tiles: Map<string, CanvasPattern> }>();
-class JBitmapShader extends JShader {
-  bitmap!: JBitmap;
-  tileX = 0; tileY = 0;
+/** tileX/tileY: Shader.TileMode's nativeInt (CLAMP, REPEAT, MIRROR, DECAL) */
+export class NativeBitmapShader extends NativeShader {
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
+  constructor(local: Affine | null, readonly bitmap: JBitmap, readonly tileX: number, readonly tileY: number) { super(local); }
   draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
     const bitmap = this.bitmap;
     let cache = bitmapShaderTiles.get(bitmap);
@@ -783,7 +744,8 @@ class JBitmapShader extends JShader {
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     }
   }
-  pattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern {
+  override pattern(ctx?: Ctx2D): CanvasPattern | null {
+    if (!ctx) return null;
     const matrix = ctx.getTransform(), local = this.local;
     const key = `${this.bitmap.genId}:${ctx.canvas.width},${ctx.canvas.height}:${matrix.toString()}:${local}`;
     if (this.cached && key === this.cacheKey) return this.cached;
@@ -798,16 +760,8 @@ class JBitmapShader extends JShader {
     return this.cached = pattern;
   }
 }
-rt.register({ name: "android/graphics/BitmapShader", ctor: JBitmapShader, sup: "android/graphics/Shader", methods: {
-  "<init>(Landroid/graphics/Bitmap;Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V": function (this: JBitmapShader, bitmap: JBitmap, x: JSimpleEnum, y: JSimpleEnum) {
-    if (!x || !y) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    if (!bitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bitmap must be non-null");
-    if (bitmap.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot create BitmapShader for recycled bitmap");
-    this.bitmap = bitmap; this.tileX = x.ord; this.tileY = y.ord;
-  },
-} });
 /** fills everything `c` can show with `s`; a pattern shader applies its own local matrix */
-function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: JShader) {
+function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: NativeShader) {
   const style = s.pattern(c);
   if (!style) return;
   if (s.local && style instanceof CanvasGradient) c.transform(...s.local);
@@ -817,13 +771,13 @@ function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: JShader) {
   c.fillRect(bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1]);
 }
 /** ComposeShader: `src` blended onto `dst` by the mode, rasterized over the target once per transform */
-class JComposeShader extends JShader {
-  dst!: JShader; src!: JShader;
-  /** null for DST, which keeps the destination shader alone */
-  op: GlobalCompositeOperation | null = "source-over";
+export class NativeComposeShader extends NativeShader {
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
-  pattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern {
+  /** `op` is null for DST, which keeps the destination shader alone */
+  constructor(local: Affine | null, readonly dst: NativeShader, readonly src: NativeShader, readonly op: GlobalCompositeOperation | null) { super(local); }
+  override pattern(ctx?: Ctx2D): CanvasPattern | null {
+    if (!ctx) return null;
     const matrix = ctx.getTransform(), { width, height } = ctx.canvas;
     const key = `${width},${height}:${matrix.toString()}:${this.local}`;
     if (this.cached && key === this.cacheKey) return this.cached;
@@ -842,42 +796,28 @@ class JComposeShader extends JShader {
     return this.cached = pattern;
   }
 }
-/** PorterDuff.Mode, BlendMode and PorterDuffXfermode all name their mode by `ename` */
-const composeInit = function (this: JComposeShader, dst: JShader, src: JShader, mode: { ename: string }) {
-  if (!dst || !src || !mode) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shader parameters must not be null");
-  this.dst = dst; this.src = src; this.op = mode.ename === "DST" ? null : COMPOSITE[mode.ename] ?? "source-over";
-};
-rt.register({ name: "android/graphics/ComposeShader", ctor: JComposeShader, sup: "android/graphics/Shader", methods: Object.fromEntries(
-  ["PorterDuff$Mode", "BlendMode", "Xfermode"].map((m) => [`<init>(Landroid/graphics/Shader;Landroid/graphics/Shader;Landroid/graphics/${m};)V`, composeInit])) });
+/** a ComposeShader's native instance: `src` over `dst` by the SkBlendMode numbered `mode` */
+export const composeShader = (local: Affine | null, dst: NativeShader, src: NativeShader, mode: number) =>
+  new NativeComposeShader(local, dst, src, mode === 2 ? null : COMPOSITE[BLEND_MODES[mode]] ?? "source-over");
+export class NativeGradient extends NativeShader {
+  constructor(local: Affine | null, readonly grad: CanvasGradient) { super(local); }
+  override pattern(): CanvasGradient { return this.grad; }
+}
+/** a gradient's native instance: its ColorLongs at `positions` (evenly spaced when null), which
+ *  SkGradientShader pins to [0, 1] and to no less than the position before */
+export function gradient(local: Affine | null, g: CanvasGradient, colors: BigInt64Array, positions: Float32Array | null): NativeGradient {
+  for (let i = 0, prev = 0; i < colors.length; i++) {
+    const at = positions ? prev = Math.min(Math.max(positions[i], prev), 1) : i / (colors.length - 1);
+    g.addColorStop(at, cssColor(argbOfColorLong(colors[i])));
+  }
+  return new NativeGradient(local, g);
+}
 /**
  * A ColorLong is Color.pack()'s encoding: the sRGB case (colour-space id 0, the only one this
  * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
  */
 export const argbOfColorLong = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n)) | 0;
 export const colorLongOfArgb = (c: number) => BigInt.asIntN(64, BigInt(c >>> 0) << 32n);
-
-function gradientStops(g: CanvasGradient, colors: ArrayLike<number>, stops: ArrayLike<number> | null): CanvasGradient {
-  if (colors.length < 2 || (stops && stops.length !== colors.length)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid gradient colors or positions");
-  for (let i = 0; i < colors.length; i++) g.addColorStop(stops ? stops[i] : i / (colors.length - 1), cssColor(colors[i]));
-  return g;
-}
-function gradientSpec(name: string, geom: string, tile: string, make: (a: number[]) => CanvasGradient): NativeSpec {
-  const n = geom.length, sig = (c: string) => `<init>(${geom}${c}${tile})V`;
-  const init = (colors: (a: any[]) => ArrayLike<number>, stops: (a: any[]) => ArrayLike<number> | null) =>
-    function (this: JShader, ...a: any[]) { this.grad = gradientStops(make(a), colors(a), stops(a)); };
-  return {
-    name: "android/graphics/" + name, ctor: class extends JShader {}, sup: "android/graphics/Shader",
-    methods: {
-      [sig("II")]: init((a) => [a[n], a[n + 1]], () => null),
-      [sig("[I[F")]: init((a) => a[n], (a) => a[n + 1]),
-      [sig("JJ")]: init((a) => [argbOfColorLong(a[n]), argbOfColorLong(a[n + 1])], () => null),
-      [sig("[J[F")]: init((a) => Array.from(a[n] as BigInt64Array, argbOfColorLong), (a) => a[n + 1]),
-    },
-  };
-}
-rt.register(gradientSpec("SweepGradient", "FF", "", (a) => measureCtx().createConicGradient(0, a[0], a[1])));
-rt.register(gradientSpec("LinearGradient", "FFFF", "Landroid/graphics/Shader$TileMode;", (a) => measureCtx().createLinearGradient(a[0], a[1], a[2], a[3])));
-rt.register(gradientSpec("RadialGradient", "FFF", "Landroid/graphics/Shader$TileMode;", (a) => measureCtx().createRadialGradient(a[0], a[1], 0, a[0], a[1], a[2])));
 
 // ── Matrix: AOSP's bytecode over the natives in delegates.ts. native_instance is a handle to a
 // row-major 3x3 (MSCALE_X, MSKEW_X, MTRANS_X, MSKEW_Y, MSCALE_Y, MTRANS_Y, MPERSP_0..2) that the
@@ -1125,6 +1065,11 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getScaledHeight(I)I": function (this: JBitmap, td: number) { return Math.round(this.h * td / this.density); },
     "recycle()V": function (this: JBitmap) { this.recycled = true; },
     "isRecycled()Z": function (this: JBitmap) { return this.recycled ? 1 : 0; },
+    // what AOSP's BitmapShader asks of the bitmap it hands the natives
+    "checkRecycled(Ljava/lang/String;)V": function (this: JBitmap, message: string) {
+      if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", message);
+    },
+    "getNativeInstance()J": function (this: JBitmap) { return handle(this); },
     "sameAs(Landroid/graphics/Bitmap;)Z": function (this: JBitmap, other: JBitmap | null) {
       if (this === other) return 1;
       if (!other || this.w !== other.w || this.h !== other.h || this.config !== other.config) return 0;
@@ -1276,7 +1221,7 @@ export class JCanvas extends JObj {
   }
   prep(p: JPaint, stroke: boolean) {
     const ctx = this.ctx;
-    const pattern = p.shaderObj?.deferredPattern();
+    const pattern = p.drawShader()?.deferredPattern();
     if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
       if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
@@ -1287,7 +1232,7 @@ export class JCanvas extends JObj {
     } else {
       if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
-    if ((p.blendMode ?? p.xfermode as JXfermode | null)?.ename === "CLEAR") ctx[stroke ? "strokeStyle" : "fillStyle"] = "#000";
+    if (p.blendName === "CLEAR") ctx[stroke ? "strokeStyle" : "fillStyle"] = "#000";
     return !!pattern || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
   private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
@@ -1304,14 +1249,14 @@ export class JCanvas extends JObj {
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     copyPaint(p, layer.paint);
     layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
-    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
+    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shaderObj = layer.paint.shader = null; layer.paint.colorFilter = null;
     if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
     else fill(source);
     target.clearRect(0, 0, w, h);
     blurMask(target, source.canvas, p.maskFilter, 0, 0, scale);
     target.globalCompositeOperation = "source-in";
     try {
-      if (p.shaderObj) {
+      if (p.shader) {
         source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
         copyPaint(p, layer.paint);
         layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0; layer.paint.style = 0;
@@ -1360,8 +1305,8 @@ export class JCanvas extends JObj {
     try {
       if (blend) this.ctx.globalCompositeOperation = blend;
       if (p.style === 0 || p.style === 2) {
-        const lm = p.shaderObj?.local;
-        if (p.shaderObj instanceof JBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, p.shaderObj));
+        const shader = p.drawShader(), lm = shader?.local;
+        if (shader instanceof NativeBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, shader));
         else {
           const pattern = this.prep(p, false);
           // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
@@ -1380,8 +1325,8 @@ export class JCanvas extends JObj {
   private shaderCtx: (typeof this.ctx) | null = null;
   private shaderBaseCtx: (typeof this.ctx) | null = null;
   private shaderCtxLm: number[] | null = null;
-  private bitmapShader: JBitmapShader | undefined;
-  shaderClipCtx(lm: [number, number, number, number, number, number], bitmap?: JBitmapShader): typeof this.ctx {
+  private bitmapShader: NativeBitmapShader | undefined;
+  shaderClipCtx(lm: Affine, bitmap?: NativeBitmapShader): typeof this.ctx {
     const ctx = this.ctx;
     const under = (clip: (c: typeof ctx) => void) => {
       ctx.save();
@@ -1485,13 +1430,13 @@ const drawPictureInto = driven(function* (this: JCanvas, picture: JPicture, dst:
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
 }
-type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; tint: number | null; matrix: Float32Array | null };
+type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
 type LayerRaster = { ctx: OffscreenCanvasRenderingContext2D; pool: OffscreenCanvas[]; x: number; y: number; w: number; h: number };
 /** what a layer's paint (and an extra 0-255 `alpha`) does to its pixels when it is restored */
 function layerStyle(paint: JPaint | null, alpha = 255): LayerStyle {
   return {
     alpha: paint ? (paint.renderAlpha ?? paint.color >>> 24) * alpha / 255 : alpha,
-    blend: paint?.compositeOp() ?? null, tint: paint?.filterColor ?? null, matrix: paint?.filterMatrix ?? null,
+    blend: paint?.compositeOp() ?? null, filter: paint?.colorFilter ?? null,
   };
 }
 // Free rasters, grown to the largest target they served: a layer opened every frame (Lottie
@@ -1533,7 +1478,8 @@ function closeLayer(target: Ctx2D, { ctx, pool, x, y, w, h }: LayerRaster, style
   ctx.restore();
   pool.push(ctx.canvas); // nothing below opens a layer, so the raster is not reused before it is read
   if (w <= 0 || h <= 0) return;
-  if (style.tint !== null || style.matrix) recolor(ctx, w, h, style.tint, style.matrix, "SRC_IN", x, y);
+  const filter = style.filter;
+  if (filter) recolor(ctx, w, h, filter.color, filter.matrix, filter.mode, x, y);
   target.save();
   try {
     target.resetTransform();
@@ -1807,7 +1753,10 @@ function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ct
   if (b.config === 1) {
     const mask = (ctx: Ctx2D) => draw(ctx, b.canvas);
     canvas.drawMask(paint ?? defaultPaint, mask);
-  } else draw(canvas.ctx, tintedBmp(b, paint?.filterColor ?? null, paint?.filterMatrix ?? null));
+  } else {
+    const f = paint?.colorFilter;
+    draw(canvas.ctx, f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.canvas);
+  }
 }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
 function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m: object | null = null) {
@@ -2026,8 +1975,8 @@ export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, 
   return !!(cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
-    !p.underline && !p.strikeThru && !p.shaderObj && !p.maskFilter && !p.shadowRadius &&
-    !p.filterColor && !p.filterMatrix && !p.blend && !isRecording(cv.ctx) &&
+    !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.shadowRadius &&
+    !p.colorFilter && !p.blend && !isRecording(cv.ctx) &&
     p.tf.family === ROBOTO && !p.tf.bold && !p.tf.italic &&
     drawSkiaText(cv.ctx, s, x, y, p.textSize,
       p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
@@ -2063,7 +2012,7 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
  *  the draw runs under a scaled globalAlpha, applied at replay so it composes with layer alpha.
  *  True when it saved, so endShaderAlpha must follow. */
 function beginShaderAlpha(ctx: Ctx2D, p: JPaint): boolean {
-  const alpha = p.shaderObj ? p.renderAlpha ?? p.color >>> 24 : 255;
+  const alpha = p.shader ? p.renderAlpha ?? p.color >>> 24 : 255;
   if (alpha >= 255) return false;
   recordOrRun(ctx, (c) => { c.save(); c.globalAlpha *= alpha / 255; });
   return true;
@@ -2071,10 +2020,10 @@ function beginShaderAlpha(ctx: Ctx2D, p: JPaint): boolean {
 const restoreOp = (c: Ctx2D) => c.restore();
 function endShaderAlpha(ctx: Ctx2D) { recordOrRun(ctx, restoreOp); }
 const tintCache = new WeakMap<JBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
-/** `b` through a paint's colour filter — recoloured SRC_IN with `tint`, or every pixel through a
- *  4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
+/** `b` through a colour filter — `tint` blended by the BlendMode named `mode`, or every pixel through
+ *  a 4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
 export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array | null = null, mode = "SRC_IN"): OffscreenCanvas {
-  if (matrix === null && (tint === null || mode === "DST" || mode === "ADD" && !(tint >>> 24))) return b.canvas;
+  if (matrix === null && (tint === null || mode === "DST" || mode === "PLUS" && !(tint >>> 24))) return b.canvas;
   let cache = tintCache.get(b);
   if (!cache || cache.generation !== b.genId) tintCache.set(b, cache = { generation: b.genId, images: new Map() });
   const m = cache.images, key = matrix ? matrix.join(",") : `${mode}:${tint}`;
@@ -2100,9 +2049,9 @@ function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tin
       d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
     }
     c.putImageData(img, x, y);
-  } else if (tint === null) return;
+  } else if (tint === null || mode === "DST") return;
   else if (mode === "CLEAR") c.clearRect(x, y, w, h);
-  else if (mode === "MULTIPLY") {
+  else if (mode === "MODULATE") {
     const img = c.getImageData(x, y, w, h), d = img.data;
     const r = (tint >>> 16 & 255) / 255, g = (tint >>> 8 & 255) / 255, blue = (tint & 255) / 255, alpha = (tint >>> 24) / 255;
     for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }

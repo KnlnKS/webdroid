@@ -1,5 +1,5 @@
-import { rt, type NativeSpec } from "../jvm/runtime";
-import { JShader } from "./graphics";
+import { rt } from "../jvm/runtime";
+import { NativeShader, type Affine } from "./graphics";
 
 import type { Ctx2D } from "./recording";
 type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
@@ -73,12 +73,11 @@ class ShaderProgram {
     return this.cached.pattern;
   }
 }
-class JRuntimeShader extends JShader {
-  private compiled: ShaderProgram | null = null;
-  private uniforms = new Map<string, Uniform>();
-  private captured: { local: string; pattern: (ctx: Ctx2D) => CanvasPattern } | null = null;
-  init(source: string): void {
-    if (source == null) throw rt.mkThrowable("java/lang/NullPointerException", "shader");
+/** a RuntimeShader's builder: the compiled AGSL and the uniforms set so far */
+export class RuntimeShaderBuilder {
+  private readonly program: ShaderProgram;
+  private readonly uniforms = new Map<string, Uniform>();
+  constructor(source: string) {
     const gl = graphics();
     const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")
       .replace(/\b(?:half|float)([234])x([234])\b/g, (_type, columns: string, rows: string) => columns === rows ? "mat" + columns : `mat${columns}x${rows}`)
@@ -110,42 +109,32 @@ class JRuntimeShader extends JShader {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         const error = gl.getProgramInfoLog(program); gl.deleteProgram(program); invalid(error ?? "Invalid AGSL program");
       }
-      this.compiled = new ShaderProgram(program, gl);
+      this.program = new ShaderProgram(program, gl);
       for (const [name, u] of this.uniforms) u.location = gl.getUniformLocation(program, name);
     } finally { gl.deleteShader(vertex); if (fragment) gl.deleteShader(fragment); }
   }
   set(name: string, values: ArrayLike<number>, color = false, integer = false): void {
-    if (name == null || values == null) throw rt.mkThrowable("java/lang/NullPointerException", "uniform");
     const u = this.uniforms.get(name);
     if (!u || u.values.length !== values.length || u.color !== color || u.format.integer !== integer) invalid("Invalid uniform: " + name);
     let changed = false;
     for (let i = 0; i < values.length; i++) { changed ||= u.values[i] !== values[i]; u.values[i] = values[i]; }
-    if (changed) this.captured = null;
+    if (changed) this.last = null;
   }
-  override deferredPattern(): (ctx: Ctx2D) => CanvasPattern {
-    const local = this.local?.join(",") ?? "";
-    if (!this.captured || this.captured.local !== local) {
-      const program = this.compiled;
-      if (!program) return invalid("Shader is not initialized");
-      const state: ShaderState = { local: this.local ? new DOMMatrixReadOnly(this.local) : null,
-        uniforms: [...this.uniforms.values()].map(u => ({ ...u, values: [...u.values] })) };
-      this.captured = { local, pattern: ctx => program.pattern(ctx, state) };
-    }
-    return this.captured.pattern;
+  /** the state of the last shader made, which the next shares while the uniforms and local matrix
+   *  are unchanged: RuntimeShader makes a shader after every uniform set, and the program caches
+   *  its raster per state */
+  private last: { key: string; state: ShaderState } | null = null;
+  /** nativeCreateShader: the program with the uniforms as they are now */
+  shader(local: Affine | null): NativeShader {
+    const key = String(local);
+    if (this.last?.key !== key) this.last = { key, state: { local: local ? new DOMMatrixReadOnly(local) : null,
+      uniforms: [...this.uniforms.values()].map(u => ({ ...u, values: [...u.values] })) } };
+    const program = this.program, state = this.last.state;
+    return new NativeRuntimeShader(local, ctx => program.pattern(ctx, state));
   }
-  override pattern(ctx: Ctx2D): CanvasPattern { return this.deferredPattern()(ctx); }
-
 }
-const methods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/lang/String;)V": function (this: JRuntimeShader, source: string) { this.init(source); },
-  "setFloatUniform(Ljava/lang/String;[F)V": function (this: JRuntimeShader, name: string, values: Float32Array) { this.set(name, values); },
-  "setIntUniform(Ljava/lang/String;[I)V": function (this: JRuntimeShader, name: string, values: Int32Array) { this.set(name, values, false, true); },
-  "setColorUniform(Ljava/lang/String;I)V": function (this: JRuntimeShader, name: string, color: number) {
-    this.set(name, [(color >>> 16 & 255) / 255, (color >>> 8 & 255) / 255, (color & 255) / 255, (color >>> 24) / 255], true);
-  },
-};
-for (const integer of [false, true]) for (let count = 1; count <= 4; count++) {
-  methods[`set${integer ? "Int" : "Float"}Uniform(Ljava/lang/String;${(integer ? "I" : "F").repeat(count)})V`] =
-    function (this: JRuntimeShader, name: string, ...values: number[]) { this.set(name, values, false, integer); };
+class NativeRuntimeShader extends NativeShader {
+  constructor(local: Affine | null, private readonly draw: (ctx: Ctx2D) => CanvasPattern) { super(local); }
+  override deferredPattern(): (ctx: Ctx2D) => CanvasPattern { return this.draw; }
+  override pattern(ctx?: Ctx2D): CanvasPattern | null { return ctx ? this.draw(ctx) : null; }
 }
-rt.register({ name: "android/graphics/RuntimeShader", ctor: JRuntimeShader, sup: "android/graphics/Shader", methods });

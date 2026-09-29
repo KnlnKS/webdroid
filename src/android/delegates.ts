@@ -20,7 +20,9 @@ import {
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, affineOf, setAffine, applyMatrix,
+  NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
 } from "./graphics";
+import { RuntimeShaderBuilder } from "./runtime-shader";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jstream";
 import { charsToString } from "../jvm/abi";
@@ -243,6 +245,68 @@ delegate("android/graphics/Matrix", {
   },
 });
 
+// ── ColorFilter and Shader: the native instances the TS Paint draws with ──────────────────────
+// Lighting and ColorMatrix filters change theirs in place; a shader's is fixed, and Shader makes
+// a new one when its Java side changes. `m` is the local matrix's handle, 0 for identity.
+const colorFilter = (h: bigint) => deref<NativeColorFilter>(h);
+const blendFilter = (color: number, mode: number) => handle(new NativeColorFilter(null, color, BLEND_MODES[mode]));
+/** SkColorFilters::Lighting: each RGB channel scaled by `mul`'s and offset by `add`'s */
+const setMul = (k: Float32Array, mul: number) => { k[0] = (mul >>> 16 & 255) / 255; k[6] = (mul >>> 8 & 255) / 255; k[12] = (mul & 255) / 255; };
+const setAdd = (k: Float32Array, add: number) => { k[4] = add >>> 16 & 255; k[9] = add >>> 8 & 255; k[14] = add & 255; };
+delegate("android/graphics/ColorFilter", { "nativeGetFinalizer()J": () => FINALIZER });
+delegate("android/graphics/PorterDuffColorFilter", { "native_CreateBlendModeFilter(II)J": blendFilter });
+delegate("android/graphics/BlendModeColorFilter", { "native_CreateBlendModeFilter(II)J": blendFilter });
+delegate("android/graphics/LightingColorFilter", {
+  "native_CreateLightingFilter(II)J": (mul: number, add: number) => {
+    const k = new Float32Array(20);
+    k[18] = 1; setMul(k, mul); setAdd(k, add);
+    return handle(new NativeColorFilter(k));
+  },
+  "native_SetLightingFilterMul(JI)V": (h: bigint, mul: number) => setMul(colorFilter(h).matrix!, mul),
+  "native_SetLightingFilterAdd(JI)V": (h: bigint, add: number) => setAdd(colorFilter(h).matrix!, add),
+});
+delegate("android/graphics/ColorMatrixColorFilter", {
+  "nativeColorMatrixFilter([F)J": (k: Float32Array) => handle(new NativeColorFilter(k.slice(0, 20))),
+  "nativeSetColorMatrix(J[F)V": (h: bigint, k: Float32Array) => colorFilter(h).matrix!.set(k.subarray(0, 20)),
+});
+
+// Gradients clamp: Canvas2D has no REPEAT, MIRROR or DECAL gradient, so the tile mode is not used.
+delegate("android/graphics/Shader", { "nativeGetFinalizer()J": () => FINALIZER });
+delegate("android/graphics/LinearGradient", {
+  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null) =>
+    handle(gradient(localMatrix(m), measureCtx().createLinearGradient(x0, y0, x1, y1), colors, positions)),
+});
+delegate("android/graphics/RadialGradient", {
+  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null) =>
+    handle(gradient(localMatrix(m), measureCtx().createRadialGradient(fx, fy, fr, x, y, r), colors, positions)),
+});
+delegate("android/graphics/SweepGradient", {
+  "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null) =>
+    handle(gradient(localMatrix(m), measureCtx().createConicGradient(0, cx, cy), colors, positions)),
+});
+delegate("android/graphics/BitmapShader", {
+  "nativeCreate(JJIIIZZJ)J": (m: bigint, b: bigint, tileX: number, tileY: number) =>
+    handle(new NativeBitmapShader(localMatrix(m), deref<JBitmap>(b), tileX, tileY)),
+});
+delegate("android/graphics/ComposeShader", {
+  "nativeCreate(JJJI)J": (m: bigint, dst: bigint, src: bigint, mode: number) =>
+    handle(composeShader(localMatrix(m), deref<NativeShader>(dst), deref<NativeShader>(src), mode)),
+});
+const shaderBuilder = (h: bigint) => deref<RuntimeShaderBuilder>(h);
+delegate("android/graphics/RuntimeShader", {
+  "nativeGetFinalizer()J": () => FINALIZER,
+  "nativeCreateBuilder(Ljava/lang/String;)J": (source: string) => handle(new RuntimeShaderBuilder(source)),
+  "nativeCreateShader(JJ)J": (b: bigint, m: bigint) => handle(shaderBuilder(b).shader(localMatrix(m))),
+  "nativeUpdateUniforms(JLjava/lang/String;FFFFI)V": (b: bigint, name: string, x: number, y: number, z: number, w: number, n: number) =>
+    shaderBuilder(b).set(name, [x, y, z, w].slice(0, n)),
+  "nativeUpdateUniforms(JLjava/lang/String;IIIII)V": (b: bigint, name: string, x: number, y: number, z: number, w: number, n: number) =>
+    shaderBuilder(b).set(name, [x, y, z, w].slice(0, n), false, true),
+  "nativeUpdateUniforms(JLjava/lang/String;[FZ)V": (b: bigint, name: string, values: Float32Array, isColor: number) =>
+    shaderBuilder(b).set(name, values, !!isColor),
+  "nativeUpdateUniforms(JLjava/lang/String;[I)V": (b: bigint, name: string, values: Int32Array) =>
+    shaderBuilder(b).set(name, values, false, true),
+});
+
 // ── android.graphics.Typeface ──────────────────────────────────────────────────────────
 delegate("android/graphics/Typeface", {
   "nativeCreateFromTypeface(JI)J": (h: bigint, style: number) => {
@@ -328,8 +392,8 @@ delegate("android/graphics/Paint", {
   ...stubs(1, "nGetHinting(J)I"),
 
   // effects: each returns the native handle it was given, which is what Paint stores back
-  "nSetShader(JJ)J": (h: bigint, sh: bigint) => { paint(h).shaderObj = deref(sh) ?? null; return sh; },
-  "nSetColorFilter(JJ)J": (h: bigint, f: bigint) => f,
+  "nSetShader(JJ)J": (h: bigint, sh: bigint) => { paint(h).shader = deref<NativeShader | undefined>(sh) ?? null; return sh; },
+  "nSetColorFilter(JJ)J": (h: bigint, f: bigint) => { paint(h).colorFilter = deref<NativeColorFilter | undefined>(f) ?? null; return f; },
   "nSetMaskFilter(JJ)J": (_h: bigint, f: bigint) => f,
   "nSetPathEffect(JJ)J": (_h: bigint, f: bigint) => f,
 

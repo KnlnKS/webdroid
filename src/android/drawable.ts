@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, jarray, parseMethodDesc } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
@@ -139,7 +139,12 @@ const drawableMethods: NativeSpec["methods"] = cslBoundary({
   "getMinimumHeight()I": function (this: JDrawable) { return after(drawableSize(this, true), n => Math.max(0, n)); },
   "setAlpha(I)V": function (this: JDrawable, a: number) { this.alpha = a; },
   "getAlpha()I": function (this: JDrawable) { return this.alpha; },
-  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; this.tintMatrix = f?.matrix ?? null; },
+  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: object | null) {
+    return after(colorFilterOf(f), (filter) => {
+      this.tint = filter && !filter.matrix ? filter.color : null;
+      this.tintMatrix = filter?.matrix ?? null;
+    });
+  },
   // both go through setColorFilter(ColorFilter), which an app's own Drawable implements
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, color: number, mode: unknown) {
     return after(newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", color, mode),
@@ -153,15 +158,14 @@ const drawableMethods: NativeSpec["methods"] = cslBoundary({
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, mode: JSimpleEnum | null) {
     const name = mode?.ename ?? null;
     if (this.tintMode !== name) { this.tintMode = name; invalidateSelf.call(this); }
-    const blend = mode ? BLEND_OF_TINT[mode.ename] ?? mode.ename : "SRC_IN";
-    return forwardOnce(this, "settingTintMode", () =>
-      vcall(this, "setTintBlendMode", "(Landroid/graphics/BlendMode;)V", rt.link("android/graphics/BlendMode").ctor["s$" + blend]));
+    return forwardOnce(this, "settingTintMode", () => after(modeConstant("android/graphics/BlendMode", blendOfTint(name)),
+      (blend) => vcall(this, "setTintBlendMode", "(Landroid/graphics/BlendMode;)V", blend)));
   },
   "setTintBlendMode(Landroid/graphics/BlendMode;)V": function (this: JDrawable, blend: JSimpleEnum | null) {
     const name = blend?.ename ?? "";
     const mode = TINT_OF_BLEND[name] ?? (TINT_MODE_NAMES.has(name) ? name : "SRC_IN");
-    return forwardOnce(this, "settingBlendMode", () =>
-      vcall(this, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", rt.link("android/graphics/PorterDuff$Mode").ctor["s$" + mode]));
+    return forwardOnce(this, "settingBlendMode", () => after(modeConstant("android/graphics/PorterDuff$Mode", mode),
+      (porterDuff) => vcall(this, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", porterDuff)));
   },
   "setState([I)Z": driven(function* (this: JDrawable, st: Int32Array): Gen {
     const cur = this.stateSet;
@@ -264,6 +268,8 @@ function noteCustomTags(root: XmlNode, open: () => unknown) {
 // BlendMode.fromValue and blendModeToPorterDuffMode where the names differ; a blend mode with no
 // Porter-Duff form becomes the default SRC_IN
 const BLEND_OF_TINT: Record<string, string> = { ADD: "PLUS", MULTIPLY: "MODULATE" };
+/** a PorterDuff.Mode name as BlendMode names it */
+const blendOfTint = (mode: string | null) => mode ? BLEND_OF_TINT[mode] ?? mode : "SRC_IN";
 const TINT_OF_BLEND: Record<string, string> = { PLUS: "ADD", MODULATE: "MULTIPLY", MULTIPLY: "SRC_IN" };
 const TINT_MODE_NAMES = new Set(["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
   "SRC_ATOP", "DST_ATOP", "XOR", "DARKEN", "LIGHTEN", "SCREEN", "OVERLAY"]);
@@ -353,7 +359,7 @@ export class JBitmapDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    const src = tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN");
+    const src = tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, blendOfTint(this.tintMode));
     ctx.drawImage(src, this.bounds.left, this.bounds.top,
       Math.max(1, this.bounds.right - this.bounds.left), Math.max(1, this.bounds.bottom - this.bounds.top));
     ctx.restore();
@@ -441,7 +447,7 @@ class JNinePatchDrawable extends JDrawable {
     ctx.globalAlpha *= this.alpha / 255;
     ctx.translate(left, top);
     if (s !== 1) ctx.scale(s, s);
-    drawNinePatch(ctx, tintedBmp(bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN"), bmp.w, bmp.h, chunk.xDivs, chunk.yDivs,
+    drawNinePatch(ctx, tintedBmp(bmp, this.tintMode ? this.tint : null, this.tintMatrix, blendOfTint(this.tintMode)), bmp.w, bmp.h, chunk.xDivs, chunk.yDivs,
       0, 0, Math.round((this.bounds.right - left) / s), Math.round((this.bounds.bottom - top) / s));
     ctx.restore();
   }

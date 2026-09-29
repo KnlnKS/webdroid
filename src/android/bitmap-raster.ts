@@ -4,7 +4,7 @@ import { isRecording, type Ctx2D } from "./recording";
 import type { JCanvas, JPaint } from "./graphics";
 
 function eligible(canvas: JCanvas, paint: JPaint): boolean {
-  return !!canvas.bmp && !paint.shaderObj && !paint.maskFilter &&
+  return !!canvas.bmp && !paint.shader && !paint.maskFilter &&
     !paint.shadowRadius && !paint.transparentSourceIn() && !isRecording(canvas.ctx);
 }
 
@@ -67,7 +67,7 @@ export function tryPartialSourceIn(canvas: JCanvas, paint: JPaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
   const alpha = paint.renderAlpha ?? paint.color >>> 24;
   if (paint.blend !== "source-in" || alpha <= 0 || alpha >= 255 ||
-    !eligible(canvas, paint) || paint.filterColor !== null || paint.filterMatrix ||
+    !eligible(canvas, paint) || paint.colorFilter ||
     canvas.w * canvas.h > 250_000) return false;
   const mask = shapeMask(canvas, paint, fill, stroke);
 
