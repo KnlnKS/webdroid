@@ -338,7 +338,7 @@ function unimplementedMethod(info: ClassInfo, m: EncodedMethod, dex: DexFile, er
 function resumableSource(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod): string {
   const { name, desc } = methodKey(dex, m.methodIdx);
   const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), (m.flags & ACC.STATIC) !== 0, desc, name, "hot").compile(prepared, false, "resumable");
-  return `(()=>{const $ic=[];const $m=(${body});return $m;})()`;
+  return `(()=>{const $ic=[];const $m=(${body}),$R=()=>$m;return $m;})()`;
 }
 
 function emitEagerMethod(R: Runtime, dex: DexFile, info: ClassInfo, method: EncodedMethod): string {
@@ -474,12 +474,14 @@ class MethodEmitter {
     }
     const allRegs = Array.from({ length: regs }, (_, i) => `v${i}`);
     const locals = [...paramInit, ...allRegs.filter((_, i) => !paramRegs.has(i))];
-    const init = this.sync ? `let ${[...locals, "$t", "$u", "$ex", "pc=0"].join(",")};`
-      : !this.resuming ? `let ${[...locals, "$t", "$u", "$ex", "$fu", "$r=0", "pc=0"].join(",")};const $th=R.th();`
-      : `let ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "pc=$F.next", "$r=$F.r"].join(",")};` +
+    // var, not let: a let without an initializer costs bytecode to set it, which counts against
+    // V8's inlining budget
+    const init = this.sync ? `var ${[...locals, "$t", "$u", "$ex", "pc=0"].join(",")};`
+      : !this.resuming ? `var ${[...locals, "$t", "$u", "$ex", "$fu", "$r=0", "pc=0"].join(",")};const $th=R.th();`
+      : `var ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "pc=$F.next", "$r=$F.r"].join(",")};` +
         `const $th=$F.$th,$s=$F.$s;R.st($th);`;
 
-    const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
+    const catchBody = this.hasTries ? "$e=R.jx($e);\n" + this.emitCatch() : this.leave() + "throw R.jx($e);";
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const profileStart = jvmProfiler.enabled
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.resuming ? "" : "P.entry($pn);"}try{`
@@ -491,8 +493,7 @@ class MethodEmitter {
     const body = `try{${this.sync ? "" : "$d:"}${dispatch}
 ${this.sync ? "" : this.saveFrame()}
 }catch($e){
-${this.resuming ? "R.st($th);$r=0;" : ""}$e=R.jx($e);
-${catchBody}
+${this.resuming ? "R.st($th);$r=0;" : ""}${catchBody}
 }`;
     const source = `function ${frameName(this.info.name, this.mname)}(${this.resuming ? "$F" : jsParams.join(",")}){
 ${this.resuming ? "" : coverageProbeSource(profileName)}
@@ -506,11 +507,12 @@ ${profileEnd}
   }
 
   /** One save point per method: suspension sites set `$r` (0 for a back-edge yield) and `pc`, then
-   *  break to it. The pending Promise is the one they tested: a suspended value is replaced by its
-   *  result on resume, so `$t` and `$u` never hold a stale one. */
+   *  break to it. R.dfr takes the Promise they tested: a suspended value is replaced by its result
+   *  on resume, so `$t` and `$u` never hold a stale one. It is kept short because its bytecode
+   *  counts against inlining the method into its callers. */
   private saveFrame(): string {
     const profiled = jvmProfiler.enabled ? `P.suspension($pn);` : "";
-    return `${profiled}return R.dfr(${this.resuming ? "$m" : "$R()"},this,$r?$u instanceof Promise?$u:$t:$fu,$r,pc,[${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")}],$th,$t,$u,$ex);`;
+    return `${profiled}return R.dfr($R,this,$r,pc,$th,$t,$u,$ex,$fu,${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")});`;
   }
 
   /** A resumed frame finishing hands the main looper back its thread: its caller re-pins its own

@@ -225,13 +225,15 @@ export class Runtime {
    * continue the saved frame in the method's resumable body, at resume point `r` (or at `next`
    * when 0).
    */
-  dfr(resume: ResumeBody, self: unknown, pending: Promise<unknown>, r: number, next: number,
-    v: unknown[], th: unknown, t: unknown, u: unknown, ex: unknown): Promise<unknown> {
+  /** a hot frame suspending at site `r` (0: a fuel yield, waiting on `fu`), with registers `v` */
+  dfr(resume: () => ResumeBody, self: unknown, r: number, next: number, th: unknown, t: unknown, u: unknown, ex: unknown,
+    fu: Promise<unknown>, ...v: unknown[]): Promise<unknown> {
     this.su(th);
+    const pending = (r ? u instanceof Promise ? u : t : fu) as Promise<unknown>;
     const F = { v, next, r, $th: th, $s: 1, $t: t, $u: u, $ex: ex, val: undefined as unknown, e: false, x: undefined as unknown };
     return suspendWith(pending, (value, threw) => {
       if (threw) { F.e = true; F.x = value; } else F.val = value;
-      return resume.call(self, F);
+      return resume().call(self, F);
     });
   }
   fuel = 4096;
