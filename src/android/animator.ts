@@ -12,7 +12,7 @@ import { parseAXML, type XmlNode } from "./axml";
 import { type Resources, type RV, attrTable, T_STR, nodeAttrRV, rvFloat, rvInt } from "./res";
 import type { JContext } from "./context";
 import { JRect, type JPoint } from "./graphics";
-import { pathKeyframeData, type JPath } from "./path";
+import { approximate, nativePathOf } from "./path";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 import { accelDecel, argbLerp, interpolatorAttr } from "./interpolator";
 
@@ -539,8 +539,12 @@ rt.register({
       objAnim(t, { propName: p, evaluator: ev, objKeys: [...(v ?? [])] }),
     "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, ev: unknown, v: unknown[]) =>
       objAnim(t, { prop: p, evaluator: ev, objKeys: [...(v ?? [])] }),
-    "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeConverter;Landroid/graphics/Path;)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, converter: unknown, path: JPath | null) =>
-      objAnim(t, { prop: p, evaluator: new JPathEvaluator(pathKeyframeData(path), converter), objKeys: [null, null] }),
+    "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeConverter;Landroid/graphics/Path;)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, converter: unknown, path: object | null) => {
+      // PathKeyframes, at its default error
+      const geometry = path && nativePathOf(path);
+      if (!geometry?.ops.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The path must not be null or empty");
+      return objAnim(t, { prop: p, evaluator: new JPathEvaluator(approximate(geometry, 0.5), converter), objKeys: [null, null] });
+    },
     "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (t: unknown, hs: JPVH[]) =>
       objAnim(t, { holders: [...(hs ?? [])] }),
   },

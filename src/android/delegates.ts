@@ -18,15 +18,15 @@ import { handle, deref, replace, release, FINALIZER } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS,
-  type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, affineOf, setAffine, applyMatrix,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
+  type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jstream";
 import { charsToString } from "../jvm/abi";
-import { JPath, appendPath, copyPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
+import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
@@ -454,12 +454,7 @@ delegate("android/graphics/Paint", {
   },
   // an outline the Canvas2D backend cannot produce: leave the path empty rather than wrong
   "nGetTextPath(JI[CIIFFJ)V": () => {},
-  "nGetFillPath(JJJ)Z": (_h: bigint, src: bigint, dst: bigint) => {
-    const d = deref<JPath>(dst);
-    d.ops = copyOps(src);
-    d.dirty = true;
-    return 1;
-  },
+  "nGetFillPath(JJJ)Z": (_h: bigint, src: bigint, dst: bigint) => { path(dst).set(path(src)); return 1; },
 
   // state we accept and do not act on: one font, one locale, no hyphenation
   ...noops("nSetElegantTextHeight(JI)V", "nSetStartHyphenEdit(JI)V", "nSetEndHyphenEdit(JI)V",
@@ -513,90 +508,105 @@ function textBounds(p: JPaint, s: string, r: Rect) {
   r.bottom = Math.round(fontDescent(p));
 }
 
-// ── android.graphics.Path ──────────────────────────────────────────────────────────────
-const path = (h: bigint) => deref<JPath>(h);
-const copyOps = (h: bigint) => path(h).ops.map((op) => [...op] as typeof op);
-const clearPath = (h: bigint) => { const p = path(h); p.ops = []; p.dirty = true; };
+// ── android.graphics.Path, PathMeasure and PathIterator ────────────────────────────────
+// The geometry and Skia's rules for it live in path.ts, beside the bridge TS reaches it through.
+const path = (h: bigint) => deref<NativePath>(h);
 
-/** AOSP's Path$Direction is CW=0/CCW=1; ours carries the same ordinal through the op list */
 delegate("android/graphics/Path", {
-  "nInit()J": () => handle(new JPath()),
-  "nInit(J)J": (h: bigint) => {
-    const p = new JPath();
-    copyPath.call(p, path(h));
-    return handle(p);
-  },
+  "nInit()J": () => handle(new NativePath()),
+  // a null source is an empty path
+  "nInit(J)J": (h: bigint) => { const p = new NativePath(); if (h) p.set(path(h)); return handle(p); },
   "nGetFinalizer()J": () => FINALIZER,
-  "nReset(J)V": clearPath,
-  "nRewind(J)V": clearPath,
-  "nSet(JJ)V": (h: bigint, s: bigint) => copyPath.call(path(h), path(s)),
+  "nReset(J)V": (h: bigint) => path(h).reset(),
+  "nRewind(J)V": (h: bigint) => path(h).reset(),
+  "nSet(JJ)V": (h: bigint, s: bigint) => path(h).set(path(s)),
   "nIsEmpty(J)Z": (h: bigint) => (path(h).ops.length ? 0 : 1),
-  "nGetGenerationID(J)I": (h: bigint) => path(h).ops.length,
+  "nGetGenerationID(J)I": (h: bigint) => path(h).generation(),
+  "nGetFillType(J)I": (h: bigint) => path(h).fillType(),
+  "nSetFillType(JI)V": (h: bigint, ft: number) => path(h).setFillType(ft),
 
-  "nMoveTo(JFF)V": (h: bigint, x: number, y: number) => { const p = path(h); p.add(["m", x, y]); p.curX = x; p.curY = y; },
-  "nLineTo(JFF)V": (h: bigint, x: number, y: number) => { const p = path(h); p.add(["l", x, y]); p.curX = x; p.curY = y; },
-  "nQuadTo(JFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number) => {
-    const p = path(h); p.add(["q", x1, y1, x2, y2]); p.curX = x2; p.curY = y2;
-  },
-  "nCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => {
-    const p = path(h); p.add(["c", a, b, c, d, e, f]); p.curX = e; p.curY = f;
-  },
+  "nMoveTo(JFF)V": (h: bigint, x: number, y: number) => path(h).moveTo(x, y),
+  "nLineTo(JFF)V": (h: bigint, x: number, y: number) => path(h).lineTo(x, y),
+  "nQuadTo(JFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number) => path(h).quadTo(x1, y1, x2, y2),
+  "nCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => path(h).cubicTo(a, b, c, d, e, f),
   "nConicTo(JFFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number, w: number) => path(h).conicTo(x1, y1, x2, y2, w),
-  // the relative forms are the same ops taken from the current point
-  "nRMoveTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = path(h); p.add(["m", p.curX += dx, p.curY += dy]); },
-  "nRLineTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = path(h); p.add(["l", p.curX += dx, p.curY += dy]); },
-  "nRQuadTo(JFFFF)V": (h: bigint, dx1: number, dy1: number, dx2: number, dy2: number) => {
-    const p = path(h);
-    p.add(["q", p.curX + dx1, p.curY + dy1, p.curX + dx2, p.curY + dy2]);
-    p.curX += dx2; p.curY += dy2;
+  // relative to the last point, which a close returns to the contour's start
+  "nRMoveTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = path(h); p.moveTo(p.pen.x + dx, p.pen.y + dy); },
+  "nRLineTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = path(h); p.lineTo(p.pen.x + dx, p.pen.y + dy); },
+  "nRQuadTo(JFFFF)V": (h: bigint, a: number, b: number, c: number, d: number) => {
+    const p = path(h), { x, y } = p.pen;
+    p.quadTo(x + a, y + b, x + c, y + d);
   },
   "nRCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => {
-    const p = path(h);
-    p.add(["c", p.curX + a, p.curY + b, p.curX + c, p.curY + d, p.curX + e, p.curY + f]);
-    p.curX += e; p.curY += f;
+    const p = path(h), { x, y } = p.pen;
+    p.cubicTo(x + a, y + b, x + c, y + d, x + e, y + f);
   },
-  "nRConicTo(JFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, w: number) => path(h).conicTo(a, b, c, d, w, true),
-  "nClose(J)V": (h: bigint) => { path(h).add(["z"]); },
-  "nSetLastPoint(JFF)V": (h: bigint, x: number, y: number) => { const p = path(h); p.curX = x; p.curY = y; },
+  "nRConicTo(JFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, w: number) => {
+    const p = path(h), { x, y } = p.pen;
+    p.conicTo(x + a, y + b, x + c, y + d, w);
+  },
+  "nClose(J)V": (h: bigint) => path(h).close(),
+  "nSetLastPoint(JFF)V": (h: bigint, x: number, y: number) => path(h).setLastPoint(x, y),
 
-  "nAddRect(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => { path(h).add(["rect", l, t, r, b, d]); },
-  "nAddOval(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => { path(h).add(["oval", l, t, r, b, d]); },
-  "nAddCircle(JFFFI)V": (h: bigint, x: number, y: number, r: number, d: number) => { path(h).add(["circle", x, y, r, d]); },
-  "nAddArc(JFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number) => { path(h).add(["arc", l, t, r, b, start, sweep, 0]); },
-  "nArcTo(JFFFFFFZ)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number, force: number) => { path(h).add(["arc", l, t, r, b, start, sweep, force]); },
-  "nAddRoundRect(JFFFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number) => {
-    path(h).add(["rrect", l, t, r, b, rx, ry, rx, ry, rx, ry, rx, ry]);
+  "nAddRect(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => path(h).addRect(l, t, r, b, d),
+  "nAddOval(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => path(h).addOval(l, t, r, b, d),
+  "nAddCircle(JFFFI)V": (h: bigint, x: number, y: number, r: number, d: number) => path(h).addCircle(x, y, r, d),
+  "nAddArc(JFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number) => path(h).addArc(l, t, r, b, start, sweep),
+  "nArcTo(JFFFFFFZ)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number, force: number) =>
+    path(h).arcTo(l, t, r, b, start, sweep, !!force),
+  // SkPath::addRoundRect ignores a negative radius
+  "nAddRoundRect(JFFFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, d: number) => {
+    if (rx >= 0 && ry >= 0) path(h).addRoundRect(l, t, r, b, [rx, ry, rx, ry, rx, ry, rx, ry], d);
   },
-  // float[8] = one (x,y) radius per corner, clockwise from top-left; collapsing it to one
-  // radius turns every asymmetric shape into a uniform one
-  "nAddRoundRect(JFFFF[FI)V": (h: bigint, l: number, t: number, r: number, b: number, radii: Float32Array) => {
-    path(h).add(["rrect", l, t, r, b, ...Array.from({ length: 8 }, (_, i) => radii[i] ?? 0)]);
-  },
-  "nAddPath(JJ)V": (h: bigint, o: bigint) => appendPath(path(h), path(o)),
-  "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => appendPath(path(h), path(o), [1, 0, 0, 1, dx, dy]),
-  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => appendPath(path(h), path(o), affineOf(matrix(mat))),
+  "nAddRoundRect(JFFFF[FI)V": (h: bigint, l: number, t: number, r: number, b: number, radii: Float32Array, d: number) => path(h).addRoundRect(l, t, r, b, radii, d),
+  "nAddPath(JJ)V": (h: bigint, o: bigint) => path(h).append(path(o)),
+  "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => path(h).append(path(o), undefined, dx, dy),
+  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => path(h).append(path(o), matrix(mat)),
 
-  "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => pathOffset(path(h), dx, dy),
-  "nTransform(JJ)V": (h: bigint, mat: bigint) => pathTransform(path(h), affineOf(matrix(mat))),
+  "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => path(h).offset(dx, dy),
+  "nTransform(JJ)V": (h: bigint, mat: bigint) => path(h).transform(matrix(mat)),
+  // a null destination transforms in place
   "nTransform(JJJ)V": (h: bigint, mat: bigint, dst: bigint) => {
-    const d = path(dst);
-    d.ops = copyOps(h);
-    pathTransform(d, affineOf(matrix(mat)));
+    const d = dst ? path(dst) : path(h);
+    d.set(path(h));
+    d.transform(matrix(mat));
   },
-  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => pathBounds(path(h), r),
-  "nSetFillType(JI)V": (h: bigint, ft: number) => { path(h).fillRule = ft === 1 || ft === 3 ? "evenodd" : "nonzero"; },
-  "nGetFillType(J)I": (h: bigint) => (path(h).fillRule === "evenodd" ? 1 : 0),
-
-  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => {
-    const p = path(h);
-    if (p.ops.length !== 1 || p.ops[0][0] !== "rect") return 0;
-    pathBounds(p, r);
-    return 1;
-  },
+  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => path(h).bounds(r),
+  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => (path(h).isRect(r) ? 1 : 0),
+  "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(path(h)) ? 1 : 0),
+  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => (pathOp(path(dst), path(a), path(b), op) ? 1 : 0),
+  "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (path(a).isInterpolatable(path(b)) ? 1 : 0),
+  "nInterpolate(JJFJ)Z": (a: bigint, b: bigint, t: number, out: bigint) => (path(a).interpolate(path(b), t, path(out)) ? 1 : 0),
+  "nApproximate(JF)[F": (h: bigint, error: number) => approximate(path(h), error),
   ...noops("nIncReserve(JI)V"),
-  "nIsConvex(J)Z": (h: bigint) => pathIsConvex(path(h)),
-  ...stubs(0, "nIsInterpolatable(JJ)Z", "nInterpolate(JJFJ)Z", "nOp(JJIJ)Z"),
-  "nApproximate(JF)[F": () => new Float32Array(0),
+});
+
+// PathMeasure frees its native state from finalize(), which never runs here
+const measure = (h: bigint) => deref<PathMeasure>(h);
+delegate("android/graphics/PathMeasure", {
+  "native_create(JZ)J": (p: bigint, forceClosed: number) => {
+    const m = new PathMeasure();
+    m.setPath(p ? path(p) : undefined, !!forceClosed);
+    return handle(m);
+  },
+  "native_setPath(JJZ)V": (h: bigint, p: bigint, forceClosed: number) => measure(h).setPath(p ? path(p) : undefined, !!forceClosed),
+  "native_getLength(J)F": (h: bigint) => measure(h).length(),
+  "native_getPosTan(JF[F[F)Z": (h: bigint, d: number, pos: Float32Array | null, tan: Float32Array | null) => (measure(h).getPosTan(d, pos, tan) ? 1 : 0),
+  "native_getMatrix(JFJI)Z": (h: bigint, d: number, m: bigint, flags: number) => (measure(h).getMatrix(d, matrix(m), flags) ? 1 : 0),
+  "native_getSegment(JFFJZ)Z": (h: bigint, start: number, stop: number, dst: bigint, moveTo: number) =>
+    (measure(h).getSegment(start, stop, path(dst), !!moveTo) ? 1 : 0),
+  "native_isClosed(J)Z": (h: bigint) => (measure(h).isClosed() ? 1 : 0),
+  "native_nextContour(J)Z": (h: bigint) => (measure(h).nextContour() ? 1 : 0),
+  "native_destroy(J)V": release,
+});
+
+// nNext writes into the non-movable float[8] whose address is its handle (VMRuntime.addressOf)
+const iterator = (h: bigint) => deref<VerbIterator>(h);
+delegate("android/graphics/PathIterator", {
+  "nCreate(J)J": (p: bigint) => handle(new VerbIterator(path(p))),
+  "nGetFinalizer()J": () => FINALIZER,
+  "nPeek(J)I": (h: bigint) => iterator(h).peek(),
+  "nNext(JJ)I": (h: bigint, pts: bigint) => iterator(h).next(deref<Float32Array>(pts), 0),
 });
 
 
@@ -652,11 +662,8 @@ delegate("android/graphics/Canvas", {
   },
 
   "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => on(op === 0 ? "clipOutRect(FFFF)Z" : "clipRect(FFFF)Z")(h, l, t, r, b),
-  "nClipPath(JJI)Z": (h: bigint, p: bigint) => {
-    const c = canvas(h), pp = deref<JPath>(p);
-    c.ctx.clip(pp.path(), pp.fillRule);
-    return 1;
-  },
+  // SkClipOp: 0 difference, 1 intersect
+  "nClipPath(JJI)Z": (h: bigint, p: bigint, op: number) => (clipPath(canvas(h), path(p), op === 0) ? 1 : 0),
   "nGetClipBounds(JLandroid/graphics/Rect;)Z": on("getClipBounds(Landroid/graphics/Rect;)Z"),
   ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
   ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
@@ -677,7 +684,7 @@ delegate("android/graphics/BaseCanvas", {
   "nDrawArc(JFFFFFFZJ)V": withPaint("drawArc(FFFFFFZLandroid/graphics/Paint;)V", 7),
   "nDrawLine(JFFFFJ)V": withPaint("drawLine(FFFFLandroid/graphics/Paint;)V", 4),
   "nDrawPoint(JFFJ)V": withPaint("drawPoint(FFLandroid/graphics/Paint;)V", 2),
-  "nDrawPath(JJJ)V": (h: bigint, p: bigint, pt: bigint) => cm("drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V").call(canvas(h), deref<JPath>(p) as never, paint(pt) as never),
+  "nDrawPath(JJJ)V": (h: bigint, p: bigint, pt: bigint) => drawPath(canvas(h), path(p), paint(pt)),
   "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
     cm("drawLines([FIILandroid/graphics/Paint;)V").call(canvas(h), pts as never, off as never, count as never, paint(pt) as never),
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>

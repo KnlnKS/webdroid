@@ -1,115 +1,473 @@
-// android.graphics.Path: a Path2D op list rebuilt on demand, plus Path.op set operations.
-// graphics.ts imports JPath for Canvas and this file imports JRectF and the Matrix bridge back; the cycle
-// is benign because nothing here touches those bindings before its own module body has run.
+// The native half of android.graphics.Path (the geometry behind mNativePath), PathMeasure and
+// PathIterator, following SkPath, SkContourMeasure and AOSP's PathUtils.
+//
+// Compound shapes stay whole in the op list so Path2D can draw them natively; `Pen` expands them
+// into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
+// which is what iteration, measurement, bounds and every non-native Path2D build read.
+// graphics.ts imports this file and this file imports the Matrix math back; the cycle is benign
+// because nothing here touches those bindings before its own module body has run.
 
-import { rt, JObj } from "../jvm/runtime";
-import { mkEnumSet } from "../jvm/natives/jlang";
-import { JRectF, matrixOf, affineOf, setAffine } from "./graphics";
+import { rt, declaredField } from "../jvm/runtime";
+import { deref, handle, release } from "./handles";
+import { type Mat, mapPoint } from "./graphics";
 
-const pathFillTypes = mkEnumSet("android/graphics/Path$FillType", ["WINDING", "EVEN_ODD", "INVERSE_WINDING", "INVERSE_EVEN_ODD"]);
-mkEnumSet("android/graphics/Path$Op", ["DIFFERENCE", "INTERSECT", "REVERSE_DIFFERENCE", "UNION", "XOR"]);
-type PathOp = ["m" | "l" | "q" | "c" | "z" | "arc" | "rect" | "rrect" | "oval" | "circle", ...number[]];
-export class JPath extends JObj {
+type PathOp = [string, ...number[]];
+type Verb = number[];
+interface Box { left: number; top: number; right: number; bottom: number }
+/** what the pen writes to: Path2D itself, or the verb list */
+interface Sink {
+  moveTo(x: number, y: number): void;
+  lineTo(x: number, y: number): void;
+  quadraticCurveTo(x1: number, y1: number, x2: number, y2: number): void;
+  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): void;
+  closePath(): void;
+}
+
+/** SkPath::Verb, which PathIterator reports */
+const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
+/** Path$Direction.nativeInt */
+const CW = 0, CCW = 1;
+const NEARLY_ZERO = 1 / 4096;
+
+// SkPath_PointIterator's rectangle (tl, tr, br, bl) and oval (top, right, bottom, left) points
+const cornerX = (i: number, l: number, r: number) => (i === 1 || i === 2 ? r : l);
+const cornerY = (i: number, t: number, b: number) => (i < 2 ? t : b);
+const ovalX = (i: number, l: number, r: number) => (i === 1 ? r : i === 3 ? l : (l + r) / 2);
+const ovalY = (i: number, t: number, b: number) => (i === 0 ? t : i === 2 ? b : (t + b) / 2);
+// SkRRect's eight radius points, clockwise from the top edge's left end; q holds (x, y) per corner tl, tr, br, bl
+function rrX(i: number, l: number, r: number, q: number[]) {
+  return i === 0 ? l + q[0] : i === 1 ? r - q[2] : i === 2 || i === 3 ? r : i === 4 ? r - q[4] : i === 5 ? l + q[6] : l;
+}
+function rrY(i: number, t: number, b: number, q: number[]) {
+  return i < 2 ? t : i === 2 ? t + q[3] : i === 3 ? b - q[5] : i < 6 ? b : i === 6 ? b - q[7] : t + q[1];
+}
+
+/**
+ * SkRRect::setRectRadii's radii for an "rrect" op (l, t, r, b, eight radii, direction): a corner
+ * with either radius not positive is square, and every radius shrinks by the one factor that keeps
+ * each edge's pair of corners within its length.
+ */
+function rrRadii(op: PathOp, w: number, h: number): number[] {
+  const q = op.slice(5, 13) as number[];
+  for (let i = 0; i < 8; i += 2) if (!(q[i] > 0 && q[i + 1] > 0 && Number.isFinite(q[i]) && Number.isFinite(q[i + 1]))) q[i] = q[i + 1] = 0;
+  let f = 1;
+  const fit = (sum: number, ext: number) => { if (sum > ext) f = Math.min(f, ext / sum); };
+  fit(q[0] + q[2], w); fit(q[3] + q[5], h); fit(q[4] + q[6], w); fit(q[7] + q[1], h);
+  return f < 1 ? q.map((v) => v * f) : q;
+}
+const snap = (v: number) => (Math.abs(v) <= NEARLY_ZERO ? 0 : v);
+const nearly = (a: number, b: number) => Math.abs(a - b) <= NEARLY_ZERO;
+
+/**
+ * Walks ops as SkPath stores them: tracks the last point and the contour's start (SkPath injects a
+ * moveTo there before a segment that follows a close), and writes to a sink, a bounds box, or
+ * neither when only the position matters.
+ */
+class Pen {
+  x = 0; y = 0; sx = 0; sy = 0;
+  /** a contour is open: segments continue it rather than starting one at (sx, sy) */
+  open = false;
+  /** no verb yet: an arc then starts with a moveTo */
+  empty = true;
+  constructor(public sink: Sink | null = null, readonly box: Box | null = null) {}
+  clear() { this.x = this.y = this.sx = this.sy = 0; this.open = false; this.empty = true; }
+  copy(o: Pen) { this.x = o.x; this.y = o.y; this.sx = o.sx; this.sy = o.sy; this.open = o.open; this.empty = o.empty; }
+  private pt(x: number, y: number) {
+    const b = this.box;
+    if (!b) return;
+    if (x < b.left) b.left = x;
+    if (x > b.right) b.right = x;
+    if (y < b.top) b.top = y;
+    if (y > b.bottom) b.bottom = y;
+  }
+  private begin() { if (!this.open) this.move(this.x, this.y); }
+  move(x: number, y: number) {
+    this.sink?.moveTo(x, y); this.pt(x, y);
+    this.x = this.sx = x; this.y = this.sy = y; this.open = true; this.empty = false;
+  }
+  line(x: number, y: number) { this.begin(); this.sink?.lineTo(x, y); this.pt(x, y); this.x = x; this.y = y; }
+  quad(x1: number, y1: number, x2: number, y2: number) {
+    this.begin(); this.sink?.quadraticCurveTo(x1, y1, x2, y2); this.pt(x1, y1); this.pt(x2, y2); this.x = x2; this.y = y2;
+  }
+  cubic(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) {
+    this.begin(); this.sink?.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+    this.pt(x1, y1); this.pt(x2, y2); this.pt(x3, y3); this.x = x3; this.y = y3;
+  }
+  /** an elliptical conic (weight cos(θ/2) for an arc of θ ≤ 90°) as its cubic; bounds keep the conic's control point, as Skia's do */
+  conic(x1: number, y1: number, x2: number, y2: number, w: number) {
+    this.begin();
+    const k = 4 * w / (3 * (1 + w));
+    this.sink?.bezierCurveTo(this.x + (x1 - this.x) * k, this.y + (y1 - this.y) * k, x2 + (x1 - x2) * k, y2 + (y1 - y2) * k, x2, y2);
+    this.pt(x1, y1); this.pt(x2, y2); this.x = x2; this.y = y2;
+  }
+  close() {
+    if (this.open) { this.sink?.closePath(); this.open = false; }
+    this.x = this.sx; this.y = this.sy;
+  }
+  /** SkPath::addRect: the four corners from `start`, then a close */
+  rect(l: number, t: number, r: number, b: number, dir: number, start: number) {
+    const step = dir === CW ? 1 : 3;
+    let i = start;
+    this.move(cornerX(i, l, r), cornerY(i, t, b));
+    for (let n = 0; n < 3; n++) { i = (i + step) & 3; this.line(cornerX(i, l, r), cornerY(i, t, b)); }
+    this.close();
+  }
+  /** SkPath::addOval: four quarter conics from `start`, each controlled by the corner behind it */
+  oval(l: number, t: number, r: number, b: number, dir: number, start: number) {
+    const step = dir === CW ? 1 : 3;
+    let o = start, c = start + (dir === CW ? 0 : 1);
+    this.move(ovalX(o, l, r), ovalY(o, t, b));
+    for (let n = 0; n < 4; n++) {
+      o = (o + step) & 3; c = (c + step) & 3;
+      this.conic(cornerX(c, l, r), cornerY(c, t, b), ovalX(o, l, r), ovalY(o, t, b), Math.SQRT1_2);
+    }
+    this.close();
+  }
+  /** SkPath::addRRect with its default start (the left edge's lower end clockwise, upper counterclockwise) */
+  rrect(op: PathOp) {
+    const l = Math.min(op[1], op[3]), r = Math.max(op[1], op[3]), t = Math.min(op[2], op[4]), b = Math.max(op[2], op[4]);
+    const dir = op[13], start = dir === CW ? 6 : 7, q = rrRadii(op, r - l, b - t);
+    if (r === l || b === t || q.every((v) => v === 0)) return this.rect(l, t, r, b, dir, (start + 1) >> 1);
+    if (q.every((v, i) => v === q[i & 1]) && q[0] >= (r - l) / 2 && q[1] >= (b - t) / 2) return this.oval(l, t, r, b, dir, start >> 1);
+    const step = dir === CW ? 1 : 7, cstep = dir === CW ? 1 : 3;
+    // from an edge's end: that edge, then the corner conic, four times over
+    let p = start, c = (start >> 1) + (dir === CW ? 0 : 1);
+    this.move(rrX(p, l, r, q), rrY(p, t, b, q));
+    for (let n = 0; n < 4; n++) {
+      p = (p + step) & 7;
+      this.line(rrX(p, l, r, q), rrY(p, t, b, q));
+      p = (p + step) & 7; c = (c + cstep) & 3;
+      this.conic(cornerX(c, l, r), cornerY(c, t, b), rrX(p, l, r, q), rrY(p, t, b, q), Math.SQRT1_2);
+    }
+    this.close();
+  }
+  /** SkPath::arcTo: the arc's start joined by a moveTo (forced) or a line, then a conic per quadrant */
+  arc(l: number, t: number, r: number, b: number, startDeg: number, sweepDeg: number, force: boolean) {
+    if (this.empty) force = true;
+    const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
+    const addPt = (x: number, y: number) => {
+      if (force) this.move(x, y);
+      else if (this.empty || !nearly(this.x, x) || !nearly(this.y, y)) this.line(x, y);
+    };
+    if (sweepDeg === 0 && (startDeg === 0 || startDeg === 360)) return addPt(r, cy);
+    if (r === l && b === t) return addPt(r, t);
+    // angles_to_unit_vectors, in float as Skia computes them
+    const f = Math.fround, rad = Math.PI / 180, startRad = f(f(startDeg) * rad);
+    let stopRad = f(f(startDeg + sweepDeg) * rad);
+    const ux = snap(f(Math.cos(startRad))), uy = snap(f(Math.sin(startRad)));
+    let vx = snap(f(Math.cos(stopRad))), vy = snap(f(Math.sin(stopRad)));
+    const sw = Math.abs(sweepDeg);
+    if (ux === vx && uy === vy && sw < 360 && sw > 359) {
+      const delta = Math.sign(sweepDeg) / 512;
+      do { stopRad = f(stopRad - delta); vx = snap(f(Math.cos(stopRad))); vy = snap(f(Math.sin(stopRad))); } while (ux === vx && uy === vy);
+    }
+    if (ux === vx && uy === vy) return addPt(cx + rx * Math.cos(stopRad), cy + ry * Math.sin(stopRad));
+    // SkConic::BuildUnitArc: in the frame where the start is (1, 0), a quarter conic per full
+    // quadrant and one for the rest, then rotated to the start, mirrored for counterclockwise
+    const ccw = !(sweepDeg > 0), x = ux * vx + uy * vy;
+    let y = ux * vy - uy * vx;
+    const map = (px: number, py: number): [number, number] => {
+      if (ccw) py = -py;
+      return [cx + rx * (ux * px - uy * py), cy + ry * (uy * px + ux * py)];
+    };
+    if (Math.abs(y) <= NEARLY_ZERO && x > 0 && (y >= 0 && !ccw || y <= 0 && ccw)) return addPt(cx + rx * vx, cy + ry * vy);
+    if (ccw) y = -y;
+    const quadrant = y === 0 ? 2 : x === 0 ? (y > 0 ? 1 : 3) : (y < 0 ? 2 : 0) + ((x < 0) !== (y < 0) ? 1 : 0);
+    addPt(...map(1, 0));
+    for (let i = 0; i < quadrant; i++) {
+      const [c1x, c1y] = map(QUADRANT_PTS[i * 4 + 2], QUADRANT_PTS[i * 4 + 3]);
+      const [ex, ey] = map(QUADRANT_PTS[i * 4 + 4], QUADRANT_PTS[i * 4 + 5]);
+      this.conic(c1x, c1y, ex, ey, Math.SQRT1_2);
+    }
+    const qx = QUADRANT_PTS[quadrant * 4], qy = QUADRANT_PTS[quadrant * 4 + 1], dot = qx * x + qy * y;
+    if (dot < 1) {
+      const cosHalf = Math.sqrt((1 + dot) / 2);
+      let ox = qx + x, oy = qy + y;
+      const k = 1 / cosHalf / Math.hypot(ox, oy);
+      ox *= k; oy *= k;
+      if (Math.hypot(ox - qx, oy - qy) > NEARLY_ZERO) {
+        const [c1x, c1y] = map(ox, oy), [ex, ey] = map(x, y);
+        this.conic(c1x, c1y, ex, ey, cosHalf);
+      }
+    }
+  }
+  op(op: PathOp) {
+    switch (op[0]) {
+      case "m": this.move(op[1], op[2]); break;
+      case "l": this.line(op[1], op[2]); break;
+      case "q": this.quad(op[1], op[2], op[3], op[4]); break;
+      case "c": this.cubic(op[1], op[2], op[3], op[4], op[5], op[6]); break;
+      case "z": this.close(); break;
+      case "rect": this.rect(op[1], op[2], op[3], op[4], op[5], op[6]); break;
+      case "rrect": this.rrect(op); break;
+      case "oval": this.oval(op[1], op[2], op[3], op[4], op[5], op[6]); break;
+      case "arc": this.arc(op[1], op[2], op[3], op[4], op[5], op[6], !!op[7]); break;
+    }
+  }
+}
+/** the unit quadrant conics' points: (1,0) (1,1) (0,1) (-1,1) (-1,0) (-1,-1) (0,-1) (1,-1) */
+const QUADRANT_PTS = [1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1, 0, -1, 1, -1];
+
+/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
+class VerbSink implements Sink {
+  verbs: Verb[] = [];
+  private x = 0; private y = 0;
+  moveTo(x: number, y: number) { this.verbs.push([MOVE, x, y]); this.x = x; this.y = y; }
+  lineTo(x: number, y: number) { this.verbs.push([LINE, this.x, this.y, x, y]); this.x = x; this.y = y; }
+  quadraticCurveTo(a: number, b: number, x: number, y: number) { this.verbs.push([QUAD, this.x, this.y, a, b, x, y]); this.x = x; this.y = y; }
+  bezierCurveTo(a: number, b: number, c: number, d: number, x: number, y: number) { this.verbs.push([CUBIC, this.x, this.y, a, b, c, d, x, y]); this.x = x; this.y = y; }
+  closePath() { this.verbs.push([CLOSE]); }
+}
+function pathVerbs(ops: PathOp[]): Verb[] {
+  const sink = new VerbSink(), pen = new Pen(sink);
+  for (const op of ops) pen.op(op);
+  return sink.verbs;
+}
+/** the inverse of pathVerbs: a flattened path back as ops */
+function verbsToOps(vs: Verb[]): PathOp[] {
+  const out: PathOp[] = [];
+  for (const v of vs) {
+    if (v[0] === MOVE) out.push(["m", v[1], v[2]]);
+    else if (v[0] === LINE) out.push(["l", v[3], v[4]]);
+    else if (v[0] === QUAD) out.push(["q", v[3], v[4], v[5], v[6]]);
+    else if (v[0] === CUBIC) out.push(["c", v[3], v[4], v[5], v[6], v[7], v[8]]);
+    else if (v[0] === CLOSE) out.push(["z"]);
+  }
+  return out;
+}
+/** the points SkPath stores for these verbs (a segment's start is the previous verb's end) */
+const verbPoints = (vs: Verb[]) => vs.flatMap((v) => (v[0] === MOVE ? v.slice(1) : v.slice(3)));
+
+/** Leading (x,y) pairs each op carries; everything after them is a scalar (radius, angle, direction). */
+const opPairs: Record<string, number> = { m: 1, l: 1, q: 2, c: 3, z: 0, rect: 2, rrect: 2, oval: 2, arc: 2 };
+/** an op's numbers, index for index */
+const nums = (op: PathOp) => op as unknown as number[];
+function offsetOps(ops: PathOp[], dx: number, dy: number) {
+  for (const op of ops) for (let i = 1, n = opPairs[op[0]], v = nums(op); n--; i += 2) { v[i] += dx; v[i + 1] += dy; }
+}
+/**
+ * SkPath::transform. A positive scale and translation keeps every compound op (an arc's angles
+ * are parametric, so they survive a non-uniform scale); anything else expands them into the
+ * curves Skia holds and maps each point, projectively under perspective.
+ */
+function transformOps(ops: PathOp[], m: Mat): PathOp[] {
+  if (m[1] === 0 && m[3] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1 && m[0] > 0 && m[4] > 0) {
+    for (const op of ops) {
+      const v = nums(op);
+      for (let i = 1, n = opPairs[op[0]]; n--; i += 2) { v[i] = m[0] * v[i] + m[2]; v[i + 1] = m[4] * v[i + 1] + m[5]; }
+      if (op[0] === "rrect") for (let i = 5; i < 13; i++) v[i] *= i & 1 ? m[0] : m[4];
+    }
+    return ops;
+  }
+  const out = verbsToOps(pathVerbs(ops));
+  for (const op of out) for (let i = 1, n = opPairs[op[0]], v = nums(op); n--; i += 2) [v[i], v[i + 1]] = mapPoint(m, v[i], v[i + 1]);
+  return out;
+}
+
+/** Path2D forms of the compound ops it can draw itself */
+function drawNative(p: Path2D, op: PathOp): boolean {
+  const [k, l, t, r, b] = op;
+  if (k === "rect" && op[5] === CW && op[6] === 0) p.rect(l, t, r - l, b - t);
+  else if (k === "rrect" && op[13] === CW) {
+    const x = Math.min(l, r), y = Math.min(t, b), w = Math.abs(r - l), h = Math.abs(b - t), q = rrRadii(op, w, h);
+    p.roundRect(x, y, w, h, [{ x: q[0], y: q[1] }, { x: q[2], y: q[3] }, { x: q[4], y: q[5] }, { x: q[6], y: q[7] }]);
+  } else if (k === "oval" && l <= r && t <= b) {
+    const a = (op[6] - 1) * Math.PI / 2, ccw = op[5] === CCW;
+    p.moveTo(ovalX(op[6], l, r), ovalY(op[6], t, b));
+    p.ellipse((l + r) / 2, (t + b) / 2, (r - l) / 2, (b - t) / 2, 0, a, ccw ? a - 2 * Math.PI : a + 2 * Math.PI, ccw);
+    p.closePath();
+  } else return false;
+  return true;
+}
+
+let generations = 1;
+/** SkPath: the geometry a Java Path's mNativePath names */
+export class NativePath {
   ops: PathOp[] = [];
-  curX = 0; curY = 0; startX = 0; startY = 0;
   fillRule: CanvasFillRule = "nonzero";
   inverseFill = false;
-  p2d: Path2D | null = null;
-  dirty = true;
+  /** where the next verb starts */
+  readonly pen = new Pen();
+  private p2d: Path2D | null = null;
+  /** SkPathRef's generation ID, assigned when asked after a change; the empty path's is 1 */
+  private gen = 1;
+
   path(): Path2D {
-    if (this.dirty || !this.p2d) {
-      const p = new Path2D();
-      for (const op of this.ops) applyPathOp(p, op);
+    if (!this.p2d) {
+      const p = new Path2D(), pen = new Pen(p);
+      for (const op of this.ops) {
+        if (!drawNative(p, op)) { pen.op(op); continue; }
+        pen.sink = null; pen.op(op); pen.sink = p;
+      }
       this.p2d = p;
-      this.dirty = false;
     }
     return this.p2d;
   }
-  add(op: PathOp) { this.ops.push(op); this.dirty = true; }
-  conicTo(x1: number, y1: number, x2: number, y2: number, w: number, relative = false) {
-    const last = this.ops.at(-1);
-    let x = 0, y = 0;
-    if (last?.[0] === "m" || last?.[0] === "l") { x = last[1]; y = last[2]; }
-    else if (last?.[0] === "q") { x = last[3]; y = last[4]; }
-    else if (last?.[0] === "c") { x = last[5]; y = last[6]; }
-    else if (last) {
-      let sx = 0, sy = 0;
-      for (const v of pathVerbs(this.ops)) {
-        if (v[0] === MOVE) { sx = v[1]; sy = v[2]; }
-        if (v[0] === CLOSE) { x = sx; y = sy; }
-        else { x = v[v.length - 2]; y = v[v.length - 1]; }
-      }
+  private changed() { this.p2d = null; this.gen = 0; }
+  private add(op: PathOp) { this.ops.push(op); this.pen.op(op); this.changed(); }
+  /** SkPath::injectMoveToIfNeeded: a segment with no open contour starts one where the pen is */
+  private begin() { if (!this.pen.open) this.moveTo(this.pen.x, this.pen.y); }
+  private replaceOps(ops: PathOp[]) {
+    this.ops = ops;
+    this.pen.clear();
+    for (const op of ops) this.pen.op(op);
+    this.changed();
+  }
+
+  generation(): number {
+    if (!this.gen) {
+      if (!this.ops.length) this.gen = 1;
+      else do this.gen = ++generations & 0x3fffffff; while (this.gen < 2);
     }
-    if (relative) { x1 += x; y1 += y; x2 += x; y2 += y; }
-    if (!last || last[0] === "z") this.add(["m", x, y]);
-    if (w <= 0) this.add(["l", x2, y2]);
-    else if (w === 1) this.add(["q", x1, y1, x2, y2]);
-    else if (!Number.isFinite(w)) { this.add(["l", x1, y1]); this.add(["l", x2, y2]); }
-    else {
-      // Subdivide rational quadratics with Skia's error estimate and bounded depth; path consumers
-      // can then share the existing quadratic representation.
-      const chop = (a: number, b: number, c: number, d: number, e: number, f: number, weight: number, depth: number) => {
-        const error = Math.abs((weight - 1) / (4 * (weight + 1))) * Math.hypot(a - 2 * c + e, b - 2 * d + f);
-        if (!(error > 0.25) || depth === 5) { this.add(["q", c, d, e, f]); return; }
-        const s = 1 / (1 + weight), ws = weight * s;
-        const ax = a * s + c * ws, ay = b * s + d * ws;
-        const bx = e * s + c * ws, by = f * s + d * ws;
-        const mx = (ax + bx) / 2, my = (ay + by) / 2, next = Math.sqrt((1 + weight) / 2);
-        chop(a, b, ax, ay, mx, my, next, depth + 1);
-        chop(mx, my, bx, by, e, f, next, depth + 1);
-      };
-      chop(x, y, x1, y1, x2, y2, w, 0);
+    return (this.gen | this.fillType() << 30) | 0;
+  }
+  fillType(): number { return (this.fillRule === "evenodd" ? 1 : 0) | (this.inverseFill ? 2 : 0); }
+  setFillType(ft: number) { this.fillRule = ft & 1 ? "evenodd" : "nonzero"; this.inverseFill = !!(ft & 2); this.p2d = null; }
+
+  moveTo(x: number, y: number) { this.add(["m", x, y]); }
+  lineTo(x: number, y: number) { this.begin(); this.add(["l", x, y]); }
+  quadTo(x1: number, y1: number, x2: number, y2: number) { this.begin(); this.add(["q", x1, y1, x2, y2]); }
+  cubicTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) { this.begin(); this.add(["c", x1, y1, x2, y2, x3, y3]); }
+  /** SkPath::conicTo, with the rational quadratic subdivided into quadratics by Skia's error estimate */
+  conicTo(x1: number, y1: number, x2: number, y2: number, w: number) {
+    if (!(w > 0)) return this.lineTo(x2, y2);
+    if (!Number.isFinite(w)) { this.lineTo(x1, y1); return this.lineTo(x2, y2); }
+    if (w === 1) return this.quadTo(x1, y1, x2, y2);
+    this.begin();
+    const chop = (a: number, b: number, c: number, d: number, e: number, f: number, weight: number, depth: number) => {
+      const error = Math.abs((weight - 1) / (4 * (weight + 1))) * Math.hypot(a - 2 * c + e, b - 2 * d + f);
+      if (!(error > 0.25) || depth === 5) { this.add(["q", c, d, e, f]); return; }
+      const s = 1 / (1 + weight), ws = weight * s;
+      const ax = a * s + c * ws, ay = b * s + d * ws;
+      const bx = e * s + c * ws, by = f * s + d * ws;
+      const mx = (ax + bx) / 2, my = (ay + by) / 2, next = Math.sqrt((1 + weight) / 2);
+      chop(a, b, ax, ay, mx, my, next, depth + 1);
+      chop(mx, my, bx, by, e, f, next, depth + 1);
+    };
+    chop(this.pen.x, this.pen.y, x1, y1, x2, y2, w, 0);
+  }
+  close() { if (this.pen.open) this.add(["z"]); else this.pen.close(); }
+  addRect(l: number, t: number, r: number, b: number, dir: number) { this.add(["rect", l, t, r, b, dir, 0]); }
+  addOval(l: number, t: number, r: number, b: number, dir: number, start = 1) { this.add(["oval", l, t, r, b, dir, start]); }
+  addCircle(x: number, y: number, r: number, dir: number) { if (r > 0) this.addOval(x - r, y - r, x + r, y + r, dir); }
+  /** radii: (x, y) per corner, clockwise from top-left */
+  addRoundRect(l: number, t: number, r: number, b: number, radii: ArrayLike<number>, dir: number) {
+    this.add(["rrect", l, t, r, b, radii[0], radii[1], radii[2], radii[3], radii[4], radii[5], radii[6], radii[7], dir]);
+  }
+  arcTo(l: number, t: number, r: number, b: number, start: number, sweep: number, force: boolean) {
+    if (r - l < 0 || b - t < 0) return;
+    this.add(["arc", l, t, r, b, start, sweep, force || !this.ops.length ? 1 : 0]);
+  }
+  /** SkPath::addArc: a whole turn from a quadrant point is an oval; anything else a new contour */
+  addArc(l: number, t: number, r: number, b: number, start: number, sweep: number) {
+    if (!(l < r && t < b) || sweep === 0) return;
+    if (sweep >= 360 || sweep <= -360) {
+      const q = start / 90, qi = Math.floor(q + 0.5);
+      if (nearly(q, qi)) return this.addOval(l, t, r, b, sweep > 0 ? CW : CCW, (((qi + 1) % 4) + 4) % 4);
     }
-    this.curX = x2; this.curY = y2;
+    this.arcTo(l, t, r, b, start, sweep, true);
+  }
+  reset() {
+    this.ops = [];
+    this.fillRule = "nonzero"; this.inverseFill = false;
+    this.pen.clear();
+    this.p2d = null; this.gen = 1;
+  }
+  set(src: NativePath) {
+    if (src === this) return;
+    this.ops = src.ops.map((op) => op.slice() as PathOp);
+    this.fillRule = src.fillRule; this.inverseFill = src.inverseFill;
+    this.pen.copy(src.pen);
+    this.changed();
+  }
+  /** SkPath::addPath in append mode, through `m` when given */
+  append(src: NativePath, m?: Mat, dx = 0, dy = 0) {
+    if (!src.ops.length) return;
+    let ops = src.ops.map((op) => op.slice() as PathOp);
+    if (m) ops = transformOps(ops, m);
+    if (dx || dy) offsetOps(ops, dx, dy);
+    for (const op of ops) { this.ops.push(op); this.pen.op(op); }
+    this.changed();
+  }
+  offset(dx: number, dy: number) {
+    offsetOps(this.ops, dx, dy);
+    const pen = this.pen;
+    pen.x += dx; pen.y += dy; pen.sx += dx; pen.sy += dy;
+    this.changed();
+  }
+  transform(m: Mat) {
+    this.ops = transformOps(this.ops, m);
+    const pen = this.pen;
+    [pen.x, pen.y] = mapPoint(m, pen.x, pen.y);
+    [pen.sx, pen.sy] = mapPoint(m, pen.sx, pen.sy);
+    this.changed();
+  }
+  /** SkPath::setLastPt: moves the last stored point, or starts the path there */
+  setLastPoint(x: number, y: number) {
+    if (!this.ops.length) return this.moveTo(x, y);
+    const ops = this.ops.some((op) => !(op[0] in SIMPLE)) ? verbsToOps(pathVerbs(this.ops)) : this.ops;
+    let i = ops.length - 1;
+    while (ops[i][0] === "z") i--;
+    const op = ops[i];
+    op[op.length - 2] = x; op[op.length - 1] = y;
+    this.replaceOps(ops);
+  }
+  /** SkPath::getBounds: every stored point, conic control points included */
+  bounds(r: Box) {
+    const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }, pen = new Pen(null, box);
+    for (const op of this.ops) pen.op(op);
+    if (box.left === Infinity) r.left = r.top = r.right = r.bottom = 0;
+    else { r.left = box.left; r.top = box.top; r.right = box.right; r.bottom = box.bottom; }
+  }
+  /** SkPath::isRect: one contour of axis-aligned lines turning four right angles, closed or implicitly */
+  isRect(r: Box): boolean {
+    const vs = pathVerbs(this.ops), xs: number[] = [], ys: number[] = [];
+    let i = 0;
+    for (; i < vs.length; i++) {
+      const v = vs[i];
+      if (v[0] === MOVE) { if (xs.length) break; xs.push(v[1]); ys.push(v[2]); }
+      else if (v[0] === LINE) { if (v[3] !== xs.at(-1) || v[4] !== ys.at(-1)) { xs.push(v[3]); ys.push(v[4]); } }
+      else if (v[0] === CLOSE) { i++; break; }
+      else return false;
+    }
+    for (; i < vs.length; i++) if (vs[i][0] !== MOVE) return false;
+    if (xs.length > 1 && xs[0] === xs.at(-1) && ys[0] === ys.at(-1)) { xs.pop(); ys.pop(); }
+    const dirs: number[] = [];
+    for (let k = 0; k < xs.length; k++) {
+      const dx = xs[(k + 1) % xs.length] - xs[k], dy = ys[(k + 1) % xs.length] - ys[k];
+      if ((dx === 0) === (dy === 0)) return false;
+      const d = dx > 0 ? 0 : dy > 0 ? 1 : dx < 0 ? 2 : 3;
+      if (d !== dirs.at(-1)) dirs.push(d);
+    }
+    if (dirs.length > 1 && dirs[0] === dirs.at(-1)) dirs.pop();
+    if (dirs.length !== 4 || dirs.some((d, k) => ((dirs[(k + 1) & 3] - d) & 1) === 0)) return false;
+    r.left = Math.min(...xs); r.top = Math.min(...ys); r.right = Math.max(...xs); r.bottom = Math.max(...ys);
+    return true;
+  }
+  /** SkPath::isInterpolatable: the same verbs */
+  isInterpolatable(o: NativePath): boolean {
+    const a = pathVerbs(this.ops), b = pathVerbs(o.ops);
+    return a.length === b.length && a.every((v, i) => v[0] === b[i][0]);
+  }
+  /** SkPath::interpolate: out holds this path's verbs over points weighted `w` toward this path */
+  interpolate(end: NativePath, w: number, out: NativePath): boolean {
+    const verbs = pathVerbs(this.ops), a = verbPoints(verbs), b = verbPoints(pathVerbs(end.ops));
+    if (a.length !== b.length) return false;
+    if (!a.length) return true;
+    let k = 0;
+    const ops = verbsToOps(verbs);
+    for (const op of ops) for (let i = 1; i < op.length; i++, k++) op[i] = Math.fround(b[k] + (a[k] - b[k]) * w);
+    out.reset();
+    out.replaceOps(ops);
+    return true;
   }
 }
-/**
- * The eight radii of an "rrect" op (tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y), shrunk by the one
- * factor that keeps every edge's pair of corners within its length — the rule Path2D.roundRect
- * and Skia both apply, so the flattener and the Path2D build agree on the shape.
- */
-function rrRadii(op: PathOp): number[] {
-  const w = (op[3] as number) - (op[1] as number), h = (op[4] as number) - (op[2] as number);
-  const q = (op as number[]).slice(5, 13).map((v) => Math.max(0, v || 0));
-  let f = 1;
-  const fit = (sum: number, ext: number) => { if (sum > ext && sum > 0) f = Math.min(f, ext / sum); };
-  fit(q[0] + q[2], w); fit(q[6] + q[4], w); fit(q[1] + q[7], h); fit(q[3] + q[5], h);
-  return f < 1 ? q.map((v) => v * f) : q;
-}
-function applyPathOp(p: Path2D, op: PathOp) {
-  switch (op[0]) {
-    case "m": p.moveTo(op[1], op[2]); break;
-    case "l": p.lineTo(op[1], op[2]); break;
-    case "q": p.quadraticCurveTo(op[1], op[2], op[3], op[4]); break;
-    case "c": p.bezierCurveTo(op[1], op[2], op[3], op[4], op[5], op[6]); break;
-    case "z": p.closePath(); break;
-    // Direction is not decoration: a shape added CW inside a rect added CCW is how Material's
-    // ShapeableImageView builds "everything outside the shape" for its non-zero-winding mask.
-    case "rect":
-      if (op[5]) { p.moveTo(op[1], op[2]); p.lineTo(op[1], op[4]); p.lineTo(op[3], op[4]); p.lineTo(op[3], op[2]); p.closePath(); }
-      else p.rect(op[1], op[2], op[3] - op[1], op[4] - op[2]);
-      break;
-    case "rrect": {
-      const [, l, t, r, b] = op;
-      const q = rrRadii(op);
-      p.roundRect(l, t, r - l, b - t, [{ x: q[0], y: q[1] }, { x: q[2], y: q[3] }, { x: q[4], y: q[5] }, { x: q[6], y: q[7] }]);
-      break;
-    }
-    case "oval": {
-      const cx = (op[1] + op[3]) / 2, cy = (op[2] + op[4]) / 2, rx = (op[3] - op[1]) / 2, ry = (op[4] - op[2]) / 2;
-      p.moveTo(cx + rx, cy);
-      p.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2, !!op[5]);
-      break;
-    }
-    case "circle": p.moveTo(op[1] + op[3], op[2]); p.arc(op[1], op[2], op[3], 0, Math.PI * 2, !!op[4]); break;
-    case "arc": {
-      const [, l, t, r, b, startDeg, sweepDeg] = op;
-      const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
-      p.ellipse(cx, cy, rx, ry, 0, startDeg * Math.PI / 180, (startDeg + sweepDeg) * Math.PI / 180, sweepDeg < 0);
-      break;
-    }
-  }
-}
+const SIMPLE: Record<string, true> = { m: true, l: true, q: true, c: true, z: true };
+
+let mNativePath = "";
+/** the geometry behind a Java Path */
+export const nativePathOf = (p: object): NativePath =>
+  deref<NativePath>((p as Record<string, bigint>)[mNativePath ||= declaredField("android/graphics/Path", "mNativePath")]);
 
 // ── Path.op (set operations on paths)
 // Path2D has no set operations and cannot be read back, so the operands are flattened to
@@ -118,183 +476,36 @@ function applyPathOp(p: Path2D, op: PathOp) {
 // polygonal because the boundary of a boolean is in general NOT expressible in the operands'
 // own primitives (a rounded rect minus an inset rounded rect has no rrect form).
 type Pt = [number, number];
-/** Leading (x,y) pairs each op carries; everything after them is a scalar (radius, angle). */
-const opPairs: Record<string, number> = { m: 1, l: 1, q: 2, c: 3, z: 0, rect: 2, rrect: 2, oval: 2, circle: 1, arc: 2 };
-/** Trailing scalars that are lengths and so scale with the path (radii, not angles). */
-const opRadii: Record<string, [number, number]> = { rrect: [5, 13], circle: [3, 4] };
-
-type Contour = Pt[] & { closed?: boolean };
-/** Polylines for every contour; `all` keeps degenerate/open ones and marks which were closed
- *  (Path.op wants only real polygons, PathMeasure wants every stroke). */
-function flattenPath(ops: PathOp[], all = false): Contour[] {
-  const out: Contour[] = [];
-  let cur: Contour | null = null, cx = 0, cy = 0, sx = 0, sy = 0;
-  const move = (x: number, y: number) => { cur = [[x, y]]; out.push(cur); cx = sx = x; cy = sy = y; };
-  const close = () => { if (cur) cur.closed = true; cur = null; };
-  const line = (x: number, y: number) => { if (cur) cur.push([x, y]); else move(x, y); cx = x; cy = y; };
-  // Steps grow with the square root of the arc length, which keeps the chord's sagitta under
-  // about a quarter pixel for anything screen-sized without exploding the segment count.
+/** each closed-off contour as a polygon, curves sampled finely enough for screen sizes */
+function flattenPath(ops: PathOp[]): Pt[][] {
+  const out: Pt[][] = [];
+  let cur: Pt[] = [];
+  // Steps grow with the square root of the control polygon's length, which keeps the chord's
+  // sagitta under about a quarter pixel for anything screen-sized without exploding the count.
   const steps = (span: number) => Math.max(2, Math.min(128, Math.ceil(Math.sqrt(Math.max(1, span)) * 2)));
-  const arc = (ax: number, ay: number, rx: number, ry: number, a0: number, a1: number) => {
-    const n = steps(Math.abs(a1 - a0) * Math.max(rx, ry));
-    for (let i = 1; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; line(ax + rx * Math.cos(a), ay + ry * Math.sin(a)); }
-  };
-  const P = Math.PI;
-  for (const op of ops) {
-    const [k, a, b, c, d, e, f] = op as [string, ...number[]];
-    switch (k) {
-      case "m": move(a, b); break;
-      case "l": line(a, b); break;
-      case "q": {
-        const x0 = cx, y0 = cy, n = steps(Math.hypot(a - x0, b - y0) + Math.hypot(c - a, d - b));
-        for (let i = 1; i <= n; i++) { const t = i / n, u = 1 - t; line(u * u * x0 + 2 * u * t * a + t * t * c, u * u * y0 + 2 * u * t * b + t * t * d); }
+  for (const v of pathVerbs(ops)) {
+    switch (v[0]) {
+      case MOVE: out.push(cur = [[v[1], v[2]]]); break;
+      case LINE: cur.push([v[3], v[4]]); break;
+      case QUAD: {
+        const [, x0, y0, a, b, c, d] = v, n = steps(Math.hypot(a - x0, b - y0) + Math.hypot(c - a, d - b));
+        for (let i = 1; i <= n; i++) { const t = i / n, u = 1 - t; cur.push([u * u * x0 + 2 * u * t * a + t * t * c, u * u * y0 + 2 * u * t * b + t * t * d]); }
         break;
       }
-      case "c": {
-        const x0 = cx, y0 = cy, n = steps(Math.hypot(a - x0, b - y0) + Math.hypot(c - a, d - b) + Math.hypot(e - c, f - d));
+      case CUBIC: {
+        const [, x0, y0, a, b, c, d, e, f] = v, n = steps(Math.hypot(a - x0, b - y0) + Math.hypot(c - a, d - b) + Math.hypot(e - c, f - d));
         for (let i = 1; i <= n; i++) {
           const t = i / n, u = 1 - t;
-          line(u * u * u * x0 + 3 * u * u * t * a + 3 * u * t * t * c + t * t * t * e,
-            u * u * u * y0 + 3 * u * u * t * b + 3 * u * t * t * d + t * t * t * f);
+          cur.push([u * u * u * x0 + 3 * u * u * t * a + 3 * u * t * t * c + t * t * t * e,
+            u * u * u * y0 + 3 * u * u * t * b + 3 * u * t * t * d + t * t * t * f]);
         }
         break;
       }
-      case "z": close(); cx = sx; cy = sy; break;
-      case "rect": { const r: Contour = [[a, b], [c, b], [c, d], [a, d]]; r.closed = true; out.push(r); cur = null; cx = sx = a; cy = sy = b; break; }
-      case "rrect": {
-        const q = rrRadii(op);
-        move(a + q[0], b);
-        line(c - q[2], b); arc(c - q[2], b + q[3], q[2], q[3], -P / 2, 0);
-        line(c, d - q[5]); arc(c - q[4], d - q[5], q[4], q[5], 0, P / 2);
-        line(a + q[6], d); arc(a + q[6], d - q[7], q[6], q[7], P / 2, P);
-        line(a, b + q[1]); arc(a + q[0], b + q[1], q[0], q[1], P, P * 1.5);
-        close();
-        break;
-      }
-      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); close(); break;
-      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); close(); break;
-      case "arc": {
-        const mx = (a + c) / 2, my = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2, a0 = e * P / 180;
-        if (!cur || op[7]) move(mx + rx * Math.cos(a0), my + ry * Math.sin(a0)); else line(mx + rx * Math.cos(a0), my + ry * Math.sin(a0));
-        arc(mx, my, rx, ry, a0, a0 + f * P / 180);
-        break;
-      }
     }
   }
-  return all ? out : out.filter((c) => c.length > 2);
+  for (const c of out) if (c.length > 1 && c[0][0] === c.at(-1)![0] && c[0][1] === c.at(-1)![1]) c.pop();
+  return out.filter((c) => c.length > 2);
 }
-
-export function pathKeyframeData(path: JPath | null): Float32Array {
-  if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The path must not be null or empty");
-  const contours = flattenPath(path.ops, true);
-  if (!contours.some((contour) => contour.length > 1)) {
-    throw rt.mkThrowable("java/lang/IllegalArgumentException", "The path must not be null or empty");
-  }
-  const points = contours.map((contour) => contour.closed && contour.length > 1
-    && (contour[0][0] !== contour[contour.length - 1][0] || contour[0][1] !== contour[contour.length - 1][1])
-    ? [...contour, contour[0]] : contour);
-  let total = 0;
-  for (const contour of points) {
-    for (let i = 1; i < contour.length; i++) total += Math.hypot(contour[i][0] - contour[i - 1][0], contour[i][1] - contour[i - 1][1]);
-  }
-  if (total === 0) {
-    const [x, y] = points.at(-1)!.at(-1)!;
-    return new Float32Array([0, x, y, 1, x, y]);
-  }
-  const data = new Float32Array(points.reduce((count, contour) => count + contour.length, 0) * 3);
-  let length = 0, offset = 0;
-  for (const contour of points) {
-    for (let i = 0; i < contour.length; i++) {
-      if (i) length += Math.hypot(contour[i][0] - contour[i - 1][0], contour[i][1] - contour[i - 1][1]);
-      data[offset++] = Math.fround(length / total);
-      data[offset++] = Math.fround(contour[i][0]);
-      data[offset++] = Math.fround(contour[i][1]);
-    }
-  }
-  data[data.length - 3] = 1;
-  return data;
-}
-
-// ── PathMeasure: arc-length queries over the flattened contours, one contour at a time
-class JPathMeasure extends JObj {
-  contours: Contour[] = [];
-  idx = 0;
-  forceClosed = false;
-  segs: number[] = []; // cumulative length at each vertex of the current contour
-  pts: Pt[] = [];
-  load(p: JPath | null, forceClosed: boolean) {
-    this.forceClosed = forceClosed;
-    this.contours = p ? flattenPath(p.ops, true).filter((c) => c.length > 1) : [];
-    this.idx = 0;
-    this.prep();
-  }
-  prep() {
-    const c = this.contours[this.idx];
-    this.pts = c ? (this.closed(c) && (c[0][0] !== c[c.length - 1][0] || c[0][1] !== c[c.length - 1][1]) ? [...c, c[0]] : [...c]) : [];
-    this.segs = [0];
-    for (let i = 1; i < this.pts.length; i++) this.segs.push(this.segs[i - 1] + Math.hypot(this.pts[i][0] - this.pts[i - 1][0], this.pts[i][1] - this.pts[i - 1][1]));
-  }
-  closed(c: Contour) { return this.forceClosed || !!c.closed; }
-  length() { return this.segs[this.segs.length - 1] ?? 0; }
-  /** position + unit tangent at distance d along the current contour */
-  at(d: number): [number, number, number, number] | null {
-    const n = this.pts.length;
-    if (n < 2) return null;
-    d = Math.max(0, Math.min(this.length(), d));
-    let i = 1;
-    while (i < n - 1 && this.segs[i] < d) i++;
-    const [x0, y0] = this.pts[i - 1], [x1, y1] = this.pts[i];
-    const L = this.segs[i] - this.segs[i - 1];
-    const t = L > 0 ? (d - this.segs[i - 1]) / L : 0;
-    const tx = L > 0 ? (x1 - x0) / L : 1, ty = L > 0 ? (y1 - y0) / L : 0;
-    return [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, tx, ty];
-  }
-}
-rt.register({
-  name: "android/graphics/PathMeasure", ctor: JPathMeasure,
-  statics: { POSITION_MATRIX_FLAG: 1, TANGENT_MATRIX_FLAG: 2 },
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Landroid/graphics/Path;Z)V": function (this: JPathMeasure, p: JPath | null, fc: number) { this.load(p, !!fc); },
-    "setPath(Landroid/graphics/Path;Z)V": function (this: JPathMeasure, p: JPath | null, fc: number) { this.load(p, !!fc); },
-    "getLength()F": function (this: JPathMeasure) { return Math.fround(this.length()); },
-    "isClosed()Z": function (this: JPathMeasure) { const c = this.contours[this.idx]; return c && this.closed(c) ? 1 : 0; },
-    "nextContour()Z": function (this: JPathMeasure) {
-      if (this.idx + 1 >= this.contours.length) return 0;
-      this.idx++; this.prep(); return 1;
-    },
-    "getPosTan(F[F[F)Z": function (this: JPathMeasure, d: number, pos: Float32Array | null, tan: Float32Array | null) {
-      const r = this.at(d);
-      if (!r) return 0;
-      if (pos) { pos[0] = r[0]; pos[1] = r[1]; }
-      if (tan) { tan[0] = r[2]; tan[1] = r[3]; }
-      return 1;
-    },
-    "getMatrix(FLandroid/graphics/Matrix;I)Z": function (this: JPathMeasure, d: number, m: object, flags: number) {
-      const r = this.at(d);
-      if (!r) return 0;
-      const rot = flags & 2 ? Math.atan2(r[3], r[2]) : 0, c = Math.cos(rot), s = Math.sin(rot);
-      const tx = flags & 1 ? r[0] : 0, ty = flags & 1 ? r[1] : 0;
-      setAffine(matrixOf(m), c, s, -s, c, tx, ty); // rotation then translate
-      return 1;
-    },
-    "getSegment(FFLandroid/graphics/Path;Z)Z": function (this: JPathMeasure, start: number, stop: number, dst: JPath, moveTo: number) {
-      const len = this.length();
-      if (this.pts.length < 2) return 0;
-      start = Math.max(0, start); stop = Math.min(len, stop);
-      if (start >= stop) return 0;
-      const a = this.at(start)!, b = this.at(stop)!;
-      if (moveTo || !dst.ops.length) dst.add(["m", a[0], a[1]]); else dst.add(["l", a[0], a[1]]);
-      dst.curX = a[0]; dst.curY = a[1];
-      for (let i = 1; i < this.pts.length - 1; i++) {
-        if (this.segs[i] > start && this.segs[i] < stop) dst.add(["l", this.pts[i][0], this.pts[i][1]]);
-      }
-      dst.add(["l", b[0], b[1]]);
-      dst.curX = b[0]; dst.curY = b[1];
-      return 1;
-    },
-  },
-});
 
 function contourWinding(c: Pt[], x: number, y: number): number {
   let w = 0;
@@ -392,10 +603,12 @@ function chainSegs(segs: Seg[]): Pt[][] {
   return out;
 }
 
-const PathOpMode = { DIFFERENCE: 0, INTERSECT: 1, REVERSE_DIFFERENCE: 2, UNION: 3, XOR: 4 };
-function pathOp(dst: JPath, pa: JPath, pb: JPath, mode: number): number {
-  if (mode === PathOpMode.REVERSE_DIFFERENCE) { [pa, pb] = [pb, pa]; mode = PathOpMode.DIFFERENCE; }
-  const flat = (p: JPath) => {
+/** SkPathOp, which Path$Op's ordinals follow */
+const DIFFERENCE = 0, INTERSECT = 1, UNION = 2, XOR = 3, REVERSE_DIFFERENCE = 4;
+/** Path.op. Operands' inverse fill types are not modelled: each is taken as its plain fill. */
+export function pathOp(dst: NativePath, pa: NativePath, pb: NativePath, mode: number): boolean {
+  if (mode === REVERSE_DIFFERENCE) { [pa, pb] = [pb, pa]; mode = DIFFERENCE; }
+  const flat = (p: NativePath) => {
     const cs = flattenPath(p.ops);
     return p.fillRule === "evenodd" ? orientEvenOdd(cs) : cs;
   };
@@ -425,297 +638,58 @@ function pathOp(dst: JPath, pa: JPath, pb: JPath, mode: number): number {
       // boundary here only for union and intersect, and the opposite case only for difference.
       if (s.from === 1) continue;
       const same = (s.b[0] - s.a[0]) * (twin.b[0] - twin.a[0]) + (s.b[1] - s.a[1]) * (twin.b[1] - twin.a[1]) > 0;
-      if (mode === PathOpMode.UNION || mode === PathOpMode.INTERSECT ? same : mode === PathOpMode.DIFFERENCE && !same) kept.push(s);
+      if (mode === UNION || mode === INTERSECT ? same : mode === DIFFERENCE && !same) kept.push(s);
       continue;
     }
     const mid: Pt = [(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2];
     const inOther = inside(s.from ? A : B, mid);
     // A segment bounds the result iff the region on its far side is classified differently from
     // the region on its near side; which side is which flips when the other operand covers it.
-    if (mode === PathOpMode.UNION ? !inOther
-      : mode === PathOpMode.INTERSECT ? inOther
-        : mode === PathOpMode.XOR ? true
+    if (mode === UNION ? !inOther
+      : mode === INTERSECT ? inOther
+        : mode === XOR ? true
           : s.from === 0 ? !inOther : inOther) {
-      const flip = mode === PathOpMode.XOR ? inOther : mode === PathOpMode.DIFFERENCE && s.from === 1;
+      const flip = mode === XOR ? inOther : mode === DIFFERENCE && s.from === 1;
       kept.push(flip ? { a: s.b, b: s.a, from: s.from } : s);
     }
   }
-  dst.ops = chainSegs(kept).flatMap((c) => [["m", c[0][0], c[0][1]] as PathOp, ...c.slice(1).map((p) => ["l", p[0], p[1]] as PathOp), ["z"] as PathOp]);
-  dst.fillRule = "nonzero";
-  dst.inverseFill = false;
-  dst.curX = dst.startX = dst.ops.length ? (dst.ops[0][1] as number) : 0;
-  dst.curY = dst.startY = dst.ops.length ? (dst.ops[0][2] as number) : 0;
-  dst.dirty = true;
-  return 1;
+  dst.reset();
+  for (const c of chainSegs(kept)) {
+    dst.moveTo(c[0][0], c[0][1]);
+    for (let i = 1; i < c.length; i++) dst.lineTo(c[i][0], c[i][1]);
+    dst.close();
+  }
+  // a boundary with no overlaps fills the same under either rule; Skia reports even-odd
+  dst.fillRule = "evenodd";
+  return true;
 }
 
-export function inversePath(path: JPath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] {
+export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] {
   if (path.fillRule === "evenodd") {
     const inverse = new Path2D();
     inverse.rect(l, t, r - l, b - t);
     inverse.addPath(path.path());
     return [inverse, "evenodd"];
   }
-  const outer = new JPath();
-  outer.add(["rect", l, t, r, b, 0]);
-  const result = new JPath();
-  pathOp(result, outer, path, PathOpMode.DIFFERENCE);
-  return [result.path(), "nonzero"];
-}
-
-export function copyPath(this: JPath, source: JPath) {
-  if (this === source) return;
-  this.ops = source.ops.map(op => op.slice() as PathOp);
-  this.curX = source.curX; this.curY = source.curY;
-  this.startX = source.startX; this.startY = source.startY;
-  this.fillRule = source.fillRule;
-  this.inverseFill = source.inverseFill;
-  this.dirty = true;
-}
-export function appendPath(target: JPath, source: JPath, matrix?: ArrayLike<number>) {
-  if (!source.ops.length) return;
-  const copy = new JPath();
-  copyPath.call(copy, source);
-  if (matrix) pathTransform(copy, matrix);
-  target.ops.push(...copy.ops);
-  target.curX = copy.curX; target.curY = copy.curY;
-  target.startX = copy.startX; target.startY = copy.startY;
-  target.dirty = true;
-}
-rt.register({
-  name: "android/graphics/Path", ctor: JPath,
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) copyPath.call(this, o); },
-    "set(Landroid/graphics/Path;)V": copyPath,
-    "reset()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
-    "rewind()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
-    "moveTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["m", x, y]); this.curX = this.startX = x; this.curY = this.startY = y; },
-    "rMoveTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["m", this.curX + x, this.curY + y]); this.curX = this.startX = this.curX + x; this.curY = this.startY = this.curY + y; },
-    "lineTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["l", x, y]); this.curX = x; this.curY = y; },
-    "rLineTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["l", this.curX + x, this.curY + y]); this.curX += x; this.curY += y; },
-    "quadTo(FFFF)V": function (this: JPath, a: number, b: number, c: number, d: number) { this.add(["q", a, b, c, d]); this.curX = c; this.curY = d; },
-    "conicTo(FFFFF)V": function (this: JPath, a: number, b: number, c: number, d: number, w: number) { this.conicTo(a, b, c, d, w); },
-    "rConicTo(FFFFF)V": function (this: JPath, a: number, b: number, c: number, d: number, w: number) { this.conicTo(a, b, c, d, w, true); },
-    "rQuadTo(FFFF)V": function (this: JPath, a: number, b: number, c: number, d: number) {
-      this.add(["q", this.curX + a, this.curY + b, this.curX + c, this.curY + d]);
-      this.curX += c; this.curY += d;
-    },
-    "cubicTo(FFFFFF)V": function (this: JPath, a: number, b: number, c: number, d: number, e: number, f: number) {
-      this.add(["c", a, b, c, d, e, f]); this.curX = e; this.curY = f;
-    },
-    "rCubicTo(FFFFFF)V": function (this: JPath, a: number, b: number, c: number, d: number, e: number, f: number) {
-      const { curX: x, curY: y } = this;
-      this.add(["c", x + a, y + b, x + c, y + d, x + e, y + f]);
-      this.curX = x + e; this.curY = y + f;
-    },
-    "close()V": function (this: JPath) { this.add(["z"]); this.curX = this.startX; this.curY = this.startY; },
-    "op(Landroid/graphics/Path;Landroid/graphics/Path$Op;)Z": function (this: JPath, o: JPath, mode: { ord: number } | null) {
-      return pathOp(this, this, o, mode?.ord ?? 0);
-    },
-    "op(Landroid/graphics/Path;Landroid/graphics/Path;Landroid/graphics/Path$Op;)Z": function (this: JPath, a: JPath, b: JPath, mode: { ord: number } | null) {
-      return pathOp(this, a, b, mode?.ord ?? 0);
-    },
-    "getFillType()Landroid/graphics/Path$FillType;": function (this: JPath) {
-      return pathFillTypes[(this.fillRule === "evenodd" ? 1 : 0) + (this.inverseFill ? 2 : 0)];
-    },
-
-    "addRect(FFFFLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number, d: { ord: number } | null) {
-      this.add(["rect", l, t, r, b, d?.ord ?? 0]);
-    },
-    "addRect(Landroid/graphics/RectF;Landroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, d: { ord: number } | null) {
-      this.add(["rect", r.left, r.top, r.right, r.bottom, d?.ord ?? 0]);
-    },
-    "addRoundRect(Landroid/graphics/RectF;FFLandroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, rx: number, ry: number) {
-      this.add(["rrect", r.left, r.top, r.right, r.bottom, rx, ry, rx, ry, rx, ry, rx, ry]);
-    },
-    "addRoundRect(FFFFFFLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number, rx: number, ry: number) {
-      this.add(["rrect", l, t, r, b, rx, ry, rx, ry, rx, ry, rx, ry]);
-    },
-    // float[8] = one (x,y) radius per corner, clockwise from top-left. Collapsing it to a single
-    // radius turns every asymmetric shape (a segmented button's end cap, a bottom sheet) into a
-    // uniform one.
-    "addRoundRect(Landroid/graphics/RectF;[FLandroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, radii: Float32Array) {
-      this.add(["rrect", r.left, r.top, r.right, r.bottom, ...Array.from({ length: 8 }, (_, i) => radii[i] ?? 0)]);
-    },
-    "addRoundRect(FFFF[FLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number, radii: Float32Array) {
-      this.add(["rrect", l, t, r, b, ...Array.from({ length: 8 }, (_, i) => radii[i] ?? 0)]);
-    },
-    "addOval(Landroid/graphics/RectF;Landroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, d: { ord: number } | null) {
-      this.add(["oval", r.left, r.top, r.right, r.bottom, d?.ord ?? 0]);
-    },
-    "addCircle(FFFLandroid/graphics/Path$Direction;)V": function (this: JPath, x: number, y: number, r: number, d: { ord: number } | null) {
-      if (r > 0) this.add(["circle", x, y, r, d?.ord ?? 0]);
-    },
-    "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { appendPath(this, o); },
-    "addPath(Landroid/graphics/Path;FF)V": function (this: JPath, o: JPath, dx: number, dy: number) {
-      appendPath(this, o, [1, 0, 0, 1, dx, dy]);
-    },
-    "addPath(Landroid/graphics/Path;Landroid/graphics/Matrix;)V": function (this: JPath, o: JPath, matrix: object) {
-      appendPath(this, o, affineOf(matrixOf(matrix)));
-    },
-
-    // addArc starts a new contour at the arc's first point
-    "addArc(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
-      this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 1]);
-    },
-    "addArc(FFFFFF)V": function (this: JPath, l: number, t: number, r: number, b: number, start: number, sweep: number) {
-      this.add(["arc", l, t, r, b, start, sweep, 1]);
-    },
-    "arcTo(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
-      this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 0]);
-    },
-    "arcTo(Landroid/graphics/RectF;FFZ)V": function (this: JPath, r: JRectF, start: number, sweep: number, force: number) {
-      this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, force]);
-    },
-    "arcTo(FFFFFFZ)V": function (this: JPath, l: number, t: number, r: number, b: number, start: number, sweep: number, force: number) {
-      this.add(["arc", l, t, r, b, start, sweep, force]);
-    },
-    "setFillType(Landroid/graphics/Path$FillType;)V": function (this: JPath, ft: { ord: number }) {
-      this.fillRule = ft?.ord === 1 || ft?.ord === 3 ? "evenodd" : "nonzero";
-      this.inverseFill = ft?.ord === 2 || ft?.ord === 3;
-    },
-    "isEmpty()Z": function (this: JPath) { return this.ops.length ? 0 : 1; },
-    "isConvex()Z": function (this: JPath) { return pathIsConvex(this); },
-    "computeBounds(Landroid/graphics/RectF;Z)V": function (this: JPath, r: JRectF) { pathBounds(this, r); },
-    "offset(FF)V": function (this: JPath, dx: number, dy: number) { pathOffset(this, dx, dy); },
-    "transform(Landroid/graphics/Matrix;)V": function (this: JPath, mt: object) {
-      pathTransform(this, affineOf(matrixOf(mt)));
-    },
-  },
-});
-
-// These three walk coordinates only: an op's trailing scalars are radii and angles, and moving
-// or bounding a path must not touch them. Exported because AOSP's own Path bytecode reaches
-// the same three through nComputeBounds/nOffset/nTransform (src/android/delegates.ts).
-export function pathBounds(p: JPath, r: { left: number; top: number; right: number; bottom: number }) {
-  let l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
-  for (const op of p.ops) {
-    if (op[0] === "circle") {
-      const x = op[1], y = op[2], radius = op[3];
-      l = Math.min(l, x - radius); rr = Math.max(rr, x + radius);
-      t = Math.min(t, y - radius); b = Math.max(b, y + radius);
-      continue;
-    }
-    for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
-      l = Math.min(l, op[i] as number); rr = Math.max(rr, op[i] as number);
-      t = Math.min(t, op[i + 1] as number); b = Math.max(b, op[i + 1] as number);
-    }
-  }
-  if (l === Infinity) { r.left = r.top = r.right = r.bottom = 0; }
-  else { r.left = l; r.top = t; r.right = rr; r.bottom = b; }
-}
-export function pathOffset(p: JPath, dx: number, dy: number) {
-  p.curX += dx; p.curY += dy; p.startX += dx; p.startY += dy;
-  for (const op of p.ops) {
-    for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
-      (op[i] as number) += dx; (op[i + 1] as number) += dy;
-    }
-  }
-  p.dirty = true;
-}
-/** @param m an affine [a, b, c, d, tx, ty] */
-export function pathTransform(p: JPath, m: ArrayLike<number>) {
-  // A rotation or skew cannot be folded into an arc's axis-aligned rect and its angles, so
-  // expand the compound ops into the curves Skia would already be holding. Material's
-  // ShapeAppearancePathProvider rotates the path around every corner, and without this each
-  // corner arc came out as a straight chord.
-  if (m[1] !== 0 || m[2] !== 0) p.ops = verbsToOps(pathVerbs(p.ops));
-  const sx = Math.hypot(m[0], m[1]), sy = Math.hypot(m[2], m[3]);
-  for (const op of p.ops) {
-    for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
-      const x = op[i] as number, y = op[i + 1] as number;
-      (op[i] as number) = m[0] * x + m[2] * y + m[4];
-      (op[i + 1] as number) = m[1] * x + m[3] * y + m[5];
-    }
-    const rad = opRadii[op[0]];
-    if (rad) for (let i = rad[0]; i < rad[1] && i < op.length; i++) (op[i] as number) *= (i - rad[0]) % 2 ? sy : sx;
-  }
-  const { curX, curY, startX, startY } = p;
-  p.curX = m[0] * curX + m[2] * curY + m[4];
-  p.curY = m[1] * curX + m[3] * curY + m[5];
-  p.startX = m[0] * startX + m[2] * startY + m[4];
-  p.startY = m[1] * startX + m[3] * startY + m[5];
-  p.dirty = true;
-}
-mkEnumSet("android/graphics/Path$Direction", ["CW", "CCW"]);
-
-// ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and
-// point arrays. Ours walks the op list, expanding the compound ops into the verbs Skia would
-// have stored — arcs as cubics rather than conics, so the conic-evaluation mode and tolerance
-// have nothing to convert and Conic never appears.
-const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
-/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
-type Verb = number[];
-function pathVerbs(ops: PathOp[]): Verb[] {
-  const out: Verb[] = [];
-  let cx = 0, cy = 0, sx = 0, sy = 0, open = false;
-  const move = (x: number, y: number) => { out.push([MOVE, x, y]); cx = sx = x; cy = sy = y; open = true; };
-  // Skia injects a moveTo at the current point before a segment that has no contour
-  const start = () => { if (!open) move(cx, cy); };
-  const line = (x: number, y: number) => { start(); out.push([LINE, cx, cy, x, y]); cx = x; cy = y; };
-  const cubic = (a: number, b: number, c: number, d: number, e: number, f: number) => {
-    start(); out.push([CUBIC, cx, cy, a, b, c, d, e, f]); cx = e; cy = f;
-  };
-  const close = () => { if (open) { out.push([CLOSE]); open = false; } cx = sx; cy = sy; };
-  const arc = (ax: number, ay: number, rx: number, ry: number, a0: number, a1: number) => {
-    const n = Math.max(1, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 2) - 1e-6));
-    const d = (a1 - a0) / n, k = 4 / 3 * Math.tan(d / 4);
-    for (let i = 0; i < n; i++) {
-      const t0 = a0 + d * i, t1 = t0 + d;
-      const c0 = Math.cos(t0), s0 = Math.sin(t0), c1 = Math.cos(t1), s1 = Math.sin(t1);
-      cubic(ax + rx * (c0 - k * s0), ay + ry * (s0 + k * c0), ax + rx * (c1 + k * s1), ay + ry * (s1 - k * c1), ax + rx * c1, ay + ry * s1);
-    }
-  };
-  const P = Math.PI;
-  for (const op of ops) {
-    const [k, a, b, c, d, e, f] = op as [string, ...number[]];
-    switch (k) {
-      case "m": move(a, b); break;
-      case "l": line(a, b); break;
-      case "q": start(); out.push([QUAD, cx, cy, a, b, c, d]); cx = c; cy = d; break;
-      case "c": cubic(a, b, c, d, e, f); break;
-      case "z": close(); break;
-      case "rect":
-        if (op[5]) { move(a, b); line(a, d); line(c, d); line(c, b); }
-        else { move(a, b); line(c, b); line(c, d); line(a, d); }
-        close(); break;
-      case "rrect": {
-        const q = rrRadii(op);
-        move(a + q[0], b);
-        line(c - q[2], b); arc(c - q[2], b + q[3], q[2], q[3], -P / 2, 0);
-        line(c, d - q[5]); arc(c - q[4], d - q[5], q[4], q[5], 0, P / 2);
-        line(a + q[6], d); arc(a + q[6], d - q[7], q[6], q[7], P / 2, P);
-        line(a, b + q[1]); arc(a + q[0], b + q[1], q[0], q[1], P, P * 1.5);
-        close();
-        break;
-      }
-      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); close(); break;
-      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); close(); break;
-      case "arc": {
-        const mx = (a + c) / 2, my = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2, a0 = e * P / 180;
-        const px = mx + rx * Math.cos(a0), py = my + ry * Math.sin(a0);
-        if (!open || op[7]) move(px, py); else line(px, py);
-        arc(mx, my, rx, ry, a0, a0 + f * P / 180);
-        break;
-      }
-    }
-  }
-  return out;
+  const outer = new NativePath();
+  outer.addRect(l, t, r, b, CW);
+  const result = new NativePath();
+  pathOp(result, outer, path, DIFFERENCE);
+  return [result.path(), result.fillRule];
 }
 
 // Skia tests the control polygon, including implicit closure, rather than sampling curves.
-export function pathIsConvex(path: JPath): number {
+export function pathIsConvex(path: NativePath): boolean {
   const points: Pt[] = [];
   let start: Pt = [0, 0], ended = false;
   for (const verb of pathVerbs(path.ops)) {
-    if (verb.slice(1).some(value => !Number.isFinite(Math.fround(value)))) return 0;
+    if (verb.slice(1).some(value => !Number.isFinite(Math.fround(value)))) return false;
     if (verb[0] === MOVE) {
       if (points.length) ended = true;
       start = [Math.fround(verb[1]), Math.fround(verb[2])];
       continue;
     }
-    if (ended) return 0;
+    if (ended) return false;
     if (!points.length) points.push(start);
     if (verb[0] === CLOSE) { ended = true; continue; }
     for (let i = 3; i < verb.length; i += 2) {
@@ -723,18 +697,18 @@ export function pathIsConvex(path: JPath): number {
       if (last[0] !== x || last[1] !== y) points.push([x, y]);
     }
   }
-  if (points.length < 2) return 1;
+  if (points.length < 2) return true;
   const vectors: Pt[] = [];
   let xChanges = 0, yChanges = 0, lastX = -1, lastY = -1;
   for (let i = 0; i < points.length; i++) {
     const a = points[i], b = points[(i + 1) % points.length];
     const x = Math.fround(b[0] - a[0]), y = Math.fround(b[1] - a[1]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
     if (x === 0 && y === 0) continue;
     const sx = x < 0 ? 1 : 0, sy = y < 0 ? 1 : 0;
     if (sx !== lastX) xChanges++;
     if (sy !== lastY) yChanges++;
-    if (xChanges > 3 || yChanges > 3) return 0;
+    if (xChanges > 3 || yChanges > 3) return false;
     lastX = sx; lastY = sy;
     vectors.push([x, y]);
   }
@@ -743,51 +717,347 @@ export function pathIsConvex(path: JPath): number {
   for (let i = 1; i <= vectors.length; i++) {
     const [x, y] = vectors[i % vectors.length];
     const cross = Math.fround(Math.fround(lastVX * y) - Math.fround(lastVY * x));
-    if (!Number.isFinite(cross)) return 0;
+    if (!Number.isFinite(cross)) return false;
     if (cross !== 0) {
       const turn = Math.sign(cross);
-      if (direction && turn !== direction) return 0;
+      if (direction && turn !== direction) return false;
       direction = turn;
     } else {
       if (Math.fround(Math.fround(lastVX * x) + Math.fround(lastVY * y)) >= 0) continue;
-      if (++reversals > 2) return 0;
+      if (++reversals > 2) return false;
     }
     lastVX = x; lastVY = y;
   }
-  return 1;
+  return true;
 }
 
-/** the inverse of pathVerbs: a flattened path back as ops */
-function verbsToOps(vs: Verb[]): PathOp[] {
-  const out: PathOp[] = [];
-  for (const v of vs) {
-    if (v[0] === MOVE) out.push(["m", v[1], v[2]]);
-    else if (v[0] === LINE) out.push(["l", v[3], v[4]]);
-    else if (v[0] === QUAD) out.push(["q", v[3], v[4], v[5], v[6]]);
-    else if (v[0] === CUBIC) out.push(["c", v[3], v[4], v[5], v[6], v[7], v[8]]);
-    else if (v[0] === CLOSE) out.push(["z"]);
+/**
+ * Path.approximate (AOSP's PathUtils over SkPath::Iter): [fraction of length, x, y] per point, curves
+ * subdivided until each chord's midpoint lies within `error` of the curve's.
+ */
+export function approximate(p: NativePath, error: number): Float32Array {
+  const xs: number[] = [], ys: number[] = [], lens: number[] = [];
+  const err2 = error * error;
+  const move = (x: number, y: number) => { lens.push(lens.at(-1) ?? 0); xs.push(x); ys.push(y); };
+  const line = (x: number, y: number) => {
+    const lx = xs.at(-1)!, ly = ys.at(-1)!;
+    if (lx === x && ly === y) return;
+    lens.push(lens.at(-1)! + Math.hypot(x - lx, y - ly)); xs.push(x); ys.push(y);
+  };
+  const verbs = pathVerbs(p.ops);
+  let mx = 0, my = 0;
+  for (let i = 0; i < verbs.length; i++) {
+    const v = verbs[i];
+    switch (v[0]) {
+      // SkPath::Iter reports no trailing moveTo
+      case MOVE: if (i < verbs.length - 1) { move(mx = v[1], my = v[2]); } break;
+      case LINE: line(v[3], v[4]); break;
+      case QUAD: case CUBIC: {
+        const at = v[0] === QUAD ? quadAt : cubicAt;
+        const sub = (t0: number, x0: number, y0: number, t1: number, x1: number, y1: number) => {
+          const tm = (t0 + t1) / 2, xm = at(v, tm, 0), ym = at(v, tm, 1);
+          const dx = (x0 + x1) / 2 - xm, dy = (y0 + y1) / 2 - ym;
+          if (dx * dx + dy * dy > err2) { sub(t0, x0, y0, tm, xm, ym); sub(tm, xm, ym, t1, x1, y1); }
+          else line(x1, y1);
+        };
+        sub(0, v[1], v[2], 1, v[v.length - 2], v[v.length - 1]);
+        break;
+      }
+      case CLOSE: line(mx, my); break;
+    }
   }
+  if (!xs.length) move(verbs.length === 1 ? verbs[0][1] : 0, verbs.length === 1 ? verbs[0][2] : 0);
+  let total = lens.at(-1)!;
+  // a lone point still animates, holding its value
+  if (total === 0) { xs.push(xs.at(-1)!); ys.push(ys.at(-1)!); lens.push(total = 1); }
+  const out = new Float32Array(xs.length * 3);
+  for (let i = 0; i < xs.length; i++) { out[i * 3] = lens[i] / total; out[i * 3 + 1] = xs[i]; out[i * 3 + 2] = ys[i]; }
   return out;
 }
+/** coordinate `c` (0 = x, 1 = y) of a quadratic or cubic verb at t */
+function quadAt(v: Verb, t: number, c: number) {
+  const u = 1 - t;
+  return u * (u * v[1 + c] + t * v[3 + c]) + t * (u * v[3 + c] + t * v[5 + c]);
+}
+function cubicAt(v: Verb, t: number, c: number) {
+  const u = 1 - t;
+  return u * u * u * v[1 + c] + 3 * u * u * t * v[3 + c] + 3 * u * t * t * v[5 + c] + t * t * t * v[7 + c];
+}
 
-const pathIters = new Map<bigint, { segs: Verb[]; i: number }>();
-let nextPathIter = 1n;
+// ── PathMeasure: SkContourMeasure over a snapshot of the path's verbs
+const LINE_SEG = 0, QUAD_SEG = 1, CUBIC_SEG = 2;
+/** SkContourMeasure's fixed-point t, which bounds subdivision */
+const MAX_T = 0x3fffffff;
+/** CHEAP_DIST_LIMIT at a resolution scale of 1 */
+const TOLERANCE = 0.5;
+class Contour {
+  /** per segment: distance at its end, index of its curve's first point, type and end t */
+  d: number[] = []; pi: number[] = []; ty: number[] = []; tv: number[] = [];
+  /** the contour's points, x and y interleaved; curves share their end points */
+  pts: number[] = [];
+  length = 0;
+  closed = false;
+  seg(d: number, pi: number, ty: number, tv: number) { this.d.push(d); this.pi.push(pi); this.ty.push(ty); this.tv.push(tv); }
+}
+function lineSeg(c: Contour, x0: number, y0: number, x1: number, y1: number, d: number, pi: number) {
+  const next = d + Math.hypot(x1 - x0, y1 - y0);
+  if (next > d) c.seg(next, pi, LINE_SEG, MAX_T);
+  return next;
+}
+function quadSegs(c: Contour, x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, d: number, mint: number, maxt: number, pi: number): number {
+  const dx = x1 / 2 - (x0 + x2) / 4, dy = y1 / 2 - (y0 + y2) / 4;
+  if (maxt - mint >= 1024 && Math.max(Math.abs(dx), Math.abs(dy)) > TOLERANCE) {
+    const half = (mint + maxt) >>> 1;
+    const ax = (x0 + x1) / 2, ay = (y0 + y1) / 2, bx = (x1 + x2) / 2, by = (y1 + y2) / 2, mx = (ax + bx) / 2, my = (ay + by) / 2;
+    d = quadSegs(c, x0, y0, ax, ay, mx, my, d, mint, half, pi);
+    return quadSegs(c, mx, my, bx, by, x2, y2, d, half, maxt, pi);
+  }
+  const next = d + Math.hypot(x2 - x0, y2 - y0);
+  if (next > d) c.seg(next, pi, QUAD_SEG, maxt);
+  return next;
+}
+const tooFar = (x: number, y: number, px: number, py: number) => Math.max(Math.abs(px - x), Math.abs(py - y)) > TOLERANCE;
+function cubicSegs(c: Contour, x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, d: number, mint: number, maxt: number, pi: number): number {
+  if (maxt - mint >= 1024 && (tooFar(x1, y1, x0 + (x3 - x0) / 3, y0 + (y3 - y0) / 3) || tooFar(x2, y2, x0 + (x3 - x0) * 2 / 3, y0 + (y3 - y0) * 2 / 3))) {
+    const half = (mint + maxt) >>> 1;
+    const abx = (x0 + x1) / 2, aby = (y0 + y1) / 2, bcx = (x1 + x2) / 2, bcy = (y1 + y2) / 2, cdx = (x2 + x3) / 2, cdy = (y2 + y3) / 2;
+    const abcx = (abx + bcx) / 2, abcy = (aby + bcy) / 2, bcdx = (bcx + cdx) / 2, bcdy = (bcy + cdy) / 2;
+    const mx = (abcx + bcdx) / 2, my = (abcy + bcdy) / 2;
+    d = cubicSegs(c, x0, y0, abx, aby, abcx, abcy, mx, my, d, mint, half, pi);
+    return cubicSegs(c, mx, my, bcdx, bcdy, cdx, cdy, x3, y3, d, half, maxt, pi);
+  }
+  const next = d + Math.hypot(x3 - x0, y3 - y0);
+  if (next > d) c.seg(next, pi, CUBIC_SEG, maxt);
+  return next;
+}
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+export class PathMeasure {
+  private verbs: Verb[] = [];
+  private i = 0;
+  private forceClosed = false;
+  private contour: Contour | null = null;
+  /** position and unit tangent from the last posTan */
+  private readonly pt = new Float64Array(4);
+  /** the t distanceToSegment found */
+  private t = 0;
+  private readonly chop = new Float64Array(14);
+  private readonly chop2 = new Float64Array(14);
+
+  /** SkPathMeasure::setPath: the path is copied, and the first contour with length measured */
+  setPath(p: NativePath | undefined, forceClosed: boolean) {
+    this.verbs = p ? pathVerbs(p.ops) : [];
+    this.i = 0;
+    this.forceClosed = forceClosed;
+    this.nextContour();
+  }
+  /** SkContourMeasureIter::next skips contours of zero length */
+  nextContour(): boolean {
+    this.contour = null;
+    while (!this.contour && this.i < this.verbs.length) this.contour = this.build();
+    return !!this.contour;
+  }
+  length(): number { return this.contour?.length ?? 0; }
+  isClosed(): boolean { return !!this.contour?.closed; }
+  private build(): Contour | null {
+    const c = new Contour(), vs = this.verbs;
+    let pi = -1, d = 0, seenClose = this.forceClosed, seenMove = false;
+    for (; this.i < vs.length; this.i++) {
+      const v = vs[this.i];
+      if (seenMove && v[0] === MOVE) break;
+      const prev = d;
+      switch (v[0]) {
+        case MOVE: pi++; c.pts.push(v[1], v[2]); seenMove = true; break;
+        case LINE:
+          d = lineSeg(c, v[1], v[2], v[3], v[4], d, pi);
+          if (d > prev) { c.pts.push(v[3], v[4]); pi++; }
+          break;
+        case QUAD:
+          d = quadSegs(c, v[1], v[2], v[3], v[4], v[5], v[6], d, 0, MAX_T, pi);
+          if (d > prev) { c.pts.push(v[3], v[4], v[5], v[6]); pi += 2; }
+          break;
+        case CUBIC:
+          d = cubicSegs(c, v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], d, 0, MAX_T, pi);
+          if (d > prev) { c.pts.push(v[3], v[4], v[5], v[6], v[7], v[8]); pi += 3; }
+          break;
+        case CLOSE: seenClose = true; break;
+      }
+    }
+    if (!Number.isFinite(d) || !c.d.length) return null;
+    if (seenClose) {
+      const prev = d, fx = c.pts[0], fy = c.pts[1];
+      d = lineSeg(c, c.pts[pi * 2], c.pts[pi * 2 + 1], fx, fy, d, pi);
+      if (d > prev) c.pts.push(fx, fy);
+    }
+    c.length = d;
+    c.closed = seenClose;
+    return c;
+  }
+  /** SkContourMeasure::distanceToSegment: the first segment reaching `d`, and the t there in this.t */
+  private segAt(c: Contour, d: number): number {
+    let lo = 0, hi = c.d.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (c.d[mid] < d) lo = mid + 1; else hi = mid; }
+    let startT = 0, startD = 0;
+    if (lo > 0) { startD = c.d[lo - 1]; if (c.pi[lo - 1] === c.pi[lo]) startT = c.tv[lo - 1] / MAX_T; }
+    this.t = startT + (c.tv[lo] / MAX_T - startT) * (d - startD) / (c.d[lo] - startD);
+    return lo;
+  }
+  /** compute_pos_tan into this.pt */
+  private posTan(c: Contour, seg: number, t: number) {
+    const p = c.pts, i = c.pi[seg] * 2, out = this.pt;
+    const x0 = p[i], y0 = p[i + 1], x1 = p[i + 2], y1 = p[i + 3];
+    let tx: number, ty: number;
+    if (c.ty[seg] === LINE_SEG) {
+      out[0] = lerp(x0, x1, t); out[1] = lerp(y0, y1, t);
+      tx = x1 - x0; ty = y1 - y0;
+    } else if (c.ty[seg] === QUAD_SEG) {
+      const x2 = p[i + 4], y2 = p[i + 5];
+      out[0] = ((x2 - 2 * x1 + x0) * t + 2 * (x1 - x0)) * t + x0;
+      out[1] = ((y2 - 2 * y1 + y0) * t + 2 * (y1 - y0)) * t + y0;
+      // SkEvalQuadTangentAt: an end whose control point coincides takes the chord
+      if ((t === 0 && x0 === x1 && y0 === y1) || (t === 1 && x1 === x2 && y1 === y2)) { tx = x2 - x0; ty = y2 - y0; }
+      else { tx = (x2 - 2 * x1 + x0) * t + (x1 - x0); ty = (y2 - 2 * y1 + y0) * t + (y1 - y0); }
+    } else {
+      const x2 = p[i + 4], y2 = p[i + 5], x3 = p[i + 6], y3 = p[i + 7];
+      const ax = x3 + 3 * (x1 - x2) - x0, ay = y3 + 3 * (y1 - y2) - y0;
+      const bx = 3 * (x2 - 2 * x1 + x0), by = 3 * (y2 - 2 * y1 + y0);
+      const cx = 3 * (x1 - x0), cy = 3 * (y1 - y0);
+      out[0] = ((ax * t + bx) * t + cx) * t + x0;
+      out[1] = ((ay * t + by) * t + cy) * t + y0;
+      // SkEvalCubicAt: at an end whose neighbour coincides, the next control point or the chord
+      if ((t === 0 && x0 === x1 && y0 === y1) || (t === 1 && x2 === x3 && y2 === y3)) {
+        if (t === 0) { tx = x2 - x0; ty = y2 - y0; } else { tx = x3 - x1; ty = y3 - y1; }
+        if (!tx && !ty) { tx = x3 - x0; ty = y3 - y0; }
+      } else { tx = (ax * t + bx * 2 / 3) * t + cx / 3; ty = (ay * t + by * 2 / 3) * t + cy / 3; }
+    }
+    const len = Math.hypot(tx, ty);
+    out[2] = len > 0 && Number.isFinite(len) ? tx / len : 0;
+    out[3] = len > 0 && Number.isFinite(len) ? ty / len : 0;
+  }
+  /** SkContourMeasure::getPosTan into this.pt, the distance pinned to the contour */
+  private at(d: number): boolean {
+    const c = this.contour;
+    if (!c || !c.length) return false;
+    const seg = this.segAt(c, d < 0 ? 0 : d > c.length ? c.length : d);
+    if (!Number.isFinite(this.t)) return false;
+    this.posTan(c, seg, this.t);
+    return true;
+  }
+  getPosTan(d: number, pos: Float32Array | null, tan: Float32Array | null): boolean {
+    if (!this.at(d)) return false;
+    if (pos) { pos[0] = this.pt[0]; pos[1] = this.pt[1]; }
+    if (tan) { tan[0] = this.pt[2]; tan[1] = this.pt[3]; }
+    return true;
+  }
+  /** SkContourMeasure::getMatrix: flags 1 = position, 2 = tangent */
+  getMatrix(d: number, m: Mat, flags: number): boolean {
+    if (!this.at(d)) return false;
+    const [x, y, tx, ty] = this.pt;
+    m.set(flags & 2 ? [tx, -ty, 0, ty, tx, 0, 0, 0, 1] : [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    if (flags & 1) { m[2] = x; m[5] = y; }
+    return true;
+  }
+  /** SkContourMeasure::getSegment */
+  getSegment(startD: number, stopD: number, dst: NativePath, moveTo: boolean): boolean {
+    const c = this.contour;
+    if (!c) return false;
+    if (startD < 0) startD = 0;
+    if (stopD > c.length) stopD = c.length;
+    if (!(startD <= stopD)) return false;
+    let seg = this.segAt(c, startD), startT = this.t;
+    if (!Number.isFinite(startT)) return false;
+    const stop = this.segAt(c, stopD), stopT = this.t;
+    if (!Number.isFinite(stopT)) return false;
+    if (moveTo) { this.posTan(c, seg, startT); dst.moveTo(this.pt[0], this.pt[1]); }
+    if (c.pi[seg] === c.pi[stop]) {
+      this.segTo(c, seg, startT, stopT, dst);
+      return true;
+    }
+    do {
+      this.segTo(c, seg, startT, 1, dst);
+      const pi = c.pi[seg];
+      do seg++; while (c.pi[seg] === pi);
+      startT = 0;
+    } while (c.pi[seg] < c.pi[stop]);
+    this.segTo(c, seg, 0, stopT, dst);
+    return true;
+  }
+  /** SkContourMeasure_segTo: the part of a segment's curve between two t, appended */
+  private segTo(c: Contour, seg: number, startT: number, stopT: number, dst: NativePath) {
+    if (startT === stopT) {
+      // a zero-length piece still carries its end caps
+      if (dst.ops.length) dst.lineTo(dst.pen.x, dst.pen.y);
+      return;
+    }
+    const p = c.pts, i = c.pi[seg] * 2, a = this.chop, b = this.chop2;
+    switch (c.ty[seg]) {
+      case LINE_SEG:
+        dst.lineTo(stopT === 1 ? p[i + 2] : lerp(p[i], p[i + 2], stopT), stopT === 1 ? p[i + 3] : lerp(p[i + 1], p[i + 3], stopT));
+        break;
+      case QUAD_SEG:
+        for (let k = 0; k < 6; k++) a[k] = p[i + k];
+        if (startT === 0) {
+          if (stopT === 1) return dst.quadTo(a[2], a[3], a[4], a[5]);
+          chopQuad(a, stopT, b);
+          return dst.quadTo(b[2], b[3], b[4], b[5]);
+        }
+        chopQuad(a, startT, b);
+        if (stopT === 1) return dst.quadTo(b[6], b[7], b[8], b[9]);
+        chopQuad(b.subarray(4), (stopT - startT) / (1 - startT), a);
+        return dst.quadTo(a[2], a[3], a[4], a[5]);
+      case CUBIC_SEG:
+        for (let k = 0; k < 8; k++) a[k] = p[i + k];
+        if (startT === 0) {
+          if (stopT === 1) return dst.cubicTo(a[2], a[3], a[4], a[5], a[6], a[7]);
+          chopCubic(a, stopT, b);
+          return dst.cubicTo(b[2], b[3], b[4], b[5], b[6], b[7]);
+        }
+        chopCubic(a, startT, b);
+        if (stopT === 1) return dst.cubicTo(b[8], b[9], b[10], b[11], b[12], b[13]);
+        chopCubic(b.subarray(6), (stopT - startT) / (1 - startT), a);
+        return dst.cubicTo(a[2], a[3], a[4], a[5], a[6], a[7]);
+    }
+  }
+}
+/** SkChopQuadAt: src's three points split at t into five (the middle one shared) */
+function chopQuad(src: Float64Array, t: number, dst: Float64Array) {
+  const [x0, y0, x1, y1, x2, y2] = src;
+  const ax = lerp(x0, x1, t), ay = lerp(y0, y1, t), bx = lerp(x1, x2, t), by = lerp(y1, y2, t);
+  dst.set([x0, y0, ax, ay, lerp(ax, bx, t), lerp(ay, by, t), bx, by, x2, y2]);
+}
+/** SkChopCubicAt: src's four points split at t into seven */
+function chopCubic(src: Float64Array, t: number, dst: Float64Array) {
+  const [x0, y0, x1, y1, x2, y2, x3, y3] = src;
+  const abx = lerp(x0, x1, t), aby = lerp(y0, y1, t), bcx = lerp(x1, x2, t), bcy = lerp(y1, y2, t), cdx = lerp(x2, x3, t), cdy = lerp(y2, y3, t);
+  const abcx = lerp(abx, bcx, t), abcy = lerp(aby, bcy, t), bcdx = lerp(bcx, cdx, t), bcdy = lerp(bcy, cdy, t);
+  dst.set([x0, y0, abx, aby, abcx, abcy, lerp(abcx, bcdx, t), lerp(abcy, bcdy, t), bcdx, bcdy, cdx, cdy, x3, y3]);
+}
+
+/** SkPath::RawIter over a snapshot of the verbs, as PathIterator and androidx's pre-34 iterator walk them */
+export class VerbIterator {
+  private i = 0;
+  readonly verbs: Verb[];
+  constructor(p: NativePath) { this.verbs = pathVerbs(p.ops); }
+  peek(): number { return this.verbs[this.i]?.[0] ?? DONE; }
+  next(pts: Float32Array, off: number): number {
+    const v = this.verbs[this.i];
+    if (!v) return DONE;
+    this.i++;
+    for (let k = 1; k < v.length; k++) pts[off + k - 1] = v[k];
+    return v[0];
+  }
+}
+
+// ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and
+// point arrays, as PathIterator does. Arcs come out as cubics rather than conics, so the
+// conic-evaluation mode and tolerance have nothing to convert and Conic never appears.
 const pjni = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni("androidx/graphics/path/PathIteratorPreApi34Impl", sig, fn);
-const iterSize = (h: bigint) => pathIters.get(h)?.segs.length ?? 0;
-pjni("createInternalPathIterator(Landroid/graphics/Path;IF)J", (p: JPath) => {
-  pathIters.set(nextPathIter, { segs: pathVerbs(p.ops), i: 0 });
-  return nextPathIter++;
-});
-pjni("destroyInternalPathIterator(J)V", (h: bigint) => { pathIters.delete(h); });
-pjni("internalPathIteratorHasNext(J)Z", (h: bigint) => { const it = pathIters.get(h); return it && it.i < it.segs.length ? 1 : 0; });
-pjni("internalPathIteratorPeek(J)I", (h: bigint) => { const it = pathIters.get(h); return it?.segs[it.i]?.[0] ?? DONE; });
-pjni("internalPathIteratorNext(J[FI)I", (h: bigint, pts: Float32Array, off: number) => {
-  const it = pathIters.get(h), s = it?.segs[it.i];
-  if (!it || !s) return DONE;
-  it.i++;
-  for (let i = 1; i < s.length; i++) pts[off + i - 1] = s[i];
-  return s[0];
-});
-pjni("internalPathIteratorSize(J)I", iterSize);
-pjni("internalPathIteratorRawSize(J)I", iterSize);
+const iter = (h: bigint) => deref<VerbIterator>(h);
+pjni("createInternalPathIterator(Landroid/graphics/Path;IF)J", (p: object) => handle(new VerbIterator(nativePathOf(p))));
+pjni("destroyInternalPathIterator(J)V", release);
+pjni("internalPathIteratorHasNext(J)Z", (h: bigint) => (iter(h).peek() !== DONE ? 1 : 0));
+pjni("internalPathIteratorPeek(J)I", (h: bigint) => iter(h).peek());
+pjni("internalPathIteratorNext(J[FI)I", (h: bigint, pts: Float32Array, off: number) => iter(h).next(pts, off));
+pjni("internalPathIteratorSize(J)I", (h: bigint) => iter(h).verbs.length);
+pjni("internalPathIteratorRawSize(J)I", (h: bigint) => iter(h).verbs.length);
 rt.claimNativeLib("androidx.graphics.path");

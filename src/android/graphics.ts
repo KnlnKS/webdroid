@@ -16,7 +16,7 @@ import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
-import { JPath, inversePath } from "./path";
+import { NativePath, inversePath, nativePathOf } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
@@ -1594,14 +1594,26 @@ function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) 
   recordOrRun(this.ctx, apply);
   return 1;
 }
-function clipPath(this: JCanvas, path: JPath): number {
-  if (path.inverseFill) {
-    const bounds = canvasLocalBounds(this.ctx);
-    if (!bounds) return 0;
+/** intersect the clip with the path's fill, or with its inverse to clip the path out */
+export function clipPath(cv: JCanvas, path: NativePath, out: boolean): boolean {
+  if (path.inverseFill !== out) {
+    const bounds = canvasLocalBounds(cv.ctx);
+    if (!bounds) return false;
     const [inverse, rule] = inversePath(path, ...bounds);
-    this.ctx.clip(inverse, rule);
-  } else this.ctx.clip(path.path(), path.fillRule);
-  return 1;
+    cv.ctx.clip(inverse, rule);
+  } else cv.ctx.clip(path.path(), path.fillRule);
+  return true;
+}
+export function drawPath(cv: JCanvas, path: NativePath, p: JPaint) {
+  if (tryBitmapPath(cv, p, path)) return;
+  if (!path.inverseFill) {
+    cv.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+    return;
+  }
+  const bounds = canvasLocalBounds(cv.ctx);
+  if (!bounds) return;
+  const [inverse, rule] = inversePath(path, ...bounds);
+  cv.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
 }
 // Canvas2D exposes no clip region; rectangular clips retain a device-space bound.
 function viewportClipBounds(cv: JCanvas, out: JRect): number {
@@ -1845,14 +1857,15 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipOutRect(Landroid/graphics/RectF;)Z": clipOutRectObj,
   "clipRect(Landroid/graphics/Rect;)Z": clipRectObj,
   "clipRect(Landroid/graphics/RectF;)Z": clipRectObj,
-  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
-    if (op && op.ename && op.ename !== "INTERSECT") return 1;
-    return clipPath.call(this, path);
+  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: object, op: { ename?: string } | null) {
+    const name = op?.ename ?? "INTERSECT";
+    if (name !== "INTERSECT" && name !== "DIFFERENCE") return 1;
+    return clipPath(this, nativePathOf(path), name === "DIFFERENCE") ? 1 : 0;
   },
-  "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: JPath) {
+  "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: object) {
     return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[1]);
   },
-  "clipOutPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: JPath) {
+  "clipOutPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: object) {
     return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[0]);
   },
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
@@ -1909,17 +1922,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "drawPoints([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawPoints(this, pts, 0, pts?.length ?? 0, p); },
   "drawPoints([FIILandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) { drawPoints(this, pts, off, n, p); },
-  "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: JPath, p: JPaint) {
-    if (tryBitmapPath(this, p, path)) return;
-    if (!path.inverseFill) {
-      this.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
-      return;
-    }
-    const bounds = canvasLocalBounds(this.ctx);
-    if (!bounds) return;
-    const [inverse, rule] = inversePath(path, ...bounds);
-    this.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
-  },
+  "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: object, p: JPaint) { drawPath(this, nativePathOf(path), p); },
   "drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s, x, y, p);
   },
@@ -2080,17 +2083,22 @@ rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMet
 export class JOutline extends JObj {
   kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
   l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
-  path: JPath | null = null;
+  path: NativePath | null = null;
   setRR(l: number, t: number, r: number, b: number, rad: number) { this.kind = 1; this.l = l; this.t = t; this.r = r; this.b = b; this.rad = rad; this.path = null; }
   /** intersect ctx's clip with the outline shape */
   trace(ctx: Ctx2D) {
     ctx.beginPath();
-    if (this.kind === 3 && this.path) { ctx.clip(this.path.path()); return; }
+    if (this.kind === 3 && this.path) { ctx.clip(this.path.path(), this.path.fillRule); return; }
     if (this.kind === 2) ctx.ellipse((this.l + this.r) / 2, (this.t + this.b) / 2, (this.r - this.l) / 2, (this.b - this.t) / 2, 0, 0, Math.PI * 2);
     else if (this.rad > 0) ctx.roundRect(this.l, this.t, this.r - this.l, this.b - this.t, this.rad);
     else ctx.rect(this.l, this.t, this.r - this.l, this.b - this.t);
     ctx.clip();
   }
+}
+/** Outline.setPath copies the path into the outline's own */
+function setOutlinePath(this: JOutline, p: object) {
+  this.kind = 3;
+  (this.path ??= new NativePath()).set(nativePathOf(p));
 }
 rt.register({
   name: "android/graphics/Outline", ctor: JOutline,
@@ -2102,8 +2110,8 @@ rt.register({
     "setRect(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); },
     "setOval(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); this.kind = 2; },
     "setOval(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); this.kind = 2; },
-    "setPath(Landroid/graphics/Path;)V": function (this: JOutline, p: JPath) { this.kind = 3; this.path = p; },
-    "setConvexPath(Landroid/graphics/Path;)V": function (this: JOutline, p: JPath) { this.kind = 3; this.path = p; },
+    "setPath(Landroid/graphics/Path;)V": setOutlinePath,
+    "setConvexPath(Landroid/graphics/Path;)V": setOutlinePath,
     "setEmpty()V": function (this: JOutline) { this.kind = 0; this.path = null; },
     "offset(II)V": function (this: JOutline, dx: number, dy: number) { this.l += dx; this.r += dx; this.t += dy; this.b += dy; },
     "canClip()Z": () => 1,
@@ -2372,12 +2380,12 @@ rt.register({
       r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
       return this.left < this.right ? 1 : 0;
     },
-    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": driven(function* (this: JRegion, p: JPath, clip: JRegion): Gen {
-      const b = new JRectF();
-      yield vcall(p, "computeBounds", "(Landroid/graphics/RectF;Z)V", b, 1);
+    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": function (this: JRegion, p: object, clip: JRegion) {
+      const b = { left: 0, top: 0, right: 0, bottom: 0 };
+      nativePathOf(p).bounds(b);
       return setRegion.call(this, Math.max(Math.floor(b.left), clip.left), Math.max(Math.floor(b.top), clip.top),
         Math.min(Math.ceil(b.right), clip.right), Math.min(Math.ceil(b.bottom), clip.bottom));
-    }),
+    },
     "op(IIIILandroid/graphics/Region$Op;)Z": regionOp,
     "op(Landroid/graphics/Rect;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRect, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
     "op(Landroid/graphics/Region;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRegion, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },

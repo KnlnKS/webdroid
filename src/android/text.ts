@@ -14,7 +14,7 @@ import { JPersistableBundle, bundleBox } from "./os";
 import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
 import { csText as javaCsText } from "../jvm/natives/jchars";
-import type { JPath } from "./path";
+import { nativePathOf } from "./path";
 import { breakLines, type TLine } from "./linebreak";
 import { G } from "./gravity";
 export type { TLine } from "./linebreak";
@@ -1449,7 +1449,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getPrimaryHorizontal(I)F": primaryHorizontal,
   "getSecondaryHorizontal(I)F": primaryHorizontal,
-  "getSelectionPath(IILandroid/graphics/Path;)V": driven(function* (this: JLayout, start: number, end: number, path: JPath): Gen {
+  "getSelectionPath(IILandroid/graphics/Path;)V": driven(function* (this: JLayout, start: number, end: number, path: object): Gen {
     const thread = curThread;
     yield vcallOn(thread, path, "reset", "()V");
     if (start === end) return;
@@ -1463,7 +1463,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
       const right = line === last ? Number(yield vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", end)) : rtl ? 0 : width;
       const top = Number(yield vcallOn(thread, this, "getLineTop", "(I)I", line));
       const bottom = Number(yield vcallOn(thread, this, "getLineBottom", "(I)I", line));
-      if (left !== right) path.add(["rect", Math.min(left, right), top, Math.max(left, right), bottom, 0]);
+      if (left !== right) nativePathOf(path).addRect(Math.min(left, right), top, Math.max(left, right), bottom, 0);
     }
   }),
   "getOffsetForHorizontal(IF)I": function (this: JLayout, line: number, x: number) {

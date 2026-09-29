@@ -6,7 +6,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { parseAXML, attr, TV, type XmlNode } from "./axml";
 import { rvFloat, namedAttrRV, type Resources } from "./res";
 import { flatten, parsePathData } from "./pathdata";
-import { pathKeyframeData, type JPath } from "./path";
+import { approximate, nativePathOf } from "./path";
 
 /** AOSP's AccelerateDecelerateInterpolator, the default for animators and view animations */
 export function accelDecel(t: number) { return Math.cos((t + 1) * Math.PI) / 2 + 0.5; }
@@ -100,8 +100,9 @@ for (const name of Object.keys(CURVES)) {
       ? function (this: JInterpolator, x: number, y: number) { curve(quadCurve(x, y)).call(this); }
       : function (this: JInterpolator, a: number, b: number) { init(this, name, a, b); },
     "(FFFF)V": function (this: JInterpolator, x1: number, y1: number, x2: number, y2: number) { curve(bezierCurve(x1, y1, x2, y2)).call(this); },
-    "(Landroid/graphics/Path;)V": function (this: JInterpolator, path: JPath) {
-      const data = pathKeyframeData(path);
+    "(Landroid/graphics/Path;)V": function (this: JInterpolator, path: object) {
+      // PathInterpolator's PRECISION
+      const data = approximate(nativePathOf(path), 0.002);
       curve(pathCurve(data.filter((_, i) => i % 3 !== 0))).call(this);
     },
   };
