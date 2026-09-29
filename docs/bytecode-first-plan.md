@@ -637,7 +637,7 @@ Run all of these before committing a flip:
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 40,085, 2,544, 27,514,
-  1,219 and 474; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+  1,219 and 537; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -729,6 +729,15 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   luni-net went from 338 to 472. `new URI(s)` costs 4.8 µs against 0.34 µs for the lazy TS regex,
   after `1L << n` became a table lookup in shl-long and short `String.indexOf(int)` stopped
   allocating (7.3 µs before them).
+- **java.net.URL (B.7 cut 7c).** libcore's URL and URLStreamHandler, with the file: and jar:
+  handlers from sun.net.www. http and https resolve, as on a device, to
+  `com.android.okhttp.HttpHandler`/`HttpsHandler`, TS specs whose connections are the fetch-backed
+  HttpURLConnection; it reads a URL through its getters. Class loader resources come from libcore's
+  ClassPathURLStreamHandler, one per archive, over JarFile on the TS ZipFile. A TS spec declared over
+  a bytecode superclass is now re-parented onto it at link. luni-net went from 476 to 537. In V8,
+  `new URL(s)` costs 0.85 µs against 0.38, toString 0.12 against 0.06; getters and equals got
+  faster. Limit: class path archives open unverified (JarVerifier's PKCS7 parse needs a bytecode
+  ByteArrayInputStream).
 
 Fixes that apply to every mode:
 - Fallthrough ordering. A platform body that cannot run on a TS class yields to the spec's
@@ -767,9 +776,11 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
    - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 4 in part (Writer, Reader,
-     DataOutputStream), 7a (java.net leaf classes) and 7b (URI and cookies). **Next in cut 7:** 7c, URL: TS still reads `JURL.spec`/`.u` in
-     HttpURLConnection, JarURLConnection and `openStream`, and libcore's URL needs its stream
-     handlers (`libcore.net.url`, OkHttp's) or a TS URLStreamHandler over the fetch proxy. **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
+     DataOutputStream), 7a (java.net leaf classes), 7b (URI and cookies) and 7c (URL and its
+     handlers). **Next in cut 7:** URLConnection's base (`getContentHandler`, the content handler
+     statics) and InetAddress/InetSocketAddress, then sockets (cut 8). Moving ByteArrayInputStream
+     to libcore unblocks JarVerifier, after which ClassPathURLStreamHandler's TS constructor goes.
+     **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
      getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,
      which fflate's push API does not expose; there is no line or speed gain to pay for that risk.
    - **Cut order.** (1) zip codecs (CRC32, Adler32, Inflater, Deflater and their streams; 26

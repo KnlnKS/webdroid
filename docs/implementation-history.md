@@ -332,6 +332,32 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   emitted dispatch loop around small methods and the nest-access trampoline in front of
   `match`, general emitter costs rather than URI's. indexOf(int) also truncated supplementary
   code points to their low half.
+- 2026-09-29, java.net.URL from libcore (B.7 cut 7c). The TS URL parsed with WHATWG URL and
+  answered openConnection/openStream itself, so libcore's handler resolution
+  (`URL.createBuiltinHandler`) never ran. libcore's URL now resolves http and https to
+  `com.android.okhttp.HttpHandler`/`HttpsHandler`, as a device does; those two are TS specs whose
+  connections are the fetch-backed HttpURLConnection, which reads the URL through its getters and
+  throws OkHttp's `Invalid host` UnknownHostException for an empty host at connect. file: and jar:
+  are libcore's sun.net.www handlers. Findings: a TS spec declared over a bytecode superclass did
+  not inherit its methods (its JS class extends JObj, and a native spec counts as initialized, so
+  the super was never compiled); `link` now re-parents such a spec onto the bytecode class and
+  compiles it, which also gives the TS BufferedReader Reader's own methods. Fallthrough prefers a
+  method the prototype chain reaches, so a spec over a bytecode super must spell out an override
+  its platform class declares (ClassPathURLStreamHandler.openConnection). Class loader resources
+  now come from libcore's ClassPathURLStreamHandler, one per archive as DexPathList keeps them, so
+  their URLs read `jar:file:/data/app/base.apk!/x` as on a device. That needed JarFile over the
+  TS ZipFile: `ZipFile(File,int,boolean)`, `ZipEntry(ZipEntry)`, JarFileEntry from getEntry and
+  entries (ZipFile.getZipEntry does this for a JarFile), `getManifestName` and
+  `getManifestAndSignatureRelatedFiles`. A device opens class path archives with verify=true; for
+  a v1-signed apk (TikTok's MANIFEST.MF is 2.2 MB) JarVerifier's PKCS7 parse runs
+  sun.security.util.DerInputBuffer, a bytecode ByteArrayInputStream that reads the TS stream's
+  missing `buf`/`count` and fails, so the class path handler's constructor stays TS and opens the
+  archive unverified until that stream moves to libcore. An app-built jar: URL to a signed archive
+  still verifies and fails the same way. luni-net went from 476 to 537 (URLTest 61 to 91, harmony
+  URLTest 10 to 26, OldURLTest 18 to 26); luni-io 1,221. V8 (node) steady cost per call, tip
+  against libcore: `new URL(s)` 0.38 to 0.85 us, relative 0.57 to 0.96, toString 0.064 to 0.117,
+  openConnection 0.110 to 0.120, getters 0.108 to 0.012, hashCode+equals 0.27 to 0.05. The first
+  2,000 constructions average 11.9 us against 1.35 while the parse runs cold.
 - 2026-09-29, live-flow fixes. YouTube's MediaRouteButton failed its main-thread check in about
   half the runs because `curThread` was still `Binder:1000`: a resumed generator that suspended
   again (`driveStep`), `withCallingIdentity` and the WebView bridge kept their thread across an
