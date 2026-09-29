@@ -5,7 +5,7 @@
 // baseline tests/conformance/<suite>.json, which holds a hash of every passing test's name per
 // class: one that passed there and fails now is a regression. --update rewrites it from this run;
 // --bytecode serves those prefixes from platform bytecode instead of native specs, for A/B cuts.
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { androidPlatform, androidTool } from "../android-sdk";
 import { SUITES } from "./suites";
 import { consume } from "../args";
@@ -43,13 +43,17 @@ if (suite.source) {
     let res = await fetch(suite.source.archive);
     for (let tries = 1; !res.ok && tries < 5; tries++) { await Bun.sleep(2000 * tries); res = await fetch(suite.source.archive); }
     if (!res.ok) throw new Error(`${suite.source.archive}: HTTP ${res.status}`);
-    await Bun.write(`${srcDir}/src.tar.gz`, res);
+    await Bun.write(`${srcDir}/src.tar.gz`, await res.arrayBuffer());
     run(["tar", "xzf", `${srcDir}/src.tar.gz`, "-C", srcDir]);
   }
   for (const f of new Bun.Glob("**/*.java").scanSync(root)) {
-    if (suite.source.exclude?.test(f)) continue;
+    if (suite.source.include && !suite.source.include.test(f) || suite.source.exclude?.test(f)) continue;
     sources.push(`${root}/${f}`);
-    if (suite.source.tests.test(f.slice(f.lastIndexOf("/") + 1))) classes.push(f.replace(/\.java$/, "").replace(/\//g, "."));
+    const base = f.slice(f.lastIndexOf("/") + 1);
+    if (!suite.source.tests.test(base)) continue;
+    // the package names the class: an archive may hold several source roots
+    const pkg = /^package\s+([\w.]+)\s*;/m.exec(readFileSync(`${root}/${f}`, "utf8"))?.[1];
+    classes.push((pkg ? pkg + "." : "") + base.slice(0, -5));
   }
   classes = classes.sort();
 }
@@ -58,7 +62,11 @@ if (!existsSync(`${dexDir}/classes.dex`)) {
   mkdirSync(out, { recursive: true });
   // libcore's test sources also name android.* and test-selection annotations (scripts/conform/stubs)
   const stubs = [...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/stubs`)].map((f) => `${import.meta.dir}/stubs/${f}`);
-  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", "-cp", [...jars, `${androidPlatform(35)}/android.jar`].join(":"),
+  // hidden platform APIs the tests call: compiled against, never dexed, so the platform's own classes answer
+  const hidden = `${dexDir}/hidden`;
+  if (suite.source) run(["javac", "--release", "17", "-nowarn", "-cp", `${androidPlatform(35)}/android.jar`, "-d", hidden,
+    ...[...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/hidden`)].map((f) => `${import.meta.dir}/hidden/${f}`)]);
+  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", "-cp", [...jars, `${androidPlatform(35)}/android.jar`, hidden].join(":"),
     "-d", out, `${import.meta.dir}/ConformRunner.java`, ...(suite.source ? stubs : []),
     ...(suite.testng ? [`${import.meta.dir}/NgRunner.java`] : []), ...sources]);
   run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,

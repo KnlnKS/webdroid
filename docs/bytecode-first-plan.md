@@ -620,8 +620,9 @@ Run all of these before committing a flip:
 - `bun run test` (1,376 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time`. Baselines are 38,088, 2,538 and 27,514; jsr166
-  takes about 5 minutes and ojluni-time about 2.5;
+- `bun run conform guava|jsr166|ojluni-time|luni-io`. Baselines are 38,088, 2,538, 27,514 and 974;
+  jsr166 and luni-io take about 5 minutes and ojluni-time about 2.5. luni-io is libcore's java.io
+  and java.util.zip tests (harmony and luni) from LineageOS's Android 14 mirror;
 - `bun run lat` cold and `--warm`;
 - `bun run smoke apks/FitNotes.apk` (0 method failures).
 
@@ -737,7 +738,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      `URI.compareTo`). (8) sockets over `native/net.ts`.
    - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
      streams (`streamOfSource`), and probably the Buffers and charset codecs.
-   - Add an ojluni io/zip conformance suite before cut 3.
+   - `luni-io` (974 of 1,543 at the TS io layer) is the conformance suite for cuts 3 and 4.
 2. **B.4 collections.** Performance does not rule it out: 20,000 mixed String/Integer keys through
    HashMap put/get, ArrayList add/get and an entrySet walk took 12.3 ms from libcore against 11.3 ms
    in TS at steady state (Bun), and 29.9 against 15.4 ms on the first, cold run. The blocker is TS
