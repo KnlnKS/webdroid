@@ -617,11 +617,11 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,378 pass);
+- `bun run test` (1,382 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,148, 2,538, 27,514,
-  1,012 and 338; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+  1,012 and 472; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -701,6 +701,13 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   layout; no proxy system properties are set, so DefaultProxySelector answers NO_PROXY. luni-net went
   from 295 to 318. URLEncoder/URLDecoder cost 3.5 to 6.5 times the TS bodies (2 to 7 µs per query
   string in Bun, after trimming charset lookup, `String(char[])` and `Integer.parseInt`).
+- **java.net.URI and the cookie model (B.7 cut 7b).** URI, URISyntaxException, HttpCookie,
+  CookiePolicy, CookieManager, CookieStore and CookieHandler; `jcookies.ts` is gone. TS makes a URI
+  with `newObj("java/net/URI", ...)` and reads it through its getters. HttpURLConnection asks
+  `CookieHandler.getDefault()` per hop and escapes the URI as OkHttp's `HttpUrl.uri()` does.
+  luni-net went from 338 to 472. `new URI(s)` costs 4.8 µs against 0.34 µs for the lazy TS regex,
+  after `1L << n` became a table lookup in shl-long and short `String.indexOf(int)` stopped
+  allocating (7.3 µs before them).
 
 Fixes that apply to every mode:
 - Fallthrough ordering. A platform body that cannot run on a TS class yields to the spec's
@@ -738,7 +745,10 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      the rest; single classes need an exact-match form. About 60 TS sites read TS layout
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
-   - **Done:** cuts 2 (File) and 3 (FileDescriptor and the file streams). **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
+   - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 7a (java.net leaf classes)
+     and 7b (URI and cookies). **Next in cut 7:** 7c, URL: TS still reads `JURL.spec`/`.u` in
+     HttpURLConnection, JarURLConnection and `openStream`, and libcore's URL needs its stream
+     handlers (`libcore.net.url`, OkHttp's) or a TS URLStreamHandler over the fetch proxy. **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
      getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,
      which fflate's push API does not expose; there is no line or speed gain to pay for that risk.
    - **Cut order.** (1) zip codecs (CRC32, Adler32, Inflater, Deflater and their streams; 26

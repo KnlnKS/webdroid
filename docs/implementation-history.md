@@ -319,6 +319,19 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   unbuffered 1-byte writes of 256 KB 10 to 81 ms, RandomAccessFile readInt x100k 26 to 62 ms and
   readLine over 1 MB 5 to 155 ms (one read per byte, as on a device). luni-io went from 974 to
   1,012, mostly RandomAccessFile, FileInputStream and FileWriter tests.
+- 2026-09-28, java.net.URI and the cookie model from libcore (B.7 cut 7b). The TS URI parsed
+  lazily with a regex and never rejected input; its cookie store keyed cookies by strings, so it
+  could not answer as InMemoryCookieStore does. HttpURLConnection now asks
+  `CookieHandler.getDefault()` and builds each hop's URI through the Java constructor, escaping
+  what WHATWG URL leaves in a path or query and RFC 2396 rejects (`|`, `{`, a bare `%`), as
+  OkHttp's HttpUrl.uri() does; without that, a redirect to such a URL threw URISyntaxException.
+  luni-net went from 338 to 472. Parsing measured 7.3 us per typical https URL against 0.34 us
+  for the TS regex parse: libcore validates each character through `URI.match`, which shifted a
+  BigInt `1L << c` per call. A table for `1L << n` in shl-long and a non-allocating short-string
+  `String.indexOf(int)` brought it to 4.8 us (resolve 1.8 us against 0.19). The rest is the
+  emitted dispatch loop around small methods and the nest-access trampoline in front of
+  `match`, general emitter costs rather than URI's. indexOf(int) also truncated supplementary
+  code points to their low half.
 - 2026-09-28, java.util.logging from libcore. zygoteInit ran from platform-jar loading, before
   `linkNatives`; once its time-zone setup reached libcore logging, a TS-built HashMap view had no
   linked methods and every app failed to boot. It now runs after linking and also installs
