@@ -710,6 +710,25 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   heap of 2.1-3.8 GB; its 360 MB of dex is already shared through packed archives, and the bulk is
   per-class and per-method state (the top realm links 42,569 classes). Allocation sampling over a
   TikTok run: 6.6 GB in 38 s, about half under cold execution and 2 GB in compilation.
+- 2026-09-30, the zygote phase and platform-first precedence. A cold launch idled for about 200 ms
+  on localhost while the page waited for the apk, fonts, provisioning and the display-rate probe, and
+  only then indexed the boot class path and linked 1,904 native specs (about 150 ms), because the
+  app's dex had to be indexed first so that an app's copy of a platform class would win. A device
+  does the opposite (PathClassLoader asks the boot class loader first), so the platform is now
+  indexed and linked when the page starts, overlapping the download; the app's dex follows, and the
+  compile worker indexes in the same order. Cold `lat`, 4 interleaved rounds against 44da4521:
+  first frame -150 to -220 ms on Calculator, FitNotes and Mihon.
+- 2026-09-30, ColorFilters, Shaders and Path from AOSP (Stage C.2). The filters and shaders return
+  handles to small descriptors (a 4x5 matrix, a colour and blend mode, a gradient/bitmap/compose/
+  runtime recipe with its local matrix) that the Canvas2D renderer applies; the TS Paint reads a
+  filter's instance when it is set and a shader's per shaded draw, so setLocalMatrix and uniform
+  changes reach the next draw. Bitmaps and layers now honour a PorterDuff filter's mode (every mode
+  had been SRC_IN) and radial gradients keep their focal circle. Path, PathMeasure and PathIterator
+  run over natives ported from SkPath and SkContourMeasure, with the device's values recorded in
+  fwtest (verbs, points, lengths, pos/tan, segments, generation ids, op outlines); the old natives
+  returned placeholders for op, interpolate and approximate, ignored the clip op and lost the current
+  point after relative moves, and clipOutPath did nothing. Arcs stay cubics where Skia keeps conics.
+  Released handle slots are now reused, since recreated shaders and paths otherwise grew the table.
 
 ## Java, storage and framework semantics
 

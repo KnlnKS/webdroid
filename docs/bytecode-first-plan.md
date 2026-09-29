@@ -589,22 +589,29 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 ### Handoff state (2026-09-30): start here
 
-- **`knlnks/bytecode` tip `fa666ac3` is gated** (not pushed): typecheck; `bun run test` 1,388 pass;
-  FitNotes smoke 0 method failures; fast e2e 7/7 twice; the live set 6/6; `lat` cold and warm, level
-  with 44da4521 in interleaved runs on a quiet host; conform at every baseline on ab9f898b (the later
-  commits touch graphics and page-level sharing, which no suite reaches). `android/content/res/` is
-  AOSP bytecode by default (131efb48); its cold-launch cost measured under the switch is gone.
-- **Done since (2026-09-30), details in the history:** platform overrides of Object's methods run on
-  spec classes (a61f89c4; 406 had answered with identity); Rect, RectF, Point, PointF and Insets keep
-  only their layout (dbb39a74); Color and ColorSpace (fd124d8a), ColorMatrix (28fd6e26) and Matrix
-  (fa666ac3) are AOSP bytecode; lazy method stubs are 70% smaller (ab9f898b); a tab's realms share
-  CanvasKit, the platform jars and framework-res (a9d43bd3).
+- **`knlnks/bytecode` tip `2d4ac175` is gated** (not pushed): typecheck; `bun run test` 1,388 pass;
+  FitNotes smoke 0 method failures; fwtest's graphics and resource exercises; fast e2e 7/7 twice; the
+  live set (YouTube failed from `show-controls` once under parallel load, then passed 3 of 3 alone);
+  `lat` cold and warm. Conform last ran on ab9f898b, all at baseline; later commits touch graphics,
+  the shell's boot order and page-level sharing, which no suite reaches.
+- **Done 2026-09-30, details in the history:** platform overrides of Object's methods run on spec
+  classes (a61f89c4); Rect, RectF, Point, PointF and Insets keep only their layout (dbb39a74); Color,
+  ColorSpace, ColorMatrix, Matrix, the ColorFilters, Shaders, PorterDuff/BlendMode/Xfermode/TileMode,
+  Path, PathMeasure and PathIterator are AOSP bytecode, their natives following Skia; lazy method
+  stubs are 70% smaller (ab9f898b); a tab's realms share CanvasKit, the platform jars and
+  framework-res (a9d43bd3); the platform is indexed and linked in a zygote phase that overlaps the
+  app's download, with the boot class path ahead of the app as on a device (7917249c); released
+  handle slots are reused (b6a038f3). Cold `lat` against 44da4521: Calculator 1,468 against 1,620 ms,
+  FitNotes 1,421 against 1,581, Mihon 2,127 against 2,346; warm Calculator 871, FitNotes 879, Mihon
+  1,785 ms.
 - **Next: the rest of Stage C.2.** `fwtest android/graphics/` lists what the natives lack; the TS
-  references to re-home are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields
-  (167, which stay a layout), Bitmap (144), Path (96) and Typeface (52). Smaller, self-contained
-  cuts first: Path and PathMeasure (natives over `path.ts`), the ColorFilters and Shaders (their
-  natives return handles the TS Paint reads), Region, Outline, Camera, Interpolator; Paint, Canvas
-  and Bitmap last, with the view stack (Stage D).
+  references left to re-home are dominated by Drawable (222), Canvas (207), Paint (195), Rect's
+  fields (167, which stay a layout), Bitmap (144) and Typeface (52). Smaller cuts first: Region,
+  Outline, Camera, Interpolator, NinePatch, Picture; then Typeface and fonts; Paint, Canvas and
+  Bitmap last, with the view stack (Stage D).
+- **Finalizers do not run.** AOSP's PathMeasure frees its native state only in `finalize()`, so a
+  PathMeasure made per draw grows the handle table (the TS spec did not). Classes that clean up in
+  `finalize()` need a runtime mechanism (a FinalizationRegistry holding what the finalizer frees).
 - **Memory, measured 2026-09-30.** A realm starts at about 91 MB of heap plus the jars; the native
   core reserves 256 MiB of wasm memory per realm (untouched pages are not resident, and in V8 it
   adds full GCs only when allocated, not in steady state). TikTok runs 5 realms and its JS heap is
