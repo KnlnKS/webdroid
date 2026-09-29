@@ -10,7 +10,7 @@
 import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { JThrowable, stringHash, newObj, vcall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
+import { JThrowable, stringHash, newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8, sameBytes, mangleMethod } from "../abi";
 import { type JBAOS, noMark } from "./jio";
@@ -907,6 +907,13 @@ function group(entries: [string | null, string][]): Map<string | null, string[]>
   for (const [k, v] of entries) { let l = g.get(k); if (!l) g.set(k, l = []); l.push(v); }
   return g;
 }
+/** the URI a CookieHandler sees, escaped as OkHttp's HttpUrl.uri() does: WHATWG leaves characters
+ *  in the path, query and fragment that java.net.URI rejects */
+function cookieURI(target: string): Promise<unknown> {
+  const u = new URL(target), tail = u.pathname + u.search + u.hash;
+  const text = u.href.slice(0, u.href.length - tail.length) + tail.replace(/[[\]{}|\\^`"<> ]|%(?![\dA-Fa-f]{2})/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return newObj("java/net/URI", "(Ljava/lang/String;)V", text);
+}
 let followRedirects = 1, defaultUseCaches = 1;
 class JURLConnection extends JObj {
   url!: JURL;
@@ -942,7 +949,8 @@ class JURLConnection extends JObj {
     // Redirects are followed here, one proxy hop each, because the process CookieHandler that
     // Android's HttpURLConnection consults around every exchange must see each hop's URL.
     for (let hop = 0; ; hop++) {
-      const cookies = defaultCookieHandler, uri = cookies && mkURI(target), headers = new Headers(base);
+      const cookies = await scall("java/net/CookieHandler", "getDefault", "()Ljava/net/CookieHandler;");
+      const uri = cookies && await cookieURI(target), headers = new Headers(base);
       if (cookies) {
         const offered = await vcall(cookies, "get", "(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;", uri, await headerMap(group(this.req)));
         for (const e of await toJsArray(await vcall(offered, "entrySet", "()Ljava/util/Set;"))) {

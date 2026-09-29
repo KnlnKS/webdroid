@@ -130,6 +130,29 @@ describe("http-stream", () => {
       globalThis.fetch = original; server.stop(true);
     }
   });
+  test("a default CookieManager returns a hop's Set-Cookie on the next hop, for URLs java.net.URI would reject", async () => {
+    const seen: (string | null)[] = [];
+    const server = Bun.serve({ port: 0, fetch(request) {
+      const url = new URL(request.url).searchParams.get("url")!, start = url.includes("/start");
+      seen.push(request.headers.get("x-wd-cookie"));
+      const headers: Record<string, string> = { "x-wd-final-url": url, "x-wd-status": start ? "302" : "200" };
+      if (start) Object.assign(headers, { location: "https://example.test/end?v=a|b", "x-wd-set-cookie": JSON.stringify(["hop=1"]) });
+      return new Response(start ? null : "done", { headers });
+    } });
+    const original = globalThis.fetch;
+    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+      original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
+    await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", await newObj("java/net/CookieManager"));
+    try {
+      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/start?q={x}");
+      const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
+      expect(await vcall(connection, "getResponseCode", "()I")).toBe(200);
+      expect(seen).toEqual([null, "hop=1"]);
+    } finally {
+      await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", null);
+      globalThis.fetch = original; server.stop(true);
+    }
+  });
 });
 
 describe("http-upload", () => {
