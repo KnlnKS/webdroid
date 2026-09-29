@@ -103,11 +103,42 @@ await exercise("Paint.measureText", async () => {
   if (typeof w !== "number" || !(w > 0)) throw new Error(`measureText returned ${w}`);
 }, true);
 
-await exercise("new Matrix()", async () => {
-  const m = await newObj("android/graphics/Matrix", "()V");
+await exercise("Matrix (compose, map, invert, fit, poly, values)", async () => {
+  const M = () => newObj("android/graphics/Matrix", "()V");
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  const str = (m: unknown) => vcall(m, "toString", "()Ljava/lang/String;");
+  const rectF = (l: number, t: number, r: number, b: number) => newObj("android/graphics/RectF", "(FFFF)V", l, t, r, b);
+  const m = await M();
   await vcall(m, "setTranslate", "(FF)V", 3, 4);
-  const id = await vcall(m, "isIdentity", "()Z");
-  if (id) throw new Error("translated matrix reports identity");
+  await vcall(m, "preScale", "(FF)Z", 2, 2);
+  await vcall(m, "postRotate", "(F)Z", 90);
+  same("translate.scale then rotate", await str(m), "Matrix{[0.0, -2.0, -4.0][2.0, 0.0, 3.0][0.0, 0.0, 1.0]}");
+  await vcall(m, "setRotate", "(FFF)V", 90, 10, 10);
+  same("quarter turn", [await str(m), await vcall(m, "rectStaysRect", "()Z")], ["Matrix{[0.0, -1.0, 20.0][1.0, 0.0, 0.0][0.0, 0.0, 1.0]}", 1]);
+  await vcall(m, "setSkew", "(FFFF)V", 0.5, 0.25, 4, 8);
+  const pts = Float32Array.of(1, 2), vec = Float32Array.of(1, 2), rect = await rectF(0, 0, 10, 20);
+  await vcall(m, "mapPoints", "([F)V", pts);
+  await vcall(m, "mapVectors", "([F)V", vec);
+  same("mapPoints/mapVectors", [...pts, ...vec], [-2, 1.25, 2, 2.25]);
+  same("mapRect", [await vcall(m, "mapRect", "(Landroid/graphics/RectF;)Z", rect), await vcall(rect, "toShortString", "()Ljava/lang/String;")], [0, "[-4.0,-1.0][16.0,21.5]"]);
+  const inv = await M(), product = await M();
+  same("invert", await vcall(m, "invert", "(Landroid/graphics/Matrix;)Z", inv), 1);
+  await vcall(product, "setConcat", "(Landroid/graphics/Matrix;Landroid/graphics/Matrix;)Z", m, inv);
+  same("m * m^-1", await vcall(product, "isIdentity", "()Z"), 1);
+  const fit = (await linkInit("android/graphics/Matrix$ScaleToFit")).ctor as Record<string, unknown>;
+  same("setRectToRect CENTER", await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z",
+    await rectF(0, 0, 100, 50), await rectF(10, 10, 210, 210), fit.s$CENTER), 1);
+  same("its values", await str(m), "Matrix{[2.0, 0.0, 10.0][0.0, 2.0, 60.0][0.0, 0.0, 1.0]}");
+  // four points need perspective
+  const src = Float32Array.of(0, 0, 100, 0, 100, 100, 0, 100), dst = Float32Array.of(10, 10, 90, 20, 80, 90, 20, 80), out = new Float32Array(8);
+  same("setPolyToPoly", [await vcall(m, "setPolyToPoly", "([FI[FII)Z", src, 0, dst, 0, 4), await vcall(m, "isAffine", "()Z")], [1, 0]);
+  await vcall(m, "mapPoints", "([F[F)V", out, src);
+  same("maps the quad", [...out].map((v) => +v.toFixed(3)), [...dst]);
+  await vcall(m, "setValues", "([F)V", Float32Array.of(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  const copy = await newObj("android/graphics/Matrix", "(Landroid/graphics/Matrix;)V", m);
+  same("equals a copy", await vcall(m, "equals", "(Ljava/lang/Object;)Z", copy), 1);
+  await vcall(copy, "postTranslate", "(FF)Z", 1, 0);
+  same("and not once changed", await vcall(m, "equals", "(Ljava/lang/Object;)Z", copy), 0);
 });
 
 await exercise("new Path()", async () => {

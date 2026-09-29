@@ -6,7 +6,7 @@ import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
-import { handle } from "./handles";
+import { handle, deref, replace } from "./handles";
 import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
@@ -878,6 +878,66 @@ function gradientSpec(name: string, geom: string, tile: string, make: (a: number
 rt.register(gradientSpec("SweepGradient", "FF", "", (a) => measureCtx().createConicGradient(0, a[0], a[1])));
 rt.register(gradientSpec("LinearGradient", "FFFF", "Landroid/graphics/Shader$TileMode;", (a) => measureCtx().createLinearGradient(a[0], a[1], a[2], a[3])));
 rt.register(gradientSpec("RadialGradient", "FFF", "Landroid/graphics/Shader$TileMode;", (a) => measureCtx().createRadialGradient(a[0], a[1], 0, a[0], a[1], a[2])));
+
+// ── Matrix: AOSP's bytecode over the natives in delegates.ts. native_instance is a handle to a
+// row-major 3x3 (MSCALE_X, MSKEW_X, MTRANS_X, MSKEW_Y, MSCALE_Y, MTRANS_Y, MPERSP_0..2) that the
+// natives update in place, so TS state can share one with a Java Matrix. A 2D context holds only
+// the affine part: [a, b, c, d, e, f] = [M0, M3, M1, M4, M2, M5].
+export type Mat = Float64Array;
+export const identity = (): Mat => Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1);
+/** read-only: a source to copy from */
+export const IDENTITY = identity();
+export function mul(a: Mat, b: Mat): Mat {
+  const o = new Float64Array(9);
+  for (let r = 0; r < 9; r += 3) {
+    for (let c = 0; c < 3; c++) o[r + c] = a[r] * b[c] + a[r + 1] * b[3 + c] + a[r + 2] * b[6 + c];
+  }
+  return o;
+}
+export const translateM = (dx: number, dy: number): Mat => Float64Array.of(1, 0, dx, 0, 1, dy, 0, 0, 1);
+export const scaleM = (sx: number, sy: number): Mat => Float64Array.of(sx, 0, 0, 0, sy, 0, 0, 0, 1);
+export const skewM = (kx: number, ky: number): Mat => Float64Array.of(1, kx, 0, ky, 1, 0, 0, 0, 1);
+export const sinCosM = (s: number, c: number): Mat => Float64Array.of(c, -s, 0, s, c, 0, 0, 0, 1);
+/** SkMatrix::setRotate snaps a sine or cosine within SK_ScalarNearlyZero to 0, so quarter turns stay exact */
+const snap = (v: number) => (Math.abs(v) <= 1 / 4096 ? 0 : v);
+export const rotateM = (deg: number): Mat => { const r = deg * Math.PI / 180; return sinCosM(snap(Math.sin(r)), snap(Math.cos(r))); };
+/** the same transform taken about (px, py) rather than the origin */
+export const about = (m: Mat, px: number, py: number): Mat => mul(translateM(px, py), mul(m, translateM(-px, -py)));
+export function invert(m: Mat): Mat | null {
+  const [a, b, c, d, e, f, g, h, i] = m;
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  // SkMatrix::invert: a determinant within SK_ScalarNearlyZero cubed is singular
+  if (!(Math.abs(det) > 1 / 4096 ** 3)) return null;
+  return Float64Array.of(
+    (e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det,
+    (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det,
+    (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det,
+  );
+}
+/** SkMatrix's point mapping: a point at w = 0 maps to the origin */
+export function mapPoint(m: Mat, x: number, y: number): [number, number] {
+  const w = m[6] * x + m[7] * y + m[8];
+  const k = w === 1 ? 1 : w ? 1 / w : 0;
+  return [(m[0] * x + m[1] * y + m[2]) * k, (m[3] * x + m[4] * y + m[5]) * k];
+}
+export const isIdentity = (m: Mat) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 0 && m[4] === 1 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1;
+
+let nativeInstance = "";
+const instanceOf = (m: object) => (m as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Matrix", "native_instance")];
+/** the 3x3 behind a Java Matrix */
+export const matrixOf = (m: object): Mat => deref<Mat>(instanceOf(m));
+/** a new Java Matrix over `mat` itself: writes on either side are seen by the other */
+export const javaMatrix = (mat: Mat): unknown => after(newObj("android/graphics/Matrix", "()V"), (m: object) => { replace(instanceOf(m), mat); return m; });
+/** a 2D context's affine [a, b, c, d, e, f] as the 3x3 */
+export function setAffine(m: Mat, a: number, b: number, c: number, d: number, e: number, f: number): void {
+  m[0] = a; m[1] = c; m[2] = e; m[3] = b; m[4] = d; m[5] = f; m[6] = 0; m[7] = 0; m[8] = 1;
+}
+export const affineOf = (m: Mat): [number, number, number, number, number, number] => [m[0], m[3], m[1], m[4], m[2], m[5]];
+/** concatenate (or with `set`, replace) a 2D context's transform; a perspective row cannot be carried */
+export function applyMatrix(ctx: Ctx2D, m: ArrayLike<number>, set = false): void {
+  if (set) ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
+  else ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
+}
 
 // ── Matrix (affine 2x3: [a, b, c, d, tx, ty] as in canvas transform(a,b,c,d,e,f))
 export class JMatrix extends JObj {

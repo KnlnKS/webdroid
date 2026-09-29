@@ -18,7 +18,8 @@ import { handle, deref, replace, release, FINALIZER } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS,
+  type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, affineOf, setAffine, applyMatrix,
 } from "./graphics";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jstream";
@@ -82,60 +83,6 @@ rt.register({
   },
 });
 
-// ── android.graphics.Matrix ────────────────────────────────────────────────────────────
-// AOSP's is a full 3x3 in row-major order (MSCALE_X, MSKEW_X, MTRANS_X, MSKEW_Y, MSCALE_Y,
-// MTRANS_Y, MPERSP_0, MPERSP_1, MPERSP_2), not the 6-element affine JMatrix carries: it has
-// to be, or setPolyToPoly and every perspective mapping quietly flattens.
-type Mat = Float64Array;
-const identity = (): Mat => Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1);
-function mul(a: Mat, b: Mat): Mat {
-  const o = new Float64Array(9);
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
-    }
-  }
-  return o;
-}
-const translateM = (dx: number, dy: number): Mat => Float64Array.of(1, 0, dx, 0, 1, dy, 0, 0, 1);
-const scaleM = (sx: number, sy: number): Mat => Float64Array.of(sx, 0, 0, 0, sy, 0, 0, 0, 1);
-const skewM = (kx: number, ky: number): Mat => Float64Array.of(1, kx, 0, ky, 1, 0, 0, 0, 1);
-const sinCosM = (s: number, c: number): Mat => Float64Array.of(c, -s, 0, s, c, 0, 0, 0, 1);
-const rotateM = (deg: number): Mat => sinCosM(Math.sin(deg * Math.PI / 180), Math.cos(deg * Math.PI / 180));
-/** the same transform taken about (px, py) rather than the origin */
-const about = (m: Mat, px: number, py: number): Mat => mul(translateM(px, py), mul(m, translateM(-px, -py)));
-
-/** pre/post/set are the same three compositions for every transform AOSP names; Translate has
- *  no pivoted form and SinCos only the set ones */
-function matrixOps(name: string, make: (...a: number[]) => Mat, arity: number, pivot = true, compose = true): Record<string, unknown> {
-  const plain = `(J${"F".repeat(arity)})V`;
-  const pivoted = `(J${"F".repeat(arity + 2)})V`;
-  const at = (a: number[]) => (a.length > arity ? about(make(...a.slice(0, arity)), a[arity], a[arity + 1]) : make(...a));
-  const set = (h: bigint, ...a: number[]) => { replace(h, at(a)); };
-  const pre = (h: bigint, ...a: number[]) => { replace(h, mul(deref<Mat>(h), at(a))); };
-  const post = (h: bigint, ...a: number[]) => { replace(h, mul(at(a), deref<Mat>(h))); };
-  const forms = pivot ? [plain, pivoted] : [plain];
-  return Object.fromEntries(forms.flatMap((desc) => [[`nSet${name}${desc}`, set],
-    ...compose ? [[`nPre${name}${desc}`, pre], [`nPost${name}${desc}`, post]] : []]));
-}
-
-function invert(m: Mat): Mat | null {
-  const [a, b, c, d, e, f, g, h, i] = m;
-  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-  if (!det) return null;
-  return Float64Array.of(
-    (e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det,
-    (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det,
-    (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det,
-  );
-}
-function mapPoint(m: Mat, x: number, y: number): [number, number] {
-  const w = m[6] * x + m[7] * y + m[8];
-  const k = w === 1 || w === 0 ? 1 : 1 / w;
-  return [(m[0] * x + m[1] * y + m[2]) * k, (m[3] * x + m[4] * y + m[5]) * k];
-}
-const isIdentity = (m: Mat) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 0 && m[4] === 1 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1;
-
 interface Rect { left: number; top: number; right: number; bottom: number }
 
 // Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
@@ -168,8 +115,67 @@ delegate("android/graphics/ColorSpace$Rgb$Native", {
   "nativeGetNativeFinalizer()J": () => FINALIZER,
 });
 
+// ── android.graphics.Matrix ────────────────────────────────────────────────────────────
+// The 3x3 and its math live in graphics.ts, beside the bridge TS reaches it through. Every write
+// lands in the handle's own array, because TS state (an ImageView's matrix, a Transformation's)
+// can be the array behind a Java Matrix.
+const matrix = (h: bigint) => deref<Mat>(h);
+const put = (h: bigint, m: ArrayLike<number>) => { matrix(h).set(m); };
+
+/** pre/post/set are the same three compositions for every transform AOSP names; Translate has
+ *  no pivoted form and SinCos only the set ones */
+function matrixOps(name: string, make: (...a: number[]) => Mat, arity: number, pivot = true, compose = true): Record<string, unknown> {
+  const plain = `(J${"F".repeat(arity)})V`;
+  const pivoted = `(J${"F".repeat(arity + 2)})V`;
+  const at = (a: number[]) => (a.length > arity ? about(make(...a.slice(0, arity)), a[arity], a[arity + 1]) : make(...a));
+  const set = (h: bigint, ...a: number[]) => put(h, at(a));
+  const pre = (h: bigint, ...a: number[]) => put(h, mul(matrix(h), at(a)));
+  const post = (h: bigint, ...a: number[]) => put(h, mul(at(a), matrix(h)));
+  const forms = pivot ? [plain, pivoted] : [plain];
+  return Object.fromEntries(forms.flatMap((desc) => [[`nSet${name}${desc}`, set],
+    ...compose ? [[`nPre${name}${desc}`, pre], [`nPost${name}${desc}`, post]] : []]));
+}
+const hasPerspective = (m: Mat) => m[6] !== 0 || m[7] !== 0 || m[8] !== 1;
+/** SkMatrix::rectStaysRect */
+function rectStaysRect(m: Mat): boolean {
+  if (hasPerspective(m)) return false;
+  return m[1] === 0 && m[3] === 0 ? m[0] !== 0 && m[4] !== 0 : m[0] === 0 && m[4] === 0 && m[1] !== 0 && m[3] !== 0;
+}
+/** SkMatrix::mapVectors: without the translation, or under perspective, less where the origin maps */
+function mapVector(m: Mat, x: number, y: number): [number, number] {
+  if (!hasPerspective(m)) return [m[0] * x + m[1] * y, m[3] * x + m[4] * y];
+  const [px, py] = mapPoint(m, x, y), [ox, oy] = mapPoint(m, 0, 0);
+  return [px - ox, py - oy];
+}
+// SkMatrix::setPolyToPoly: each point set becomes the image of the unit square (or its first two
+// or three corners), and the result is dst's map after the inverse of src's
+const nearlyZero = (x: number) => Math.fround(x * x) === 0;
+function polyMap(p: Float32Array, i: number, n: number): Mat | null {
+  const x = (k: number) => p[i + k * 2], y = (k: number) => p[i + k * 2 + 1];
+  if (n === 2) return Float64Array.of(y(1) - y(0), x(1) - x(0), x(0), x(0) - x(1), y(1) - y(0), y(0), 0, 0, 1);
+  if (n === 3) return Float64Array.of(x(2) - x(0), x(1) - x(0), x(0), y(2) - y(0), y(1) - y(0), y(0), 0, 0, 1);
+  const x0 = x(2) - x(0), y0 = y(2) - y(0), x1 = x(2) - x(1), y1 = y(2) - y(1), x2 = x(2) - x(3), y2 = y(2) - y(3);
+  let a1: number, a2: number, denom: number;
+  if (x2 > 0 ? y2 > 0 ? x2 > y2 : x2 > -y2 : y2 > 0 ? -x2 > y2 : x2 < y2) {
+    if (nearlyZero(denom = x1 * y2 / x2 - y1)) return null;
+    a1 = ((x0 - x1) * y2 / x2 - y0 + y1) / denom;
+  } else {
+    if (nearlyZero(denom = x1 - y1 * x2 / y2)) return null;
+    a1 = (x0 - x1 - (y0 - y1) * x2 / y2) / denom;
+  }
+  if (x1 > 0 ? y1 > 0 ? x1 > y1 : x1 > -y1 : y1 > 0 ? -x1 > y1 : x1 < y1) {
+    if (nearlyZero(denom = y2 - x2 * y1 / x1)) return null;
+    a2 = (y0 - y2 - (x0 - x2) * y1 / x1) / denom;
+  } else {
+    if (nearlyZero(denom = y2 * x1 / y1 - x2)) return null;
+    a2 = ((y0 - y2) * x1 / y1 - x0 + x2) / denom;
+  }
+  return Float64Array.of(a2 * x(3) + x(3) - x(0), a1 * x(1) + x(1) - x(0), x(0),
+    a2 * y(3) + y(3) - y(0), a1 * y(1) + y(1) - y(0), y(0), a2, a1, 1);
+}
+
 delegate("android/graphics/Matrix$ExtraNatives", {
-  "nCreate(J)J": (src: bigint) => handle(src ? Float64Array.from(deref<Mat>(src)) : identity()),
+  "nCreate(J)J": (src: bigint) => handle(src ? Float64Array.from(matrix(src)) : identity()),
   "nGetNativeFinalizer()J": () => FINALIZER,
 });
 delegate("android/graphics/Matrix", {
@@ -178,68 +184,62 @@ delegate("android/graphics/Matrix", {
   ...matrixOps("Skew", skewM, 2),
   ...matrixOps("Rotate", rotateM, 1),
   ...matrixOps("SinCos", sinCosM, 2, true, false),
-  "nReset(J)V": (h: bigint) => { replace(h, identity()); },
-  "nSet(JJ)V": (h: bigint, s: bigint) => { replace(h, s ? Float64Array.from(deref<Mat>(s)) : identity()); },
-  "nSetConcat(JJJ)V": (h: bigint, a: bigint, b: bigint) => { replace(h, mul(deref<Mat>(a), deref<Mat>(b))); },
-  "nPreConcat(JJ)V": (h: bigint, o: bigint) => { replace(h, mul(deref<Mat>(h), deref<Mat>(o))); },
-  "nPostConcat(JJ)V": (h: bigint, o: bigint) => { replace(h, mul(deref<Mat>(o), deref<Mat>(h))); },
-  "nIsIdentity(J)Z": (h: bigint) => (isIdentity(deref<Mat>(h)) ? 1 : 0),
-  "nIsAffine(J)Z": (h: bigint) => { const m = deref<Mat>(h); return m[6] === 0 && m[7] === 0 && m[8] === 1 ? 1 : 0; },
-  "nRectStaysRect(J)Z": (h: bigint) => {
-    const m = deref<Mat>(h);
-    return (m[1] === 0 && m[3] === 0) || (m[0] === 0 && m[4] === 0) ? 1 : 0;
-  },
-  "nEquals(JJ)Z": (a: bigint, b: bigint) => (deref<Mat>(a).every((v, i) => v === deref<Mat>(b)[i]) ? 1 : 0),
-  "nGetValues(J[F)V": (h: bigint, out: Float32Array) => out.set(deref<Mat>(h)),
-  "nSetValues(J[F)V": (h: bigint, v: Float32Array) => { replace(h, Float64Array.from(v)); },
+  "nReset(J)V": (h: bigint) => put(h, IDENTITY),
+  "nSet(JJ)V": (h: bigint, s: bigint) => put(h, s ? matrix(s) : IDENTITY),
+  "nSetConcat(JJJ)V": (h: bigint, a: bigint, b: bigint) => put(h, mul(matrix(a), matrix(b))),
+  "nPreConcat(JJ)V": (h: bigint, o: bigint) => put(h, mul(matrix(h), matrix(o))),
+  "nPostConcat(JJ)V": (h: bigint, o: bigint) => put(h, mul(matrix(o), matrix(h))),
+  "nIsIdentity(J)Z": (h: bigint) => +isIdentity(matrix(h)),
+  "nIsAffine(J)Z": (h: bigint) => +!hasPerspective(matrix(h)),
+  "nRectStaysRect(J)Z": (h: bigint) => +rectStaysRect(matrix(h)),
+  "nEquals(JJ)Z": (a: bigint, b: bigint) => { const m = matrix(a), o = matrix(b); return +m.every((v, i) => v === o[i]); },
+  "nGetValues(J[F)V": (h: bigint, out: Float32Array) => out.set(matrix(h)),
+  "nSetValues(J[F)V": (h: bigint, v: Float32Array) => put(h, v.subarray(0, 9)),
   "nInvert(JJ)Z": (h: bigint, into: bigint) => {
-    const inv = invert(deref<Mat>(h));
-    if (!inv) return 0;
-    replace(into, inv);
-    return 1;
+    const inv = invert(matrix(h));
+    if (inv) put(into, inv);
+    return +!!inv;
   },
-  "nMapPoints(J[FI[FIIZ)V": (h: bigint, dst: Float32Array, dstI: number, src: Float32Array, srcI: number, n: number, isPts: number) => {
-    const m = deref<Mat>(h);
-    // a vector ignores translation, which is the whole difference between mapPoints and
-    // mapVectors — AOSP passes it as the trailing boolean rather than as a second entry point
-    const t = isPts ? m : Float64Array.of(m[0], m[1], 0, m[3], m[4], 0, m[6], m[7], m[8]);
-    for (let i = 0; i < n; i++) {
-      const [x, y] = mapPoint(t, src[srcI + i * 2], src[srcI + i * 2 + 1]);
-      dst[dstI + i * 2] = x; dst[dstI + i * 2 + 1] = y;
+  "nMapPoints(J[FI[FIIZ)V": (h: bigint, dst: Float32Array, di: number, src: Float32Array, si: number, n: number, isPts: number) => {
+    const m = matrix(h), map = isPts ? mapPoint : mapVector;
+    if (src === dst && si !== di) src = src.slice(si, si + n * 2), si = 0;
+    for (let i = 0; i < n * 2; i += 2) {
+      const [x, y] = map(m, src[si + i], src[si + i + 1]);
+      dst[di + i] = x; dst[di + i + 1] = y;
     }
   },
   "nMapRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z": (h: bigint, dst: Rect, src: Rect) => {
-    const m = deref<Mat>(h);
+    const m = matrix(h);
     const [x0, y0] = mapPoint(m, src.left, src.top), [x1, y1] = mapPoint(m, src.right, src.top);
     const [x2, y2] = mapPoint(m, src.right, src.bottom), [x3, y3] = mapPoint(m, src.left, src.bottom);
     dst.left = Math.min(x0, x1, x2, x3); dst.right = Math.max(x0, x1, x2, x3);
     dst.top = Math.min(y0, y1, y2, y3); dst.bottom = Math.max(y0, y1, y2, y3);
-    return isIdentity(m) || (m[1] === 0 && m[3] === 0) ? 1 : 0;
+    return +rectStaysRect(m);
   },
+  // SkMatrix::setRectToRect: an empty source resets and fails, an empty destination scales to 0
   "nSetRectToRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z": (h: bigint, src: Rect, dst: Rect, stf: number) => {
     const sw = src.right - src.left, sh = src.bottom - src.top;
     const dw = dst.right - dst.left, dh = dst.bottom - dst.top;
-    if (sw <= 0 || sh <= 0) return 0;
+    if (!(sw > 0 && sh > 0)) { put(h, IDENTITY); return 0; }
+    if (!(dw > 0 && dh > 0)) { put(h, [0, 0, 0, 0, 0, 0, 0, 0, 1]); return 1; }
     // FILL stretches each axis; START/CENTER/END keep the aspect and align the slack
     let sx = dw / sw, sy = dh / sh;
     if (stf !== 0) sx = sy = Math.min(sx, sy);
-    const slackX = dw - sw * sx, slackY = dh - sh * sy;
     const k = stf === 2 ? 0.5 : stf === 3 ? 1 : 0;
-    const tx = dst.left - src.left * sx + (stf === 0 ? 0 : slackX * k);
-    const ty = dst.top - src.top * sy + (stf === 0 ? 0 : slackY * k);
-    replace(h, Float64Array.of(sx, 0, tx, 0, sy, ty, 0, 0, 1));
+    put(h, [sx, 0, dst.left - src.left * sx + (dw - sw * sx) * k, 0, sy, dst.top - src.top * sy + (dh - sh * sy) * k, 0, 0, 1]);
     return 1;
   },
   "nSetPolyToPoly(J[FI[FII)Z": (h: bigint, src: Float32Array, si: number, dst: Float32Array, di: number, n: number) => {
-    const m = affineFromPoints(src, si, dst, di, n);
-    if (!m) return 0;
-    replace(h, Float64Array.of(m[0], m[2], m[4], m[1], m[3], m[5], 0, 0, 1));
+    if (n === 0) { put(h, IDENTITY); return 1; }
+    if (n === 1) { put(h, translateM(dst[di] - src[si], dst[di + 1] - src[si + 1])); return 1; }
+    const from = polyMap(src, si, n), inverse = from && invert(from), to = inverse && polyMap(dst, di, n);
+    if (!to) return 0;
+    put(h, mul(to, inverse!));
     return 1;
   },
   "nMapRadius(JF)F": (h: bigint, r: number) => {
-    const m = deref<Mat>(h);
-    // Skia's: the geometric mean of the two axis lengths, which is what a circle maps to on average
-    return Math.sqrt(Math.abs(m[0] * m[4] - m[1] * m[3])) * r;
+    const m = matrix(h), [ax, ay] = mapVector(m, r, 0), [bx, by] = mapVector(m, 0, r);
+    return Math.fround(Math.sqrt(Math.hypot(ax, ay) * Math.hypot(bx, by)));
   },
 });
 
@@ -510,14 +510,14 @@ delegate("android/graphics/Path", {
   },
   "nAddPath(JJ)V": (h: bigint, o: bigint) => appendPath(path(h), path(o)),
   "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => appendPath(path(h), path(o), [1, 0, 0, 1, dx, dy]),
-  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => appendPath(path(h), path(o), affine(deref<Mat>(mat))),
+  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => appendPath(path(h), path(o), affineOf(matrix(mat))),
 
   "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => pathOffset(path(h), dx, dy),
-  "nTransform(JJ)V": (h: bigint, mat: bigint) => pathTransform(path(h), affine(deref<Mat>(mat))),
+  "nTransform(JJ)V": (h: bigint, mat: bigint) => pathTransform(path(h), affineOf(matrix(mat))),
   "nTransform(JJJ)V": (h: bigint, mat: bigint, dst: bigint) => {
     const d = path(dst);
     d.ops = copyOps(h);
-    pathTransform(d, affine(deref<Mat>(mat)));
+    pathTransform(d, affineOf(matrix(mat)));
   },
   "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => pathBounds(path(h), r),
   "nSetFillType(JI)V": (h: bigint, ft: number) => { path(h).fillRule = ft === 1 || ft === 3 ? "evenodd" : "nonzero"; },
@@ -535,8 +535,6 @@ delegate("android/graphics/Path", {
   "nApproximate(JF)[F": () => new Float32Array(0),
 });
 
-/** the 6-element affine pathTransform takes, from AOSP's 3x3 */
-const affine = (m: Mat): number[] => [m[0], m[3], m[1], m[4], m[2], m[5]];
 
 // ── android.graphics.Canvas / BaseCanvas ───────────────────────────────────────────────
 // Every one of these routes into canvasMethods, which is the table our own Canvas native
@@ -581,12 +579,12 @@ delegate("android/graphics/Canvas", {
   "nScale(JFF)V": on("scale(FF)V"),
   "nRotate(JF)V": on("rotate(F)V"),
   "nSkew(JFF)V": on("skew(FF)V"),
-  "nConcat(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h), deref<Mat>(m), false),
-  "nConcat(J[F)V": (h: bigint, v: Float32Array) => applyMatrix(canvas(h), Float64Array.from(v), false),
-  "nSetMatrix(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h), m ? deref<Mat>(m) : identity(), true),
+  "nConcat(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h).ctx, matrix(m)),
+  "nConcat(J[F)V": (h: bigint, v: Float32Array) => applyMatrix(canvas(h).ctx, v),
+  "nSetMatrix(JJ)V": (h: bigint, m: bigint) => { if (m) applyMatrix(canvas(h).ctx, matrix(m), true); else canvas(h).ctx.setTransform(1, 0, 0, 1, 0, 0); },
   "nGetMatrix(JJ)V": (h: bigint, into: bigint) => {
     const t = canvas(h).ctx.getTransform();
-    replace(into, Float64Array.of(t.a, t.c, t.e, t.b, t.d, t.f, 0, 0, 1));
+    setAffine(matrix(into), t.a, t.b, t.c, t.d, t.e, t.f);
   },
 
   "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => on(op === 0 ? "clipOutRect(FFFF)Z" : "clipRect(FFFF)Z")(h, l, t, r, b),
@@ -634,7 +632,7 @@ delegate("android/graphics/BaseCanvas", {
   "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, pt: bigint) => {
     const c = canvas(h);
     c.ctx.save();
-    applyMatrix(c, deref<Mat>(m), false);
+    applyMatrix(c.ctx, matrix(m));
     cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V")
       .call(c, deref<JBitmap>(b) as never, 0 as never, 0 as never, optPaint(pt) as never);
     c.ctx.restore();
@@ -690,11 +688,6 @@ function rect(l: number, t: number, r: number, b: number): JRect {
   const o = new JRect();
   o.left = l; o.top = t; o.right = r; o.bottom = b;
   return o;
-}
-/** AOSP's 3x3 onto the 2D context's transform; a perspective row cannot be carried */
-function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
-  if (replace) c.ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
-  else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
 
 // ── android.graphics.text: MeasuredText and LineBreaker ────────────────────────────────
