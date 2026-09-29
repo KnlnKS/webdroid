@@ -39,67 +39,9 @@ export function lambda(iface: string, f: Fn): JLambda {
   return l;
 }
 const fnDesc = (iface: string) => `L${F}${iface};`;
-/** and/or/negate of the predicate interfaces */
-const logic = (iface: string): Methods => ({
-  [`and(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, o: unknown) {
-    if (o == null) rt.npe();
-    return lambda(iface, (...a) => after(invoke(iface, this, ...a), (r) => (r ? invoke(iface, o, ...a) : 0)));
-  },
-  [`or(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, o: unknown) {
-    if (o == null) rt.npe();
-    return lambda(iface, (...a) => after(invoke(iface, this, ...a), (r) => (r ? 1 : invoke(iface, o, ...a))));
-  },
-  [`negate()${fnDesc(iface)}`]: function (this: unknown) { return lambda(iface, (...a) => after(invoke(iface, this, ...a), (r) => +!r)); },
-});
-/** andThen of the consumer interfaces: run this, then the other, with the same arguments */
-const chain = (iface: string): Methods => ({
-  [`andThen(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, o: unknown) {
-    if (o == null) rt.npe();
-    return lambda(iface, (...a) => after(invoke(iface, this, ...a), () => invoke(iface, o, ...a)));
-  },
-});
-/** compose/andThen/identity of Function and the primitive unary operators */
-const composing = (iface: string): Methods => ({
-  [`compose(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, g: unknown) {
-    if (g == null) rt.npe();
-    return lambda(iface, (x) => after(invoke(iface, g, x), (y) => invoke(iface, this, y)));
-  },
-  [`andThen(${fnDesc(iface)})${fnDesc(iface)}`]: function (this: unknown, g: unknown) {
-    if (g == null) rt.npe();
-    return lambda(iface, (x) => after(invoke(iface, this, x), (y) => invoke(iface, g, y)));
-  },
-  [`static identity()${fnDesc(iface)}`]: () => lambda(iface, (x) => x),
-});
 const compareWith = (c: unknown, a: unknown, b: unknown): number | Promise<number> => vcall(c, "compare", `(${O}${O})I`, a, b);
-const DEFAULTS: Record<string, Methods> = {
-  Function: composing("Function"),
-  UnaryOperator: { [`static identity()${fnDesc("UnaryOperator")}`]: () => lambda("UnaryOperator", (x) => x) },
-  BiFunction: {
-    [`andThen(${fnDesc("Function")})${fnDesc("BiFunction")}`]: function (this: unknown, g: unknown) {
-      if (g == null) rt.npe();
-      return lambda("BiFunction", (a, b) => after(invoke("BiFunction", this, a, b), (r) => invoke("Function", g, r)));
-    },
-  },
-  BinaryOperator: {
-    [`static minBy(Ljava/util/Comparator;)${fnDesc("BinaryOperator")}`]: (c: unknown) =>
-      lambda("BinaryOperator", (a, b) => after(compareWith(c ?? rt.npe(), a, b), (r) => (r <= 0 ? a : b))),
-    [`static maxBy(Ljava/util/Comparator;)${fnDesc("BinaryOperator")}`]: (c: unknown) =>
-      lambda("BinaryOperator", (a, b) => after(compareWith(c ?? rt.npe(), a, b), (r) => (r >= 0 ? a : b))),
-  },
-  Consumer: chain("Consumer"), BiConsumer: chain("BiConsumer"),
-  Predicate: {
-    ...logic("Predicate"),
-    [`static isEqual(${O})${fnDesc("Predicate")}`]: (t: unknown) =>
-      lambda("Predicate", (x) => (t == null ? +(x == null) : vcall(t, "equals", `(${O})Z`, x))),
-    [`static not(${fnDesc("Predicate")})${fnDesc("Predicate")}`]: (p: unknown) =>
-      lambda("Predicate", (x) => after(invoke("Predicate", p ?? rt.npe(), x), (r) => +!r)),
-  },
-  BiPredicate: logic("BiPredicate"),
-  ...Object.fromEntries(PRIMS.flatMap(([P]) => [[`${P}Predicate`, logic(`${P}Predicate`)], [`${P}Consumer`, chain(`${P}Consumer`)],
-    [`${P}UnaryOperator`, composing(`${P}UnaryOperator`)]])),
-};
-for (const [name, sig, sup] of FUNCTIONS) {
-  rt.register({ name: F + name, ctor: class extends JObj {}, ifaces: sup ? [F + sup] : undefined, methods: DEFAULTS[name] });
+// the interfaces and their default methods are libcore's; these are the host lambdas handed to Java
+for (const [name, sig] of FUNCTIONS) {
   const C = class extends JLambda {};
   lambdas.set(name, C);
   rt.register({ name: "webdroid/fn/" + name, ctor: C, ifaces: [F + name], methods: { [sig]: function (this: JLambda, ...a: unknown[]) { return this.f(...a); } } });
