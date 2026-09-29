@@ -835,7 +835,7 @@ ${profileEnd}
       case "and-long": expr = `${x}&${y}`; break;
       case "or-long": expr = `${x}|${y}`; break;
       case "xor-long": expr = `${x}^${y}`; break;
-      case "shl-long": expr = `BigInt.asIntN(64,${x}<<R.shifts[${y}&63])`; break;
+      case "shl-long": expr = `(${x}===1n?R.bits[${y}&63]:BigInt.asIntN(64,${x}<<R.shifts[${y}&63]))`; break;
       case "shr-long": expr = `${x}>>R.shifts[${y}&63]`; break;
       case "ushr-long": expr = `BigInt.asIntN(64,BigInt.asUintN(64,${x})>>R.shifts[${y}&63])`; break;
       case "add-float": expr = `Math.fround(${x}+${y})`; break;

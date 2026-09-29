@@ -992,6 +992,8 @@ export class Runtime {
   }
   /** long shift counts, so a shift does not allocate its BigInt amount */
   readonly shifts: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt(i));
+  /** `1L << n` for every n: the bit-mask idiom then allocates nothing */
+  readonly bits: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt.asIntN(64, 1n << BigInt(i)));
   private lastYield = 0;
   /** ms between back-edge yields. The frame loop stretches it while a draw pass is in flight:
    *  a yield there only costs a macrotask, since nothing is presented until the pass ends. */
