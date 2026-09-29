@@ -14,7 +14,7 @@
 // there because that said so.
 
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
-import { handle, ownedHandle, deref, replace, release, FINALIZER } from "./handles";
+import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
@@ -33,6 +33,11 @@ import { recordingContext, replay, replayWithSemantics, type DisplayList } from 
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
+import { type JBuffer, resident, mappedReadOnlyBuffer } from "../jvm/natives/jnio";
+import {
+  type Axis, NativeFont, NativeFamily, mkFamily, typefaceOver, systemFonts, sfntTables, sfntStyle, T_CMAP,
+  fontRevision, postScriptName, isPostScriptType1,
+} from "./fonts";
 
 type Fn = (...a: never[]) => unknown;
 /** register the native halves of one class, by their exact AOSP descriptors */
@@ -328,9 +333,14 @@ delegate("android/graphics/Typeface", {
     const src = deref<JTypeface>(h) ?? tfDefault;
     return handle(mkTypeface(src.family, weight >= 600, !!italic, weight));
   },
-  // a family built from font handles: we have the browser's faces, not font files, so the
-  // family it resolves to is whatever the first face named
-  "nativeCreateFromArray([JJII)J": (_fonts: BigInt64Array, fallback: bigint) => handle(deref<JTypeface>(fallback) ?? tfDefault),
+  // RESOLVE_BY_FONT_TABLE (-1) reads the OS/2 style of the first family's closest match to regular
+  "nativeCreateFromArray([JJII)J": (families: BigInt64Array, fallback: bigint, weight: number, italic: number) => {
+    const fams = Array.from(families, (h) => deref<NativeFamily>(h));
+    const regular = fams.length ? fams[0].closest(400, false) : null;
+    const table = (weight === -1 || italic === -1) && regular ? sfntStyle(regular.bytes, regular.ttcIndex) : null;
+    return handle(typefaceOver(fams, deref<JTypeface>(fallback) ?? tfDefault,
+      weight === -1 ? table?.weight ?? 400 : weight, italic === -1 ? !!table?.italic : italic === 1));
+  },
   // the serialised typeface cache a process shares with the system; there is no other process
   "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
   ...stubs(null, "nativeGetSupportedAxes(J)[I"),
@@ -340,6 +350,97 @@ delegate("android/graphics/Typeface", {
   ...stubs(0, "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I"),
   // Typeface.DEFAULT and friends are set through this from the static initialiser
   "nativeForceSetStaticFinalField(Ljava/lang/String;Landroid/graphics/Typeface;)V": () => {},
+});
+
+// ── android.graphics.fonts ─────────────────────────────────────────────────────────────
+// minikin's Font and FontFamily are fonts.ts' NativeFont and NativeFamily. A Java Font's pointer
+// is a FontWrapper: every Java Font (FontFamily.getFont, a buffer's clone) owns its own reference,
+// which its registry releases, to a font the others share.
+class FontWrapper { constructor(readonly font: NativeFont) {} }
+const fontOf = (h: bigint) => deref<FontWrapper>(h).font;
+const wrapFont = (f: NativeFont) => handle(new FontWrapper(f));
+/** a builder's state, which building consumes, as the JNI's unique_ptr does */
+function take<T>(h: bigint): T { const b = deref<T>(h); release(h); return b; }
+/** a direct buffer's bytes, as GetDirectBufferAddress and GetDirectBufferCapacity see them;
+ *  guest memory can move, so bytes there are copied */
+function directBytes<T>(b: JBuffer | null, then: (bytes: Uint8Array) => T): T | Promise<T> {
+  if (!b) rt.npe();
+  if (!b!.direct) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a direct buffer");
+  return after(resident(b!), () => {
+    const v = b!.dv, bytes = new Uint8Array(v.buffer, v.byteOffset, b!.cap);
+    return then(b!.backing.storage.kind === "native" ? bytes.slice() : bytes);
+  });
+}
+const PACKED_ITALIC = 1 << 16;
+delegate("android/graphics/fonts/Font$Builder", {
+  "nInitBuilder()J": () => handle({ axes: [] as Axis[] }),
+  "nAddAxis(JIF)V": (b: bigint, tag: number, value: number) => { deref<{ axes: Axis[] }>(b).axes.push({ tag, value }); },
+  "nBuild(JLjava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/String;IZI)J": (b: bigint, buffer: JBuffer | null, path: string, locales: string, weight: number, italic: number, ttcIndex: number) => {
+    const { axes } = take<{ axes: Axis[] }>(b);
+    return directBytes(buffer, (bytes) => {
+      const font = new NativeFont(bytes, ttcIndex, weight, !!italic, axes, path, locales);
+      // what FreeType cannot open as a face (no head or hhea) Skia makes no typeface of
+      if (!font.faceMetrics) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Failed to create internal object. maybe invalid font data.");
+      return wrapFont(font);
+    });
+  },
+  // Skia's makeClone over the same data: new axes, style and collection index
+  "nClone(JJIZI)J": (font: bigint, b: bigint, weight: number, italic: number, ttcIndex: number) => {
+    const { axes } = take<{ axes: Axis[] }>(b), f = fontOf(font);
+    return wrapFont(new NativeFont(f.bytes, ttcIndex, weight, !!italic, axes, f.path, f.locales, f.sourceId));
+  },
+});
+delegate("android/graphics/fonts/Font", {
+  "nGetReleaseNativeFont()J": () => FINALIZER,
+  "nCloneFont(J)J": (h: bigint) => wrapFont(fontOf(h)),
+  "nNewByteBuffer(J)Ljava/nio/ByteBuffer;": (h: bigint) => mappedReadOnlyBuffer(fontOf(h).bytes),
+  // identity only: Font.equals compares these
+  "nGetMinikinFontPtr(J)J": (h: bigint) => weakHandle(fontOf(h)),
+  "nGetSourceId(J)I": (h: bigint) => fontOf(h).sourceId,
+  "nGetFontPath(J)Ljava/lang/String;": (h: bigint) => fontOf(h).path,
+  "nGetLocaleList(J)Ljava/lang/String;": (h: bigint) => fontOf(h).locales,
+  "nGetPackedStyle(J)I": (h: bigint) => { const f = fontOf(h); return f.weight | (f.italic ? PACKED_ITALIC : 0); },
+  "nGetIndex(J)I": (h: bigint) => fontOf(h).ttcIndex,
+  "nGetAxisCount(J)I": (h: bigint) => fontOf(h).axes.length,
+  "nGetAxisInfo(JI)J": (h: bigint, i: number) => {
+    const a = fontOf(h).axes[i];
+    return BigInt(a.tag >>> 0) << 32n | BigInt(new Uint32Array(Float32Array.of(a.value).buffer)[0]);
+  },
+  // SkFont::getMetrics over this face at the paint's size
+  "nGetFontMetrics(JJLandroid/graphics/Paint$FontMetrics;)F": (h: bigint, p: bigint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null) => {
+    const m = fontOf(h).faceMetrics!;
+    const size = paint(p).textSize, f = Math.fround;
+    const ascent = f(-m.ascent * size), descent = f(m.descent * size), leading = f(m.leading * size);
+    if (fm) { fm.top = f(-m.top * size); fm.ascent = ascent; fm.descent = descent; fm.bottom = f(m.bottom * size); fm.leading = leading; }
+    return f(descent - ascent + leading);
+  },
+  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": () => {
+    throw rt.mkThrowable("java/lang/UnsupportedOperationException", "glyph ids are not addressable: text is shaped by the browser");
+  },
+  "nGetAvailableFontSet()[J": () => systemFonts().then((fonts) => BigInt64Array.from(fonts, wrapFont)),
+});
+delegate("android/graphics/fonts/FontFamily$Builder", {
+  "nInitBuilder()J": () => handle({ fonts: [] as NativeFont[] }),
+  "nAddFont(JJ)V": (b: bigint, font: bigint) => { deref<{ fonts: NativeFont[] }>(b).fonts.push(fontOf(font)); },
+  // minikin rejects a family whose default face has no cmap (no coverage)
+  "nBuild(JLjava/lang/String;IZZI)J": (b: bigint, langTags: string | null, variant: number) => {
+    const { fonts } = take<{ fonts: NativeFont[] }>(b);
+    const regular = new NativeFamily(fonts, "").closest(400, false);
+    if (!sfntTables(regular.bytes, regular.ttcIndex)?.at.has(T_CMAP)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Failed to create internal object. maybe invalid font data");
+    return mkFamily(fonts, langTags ?? "", variant).then(handle);
+  },
+  "nGetReleaseNativeFamily()J": () => FINALIZER,
+});
+delegate("android/graphics/fonts/FontFamily", {
+  "nGetFont(JI)J": (h: bigint, i: number) => wrapFont(deref<NativeFamily>(h).fonts[i]),
+  "nGetFontSize(J)I": (h: bigint) => deref<NativeFamily>(h).fonts.length,
+  "nGetLangTags(J)Ljava/lang/String;": (h: bigint) => deref<NativeFamily>(h).langTags,
+  "nGetVariant(J)I": (h: bigint) => deref<NativeFamily>(h).variant,
+});
+delegate("android/graphics/fonts/FontFileUtil", {
+  "nGetFontRevision(Ljava/nio/ByteBuffer;I)J": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => fontRevision(bytes, index)),
+  "nGetFontPostScriptName(Ljava/nio/ByteBuffer;I)Ljava/lang/String;": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => postScriptName(bytes, index)),
+  "nIsPostScriptType1Font(Ljava/nio/ByteBuffer;I)I": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => isPostScriptType1(bytes, index)),
 });
 
 // ── android.graphics.Paint ─────────────────────────────────────────────────────────────

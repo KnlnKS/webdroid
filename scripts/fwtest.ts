@@ -192,6 +192,73 @@ await exercise("Shaders (gradients, bitmap, compose; setLocalMatrix replaces the
   if (recomposed === composed || String((recomposed as InstanceType<typeof NativeComposeShader>).dst.local) !== "1,0,0,1,7,0") throw new Error("ComposeShader kept a replaced child");
 }, true);
 
+// Expected values are Roboto's own tables: OS/2 weight 400/700, head.fontRevision 0x22354, name ID 6
+// "RobotoStatic-Regular", hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units per em.
+await exercise("Font, FontFamily, FontFileUtil and the Typeface bridge", async () => {
+  const { vfs } = await import("../src/shell/vfs");
+  const { familyOf } = await import("../src/android/fonts");
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  const F = "Landroid/graphics/fonts/Font;", FB = "Landroid/graphics/fonts/Font$Builder;", BB = "Ljava/nio/ByteBuffer;";
+  const bytes = async (file: string) => new Uint8Array(await Bun.file(`vendor/fonts/${file}`).arrayBuffer());
+  for (const file of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) vfs.write(`/system/fonts/${file}`, await bytes(file));
+  const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/system/fonts/Roboto-Regular.ttf");
+  const regular = await vcall(await newObj("android/graphics/fonts/Font$Builder", "(Ljava/io/File;)V", file), "build", `()${F}`);
+  const style = async (f: unknown) => vcall(await vcall(f, "getStyle", "()Landroid/graphics/fonts/FontStyle;"), "toString", "()Ljava/lang/String;");
+  same("from a file", [await style(regular), await vcall(regular, "getTtcIndex", "()I"), (await vcall(regular, "getAxes", "()[Landroid/graphics/fonts/FontVariationAxis;")).length,
+    await vcall(await vcall(regular, "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"), await vcall(await vcall(regular, "getLocaleList", "()Landroid/os/LocaleList;"), "isEmpty", "()Z"),
+    await vcall(await vcall(regular, "getBuffer", `()${BB}`), "capacity", "()I")],
+    ["FontStyle { weight=400, slant=0}", 0, 0, "/system/fonts/Roboto-Regular.ttf", 1, 305656]);
+  const boldBytes = await bytes("Roboto-Bold.ttf"), direct = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, boldBytes.length);
+  await vcall(direct, "put", `([B)${BB}`, new Int8Array(boldBytes.buffer));
+  const bold = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, direct), "build", `()${F}`);
+  same("from a direct buffer", await style(bold), "FontStyle { weight=700, slant=0}");
+  const thrown = async (fn: () => Promise<unknown>) => { try { await fn(); return "none"; } catch (e) { return (e as { msg?: string })?.msg ?? String(e); } };
+  const heap = await scall("java/nio/ByteBuffer", "wrap", `([B)${BB}`, new Int8Array(boldBytes.buffer));
+  same("a heap buffer", (await thrown(() => newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, heap))).includes("direct"), true);
+  const cloning = await newObj("android/graphics/fonts/Font$Builder", `(${F})V`, regular);
+  await vcall(cloning, "setWeight", `(I)${FB}`, 500);
+  await vcall(cloning, "setFontVariationSettings", `(Ljava/lang/String;)${FB}`, "'wght' 500, 'ital' 1");
+  const clone = await vcall(cloning, "build", `()${F}`);
+  const axes = await vcall(clone, "getAxes", "()[Landroid/graphics/fonts/FontVariationAxis;");
+  same("a clone", [await style(clone), await scall("android/graphics/fonts/FontVariationAxis", "toFontVariationSettings", "([Landroid/graphics/fonts/FontVariationAxis;)Ljava/lang/String;", axes),
+    await vcall(clone, "getSourceIdentifier", "()I") === await vcall(regular, "getSourceIdentifier", "()I"), await vcall(clone, "equals", "(Ljava/lang/Object;)Z", regular)],
+    ["FontStyle { weight=500, slant=0}", "'wght' 500.0,'ital' 1.0", true, 0]);
+  const garbage = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, 64);
+  const bad = await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, garbage);
+  await vcall(bad, "setWeight", `(I)${FB}`, 400);
+  await vcall(bad, "setSlant", `(I)${FB}`, 0);
+  same("invalid data", await thrown(() => vcall(bad, "build", `()${F}`)), "Failed to create internal object. maybe invalid font data.");
+
+  const FF = "Landroid/graphics/fonts/FontFamily;", FFB = "Landroid/graphics/fonts/FontFamily$Builder;";
+  const builder = await newObj("android/graphics/fonts/FontFamily$Builder", `(${F})V`, regular);
+  await vcall(builder, "addFont", `(${F})${FFB}`, bold);
+  same("a second regular", (await thrown(() => vcall(builder, "addFont", `(${F})${FFB}`, regular))).endsWith("has already been added"), true);
+  const family = await vcall(builder, "build", `()${FF}`);
+  const first = await vcall(family, "getFont", `(I)${F}`, 0), again = await vcall(family, "getFont", `(I)${F}`, 0);
+  same("the family", [await vcall(family, "getSize", "()I"), await style(await vcall(family, "getFont", `(I)${F}`, 1)), first === again,
+    await vcall(first, "equals", "(Ljava/lang/Object;)Z", again), await vcall(first, "equals", "(Ljava/lang/Object;)Z", regular), familyOf(family).fonts.length],
+    [2, "FontStyle { weight=700, slant=0}", false, 1, 1, 2]);
+
+  const paint = await newObj("android/graphics/Paint", "()V");
+  await vcall(paint, "setTextSize", "(F)V", 20);
+  const fm = await newObj("android/graphics/Paint$FontMetrics", "()V") as any;
+  await vcall(regular, "getMetrics", "(Landroid/graphics/Paint;Landroid/graphics/Paint$FontMetrics;)V", paint, fm);
+  same("getMetrics", [fm.top, fm.ascent, fm.descent, fm.bottom, fm.leading], [-2163, -1900, 500, 555, 0].map((v) => Math.fround(v * 20 / 2048)));
+
+  const buffer = await vcall(regular, "getBuffer", `()${BB}`);
+  same("FontFileUtil", [await scall("android/graphics/fonts/FontFileUtil", "getRevision", `(${BB}I)J`, buffer, 0),
+    await scall("android/graphics/fonts/FontFileUtil", "getPostScriptName", `(${BB}I)Ljava/lang/String;`, buffer, 0),
+    await scall("android/graphics/fonts/FontFileUtil", "isPostScriptType1Font", `(${BB}I)I`, buffer, 0)], [0x22354, "RobotoStatic-Regular", 0]);
+  same("available fonts", await vcall(await scall("android/graphics/fonts/SystemFonts", "getAvailableFonts", "()Ljava/util/Set;"), "size", "()I"), 2);
+
+  // the bridge the TS Typeface builds on; a cut Typeface runs AOSP's over the natives instead
+  if (isBytecode("android/graphics/Typeface")) return;
+  const tf = await vcall(await vcall(await newObj("android/graphics/Typeface$CustomFallbackBuilder", `(${FF})V`, family), "setStyle",
+    "(Landroid/graphics/fonts/FontStyle;)Landroid/graphics/Typeface$CustomFallbackBuilder;", await newObj("android/graphics/fonts/FontStyle", "(II)V", 700, 1)),
+    "build", "()Landroid/graphics/Typeface;") as { family: string; weight: number; italic: boolean };
+  same("CustomFallbackBuilder", [tf.family.startsWith(familyOf(family).css + ", "), tf.weight, tf.italic], [true, 700, true]);
+});
+
 // Expected values are the reference AVD's (API 35) for the same calls. Skia stores ovals, round
 // rects and arcs as conics (K) and ours as cubics (C), so those compare by their end points.
 await exercise("Path, PathMeasure, PathIterator (device values)", async () => {

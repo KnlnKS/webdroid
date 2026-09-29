@@ -12,7 +12,7 @@ import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught, after, checkFromIndexSize } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
@@ -928,12 +928,22 @@ rt.register({
     "checkError()V": () => {},
   },
 });
-class JPfdIn extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; pfd: JParcelFileDescriptor | null = null; }
+class JPfdIn extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; pfd: JParcelFileDescriptor | null = null; channel: JObj | null = null; }
+const pfdDescriptor = (s: JPfdIn) => {
+  if (!s.pfd) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
+  return vcall(s.pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+};
 rt.register({
   name: "android/os/ParcelFileDescriptor$AutoCloseInputStream", ctor: JPfdIn, sup: "java/io/InputStream",
   methods: {
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdIn, p: JParcelFileDescriptor) { this.buf = p.bytes; this.pfd = p; },
     ...heldByteReads,
+    // FileInputStream's, which AOSP's subclasses (AssetFileDescriptor's streams) reach
+    "getFD()Ljava/io/FileDescriptor;": function (this: JPfdIn) { return pfdDescriptor(this); },
+    "getChannel()Ljava/nio/channels/FileChannel;": driven(function* (this: JPfdIn): Gen {
+      return this.channel ??= yield scall("sun/nio/ch/FileChannelImpl", "open", "(Ljava/io/FileDescriptor;Ljava/lang/String;ZZLjava/lang/Object;)Ljava/nio/channels/FileChannel;",
+        yield pfdDescriptor(this), null, 1, 0, this);
+    }),
     "close()V": function (this: JPfdIn) { const pfd = this.pfd; this.pfd = null; if (pfd) return vcall(pfd, "close", "()V"); },
   },
 });

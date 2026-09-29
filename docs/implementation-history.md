@@ -754,6 +754,17 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   handles and a platform class declaring finalize() routes its long fields through a setter that
   makes the first object to store one its owner; the slot is released when the owner is collected,
   unless an explicit destroy freed or reused it first (401 of 401 released after GC headless).
+- 2026-09-30, android.graphics.fonts from AOSP (Stage C.3). Font, FontFamily, FontStyle and
+  FontVariationAxis run AOSP's bytecode over minikin's natives: a Font's pointer is a FontWrapper
+  (one per Java Font, released by its registry) over a shared NativeFont (bytes, style, axes, path,
+  locales, source id), and FontFamily.Builder's build registers the members as one CSS family, as
+  the TS Typeface builders do; the TS Typeface reaches a Java FontFamily through `familyOf`. Two
+  differences from the TS specs: CustomFallbackBuilder without a style is 400 upright (the specs
+  took the first font's), and Typeface.nativeCreateFromArray now uses its families. Font.Builder
+  over an AssetManager or Resources maps the asset through AssetFileDescriptor's stream, whose TS
+  ParcelFileDescriptor.AutoCloseInputStream lacked FileInputStream's getFD and getChannel.
+  Font.getGlyphBounds throws (glyph ids are not addressable: the browser shapes text), and
+  nGetBufferAddress stays missing (no framework caller).
 
 ## Java, storage and framework semantics
 
