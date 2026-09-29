@@ -502,6 +502,33 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   lookups behind the ~2 ns per compiled call the B.4 measurement found. V8 A/B showed ±10% both
   ways (`new URI` -5%), within noise. A synthetic 4-deep emitted call chain (try/catch, Promise
   checks, prologue) runs as fast as plain JS (about 3 ns), so the per-call cost lies elsewhere.
+- 2026-09-29, resource natives as libandroidfw answers them (Stage C.1, first step). The delegates
+  for AssetManager/XmlBlock/StringBlock answered off the app's one TS `Resources` with cookie 0,
+  the device density and no ApkAssets, so AOSP's TypedArray could not read a string (it asks
+  `ApkAssets[cookie - 1]`'s pool, or the XML block's pool for cookie -1). `res.ts`'s `Resources`
+  is now AssetManager2 for both stacks: `getResource`/`resolveReference` carry the package, the
+  ResTable_typeSpec flags (new in `arsc.ts`) and the selected density; bags are flattened with their
+  parents, key-sorted (aapt2 stores a plural's "one" before its "other"), and fail when a parent is
+  missing; `JTheme` is AOSP's Theme (a merged attribute map with force semantics, SetTo, Rebase),
+  and `resolveAttributes` is AttributeResolution's ApplyStyle/ResolveAttrs/RetrieveAttributes in one
+  pass, writing TypedArray's int layout or our own RVs. Behaviour that moved to AOSP's in the TS
+  stack too: `Theme.obtainStyledAttributes(resId, attrs)` falls back to the theme (it is the style
+  as defStyleRes), a defStyleAttr counts only when the theme holds a reference, and a theme
+  application with force=false keeps existing attributes. `src/android/assetmanager.ts` holds the
+  natives, with ApkAssets over the package registry (`packages`, by install path). Running AOSP's
+  Resources needed four partial TS specs completed from the device: Environment's partition
+  directories, `Build.VERSION.RESOURCES_SDK_INT`, ActivityInfo's `CONFIG_NATIVE_BITS` (read from its
+  `<clinit>` payload) and DisplayMetrics' noncompat fields; plus `VMRuntime.addressOf` (a handle)
+  and ImageDecoder.decodeDrawable. Under `WEBDROID_BYTECODE=android/content/res/`, `fwtest` now
+  drives the Java classes end to end (ApkAssets, AssetManager.Builder with `getSystem()`, strings
+  from both cookies, plurals through PluralRules, ApplyStyle, an XmlBlock walk with XML strings, a
+  ColorStateList). V8 (Node, FitNotes' theme, median of 7 interleaved runs, 3,000 iterations after
+  1,500 warm-up): styling every start tag of `activity_main` with View's and TextView's
+  attributes 36.7 us at the base commit, 37.4 us with the new core in TS mode, 32.0 us through the
+  bytecode path; six `Theme.resolveAttribute` 1.2 / 1.0 / 2.2 us; ten getString+getDimension pairs
+  6.7 / 6.4 / 8.6 us. First calls cost more on bytecode (3.6 against 1.3 ms for the layout) and
+  `AssetManager.getSystem()` takes about 35 ms once per process (OverlayConfig's partition scan).
+  Before the theme memoised resolved values the TS path had regressed to 47 us.
 
 ## Java, storage and framework semantics
 

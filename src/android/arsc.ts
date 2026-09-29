@@ -57,6 +57,10 @@ export class Arsc {
   pkgName = "";
   types = new Map<number, TypeChunk[]>();   // default package: typeId → configurations
   private packages = new Map<number, { name: string; types: Map<number, TypeChunk[]> }>();
+  /** (package << 8 | type) → each entry's ResTable_typeSpec flags: the configuration axes it varies over */
+  private specs = new Map<number, Uint32Array>();
+  /** overlayable name → actor, per package name (ResTable_overlayable_header) */
+  readonly overlayables = new Map<string, Map<string, string>>();
   locales = new Set<string>();
   device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
     wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang, region: dev.region,
@@ -118,6 +122,20 @@ export class Arsc {
       const ctype = view.getUint16(pos, true);
       const csize = view.getUint32(pos + 4, true);
       if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames, remap, typeIdOffset, pkg.types);
+      else if (ctype === 0x0202) {
+        const count = view.getUint32(pos + 12, true), at = pos + view.getUint16(pos + 2, true);
+        const flags = new Uint32Array(count);
+        for (let i = 0; i < count; i++) flags[i] = view.getUint32(at + i * 4, true);
+        const key = (pkgId << 8) | (view.getUint8(pos + 8) + typeIdOffset);
+        const old = this.specs.get(key);
+        if (old) for (let i = 0; i < Math.min(old.length, count); i++) flags[i] |= old[i];
+        this.specs.set(key, flags);
+      } else if (ctype === 0x0204) {
+        const text = (at: number) => { let t = ""; for (let i = 0; i < 256; i++) { const c = view.getUint16(at + i * 2, true); if (!c) break; t += String.fromCharCode(c); } return t; };
+        let named = this.overlayables.get(name);
+        if (!named) this.overlayables.set(name, named = new Map());
+        named.set(text(pos + 8), text(pos + 520));
+      }
       pos += csize;
     }
   }
@@ -235,6 +253,7 @@ export class Arsc {
     return pkgId === this.pkgId ? this.types : this.packages.get(pkgId)?.types;
   }
 
+  packageIds(): number[] { return [...this.packages.keys()]; }
   packageName(pkgId: number): string | undefined { return pkgId === this.pkgId ? this.pkgName : this.packages.get(pkgId)?.name; }
   packageId(name: string): number | undefined {
     if (name === this.pkgName) return this.pkgId;
@@ -262,6 +281,13 @@ export class Arsc {
     return name;
   }
 
+  /** every configuration the default package's types are defined under */
+  configs(): Config[] {
+    const out: Config[] = [];
+    for (const chunks of this.types.values()) for (const ch of chunks) out.push(ch.config);
+    return out;
+  }
+
   /** every type name the table defines, each once */
   allTypes(): string[] {
     const s = new Set<string>();
@@ -269,7 +295,9 @@ export class Arsc {
     return [...s];
   }
 
-  /** best-config entry for resId, or null */
+  /** the configuration axes the entry's values vary over (ResTable_typeSpec flags) */
+  specFlags(resId: number): number { return this.specs.get(resId >>> 16)?.[resId & 0xffff] ?? 0; }
+
   /** values a device overlay replaces in every configuration, as fabricated overlays do */
   private overlaid = new Map<number, ResEntry>();
   overlay(resId: number, value: { type: number; data: number }): void {

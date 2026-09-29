@@ -17,12 +17,16 @@ BYTECODE.push(...(CUTS.length ? CUTS : [
 
 // imported AFTER the policy is set: rt.register consults it, so the specs never land
 const { rt, ACC } = await import("../src/jvm/runtime");
-const { loadJarDexes } = await import("./lib");
 await import("../src/natives");
 
-const JAR = "vendor/aosp/framework.jar";
-await loadJarDexes(JAR);
+// the whole boot class path, as a page indexes it behind the app
+const { loadPlatformJar } = await import("../src/android/framework");
+const { PLATFORM_JARS } = await import("../src/jvm/provenance");
+if (!existsSync("vendor/aosp/framework.jar")) throw new Error("no vendor/aosp/framework.jar — run `bun run gen-framework` with the reference AVD booted");
+for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), i);
 rt.linkNatives();
+// the device's languages, which a booted page has before any app code runs
+await (await import("../src/android/resnative")).initDeviceLocales();
 
 console.log(`withheld ${BYTECODE.length} prefixes; ${rt.dexIndex.size} framework classes\n`);
 
@@ -136,97 +140,83 @@ await exercise("Bitmap.createBitmap + pixels", async () => {
   if (await vcall(b, "isRecycled", "()Z")) throw new Error("a fresh bitmap reports recycled");
 });
 
-// The resource delegates are exercised against the real framework table rather than through
-// bytecode: constructing an AOSP Resources needs ResourcesImpl, a Configuration and a
-// DisplayMetrics, none of which says anything more about whether the lookups are right.
-if (existsSync("vendor/aosp/framework-res.apk")) {
+// The resource natives, under AOSP's own Resources: the framework and an app installed as the
+// package registry installs them, loaded through ApkAssets into an AssetManager, then read
+// through Resources, Theme, TypedArray and XmlBlock as an app reads them.
+if (isBytecode("android/content/res/Resources") && existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk")) {
   const { Arsc } = await import("../src/android/arsc");
   const { Resources, setFramework } = await import("../src/android/res");
-  const { handle } = await import("../src/android/handles");
+  const { PackageRecord, packages } = await import("../src/android/packages");
   const { centralDir, entryBytes } = await import("../src/jvm/natives/jzip");
-  // read the package lazily, as framework.ts does: the arsc up front, every other entry on
-  // demand — the layout exercise below needs res/ to be reachable, not just the table
-  const apkBytes = new Uint8Array(await Bun.file("vendor/aosp/framework-res.apk").arrayBuffer());
-  const dir = centralDir(apkBytes);
-  const files = (path: string) => { const e = dir.get(path); return e ? entryBytes(apkBytes, e) : null; };
-  const arsc = new Arsc(files("resources.arsc")!, files);
-  setFramework(arsc);
-  const res = new Resources(arsc, {});
-  const am = handle(res);
-  const jni = (cls: string, sig: string) => {
-    const fn = rt.jniFn(cls, sig);
-    if (!fn) throw new Error(`no delegate for ${cls}.${sig}`);
-    return fn as (...x: unknown[]) => unknown;
-  };
-  const call = (sig: string, ...a: unknown[]) => jni("android/content/res/AssetManager", sig)(am, ...a);
+  const { parseAXML } = await import("../src/android/axml");
+  const { openInstall } = await import("../src/shell/install");
+  const { mountPlatformData } = await import("../src/shell/apex");
+  const read = async (p: string) => new Uint8Array(await Bun.file(p).arrayBuffer());
+  // plurals select through ICU's PluralRules, which reads the apex ICU data
+  mountPlatformData((path: string, size: number) => ({ size, read: async (at: number, length: number) => (await read(`vendor/aosp${path}`)).subarray(at, at + length) }));
+  const fwApk = await read("vendor/aosp/framework-res.apk"), dir = centralDir(fwApk);
+  const fwFiles = (path: string) => { const e = dir.get(path); return e ? entryBytes(fwApk, e) : null; };
+  const fw = new Arsc(fwFiles("resources.arsc")!, fwFiles);
+  setFramework(fw);
+  packages.set("android", new PackageRecord(parseAXML(fwFiles("AndroidManifest.xml")!), new Resources(fw, {}, undefined, true),
+    "/system/framework/framework-res.apk", 1000, async () => []));
+  const app = openInstall(await read("apks/FitNotes.apk"));
+  const appTable = new Arsc(app.zip["resources.arsc"], (path: string) => app.zip[path] ?? null);
+  const manifest = parseAXML(app.zip["AndroidManifest.xml"]);
+  const pkg = manifest.attrs.find((a) => a.name === "package")!.str!;
+  packages.set(pkg, new PackageRecord(manifest, new Resources(appTable, app.zip, app.lazyEntries), "/data/app/base.apk", 10001, async () => []));
+  const appTheme = manifest.children.find((n) => n.name === "application")!.attrs.find((a) => a.name === "theme")!.data;
 
-  await exercise("AssetManager.nativeGetResourceIdentifier", async () => {
-    const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ok", "string", "android") as number;
-    if ((id >>> 24) !== 0x01) throw new Error(`android:string/ok resolved to 0x${(id >>> 0).toString(16)}`);
-    const name = call("nativeGetResourceName(JI)Ljava/lang/String;", id);
-    if (name !== "android:string/ok") throw new Error(`name round-tripped as ${name}`);
+  const S = "Ljava/lang/String;", T = "Landroid/content/res/Resources$Theme;";
+  let res: unknown = null, theme: unknown = null;
+  const id = (name: string, type: string, p: string): Promise<number> => vcall(res, "getIdentifier", `(${S}${S}${S})I`, name, type, p);
+  await exercise("ApkAssets + AssetManager.Builder + Resources", async () => {
+    const apk = await scall("android/content/res/ApkAssets", "loadFromPath", `(${S})Landroid/content/res/ApkAssets;`, "/data/app/base.apk");
+    const builder = await newObj("android/content/res/AssetManager$Builder", "()V");
+    await vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);
+    const am = await vcall(builder, "build", "()Landroid/content/res/AssetManager;");
+    const config = await newObj("android/content/res/Configuration", "()V");
+    await vcall(config, "setToDefaults", "()V");
+    res = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
+      am, await newObj("android/util/DisplayMetrics", "()V"), config);
+    theme = await vcall(res, "newTheme", `()${T}`);
+    await vcall(theme, "applyStyle", "(IZ)V", appTheme, 1);
   });
-
-  await exercise("AssetManager.nativeGetResourceValue", async () => {
-    const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ok", "string", "android") as number;
-    const tv = { type: 0, data: 0, resourceId: 0, density: 0, string: null as unknown, assetCookie: 0, changingConfigurations: 0 };
-    const block = call("nativeGetResourceValue(JISLandroid/util/TypedValue;Z)I", id, 0, tv, 1);
-    if (block !== 0 || tv.string !== "OK") throw new Error(`block ${block}, string ${JSON.stringify(tv.string)}`);
+  const expect = (what: string, got: unknown, want: unknown) => { if (got !== want) throw new Error(`${what}: ${JSON.stringify(got)}, not ${JSON.stringify(want)}`); };
+  await exercise("Resources.getString (app and framework cookies)", async () => {
+    expect("app_name", await vcall(res, "getString", `(I)${S}`, await id("app_name", "string", pkg)), "FitNotes");
+    expect("android:ok", await vcall(res, "getString", `(I)${S}`, await id("ok", "string", "android")), "OK");
   });
-
-  await exercise("AssetManager.nativeApplyStyle (obtainStyledAttributes)", async () => {
-    // com.android.internal.R.styleable.View's first entry is android:id; asking a real theme
-    // for the View styleable is what every widget constructor does
-    const theme = call("nativeThemeCreate(J)J") as bigint;
-    const styleId = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "Theme.Material.Light", "style", "android") as number;
-    if (!styleId) throw new Error("no android:style/Theme.Material.Light");
-    call("nativeThemeApplyStyle(JJIZ)V", theme, styleId, 1);
-    const attrs = Int32Array.of(
-      call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "textColorPrimary", "attr", "android") as number,
-      call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "colorBackground", "attr", "android") as number,
-    );
-    const values = new Int32Array(attrs.length * 7);
-    const indices = new Int32Array(attrs.length + 1);
-    call("nativeApplyStyle(JJIIJ[IJJ)V", theme, 0, 0, 0n, attrs, handle(values), handle(indices));
-    if (indices[0] === 0) throw new Error("the theme resolved none of the two attributes");
+  await exercise("Resources.getQuantityString (PluralRules over a bag)", async () => {
+    const plural = appTable.findId("plurals", "exercise");
+    expect("one", await vcall(res, "getQuantityString", `(II)${S}`, plural, 1), appTable.values.get(appTable.entry(plural)!.bag!.map.find((e) => e[0] === 0x01000006)![2]));
+    expect("other", await vcall(res, "getQuantityString", `(II)${S}`, plural, 2), appTable.values.get(appTable.entry(plural)!.bag!.map.find((e) => e[0] === 0x01000004)![2]));
   });
-
-  await exercise("AssetManager.nativeOpenXmlAsset (XmlBlock walk)", async () => {
-    const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "alert_dialog", "layout", "android") as number;
-    if (!id) throw new Error("no android:layout/alert_dialog");
-    const tv = { type: 0, data: 0, resourceId: 0, density: 0, string: null as unknown, assetCookie: 0, changingConfigurations: 0 };
-    call("nativeGetResourceValue(JISLandroid/util/TypedValue;Z)I", id, 0, tv, 1);
-    // Resources.getLayout takes the TYPE_STRING branch or throws NotFoundException
-    if (tv.type !== 3) throw new Error(`layout resolved as type ${tv.type}, not TYPE_STRING`);
-
-    const blk = call("nativeOpenXmlAsset(JILjava/lang/String;)J", tv.assetCookie, tv.string) as bigint;
-    const xb = (sig: string, ...a: unknown[]) => jni("android/content/res/XmlBlock", sig)(blk, ...a);
-    const pool = xb("nativeGetStringBlock(J)J") as bigint;
-    const str = (i: number) => jni("android/content/res/StringBlock", "nativeGetString(JI)Ljava/lang/String;")(pool, i);
-    const st = xb("nativeCreateParseState(JI)J", id) as bigint;
-    const sx = (sig: string, ...a: unknown[]) => jni("android/content/res/XmlBlock", sig)(st, ...a);
-
+  await exercise("Theme.obtainStyledAttributes (ApplyStyle over the theme)", async () => {
+    const attrs = Int32Array.of(await id("colorBackground", "attr", "android"), await id("windowActionBar", "attr", "android"));
+    const ta = await vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", attrs);
+    const tv = await newObj("android/util/TypedValue", "()V");
+    expect("resolveAttribute", await vcall(theme, "resolveAttribute", "(ILandroid/util/TypedValue;Z)Z", attrs[0], tv, 1), 1);
+    expect("colorBackground", await vcall(ta, "getColor", "(II)I", 0, 7), (tv as { data: number }).data);
+    expect("indices", await vcall(ta, "getIndexCount", "()I"), 2);
+    await vcall(ta, "recycle", "()V");
+  });
+  await exercise("Resources.getLayout (XmlBlock walk, attribute strings from the block pool)", async () => {
+    const parser = await vcall(res, "getLayout", "(I)Landroid/content/res/XmlResourceParser;", await id("activity_main", "layout", pkg));
     const tags: string[] = [];
-    let attrs = 0, depth = 0, ev = 0;
-    while ((ev = sx("nativeNext(J)I") as number) !== 1) {
-      if (ev === 2) { tags.push(str(sx("nativeGetName(J)I") as number) as string); attrs += sx("nativeGetAttributeCount(J)I") as number; depth++; }
-      if (ev === 3) depth--;
+    for (let ev = await vcall(parser, "next", "()I"); ev !== 1; ev = await vcall(parser, "next", "()I")) {
+      if (ev !== 2) continue;
+      tags.push(await vcall(parser, "getName", `()${S}`));
+      // an XML string attribute comes back through the block's pool, cookie -1
+      const ta = await vcall(res, "obtainAttributes", "(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;", parser, Int32Array.of(0x01010003));
+      if (tags.length === 2) expect("fragment android:name", await vcall(ta, "getString", `(I)${S}`, 0), "com.github.jamesgay.fitnotes.feature.home.datenavigation.DateNavigationFragment");
+      await vcall(ta, "recycle", "()V");
     }
-    if (depth !== 0) throw new Error(`walk ended at depth ${depth}`);
-
-    // the tree parse of the same bytes is an independent count: it never sees a pool index
-    const { parseAXML } = await import("../src/android/axml");
-    const bytes = res.fileOf(id)!.bytes;
-    const want: string[] = [];
-    let wantAttrs = 0;
-    const walk = (n: { name: string; attrs: unknown[]; children: never[] }) => {
-      want.push(n.name); wantAttrs += n.attrs.length;
-      for (const c of n.children) walk(c);
-    };
-    walk(parseAXML(bytes) as never);
-    if (tags.join(",") !== want.join(",")) throw new Error(`${tags.length} tags vs the tree's ${want.length}`);
-    if (attrs !== wantAttrs) throw new Error(`${attrs} attributes vs the tree's ${wantAttrs}`);
-    if (!(pool > 0n) || !str(0)) throw new Error("the block's string pool is empty");
+    expect("tags", tags.join(","), "LinearLayout,fragment,androidx.viewpager.widget.ViewPager,ViewStub");
+  });
+  await exercise("Resources.getColorStateList (inflated from XML by ColorStateList)", async () => {
+    const csl = await vcall(res, "getColorStateList", `(I${T})Landroid/content/res/ColorStateList;`, await id("primary_text_dark", "color", "android"), theme);
+    expect("default", await vcall(csl, "getDefaultColor", "()I"), -1);
   });
 }
 

@@ -63,7 +63,7 @@ function manifestTheme(host: AppHost, cls: string): JTheme {
   if (!id) return host.theme;
   const theme = new JTheme();
   theme.res = host.res;
-  theme.styles = host.theme.styles.slice();
+  theme.setTo(host.theme);
   theme.apply(id);
   return theme;
 }

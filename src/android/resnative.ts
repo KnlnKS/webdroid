@@ -550,10 +550,7 @@ rt.register({
       },
     "getResources()Landroid/content/res/Resources;": function (this: JTheme) { return this.res.jobj; },
     "dump(ILjava/lang/String;Ljava/lang/String;)V": () => {},
-    "setTo(Landroid/content/res/Resources$Theme;)V": function (this: JTheme, o: JTheme) {
-      this.styles = o.styles.slice();
-      this.cache.clear();
-    },
+    "setTo(Landroid/content/res/Resources$Theme;)V": function (this: JTheme, o: JTheme) { this.setTo(o); },
   },
 });
 

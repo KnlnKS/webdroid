@@ -441,7 +441,7 @@ rt.register({
 });
 /** AOSP Drawable.drawableFromBitmap: a decoded 9-patch chunk, not the file name, makes a
  *  NinePatchDrawable, padded as the chunk says */
-function drawableFromBitmap(bmp: JBitmap, targetDensity: number, name: string | null): JDrawable {
+export function drawableFromBitmap(bmp: JBitmap, targetDensity: number, name: string | null): JDrawable {
   if (isNinePatchChunk(bmp.ninePatchChunk)) {
     const d = new JNinePatchDrawable(), patch = newNinePatch(bmp, bmp.ninePatchChunk, name), pad = new JRect();
     [pad.left, pad.top, pad.right, pad.bottom] = patch.chunk.padding;

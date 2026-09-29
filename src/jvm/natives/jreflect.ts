@@ -6,6 +6,7 @@ import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import type { Cells } from "../compiler";
 import { device } from "../../shell/config";
+import { handle } from "../../android/handles";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -463,6 +464,8 @@ rt.register({
     "static getRuntime()Ldalvik/system/VMRuntime;": () => theVmRuntime,
     "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
     "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
+    // a non-movable array's address is the handle JNI implementations dereference it by
+    "addressOf(Ljava/lang/Object;)J": (array: object) => handle(array),
     "getTargetSdkVersion()I": () => targetSdk,
     "setTargetSdkVersion(I)V": setTargetSdkVersion,
     // ro.build.version.sdk

@@ -96,9 +96,46 @@ function parseColor(raw: string): number {
   if (h.length === 6) h = "ff" + h;
   return parseInt(h, 16) | 0;
 }
-interface Bag { parent: number; map: Map<number, RV>; }
+/**
+ * A value as AssetManager2 selects it (its SelectedValue): the Res_value, the package id of the
+ * table its entry came from (-1 for an XML attribute's own value, AOSP's kInvalidCookie), the
+ * configuration axes its entries vary over, the resource it was read from and the density of the
+ * configuration that answered. FLOAT data stays as its bits.
+ */
+export interface SV { t: number; d: number; pkg: number; flags: number; resid: number; density: number }
+export const newSV = (): SV => ({ t: TV.NULL, d: 0, pkg: -1, flags: 0, resid: 0, density: 0 });
+/** Res_value::DATA_NULL_EMPTY: @empty, a TYPE_NULL that still counts as a value */
+export const DATA_NULL_EMPTY = 1;
+const isValidResid = (id: number) => (id & 0x00ff0000) !== 0 && (id & 0xff000000) !== 0;
+
+/** A bag with its parents merged in, keys ascending, child entries winning (AssetManager2::GetBag):
+ *  entry i is (types[i], data[i]) out of style styles[i], whose table its strings index. */
+export class Bag {
+  private rvs: Map<number, RV> | null = null;
+  constructor(readonly res: Resources, readonly parent: number, readonly flags: number, readonly keys: Int32Array,
+    readonly types: Uint8Array, readonly data: Int32Array, readonly styles: Int32Array) {}
+  /** the index of attribute `key`, or -1 */
+  find(key: number): number {
+    const keys = this.keys;
+    let lo = 0, hi = keys.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1, k = keys[mid];
+      if (k === key) return mid;
+      if (k < key) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+  }
+  /** key → value as our own stack reads it, unresolved */
+  get map(): Map<number, RV> {
+    if (this.rvs) return this.rvs;
+    const m = new Map<number, RV>();
+    for (let i = 0; i < this.keys.length; i++) m.set(this.keys[i], this.res.rawRV(this.types[i], this.data[i], this.styles[i] >>> 24));
+    return this.rvs = m;
+  }
+}
 /** resource types a reference to stays a reference: the caller loads them by id */
 const LOADED_BY_ID = new Set(["drawable", "layout", "style", "anim", "xml", "menu", "mipmap", "raw", "font", "id", "transition", "interpolator", "animator"]);
+const SEL = { density: 0 };
 
 /**
  * Every resource memo below is only valid for one device Configuration: the same id resolves to
@@ -136,6 +173,13 @@ export function themeByName(res: Resources, theme: JTheme | null, name: string):
   return (own ? theme.lookup(own) : null) ?? (AID(name) ? theme.lookup(AID(name)) : null);
 }
 
+/** the native half of an ApkAssets: one archive and its resource table */
+export interface Apk {
+  path: string; table: Arsc | null;
+  zip: Record<string, Uint8Array>; lazyEntries: Map<string, FileSource>;
+}
+
+/** AssetManager2: the tables of the loaded packages, addressed by the package byte of an id. */
 export class Resources {
   arsc: Arsc | null;
   zip: Record<string, Uint8Array>;
@@ -145,6 +189,11 @@ export class Resources {
   selectorCache = new Map<number, number>();
   private framework: Arsc | null | undefined;
   jobj: any = null; // android.content.res.Resources instance
+  /** an AssetManager's apks in cookie order; null for the stack's own, whose framework is
+   *  cookie 1 and app cookie 2 */
+  apks: Apk[] | null = null;
+  private cookies: Int8Array | null = null;
+  private qualifiers: Partial<Arsc["device"]> = {};
 
   constructor(arsc: Arsc | null, zip: Record<string, Uint8Array>, lazyEntries = new Map<string, FileSource>(), scoped = false) {
     this.arsc = arsc;
@@ -156,11 +205,34 @@ export class Resources {
   invalidate(): void { this.bagCache.clear(); this.selectorCache.clear(); configGen++; }
 
   scoped(qualifiers: Partial<Arsc["device"]>): Resources {
-    const copy = (table: Arsc | null): Arsc | null => table && Object.assign(Object.create(table), { device: { ...table.device, ...qualifiers } });
-    const res = new Resources(copy(this.arsc), this.zip, this.lazyEntries, true);
-    res.framework = copy(this.tbl(0x01000000));
+    const res = new Resources(scopeTable(this.arsc, qualifiers), this.zip, this.lazyEntries, true);
+    res.framework = scopeTable(this.tbl(0x01000000), qualifiers);
     Object.assign(res.dm, this.dm);
     return res;
+  }
+
+  /** AssetManager2::SetApkAssets: the last package that is not the framework is the app's */
+  setApks(apks: Apk[]): void {
+    this.apks = apks;
+    const app = appApk(apks);
+    this.zip = app?.zip ?? {};
+    this.lazyEntries = app?.lazyEntries ?? new Map();
+    const cookies = this.cookies = new Int8Array(256).fill(-1);
+    apks.forEach((a, i) => { if (a.table) for (const id of a.table.packageIds()) if (cookies[id] < 0) cookies[id] = i + 1; });
+    this.configure(this.qualifiers);
+  }
+  /** AssetManager2::SetConfigurations: select under these qualifiers from now on */
+  configure(qualifiers: Partial<Arsc["device"]>): void {
+    this.qualifiers = qualifiers;
+    const apks = this.apks ?? [];
+    this.arsc = scopeTable(appApk(apks)?.table ?? null, qualifiers);
+    this.framework = scopeTable(apks.find((a) => a.table?.pkgId === 0x01)?.table ?? null, qualifiers);
+    this.invalidate();
+  }
+  /** the Java cookie of the apk a package id's table came from: 1-based, -1 for none */
+  cookieOf(pkg: number): number {
+    if (pkg < 0) return -1;
+    return this.cookies ? this.cookies[pkg] : pkg === 0x01 ? 1 : 2;
   }
 
   /** the table a resource id belongs to: package 0x01 is the framework, anything else the app */
@@ -216,81 +288,233 @@ export class Resources {
     return normRV(v);
   }
 
+  /** AssetManager2::GetResource into `out`; false when `resid` names nothing, or a bag and
+   *  `mayBeBag` is false. A bag reads back as a reference to itself. */
+  getResource(resid: number, mayBeBag: boolean, out: SV, density = 0): boolean {
+    const a = this.tbl(resid);
+    SEL.density = 0;
+    const e = a?.entry(resid, SEL, density || undefined);
+    if (!e) return false;
+    if (e.bag) {
+      if (!mayBeBag) return false;
+      out.t = TV.REFERENCE; out.d = resid;
+    } else { out.t = e.value!.type; out.d = e.value!.data; }
+    out.pkg = resid >>> 24; out.flags = a!.specFlags(resid); out.resid = resid; out.density = SEL.density;
+    return true;
+  }
+
+  /** AssetManager2::ResolveReference: follow a reference to the value at the end of its chain.
+   *  False when an id on the way names nothing; `v` then holds the last value that resolved. */
+  resolveReference(v: SV): boolean {
+    if (v.t !== TV.REFERENCE || v.d === 0) return true;
+    const original = v.flags;
+    let combined = 0, rid = v.d;
+    for (let i = 0; ; i++) {
+      if (!this.getResource(rid, true, v)) { v.resid = rid; return false; }
+      v.flags |= combined;
+      if (v.t !== TV.REFERENCE || v.d === 0 || v.d === rid || i === 20) { v.flags |= original; return true; }
+      combined = v.flags; rid = v.d;
+    }
+  }
+
+  /** a table value as our own stack reads it, strings out of the package's pool */
+  rawRV(t: number, d: number, pkg: number): RV {
+    if (t === TV.STRING) return { t, d, s: this.tbl(pkg << 24)?.values.get(d) };
+    return t === TV.FLOAT ? { t, d: intBitsToFloat(d) } : { t, d };
+  }
+
+  /** A selected value as our own stack reads it. The stack loads files, styles and ids by id, so a
+   *  value that came out of one stays a reference to it; an XML attribute's own value is `xa`'s. */
+  toRV(v: SV, xa: XmlAttr | null = null): RV | null {
+    const t = v.t;
+    if (t === TV.NULL || t === TV.ATTRIBUTE) return null;
+    if (v.pkg < 0) return xa ? xmlAttrRV(xa) : normRV({ t, d: v.d });
+    if (v.resid) {
+      const type = this.idType(v.resid);
+      if (LOADED_BY_ID.has(type) || (t === TV.STRING && type === "color")) {
+        const rv: RV = { t: TV.REFERENCE, d: v.resid };
+        if (t === TV.STRING) rv.s = this.tbl(v.pkg << 24)?.values.get(v.d);
+        return rv;
+      }
+    }
+    const rv = this.rawRV(t, v.d, v.pkg);
+    if (v.resid) rv.r = v.resid;
+    return rv;
+  }
+
   /** the resolved value behind resource id `id` — value(id) with its REFERENCE chain followed */
   ref(id: number): RV { return this.resolveRefs({ t: TV.REFERENCE, d: id }); }
 
   /** resolve REFERENCE chains (not ATTRIBUTE) */
-  resolveRefs(v: RV, depth = 0): RV {
-    while (v.t === TV.REFERENCE && v.d && depth++ < 20) {
-      if (LOADED_BY_ID.has(this.idType(v.d))) break;
-      const nv = this.value(v.d);
-      if (nv.t === TV.NULL) break;
-      if (nv.t === TV.REFERENCE && nv.d === v.d) break;
-      // color/dimen entries whose value is a file reference (color selector xml)
-      if (nv.t === TV.STRING && nv.s?.endsWith(".xml")) { v = { t: TV.REFERENCE, d: v.d, s: nv.s }; break; }
-      v = { ...nv, r: v.d };
-    }
-    return v;
+  resolveRefs(v: RV): RV {
+    if (v.t !== TV.REFERENCE || !v.d) return v;
+    const sv = SCRATCH;
+    sv.t = TV.REFERENCE; sv.d = v.d; sv.pkg = -1; sv.flags = 0; sv.resid = 0; sv.density = 0;
+    this.resolveReference(sv);
+    // a reference to itself (a bag) or one that did not resolve stays the value it was
+    if (sv.t === TV.REFERENCE && sv.d === v.d) return v;
+    return this.toRV(sv) ?? v;
   }
 
+  /** the bag `resId` names with its parents merged in, or null (AssetManager2::GetBag) */
   bag(resId: number): Bag | null {
     if (!resId) return null;
     let b = this.bagCache.get(resId);
-    if (b !== undefined) return b;
-    b = this.computeBag(resId);
-    this.bagCache.set(resId, b);
+    if (b === undefined) this.bagCache.set(resId, b = this.computeBag(resId, [resId]));
     return b;
   }
 
-  private computeBag(resId: number): Bag | null {
+  private computeBag(resId: number, chain: number[]): Bag | null {
     const a = this.tbl(resId);
     const e = a?.entry(resId);
     if (!e?.bag) return null;
-    const map = new Map<number, RV>();
-    for (const [attr, vt, vd] of e.bag.map) {
-      const v: RV = { t: vt, d: vd };
-      if (v.t === TV.STRING) v.s = a!.values.get(vd);
-      map.set(attr, normRV(v));
+    const own = e.bag.map, flags = a!.specFlags(resId), parentId = e.bag.parent;
+    // a parent already on the chain is a cycle, and a bag in one inherits nothing
+    const inherits = parentId !== 0 && !chain.includes(parentId);
+    let parent: Bag | null = null;
+    if (inherits) {
+      parent = this.bagCache.get(parentId) ?? null;
+      if (!this.bagCache.has(parentId)) { chain.push(parentId); this.bagCache.set(parentId, parent = this.computeBag(parentId, chain)); }
+      // a parent that should exist and does not fails the bag
+      if (!parent) return null;
     }
-    return { parent: e.bag.parent, map };
+    const order = own.map((_, i) => i);
+    // entries need not be stored in key order: aapt2 writes a plural's "one" before its "other"
+    order.sort((x, y) => own[x][0] - own[y][0]);
+    const pk = parent?.keys, n = order.length + (pk?.length ?? 0);
+    const keys = new Int32Array(n), types = new Uint8Array(n), data = new Int32Array(n), styles = new Int32Array(n);
+    let k = 0, i = 0, j = 0;
+    while (i < order.length || (pk && j < pk.length)) {
+      const mine = i < order.length ? own[order[i]] : null;
+      if (mine && (!pk || j >= pk.length || mine[0] <= pk[j])) {
+        if (pk && j < pk.length && mine[0] === pk[j]) j++;
+        keys[k] = mine[0]; types[k] = mine[1]; data[k] = mine[2]; styles[k] = resId; i++;
+      } else {
+        keys[k] = pk![j]; types[k] = parent!.types[j]; data[k] = parent!.data[j]; styles[k] = parent!.styles[j]; j++;
+      }
+      k++;
+    }
+    return new Bag(this, parentId, flags | (parent?.flags ?? 0), keys.subarray(0, k), types.subarray(0, k), data.subarray(0, k), styles.subarray(0, k));
   }
 
-  /** search style chain for attr */
-  styleLookup(styleId: number, attrId: number, depth = 0): RV | null {
-    let id = styleId;
-    while (id && depth++ < 30) {
-      const b = this.bag(id);
-      if (!b) return null;
-      const v = b.map.get(attrId);
-      if (v) return v;
-      id = b.parent;
-    }
-    return null;
+  /** an attribute's raw value in a style or its parents */
+  styleLookup(styleId: number, attrId: number): RV | null {
+    return this.bag(styleId)?.map.get(attrId) ?? null;
   }
 }
+const SCRATCH = newSV();
+/** the app's apk: the last whose package is not the framework's */
+function appApk(apks: Apk[]): Apk | undefined {
+  for (let i = apks.length - 1; i >= 0; i--) if (apks[i].table && apks[i].table!.pkgId !== 0x01) return apks[i];
+  return undefined;
+}
+function scopeTable(table: Arsc | null, qualifiers: Partial<Arsc["device"]>): Arsc | null {
+  return table && Object.assign(Object.create(table), { device: { ...table.device, ...qualifiers } });
+}
 
+interface ThemeEntry { t: number; d: number; pkg: number; flags: number }
+/** A theme's native half (AssetManager2's Theme): the attributes of the styles applied to it,
+ *  merged as Theme::ApplyStyle merges them. */
 export class JTheme extends JObj {
   res!: Resources;
-  styles: number[] = []; // applied in order; later wins
+  entries = new Map<number, ThemeEntry>();
+  /** the styles applied so far, with their force flags, in pairs */
+  applied: number[] = [];
+  flags = 0;
+  /** resolved values (AOSP caches them too) and our own stack's reading of them, valid for one
+   *  selection generation */
+  private resolved = new Map<number, SV | null>();
   cache = new Map<number, RV | null>();
-  gen = configGen;
+  private gen = configGen;
+  /** A theme our own stack holds re-applies its styles when a qualifier changes; one AOSP's
+   *  ThemeImpl holds is rebased by it instead. */
+  live = true;
 
-  apply(styleId: number) { this.styles.push(styleId); this.cache.clear(); }
+  private sync(): void {
+    if (this.gen === configGen) return;
+    this.gen = configGen;
+    this.forget();
+    if (this.live) this.replay(this.applied);
+  }
+  private replay(applied: number[]): void {
+    this.entries.clear(); this.flags = 0; this.applied = [];
+    for (let i = 0; i < applied.length; i += 2) this.apply(applied[i], applied[i + 1] !== 0);
+  }
 
-  lookup(attrId: number, depth = 0): RV | null {
-    if (this.gen !== configGen) { this.cache.clear(); this.gen = configGen; }
-    if (depth === 0) {
-      const c = this.cache.get(attrId);
-      if (c !== undefined) return c;
+  apply(styleId: number, force = true): void {
+    this.sync();
+    this.applied.push(styleId, force ? 1 : 0);
+    this.forget();
+    const bag = this.res.bag(styleId);
+    if (!bag) return;
+    this.flags |= bag.flags;
+    for (let i = 0; i < bag.keys.length; i++) {
+      const key = bag.keys[i], t = bag.types[i], d = bag.data[i];
+      // a bag that is not a style fails where its keys stop being attribute ids
+      if (!isValidResid(key)) return;
+      const undefinedValue = t === TV.NULL && d !== DATA_NULL_EMPTY;
+      if (!force && undefinedValue) continue;
+      if (this.entries.has(key)) {
+        if (undefinedValue) this.entries.delete(key);
+        else if (force) this.entries.set(key, { t, d, pkg: bag.styles[i] >>> 24, flags: bag.flags });
+      } else this.entries.set(key, { t, d, pkg: bag.styles[i] >>> 24, flags: bag.flags });
     }
-    let out: RV | null = null;
-    for (let i = this.styles.length - 1; i >= 0 && !out; i--) {
-      out = this.res.styleLookup(this.styles[i], attrId);
+  }
+  /** Theme::SetTo. Our own stack copies a theme onto another configuration's tables, where the
+   *  same styles select other values, so it re-applies them there. */
+  setTo(o: JTheme): void {
+    o.sync();
+    this.gen = configGen; this.forget();
+    if (this.res && this.res !== o.res) { this.replay(o.applied); return; }
+    this.res = o.res;
+    this.entries = new Map(o.entries); this.flags = o.flags; this.applied = o.applied.slice();
+  }
+  /** Theme::Rebase: these styles over another AssetManager */
+  rebase(res: Resources, styles: number[]): void { this.res = res; this.gen = configGen; this.forget(); this.replay(styles); }
+  private forget(): void { this.resolved.clear(); this.cache.clear(); }
+
+  /** Theme::GetAttribute: the value an attribute holds, through ?attr indirections, unresolved */
+  getAttribute(resid: number, out: SV): boolean {
+    this.sync();
+    let flags = 0;
+    for (let i = 0; i <= 20; i++) {
+      const e = this.entries.get(resid);
+      if (!e) return false;
+      flags |= e.flags;
+      if (e.t === TV.ATTRIBUTE) { resid = e.d; continue; }
+      if (e.t === TV.NULL && e.d !== DATA_NULL_EMPTY) return false;
+      out.t = e.t; out.d = e.d; out.pkg = e.pkg; out.flags = flags; out.resid = 0; out.density = 0;
+      return true;
     }
-    if (out && out.t === TV.ATTRIBUTE && depth < 20) out = this.lookup(out.d, depth + 1);
-    if (out) out = this.res.resolveRefs(out);
-    if (depth === 0) this.cache.set(attrId, out);
-    return out;
+    return false;
+  }
+  /** GetAttribute then ResolveReference, or null when the theme holds nothing for it */
+  resolvedAttribute(attr: number): SV | null {
+    this.sync();
+    let v = this.resolved.get(attr);
+    if (v === undefined) {
+      v = newSV();
+      if (this.getAttribute(attr, v)) this.res.resolveReference(v); else v = null;
+      this.resolved.set(attr, v);
+    }
+    return v;
+  }
+  /** Theme::ResolveAttributeReference */
+  resolveAttributeReference(v: SV): void {
+    if (v.t !== TV.ATTRIBUTE) { this.res.resolveReference(v); return; }
+    const t = this.resolvedAttribute(v.d);
+    if (!t) return;
+    v.t = t.t; v.d = t.d; v.pkg = t.pkg; v.flags |= t.flags; v.resid = t.resid; v.density = t.density;
+  }
+
+  /** an attribute's resolved value, as our own stack reads it */
+  lookup(attrId: number): RV | null {
+    let v = this.cache.get(attrId);
+    if (v !== undefined && this.gen === configGen) return v;
+    const sv = this.resolvedAttribute(attrId);
+    v = sv && this.res.toRV(sv);
+    this.cache.set(attrId, v);
+    return v;
   }
 }
 
@@ -337,6 +561,92 @@ export class JTypedArray extends JObj {
   attrIds: Int32Array | number[] = [];
 }
 
+/** AOSP's TypedArray layout: STYLE_NUM_ENTRIES ints per attribute, (type, data, assetCookie,
+ *  resourceId, changingConfigurations, density, sourceResourceId). */
+export const STYLE_NUM_ENTRIES = 7;
+const STYLED = newSV();
+
+/**
+ * libandroidfw's AttributeResolution in one pass: ApplyStyle with a theme (XML attribute, the
+ * XML's style=, the default style, then the theme), ResolveAttrs when `srcValues` stands in for
+ * the XML, RetrieveAttributes without a theme (XML attributes only). Each value lands in
+ * `outValues`/`outIndices` in TypedArray's layout, or as our own stack's RV in `outRVs`.
+ */
+function ascending<T>(list: ArrayLike<T>, id: (t: T) => number): boolean {
+  for (let i = 1; i < list.length; i++) if (id(list[i]) < id(list[i - 1])) return false;
+  return true;
+}
+/** a style's value for `key` into `v`, returning the style it came from, or 0 */
+function fromBag(bag: Bag, key: number, flags: number, v: SV): number {
+  const i = bag.find(key);
+  if (i < 0) return 0;
+  v.t = bag.types[i]; v.d = bag.data[i]; v.pkg = bag.styles[i] >>> 24; v.flags = bag.flags | flags;
+  return bag.styles[i];
+}
+
+export function resolveAttributes(
+  res: Resources, theme: JTheme | null, node: XmlNode | null, sourceResId: number,
+  defStyleAttr: number, defStyleRes: number, attrs: ArrayLike<number>, srcValues: ArrayLike<number> | null,
+  outValues: Int32Array | null, outIndices: Int32Array | null, outRVs: (RV | null)[] | null,
+): void {
+  const v = STYLED;
+  let defStyleFlags = 0, xmlStyleFlags = 0, xmlStyle = 0;
+  if (theme) {
+    if (defStyleAttr && theme.getAttribute(defStyleAttr, v)) {
+      if (v.t === TV.REFERENCE) defStyleRes = v.d;
+      defStyleFlags = v.flags;
+    }
+    // the element's style=, which may itself be a theme attribute
+    const styleAttr = node?.attrs.find((a) => a.name === "style" && !a.ns);
+    if (styleAttr) {
+      let t = styleAttr.type, d = styleAttr.data;
+      if (t === TV.ATTRIBUTE) {
+        if (theme.getAttribute(d, v)) { t = v.t; d = v.d; xmlStyleFlags = v.flags; } else t = TV.NULL;
+      }
+      if (t === TV.REFERENCE) xmlStyle = d;
+    }
+  } else defStyleRes = 0;
+  const xmlBag = xmlStyle ? res.bag(xmlStyle) : null, defBag = defStyleRes ? res.bag(defStyleRes) : null;
+  const xmlAttrs = node?.attrs;
+  // both lists are normally in ascending id order (styleables are sorted, aapt2 sorts an element's
+  // attributes), which lets one cursor walk them together as AOSP's attribute finders do
+  const merge = !!xmlAttrs && ascending(attrs, (id) => id) && ascending(xmlAttrs, (a) => a.resId);
+  let found = 0, cursor = 0;
+  for (let ii = 0; ii < attrs.length; ii++) {
+    const cur = attrs[ii];
+    v.t = TV.NULL; v.d = 0; v.pkg = -1; v.flags = 0; v.resid = 0; v.density = 0;
+    let source = 0, xa: XmlAttr | null = null;
+    if (srcValues && srcValues[ii]) { v.t = TV.ATTRIBUTE; v.d = srcValues[ii]; }
+    else if (xmlAttrs && cur) {
+      if (merge) {
+        while (cursor < xmlAttrs.length && xmlAttrs[cursor].resId < cur) cursor++;
+        if (cursor < xmlAttrs.length && xmlAttrs[cursor].resId === cur) xa = xmlAttrs[cursor];
+      } else for (let k = 0; k < xmlAttrs.length; k++) if (xmlAttrs[k].resId === cur) { xa = xmlAttrs[k]; break; }
+      if (xa) { v.t = xa.type; v.d = xa.data; source = sourceResId; }
+    }
+    if (xmlBag && v.t === TV.NULL && v.d !== DATA_NULL_EMPTY) source = fromBag(xmlBag, cur, xmlStyleFlags, v) || source;
+    if (defBag && v.t === TV.NULL && v.d !== DATA_NULL_EMPTY) source = fromBag(defBag, cur, defStyleFlags, v) || source;
+    let fromTheme = false;
+    if (v.t !== TV.NULL) {
+      if (theme) theme.resolveAttributeReference(v); else res.resolveReference(v);
+    } else if (v.d !== DATA_NULL_EMPTY && theme) {
+      const t = theme.resolvedAttribute(cur);
+      if (t) { v.t = t.t; v.d = t.d; v.pkg = t.pkg; v.flags = t.flags; v.resid = t.resid; v.density = t.density; fromTheme = true; }
+    }
+    // @null turns back into TYPE_NULL, having masked whatever lay beneath it
+    if (v.t === TV.REFERENCE && v.d === 0) { v.t = TV.NULL; v.pkg = -1; }
+    const has = v.t !== TV.NULL || v.d === DATA_NULL_EMPTY;
+    if (outValues) {
+      const at = ii * STYLE_NUM_ENTRIES;
+      outValues[at] = v.t; outValues[at + 1] = v.d; outValues[at + 2] = res.cookieOf(v.pkg);
+      outValues[at + 3] = v.resid; outValues[at + 4] = v.flags; outValues[at + 5] = v.density; outValues[at + 6] = source;
+    }
+    if (outIndices && has) outIndices[++found] = ii;
+    if (outRVs) outRVs[ii] = !has ? null : fromTheme ? theme!.lookup(cur) : res.toRV(v, v.pkg < 0 ? xa : null);
+  }
+  if (outIndices) outIndices[0] = found;
+}
+
 export function obtainStyled(
   res: Resources, theme: JTheme | null, set: JAttrSet | null,
   attrIds: Int32Array | number[], defStyleAttr: number, defStyleRes: number,
@@ -348,56 +658,17 @@ export function obtainStyled(
   ta.res = res; ta.theme = theme;
   ta.attrIds = attrIds;
   const n = attrIds.length;
-  ta.vals = new Array(n).fill(null);
+  ta.vals = new Array(n);
   // asking is what counts, not finding: app classes reach their own framework attributes through
   // this same cascade, so an attribute nobody asks for is one nobody implements.
   for (let i = 0; i < n; i++) askedAttrs.add(attrIds[i]);
-
-  // 3/4. defStyle chain
-  let defStyleId = 0;
-  if (defStyleAttr && theme) {
-    const v = theme.lookup(defStyleAttr);
-    if (v && (v.t === TV.REFERENCE || v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4)) defStyleId = v.d;
-  }
-  if (!defStyleId && defStyleRes) defStyleId = defStyleRes;
-
-  // 2. style= attr in XML
-  let xmlStyleId = 0;
-  if (set?.node) {
-    for (const a of set.node.attrs) {
-      if (a.name === "style" && !a.ns) {
-        // `style="?attr/materialButtonOutlinedStyle"` is a THEME ATTRIBUTE, not a style id —
-        // every Material widget in a layout is styled this way, and taking the raw data left
-        // them with no style at all.
-        xmlStyleId = a.type === TV.ATTRIBUTE ? theme?.lookup(a.data)?.d ?? 0 : a.data;
-      }
-    }
-  }
-
-  for (let i = 0; i < n; i++) {
-    const attrId = attrIds[i];
-    if (!attrId) continue;
-    let v: RV | null = null;
-    // 1. direct XML attribute
-    if (set?.node) {
-      v = nodeAttrRV(set.node, attrId);
-    }
-    if (!v && xmlStyleId) v = res.styleLookup(xmlStyleId, attrId);
-    if (!v && defStyleId) v = res.styleLookup(defStyleId, attrId);
-    if (!v && theme) v = theme.lookup(attrId);
-    ta.vals[i] = resolveStyleValue(res, theme, v);
-  }
+  resolveAttributes(res, theme, set?.node ?? null, 0, defStyleAttr, defStyleRes, attrIds, null, null, null, ta.vals);
   return ta;
 }
 
-/** Theme/Context.obtainStyledAttributes(styleId, attrs): the style's own values, no XML or defaults */
+/** Theme.obtainStyledAttributes(resId, attrs): the style as the default style, over the theme */
 export function obtainStyleAttributes(res: Resources, theme: JTheme | null, styleId: number, attrIds: Int32Array): JTypedArray {
-  const ta = new JTypedArray();
-  ta.res = res;
-  ta.theme = theme;
-  ta.attrIds = attrIds;
-  ta.vals = [...attrIds].map((a) => resolveStyleValue(res, theme, res.styleLookup(styleId, a)));
-  return ta;
+  return obtainStyled(res, theme, null, attrIds, 0, styleId);
 }
 
 /**

@@ -16,7 +16,7 @@ import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
 import { getPM, registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jutil";
-import { Resources, JTheme, T_STR, themeOf } from "../src/android/res";
+import { Resources, JTheme, themeOf } from "../src/android/res";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { JIntent } from "../src/android/intent";
 import { encodeIntent } from "../src/android/intentipc";
@@ -36,7 +36,7 @@ import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
 import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
 import { JActivity } from "../src/android/app";
-import { scall, loadLibcore } from "./java";
+import { scall, loadLibcore, fakeStyles } from "./java";
 
 describe("adservices", () => {
   rt.linkNatives();
@@ -800,17 +800,16 @@ describe("window-context", () => {
   });
 
   test("Dialog exposes its overlay theme through its context and inflater without changing its owner", async () => {
-    const res = new Resources(null, {}), theme = new JTheme();
-    theme.res = res; theme.styles = [100];
-    res.bagCache.set(100, { parent: 0, map: new Map([[1, { t: T_STR, d: 0, s: "base" }]]) });
-    res.bagCache.set(101, { parent: 0, map: new Map([[1, { t: T_STR, d: 0, s: "dialog" }]]) });
+    const S = 0x7f0f0000, A = 0x7f010001;
+    const res = await fakeStyles(["base", "dialog"], { [S]: [[A, TV.STRING, 0]], [S + 1]: [[A, TV.STRING, 1]] }), theme = new JTheme();
+    theme.res = res; theme.apply(S);
     const context = Object.assign(rt.make("android/content/Context"), { $host: { res, theme } });
-    const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, 101);
+    const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, S + 1);
     const themed = await vcall(dialog, "getContext", "()Landroid/content/Context;");
     expect(themed).not.toBe(context);
-    expect(themeOf(themed)?.lookup(1)?.s).toBe("dialog");
-    expect(themeOf(getInflater(themed).jctx)?.lookup(1)?.s).toBe("dialog");
-    expect(theme.lookup(1)?.s).toBe("base");
+    expect(themeOf(themed)?.lookup(A)?.s).toBe("dialog");
+    expect(themeOf(getInflater(themed).jctx)?.lookup(A)?.s).toBe("dialog");
+    expect(theme.lookup(A)?.s).toBe("base");
     expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBeNull();
     const owner = rt.make("android/app/Activity");
     await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);

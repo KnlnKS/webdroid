@@ -889,6 +889,29 @@ android/content/res/`):
   (`Theme::GetAttribute` + `ResolveReference`). `getValue` (`nativeGetResourceValue`). Layout XML
   through XmlBlock (today the TS inflater parses AXML itself). String reads with spans
   (StringBlock styles).
+- **Done (step 1): natives.** 94 of 97 have libandroidfw semantics over one AssetManager2
+  (`res.ts` `Resources`, `JTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
+  stack uses too. Left: ObbScanner and ResourceTimer (unreached), resolution logging (answers ""),
+  `nativeList` of the framework apk's assets (its archive is not listed) and fd-backed ApkAssets
+  (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
+  runs AOSP's Resources end to end headless. Measurements are in the history entry.
+- **Not yet flippable; next, in order:**
+  1. Boot under the switch: `device.ts`, `context.ts`, `pm.ts` build `JResources`/`JTheme`/
+     `JConfiguration` themselves. They must load ApkAssets, build the AssetManager and Resources
+     through AOSP (ResourcesManager, as LoadedApk does), and hand Contexts the Java Resources and
+     Theme; device configuration changes go through `Resources.updateConfiguration`.
+  2. Bridges for the TS view stack, which stays TS until Stage D: the native state behind a Java
+     object (`Resources.mResourcesImpl.mAssets.mObject` → `Resources`, `Theme.mThemeImpl.mTheme` →
+     `JTheme`, `XmlBlock$Parser.mParseState` → the element). AOSP's ThemeImpl casts the
+     AttributeSet to `XmlBlock$Parser`, so the TS inflater must pass the parser `getLayout` returns,
+     not `webdroid/AttrSet`.
+  3. Drawables: `ResourcesImpl.loadXmlDrawable` runs AOSP's DrawableInflater over the TS drawables,
+     which lack AOSP's fields (`Drawable.mSrcDensityOverride`); either a TS
+     `Drawable.createFromXmlForDensity` over the bridge or C.2 first. Bitmap drawables go through
+     `ImageDecoder.decodeDrawable` (added; needs a browser to decode).
+  4. ColorStateList consumers (69 references in drawable, widget, textview, text, view, imageview)
+     read the TS list's items; with the cut they get AOSP's and must call it.
+  5. Then e2e/lat under `?bytecode=android/content/res/`, and delete `resnative.ts`'s specs.
 
 ### Tools and pitfalls learned
 

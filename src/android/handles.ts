@@ -44,3 +44,7 @@ export function release(h: bigint): void {
   if (old) byObj.delete(old);
   objs[n] = undefined;
 }
+
+/** A finalizer is a function pointer the class hands to NativeAllocationRegistry, which only
+ *  ever passes it back to us. One shared handle to the release function is enough. */
+export const FINALIZER = handle((h: bigint) => release(h));

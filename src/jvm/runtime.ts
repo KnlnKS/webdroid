@@ -374,6 +374,9 @@ export class Runtime {
     return d;
   }
 
+  /** the property an instance field of `cls` (or a superclass) lives in, bytecode or spec */
+  fieldProp(cls: string, name: string): string | undefined { return instanceFieldOf(this.link(cls), name); }
+
   /** compile-time: mangled property name for an instance field ref */
   resolveInstanceField(dex: DexFile, fieldIdx: number): string {
     const fr = dex.field(fieldIdx);
