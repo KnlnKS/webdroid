@@ -1796,8 +1796,8 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       }
       return d;
     }
-    case "layer-list": {
-      const d = new JLayerDrawable();
+    case "layer-list": case "transition": {
+      const d = node.name === "transition" ? new JTransitionDrawable() : new JLayerDrawable();
       for (const c of node.children) {
         if (c.name !== "item") continue;
         const child = yield itemDrawable(res, c, theme);
@@ -1941,7 +1941,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       }
       return d;
     }
-    case "transition": case "level-list": {
+    case "level-list": {
       for (const c of node.children) {
         const child = c.name === "item" ? yield itemDrawable(res, c, theme) : null;
         if (child) return child;
