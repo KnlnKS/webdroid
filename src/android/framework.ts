@@ -19,7 +19,6 @@ import { PLATFORM_JARS } from "../jvm/provenance";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
 import { BytesFile } from "../shell/lazyfile";
-import { zygoteInit } from "./delegates";
 import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
@@ -61,7 +60,6 @@ export function loadPlatformDex(): Promise<void> {
   return pendingDex ??= fetchPlatformJars().then(async (bytes) => {
     // a jar at a time: a process realm's boot shares the page's main thread with the presented app
     for (let i = 0; i < bytes.length; i++) { loadPlatformJar(bytes[i], i); await yieldToLoop(); }
-    await zygoteInit();
   });
 }
 

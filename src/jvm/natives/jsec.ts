@@ -1,39 +1,11 @@
 // java.security — MessageDigest (sync MD5/SHA-1/SHA-256: fingerprint checks at boot, cache keys), SecureRandom, AccessController.
 import { rt, JObj, driven, type Gen } from "../runtime";
-import { vcall, after, defineException, stringHash } from "./jlang";
+import { vcall, after, defineException } from "./jlang";
 import { jarray, concat, u8, mangleMethod } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
 import { JProps } from "./jutil";
 import { JFilterInputStream, JFilterOutputStream } from "./jio";
 import { md5, sha1, sha256 } from "./digest";
-
-class JPermission extends JObj { name = ""; }
-rt.register({ name: "java/security/Permission", ctor: JPermission, fields: { name: "name" }, methods: {
-  "<init>(Ljava/lang/String;)V": function (this: JPermission, name: string) { this.name = name; },
-  "getName()Ljava/lang/String;": function (this: JPermission) { return this.name; },
-  "checkGuard(Ljava/lang/Object;)V": () => {},
-} });
-
-class JBasicPermission extends JPermission {}
-function initBasicPermission(this: JBasicPermission, name: string) {
-  if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", "name");
-  if (!name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "name");
-  this.name = name;
-}
-rt.register({ name: "java/security/BasicPermission", ctor: JBasicPermission, sup: "java/security/Permission", methods: {
-  "<init>(Ljava/lang/String;)V": initBasicPermission,
-  "<init>(Ljava/lang/String;Ljava/lang/String;)V": initBasicPermission,
-  "getActions()Ljava/lang/String;": () => "",
-  "implies(Ljava/security/Permission;)Z": function (this: JBasicPermission, other: JBasicPermission | null) {
-    if (!other || this.constructor !== other.constructor) return 0;
-    if (this.name === "*") return 1;
-    return +(this.name === other.name || (this.name.endsWith(".*") && other.name.startsWith(this.name.slice(0, -1))));
-  },
-  "equals(Ljava/lang/Object;)Z": function (this: JBasicPermission, other: JBasicPermission | null) {
-    return +(!!other && this.constructor === other.constructor && this.name === other.name);
-  },
-  "hashCode()I": function (this: JBasicPermission) { return stringHash(this.name); },
-} });
 
 defineException("java/security/GeneralSecurityException", "java/lang/Exception");
 defineException("java/security/NoSuchAlgorithmException", "java/security/GeneralSecurityException");

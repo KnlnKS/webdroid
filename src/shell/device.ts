@@ -10,6 +10,7 @@ import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "
 import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
+import { zygoteInit } from "../android/delegates";
 import { loadCode, startupDone } from "../jvm/codecache";
 import { parseBaselineProfile, precompileProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
@@ -138,6 +139,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.
   await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+  // after linking: the time zone setup runs Java that reaches TS-built objects
+  await zygoteInit();
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();
   await vfs.prepare(pkg);

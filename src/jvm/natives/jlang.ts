@@ -581,6 +581,9 @@ const stackClass = (n: number) => { const frame = framesHere()[n]; return frame 
 rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, methods: {
   "static getStackClass1()Ljava/lang/Class;": () => stackClass(1),
   "static getStackClass2()Ljava/lang/Class;": () => stackClass(2),
+  // another cooperative thread's frames are not on the JS stack: none, as for a thread not running
+  "static getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;": (t: JThread | null) =>
+    stackTrace(t === curThread ? [["dalvik/system/VMStack", "getThreadStackTrace"], ...framesHere()] : []),
 } });
 
 const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen {
@@ -2333,6 +2336,10 @@ rt.register({
   },
 });
 class JWeakRef extends JRef { wr: WeakRef<object> | null = null; }
+// Reference.refersTo(obj): whether the referent is obj, without making a weak referent strong
+rt.registerJni("java/lang/ref/Reference", "refersTo0(Ljava/lang/Object;)Z", function (this: JRef, o: unknown) {
+  return +((this instanceof JWeakRef ? this.wr?.deref() ?? this.referent : this.referent) === o);
+});
 rt.register({
   name: "java/lang/ref/WeakReference", ctor: JWeakRef, sup: "java/lang/ref/Reference",
   methods: {

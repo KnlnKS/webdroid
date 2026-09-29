@@ -20,7 +20,7 @@ import {
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
-import { newObj, vcall, after } from "../jvm/natives/jlang";
+import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jstream";
 import { charsToString, floatToIntBits, i8, u8, jarray } from "../jvm/abi";
 import { JPath, appendPath, copyPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
@@ -774,11 +774,13 @@ delegate("android/os/SystemProperties", {
 });
 
 /** What RuntimeInit.commonInit sets up in a zygote-forked process before app code runs: the
- *  default time zone follows persist.sys.timezone. */
-export function zygoteInit(): unknown {
+ *  default time zone follows persist.sys.timezone, and java.util.logging reaches logcat. */
+export async function zygoteInit(): Promise<void> {
   const hooks = rt.link("dalvik/system/RuntimeHooks");
-  return after(rt.initClass(hooks), () => vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V",
-    lambda("Supplier", deviceProperties["persist.sys.timezone"])));
+  await rt.initClass(hooks);
+  await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("Supplier", deviceProperties["persist.sys.timezone"]));
+  await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
+  await newObj("com/android/internal/logging/AndroidConfig", "()V");
 }
 
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────

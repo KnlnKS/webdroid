@@ -5,7 +5,6 @@ import "../src/jvm/natives/jlang";
 import "../src/jvm/natives/jutil";
 import "../src/jvm/natives/jrandom";
 import "../src/jvm/natives/jvalues";
-import "../src/jvm/natives/jlogging";
 import "../src/jvm/natives/jtimer";
 import "../src/jvm/natives/jstream";
 import "../src/jvm/natives/jio";

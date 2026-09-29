@@ -3,7 +3,7 @@ import { mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-v
 import { jarray, mangleMethod, charsToString, dotName, slashName, utf8 } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo, driven, without, type Gen } from "../runtime";
-import { defaultLocale, JLocale } from "./jvalues";
+import { defaultLocale, localeForTag, JLocale } from "./jvalues";
 import {
   synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet, synchronizedSortedMap,
   unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet, uoe,
@@ -2885,7 +2885,11 @@ rt.register({
     "store(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JProps, stream: unknown, comments: string | null) { return storeProperties(this, stream, comments); },
   },
 });
-class JResourceBundle extends JObj { values = new Map<string, unknown>(); parent: JResourceBundle | null = null; }
+class JResourceBundle extends JObj {
+  values = new Map<string, unknown>(); parent: JResourceBundle | null = null;
+  /** the locale part of the name it was found under ("en_US", "" for the base bundle) */
+  suffix = "";
+}
 class JListResourceBundle extends JResourceBundle { loading: Promise<void> | null = null; }
 const bundleValues = driven(function* bundleValues(bundle: JResourceBundle): Gen<Map<string, unknown>> {
   if (bundle instanceof JListResourceBundle) {
@@ -2907,6 +2911,11 @@ const bundleNames = driven(function* bundleNames(baseName: string, locale: JLoca
 const getBundle = driven(function* getBundle(baseName: string, locale: JLocale, control?: JBundleControl): Gen<JResourceBundle> {
   if (baseName == null || locale == null) rt.npe();
   const load = async (name: string): Promise<JResourceBundle | null> => {
+    const bundle = await loadNamed(name);
+    if (bundle) bundle.suffix = name.slice(baseName.length + 1);
+    return bundle;
+  };
+  const loadNamed = async (name: string): Promise<JResourceBundle | null> => {
     const cls = name.replaceAll(".", "/");
     if ((!control || control.formats.a.includes("java.class")) && (rt.dexIndex.has(cls) || rt.natives.has(cls))) {
       const candidate = await newObj(cls);
@@ -2976,11 +2985,26 @@ rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: {
   "<init>()V": function () {},
   "static getBundle(Ljava/lang/String;)Ljava/util/ResourceBundle;": (baseName: string) => after(defaultLocale(), (locale) => getBundle(baseName, locale)),
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/ResourceBundle;": getBundle,
+  // one class path serves every loader
+  "static getBundle(Ljava/lang/String;Ljava/util/Locale;Ljava/lang/ClassLoader;)Ljava/util/ResourceBundle;": (baseName: string, locale: JLocale, loader: unknown) => {
+    if (loader === null) rt.npe();
+    return getBundle(baseName, locale);
+  },
+  "static getBundle(Ljava/lang/String;Ljava/util/Locale;Ljava/lang/ClassLoader;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;":
+    (baseName: string, locale: JLocale, loader: unknown, control: JBundleControl | null) => {
+      if (loader === null || control === null) rt.npe();
+      return getBundle(baseName, locale, control!);
+    },
+  "static getBundle(Ljava/lang/String;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;": (baseName: string, control: JBundleControl | null) => {
+    if (control === null) rt.npe();
+    return after(defaultLocale(), (locale) => getBundle(baseName, locale, control!));
+  },
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;": (baseName: string, locale: JLocale, control: JBundleControl | null) => {
     if (control === null) rt.npe();
     return getBundle(baseName, locale, control!);
   },
   "setParent(Ljava/util/ResourceBundle;)V": function (this: JResourceBundle, parent: JResourceBundle) { this.parent = parent; },
+  "getLocale()Ljava/util/Locale;": function (this: JResourceBundle) { return localeForTag(this.suffix.replaceAll("_", "-") || "und"); },
   "handleGetObject(Ljava/lang/String;)Ljava/lang/Object;": driven(function* (this: JResourceBundle, key: string): Gen {
     if (key == null) rt.npe();
     return (yield bundleValues(this)).get(key) ?? null;

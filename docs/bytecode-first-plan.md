@@ -653,12 +653,17 @@ These classes now run from AOSP bytecode, with their TS code deleted:
     `ClassLoader.findResource`;
   - the `/apex` ICU and tz files mounted in every realm (`src/shell/apex.ts`). The production
     worker serves byte ranges of split files;
-  - `zygoteInit()` (`src/android/delegates.ts`): RuntimeHooks' time-zone supplier reads
-    `persist.sys.timezone`, which `device.timezone` (the host zone) answers.
+  - `zygoteInit()` (`src/android/delegates.ts`, after `linkNatives`): RuntimeHooks' time-zone
+    supplier reads `persist.sys.timezone`, which `device.timezone` (the host zone) answers, and
+    java.util.logging is reset onto AndroidConfig's AndroidHandler, as RuntimeInit.commonInit does.
 - **java.io.File (B.7 cut 2).** libcore's File over `java/io/UnixFileSystem` natives and Linux
   access/remove/rename (`src/android/os.ts`), with VFS modification times. TS reads a File with
   `pathOf` and makes one with `newFile` (`jio.ts`). The TS java.nio.file layer stays and answers
   `FileSystems.getDefault()` for `File.toPath`.
+- **java.util.logging.** libcore's Logger/LogManager reach logcat through AndroidHandler. The flip
+  needed `Reference.refersTo0`, `VMStack.getThreadStackTrace` (LogRecord.inferCaller) and the
+  ResourceBundle loader/Control overloads, and removed the TS Permission specs, whose empty-name
+  check Android's stubs lack.
 - **java.util.Locale.** libcore's Locale starts from `user.locale` (`device.locale`). TS reads a
   Locale through its Java API (`localeTag`, `localeDirection`, `defaultLocale` in `jvalues.ts`);
   LocaleList keeps its Locales' tags for synchronous readers. The "3x suite time" was

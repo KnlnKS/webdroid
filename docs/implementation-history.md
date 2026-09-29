@@ -303,6 +303,14 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   makes on a device, and the native threw ErrnoException where the JNI throws IOException, the one
   ProfileInstaller catches. libcore's UnixFileSystem also needs `java.home`, and `File.toPath` reaches
   `FileSystems.getDefault()`.
+- 2026-09-28, java.util.logging from libcore. zygoteInit ran from platform-jar loading, before
+  `linkNatives`; once its time-zone setup reached libcore logging, a TS-built HashMap view had no
+  linked methods and every app failed to boot. It now runs after linking and also installs
+  AndroidHandler, without which SimpleFormatter printed its `%1$tb` pattern raw. Komikku's e2e flow
+  failed about 4 in 11 parallel runs: its storage step waited for "Selected folder:", which the
+  unselected state already shows, so a late picker result left later taps a page behind. With the
+  wait on the granted URI, 2 of 14 runs still settled on pixels mid-transition after "Get started"
+  (HEAD 0 of 24); per-step times matched HEAD's, so no slowdown was found behind it.
 - 2026-09-28, override bypasses. `bun run bypass` (plan §5.6) found 786 places where a TS method
   answered without the overridable method AOSP's body calls and a corpus app overrides; about 230
   were fixed that day. The most consequential: no view's onScrollChanged or onWindowFocusChanged

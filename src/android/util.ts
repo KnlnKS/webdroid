@@ -28,6 +28,7 @@ const logFn = (lvl: string) => (tag: string, msg: string, tr?: unknown) => {
   console.log(`[${lvl}/${tag}]`, msg, tr ? `(${t?.msg ?? tr})` : "", t?.jsStack ?? t?.stack ?? "");
   return 0;
 };
+const logAt = (priority: number) => logFn(["", "", "V", "D", "I", "W", "E", "A"][priority] ?? "P");
 rt.register({
   name: "android/util/Log", ctor: JLog,
   statics: { VERBOSE: 2, DEBUG: 3, INFO: 4, WARN: 5, ERROR: 6, ASSERT: 7 },
@@ -40,7 +41,7 @@ rt.register({
     "static wtf(Ljava/lang/String;Ljava/lang/String;)I": logFn("WTF"),
     "static isLoggable(Ljava/lang/String;I)Z": (_tag: string, level: number) => level >= 4 ? 1 : 0,
     "static getStackTraceString(Ljava/lang/Throwable;)Ljava/lang/String;": (t: unknown) => String((t as any)?.msg ?? t ?? ""),
-    "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logFn("P")(tag, msg),
+    "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logAt(p)(tag, msg),
   },
 });
 class JLogPrinter extends JObj { priority = 3; tag = ""; }
@@ -49,7 +50,7 @@ rt.register({ name: "android/util/LogPrinter", ctor: JLogPrinter, ifaces: ["andr
   "<init>(ILjava/lang/String;)V": initLogPrinter,
   "<init>(ILjava/lang/String;I)V": initLogPrinter,
   "println(Ljava/lang/String;)V": function (this: JLogPrinter, message: string) {
-    logFn(["", "", "V", "D", "I", "W", "E", "A"][this.priority] ?? "P")(this.tag, message);
+    logAt(this.priority)(this.tag, message);
   },
 } });
 
