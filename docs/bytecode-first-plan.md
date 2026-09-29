@@ -585,45 +585,20 @@ Last updated 2026-09-29. The branch is `knlnks/bytecode` in `/Users/kunalan/Proj
 commit message states what it measured. The implementation history (the 2026-09-27 to
 2026-09-29 Stage A/B entries) records failure mechanisms.
 
-### Handoff state (2026-09-29)
+### Handoff state (2026-09-29, later)
 
-- **Tip `4dfc6a57` is not fully gated.** The last full gate (e2e twice, the live set, `lat` cold and
-  warm, every conform suite) passed at `59e1581f`. Merged since, with typecheck, `bun run test`
-  (1,384 pass), FitNotes smoke and each change's own conform runs only: Html from AOSP bytecode,
-  cut 7b (URI and cookies), and the live-flow fixes (a borrowed thread released at every
-  suspension, subclass statics, WindowInsets bounding rects, `<transition>` inflation, TikTok's
-  reflective StorageManager/Choreographer calls). Run the full gate first. Watch Harmonic's
-  comments (Html's first call costs about 52 ms, mostly TagSoup's schema), YouTube's media router,
-  and `lat`, since the thread release changes when queued work sees the main thread.
-- **Unmerged branches.** Each came from an agent the 2026-09-29 crash interrupted before its final
-  gates, so its report and measurements are lost. All three merge cleanly onto the tip and pass
-  typecheck and `bun run test`; none has run e2e or `lat`.
-  - `collections-followups` (6 commits on `59e1581f`): unmodifiable `Collections.*`,
-    `Arrays.asList` and `List/Set/Map.of`; the List equals fast path only against our own
-    iterators; synchronous AbstractCollection bodies when element equality is; entry and value views
-    answered through their mapping; libcore spliterators with the JDK's interfaces for ArrayList,
-    LinkedList and ArrayDeque. Its guava (40,085) and jsr166 (2,544) baselines came from the agent's
-    final `--update` runs and lose no earlier pass. Still needed: hot-path benchmarks (ArrayList
-    add/get, HashMap put/get, equals), luni-net, e2e and `lat`.
-  - `cut4-java-io` (7 commits on `59e1581f`), cut 4 in progress: an uncontended monitor release
-    skips the queue shift; streaming charset encode stops at the output limit and decode avoids
-    per-char views; arraycopy, `String.getChars`, `subSequence` and `String(char[],int,int)` are
-    bounds-checked; `Charset.forName` rejects unsupported and illegal names; an InputStream subclass
-    is read through its own `read()`; Writer and its subclasses, then Reader and its subclasses, run
-    from libcore with BufferedReader over them staying TS. Still needed: luni-io (baseline 1,012) and
-    guava, the readLine/InputStreamReader/StringWriter benchmarks, the docs, and the remaining classes
-    (the streams, Data*, PrintStream, ByteArray*).
-  - `small-method-overhead` (4 commits on `a3e8e10b`): hot invoke-direct targets and const-class
-    results cached per site, and a hot body's own static methods called on `C`. The last commit is a
-    WIP: forward-only hot bodies run in pc order without the dispatch loop, unmeasured. Measure each
-    commit (libcore `new URI(s)` is the motivating case: 4.8 µs against 0.34 µs for the old TS
-    regex), check emitted bytes and warm launch, and drop what does not pay.
-- **Open follow-ups found this session.** `<level-list>` still inflates as its first item.
-  TikTok reaches `ActivityThread.installProvider` by reflection. System services audio, window,
-  activity_task, connectivity, webviewupdate and media_projection are missing. Every small emitted
-  method pays the full call overhead (the `small-method-overhead` branch starts on this).
-- **After that, continue with the whole plan.** Once the tip is gated and the three branches are
-  verified and merged or dropped, work through "Next steps, in plan order" below, then the rest of
+- **The tip is gated** (typecheck, `bun run test` 1,388, smoke, e2e twice, the live set, `lat` cold
+  and warm, every conform suite). The three branches the crash interrupted are verified and merged:
+  collections-followups, cut 4 (Writer, Reader and DataOutputStream from libcore) and the small-method
+  work, which led to structured hot entries (`src/jvm/structure.ts`, see the history).
+- **Open follow-ups.** `<level-list>` still inflates as its first item. TikTok reaches
+  `ActivityThread.installProvider` by reflection. No system service is hosted behind binder yet
+  (`binderServices` in `src/android/binder.ts` is empty), so Shizuku's `ServiceManager.getService
+  ("activity")` reports a gap in every Mihon and Komikku run; audio, window, activity_task,
+  connectivity, webviewupdate and media_projection are missing (Stage D.3). Resumable bodies keep the
+  dispatch loop. Cut 4 leftovers: PrintStream needs `System.out`/`err` as bytecode streams; libcore's
+  Buffered streams are 1.13x slower on byte streams.
+- **Continue with the whole plan.** Work through "Next steps, in plan order" below, then the rest of
   the plan's stages (C to F), under the standing constraints and gates above.
 
 ### Standing constraints from the user
@@ -658,11 +633,11 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,384 pass);
+- `bun run test` (1,388 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,148, 2,538, 27,514,
-  1,012 and 472; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 40,085, 2,544, 27,514,
+  1,219 and 474; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -679,6 +654,8 @@ Known flakes, which are not regressions:
   misses (2 of 14 parallel runs after the logging flip, 0 of 24 before; step times match).
 - Resy times out.
 - `TCKInstant` has one test whose name embeds `Instant.now()`.
+- Under five suites at once, ojluni-time's TestZoneTextPrinterParser (86 s alone) exceeds the 240 s
+  class timeout; rerun it alone.
 - Cold Mihon `light` in `lat` sits around 150 ms and fails the 150 ms gate about 2 times in 7;
   warm passes. See the latency section below.
 
@@ -709,6 +686,9 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   FileOutputStream and RandomAccessFile over the Linux read/write/pread/pwrite/fstat natives. TS
   reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel stays TS, as
   `sun/nio/ch/FileChannelImpl` over the stream's descriptor. luni-io went from 974 to 1,012.
+- **java.io Writer, Reader and DataOutputStream (B.7 cut 4, partial).** Writer and Reader and their
+  subclasses run from libcore, with BufferedReader over them staying TS; an InputStream subclass is
+  read through its own `read()`. luni-io went from 1,014 to 1,219.
 - **android.text.Html.** AOSP's HtmlToSpannedConverter over TagSoup from ext.jar, so a TagHandler
   gets the real XMLReader. It needed getSpans to report zero-length marks at query edges. About
   260 µs per 2 KB comment against 60 µs in TS, and about 50 ms on the first call.
@@ -786,8 +766,8 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      the rest; single classes need an exact-match form. About 60 TS sites read TS layout
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
-   - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 7a (java.net leaf classes)
-     and 7b (URI and cookies). **Next in cut 7:** 7c, URL: TS still reads `JURL.spec`/`.u` in
+   - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 4 in part (Writer, Reader,
+     DataOutputStream), 7a (java.net leaf classes) and 7b (URI and cookies). **Next in cut 7:** 7c, URL: TS still reads `JURL.spec`/`.u` in
      HttpURLConnection, JarURLConnection and `openStream`, and libcore's URL needs its stream
      handlers (`libcore.net.url`, OkHttp's) or a TS URLStreamHandler over the fetch proxy. **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
      getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,

@@ -373,6 +373,34 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   returned plain text) while escapeHtml leaves quotes alone. Headless Chromium, a 1.9 KB HN comment:
   TS 60 µs per call, bytecode 257 µs (4.2x); the first call costs about 50 ms (HTMLSchema's
   initializer about 17 ms of it). TagSoup's HTMLScanner.scan is a quarter of steady-state time.
+- 2026-09-29, structured hot entries. The forward-only change (blocks in pc order, a branch
+  breaking out of a labelled block that ends at its target) cut `new URI(s)` 24% in Bun, which
+  showed the `for(;;){switch(pc)}` dispatch itself was costly: every register is live across one
+  loop header, so V8 sees no natural loops. Hot entries now split into single-entry regions (the
+  method entry, each handler, and blocks several of them reach; a block whose immediate dominator
+  is the virtual root), each ordered as a topological order with loops contiguous (inner loops
+  collapsed to their headers, lowest pc first). Back edges `continue` a labelled `for(;;)`,
+  forward edges `break` a labelled block opened at the first breaking block and widened until all
+  scopes nest, and only region-crossing edges set `pc` and continue the outer loop. A conditional
+  whose taken edge is the next block is inverted. Yield checks moved from `target <= pc` to the
+  flow's retreating edges: a rotated loop's back edge can point to a higher pc. Measure in V8,
+  not Bun: in JSC the allocation-bound `small` loop ran 52% slower while V8 showed no change, and
+  V8 showed an ArrayList add/get/iterate loop 4.5x faster (557 to 125 µs per 2,000). Per-site
+  caches for hot invoke-direct targets and const-class, and own-class statics called on `C`, were
+  within noise individually in both engines and were kept. 8 of 219,874 framework methods are
+  irreducible and keep the dispatch loop; resumable bodies keep it too, since they re-enter
+  mid-block.
+- 2026-09-29, collection and java.io follow-ups recovered from the crash. An IdentityHashMap's
+  `values().remove(x)` removed the first equal value, not the identical one. `StringBuilder.append(
+  CharSequence)` took the async path for every argument, so each libcore `StringWriter.write`
+  suspended (PrintWriter 2.2x slower than TS until fixed, then 6x faster). `CharBuffer.wrap` of a
+  fresh `char[]` read its ArrayBuffer, which the engine copies on first access, and encode ran
+  through a generator per call; OutputStreamWriter went from 9x to 1.5x the TS time, the rest being
+  libcore's StreamEncoder call chain (the TS writer was UTF-8 only and held output until flush).
+  DataOutputStream from libcore is 4.6x faster than TS, whose superclass was wrong. Not flipped:
+  BufferedInput/OutputStream from libcore passes all 99 Buffered tests but is 1.13x slower on byte
+  streams and 8x under the TS DataInputStream; PrintStream is blocked on `System.out`/`err`, which
+  are TS console streams set at module load.
 
 ## Java, storage and framework semantics
 
