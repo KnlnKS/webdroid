@@ -671,7 +671,8 @@ export class Runtime {
    * A native spec that leaves out a method the platform class declares answers with the
    * platform's: its body, compiled against the native object on first call, or its JNI binding
    * when the platform declares it native. Only gaps are filled: a virtual method or constructor
-   * the prototype chain already reaches keeps its native implementation.
+   * the prototype chain already reaches, other than java.lang.Object's, keeps its native
+   * implementation.
    */
   private fallThrough(info: ClassInfo) {
     const { dex, def } = this.classDefOf(info.name)!;
@@ -702,9 +703,12 @@ export class Runtime {
       const isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
       // statics and private methods belong to their class; the rest may be inherited
       const own = isStatic || l === 0 && name !== "<init>";
-      if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target)) return;
+      // what a subclass reaches from java.lang.Object alone is no implementation of the spec's
+      const base = proto === JObj.prototype ? undefined : JObj.prototype[mangled as never];
+      if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target && target[mangled] !== base)) return;
       // a spec whose JS class does not extend its declared superclass's still inherits from it
-      const gap: Gap = [l, index, mangled, !own && info.superInfo?.ctor?.prototype?.[mangled] ? 2 : m.flags & ACC.NATIVE ? 1 : 0];
+      const inherited = own ? undefined : info.superInfo?.ctor?.prototype?.[mangled];
+      const gap: Gap = [l, index, mangled, inherited && inherited !== base ? 2 : m.flags & ACC.NATIVE ? 1 : 0];
       found.push(gap);
       fill(gap);
     }));

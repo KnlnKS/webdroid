@@ -156,7 +156,9 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const target = rec.isStatic ? C : C.prototype;
   if (rec.fallthrough) {
     const absent = R.absentFields(dex, rec.m);
-    const fallback = absent.length && !rec.isStatic ? R.interfaceDefault(info, rec.mangled) as JvmFunction | undefined : undefined;
+    // a body that cannot run on this object yields to an interface default, or to Object's
+    const fallback = absent.length && !rec.isStatic
+      ? (R.interfaceDefault(info, rec.mangled) ?? JObj.prototype[rec.mangled as never]) as JvmFunction | undefined : undefined;
     if (fallback) {
       retarget(rec.stub, fallback);
       return target[rec.mangled] = fallback;
