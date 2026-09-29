@@ -585,21 +585,27 @@ Last updated 2026-09-29. The branch is `knlnks/bytecode` in `/Users/kunalan/Proj
 commit message states what it measured. The implementation history (the 2026-09-27 to
 2026-09-29 Stage A/B entries) records failure mechanisms.
 
-### Handoff state (2026-09-29, later)
+### Handoff state (2026-09-29, evening)
 
-- **The tip is gated** (typecheck, `bun run test` 1,388, smoke, e2e twice, the live set, `lat` cold
-  and warm, every conform suite). The three branches the crash interrupted are verified and merged:
-  collections-followups, cut 4 (Writer, Reader and DataOutputStream from libcore) and the small-method
-  work, which led to structured hot entries (`src/jvm/structure.ts`, see the history).
+- **The tip is gated** (typecheck, `bun run test` 1,391, smoke, e2e twice, the live set, `lat` cold
+  and warm, every conform suite). Merged since the morning handoff: structured hot entries
+  (`src/jvm/structure.ts`), java.net.URL from libcore (cut 7c), paged file mappings, the first-launch
+  compile worker (`src/jvm/compileworker.ts`, §4.4) and the charset table with UTF-32. B.4 was
+  measured and not flipped (see "Next steps" item 2).
 - **Open follow-ups.** `<level-list>` still inflates as its first item. TikTok reaches
   `ActivityThread.installProvider` by reflection. No system service is hosted behind binder yet
   (`binderServices` in `src/android/binder.ts` is empty), so Shizuku's `ServiceManager.getService
   ("activity")` reports a gap in every Mihon and Komikku run; audio, window, activity_task,
   connectivity, webviewupdate and media_projection are missing (Stage D.3). Resumable bodies keep the
   dispatch loop. Cut 4 leftovers: PrintStream needs `System.out`/`err` as bytecode streams; libcore's
-  Buffered streams are 1.13x slower on byte streams.
+  Buffered streams are 1.13x slower on byte streams. `Charset.availableCharsets()` reaches
+  NativeConverter natives; the other 217 ICU charsets are not served. The TS TreeMap's `keySet()`
+  seems not to be a SortedSet: guava's Maps suite fails to initialise (unconfirmed).
 - **Continue with the whole plan.** Work through "Next steps, in plan order" below, then the rest of
   the plan's stages (C to F), under the standing constraints and gates above.
+- **Process note.** Run conform from a worktree at a committed snapshot (`git worktree add --detach
+  ../webdroid-gate HEAD`, symlink `vendor/{aosp,microg}`, `apks` and `conform-cache`): its runner
+  spawns a process per class that imports `src/`, so edits during a run contaminate it.
 
 ### Standing constraints from the user
 
@@ -633,7 +639,7 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,388 pass);
+- `bun run test` (1,391 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 40,085, 2,544, 27,514,
@@ -821,6 +827,9 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      so a build-time platform image (§4.1) pays more as the view stack moves to bytecode.
      Resumable-body compilation (about 11 ms) happens on suspension. Two experiments were
      rejected: starting leaf methods cold, and a 50 ms yield gap over layout (see the history).
+   - **Compile worker (done for first launches with a baseline profile).** Launches with persisted
+     code skip it; apps without a profile still start cold. Open: resumable bodies (about 14 ms in a
+     cold Mihon tap, built on suspension and OSR) could come from the worker too.
    - **Persisted code.** Warm launches load 49 MB of emitted JS for Mihon (63 MB more for
      microG). Suspension checks are 23% of those bytes, and 60% of bodies are single-block
      methods that still carry the full dispatch loop, so a leaner emitter shrinks both import and

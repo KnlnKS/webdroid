@@ -478,6 +478,30 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   no validators, so the whole file was fetched on every launch before. Unresolved: each fault is a
   round trip on a first touch, and no page profile prefetches the set a launch touched before;
   libcore's tzdata goes through `Os.mmap` into guest memory, still read whole.
+- 2026-09-29, first-launch compile worker (§4.4). Precompiling Mihon's whole baseline profile
+  synchronously at boot, as an experiment, cut the first-launch `light` tap from 147 to 124 ms
+  (cold calls 15.7k to 2.5k) but moved the first frame from 2.2 to 3.3 s; the idle precompile had
+  reached 3.6k of the 18,274 profile methods by the first tap. In V8 each profile method costs about
+  40 µs to prepare and emit and 43 µs in `new Function`. A worker with its own runtime now emits
+  the entries and the page imports them as modules, which V8 compiles off the main thread. Three
+  placements were measured: importing in idle time after the first frame came too late (a
+  launching page is not idle before its first taps; launch cold calls stayed at 125-157k); one
+  import at a time throttled delivery; unthrottled concurrent imports finalized inside taps (in a
+  145 ms first tap, 61.5 ms of `(program)` and 9 ms of `offerCode`; one `dark` tap hit 263 ms). At
+  most three imports in flight, each waiting until 250 ms after the last input event, keep taps
+  clear. A synthetic 3,000-body chunk blocked the main thread for at most 22 ms, so the remaining
+  main-thread cost is V8's finalization, about 7-12 µs per body.
+- 2026-09-29, UTF-32 and the charset table. Cut 4 made `Charset.forName` reject names it did not
+  serve; TikTok's class init then failed on UTF-32BE. Probes on the reference device (app_process)
+  gave the values the table holds. Android's UTF-32 is ICU's platform-endian converter: it encodes
+  little-endian after FF FE 00 00 and decodes big-endian without a mark, unlike OpenJDK. The device
+  lists 226 charsets (ICU converters); the TS boundary serves the 9 Unicode, ASCII and Latin-1 ones,
+  and `availableCharsets()` still falls through to libcore's NativeConverter natives.
+- 2026-09-29, rejected: per-site `$ic` caches for string constants, static calls and static fields.
+  The dex-wide link tables are sparse `new Array(typeCount)`, so the hypothesis was dictionary-mode
+  lookups behind the ~2 ns per compiled call the B.4 measurement found. V8 A/B showed ±10% both
+  ways (`new URI` -5%), within noise. A synthetic 4-deep emitted call chain (try/catch, Promise
+  checks, prologue) runs as fast as plain JS (about 3 ns), so the per-call cost lies elsewhere.
 
 ## Java, storage and framework semantics
 
