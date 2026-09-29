@@ -621,7 +621,7 @@ Run all of these before committing a flip:
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,088, 2,538, 27,514,
-  974 and 295; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+  974 and 318; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -689,6 +689,11 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   ConcurrentHashMap, the atomics, CopyOnWriteArrayList, ConcurrentLinkedQueue, the executors
   (`mkExecutor` serves `android/os.ts` and `intentservice.ts`), FutureTask, LinkedBlockingQueue
   and TimeUnit stay TS; the whole-package cut cost a 191 ms cold Mihon tap.
+- **java.net leaf classes (B.7 cut 7a).** IDN (over ICU4J's IDNA, so toUnicode now decodes
+  punycode), URLEncoder/URLDecoder, Proxy, ProxySelector and Authenticator. No TS code read their
+  layout; no proxy system properties are set, so DefaultProxySelector answers NO_PROXY. luni-net went
+  from 295 to 318. URLEncoder/URLDecoder cost 3.5 to 6.5 times the TS bodies (2 to 7 µs per query
+  string in Bun, after trimming charset lookup, `String(char[])` and `Integer.parseInt`).
 
 Fixes that apply to every mode:
 - Fallthrough ordering. A platform body that cannot run on a TS class yields to the spec's

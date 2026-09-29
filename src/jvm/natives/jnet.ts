@@ -10,7 +10,7 @@
 import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { JThrowable, stringHash, mkEnumSet, newObj, vcall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
+import { JThrowable, stringHash, newObj, vcall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8, sameBytes, mangleMethod } from "../abi";
 import { type JBAOS, noMark } from "./jio";
@@ -86,33 +86,6 @@ rt.register({
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
   },
 });
-
-const proxyTypes = mkEnumSet("java/net/Proxy$Type", ["DIRECT", "HTTP", "SOCKS"]);
-class JProxy extends JObj {}
-const noProxy = new JProxy();
-rt.register({
-  name: "java/net/Proxy", ctor: JProxy,
-  statics: { NO_PROXY: noProxy },
-  methods: {
-    "address()Ljava/net/SocketAddress;": () => null,
-    "type()Ljava/net/Proxy$Type;": () => proxyTypes[0],
-    "toString()Ljava/lang/String;": () => "DIRECT",
-  },
-});
-class JProxySelector extends JObj {}
-const proxySelector = new JProxySelector();
-rt.register({
-  name: "java/net/ProxySelector", ctor: JProxySelector,
-  methods: {
-    "static getDefault()Ljava/net/ProxySelector;": () => proxySelector,
-    "select(Ljava/net/URI;)Ljava/util/List;": () => newArrayList([noProxy]),
-  },
-});
-rt.register({
-  name: "java/net/Authenticator", ctor: class extends JObj {},
-  methods: { "<init>()V": function () {} },
-});
-rt.markers("java/net/Authenticator$RequestorType");
 
 class JSSLContext extends JObj { protocol = "TLS"; provider: unknown = null; }
 function sslContext(protocol: string | null, provider: unknown = null): JSSLContext {
@@ -699,25 +672,6 @@ function hierarchicalURI(scheme: string | null, authority: string | null, path: 
   return uri;
 }
 export const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
-// URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
-// "+" for a space and the extra unreserved set Java leaves alone.
-const formEncode = (s: string) =>
-  encodeURIComponent(s ?? "").replace(/[!'()~*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, "+");
-const formDecode = (s: string) => decodeURIComponent((s ?? "").replace(/\+/g, " "));
-rt.register({
-  name: "java/net/URLEncoder", ctor: class extends JObj {},
-  methods: {
-    "static encode(Ljava/lang/String;)Ljava/lang/String;": formEncode,
-    "static encode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": formEncode,
-  },
-});
-rt.register({
-  name: "java/net/URLDecoder", ctor: class extends JObj {},
-  methods: {
-    "static decode(Ljava/lang/String;)Ljava/lang/String;": formDecode,
-    "static decode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": formDecode,
-  },
-});
 rt.register({
   name: "java/net/URI", ctor: JURI, ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   methods: {
@@ -881,23 +835,6 @@ rt.register({
     }),
   },
 });
-const idnAscii = (s: string) => {
-  if (!s) return s;
-  // a hostname only: URL would silently truncate anything with a delimiter in it
-  if (/[/?#@:\\\s]/.test(s)) throw rt.mkThrowable("java/lang/IllegalArgumentException", s);
-  try { return new URL("http://" + s).hostname; } catch { throw rt.mkThrowable("java/lang/IllegalArgumentException", s); }
-};
-rt.register({
-  name: "java/net/IDN", ctor: class extends JObj {}, statics: { ALLOW_UNASSIGNED: 1, USE_STD3_ASCII_RULES: 2 },
-  methods: {
-    "static toASCII(Ljava/lang/String;)Ljava/lang/String;": idnAscii,
-    "static toASCII(Ljava/lang/String;I)Ljava/lang/String;": idnAscii,
-    // no punycode decoder in the page; ToUnicode's contract is to hand back the input when it cannot convert
-    "static toUnicode(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s,
-    "static toUnicode(Ljava/lang/String;I)Ljava/lang/String;": (s: string) => s,
-  },
-});
-
 class JHttpInputStream extends JObj {
   reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   timeout: () => number = () => 0;
