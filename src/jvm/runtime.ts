@@ -15,7 +15,7 @@ import { insnLen } from "./opcodes";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
-import { Monitors } from "./monitor";
+import { Monitors, type Monitor } from "./monitor";
 
 export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
 // DEX type IDs cap distinct class definitions at 65,535 per file.
@@ -197,8 +197,21 @@ export class Runtime {
   st: (t: unknown) => void = () => {};
   su: (t: unknown) => void = () => {};
   monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
-  me(obj: object | string | null | 0) { return this.monitors.enter(obj, this.th()); }
-  mx(obj: object | string | null | 0) { this.monitors.exit(obj, this.th()); }
+  /** monitor-enter and monitor-exit, given the monitor the compiled site loaded from the object: a
+   *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call */
+  me(obj: object | string | null | 0, m?: Monitor) {
+    const thread = this.th();
+    if (m !== undefined && (m.depth === 0 || m.owner === thread)) { m.owner = thread; m.depth++; return; }
+    return this.monitors.enter(obj, thread);
+  }
+  mx(obj: object | string | null | 0, m?: Monitor) {
+    const thread = this.th();
+    if (m !== undefined && m.owner === thread && (m.depth > 1 || m.entrants.length === 0)) {
+      if (--m.depth === 0) m.owner = null;
+      return;
+    }
+    this.monitors.exit(obj, thread);
+  }
   /**
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
    * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a

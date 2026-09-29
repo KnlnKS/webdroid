@@ -598,8 +598,8 @@ ${profileEnd}
         out.push(`${this.reg(i.a)}=$ic[${k}]??($ic[${k}]=${load});`);
         break;
       }
-      case "monitor-enter": this.guard(`R.me(${this.reg(i.a)})`, out); break;
-      case "monitor-exit": out.push(`R.mx(${this.reg(i.a)});`); break;
+      case "monitor-enter": this.guard(`R.me(${this.reg(i.a)},${this.reg(i.a)}.$mon)`, out); break;
+      case "monitor-exit": out.push(`R.mx(${this.reg(i.a)},${this.reg(i.a)}.$mon);`); break;
       case "check-cast": {
         const v = this.reg(i.a), name = this.literal(descToName(dex.type(i.b)));
         if (this.cold) { out.push(`R.cc(${v},${name});`); break; }
