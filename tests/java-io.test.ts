@@ -133,7 +133,7 @@ describe("file-descriptor", () => {
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");
     const pfd = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(input, "getFD", FD));
     expect(await vcall(pfd, "getFd", "()I")).toBeGreaterThanOrEqual(0);
-    const entry = mkAssetFd(new Uint8Array([1, 2, 3, 4]));
+    const entry = await mkAssetFd(new Uint8Array([1, 2, 3, 4]));
     const dup = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(entry, "getFileDescriptor", FD));
     const end = await scall("android/system/Os", "lseek", "(Ljava/io/FileDescriptor;JI)J", await vcall(dup, "getFileDescriptor", FD), 0n, 2);
     expect(end).toBe(4n);

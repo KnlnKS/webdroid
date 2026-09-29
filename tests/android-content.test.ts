@@ -16,7 +16,8 @@ import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
 import { getPM, registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jutil";
-import { Resources, JTheme, themeOf, rvString } from "../src/android/res";
+import { Resources, JTheme, themeOf, rvString, newSV, nativeRes, AID } from "../src/android/res";
+import { newTheme } from "../src/android/resources";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { JIntent } from "../src/android/intent";
 import { encodeIntent } from "../src/android/intentipc";
@@ -25,8 +26,6 @@ import { mkPfd } from "../src/android/os";
 import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
 import { javaReadFd } from "../src/native/stdio";
 import { Arsc } from "../src/android/arsc";
-import { mkJResources } from "../src/android/resnative";
-import { JTypedValue } from "../src/android/util";
 import { locationTransport } from "../src/android/locationmanager";
 import { getInflater } from "../src/android/inflate";
 import { JFrameLayout } from "../src/android/layouts";
@@ -36,7 +35,7 @@ import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
 import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
 import { JActivity } from "../src/android/app";
-import { scall, loadLibcore, fakeStyles } from "./java";
+import { scall, loadLibcore, appResources } from "./java";
 
 describe("adservices", () => {
   rt.linkNatives();
@@ -651,15 +650,17 @@ describe("resource-value-density", () => {
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 3 } }],
       ]) },
     ]);
-    const res = mkJResources(new Resources(table, {}), false), value = new JTypedValue();
+    const res = new Resources(table, {});
     for (const [id, resolve, expected] of [
       [0x7f010000, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
       [0x7f010001, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
       [0x7f010001, 0, [TV.REFERENCE, 0x7f010000, 0, 0x7f010001]],
       [0x7f010002, 1, [TV.INT_DEC, 2, 0, 0x7f010002]],
     ] satisfies [number, number, number[]][]) {
-      await vcall(res, "getValue", "(ILandroid/util/TypedValue;Z)V", id, value, resolve);
-      expect([value.type, value.data, value.density, value.resourceId]).toEqual(expected);
+      const value = newSV();
+      expect(res.getResource(id, false, value)).toBe(true);
+      if (resolve) res.resolveReference(value);
+      expect([value.t, value.d, value.density, value.resid]).toEqual(expected);
     }
   });
 });
@@ -809,16 +810,16 @@ describe("window-context", () => {
   });
 
   test("Dialog exposes its overlay theme through its context and inflater without changing its owner", async () => {
-    const S = 0x7f0f0000, A = 0x7f010001;
-    const res = await fakeStyles(["base", "dialog"], { [S]: [[A, TV.STRING, 0]], [S + 1]: [[A, TV.STRING, 1]] }), theme = new JTheme();
-    theme.res = res; theme.apply(S);
-    const context = Object.assign(rt.make("android/content/Context"), { $host: { res, theme } });
-    const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, S + 1);
+    const jresources = await appResources(new Resources(null, {}), "dialog"), res = nativeRes(jresources);
+    const style = (name: string) => res.idFor("style", name, "android"), floating = (t: JTheme | null | undefined) => t?.lookup(AID("windowIsFloating"))?.d;
+    const theme = await newTheme(jresources, null, style("Theme.Material.Light"));
+    const context = Object.assign(rt.make("android/content/Context"), { $host: { res, jresources, theme } });
+    const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, style("Theme.Material.Light.Dialog"));
     const themed = await vcall(dialog, "getContext", "()Landroid/content/Context;");
     expect(themed).not.toBe(context);
-    expect(themeOf(themed)?.lookup(A)?.s).toBe("dialog");
-    expect(themeOf(getInflater(themed).jctx)?.lookup(A)?.s).toBe("dialog");
-    expect(theme.lookup(A)?.s).toBe("base");
+    expect(floating(themeOf(themed))).toBe(-1);
+    expect(floating(themeOf(getInflater(themed).jctx))).toBe(-1);
+    expect(floating(theme)).toBe(0);
     expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBeNull();
     const owner = rt.make("android/app/Activity");
     await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);

@@ -11,7 +11,7 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
 import {
-  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES, attrSet,
+  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES, attrSet, javaField,
 } from "./res";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml";
 import { sizeClass, type Arsc } from "./arsc";
@@ -97,7 +97,7 @@ delegate("android/content/res/ApkAssets", {
   "nativeGetDebugName(J)Ljava/lang/String;": (h: bigint) => apkN(h).path,
   "nativeGetStringBlock(J)J": (h: bigint) => {
     const apk = apkN(h);
-    return apk.strings || (apk.strings = apk.table ? handle(apk.table.values) : 0n);
+    return apk.strings || (apk.strings = apk.table?.values ? handle(apk.table.values) : 0n);
   },
   // installed archives never change underneath a process
   "nativeIsUpToDate(J)Z": () => 1,
@@ -136,6 +136,11 @@ class ParseState extends JAttrSet {
 export function parserRoot(parser: unknown): XmlNode | null {
   const st = attrSet(parser);
   return st instanceof ParseState ? st.blk.doc.root : null;
+}
+/** another parser over the document an XmlBlock$Parser reads, from its start */
+export function reopenParser(parser: unknown): Promise<unknown> {
+  const st = attrSet(parser) as ParseState;
+  return vcall(javaField(parser, "android/content/res/XmlBlock$Parser", "mBlock"), "newParser", "(I)Landroid/content/res/XmlResourceParser;", st.sourceResId);
 }
 const block = (h: bigint) => deref<Block>(h);
 const state = (h: bigint) => deref<ParseState>(h);

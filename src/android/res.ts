@@ -5,8 +5,8 @@ import { Arsc } from "./arsc";
 import { TV, parseAXML, attr, type XmlNode, type XmlAttr } from "./axml";
 import { JObj, rt } from "../jvm/runtime";
 import { deref } from "./handles";
-import { JDisplayMetrics, JTypedValue, complexToPx } from "./util";
-import { mangleMethod, intBitsToFloat, floatToIntBits } from "../jvm/abi";
+import { JDisplayMetrics, complexToPx } from "./util";
+import { mangleMethod, intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
 
 let fwPkg: Arsc | null = null;
@@ -60,10 +60,10 @@ export function setFramework(a: Arsc): void {
 
 const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Theme;");
 
-// resolved value: binary Res_value types + internal PX (0xfe) and STR (0xfd)
+// resolved value: binary Res_value types + an internal STR (0xfd)
 /** r: the resource whose entry a resolved value came from — what getResourceId still reports */
 export interface RV { t: number; d: number; s?: string; r?: number }
-export const T_PX = 0xfe, T_STR = 0xfd;
+export const T_STR = 0xfd;
 const NULL_RV: RV = { t: TV.NULL, d: 0 };
 /** binary Res_value → RV with FLOAT bits decoded to a JS number */
 export function normRV(v: RV): RV {
@@ -532,36 +532,8 @@ export class JAttrSet extends JObj {
   theme: JTheme | null = null;
 }
 
-export class JXmlParser extends JObj {
-  events: { type: number; node: XmlNode | null; depth: number; text?: string; line?: number; namespace?: string }[] = [];
-  pos = -1;
-  res!: Resources;
-  set = new JAttrSet();
-  sourceResId = 0;
-  get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
-}
-
-/** A pull parser positioned on a drawable's current start tag, as DrawableInflater supplies it. */
-export function xmlParserAtNode(res: Resources, root: XmlNode): JXmlParser {
-  const parser = new JXmlParser();
-  parser.res = res;
-  parser.set.res = res;
-  const events: JXmlParser["events"] = [];
-  const walk = (node: XmlNode, depth: number) => {
-    events.push({ type: 2, node, depth });
-    for (const child of node.children) walk(child, depth + 1);
-    events.push({ type: 3, node, depth });
-  };
-  walk(root, 1);
-  events.push({ type: 1, node: null, depth: 0 });
-  parser.events = events;
-  parser.pos = 0;
-  parser.set.node = root;
-  return parser;
-}
-
-// ── TypedArray (result of obtainStyledAttributes)
-export class JTypedArray extends JObj {
+/** our own stack's styled attributes: what AOSP's TypedArray holds, as resolved values */
+class StyledValues {
   res!: Resources;
   theme: JTheme | null = null;
   vals: (RV | null)[] = [];
@@ -657,10 +629,10 @@ export function resolveAttributes(
 export function obtainStyled(
   res: Resources, theme: JTheme | null, set: JAttrSet | null,
   attrIds: Int32Array | number[], defStyleAttr: number, defStyleRes: number,
-): JTypedArray {
+): StyledValues {
   // an XmlResourceParser used as AttributeSet carries its live JAttrSet in .set
   set = attrSet(set);
-  const ta = new JTypedArray();
+  const ta = new StyledValues();
   ta.res = res; ta.theme = theme;
   ta.attrIds = attrIds;
   const n = attrIds.length;
@@ -670,11 +642,6 @@ export function obtainStyled(
   for (let i = 0; i < n; i++) askedAttrs.add(attrIds[i]);
   resolveAttributes(res, theme, set?.node ?? null, 0, defStyleAttr, defStyleRes, attrIds, null, null, null, ta.vals);
   return ta;
-}
-
-/** Theme.obtainStyledAttributes(resId, attrs): the style as the default style, over the theme */
-export function obtainStyleAttributes(res: Resources, theme: JTheme | null, styleId: number, attrIds: Int32Array): JTypedArray {
-  return obtainStyled(res, theme, null, attrIds, 0, styleId);
 }
 
 /**
@@ -819,11 +786,10 @@ export function nativeTheme(theme: unknown): JTheme | null {
   t.jobj = theme;
   return t;
 }
-/** the element an AttributeSet stands on: our own, a parser of ours, or AOSP's XmlBlock$Parser */
+/** the element an AttributeSet stands on: our own, or AOSP's XmlBlock$Parser */
 export function attrSet(set: unknown): JAttrSet | null {
   if (!set) return null;
   if (set instanceof JAttrSet) return set;
-  if (set instanceof JXmlParser) return set.set;
   if (!rt.iof(set, "android/content/res/XmlBlock$Parser")) return null;
   return deref<JAttrSet>(javaField(set, "android/content/res/XmlBlock$Parser", "mParseState"));
 }
@@ -835,7 +801,6 @@ export function themeOf(ctx: unknown): JTheme | null {
 }
 export function rvDimen(res: Resources, v: RV | null, dflt = 0): number {
   if (!v) return dflt;
-  if (v.t === T_PX) return v.d;
   if (v.t === TV.DIMENSION) return complexToPx(v.d, res.dm);
   if (v.t === TV.FLOAT) return v.d;
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
@@ -845,7 +810,6 @@ export function rvInt(res: Resources, v: RV | null, dflt = 0): number {
   if (!v) return dflt;
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
   if (v.t === TV.FLOAT) return Math.round(v.d);
-  if (v.t === T_PX) return Math.round(v.d);
   if (v.t === TV.DIMENSION) return Math.round(complexToPx(v.d, res.dm));
   if (v.t === T_STR && v.s && /^-?\d+$/.test(v.s)) return parseInt(v.s);
   return dflt;
@@ -854,7 +818,6 @@ export function rvFloat(res: Resources, v: RV | null, dflt = 0): number {
   if (!v) return dflt;
   if (v.t === TV.FLOAT) return v.d;
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
-  if (v.t === T_PX) return v.d;
   if (v.t === T_STR && v.s) {
     const n = parseFloat(v.s);
     return Number.isNaN(n) ? dflt : n;
@@ -862,26 +825,3 @@ export function rvFloat(res: Resources, v: RV | null, dflt = 0): number {
   return dflt;
 }
 
-// fill a java TypedValue from RV
-export function fillTypedValue(res: Resources, v: RV | null, tv: JTypedValue): number {
-  if (!v || v.t === TV.NULL) { tv.type = 0; return 0; }
-  tv.assetCookie = 1; // everything we can resolve came out of the app's one loaded apk
-  if (v.t === T_PX) { tv.type = TV.DIMENSION; tv.data = pxToComplex(v.d); return 1; }
-  if (v.t === T_STR) { tv.type = TV.STRING; tv.string = v.s ?? null; return 1; }
-  tv.type = v.t;
-  // a normalized RV carries a float as a number; TypedValue.data holds the IEEE bits, as getFloat reads them
-  tv.data = v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d;
-  if (v.r) tv.resourceId = v.r;
-  if (v.t === TV.STRING) tv.string = v.s ?? null;
-  if (v.t === TV.REFERENCE) {
-    // a reference that resolveRefs kept (a file resource) is, once resolved as AOSP does it,
-    // the file's path string carrying the id it came from
-    tv.resourceId = v.d;
-    const f = res.value(v.d);
-    if (f.t === TV.STRING) { tv.type = TV.STRING; tv.string = f.s ?? null; }
-  }
-  return 1;
-}
-function pxToComplex(px: number): number {
-  return ((Math.round(px) & 0xffffff) << 8) | 0; // COMPLEX_UNIT_PX, radix 0
-}

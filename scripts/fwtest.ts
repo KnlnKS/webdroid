@@ -143,7 +143,7 @@ await exercise("Bitmap.createBitmap + pixels", async () => {
 // The resource natives, under AOSP's own Resources: the framework and an app installed as the
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read
 // through Resources, Theme, TypedArray and XmlBlock as an app reads them.
-if (isBytecode("android/content/res/Resources") && existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk")) {
+if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk")) {
   const { Arsc } = await import("../src/android/arsc");
   const { Resources, setFramework } = await import("../src/android/res");
   const { PackageRecord, packages } = await import("../src/android/packages");

@@ -8,8 +8,7 @@ import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
 import { packedArchives } from "../shell/packedarchive";
 import { loadDrawable } from "./drawable";
-import { mkXmlParser } from "./resnative";
-import { aospResources, javaResources } from "./resources";
+import { javaResources } from "./resources";
 import { getPackageInstaller } from "./packageinstaller";
 import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
@@ -746,7 +745,7 @@ rt.register({
     "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {
       const res: Resources | undefined = yield packageResources(pkg, info);
       if (!res) return null;
-      try { return aospResources() ? yield vcall(yield javaResources(res, info?.sourceDir ?? ""), "getXml", "(I)Landroid/content/res/XmlResourceParser;", id) : mkXmlParser(res, id); }
+      try { return yield vcall(yield javaResources(res, info?.sourceDir ?? ""), "getXml", "(I)Landroid/content/res/XmlResourceParser;", id); }
       catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     }),
     "getDrawable(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {

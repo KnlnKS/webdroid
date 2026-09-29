@@ -1,19 +1,19 @@
 import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
 import "../src/natives";
-import { JCanvas, JPaint, JMatrix, locateDrawnText, fillFontMetrics, mkTypeface, setFamilyMetrics, matrixColor } from "../src/android/graphics";
+import { JCanvas, JPaint, JMatrix, locateDrawnText, fillFontMetrics, mkTypeface, JTypeface, setFamilyMetrics, matrixColor } from "../src/android/graphics";
 import { JPath, pathIsConvex, pathTransform } from "../src/android/path";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { newObj, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
 import { JTextView } from "../src/android/textview";
 import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
-import { ST, JDrawable, inflateDrawableNode } from "../src/android/drawable";
-import { Resources, JTypedArray } from "../src/android/res";
-import { mkJResources } from "../src/android/resnative";
+import { ST, JDrawable } from "../src/android/drawable";
+import { Resources } from "../src/android/res";
 import { TV, type XmlNode } from "../src/android/axml";
 import { JImageView } from "../src/android/imageview";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { recordingContext, replay, replayWithSemantics } from "../src/android/recording";
+import { appResources, axmlBytes, scall } from "./java";
 
 describe("canvas-text", () => {
   rt.linkNatives();
@@ -155,14 +155,16 @@ describe("custom-drawable-inflate", () => {
   rt.linkNatives();
 
   test("fully qualified drawable tags construct and inflate the app class", async () => {
-    const res = new Resources(null, {});
-    mkJResources(res, false);
+    const jres = await appResources(new Resources(null, {}), "custom-drawable");
     const node: XmlNode = {
       name: "test.XmlDrawable",
       attrs: [{ ns: "", name: "amount", resId: 0, type: TV.INT_DEC, data: 17, str: null }],
       children: [{ name: "child", attrs: [], children: [] }],
     };
-    const drawable = await inflateDrawableNode(res, node, null);
+    const block = await newObj("android/content/res/XmlBlock", "([B)V", new Int8Array(axmlBytes(node).buffer));
+    const parser = await vcall(block, "newParser", "()Landroid/content/res/XmlResourceParser;");
+    const drawable = await scall("android/graphics/drawable/Drawable", "createFromXml",
+      "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;)Landroid/graphics/drawable/Drawable;", jres, parser);
     expect(drawable).toBeInstanceOf(XmlDrawable);
     if (!(drawable instanceof XmlDrawable)) return;
     expect(drawable.tag).toBe("test.XmlDrawable");
@@ -707,16 +709,12 @@ describe("transition-drawable", () => {
 describe("typed-array-font", () => {
   rt.linkNatives();
 
-  test("TypedArray resolves referenced font resources", async () => {
+  test("Resources resolve referenced font resources", async () => {
     const bytes = new Uint8Array(await Bun.file("apks/Resy.apk").arrayBuffer());
     const archive = await parsePackageArchive(bytes);
     const id = archive.res.idFor("font", "fontawesome", archive.pkg);
     expect(id).not.toBe(0);
-    const typed = new JTypedArray();
-    typed.res = archive.res;
-    typed.vals = [{ t: TV.REFERENCE, d: id }];
-    expect(await vcall(typed, "getFont", "(I)Landroid/graphics/Typeface;", 0)).not.toBeNull();
-    typed.vals = [null];
-    expect(await vcall(typed, "getFont", "(I)Landroid/graphics/Typeface;", 0)).toBeNull();
+    const jres = await appResources(archive.res, "typed-array-font");
+    expect(await vcall(jres, "getFont", "(I)Landroid/graphics/Typeface;", id)).toBeInstanceOf(JTypeface);
   });
 });

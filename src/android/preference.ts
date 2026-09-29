@@ -7,10 +7,9 @@
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, without, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { vcall, newObj, vcallUncaught, after } from "../jvm/natives/jlang";
-import { attr, TV, parseAXML, type XmlNode } from "./axml";
+import { attr, TV, type XmlNode } from "./axml";
 import { JAttrSet, xmlAttrRV, resString, rvString, type Resources, type RV, JTheme, bagStrings, attrSet } from "./res";
 import { tagAttributes } from "./inflate";
-import { aospResources } from "./resources";
 import { parserRoot } from "./assetmanager";
 import { JView, JLinearLP, addUnattachedView } from "./view";
 import { tfMedium } from "./graphics";
@@ -440,19 +439,12 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "addPreferencesFromResource(I)V": driven(function* (this: JPreferenceFragment, resId: number): Gen {
     const jctx: any = this.act;
-    const host = jctx?.$host;
-    if (!host) { rt.noteMissing("preference xml (no activity)"); return; }
+    if (!jctx?.$host) { rt.noteMissing("preference xml (no activity)"); return; }
     let screen: JPreferenceScreen;
-    if (aospResources()) {
-      // PreferenceInflater reads the resource's XmlBlock parser, which is the AttributeSet each item gets
-      const parser = yield vcall(yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;"), "getXml", "(I)Landroid/content/res/XmlResourceParser;", resId);
-      try { screen = yield buildPreferenceNode(parserRoot(parser)!, jctx, this, parser); }
-      finally { yield vcall(parser, "close", "()V"); }
-    } else {
-      const f = host.res.fileOf(resId);
-      if (!f) { rt.noteMissing("preference xml 0x" + resId.toString(16)); return; }
-      screen = yield buildPreferenceNode(parseAXML(f.bytes), jctx, this, null);
-    }
+    // PreferenceInflater reads the resource's XmlBlock parser, which is the AttributeSet each item gets
+    const parser = yield vcall(yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;"), "getXml", "(I)Landroid/content/res/XmlResourceParser;", resId);
+    try { screen = yield buildPreferenceNode(parserRoot(parser)!, jctx, this, parser); }
+    finally { yield vcall(parser, "close", "()V"); }
     if (this.root) { for (const c of screen.children) { this.root.children.push(c); bindTree(c, this); } }
     else this.root = screen;
   }),

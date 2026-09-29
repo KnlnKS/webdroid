@@ -14,10 +14,10 @@ import { zygoteInit } from "../android/delegates";
 import { loadCode, loadLinkTable, saveLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
-import { Resources, JTheme, nativeRes } from "../android/res";
-import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
+import { Resources, nativeRes } from "../android/res";
+import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
 import { setAppHost, type AppHost } from "../android/apphost";
-import { aospResources, loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
+import { loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk } from "../android/assetmanager";
 import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { windowDim, windowParams } from "../android/window";
@@ -120,7 +120,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   applyOrientationRequest(launcherOrientation(manifest));
   // a native class the framework links now falls through to the platform once it is indexed
   const linkTable = loadLinkTable();
-  const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
+  await Promise.all([loadFramework(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
@@ -181,27 +181,16 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
-  const tables = new Resources(arsc, zip, install.lazyEntries);
+  registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
   const themeResId = themeAttr?.data ?? 0;
   const { target } = usesSdk(manifest);
-  let res = tables, jres: JObj, theme: JTheme;
-  if (aospResources()) {
-    // ContextImpl.getTheme: the manifest's theme, or the platform default for the target SDK
-    registerApk(apkPath(), tables);
-    jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
-    // ActivityThread.handleBindApplication: the system Resources take the device configuration and
-    // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
-    await applyDeviceConfiguration();
-    res = nativeRes(jres);
-    theme = await newTheme(res, jres, null, await scall("android/content/res/Resources", "selectDefaultTheme", "(II)I", themeResId, target));
-  } else {
-    jres = mkJResources(res);
-    theme = new JTheme();
-    theme.res = res;
-    const fwMaterial = fwPkg.findId("style", "Theme.Material.Light.DarkActionBar");
-    if (fwMaterial) theme.apply(fwMaterial);
-    if (themeResId) theme.apply(themeResId);
-  }
+  const jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
+  // ActivityThread.handleBindApplication: the system Resources take the device configuration and
+  // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
+  await applyDeviceConfiguration();
+  const res = nativeRes(jres);
+  // ContextImpl.getTheme: the manifest's theme, or the platform default for the target SDK
+  const theme = await newTheme(jres, null, await scall("android/content/res/Resources", "selectDefaultTheme", "(II)I", themeResId, target));
 
   const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
@@ -291,12 +280,6 @@ function changeActivityOrientation(act: JActivity, request: number): void {
  *  every changed bit, through a relaunch otherwise. */
 function deliverConfigChange(act: JActivity, bits: number): void {
   requestLayoutAll();
-  if (!aospResources()) {
-    if (activityHandlesConfig(act, bits)) {
-      void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
-    } else recreateActivity(act);
-    return;
-  }
   // AOSP's resources take the change first, as ActivityThread applies it before the activity sees it
   void onMain(() => after(applyDeviceConfiguration(), (config) => {
     if (activityHandlesConfig(act, bits)) return vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", config);

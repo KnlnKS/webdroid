@@ -1,5 +1,5 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
-import { JDrawable, JColorStateList, cslBoundary, tsCsl } from "./drawable";
+import { JDrawable, JColorStateList, cslBoundary, cslColor, tsCsl } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
@@ -15,7 +15,6 @@ import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
 import { csText as javaCsText } from "../jvm/natives/jchars";
 import type { JPath } from "./path";
-import type { StringPool } from "./axml";
 import { breakLines, type TLine } from "./linebreak";
 import { G } from "./gravity";
 export type { TLine } from "./linebreak";
@@ -247,22 +246,6 @@ rt.register({
   },
 });
 class JSpannedString extends JSpanned {}
-export function annotatedResource(pool: StringPool, index: number): string | JSpanned {
-  const text = pool.get(index), styles = pool.styleOf(index);
-  if (!styles) return text;
-  const result = new JSpannedString(); result.text = text;
-  for (let i = 0; i < styles.length; i += 3) {
-    const tag = pool.get(styles[i]);
-    if (!tag.startsWith("annotation;")) continue;
-    for (const entry of tag.slice(11).split(";")) {
-      const equals = entry.indexOf("=");
-      if (equals < 0) continue;
-      const span = new JAnnotation(); span.key = entry.slice(0, equals); span.value = entry.slice(equals + 1);
-      result.spans.push({ span, start: styles[i + 1], end: styles[i + 2] + 1, flags: 33 });
-    }
-  }
-  return result.spans.length ? result : text;
-}
 const immutableSpanMethods = Object.fromEntries(Object.entries(spanMethods!).filter(([name]) => !name.startsWith("setSpan(") && !name.startsWith("removeSpan(") && name !== "<init>()V"));
 rt.register({
   name: "android/text/SpannedString", ctor: JSpannedString,
@@ -611,8 +594,9 @@ rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearan
   "updateDrawState(Landroid/text/TextPaint;)V": driven(function* (this: JTextAppearanceSpan, paint: JTextPaint): Gen {
     const thread = curThread;
     yield vcallOn(thread, this, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    if (this.color) yield vcallOn(thread, paint, "setColor", "(I)V", yield vcallOn(thread, this.color, "getColorForState", "([II)I", paint.drawableState, 0));
-    if (this.linkColor) paint.linkColor = Number(yield vcallOn(thread, this.linkColor, "getColorForState", "([II)I", paint.drawableState, 0));
+    const states = paint.drawableState;
+    if (this.color) yield vcallOn(thread, paint, "setColor", "(I)V", states ? cslColor(this.color, states) : this.color.defColor);
+    if (this.linkColor) paint.linkColor = states ? cslColor(this.linkColor, states) : this.linkColor.defColor;
     if (this.shadowColor) yield vcallOn(thread, paint, "setShadowLayer", "(FFFI)V", this.shadowRadius, this.shadowDx, this.shadowDy, this.shadowColor);
   }),
 }) });
