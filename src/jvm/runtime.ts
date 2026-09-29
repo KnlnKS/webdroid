@@ -604,11 +604,13 @@ export class Runtime {
       const key = mangleStaticField(fname);
       const d = Object.getOwnPropertyDescriptor(spec.statics!, fname)!;
       if (!d.get) { ctorAny[key] = d.value; continue; }
-      const pin = (value: unknown) => Object.defineProperty(ctorAny, key, { value, writable: true, configurable: true });
+      const pin = (owner: object, value: unknown) => Object.defineProperty(owner, key, { value, writable: true, configurable: true });
       Object.defineProperty(ctorAny, key, {
         configurable: true,
-        get: () => { const v = d.get!.call(spec.statics); pin(v); return v; },
-        set: pin,
+        get: () => { const v = d.get!.call(spec.statics); pin(ctorAny, v); return v; },
+        // a subclass declaring a static of the same name writes through this inherited
+        // accessor; that value is its own field, not this class's
+        set(this: object, v: unknown) { pin(this, v); },
       });
     }
     const fl = spec.fields ?? [];

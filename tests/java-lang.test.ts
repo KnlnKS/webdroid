@@ -569,3 +569,17 @@ describe("invoke-polymorphic-custom", () => {
     }
   });
 });
+
+describe("lazy-native-static", () => {
+  test("a subclass writing a same-named static leaves the native class's lazy value alone", () => {
+    const token = new JObj();
+    class Base extends JObj {}
+    class Sub extends Base {}
+    rt.register({ name: "test/LazyStaticBase", ctor: Base, statics: { get TOKEN() { return token; } } });
+    rt.link("test/LazyStaticBase");
+    const key = mangleStaticField("TOKEN");
+    (Sub as unknown as Record<string, unknown>)[key] = null;
+    expect((Sub as unknown as Record<string, unknown>)[key]).toBeNull();
+    expect((Base as unknown as Record<string, unknown>)[key]).toBe(token);
+  });
+});
