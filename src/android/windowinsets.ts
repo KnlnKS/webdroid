@@ -1,8 +1,9 @@
 import { JObj, type NativeSpec, rt, stubs } from "../jvm/runtime";
-import { insetsOf } from "./graphics";
+import { insetsOf, JRect } from "./graphics";
 import { device } from "../shell/config";
 import type { JView } from "./view";
-import { vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
+import { newArrayList } from "../jvm/natives/jutil";
 
 // ── WindowInsets. AOSP keeps one Insets value per Type bit and dispatches the window's insets
 // down the tree on every traversal; androidx's WindowInsetsCompat is a thin wrapper over it, and
@@ -18,11 +19,33 @@ export class JWindowInsets extends JObj {
   /** per-type visibility, as AOSP's mVisible bitmask */
   vis = ~0;
   consumedV = false;
+  /** the window frame, and per type the insets sources' frames within it (AOSP's
+   * mTypeBoundingRectsMap for visible sources, mTypeMaxBoundingRectsMap for all) */
+  fw = 0;
+  fh = 0;
+  rects: (Ins[] | null)[] | null = null;
+  maxRects: (Ins[] | null)[] | null = null;
   copy(): JWindowInsets {
     const w = new JWindowInsets();
     w.ins = this.ins.slice(); w.vis = this.vis; w.consumedV = this.consumedV;
+    w.fw = this.fw; w.fh = this.fh; w.rects = this.rects; w.maxRects = this.maxRects;
     return w;
   }
+}
+function boundingRects(map: (Ins[] | null)[] | null, mask: number) {
+  const out: JRect[] = [];
+  if (map) for (let i = 0; i < IT_TYPES; i++) {
+    if (!(mask & (1 << i))) continue;
+    for (const r of map[i] ?? []) out.push(Object.assign(new JRect(), r));
+  }
+  return newArrayList(out);
+}
+/** AOSP's insetRect: clip to the shrunken frame and make it relative to that frame */
+function insetRects(map: (Ins[] | null)[] | null, l: number, t: number, r: number, b: number, fw: number, fh: number) {
+  return map && map.map((rs) => rs && rs.flatMap((x) => {
+    const left = Math.max(x.left, l), top = Math.max(x.top, t), right = Math.min(x.right, fw - r), bottom = Math.min(x.bottom, fh - b);
+    return left < right && top < bottom ? [{ left: left - l, top: top - t, right: right - l, bottom: bottom - t }] : [];
+  }));
 }
 /** AOSP unions the requested types side by side (max), skipping invisible ones */
 function insUnion(w: JWindowInsets, mask: number, ignoreVis: boolean) {
@@ -54,14 +77,25 @@ export function rootWindowInsets(view?: JView): JWindowInsets {
   const frameBottom = win?.activity && !win.dialog ? device.height : root?.bottom || device.height;
   const bottom = Math.max(0, frameBottom - (device.height - device.navBar));
   const vis = ~((1 << IT_IME) | (1 << IT_CUTOUT) | (1 << IT_CAPTION) | (device.statusBar ? 0 : 1 << IT_STATUS) | hidden);
+  const fw = win?.activity && !win.dialog ? device.width : (root ? root.right - root.left : 0) || device.width;
+  const fh = frameBottom - (root?.top ?? 0);
   const cached = root && rootInsets.get(root);
-  if (cached && cached.top === top && cached.bottom === bottom && cached.vis === vis) return cached.value;
+  if (cached && cached.top === top && cached.bottom === bottom && cached.vis === vis
+    && cached.value.fw === fw && cached.value.fh === fh) return cached.value;
   const w = new JWindowInsets();
   w.ins[IT_STATUS] = { left: 0, top, right: 0, bottom: 0 };
   const bar = { left: 0, top: 0, right: 0, bottom };
   w.ins[IT_NAV] = w.ins[IT_GESTURES] = w.ins[IT_MANDATORY] = bar;
   // no soft keyboard, no cutout, no freeform caption: those types exist but are never shown
   w.vis = vis;
+  // a source without explicit bounding rects contributes its frame clipped to the window's
+  w.fw = fw; w.fh = fh;
+  const statusRect = top ? [{ left: 0, top: 0, right: fw, bottom: top }] : null;
+  const navRect = bottom ? [{ left: 0, top: fh - bottom, right: fw, bottom: fh }] : null;
+  w.maxRects = new Array(IT_TYPES).fill(null);
+  w.maxRects[IT_STATUS] = statusRect;
+  w.maxRects[IT_NAV] = w.maxRects[IT_GESTURES] = w.maxRects[IT_MANDATORY] = navRect;
+  w.rects = w.maxRects.map((r, i) => vis & (1 << i) ? r : null);
   if (root) rootInsets.set(root, { top, bottom, vis, value: w });
   return w;
 }
@@ -81,8 +115,14 @@ const hasSysInsets = function (this: JWindowInsets) { const s = sysIns(this); re
 const self = function (this: JWindowInsets) { return this; };
 const wiMethods: NativeSpec["methods"] = {
   "<init>(Landroid/view/WindowInsets;)V": function (this: JWindowInsets, o: JWindowInsets | null) {
-    if (o) { this.ins = o.ins.slice(); this.vis = o.vis; this.consumedV = o.consumedV; }
+    if (o) {
+      this.ins = o.ins.slice(); this.vis = o.vis; this.consumedV = o.consumedV;
+      this.fw = o.fw; this.fh = o.fh; this.rects = o.rects; this.maxRects = o.maxRects;
+    }
   },
+  "getBoundingRects(I)Ljava/util/List;": function (this: JWindowInsets, m: number) { return boundingRects(this.rects, m); },
+  "getBoundingRectsIgnoringVisibility(I)Ljava/util/List;": function (this: JWindowInsets, m: number) { return boundingRects(this.maxRects, m); },
+  "getFrame()Landroid/util/Size;": function (this: JWindowInsets) { return newObj("android/util/Size", "(II)V", this.fw, this.fh); },
   "getInsets(I)Landroid/graphics/Insets;": function (this: JWindowInsets, m: number) { return insUnion(this, m, false); },
   "getInsetsIgnoringVisibility(I)Landroid/graphics/Insets;": function (this: JWindowInsets, m: number) { return insUnion(this, m, true); },
   "isVisible(I)Z": function (this: JWindowInsets, m: number) { return (this.vis & m) === m ? 1 : 0; },
@@ -114,6 +154,7 @@ const wiMethods: NativeSpec["methods"] = {
     const w = this.copy();
     for (let i = 0; i < IT_TYPES; i++) if (TYPE_BARS & (1 << i)) w.ins[i] = null;
     w.consumedV = true;
+    w.rects = w.maxRects = null;
     return w;
   },
   "replaceSystemWindowInsets(IIII)Landroid/view/WindowInsets;": function (this: JWindowInsets, l: number, t: number, r: number, b: number) {
@@ -125,6 +166,9 @@ const wiMethods: NativeSpec["methods"] = {
   "inset(IIII)Landroid/view/WindowInsets;": function (this: JWindowInsets, l: number, t: number, r: number, b: number) {
     const w = this.copy();
     w.ins = w.ins.map((s) => insShrink(s, l, t, r, b));
+    w.rects = insetRects(w.rects, l, t, r, b, w.fw, w.fh);
+    w.maxRects = insetRects(w.maxRects, l, t, r, b, w.fw, w.fh);
+    w.fw = Math.max(0, w.fw - l - r); w.fh = Math.max(0, w.fh - t - b);
     return w;
   },
   "equals(Ljava/lang/Object;)Z": function (this: JWindowInsets, o: unknown) {
