@@ -1,5 +1,5 @@
 import { devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline";
-import { pathBounds, type JPath } from "./path";
+import type { NativePath } from "./path";
 import { isRecording, type Ctx2D } from "./recording";
 import type { JCanvas, JPaint } from "./graphics";
 
@@ -219,7 +219,7 @@ export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
   return true;
 }
 
-export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: JPath): boolean {
+export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: NativePath): boolean {
   const strokeInverse = path.inverseFill && paint.style === 1 && paint.strokeWidth > 0 && !paint.dash;
   const fillsOnly = paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0;
   let fillInverse = path.inverseFill && path.fillRule === "nonzero" && fillsOnly;
@@ -233,7 +233,7 @@ export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: JPath): bool
     const ctx = canvas.ctx, m = ctx.getTransform();
     if (strokeInverse) {
       const bounds = { left: 0, top: 0, right: 0, bottom: 0 };
-      pathBounds(path, bounds);
+      path.bounds(bounds);
       const corners = [[bounds.left, bounds.top], [bounds.right, bounds.top],
         [bounds.right, bounds.bottom], [bounds.left, bounds.bottom]].map(([x, y]) => devicePoint(m, x, y));
       const pad = paint.strokeWidth * Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) + 2;

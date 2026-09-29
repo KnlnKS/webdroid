@@ -6,8 +6,11 @@ import { JLayout, JTextPaint, prepareSpans, drawLayout } from "../../../src/andr
 import { JTextView } from "../../../src/android/textview";
 import { JCanvas, measureText, typefaceFor, type JPaint } from "../../../src/android/graphics";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
+import { nativePathOf } from "../../../src/android/path";
+import { loadPlatformDex } from "../../../src/android/framework";
 
 async function probe() {
+  await loadPlatformDex();
   rt.linkNatives();
   const view = rt.make("android/widget/TextView");
   if (!(view instanceof JTextView)) throw new Error("Invalid TextView");
@@ -125,9 +128,9 @@ async function probe() {
   const selectedLayout = await vcall(selectionView, "getLayout", "()Landroid/text/Layout;");
   const path = await newObj("android/graphics/Path");
   await vcall(selectedLayout, "getSelectionPath", "(IILandroid/graphics/Path;)V", 4, 1, path);
-  const selection = path.ops.map((op: number[]) => [op[1], op[3]]);
+  const selection = nativePathOf(path).ops.map((op) => [op[1], op[3]]);
   await vcall(selectedLayout, "getSelectionPath", "(IILandroid/graphics/Path;)V", 2, 2, path);
-  const emptySelection = path.ops.length;
+  const emptySelection = nativePathOf(path).ops.length;
   const emptyCanvas = await newObj("android/graphics/Canvas", "()V"), otherCanvas = await newObj("android/graphics/Canvas", "()V");
   await vcall(emptyCanvas, "save", "()I");
   await vcall(emptyCanvas, "translate", "(FF)V", 4, 7);

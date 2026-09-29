@@ -1,7 +1,7 @@
 import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
 import "../src/natives";
 import { JCanvas, JPaint, locateDrawnText, fillFontMetrics, mkTypeface, JTypeface, setFamilyMetrics, matrixColor } from "../src/android/graphics";
-import { JPath, pathIsConvex, pathTransform } from "../src/android/path";
+import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
@@ -544,71 +544,73 @@ describe("matrix-fit", () => {
 
 describe("path-copy", () => {
   rt.linkNatives();
+  const fillType = async (name: string) => ((await linkInit("android/graphics/Path$FillType")).ctor as any)[mangleStaticField(name)];
 
   test("path copies retain contours and fill rules without sharing mutable geometry", async () => {
-    const source = rt.make("android/graphics/Path") as JPath;
+    const source = await newObj("android/graphics/Path", "()V");
     await vcall(source, "moveTo", "(FF)V", 10, 20);
     await vcall(source, "lineTo", "(FF)V", 30, 40);
-    source.fillRule = "evenodd";
-    source.inverseFill = true;
-    expect((await vcall(source, "getFillType", "()Landroid/graphics/Path$FillType;") as { ename: string }).ename).toBe("INVERSE_EVEN_ODD");
-    const copy = await newObj("android/graphics/Path", "(Landroid/graphics/Path;)V", source) as JPath;
-    const target = rt.make("android/graphics/Path") as JPath;
+    await vcall(source, "setFillType", "(Landroid/graphics/Path$FillType;)V", await fillType("INVERSE_EVEN_ODD"));
+    expect(await vcall(source, "getFillType", "()Landroid/graphics/Path$FillType;")).toBe(await fillType("INVERSE_EVEN_ODD"));
+    const copy = await newObj("android/graphics/Path", "(Landroid/graphics/Path;)V", source);
+    const target = await newObj("android/graphics/Path", "()V");
     await vcall(target, "set", "(Landroid/graphics/Path;)V", copy);
     await vcall(target, "set", "(Landroid/graphics/Path;)V", target);
     await vcall(target, "rLineTo", "(FF)V", 5, 6);
-    expect(target.ops.at(-1)).toEqual(["l", 35, 46]);
+    const t = nativePathOf(target);
+    expect(t.ops.at(-1)).toEqual(["l", 35, 46]);
     await vcall(target, "close", "()V");
-    expect([target.curX, target.curY, target.fillRule, target.inverseFill]).toEqual([10, 20, "evenodd", true]);
+    expect([t.pen.x, t.pen.y, t.fillRule, t.inverseFill]).toEqual([10, 20, "evenodd", true]);
     await vcall(copy, "offset", "(FF)V", 100, 200);
-    expect(source.ops).toEqual([["m", 10, 20], ["l", 30, 40]]);
-    expect(target.ops.slice(0, 2)).toEqual(source.ops);
+    expect(nativePathOf(source).ops).toEqual([["m", 10, 20], ["l", 30, 40]]);
+    expect(t.ops.slice(0, 2)).toEqual(nativePathOf(source).ops);
   });
 
   test("appending a transformed path preserves independent geometry and its current contour", async () => {
-    const source = rt.make("android/graphics/Path") as JPath;
+    const source = await newObj("android/graphics/Path", "()V");
     await vcall(source, "moveTo", "(FF)V", 1, 2);
     await vcall(source, "lineTo", "(FF)V", 3, 4);
-    const target = rt.make("android/graphics/Path") as JPath;
+    const target = await newObj("android/graphics/Path", "()V");
     const matrix = await newObj("android/graphics/Matrix", "()V");
     await vcall(matrix, "setValues", "([F)V", Float32Array.of(0, -1, 10, 1, 0, 20, 0, 0, 1));
     await vcall(target, "addPath", "(Landroid/graphics/Path;Landroid/graphics/Matrix;)V", source, matrix);
     await vcall(target, "rLineTo", "(FF)V", 5, 6);
-    expect(target.ops).toEqual([["m", 8, 21], ["l", 6, 23], ["l", 11, 29]]);
+    const t = nativePathOf(target);
+    expect(t.ops).toEqual([["m", 8, 21], ["l", 6, 23], ["l", 11, 29]]);
     await vcall(target, "close", "()V");
-    expect([target.curX, target.curY]).toEqual([8, 21]);
+    expect([t.pen.x, t.pen.y]).toEqual([8, 21]);
     await vcall(target, "addPath", "(Landroid/graphics/Path;)V", target);
-    expect(target.ops.length).toBe(8);
+    expect(t.ops.length).toBe(8);
     await vcall(target, "offset", "(FF)V", 1, 1);
-    expect(target.ops[0]).toEqual(["m", 9, 22]);
-    expect(source.ops).toEqual([["m", 1, 2], ["l", 3, 4]]);
+    expect(t.ops[0]).toEqual(["m", 9, 22]);
+    expect(nativePathOf(source).ops).toEqual([["m", 1, 2], ["l", 3, 4]]);
   });
 
   test("Path convexity follows control points, closure and contour boundaries", async () => {
-    const path = new JPath();
-    expect(await vcall(path, "isConvex", "()Z")).toBe(1);
+    const path = new NativePath();
+    expect(pathIsConvex(path)).toBe(true);
     path.ops = [["m", 0, 0], ["l", 10, 0]];
-    expect(pathIsConvex(path)).toBe(1);
+    expect(pathIsConvex(path)).toBe(true);
     path.ops.push(["l", 10, 10], ["l", 0, 10]);
-    expect(pathIsConvex(path)).toBe(1);
+    expect(pathIsConvex(path)).toBe(true);
     path.ops.push(["l", 5, 5]);
-    expect(pathIsConvex(path)).toBe(0);
+    expect(pathIsConvex(path)).toBe(false);
     path.ops = [["m", 0, 0], ["q", 10, 0, 10, 10], ["l", 0, 10], ["z"]];
-    expect(pathIsConvex(path)).toBe(1);
+    expect(pathIsConvex(path)).toBe(true);
     path.ops[1] = ["q", -10, 20, 10, 10];
-    expect(pathIsConvex(path)).toBe(0);
-    path.ops = [["rrect", 0, 0, 300, 200, 28, 28, 28, 28, 0, 0, 0, 0]];
-    expect(pathIsConvex(path)).toBe(1);
-    pathTransform(path, [0, 1, -1, 0, 300, 0]);
-    expect(pathIsConvex(path)).toBe(1);
+    expect(pathIsConvex(path)).toBe(false);
+    path.ops = [["rrect", 0, 0, 300, 200, 28, 28, 28, 28, 0, 0, 0, 0, 0]];
+    expect(pathIsConvex(path)).toBe(true);
+    path.transform(Float64Array.of(0, -1, 300, 1, 0, 0, 0, 0, 1));
+    expect(pathIsConvex(path)).toBe(true);
     path.ops.push(["m", 900, 900]);
-    expect(pathIsConvex(path)).toBe(1);
+    expect(pathIsConvex(path)).toBe(true);
     path.ops.push(["l", 901, 900]);
-    expect(pathIsConvex(path)).toBe(0);
+    expect(pathIsConvex(path)).toBe(false);
     path.ops = [["m", 0, 3], ["l", 2, -3], ["l", -3, 1], ["l", 3, 1], ["l", -2, -3], ["z"]];
-    expect(pathIsConvex(path)).toBe(0);
+    expect(pathIsConvex(path)).toBe(false);
     path.ops = [["m", Infinity, 0]];
-    expect(pathIsConvex(path)).toBe(0);
+    expect(pathIsConvex(path)).toBe(false);
   });
 });
 
