@@ -11,7 +11,7 @@ import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
-import { loadCode, startupDone } from "../jvm/codecache";
+import { loadCode, loadLinkTable, saveLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
@@ -116,6 +116,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcherOrientation(manifest));
+  // a native class the framework links now falls through to the platform once it is indexed
+  const linkTable = loadLinkTable();
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
@@ -133,13 +135,14 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   for (const name of Object.keys(zip)) {
     if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
-  await Promise.all([loadPlatformDex(), loadCode(processName ?? pkg)]);
+  await Promise.all([linkTable.then(loadPlatformDex), loadCode(processName ?? pkg)]);
   const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);
   if (profile) compileProfile(rt, Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]), profile);
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.
   await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+  saveLinkTable();
   // after linking: the time zone setup runs Java that reaches TS-built objects
   await zygoteInit();
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");

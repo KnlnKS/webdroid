@@ -12,6 +12,7 @@ import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } fro
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, type Cells, type CompiledCtor, type ResumeBody } from "./compiler";
 import { insnLen } from "./opcodes";
+import { gapsOf, recordGaps, type Gap } from "./codecache";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
@@ -660,25 +661,34 @@ export class Runtime {
       const prop = mangleStaticField(dex.field(def.staticFields[i].fieldIdx).name);
       if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = this.encToJs(dex, value);
     });
-    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
-      if (m.flags & ACC.ABSTRACT) continue;
-      const { name, desc, mangled } = methodKey(dex, m.methodIdx);
-      const isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
-      // statics and private methods belong to their class; the rest may be inherited
-      const own = isStatic || list === def.directMethods && name !== "<init>";
-      if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target)) continue;
-      // a spec whose JS class does not extend its declared superclass's still inherits from it
-      const inherited = !own && info.superInfo?.ctor?.prototype?.[mangled];
-      if (inherited) { target[mangled] = inherited; continue; }
+    const lists = [def.directMethods, def.virtualMethods], R = this, cls = info.name;
+    const fill = ([list, index, mangled, kind]: Gap) => {
+      const m = lists[list][index], isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
+      if (kind === 2) { target[mangled] = info.superInfo!.ctor.prototype[mangled]; return; }
       if (!isStatic) info.ownMethods.push(mangled);
-      if (!(m.flags & ACC.NATIVE)) { installLazy(this, dex, info, m, true); continue; }
-      const R = this, cls = info.name;
+      if (kind === 0) { installLazy(this, dex, info, m, true, mangled); return; }
       target[mangled] = function (this: unknown, ...args: unknown[]) {
-        const fn = R.jniFn(cls, name + desc);
+        const { name, desc } = methodKey(dex, m.methodIdx), fn = R.jniFn(cls, name + desc);
         if (!fn) throw R.ulink(cls, name, desc);
         return (target[mangled] = fn).apply(this, args as never[]);
       };
-    }
+    };
+    const known = gapsOf(cls);
+    if (known) { known.forEach(fill); return; }
+    const found: Gap[] = [];
+    lists.forEach((list, l) => list.forEach((m, index) => {
+      if (m.flags & ACC.ABSTRACT) return;
+      const { name, mangled } = methodKey(dex, m.methodIdx);
+      const isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
+      // statics and private methods belong to their class; the rest may be inherited
+      const own = isStatic || l === 0 && name !== "<init>";
+      if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target)) return;
+      // a spec whose JS class does not extend its declared superclass's still inherits from it
+      const gap: Gap = [l, index, mangled, !own && info.superInfo?.ctor?.prototype?.[mangled] ? 2 : m.flags & ACC.NATIVE ? 1 : 0];
+      found.push(gap);
+      fill(gap);
+    }));
+    recordGaps(cls, found);
   }
 
   /** the fields `m` reads or writes on native classes that those classes do not have: a

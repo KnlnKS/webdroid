@@ -81,8 +81,8 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
 
 /** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body.
  *  `fallthrough` marks a platform body installed on a native class, compiled only if safe. */
-export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, fallthrough = false): void {
-  const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, fallthrough = false,
+  mangled = methodKey(dex, m.methodIdx).mangled): void {
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   const i = (info.lazy ??= []).length;
   const C: CompiledCtor = info.ctor;
@@ -93,7 +93,9 @@ export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: Encode
   };
   stub.$c = [];
   if (fallthrough) stub.$unsafe = () => R.absentFields(dex, m).length > 0;
-  info.lazy.push({ dex, m, mangled, isStatic, name, desc, stub, fallthrough });
+  // name and descriptor are decoded when the method compiles, not for every stub a boot installs
+  info.lazy.push({ dex, m, mangled, isStatic, stub, fallthrough,
+    get name() { return methodKey(dex, m.methodIdx).name; }, get desc() { return methodKey(dex, m.methodIdx).desc; } });
   (isStatic ? C : C.prototype)[mangled] = stub;
 }
 

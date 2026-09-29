@@ -9,6 +9,7 @@
 // rest load after that launch's first frame, so they do not delay it.
 
 import { inputSettled } from "./yield";
+import { BYTECODE } from "./provenance";
 
 /** installs an entry body into C/C.prototype, or returns a resumable body */
 export type Factory = (C: unknown, D: unknown, R: unknown, S: unknown, P: unknown, $R?: unknown) => unknown;
@@ -200,3 +201,29 @@ function saveCode(): Promise<void> {
     if (rewrite) compact = false;
   }).catch((e) => console.warn("[webdroid] saving compiled code failed", e));
 }
+
+// Link metadata (§4.1): per native class, the platform methods its spec leaves out, which
+// Runtime.fallThrough stubs at every boot of every realm. Finding them decodes and mangles every
+// method of each class a spec covers; the gaps depend only on the bundle's specs and platform dex
+// (and the bytecode switch), so a table one boot records replays at the next.
+/** a gap: its method list (0 direct, 1 virtual), index there, mangled name and how it is filled
+ *  (0 the platform body, 1 its JNI binding, 2 the superclass's implementation) */
+export type Gap = [list: number, index: number, mangled: string, kind: number];
+const LINKS = `/wd-link/${bundle}/${encodeURIComponent(BYTECODE.join(","))}.json`;
+let gaps: Record<string, Gap[]> | null = null, foundGaps: Record<string, Gap[]> | null = null;
+export async function loadLinkTable(): Promise<void> {
+  if (typeof caches === "undefined") return;
+  try { gaps = await (await (await caches.open(CACHE)).match(LINKS))?.json() ?? null; }
+  catch (e) { console.warn("[webdroid] link table unavailable", e); }
+}
+export const gapsOf = (cls: string): Gap[] | undefined => gaps?.[cls];
+export function recordGaps(cls: string, found: Gap[]): void { if (!gaps) (foundGaps ??= {})[cls] = found; }
+/** after the boot that found them */
+export function saveLinkTable(): void {
+  if (!foundGaps || typeof caches === "undefined") return;
+  const body = JSON.stringify(foundGaps);
+  foundGaps = null;
+  void caches.open(CACHE).then((cache) => cache.put(LINKS, new Response(body, { headers: { "content-type": "application/json" } })))
+    .catch((e) => console.warn("[webdroid] saving the link table failed", e));
+}
+
