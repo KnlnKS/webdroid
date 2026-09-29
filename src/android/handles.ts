@@ -12,13 +12,16 @@
 
 const objs: (object | undefined)[] = [undefined];
 const byObj = new WeakMap<object, bigint>();
+/** released slots, reused so a native object recreated every frame does not grow the table */
+const free: number[] = [];
 
 /** hand framework Java a long for this object */
 export function handle(o: object): bigint {
   let h = byObj.get(o);
   if (h === undefined) {
-    objs.push(o);
-    byObj.set(o, (h = BigInt(objs.length - 1)));
+    const n = free.pop() ?? objs.push(undefined) - 1;
+    objs[n] = o;
+    byObj.set(o, (h = BigInt(n)));
   }
   return h;
 }
@@ -41,8 +44,10 @@ export function replace(h: bigint, o: object): void {
 export function release(h: bigint): void {
   const n = Number(h);
   const old = objs[n];
-  if (old) byObj.delete(old);
+  if (!old) return;
+  byObj.delete(old);
   objs[n] = undefined;
+  free.push(n);
 }
 
 /** A finalizer is a function pointer the class hands to NativeAllocationRegistry, which only
