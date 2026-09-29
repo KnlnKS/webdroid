@@ -1165,8 +1165,8 @@ function parseIntJ(s: string, radix = 10): number {
   if (s[0] === "+" || s[0] === "-") { negative = s[0] === "-"; start = 1; }
   let magnitude = 0;
   for (let i = start; i < s.length; i++) {
-    const digit = parseInt(s[i], 36);
-    if (Number.isNaN(digit) || digit >= radix) nfe(s);
+    const c = s.charCodeAt(i), digit = c <= 57 ? c - 48 : (c | 32) - 87;
+    if (digit >= radix) nfe(s);
     magnitude = magnitude * radix + digit;
   }
   const limit = negative ? 2147483648 : 2147483647;

@@ -1,11 +1,12 @@
 import { utf8, charsToString, concat } from "./abi";
 import { rt } from "./runtime";
 
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, SURROGATE = /[\uD800-\uDFFF]/;
 
 export function charsetName(value: unknown): string {
   const name = typeof value === "string" ? value : value && typeof value === "object" && "cname" in value ? value.cname : null;
   if (typeof name !== "string") throw rt.mkThrowable("java/lang/NullPointerException", "charset");
+  if (name === "UTF-8") return name;
   switch (name.replace(/[-_]/g, "").toUpperCase()) {
     case "UTF8": return "UTF-8";
     case "ISO88591": case "LATIN1": case "L1": return "ISO-8859-1";
@@ -19,7 +20,7 @@ export function charsetName(value: unknown): string {
 
 export function encodeString(text: string, charset: unknown): Int8Array {
   const name = charsetName(charset);
-  if (name === "UTF-8") return new Int8Array(utf8.enc.encode(text.replace(LONE_SURROGATE, "?")).buffer);
+  if (name === "UTF-8") return new Int8Array(utf8.enc.encode(SURROGATE.test(text) ? text.replace(LONE_SURROGATE, "?") : text).buffer);
   const wide = name.startsWith("UTF-16"), bom = name === "UTF-16" ? 2 : 0;
   const out = new Int8Array(text.length * (wide ? 2 : 1) + bom);
   const view = new DataView(out.buffer);

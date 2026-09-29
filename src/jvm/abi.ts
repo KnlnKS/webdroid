@@ -123,6 +123,8 @@ export const strArray = (a: readonly string[]) => jarray([...a], "Ljava/lang/Str
 
 /** code units → string, chunked to stay under the argument limit */
 export function charsToString(chars: Uint16Array | Uint8Array, off: number, len: number): string {
+  // subarray allocates a view; the common whole-array case skips it
+  if (off === 0 && len === chars.length && len <= 1024) return Reflect.apply(String.fromCharCode, null, chars);
   let s = "";
   for (let i = 0; i < len; i += 1024) {
     s += Reflect.apply(String.fromCharCode, null, chars.subarray(off + i, off + Math.min(len, i + 1024)));
