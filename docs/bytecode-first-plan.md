@@ -620,8 +620,8 @@ Run all of these before committing a flip:
 - `bun run test` (1,378 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,088, 2,538, 27,514,
-  1,012 and 318; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,148, 2,538, 27,514,
+  1,012 and 338; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
