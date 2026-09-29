@@ -43,7 +43,7 @@ export class Monitors {
   private release(obj: object | string | null | 0, monitor: Monitor): void {
     if (--monitor.depth) return;
     monitor.owner = null;
-    monitor.entrants.shift()?.();
+    if (monitor.entrants.length) monitor.entrants.shift()!();
     if (typeof obj === "string" && !monitor.depth && !monitor.waiters.length) this.strings.delete(obj);
   }
   holds(obj: object | string | null | 0, thread: unknown): boolean {

@@ -1031,6 +1031,12 @@ export class Runtime {
   classForIdx(D: DexLink, typeIdx: number): unknown {
     return this.classFor(descToName(D.dex.type(typeIdx)));
   }
+  /** new String(char[], int, int), the constructor readers and parsers call per token */
+  strChars(chars: Uint16Array | null, off: number, len: number): string {
+    if (!chars) this.npe();
+    if (off < 0 || len < 0 || off > chars.length - len) throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
+    return charsToString(chars, off, len);
+  }
   /** String.<init> replacement (see compiler special-case) */
   newStr(desc: string, args: unknown[]): string {
     switch (desc) {
@@ -1039,7 +1045,7 @@ export class Runtime {
       case "(Ljava/lang/StringBuilder;)V": case "(Ljava/lang/StringBuffer;)V":
         return String(args[0]);
       case "([C)V": return charsToString(args[0] as Uint16Array, 0, (args[0] as Uint16Array).length);
-      case "([CII)V": return charsToString(args[0] as Uint16Array, args[1] as number, args[2] as number);
+      case "([CII)V": return this.strChars(args[0] as Uint16Array, args[1] as number, args[2] as number);
       case "([B)V": return utf8.dec.decode(args[0] as Int8Array);
       case "([BI)V": case "([BIII)V": {
         const bytes = args[0] as Int8Array;

@@ -781,7 +781,7 @@ ${profileEnd}
       }
       case "invoke-direct": {
         if (clsName === "java/lang/String" && mref.name === "<init>") {
-          out.push(`${this.reg(i.regs[0])}=R.newStr(${this.literal(desc)},[${argStr}]);`);
+          out.push(desc === "([CII)V" ? `${this.reg(i.regs[0])}=R.strChars(${argStr});` : `${this.reg(i.regs[0])}=R.newStr(${this.literal(desc)},[${argStr}]);`);
           break;
         }
         // same-class: entry into this class's code implies inited (or initing in
