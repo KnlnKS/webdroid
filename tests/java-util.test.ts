@@ -487,6 +487,37 @@ describe("map-equality", () => {
     expect(await equals(deque, await newObj("java/util/ArrayDeque"))).toBe(0);
   });
 
+  test("entry and value views look mappings up and remove them", async () => {
+    const target = await map();
+    await put(target, "a", "1");
+    await put(target, new Value(7), "x");
+    await put(target, "b", "2");
+    const entry = (k: unknown, v: unknown) => newObj("java/util/AbstractMap$SimpleEntry", `(${O}${O})V`, k, v);
+    const entries = await vcall(target, "entrySet", "()Ljava/util/Set;");
+    expect(await vcall(entries, "contains", `(${O})Z`, await entry(new Value(7), "x"))).toBe(1);
+    expect(await vcall(entries, "contains", `(${O})Z`, await entry("a", "2"))).toBe(0);
+    expect(await vcall(entries, "remove", `(${O})Z`, await entry("a", "2"))).toBe(0);
+    expect(await vcall(entries, "removeAll", "(Ljava/util/Collection;)Z", newArrayList([await entry("a", "1")]))).toBe(1);
+    expect(await vcall(entries, "retainAll", "(Ljava/util/Collection;)Z", newArrayList([await entry(new Value(7), "x")]))).toBe(1);
+    expect(await vcall(target, "size", "()I")).toBe(1);
+    const values = await vcall(target, "values", "()Ljava/util/Collection;");
+    expect(await vcall(values, "remove", `(${O})Z`, "x")).toBe(1);
+    expect(await vcall(target, "isEmpty", "()Z")).toBe(1);
+  });
+
+  test("List equality walks an overriding subclass's iterator rather than its storage", async () => {
+    class Shadow extends rt.link("java/util/ArrayList").ctor {}
+    rt.register({ name: "test/ShadowList", ctor: Shadow, sup: "java/util/ArrayList", methods: {
+      "iterator()Ljava/util/Iterator;": () => vcall(newArrayList(["i"]), "iterator", "()Ljava/util/Iterator;"),
+    } });
+    rt.linkNatives();
+    const shadow = new Shadow() as { a: unknown[] };
+    shadow.a = ["a"];
+    expect(await equals(newArrayList(["a"]), shadow)).toBe(0);
+    expect(await equals(newArrayList(["i"]), shadow)).toBe(1);
+    expect(await equals(shadow, newArrayList(["a"]))).toBe(1);
+  });
+
   test("IdentityHashMap uses reference identity for keys and values", async () => {
     const target = await map("java/util/IdentityHashMap");
     const first = new Value(7), equalValue = new Value(7);
@@ -498,6 +529,8 @@ describe("map-equality", () => {
     expect(await vcall(target, "containsValue", `(${O})Z`, first)).toBe(1);
     await put(target, equalValue, equalValue);
     expect(await vcall(target, "size", "()I")).toBe(2);
+    expect(await vcall(await vcall(target, "values", "()Ljava/util/Collection;"), "remove", `(${O})Z`, equalValue)).toBe(1);
+    expect(await vcall(target, "containsKey", `(${O})Z`, first)).toBe(1);
   });
 
   test("a null mapping is distinct from an absent key", async () => {
@@ -695,6 +728,25 @@ describe("set-equality", () => {
     expect(await vcall(immutable, "get", "(I)Ljava/lang/Object;", 1)).toBe("b");
     await rejects(() => vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"), "UnsupportedOperationException");
     await rejects(() => of("a", null), "NullPointerException");
+    await rejects(() => vcall(immutable, "contains", "(Ljava/lang/Object;)Z", null), "NullPointerException");
+  });
+
+  test("Collections and Arrays.asList lists refuse only the writes that would change them", async () => {
+    const empty = await scall("java/util/Collections", "emptyList", "()Ljava/util/List;");
+    expect(await scall("java/util/Collections", "emptyList", "()Ljava/util/List;")).toBe(empty);
+    await rejects(() => vcall(empty, "add", "(Ljava/lang/Object;)Z", "a"), "UnsupportedOperationException");
+    expect(await vcall(empty, "remove", "(Ljava/lang/Object;)Z", "a")).toBe(0);
+    const single = await scall("java/util/Collections", "singletonList", "(Ljava/lang/Object;)Ljava/util/List;", "a");
+    await rejects(() => vcall(single, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "b"), "UnsupportedOperationException");
+    await rejects(() => vcall(single, "remove", "(Ljava/lang/Object;)Z", "a"), "UnsupportedOperationException");
+    const array = ["a", "b"];
+    const fixed = await scall("java/util/Arrays", "asList", "([Ljava/lang/Object;)Ljava/util/List;", array);
+    expect(await vcall(fixed, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "z")).toBe("a");
+    expect(array[0]).toBe("z");
+    await rejects(() => vcall(fixed, "add", "(Ljava/lang/Object;)Z", "c"), "UnsupportedOperationException");
+    const map = await scall("java/util/Collections", "singletonMap", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;", "k", "v");
+    expect(await vcall(map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", "x")).toBe(null);
+    await rejects(() => vcall(map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", "k"), "UnsupportedOperationException");
   });
 
   test("unordered and insertion-ordered sets do not implement SortedSet", () => {
