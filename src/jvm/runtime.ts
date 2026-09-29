@@ -10,7 +10,7 @@ import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
-import { compileClass, compileLazyMethod, installLazy, methodKey, type Cells, type CompiledCtor, type ResumeBody } from "./compiler";
+import { compileClass, compileLazyMethod, installLazy, methodKey, addCell, type Cells, type CompiledCtor, type ResumeBody, type LazyMethod } from "./compiler";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, type Gap } from "./codecache";
 import { isBytecode } from "./provenance";
@@ -101,7 +101,7 @@ export class ClassInfo {
   jclass: any = null;                 // java.lang.Class instance (lazy, made by jlang)
   compiled = false;
   /** method bodies not yet generated (see compiler installLazy); undefined when eager */
-  lazy?: { dex: DexFile; m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string; stub: Cells & ((...a: unknown[]) => unknown); fallthrough: boolean }[];
+  lazy?: LazyMethod[];
   defaultsCopied = false;         // interface default methods already copied down
   constructor(public name: string, public owner?: Runtime) {}
   get isInterface(): boolean { return (this.flags & ACC.INTERFACE) !== 0; }
@@ -134,7 +134,7 @@ interface DexLink {
 }
 
 function siteCache(c: unknown[], k: number, fn: Cells): unknown {
-  fn.$c?.push(c, k);
+  addCell(fn, c, k);
   return (c[k] = fn);
 }
 
@@ -364,9 +364,9 @@ export class Runtime {
         const proto = info.ctor.prototype, mangled = mangleMethod(m.name, dex.methodDesc(i));
         const fn: Cells | undefined = proto[mangled];
         if (!fn) throw R.unimplemented(`${info.name}.${m.name}${dex.methodDesc(i)} (direct)`);
-        fn.$c?.push(this.dp, i);
+        addCell(fn, this.dp, i);
         const direct = directName(info.name, mangled);
-        if (!Object.hasOwn(proto, direct)) { proto[direct] = fn; fn.$c?.push(proto, direct); }
+        if (!Object.hasOwn(proto, direct)) { proto[direct] = fn; addCell(fn, proto, direct); }
         return (this.dp[i] = fn);
       },
       // dp is sparse, so V8 keeps it in dictionary mode; a hot site reads its own dense slot

@@ -81,6 +81,15 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
 
 /** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body.
  *  `fallthrough` marks a platform body installed on a native class, compiled only if safe. */
+/** a method installed as a stub that compiles it on first call; name and descriptor are decoded
+ *  then, not for every stub a boot installs */
+export class LazyMethod {
+  constructor(readonly dex: DexFile, readonly m: EncodedMethod, readonly mangled: string, readonly isStatic: boolean,
+    readonly stub: JvmFunction & Cells, readonly fallthrough: boolean) {}
+  get name(): string { return methodKey(this.dex, this.m.methodIdx).name; }
+  get desc(): string { return methodKey(this.dex, this.m.methodIdx).desc; }
+}
+
 export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, fallthrough = false,
   mangled = methodKey(dex, m.methodIdx).mangled): void {
   const isStatic = (m.flags & ACC.STATIC) !== 0;
@@ -91,19 +100,27 @@ export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: Encode
     entry ??= R.lz(C, i);
     return entry.apply(this, args);
   };
-  stub.$c = [];
-  if (fallthrough) stub.$unsafe = () => R.absentFields(dex, m).length > 0;
-  // name and descriptor are decoded when the method compiles, not for every stub a boot installs
-  info.lazy.push({ dex, m, mangled, isStatic, stub, fallthrough,
-    get name() { return methodKey(dex, m.methodIdx).name; }, get desc() { return methodKey(dex, m.methodIdx).desc; } });
+  stub.$c = null;
+  info.lazy.push(new LazyMethod(dex, m, mangled, isStatic, stub, fallthrough));
   (isStatic ? C : C.prototype)[mangled] = stub;
   // a constructor or private method also goes under its direct name now: added once a class has
   // instances, it would change their prototype's shape under code already running
   if (!isStatic && (mangled.startsWith("i$") || m.flags & ACC.PRIVATE)) {
     const direct = directName(info.name, mangled);
     C.prototype[direct] = stub;
-    stub.$c.push(C.prototype, direct);
+    addCell(stub, C.prototype, direct);
   }
+}
+
+/** Does `fn`, as `info` reaches it, stand for a platform body that reads fields its native class
+ *  lacks? Such a body is not a method the class has. */
+export function unsafeFallthrough(R: Runtime, info: ClassInfo, fn: unknown): boolean {
+  if ((fn as Cells).$unsafe) return true;
+  for (let i: ClassInfo | null = info; i; i = i.superInfo) {
+    const rec = i.lazy?.find((r) => r.stub === fn);
+    if (rec) return rec.fallthrough && R.absentFields(rec.dex, rec.m).length > 0;
+  }
+  return false;
 }
 
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
@@ -111,17 +128,22 @@ type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
 /** Re-enters a suspended frame (Runtime.dfr) or an on-stack-replaced cold frame. */
 export type ResumeBody = (this: unknown, frame: object) => unknown;
 /** Direct-call caches (`D.dp`, and hot sites in `$ic`) holding an interim entry, as flat
- *  [cache, index] pairs; a platform fallthrough entry also says whether its body touches fields
- *  its native class lacks. */
-export type Cells = { $c?: unknown[]; $unsafe?: () => boolean };
+ *  [cache, index] pairs: null until a cache holds it, undefined for a final entry. A platform
+ *  fallthrough that cannot run is marked `$unsafe`. */
+export type Cells = { $c?: unknown[] | null; $unsafe?: boolean };
+/** record that `cache[key]` holds `fn`, if `fn` is an interim entry a later body replaces */
+export function addCell(fn: Cells, cache: unknown, key: unknown): void {
+  if (fn.$c !== undefined) (fn.$c ??= []).push(cache, key);
+}
 
 /** Point the direct-call caches holding `from` at `to`, so they stop paying for the indirection. */
 function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
   const cells = from.$c;
+  if (cells === undefined) return;
+  from.$c = undefined;
   if (!cells) return;
   for (let k = 0; k < cells.length; k += 2) (cells[k] as unknown[])[cells[k + 1] as number] = to;
-  from.$c = undefined;
-  if (to.$c) to.$c.push(...cells);
+  if (to.$c !== undefined) (to.$c ??= []).push(...cells);
 }
 
 // Promotion compiles synchronously within a budget per window; past it, a method waits for idle
@@ -169,7 +191,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
         R.noteMissing(what);
         throw R.mkThrowable("java/lang/NoSuchMethodError", what);
       };
-      fail.$unsafe = () => true;
+      fail.$unsafe = true;
       retarget(rec.stub, fail);
       return target[rec.mangled] = fail;
     }
@@ -280,7 +302,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
     return runCold(cold!, this, args);
   };
-  invoke.$c = [];
+  invoke.$c = null;
   if (!jvmCoverage.enabled) return install(target[rec.mangled] = invoke);
   return install(target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
     jvmCoverage.hit(profileName);

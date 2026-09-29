@@ -4,7 +4,7 @@ import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type G
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
 import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
-import type { Cells } from "../compiler";
+import { unsafeFallthrough } from "../compiler";
 import { device } from "../../shell/config";
 import { mem } from "../../native/mem";
 import { handle } from "../../android/handles";
@@ -643,7 +643,7 @@ export function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] 
   return (c[declaredOnly ? 1 : 0] ??= collectMethods(info, declaredOnly)).slice();
 }
 /** a platform body a native class could not run is not a method it has */
-const runnable = (fn: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !(fn as Cells).$unsafe?.();
+const runnable = (ci: ClassInfo, fn: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !unsafeFallthrough(rt, ci, fn);
 function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   rt.ensureCompiled(info);
   const out: JMethod[] = [];
@@ -667,8 +667,8 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
       const mangled = mangleMethod(name, desc);
       const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled];
-      if (runnable(fn)) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
-      else if (runnable(sfn)) { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
+      if (runnable(ci, fn)) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
+      else if (runnable(ci, sfn)) { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
     }
   };
   const collect = (ci: ClassInfo) => {
