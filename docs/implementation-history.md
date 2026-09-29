@@ -675,6 +675,41 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   `lat` pairs against 44da4521 give first frame 1,645 against 1,612 ms and idle 2,296 against 2,507;
   FitNotes and Mihon are level. Each realm still pays `AssetManager.getSystem()`'s OverlayConfig
   partition scan (about 27 ms in V8, mostly first-use code).
+- 2026-09-30, platform Object overrides on spec classes. Fallthrough treated a method the prototype
+  chain reached from java.lang.Object as implemented (and as the superclass's, kind 2), so 406
+  platform overrides of toString, equals and hashCode on spec classes answered with Object's identity
+  versions: ComponentName, Bundle, SpannableString, Location, Rect and so on. They now run the
+  platform body, and one that reads fields its TS object lacks yields to Object's, as an interface
+  default does; java.lang.Object itself is excluded (its own spec is JObj.prototype, and treating it
+  as a subclass replaced its hashCode with core-oj's, which spun). One new failure followed:
+  SQLiteProgram.toString calls getSql, which read an unmapped mSql (fixed by mapping the field).
+  Conform unchanged on every suite.
+- 2026-09-30, Stage C.2 first cuts. Rect, RectF, Point, PointF and Insets keep only their layout
+  (fields and CREATOR/NONE, since a spec never runs its platform `<clinit>`), and AOSP's bodies run
+  over it. RectF, PointF and Region needed JS classes of their own: as subclasses of JRect/JPoint,
+  fallthrough found Rect's same-descriptor bodies on the chain and skipped RectF's (readFromParcel
+  read ints, toString said "Rect("). Color and ColorSpace are AOSP's (Color's natives are Skia's
+  SkRGBToHSV/SkHSVToColor in float; ColorSpace.Rgb's native instance holds its transfer function and
+  XYZ matrix); the TS ColorSpace answered sRGB to everything, so color longs outside sRGB could not
+  work. ColorMatrix is AOSP's; the TS ColorMatrixColorFilter reads its mArray. Matrix is AOSP's over
+  the existing 3x3 natives, now following SkMatrix (quarter-turn snapping, mapRect/rectStaysRect,
+  perspective mapVectors, mapRadius, near-singular invert, four-point setPolyToPoly) and writing in
+  place, so TS state and a Java Matrix can share one array (`matrixOf`/`javaMatrix` in graphics.ts).
+  TikTok's wedge rate looked worse after the geometry cut (8 of 23 runs against 1 of 17), but a later
+  interleaved batch of the same two commits went 3/8 against 3/8: the flow's wedges follow host load.
+- 2026-09-30, memory per realm. A heap snapshot of Calculator M after launch (3 realms) held 2.1 GB:
+  1.65 GB of ArrayBuffer backing stores, of which the native core's 256 MiB wasm memory per realm
+  (805 MB), CanvasKit's 128 MiB heap per realm and each realm's copies of the jars (76 MB) and
+  framework-res (35 MB). Process realms now use the page's CanvasKit and view the page's jar and
+  framework-res bytes (`pageShared`): JS heap 854 -> 635 MB, retained 2,115 -> 1,626 MB. Lazy method
+  stubs carried a cell array, an $unsafe closure and a record whose getters were fresh closures (922
+  bytes a stub in V8); records are now class instances and `$c` is allocated when a cache first holds
+  the stub (274 bytes; linking the platform's 23,892 stubs: 60.1 -> 44.7 MB, 187 -> 176 ms). The wasm
+  memory was left alone: V8 counts it as external memory, but a steady-state churn test showed the
+  same GC count with or without it, and untouched pages are not resident. TikTok (5 realms) has a JS
+  heap of 2.1-3.8 GB; its 360 MB of dex is already shared through packed archives, and the bulk is
+  per-class and per-method state (the top realm links 42,569 classes). Allocation sampling over a
+  TikTok run: 6.6 GB in 38 s, about half under cold execution and 2 GB in compilation.
 
 ## Java, storage and framework semantics
 

@@ -589,19 +589,29 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 ### Handoff state (2026-09-30): start here
 
-- **`knlnks/bytecode` has `android/content/res/` on AOSP bytecode by default** (merge 131efb48 of
-  `c1-resources`, then a dead-code sweep). Gated on the merge: typecheck; `bun run test` 1,391 pass;
-  FitNotes smoke 0 method failures; fast e2e 7/7 twice; the live set (TikTok wedged once at `feed`,
-  then passed 4 of 5 alone); `lat` cold and warm; every conform suite at its baseline. The sweep
-  (398b7297..61084dea, 118 lines) passed typecheck, test (1,390) and smoke.
-- **The resource cut's cold-launch cost is gone.** Interleaved `lat` runs against 44da4521 (TS
-  resources): cold Calculator first frame median 1,645 ms against 1,612 (5 pairs, within noise) and
-  idle 2,296 against 2,507; FitNotes and Mihon launches and Mihon's taps level. The 1.73 s measured
-  under the switch predates 2ce12bbe/4d5b9ac2. `presentations=2` in a launch snapshot is `lat`'s
-  poll seeing the second frame too, not a starting window.
-- **Next: Stage C.2 graphics** (`audit ... --cut android/graphics/` reports 121 native specs and
-  1,963 TS references to re-home), then the rest of the plan, under the standing constraints and
-  gates below.
+- **`knlnks/bytecode` tip `fa666ac3` is gated** (not pushed): typecheck; `bun run test` 1,388 pass;
+  FitNotes smoke 0 method failures; fast e2e 7/7 twice; the live set 6/6; `lat` cold and warm, level
+  with 44da4521 in interleaved runs on a quiet host; conform at every baseline on ab9f898b (the later
+  commits touch graphics and page-level sharing, which no suite reaches). `android/content/res/` is
+  AOSP bytecode by default (131efb48); its cold-launch cost measured under the switch is gone.
+- **Done since (2026-09-30), details in the history:** platform overrides of Object's methods run on
+  spec classes (a61f89c4; 406 had answered with identity); Rect, RectF, Point, PointF and Insets keep
+  only their layout (dbb39a74); Color and ColorSpace (fd124d8a), ColorMatrix (28fd6e26) and Matrix
+  (fa666ac3) are AOSP bytecode; lazy method stubs are 70% smaller (ab9f898b); a tab's realms share
+  CanvasKit, the platform jars and framework-res (a9d43bd3).
+- **Next: the rest of Stage C.2.** `fwtest android/graphics/` lists what the natives lack; the TS
+  references to re-home are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields
+  (167, which stay a layout), Bitmap (144), Path (96) and Typeface (52). Smaller, self-contained
+  cuts first: Path and PathMeasure (natives over `path.ts`), the ColorFilters and Shaders (their
+  natives return handles the TS Paint reads), Region, Outline, Camera, Interpolator; Paint, Canvas
+  and Bitmap last, with the view stack (Stage D).
+- **Memory, measured 2026-09-30.** A realm starts at about 91 MB of heap plus the jars; the native
+  core reserves 256 MiB of wasm memory per realm (untouched pages are not resident, and in V8 it
+  adds full GCs only when allocated, not in steady state). TikTok runs 5 realms and its JS heap is
+  2.1-3.8 GB (the top realm links 42,569 classes and installs 254k method stubs); its 360 MB of dex
+  is shared already (packed archives hand realms the page's bytes). GC was 29-37% of TikTok's main
+  thread in CPU profiles, and its wedges track host load: interleaved A/B batches of the same two
+  commits went 3/8 against 3/8.
 - **Open follow-ups.**
   - TikTok reaches `ActivityThread.installProvider` by reflection (unsafe fallthrough).
   - No system service is hosted behind binder (`binderServices` in `src/android/binder.ts` is empty),
@@ -667,7 +677,7 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,390 pass);
+- `bun run test` (1,388 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file`. Baselines are 40,085,
