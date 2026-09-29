@@ -2124,7 +2124,6 @@ class JAbsListIter extends JObj {
 const size = (o: unknown): Promise<number> => vcall(o, "size", "()I");
 const getAt = (o: unknown, i: number): Promise<unknown> => vcall(o, "get", "(I)Ljava/lang/Object;", i);
 const iterOf = (o: unknown): Promise<unknown> => vcall(o, "iterator", "()Ljava/util/Iterator;");
-const aeq = async (a: unknown, b: unknown) => { const r = jeq(a, b); return (r instanceof Promise ? await r : r) !== 0; };
 rt.register({
   name: "webdroid/AbstractListIter", ctor: JAbsListIter, ifaces: ["java/util/Iterator", "java/util/ListIterator"],
   methods: {
@@ -2226,7 +2225,7 @@ const absCollection: Methods = {
   }),
   "add(Ljava/lang/Object;)Z": uoe,
   "contains(Ljava/lang/Object;)Z": driven(function* (this: JObj, o: unknown): Gen {
-    for (const x of yield toJsArray(this)) if (yield aeq(x, o)) return 1;
+    for (const x of yield toJsArray(this)) if (yield jeq(x, o)) return 1;
     return 0;
   }),
   "containsAll(Ljava/util/Collection;)Z": driven(function* (this: JObj, c: unknown): Gen {
@@ -2237,7 +2236,7 @@ const absCollection: Methods = {
   "remove(Ljava/lang/Object;)Z": driven(function* (this: JObj, o: unknown): Gen {
     const it = yield iterOf(this);
     while (yield vcall(it, "hasNext", "()Z")) {
-      if (yield aeq(yield vcall(it, "next", "()Ljava/lang/Object;"), o)) { yield vcall(it, "remove", "()V"); return 1; }
+      if (yield jeq(yield vcall(it, "next", "()Ljava/lang/Object;"), o)) { yield vcall(it, "remove", "()V"); return 1; }
     }
     return 0;
   }),
@@ -2286,14 +2285,14 @@ const absList: Methods = {
   "indexOf(Ljava/lang/Object;)I": driven(function* (this: JAbstractList, o: unknown): Gen {
     const it = yield vcall(this, "listIterator", "()Ljava/util/ListIterator;");
     while (yield vcall(it, "hasNext", "()Z")) {
-      if (yield aeq(yield vcall(it, "next", "()Ljava/lang/Object;"), o)) return vcall(it, "previousIndex", "()I");
+      if (yield jeq(yield vcall(it, "next", "()Ljava/lang/Object;"), o)) return vcall(it, "previousIndex", "()I");
     }
     return -1;
   }),
   "lastIndexOf(Ljava/lang/Object;)I": driven(function* (this: JAbstractList, o: unknown): Gen {
     const it = yield vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", yield size(this));
     while (yield vcall(it, "hasPrevious", "()Z")) {
-      if (yield aeq(yield vcall(it, "previous", "()Ljava/lang/Object;"), o)) return vcall(it, "nextIndex", "()I");
+      if (yield jeq(yield vcall(it, "previous", "()Ljava/lang/Object;"), o)) return vcall(it, "nextIndex", "()I");
     }
     return -1;
   }),
@@ -2317,7 +2316,7 @@ const absList: Methods = {
     const a = yield vcall(this, "listIterator", "()Ljava/util/ListIterator;"), b = yield vcall(o, "listIterator", "()Ljava/util/ListIterator;");
     let more;
     while ((more = yield vcall(a, "hasNext", "()Z")) && (yield vcall(b, "hasNext", "()Z"))) {
-      if (!(yield aeq(yield vcall(a, "next", "()Ljava/lang/Object;"), yield vcall(b, "next", "()Ljava/lang/Object;")))) return 0;
+      if (!(yield jeq(yield vcall(a, "next", "()Ljava/lang/Object;"), yield vcall(b, "next", "()Ljava/lang/Object;")))) return 0;
     }
     return more || (yield vcall(b, "hasNext", "()Z")) ? 0 : 1;
   }),
@@ -2348,7 +2347,7 @@ const mapEntries = driven(function* mapEntries(m: unknown): Gen<unknown[]> { ret
 const entryKey = (e: unknown) => vcall(e, "getKey", "()Ljava/lang/Object;");
 const entryVal = (e: unknown) => vcall(e, "getValue", "()Ljava/lang/Object;");
 const findEntry = driven(function* findEntry(m: unknown, k: unknown): Gen {
-  for (const e of yield mapEntries(m)) if (yield aeq(yield entryKey(e), k)) return e;
+  for (const e of yield mapEntries(m)) if (yield jeq(yield entryKey(e), k)) return e;
   return null;
 });
 const absMap: Methods = {
@@ -2365,7 +2364,7 @@ const absMap: Methods = {
   }),
   "containsKey(Ljava/lang/Object;)Z": driven(function* (this: JObj, k: unknown): Gen { return (yield findEntry(this, k)) ? 1 : 0; }),
   "containsValue(Ljava/lang/Object;)Z": driven(function* (this: JObj, v: unknown): Gen {
-    for (const e of yield mapEntries(this)) if (yield aeq(yield entryVal(e), v)) return 1;
+    for (const e of yield mapEntries(this)) if (yield jeq(yield entryVal(e), v)) return 1;
     return 0;
   }),
   "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": uoe,
@@ -2378,7 +2377,7 @@ const absMap: Methods = {
     const it = yield iterOf(yield vcall(this, "entrySet", "()Ljava/util/Set;"));
     while (yield vcall(it, "hasNext", "()Z")) {
       const e = yield vcall(it, "next", "()Ljava/lang/Object;");
-      if (yield aeq(yield entryKey(e), k)) { const v = yield entryVal(e); yield vcall(it, "remove", "()V"); return v; }
+      if (yield jeq(yield entryKey(e), k)) { const v = yield entryVal(e); yield vcall(it, "remove", "()V"); return v; }
     }
     return null;
   }),
@@ -2401,7 +2400,7 @@ const absMap: Methods = {
       const k = yield entryKey(e), v = yield entryVal(e);
       if (v === null) {
         if (!(yield vcall(o, "containsKey", "(Ljava/lang/Object;)Z", k)) || (yield vcall(o, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k)) !== null) return 0;
-      } else if (!(yield aeq(v, yield vcall(o, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k)))) return 0;
+      } else if (!(yield jeq(v, yield vcall(o, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k)))) return 0;
     }
     return 1;
   }),
@@ -2558,7 +2557,7 @@ const mapDefaults: Methods = {
     for (const e of yield mapEntries(this)) yield vcall(e, "setValue", `(${O})${O}`, yield vcall(fn, "apply", `(${O}${O})${O}`, yield entryKey(e), yield entryVal(e)));
   }),
   "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": driven(function* (this: JObj, k: unknown, v: unknown): Gen {
-    if (!(yield vcall(this, "containsKey", HAS, k)) || !(yield aeq(yield vcall(this, "get", GET, k), v))) return 0;
+    if (!(yield vcall(this, "containsKey", HAS, k)) || !(yield jeq(yield vcall(this, "get", GET, k), v))) return 0;
     yield vcall(this, "remove", `(${O})${O}`, k);
     return 1;
   }),
