@@ -10,11 +10,10 @@
 import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { stringHash, newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
+import { newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8, sameBytes, mangleMethod } from "../abi";
 import { type JBAOS, noMark } from "./jio";
-import { vfs } from "../../shell/vfs";
 import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
@@ -640,7 +639,6 @@ rt.register({
 // ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
 // raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
-defineException("java/net/MalformedURLException", "java/io/IOException");
 // the abstract socket implementation an app may subclass to reach a socket's descriptor
 rt.register({ name: "java/net/SocketImpl", ctor: class extends JObj { fd: unknown = null; }, fields: { fd: "fd" }, methods: { "<init>()V": function () {} } });
 defineException("java/net/ProtocolException", "java/io/IOException");
@@ -649,91 +647,26 @@ defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLExcepti
 defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLProtocolException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLKeyException", "javax/net/ssl/SSLException");
-const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
-const DEFAULT_PORT: Record<string, number> = { "http:": 80, "https:": 443, "ftp:": 21 };
-const userInfo = (u: URL) => u.username ? u.username + (u.password ? ":" + u.password : "") : null;
-
-class JURL extends JObj {
-  spec = ""; u!: URL; emptyAuthority = false; emptyPath = false;
-  open(): JURLConnection {
-    if (this.emptyAuthority) throw rt.mkThrowable("java/net/UnknownHostException", "");
-    const https = this.u.protocol === "https:";
-    if (this.u.protocol === "jar:") { const c = rt.make("java/net/JarURLConnection") as JURLConnection; c.url = this; return c; }
-    if (!https && this.u.protocol !== "http:") throw rt.unimplemented("URL.openConnection " + this.u.protocol);
-    const c = rt.make(https ? "javax/net/ssl/HttpsURLConnection" : "java/net/HttpURLConnection") as JURLConnection;
-    c.url = this;
-    if (c instanceof JHttpsURLConnection) { c.sslFactory = defaultHttpsFactory; c.hostnameVerifier = defaultHostnameVerifier; }
-    return c;
-  }
-}
-/** Java keeps the spec string it was given (toString round-trips); only a resolved URL is re-serialised */
-function urlInit(r: JURL, spec: string | null, base?: URL): JURL {
-  const s = String(spec);
-  // Android accepts an empty authority; WHATWG URL needs a host for these schemes.
-  const empty = !base && /^(https?|ftp):\/\/(?=\/|[?#]|$)/i.test(s);
-  try { r.u = new URL(empty ? s.replace("://", "://webdroid.invalid") : s, base); } catch {
-    throw rt.mkThrowable("java/net/MalformedURLException", /^[a-z][a-z0-9+.-]*:/i.test(s) ? s : "no protocol: " + s);
-  }
-  if (!SCHEMES.test(r.u.protocol)) throw rt.mkThrowable("java/net/MalformedURLException", "unknown protocol: " + r.u.protocol.slice(0, -1));
-  r.emptyAuthority = empty;
-  r.emptyPath = empty && !s.slice(s.indexOf("://") + 3).startsWith("/");
-  r.spec = base ? r.u.href : s;
-  return r;
-}
-const urlKey = (r: JURL) => r.emptyAuthority ? r.u.protocol + "//" + (r.emptyPath ? "" : r.u.pathname) + r.u.search + r.u.hash : r.u.href;
-const urlFile = (r: JURL) => (r.emptyPath ? "" : r.u.pathname) + r.u.search;
-const mkURL = (spec: string) => urlInit(new JURL(), spec);
-rt.register({
-  name: "java/net/URL", ctor: JURL, ifaces: ["java/io/Serializable"],
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JURL, s: string) { urlInit(this, s); },
-    "<init>(Ljava/net/URL;Ljava/lang/String;)V": function (this: JURL, ctx: JURL | null, s: string) { urlInit(this, s, ctx?.u); },
-    // Java concatenates "file" verbatim after the authority, so a file without a leading "/" fuses with the host
-    "<init>(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;)V": function (this: JURL, p: string, h: string, port: number, file: string) {
-      urlInit(this, p + ":" + (h ? "//" + h + (port === -1 ? "" : ":" + port) : "") + (file ?? ""));
-    },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURL, p: string, h: string, file: string) {
-      urlInit(this, p + ":" + (h ? "//" + h : "") + (file ?? ""));
-    },
-    "getProtocol()Ljava/lang/String;": function (this: JURL) { return this.u.protocol.slice(0, -1); },
-    "getHost()Ljava/lang/String;": function (this: JURL) { return this.emptyAuthority ? "" : this.u.hostname; },
-    "getPort()I": function (this: JURL) { return this.u.port ? Number(this.u.port) : -1; },
-    "getDefaultPort()I": function (this: JURL) { return DEFAULT_PORT[this.u.protocol] ?? -1; },
-    "getPath()Ljava/lang/String;": function (this: JURL) { return this.emptyPath ? "" : this.u.pathname; },
-    "getQuery()Ljava/lang/String;": function (this: JURL) { return this.u.search ? this.u.search.slice(1) : null; },
-    "getFile()Ljava/lang/String;": function (this: JURL) { return urlFile(this); },
-    "getRef()Ljava/lang/String;": function (this: JURL) { return this.u.hash ? this.u.hash.slice(1) : null; },
-    "getUserInfo()Ljava/lang/String;": function (this: JURL) { return userInfo(this.u); },
-    "getAuthority()Ljava/lang/String;": function (this: JURL) { const ui = userInfo(this.u); return this.emptyAuthority ? "" : (ui ? ui + "@" : "") + this.u.host; },
-    "toExternalForm()Ljava/lang/String;": function (this: JURL) { return this.spec; },
-    "toString()Ljava/lang/String;": function (this: JURL) { return this.spec; },
-    "toURI()Ljava/net/URI;": function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); },
-    "equals(Ljava/lang/Object;)Z": function (this: JURL, o: unknown) { return o instanceof JURL && urlKey(o) === urlKey(this) ? 1 : 0; },
-    "sameFile(Ljava/net/URL;)Z": function (this: JURL, o: JURL | null) { return o && urlKey(o).split("#")[0] === urlKey(this).split("#")[0] ? 1 : 0; },
-    // over the normalised form, not the spec, so equal URLs hash alike as Object requires
-    "hashCode()I": function (this: JURL) { return stringHash(urlKey(this)); },
-    "openConnection()Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
-    "openConnection(Ljava/net/Proxy;)Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
-    "openStream()Ljava/io/InputStream;": driven(function* (this: JURL): Gen {
-      if (this.u.protocol === "jar:") {
-        const split = this.spec.indexOf("!/");
-        if (split < 0) throw rt.mkThrowable("java/io/IOException", this.spec);
-        const archive = new URL(this.spec.slice(4, split));
-        if (archive.protocol !== "file:") throw rt.mkThrowable("java/io/IOException", this.spec);
-        const zip = yield newObj("java/util/zip/ZipFile", "(Ljava/lang/String;)V", decodeURIComponent(archive.pathname));
-        const entry = yield vcall(zip, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;", decodeURIComponent(this.spec.slice(split + 2)));
-        if (!entry) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
-        return vcall(zip, "getInputStream", "(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;", entry);
-      }
-      if (this.u.protocol === "file:") {
-        const bytes = yield vfs.readFile(decodeURIComponent(this.u.pathname));
-        if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
-        return newObj("java/io/ByteArrayInputStream", "([B)V", i8(bytes));
-      }
-      return vcall(this.open(), "getInputStream", "()Ljava/io/InputStream;");
-    }),
-  },
+/** a URL's external form, through its Java API */
+const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/String;") as string | Promise<string>;
+// URL.createBuiltinHandler instantiates these by name for http and https, as OkHttp's are on a
+// device; their connections are the fetch-backed ones below.
+class JHttpHandler extends JObj {}
+const openHttp = (cls: string) => function (url: unknown, proxy?: unknown) {
+  if (url === null || proxy === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "url == null || proxy == null");
+  const c = rt.make(cls) as JURLConnection;
+  c.url = url;
+  if (c instanceof JHttpsURLConnection) { c.sslFactory = defaultHttpsFactory; c.hostnameVerifier = defaultHostnameVerifier; }
+  return c;
+};
+const handlerMethods = (cls: string, port: number) => ({
+  "<init>()V": function () {},
+  "getDefaultPort()I": () => port,
+  "openConnection(Ljava/net/URL;)Ljava/net/URLConnection;": openHttp(cls),
+  "openConnection(Ljava/net/URL;Ljava/net/Proxy;)Ljava/net/URLConnection;": openHttp(cls),
 });
+rt.register({ name: "com/android/okhttp/HttpHandler", ctor: JHttpHandler, sup: "java/net/URLStreamHandler", methods: handlerMethods("java/net/HttpURLConnection", 80) });
+rt.register({ name: "com/android/okhttp/HttpsHandler", ctor: class extends JHttpHandler {}, sup: "com/android/okhttp/HttpHandler", methods: handlerMethods("javax/net/ssl/HttpsURLConnection", 443) });
 class JHttpInputStream extends JObj {
   reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   timeout: () => number = () => 0;
@@ -815,7 +748,7 @@ function cookieURI(target: string): Promise<unknown> {
 }
 let followRedirects = 1, defaultUseCaches = 1;
 class JURLConnection extends JObj {
-  url!: JURL;
+  url: unknown = null;
   method = "GET"; follow = followRedirects; doOut = 0; doIn = 1; useCaches = defaultUseCaches;
   allowUserInteraction = 0;
   /** the protected field a subclass implementing its own transport maintains; ours reads res */
@@ -843,7 +776,10 @@ class JURLConnection extends JObj {
     // Android's engine adds http.agent to requests that set no User-Agent
     if (!base.has("x-wd-user-agent") && sysProps["http.agent"]) base.set("x-wd-user-agent", sysProps["http.agent"]);
     if (this.ifMod) base.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
-    let method = this.method, target = this.url.spec, r: Response, hdrs: [string, string][], length: string | null;
+    const spec = await urlText(this.url);
+    // OkHttp's HttpUrl.getChecked
+    if (!await vcall(this.url, "getHost", "()Ljava/lang/String;")) throw rt.mkThrowable("java/net/UnknownHostException", "Invalid host: " + spec);
+    let method = this.method, target = spec, r: Response, hdrs: [string, string][], length: string | null;
     let body = this.out && method !== "GET" && method !== "HEAD" ? this.out.bytes().slice() : undefined;
     // Redirects are followed here, one proxy hop each, because the process CookieHandler that
     // Android's HttpURLConnection consults around every exchange must see each hop's URL.
@@ -893,7 +829,7 @@ class JURLConnection extends JObj {
       if (new URL(next).origin !== new URL(target).origin) base.delete("x-wd-authorization");
       target = next;
     }
-    if (target !== this.url.u.href) this.url = mkURL(target);   // getURL() reports where a redirect landed
+    if (target !== spec) this.url = await newObj("java/net/URL", "(Ljava/lang/String;)V", target);   // getURL() reports where a redirect landed
     const stream = new JHttpInputStream();
     stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
     const status = Number(r.headers.get("x-wd-status")) || r.status;
@@ -918,35 +854,28 @@ function withRes<A extends unknown[], C extends JURLConnection = JURLConnection>
 const header = (c: JURLConnection, name: string): string | null | Promise<string | null> =>
   vcall(c, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", name);
 const asLong = (v: string | null, d: bigint) => v && /^\s*-?\d+\s*$/.test(v) ? BigInt(v.trim()) : d;
-// a jar: URL names an entry of an archive on the class path; the stream is the URL's own openStream
-rt.register({
-  name: "java/net/JarURLConnection", ctor: class extends JURLConnection {}, sup: "java/net/URLConnection",
-  methods: {
-    "connect()V": () => {},
-    "getInputStream()Ljava/io/InputStream;": function (this: JURLConnection) { return vcall(this.url, "openStream", "()Ljava/io/InputStream;"); },
-    "getContentLength()I": () => -1,
-    "getContentLengthLong()J": () => -1n,
-    "getContentType()Ljava/lang/String;": () => null,
-    "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": () => null,
-  },
-});
 rt.register({
   name: "java/net/URLConnection", ctor: JURLConnection,
   fields: { connected: "connected", url: "url", doInput: "doIn", doOutput: "doOut", useCaches: "useCaches" },
+  // the platform getFileNameMap/setFileNameMap keep the map here
+  statics: { fileNameMap: null },
   methods: {
     "static guessContentTypeFromName(Ljava/lang/String;)Ljava/lang/String;": (name: string | null) => mimeFromFilename(name ?? rt.npe()),
-    "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
+    "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: unknown) { this.url = u; },
     "connect()V": driven(function* (this: JURLConnection): Gen {
       this.connected = 1;
       // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
       if (!this.doOut) yield this.connect();
     }),
     "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
-    "getInputStream()Ljava/io/InputStream;": withRes(function (r) {
+    "getInputStream()Ljava/io/InputStream;": withRes(async function (r) {
       if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
-      if (r.status >= 400) throw r.status === 404 || r.status === 410
-        ? rt.mkThrowable("java/io/FileNotFoundException", this.url.spec)
-        : rt.mkThrowable("java/io/IOException", `Server returned HTTP response code: ${r.status} for URL: ${this.url.spec}`);
+      if (r.status >= 400) {
+        const spec = await urlText(this.url);
+        throw r.status === 404 || r.status === 410
+          ? rt.mkThrowable("java/io/FileNotFoundException", spec)
+          : rt.mkThrowable("java/io/IOException", `Server returned HTTP response code: ${r.status} for URL: ${spec}`);
+      }
       return this.stream();
     }),
     "getOutputStream()Ljava/io/OutputStream;": function (this: JURLConnection) {
@@ -1008,7 +937,7 @@ rt.register({
     },
     "getContentLengthLong()J": function (this: JURLConnection) { return vcall(this, "getHeaderFieldLong", "(Ljava/lang/String;J)J", "content-length", -1n); },
     "toString()Ljava/lang/String;": function (this: JURLConnection) {
-      return dotName((this.constructor as typeof JObj).$i.name) + ":" + this.url.spec;
+      return after(urlText(this.url), (spec) => dotName((this.constructor as typeof JObj).$i.name) + ":" + spec);
     },
   },
 });
@@ -1097,7 +1026,7 @@ let defaultHostnameVerifier: unknown = platformHostnameVerifier;
 rt.register({
   name: "javax/net/ssl/HttpsURLConnection", ctor: JHttpsURLConnection, sup: "java/net/HttpURLConnection",
   methods: {
-    "<init>(Ljava/net/URL;)V": function (this: JHttpsURLConnection, url: JURL) {
+    "<init>(Ljava/net/URL;)V": function (this: JHttpsURLConnection, url: unknown) {
       this.url = url; this.sslFactory = defaultHttpsFactory; this.hostnameVerifier = defaultHostnameVerifier;
     },
     "setHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": function (this: JHttpsURLConnection, verifier: unknown) {
@@ -1127,9 +1056,11 @@ rt.register({
       return after(vcall(this, "getLocalCertificates", "()[Ljava/security/cert/Certificate;") as unknown[] | null, (certs) => certs === null ? null : subjectOf(certs));
     },
     "getServerCertificates()[Ljava/security/cert/Certificate;": function (this: JHttpsURLConnection) {
-      const cert = rt.make("java/security/cert/X509Certificate") as JX509;
-      cert.host = this.url.u.hostname; cert.relayPeer = true;
-      return jarray([cert], "Ljava/security/cert/Certificate;");
+      return after(vcall(this.url, "getHost", "()Ljava/lang/String;") as string | Promise<string>, (host) => {
+        const cert = rt.make("java/security/cert/X509Certificate") as JX509;
+        cert.host = host; cert.relayPeer = true;
+        return jarray([cert], "Ljava/security/cert/Certificate;");
+      });
     },
     "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
       return after(vcall(this, "getServerCertificates", "()[Ljava/security/cert/Certificate;") as unknown[], subjectOf);

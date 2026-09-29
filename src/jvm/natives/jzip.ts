@@ -3,11 +3,11 @@
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
-import { vcall, newObj, defineException, checkFromIndexSize } from "./jlang";
+import { vcall, newObj, after, defineException, checkFromIndexSize } from "./jlang";
 import { pathOf, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { JBuffer } from "./jnio";
-import { mkIter } from "./jutil";
+import { mkIter, newArrayList } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib | Gzip;
@@ -431,6 +431,10 @@ rt.register({
   statics: { STORED: 0, DEFLATED: 8 },
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JZipEntry, name: string) { this.e = { ...UNKNOWN, name }; },
+    "<init>(Ljava/util/zip/ZipEntry;)V": function (this: JZipEntry, entry: JZipEntry | null) {
+      if (!entry) throw rt.mkThrowable("java/lang/NullPointerException", "entry");
+      this.e = { ...entry.e };
+    },
     "getName()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
     "getSize()J": function (this: JZipEntry) { return BigInt(this.e.size); },
     "getCompressedSize()J": function (this: JZipEntry) { return BigInt(this.e.csize); },
@@ -536,18 +540,49 @@ async function openZip(this: JZipFile, path: string) {
   throw rt.mkThrowable("java/io/FileNotFoundException", path + " (No such file or directory)");
 }
 const openZipFile = function (this: JZipFile, f: JObj) { return openZip.call(this, pathOf(f)); };
+/** a JarFile's entries are its own JarEntry subclass, as ZipFile.getZipEntry makes them */
+function entryOf(zip: JZipFile, e: ZEntry): JZipEntry | Promise<JZipEntry> {
+  if (!rt.iof(zip, "java/util/jar/JarFile")) return mkZipEntry(e);
+  return after(vcall(zip, "entryFor", "(Ljava/lang/String;)Ljava/util/jar/JarEntry;", e.name) as JZipEntry | Promise<JZipEntry>, (entry) => { entry.e = e; return entry; });
+}
+/** the manifest and signature files JarFile verifies with, as ZipFile.Source indexes them:
+ *  META-INF/MANIFEST.MF and META-INF's own .SF, .DSA, .RSA and .EC files, ignoring case */
+function jarMeta(zip: JZipFile): { manifest: string | null; signatures: string[] } {
+  let manifest: string | null = null;
+  const signatures: string[] = [];
+  for (const name of zip.entries.keys()) {
+    const upper = name.toUpperCase();
+    if (!upper.startsWith("META-INF/")) continue;
+    if (upper === "META-INF/MANIFEST.MF") manifest ??= name;
+    else if (!upper.includes("/", 9) && /\.(SF|DSA|RSA|EC)$/.test(upper)) signatures.push(name);
+  }
+  return { manifest, signatures };
+}
 rt.register({
   name: "java/util/zip/ZipFile", ctor: JZipFile, ifaces: ["java/io/Closeable"],
   methods: {
     "<init>(Ljava/lang/String;)V": openZip,
     "<init>(Ljava/io/File;)V": openZipFile,
     "<init>(Ljava/io/File;I)V": openZipFile,
+    "<init>(Ljava/io/File;IZ)V": openZipFile,
     "getName()Ljava/lang/String;": function (this: JZipFile) { return this.name; },
+    "getManifestName(Z)Ljava/lang/String;": function (this: JZipFile, onlyIfSigned: number) {
+      const { manifest, signatures } = jarMeta(this);
+      return onlyIfSigned && !signatures.length ? null : manifest;
+    },
+    "getManifestAndSignatureRelatedFiles()Ljava/util/List;": function (this: JZipFile) {
+      const { manifest, signatures } = jarMeta(this);
+      return newArrayList(manifest ? [manifest, ...signatures] : signatures);
+    },
     "size()I": function (this: JZipFile) { return this.entries.size; },
-    "entries()Ljava/util/Enumeration;": function (this: JZipFile) { return mkIter([...this.entries.values()].map(mkZipEntry)); },
+    "entries()Ljava/util/Enumeration;": driven(function* (this: JZipFile): Gen {
+      const entries = [];
+      for (const e of this.entries.values()) entries.push(yield entryOf(this, e));
+      return mkIter(entries);
+    }),
     "getEntry(Ljava/lang/String;)Ljava/util/zip/ZipEntry;": function (this: JZipFile, name: string) {
       const e = this.entries.get(name) ?? this.entries.get(name + "/");
-      return e ? mkZipEntry(e) : null;
+      return e ? entryOf(this, e) : null;
     },
     "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": driven(function* (this: JZipFile, ze: JZipEntry): Gen {
       const e = this.entries.get(ze.e.name);
