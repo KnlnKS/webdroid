@@ -325,6 +325,7 @@ function installProbe(cfg: ProbeConfig): void {
   };
   const step = async (spec: StepSpec): Promise<StepResult> => {
     const wd = g.wd;
+    wd.mainDbg.trace = true;
     wd.perfReset();
     shots.length = 0; shotHash = -1; shooting = cfg.shots;
     const t0 = performance.now();
@@ -345,6 +346,7 @@ function installProbe(cfg: ProbeConfig): void {
     const alive = wd.alive(spec.aliveMs);
     const wedged = !(controlled ? await wd.guestClock.drive(alive, spec.aliveMs) : await alive);
     const livenessMs = performance.now() - aliveAt;
+    if (wedged) error = `WEDGE ${Date.now() - wd.mainDbg.started}ms depth=${wd.mainDbg.depth} q=${wd.mainDbg.queued} phase=${wd.mainDbg.phase} ${wd.mainDbg.running.split("\n").slice(1, 30).map((l: string) => l.trim().replace(/\(?http:\S*\//, "")).join(" | ")}`;
     shooting = false;
     const captureAt = performance.now();
     const png = spec.capture ? await capture() : null;

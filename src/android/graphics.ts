@@ -3,7 +3,7 @@
 import { displayListLength, isRecording, nestedRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
-import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
@@ -601,47 +601,13 @@ rt.register({
 });
 rt.markers("android/graphics/ColorFilter");
 // ── ColorMatrix: AOSP's row-major 4x5, and the filter that carries a copy of one
-class JColorMatrix extends JObj { a = identityMatrix(); }
 function identityMatrix(): Float32Array { const m = new Float32Array(20); m[0] = m[6] = m[12] = m[18] = 1; return m; }
 function setMatrix(dst: Float32Array, src: Float32Array): void {
   if (src.length < 20) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(src.length));
   dst.set(src.subarray(0, 20));
 }
-function concat(a: Float32Array, b: Float32Array): Float32Array {
-  const out = new Float32Array(20);
-  for (let j = 0; j < 20; j += 5) {
-    for (let i = 0; i < 4; i++) out[j + i] = a[j] * b[i] + a[j + 1] * b[5 + i] + a[j + 2] * b[10 + i] + a[j + 3] * b[15 + i];
-    out[j + 4] = a[j] * b[4] + a[j + 1] * b[9] + a[j + 2] * b[14] + a[j + 3] * b[19] + a[j + 4];
-  }
-  return out;
-}
-rt.register({
-  name: "android/graphics/ColorMatrix", ctor: JColorMatrix,
-  methods: {
-    "<init>()V": function () {},
-    "<init>([F)V": function (this: JColorMatrix, src: Float32Array) { setMatrix(this.a, src); },
-    "<init>(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, src: JColorMatrix) { this.a.set(src.a); },
-    "getArray()[F": function (this: JColorMatrix) { return this.a; },
-    "reset()V": function (this: JColorMatrix) { this.a.fill(0); this.a[0] = this.a[6] = this.a[12] = this.a[18] = 1; },
-    "set(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, src: JColorMatrix) { this.a.set(src.a); },
-    "set([F)V": function (this: JColorMatrix, src: Float32Array) { setMatrix(this.a, src); },
-    "setScale(FFFF)V": function (this: JColorMatrix, r: number, g: number, b: number, a: number) {
-      this.a.fill(0); this.a[0] = r; this.a[6] = g; this.a[12] = b; this.a[18] = a;
-    },
-    "setSaturation(F)V": function (this: JColorMatrix, sat: number) {
-      const m = this.a, inv = 1 - sat, R = 0.213 * inv, G = 0.715 * inv, B = 0.072 * inv;
-      m.fill(0);
-      m[0] = R + sat; m[1] = G; m[2] = B;
-      m[5] = R; m[6] = G + sat; m[7] = B;
-      m[10] = R; m[11] = G; m[12] = B + sat;
-      m[18] = 1;
-    },
-    "setConcat(Landroid/graphics/ColorMatrix;Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, a: JColorMatrix, b: JColorMatrix) { this.a.set(concat(a.a, b.a)); },
-    "preConcat(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, pre: JColorMatrix) { this.a.set(concat(this.a, pre.a)); },
-    "postConcat(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, post: JColorMatrix) { this.a.set(concat(post.a, this.a)); },
-    "equals(Ljava/lang/Object;)Z": function (this: JColorMatrix, o: unknown) { return o instanceof JColorMatrix && o.a.every((v, i) => v === this.a[i]) ? 1 : 0; },
-  },
-});
+/** a ColorMatrix's 4x5 row-major array */
+const colorMatrixArray = (m: unknown) => (m as Record<string, Float32Array>)[declaredField("android/graphics/ColorMatrix", "mArray")];
 class JColorMatrixColorFilter extends JObj { matrix = identityMatrix(); }
 class JLightingColorFilter extends JObj {
   mul = 0; add = 0; matrix = identityMatrix();
@@ -664,9 +630,9 @@ rt.register({
 rt.register({
   name: "android/graphics/ColorMatrixColorFilter", ctor: JColorMatrixColorFilter, sup: "android/graphics/ColorFilter",
   methods: {
-    "<init>(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, m: JColorMatrix) { this.matrix.set(m.a); },
+    "<init>(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, m: unknown) { this.matrix.set(colorMatrixArray(m)); },
     "<init>([F)V": function (this: JColorMatrixColorFilter, src: Float32Array) { setMatrix(this.matrix, src); },
-    "getColorMatrix(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, out: JColorMatrix) { out.a.set(this.matrix); },
+    "getColorMatrix(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, out: unknown) { colorMatrixArray(out).set(this.matrix); },
   },
 });
 /** ColorSpace.get(Named.SRGB), what a 2D context's pixels are in */
