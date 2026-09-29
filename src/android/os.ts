@@ -1005,6 +1005,7 @@ rt.register({
     "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
     "isEncrypted(Ljava/io/File;)Z": () => 0,
     "getStorageVolumes()Ljava/util/List;": () => newArrayList([primaryVolume()]),
+    "getVolumeList()[Landroid/os/storage/StorageVolume;": () => jarray([primaryVolume()], "Landroid/os/storage/StorageVolume;"),
     "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": primaryVolume,
     "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": (file: JObj | null) => {
       if (!file) rt.npe();
@@ -1017,6 +1018,7 @@ rt.register({
   name: "android/os/storage/StorageVolume", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
   methods: {
     "getDirectory()Ljava/io/File;": () => newFile(SHARED),
+    "getPath()Ljava/lang/String;": () => SHARED,
     "getDescription(Landroid/content/Context;)Ljava/lang/String;": () => frameworkString("storage_internal") ?? "",
     "getState()Ljava/lang/String;": () => "mounted",
     "getMediaStoreVolumeName()Ljava/lang/String;": () => "external_primary",
@@ -1152,10 +1154,18 @@ export const runFrameCallbacks = driven(function* runFrameCallbacks(cbs: FrameCa
   }
 });
 const nonNull = (cb: unknown): void => { if (cb == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "callback must not be null"); };
+/** AOSP's marker for a record whose action is a FrameCallback rather than a Runnable */
+let frameCallbackToken: JObj | null = null;
+const FRAME_CALLBACK_TOKEN = () => frameCallbackToken ??= rt.make("java/lang/Object");
 rt.register({
   name: "android/view/Choreographer", ctor: JChoreographer,
   fields: ["mLastFrameTimeNanos"],
+  statics: { get FRAME_CALLBACK_TOKEN() { return FRAME_CALLBACK_TOKEN(); } },
   methods: {
+    "postCallbackDelayedInternal(ILjava/lang/Object;Ljava/lang/Object;J)V": function (this: JChoreographer, _type: number, action: unknown, token: unknown, d: bigint) {
+      const cb = token === FRAME_CALLBACK_TOKEN() ? { frame: action } : { run: action };
+      if (d > 0n) setGuestTimeout(() => this.post(cb), Number(d)); else this.post(cb);
+    },
     "static getInstance()Landroid/view/Choreographer;": () => {
       const looper = curThread.looper as JLooper | undefined;
       if (!looper) throw rt.mkThrowable("java/lang/IllegalStateException", "The current thread must have a looper!");
