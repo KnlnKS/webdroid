@@ -2,6 +2,7 @@ import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface } from "canvaskit-wasm";
 import { shapeLigatures } from "./text-shaping";
+import { pageShared } from "../shell/pageshared";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -59,7 +60,14 @@ function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
   return clips;
 }
 
+// A process realm draws with its page's CanvasKit: the tab's realms share one thread, so one wasm
+// heap and one set of fonts serve them all rather than one per process.
+type SkiaText = { loadSkiaText: typeof loadSkiaText; drawSkiaText: typeof drawSkiaText };
+declare global { interface Window { __wdSkiaText?: SkiaText } }
+const page = pageShared("__wdSkiaText", () => ({ loadSkiaText, drawSkiaText }));
+
 export function loadSkiaText(): Promise<void> {
+  if (page.loadSkiaText !== loadSkiaText) return page.loadSkiaText();
   return loading ??= Promise.all([
     CanvasKitInit({ locateFile: () => `/canvaskit.wasm?v=${canvasKitVersion}` }),
     fetch("/vendor/fonts/Roboto-Regular.ttf").then(response => response.arrayBuffer()),
@@ -79,6 +87,7 @@ export function loadSkiaText(): Promise<void> {
 
 export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size: number, color: number,
   style: "fill" | "hairline" = "fill", subpixel = false): boolean {
+  if (page.drawSkiaText !== drawSkiaText) return page.drawSkiaText(ctx, text, x, y, size, color, style, subpixel);
   if (!kit || !face || !text || !Number.isFinite(size) || size <= 0) return false;
   const shaped = shapeLigatures(text);
   const hasLigature = shaped !== text;
