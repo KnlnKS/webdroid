@@ -632,6 +632,8 @@ Known flakes, which are not regressions:
 - TikTok `swipe-again` wedges under parallel load and passes alone.
 - YouTube `video-open` passes about 2 times in 5, with or without changes.
 - Komikku's restore step rarely throws a DOM "file not found" error; it was not shown to be new.
+- Komikku's step after "Get started" occasionally settles on pixels mid-transition, so the next tap
+  misses (2 of 14 parallel runs after the logging flip, 0 of 24 before; step times match).
 - Resy times out.
 - `TCKInstant` has one test whose name embeds `Instant.now()`.
 - Cold Mihon `light` in `lat` sits around 150 ms and fails the 150 ms gate about 2 times in 7;
