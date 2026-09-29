@@ -377,8 +377,10 @@ const contextMethods: NativeSpec["methods"] = {
   "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": function (this: JContext, name: string) {
     return newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);
   },
-  "openFileOutput(Ljava/lang/String;I)Ljava/io/FileOutputStream;": function (this: JContext, name: string) {
-    return newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);
+  // ContextImpl creates the files directory on first use; MODE_APPEND is 0x8000
+  "openFileOutput(Ljava/lang/String;I)Ljava/io/FileOutputStream;": function (this: JContext, name: string, mode: number) {
+    vfs.mkdir(`/data/data/${this.$host.pkg}/files`);
+    return newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", `/data/data/${this.$host.pkg}/files/${name}`, mode & 0x8000 ? 1 : 0);
   },
   "deleteFile(Ljava/lang/String;)Z": function (this: JContext, name: string) {
     return vfs.delete(`/data/data/${this.$host.pkg}/files/${name}`) ? 1 : 0;
