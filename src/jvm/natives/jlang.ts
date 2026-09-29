@@ -119,7 +119,7 @@ function javaToJs(src: string): [string, string] {
   });
   out = out.replace(/\\Q([\s\S]*?)(?:\\E|$)/g, (_m, lit: string) => lit.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&"));
   out = out.replace(/\\([AZzh])/g, (_m, c: string) => c === "A" ? "^" : c === "h" ? "[ \\t\\xA0]" : "$");
-  out = out.replace(/([*+?}])\+/g, "$1");
+  out = out.replace(/([*+?]|\{\d+(?:,\d*)?\})\+/g, "$1");
   out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
     const cls = POSIX[name];
     return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
