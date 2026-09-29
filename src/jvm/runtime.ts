@@ -40,6 +40,8 @@ export interface NativeSpec {
   fields?: Record<string, string> | string[];
   /** run once at init — for expensive static setup */
   clinit?: () => void | Promise<void>;
+  /** the platform class's `<clinit>` runs at init, so its statics are the platform's */
+  platformClinit?: boolean;
   /** the class's own type-variable names ("E", "K,V"). A bytecode class carries these in its
    *  signature annotation; a native one declares them here, and each interface it implements is
    *  reported parameterized with as many of them as that interface declares — which is how a
@@ -335,7 +337,7 @@ export class Runtime {
     let text = "";
     for (const name of [...this.natives.keys()].filter((n) => this.dexIndex.has(n)).sort()) {
       const spec = this.natives.get(name)!;
-      text += `${name}<${spec.sup ?? ""}|${spec.ifaces ?? ""}|${Object.keys(spec.methods ?? {})};`;
+      text += `${name}<${spec.sup ?? ""}|${spec.ifaces ?? ""}|${!!spec.platformClinit}|${Object.keys(spec.methods ?? {})};`;
     }
     for (const d of this.dexes) text += d.id;
     return hash36(text);
@@ -674,7 +676,7 @@ export class Runtime {
     // serialized state is the class's own instance fields, which JNI and reflection also reach
     for (const f of spec.serialization?.fields ?? []) if (!info.fieldTable.has(f.name)) info.fieldTable.set(f.name, f.prop);
     ctorAny.$i = info;
-    info.state = spec.clinit ? 0 : 2;
+    info.state = spec.clinit || spec.platformClinit ? 0 : 2;
     info.compiled = true;
     if (this.platformClasses.has(info.name)) this.fallThrough(info);
   }
@@ -694,7 +696,7 @@ export class Runtime {
       const prop = mangleStaticField(dex.field(def.staticFields[i].fieldIdx).name);
       if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = this.encToJs(dex, value);
     });
-    const lists = [def.directMethods, def.virtualMethods], R = this, cls = info.name;
+    const lists = [def.directMethods, def.virtualMethods], R = this, cls = info.name, platformClinit = this.natives.get(cls)?.platformClinit;
     const fill = ([list, index, mangled, kind]: Gap) => {
       const m = lists[list][index], isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
       if (kind === 2) { target[mangled] = info.superInfo!.ctor.prototype[mangled]; return; }
@@ -717,7 +719,7 @@ export class Runtime {
       const own = isStatic || l === 0 && name !== "<init>";
       // what a subclass reaches from java.lang.Object alone is no implementation of the spec's
       const base = proto === JObj.prototype ? undefined : JObj.prototype[mangled as never];
-      if (name === "<clinit>" || (own ? Object.hasOwn(target, mangled) : mangled in target && target[mangled] !== base)) return;
+      if (name === "<clinit>" ? !platformClinit : own ? Object.hasOwn(target, mangled) : mangled in target && target[mangled] !== base) return;
       // a spec whose JS class does not extend its declared superclass's still inherits from it
       const inherited = own ? undefined : info.superInfo?.ctor?.prototype?.[mangled];
       const gap: Gap = [l, index, mangled, inherited && inherited !== base ? 2 : m.flags & ACC.NATIVE ? 1 : 0];
@@ -859,6 +861,7 @@ export class Runtime {
     if (info.native) {
       const spec = this.natives.get(info.name);
       if (spec?.clinit) r = spec.clinit();
+      else if (spec?.platformClinit && Object.hasOwn(info.ctor, "$clinit")) { this.st(info.initThread); r = info.ctor.$clinit.call(info.ctor); }
     } else if (info.def) {
       const dex = info.dex!;
       if (info.def.staticValuesOff) {

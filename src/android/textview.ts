@@ -975,14 +975,4 @@ const filterText = driven(function* filterText(tv: JTextView, cs: unknown): Gen 
   return (yield applyInputFilters(tv.filters, cs, 0, (yield csText(cs)).length, emptySpanned, 0, 0))[0];
 });
 
-rt.register({
-  name: "android/text/InputFilter$AllCaps", ctor: class extends JObj {},
-  ifaces: ["android/text/InputFilter"],
-  methods: {
-    "<init>()V": function () {},
-    "filter(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;":
-      function (this: JObj, src: unknown) { return src == null ? null : spannedString(src).toUpperCase(); },
-  },
-});
-
 rt.markers("android/widget/Checkable");

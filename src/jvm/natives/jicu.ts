@@ -4,7 +4,7 @@
 
 import { rt, driven, type Gen } from "../runtime";
 import { vcall, newObj, after } from "./jlang";
-import { jarray, mangleStaticField } from "../abi";
+import { jarray, mangleMethod, mangleStaticField } from "../abi";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
 
@@ -34,6 +34,51 @@ const ofLocale = (method: string) => (name: string) => after(ulocale(name), (l) 
 const displayOf = (method: string) => driven(function* (target: string, display: string): Gen {
   return vcall(yield ulocale(target), method, `(${ULOCALE})${STRING}`, yield ulocale(display));
 });
+
+/** java_lang_Character.cpp: each native is one ICU4C property call, answered here by ICU4J's
+ *  UCharacter (compiled and called directly once its class is initialized). ASCII, whose
+ *  properties are fixed, is answered without it for the predicates text loops call. */
+function characterNatives(): Record<string, (...args: never[]) => unknown> {
+  const U = "android/icu/lang/UCharacter";
+  const uchar = (name: string, desc: string) => {
+    let fn: ((...a: unknown[]) => unknown) | null = null;
+    return (...args: unknown[]) => fn ? fn(...args) : after(icuClass(U), (ctor) => (fn = (...a: unknown[]) => (ctor as Record<string, (...a: unknown[]) => unknown>)[mangleMethod(name, desc)](...a))(...args));
+  };
+  const upper = (c: number) => c >= 65 && c <= 90, lower = (c: number) => c >= 97 && c <= 122, digit = (c: number) => c >= 48 && c <= 57;
+  const ascii = (test: (c: number) => boolean, name: string) => {
+    const icu = uchar(name, "(I)Z");
+    return (c: number) => (c < 128 ? +test(c) : icu(c));
+  };
+  const hasProperty = uchar("hasBinaryProperty", "(II)Z"), numeric = uchar("getUnicodeNumericValue", "(I)D"), charName = uchar("getName", "(I)Ljava/lang/String;");
+  return {
+    "isDigitImpl(I)Z": ascii(digit, "isDigit"),
+    "isLetterImpl(I)Z": ascii((c) => upper(c) || lower(c), "isLetter"),
+    "isLetterOrDigitImpl(I)Z": ascii((c) => upper(c) || lower(c) || digit(c), "isLetterOrDigit"),
+    "isUpperCaseImpl(I)Z": ascii(upper, "isUpperCase"),
+    "isLowerCaseImpl(I)Z": ascii(lower, "isLowerCase"),
+    "isTitleCaseImpl(I)Z": uchar("isTitleCase", "(I)Z"),
+    "isDefinedImpl(I)Z": uchar("isDefined", "(I)Z"),
+    "isIdentifierIgnorableImpl(I)Z": uchar("isIdentifierIgnorable", "(I)Z"),
+    "isSpaceCharImpl(I)Z": uchar("isSpaceChar", "(I)Z"),
+    "isWhitespaceImpl(I)Z": uchar("isWhitespace", "(I)Z"),
+    "isMirroredImpl(I)Z": uchar("isMirrored", "(I)Z"),
+    "isUnicodeIdentifierStartImpl(I)Z": uchar("isUnicodeIdentifierStart", "(I)Z"),
+    "isUnicodeIdentifierPartImpl(I)Z": uchar("isUnicodeIdentifierPart", "(I)Z"),
+    // UProperty.ALPHABETIC and IDEOGRAPHIC
+    "isAlphabeticImpl(I)Z": (c: number) => hasProperty(c, 0),
+    "isIdeographicImpl(I)Z": (c: number) => hasProperty(c, 17),
+    "getTypeImpl(I)I": uchar("getType", "(I)I"),
+    "getDirectionalityImpl(I)B": uchar("getDirection", "(I)I"),
+    "digitImpl(II)I": uchar("digit", "(II)I"),
+    "toLowerCaseImpl(I)I": uchar("toLowerCase", "(I)I"),
+    "toUpperCaseImpl(I)I": uchar("toUpperCase", "(I)I"),
+    "toTitleCaseImpl(I)I": uchar("toTitleCase", "(I)I"),
+    // U_NO_NUMERIC_VALUE is -1; a value that is negative or not an integer is -2
+    "getNumericValueImpl(I)I": (c: number) => after(numeric(c) as number | Promise<number>, (v: number) => v === -123456789 ? -1 : v < 0 || Math.floor(v + 0.5) !== v ? -2 : v | 0),
+    "getNameImpl(I)Ljava/lang/String;": charName,
+    "codePointOfImpl(Ljava/lang/String;)I": uchar("getCharFromName", "(Ljava/lang/String;)I"),
+  };
+}
 
 const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "libcore/icu/ICU": {
@@ -85,5 +130,6 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   },
   // a preload of ICU4C's zone bundles, which ICU4J opens on demand
   "com/android/icu/util/UResourceBundleNative": { "cacheTimeZoneBundles()V": () => {} },
+  "java/lang/Character": characterNatives(),
 };
 for (const [cls, methods] of Object.entries(natives)) for (const [sig, fn] of Object.entries(methods)) rt.registerJni(cls, sig, fn);

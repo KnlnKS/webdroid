@@ -3,7 +3,6 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
-import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
 import { mangleMethod, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
@@ -211,6 +210,7 @@ function jclassName(c: JClass): string {
   if (c.primName) return c.primName;
   return c.jname ??= dotName(c.arrDesc ?? c.ci!.name);
 }
+const PRIMITIVES = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"]);
 rt.register({
   name: "java/lang/Class",
   callerSensitive: ["forName(Ljava/lang/String;)Ljava/lang/Class;"],
@@ -220,6 +220,9 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JClass) { return jclassName(this); },
     "toString()Ljava/lang/String;": function (this: JClass) { return "class " + jclassName(this); },
     "ensureExtDataPresent()Ldalvik/system/ClassExt;": function (this: JClass) { return this.ext ??= rt.make("dalvik/system/ClassExt"); },
+    // ClassLinker::LookupPrimitiveClass, which the wrapper classes' <clinit> ask for their TYPE
+    "static getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;": (name: string) =>
+      PRIMITIVES.has(name ?? rt.npe()) ? rt.classFor(name) : (() => { throw rt.mkThrowable("java/lang/ClassNotFoundException", name); })(),
     "getSimpleName()Ljava/lang/String;": function (this: JClass) {
       const n = jclassName(this);
       const i = Math.max(n.lastIndexOf("."), n.lastIndexOf("$"));
@@ -1500,30 +1503,6 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
   if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
   return index;
 }
-function charTitleCase(c: number): number {
-  // Unicode simple title mappings differ from uppercase for digraphs, Georgian and Greek.
-  if (c >= 0x1c4 && c <= 0x1cc) return 0x1c5 + Math.floor((c - 0x1c4) / 3) * 3;
-  if (c >= 0x1f1 && c <= 0x1f3) return 0x1f2;
-  if (c >= 0x10d0 && c <= 0x10ff) return c;
-  if (c >= 0x1f80 && c <= 0x1faf) return c | 8;
-  if (c === 0x1fb3 || c === 0x1fc3 || c === 0x1ff3) return c + 9;
-  const upper = String.fromCharCode(c).toUpperCase();
-  return upper.length === 1 ? upper.charCodeAt(0) : c;
-}
-const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
-const characterCategories = "Cn Lu Ll Lt Lm Lo Mn Me Mc Nd Nl No Zs Zl Zp Cc Cf - Co Cs Pd Ps Pe Pc Po Sm Sc Sk So Pi Pf"
-  .split(" ").map(category => category === "-" ? null : new RegExp(`\\p{${category}}`, "u"));
-function unicodeCategory(c: number): number {
-  if (c < 0 || c > 0x10ffff) return 0;
-  const s = String.fromCodePoint(c);
-  return characterCategories.findIndex(category => category?.test(s));
-}
-const asciiCategories = Uint8Array.from({ length: 128 }, (_, c) => unicodeCategory(c));
-const characterType = (c: number) => c >= 0 && c < 128 ? asciiCategories[c] : unicodeCategory(c);
-const isDefinedChar = (c: number) => +(characterType(c) !== 0);
-const isDigit = (c: number) => (c < 0x80 ? +(c >= 48 && c <= 57) : +(c <= 0x10ffff && /\p{Nd}/u.test(String.fromCodePoint(c))));
-/** Character.digit of a char or code point (fromCodePoint equals fromCharCode below 0x10000) */
-const charDigit = (cp: number, radix: number) => { const d = parseInt(String.fromCodePoint(cp), radix); return Number.isNaN(d) ? -1 : d; };
 const charText = (chars: Uint16Array | null) => charsToString(chars ?? rt.npe(), 0, chars!.length);
 function codePointChars(cp: number): Uint16Array {
   if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid code point: " + cp);
@@ -1535,7 +1514,7 @@ rt.register({
   name: "java/lang/Character", ctor: JChar,
   serialization: { uid: 3786198910865385080n, fields: [{ name: "value", desc: "C", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
-  statics: { MAX_VALUE: 0xffff, MIN_VALUE: 0, get TYPE() { return rt.classFor("char"); } },
+  platformClinit: true,
   methods: {
     "static offsetByCodePoints(Ljava/lang/CharSequence;II)I": (cs: unknown, index: number, offset: number) => {
       if (cs == null) return rt.npe();
@@ -1543,8 +1522,6 @@ rt.register({
       return after(vcall(cs, "toString", "()Ljava/lang/String;"), (text: string) => offsetCodePoints(text, index, offset));
     },
     "static charCount(I)I": (cp: number) => (cp >= 0x10000 ? 2 : 1),
-    "static getDirectionality(C)B": directionality,
-    "static getDirectionality(I)B": directionality,
     "static toChars(I)[C": codePointChars,
     "static toChars(I[CI)I": (cp: number, destination: Uint16Array | null, offset: number) => {
       if (destination === null) rt.npe();
@@ -1570,12 +1547,6 @@ rt.register({
     "static isSurrogatePair(CC)Z": (high: number, low: number) => +(isHigh(high) && isLow(low)),
     "static isSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdfff ? 1 : 0),
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
-    "static isISOControl(I)Z": isISOControl,
-    "static isISOControl(C)Z": isISOControl,
-    "static getType(C)I": characterType,
-    "static getType(I)I": characterType,
-    "static isDefined(C)Z": isDefinedChar,
-    "static isDefined(I)Z": isDefinedChar,
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
     "compareTo(Ljava/lang/Character;)I": cmpV,
@@ -1585,23 +1556,6 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JChar) { return String.fromCharCode(this.v); },
     "static valueOf(C)Ljava/lang/Character;": (v: number) => box(JChar, v),
     "static toString(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
-    "static isDigit(C)Z": isDigit,
-    "static isDigit(I)Z": isDigit,
-    ...Object.fromEntries(([["isJavaIdentifierStart", /[\p{L}\p{Nl}\p{Sc}\p{Pc}]/u],
-      ["isJavaIdentifierPart", /[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\x00-\x08\x0e-\x1b\x7f-\x9f]/u],
-      ["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
-      const test = (c: number) => c >= 0 && c <= 0x10ffff && re.test(String.fromCodePoint(c)) ? 1 : 0;
-      return [[`static ${n}(C)Z`, test], [`static ${n}(I)Z`, test]];
-    })),
-    "static isUpperCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toLowerCase() && s === s.toUpperCase() ? 1 : 0; },
-    "static isLowerCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toUpperCase() && s === s.toLowerCase() ? 1 : 0; },
-    "static toTitleCase(C)C": charTitleCase,
-    "static toUpperCase(C)C": (c: number) => String.fromCharCode(c).toUpperCase().charCodeAt(0),
-    "static toLowerCase(C)C": (c: number) => String.fromCharCode(c).toLowerCase().charCodeAt(0),
-    "static digit(CI)I": charDigit,
-    "static digit(II)I": charDigit,
-    "static getNumericValue(C)I": (c: number) => { const d = parseInt(String.fromCharCode(c), 36); return Number.isNaN(d) ? -1 : d; },
-    "static forDigit(II)C": (d: number, r: number) => d.toString(r).charCodeAt(0),
   },
 });
 

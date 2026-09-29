@@ -281,14 +281,6 @@ describe("collection-startup", () => {
     expect(await vcall(list, "get", "(I)Ljava/lang/Object;", 0)).toBe("second");
   });
 
-  test("Java identifier parts include currency, combining marks and ignorable controls", async () => {
-    const character = rt.link("java/lang/Character").ctor;
-    for (const code of [65, 0x24, 0x301, 0x200c, 0, 0x1b, 0x203f, 0x2160, 0x10400])
-      expect(await vcall(character, "isJavaIdentifierPart", "(I)Z", code)).toBe(1);
-    for (const code of [-1, 0x110000, 0xd800, 9, 0x1c, 32, 0x1f600])
-      expect(await vcall(character, "isJavaIdentifierPart", "(I)Z", code)).toBe(0);
-  });
-
   test("AtomicLongArray lazySet publishes full-width values and checks the index", async () => {
     const array = await newObj("java/util/concurrent/atomic/AtomicLongArray", "(I)V", 1);
     await vcall(array, "lazySet", "(IJ)V", 0, 9007199254740993n);

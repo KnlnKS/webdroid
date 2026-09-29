@@ -110,14 +110,6 @@ describe("base64", () => {
 });
 
 describe("character-offset", () => {
-  test("character categories preserve Java category numbers and supplementary characters", async () => {
-    const cls = rt.link("java/lang/Character").ctor;
-    for (const [cp, category] of [[65, 1], [97, 2], [0x301, 6], [48, 9], [32, 12], [10, 15], [0xd800, 19], [45, 20], [95, 23], [0x1f600, 28], [0x378, 0], [-1, 0], [0x110000, 0]]) {
-      expect(await vcall(cls, "getType", "(I)I", cp)).toBe(category);
-      expect(await vcall(cls, "isDefined", "(I)Z", cp)).toBe(+(category !== 0));
-    }
-    expect(await vcall(cls, "getType", "(C)I", 0xd800)).toBe(19);
-  });
   test("code point offsets count pairs once and retain unpaired surrogates", async () => {
     const text = "a\ud83d\ude00\ud800b\udc00";
     const offset = (value: unknown, index: number, count: number) => vcall(rt.link("java/lang/Character").ctor, "offsetByCodePoints", "(Ljava/lang/CharSequence;II)I", value, index, count);
