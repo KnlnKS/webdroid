@@ -46,6 +46,9 @@ export function mangleMethod(name: string, desc: string): string {
   demangled.set(m, [name, desc]);
   return m;
 }
+/** the prototype property naming exactly `cls`'s method `mangled`, which a subclass cannot shadow:
+ *  a direct call through it is a method call, whose call feedback lets V8 inline the target */
+export const directName = (cls: string, mangled: string): string => "d" + hash36(cls) + "$" + mangled;
 const demangled = new Map<string, [string, string]>();
 export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
 /** a reflect.Proxy materialises a method on first use from the name and descriptor the caller

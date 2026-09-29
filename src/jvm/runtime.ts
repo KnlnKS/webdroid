@@ -9,7 +9,7 @@ import { yieldToLoop } from "./yield";
 import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
+import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, type Cells, type CompiledCtor, type ResumeBody } from "./compiler";
 import { insnLen } from "./opcodes";
 import { isBytecode } from "./provenance";
@@ -17,7 +17,7 @@ import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
 import { Monitors, type Monitor } from "./monitor";
 
-export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
+export const ACC = { PRIVATE: 0x2, STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
 // DEX type IDs cap distinct class definitions at 65,535 per file.
 const CLASS_INDEX_BASE = 0x10000;
 
@@ -360,9 +360,12 @@ export class Runtime {
         const info = this.linfo(m.cls);
         if (info.stub) throw R.ncdfe(info.name);
         R.ensureCompiled(info);
-        const fn: Cells | undefined = info.ctor.prototype[mangleMethod(m.name, dex.methodDesc(i))];
+        const proto = info.ctor.prototype, mangled = mangleMethod(m.name, dex.methodDesc(i));
+        const fn: Cells | undefined = proto[mangled];
         if (!fn) throw R.unimplemented(`${info.name}.${m.name}${dex.methodDesc(i)} (direct)`);
         fn.$c?.push(this.dp, i);
+        const direct = directName(info.name, mangled);
+        if (!Object.hasOwn(proto, direct)) { proto[direct] = fn; fn.$c?.push(proto, direct); }
         return (this.dp[i] = fn);
       },
       // dp is sparse, so V8 keeps it in dictionary mode; a hot site reads its own dense slot
@@ -630,6 +633,7 @@ export class Runtime {
       if (typeof fn !== "function") throw new Error(`bad native impl ${spec.name}.${key}`);
       target[mangled] = this.trackPlaceholder(`${spec.name}.${k}`, fn, (f) => { if (target[mangled] === f) target[mangled] = fn; });
       if (!isStatic) info.ownMethods.push(mangled);
+      if (mname === "<init>") proto[directName(spec.name, mangled)] = target[mangled];
     }
     // A static written as a getter is resolved on first READ, not here: link order is
     // registration order, so a static whose value is an instance of another class would

@@ -4,7 +4,7 @@
 // when the callee suspended, and only then does the caller save its frame (Runtime.dfr).
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
-import { mangleMethod, frameName, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
+import { mangleMethod, directName, frameName, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
 import { ACC, JObj, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
@@ -95,6 +95,13 @@ export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: Encode
   if (fallthrough) stub.$unsafe = () => R.absentFields(dex, m).length > 0;
   info.lazy.push({ dex, m, mangled, isStatic, name, desc, stub, fallthrough });
   (isStatic ? C : C.prototype)[mangled] = stub;
+  // a constructor or private method also goes under its direct name now: added once a class has
+  // instances, it would change their prototype's shape under code already running
+  if (!isStatic && (name === "<init>" || m.flags & ACC.PRIVATE)) {
+    const direct = directName(info.name, mangled);
+    C.prototype[direct] = stub;
+    stub.$c.push(C.prototype, direct);
+  }
 }
 
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
@@ -801,15 +808,20 @@ ${profileEnd}
         // same-class: entry into this class's code implies inited (or initing in
         // this chain — JVM reentrancy); skip init to avoid clinit self-deadlock
         const own = clsName === this.info.name;
-        if (this.cold) {
+        // A platform body on a native class keeps the resolved function: a native spec's JS class
+        // need not extend its declared superclass. Strings are JS primitives.
+        if (this.cold || this.info.native || clsName === "java/lang/String") {
           if (own) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
           else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
-        } else {
-          const k = this.ics++;
-          if (own) out.push(`$u=$ic[${k}]??D.rdc0($ic,${k},${i.b});`);
-          else this.guard(`$ic[${k}]??D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
+          this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out);
+          break;
         }
-        this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out);
+        // resolution installs the target under its direct name, reached as a method call (a call
+        // through Function.prototype.call records no target, so V8 never inlined one)
+        const k = this.ics++;
+        if (own) out.push(`$ic[${k}]??D.rdc0($ic,${k},${i.b});`);
+        else this.guard(`$ic[${k}]??D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
+        this.guard(`${recv}.${directName(clsName, mangled)}(${argStr})`, out);
         break;
       }
       case "invoke-static": {
