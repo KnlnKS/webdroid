@@ -805,7 +805,8 @@ const stackMethods: Methods = {
     return -1;
   }),
 };
-const SPLITERATOR_ORDERED = 0x10, SPLITERATOR_NONNULL = 0x100;
+/** Spliterator's characteristics */
+export const ORDERED = 0x10, SIZED = 0x40, NONNULL = 0x100;
 const listExtras: Record<string, (base: Methods) => Methods> = {
   "java/util/ArrayList": () => ({
     "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JList, stream: unknown): Gen {
@@ -841,7 +842,7 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
     ...IDENTITY_EQUALITY,
     // DeqSpliterator's characteristics; its body reads ArrayDeque's own fields
     "spliterator()Ljava/util/Spliterator;": function (this: JList) {
-      return scall("java/util/Spliterators", "spliterator", "(Ljava/util/Collection;I)Ljava/util/Spliterator;", this, SPLITERATOR_ORDERED | SPLITERATOR_NONNULL);
+      return scall("java/util/Spliterators", "spliterator", "(Ljava/util/Collection;I)Ljava/util/Spliterator;", this, ORDERED | NONNULL);
     },
   }),
 };
@@ -1901,7 +1902,7 @@ const priorityQueueMethods: NonNullable<NativeSpec["methods"]> = {
   ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, SEQUENCED, CAPACITY),
   ...IDENTITY_EQUALITY,
   "spliterator()Ljava/util/Spliterator;": function (this: JList) {
-    return scall("java/util/Spliterators", "spliterator", "(Ljava/util/Collection;I)Ljava/util/Spliterator;", this, SPLITERATOR_NONNULL);
+    return scall("java/util/Spliterators", "spliterator", "(Ljava/util/Collection;I)Ljava/util/Spliterator;", this, NONNULL);
   },
   "<init>()V": function () {},
   "<init>(I)V": function () {},

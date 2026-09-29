@@ -1,5 +1,5 @@
 import { JObj, rt, driven, type Gen, type NativeSpec } from "../runtime";
-import { mkIter, newArrayList, toJsArray, sortInPlace, newLinkedHashSet } from "./jutil";
+import { mkIter, newArrayList, toJsArray, sortInPlace, newLinkedHashSet, ORDERED, SIZED } from "./jutil";
 import { vcall, after, box, boxInt, scall, JLong, JDouble } from "./jlang";
 import { jarray } from "../abi";
 import { JStream, JIntStream, JLongStream, JDoubleStream, mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
@@ -430,8 +430,6 @@ rt.register({
     [`collect(L${S}Collector;)${O}`]: function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });
-/** Spliterator.ORDERED and SIZED */
-const ORDERED = 0x10, SIZED = 0x40;
 /** a spliterator's elements, drained through libcore's Spliterators.iterator adapter */
 const drain = driven(function* drain(sp: unknown, k: StreamKind): Gen<unknown[]> {
   if (sp == null) rt.npe();
