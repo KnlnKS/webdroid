@@ -6,7 +6,7 @@ import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
-import { handle, deref, replace } from "./handles";
+import { handle, deref, replace, weakHandle } from "./handles";
 import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
@@ -1963,6 +1963,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": drawPictureInto,
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
+  "getNativeCanvasWrapper()J": function (this: JCanvas) { return weakHandle(this); },
   // a bitmap's canvas is software; the one a window or RenderNode records into is not
   "isHardwareAccelerated()Z": function (this: JCanvas) { return +(this instanceof JRecordingCanvas); },
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),

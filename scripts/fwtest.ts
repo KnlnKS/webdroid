@@ -454,6 +454,38 @@ await exercise("Region, RegionIterator (device values)", async () => {
   same("from parcel", await rects(await vcall(creator.s$CREATOR, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel)), await rects(l));
 });
 
+await exercise("Camera (device values)", async () => {
+  const near = (what: string, got: number[], want: number[]) => {
+    if (got.length !== want.length || got.some((g, i) => Math.abs(g - want[i]) > 1e-5 * Math.max(1, Math.abs(want[i])))) throw new Error(`${what}: [${got}], not [${want}]`);
+  };
+  const c = await newObj("android/graphics/Camera", "()V"), m = await newObj("android/graphics/Matrix", "()V"), values = new Float32Array(9);
+  const matrixOf = async (cam: unknown) => { await vcall(cam, "getMatrix", "(Landroid/graphics/Matrix;)V", m); await vcall(m, "getValues", "([F)V", values); return [...values]; };
+  const dots = async (cam: unknown) => [await vcall(cam, "dotWithNormal", "(FFF)F", 0, 0, 1), await vcall(cam, "dotWithNormal", "(FFF)F", 1, 2, 3)] as number[];
+  const location = async (cam: unknown) => [await vcall(cam, "getLocationX", "()F"), await vcall(cam, "getLocationY", "()F"), await vcall(cam, "getLocationZ", "()F")] as number[];
+  near("identity", [...await matrixOf(c), ...await location(c)], [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8]);
+  await vcall(c, "rotateX", "(F)V", 30);
+  const rotX = [1, 0, 0, 0, 0.8660254, 0, 0, -8.6805556e-4, 1];
+  near("rotateX", [...await matrixOf(c), ...await dots(c)], [...rotX, -0.8660254, -0.8660253]);
+  await vcall(c, "save", "()V");
+  await vcall(c, "rotateY", "(F)V", 45);
+  await vcall(c, "translate", "(FFF)V", 10, 20, 30);
+  near("rotateY, translate", [...await matrixOf(c), ...await dots(c)],
+    [0.667153, 0, -13.3430605, 0.3335765, 0.81709224, -2.9987836, 0.0010030754, -8.190077e-4, 1, -0.6123724, 0.09473443]);
+  await vcall(c, "restore", "()V");
+  near("restored", await matrixOf(c), rotX);
+  await vcall(c, "rotateZ", "(F)V", 90);
+  await vcall(c, "rotate", "(FFF)V", 10, 20, 30);
+  await vcall(c, "setLocation", "(FFF)V", 1, 2, -4);
+  near("rotate, setLocation", [...await matrixOf(c), ...await location(c)],
+    [-0.44096962, 0.88256407, -72, -0.51550823, -0.39788473, 144, 0.002551072, 8.6991704e-4, 1, 1, 2, -4]);
+  const far = await newObj("android/graphics/Camera", "()V");
+  await vcall(far, "translate", "(FFF)V", 0, 0, 100);
+  near("translate z", await matrixOf(far), [0.852071, 0, 0, 0, 0.852071, 0, 0, 0, 1]);
+  const turned = await newObj("android/graphics/Camera", "()V");
+  await vcall(turned, "rotateY", "(F)V", 180);
+  near("facing away", [await vcall(turned, "dotWithNormal", "(FFF)F", 0, 0, 1) as number], [1]);
+});
+
 await exercise("Bitmap.createBitmap + pixels", async () => {
   const cfg = await linkInit("android/graphics/Bitmap$Config");
   const argb = (cfg.ctor as Record<string, unknown>).s$ARGB_8888;

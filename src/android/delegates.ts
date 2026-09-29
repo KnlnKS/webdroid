@@ -13,7 +13,7 @@
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 
-import { rt, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, deref, replace, release, FINALIZER } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
@@ -675,10 +675,80 @@ delegate("android/graphics/RegionIterator", {
 });
 
 
+// ── android.graphics.Camera: Sk3DView ──────────────────────────────────────────────────
+// A stack of 4x4 transforms (SkM44, row-major, float) viewed by SkCamera3D, whose location is
+// in inches (72 points each) and whose observer sits on the view axis at the location's depth.
+class Camera3D {
+  stack = [Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)];
+  location = [0, 0, -576];
+  get top() { return this.stack[this.stack.length - 1]; }
+  /** top = top * m (SkM44::preConcat) */
+  preConcat(m: ArrayLike<number>) {
+    const a = this.top.slice(), out = this.top;
+    for (let r = 0; r < 16; r += 4) for (let c = 0; c < 4; c++) out[r + c] = a[r] * m[c] + a[r + 1] * m[4 + c] + a[r + 2] * m[8 + c] + a[r + 3] * m[12 + c];
+  }
+  /** SkM44::Rotate about a unit axis */
+  rotate(x: number, y: number, z: number, deg: number) {
+    const rad = Math.fround(Math.fround(deg * Math.fround(Math.PI)) / 180), s = Math.sin(rad), c = Math.cos(rad), t = 1 - c;
+    this.preConcat([t * x * x + c, t * x * y - s * z, t * x * z + s * y, 0, t * x * y + s * z, t * y * y + c, t * y * z - s * x, 0,
+      t * x * z - s * y, t * y * z + s * x, t * z * z + c, 0, 0, 0, 0, 1]);
+  }
+  /** SkPatch3D (u = (1,0,0), v = (0,-1,0) at the origin) through the top transform */
+  patch() {
+    const m = this.top;
+    return { u: [m[0], m[4], m[8]], v: [-m[1], -m[5], -m[9]], origin: [m[3], m[7], m[11]] };
+  }
+  /** SkCamera3D::patchToMatrix, with the orientation its doUpdate derives for the fixed axis
+   *  (0,0,1) and zenith (0,-1,0) and an observer at (0, 0, location z) */
+  matrix(out: Mat) {
+    const { u, v, origin } = this.patch(), z = this.location[2];
+    const rows = [[-z, 0, 0], [0, z, 0], [0, 0, 1]];
+    const diff = [origin[0] - this.location[0], origin[1] - this.location[1], origin[2] - z];
+    const dot = diff[2], at = (p: number[], row: number) => (p[0] * rows[row][0] + p[1] * rows[row][1] + p[2] * rows[row][2]) / dot;
+    out.set([at(u, 0), at(v, 0), at(diff, 0), at(u, 1), at(v, 1), at(diff, 1), at(u, 2), at(v, 2), 1].map(Math.fround));
+  }
+}
+let nativeInstance = "";
+/** where a Java Camera keeps its Sk3DView, which its natives set and read themselves */
+const cameraSlot = (c: object) => c as Record<string, bigint>;
+const instanceField = () => nativeInstance ||= declaredField("android/graphics/Camera", "native_instance");
+const camera = (c: object) => deref<Camera3D>(cameraSlot(c)[instanceField()]);
+delegate("android/graphics/Camera", {
+  "nativeConstructor()V": function (this: object) { cameraSlot(this)[instanceField()] = handle(new Camera3D()); },
+  "nativeDestructor()V": function (this: object) { release(cameraSlot(this)[instanceField()]); },
+  "save()V": function (this: object) { const c = camera(this); c.stack.push(c.top.slice()); },
+  "restore()V": function (this: object) { const c = camera(this); if (c.stack.length > 1) c.stack.pop(); },
+  // SkM44::preTranslate
+  "translate(FFF)V": function (this: object, x: number, y: number, z: number) { camera(this).preConcat([1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1]); },
+  "rotateX(F)V": function (this: object, deg: number) { camera(this).rotate(1, 0, 0, deg); },
+  "rotateY(F)V": function (this: object, deg: number) { camera(this).rotate(0, -1, 0, deg); },
+  "rotateZ(F)V": function (this: object, deg: number) { camera(this).rotate(0, 0, 1, deg); },
+  "rotate(FFF)V": function (this: object, x: number, y: number, z: number) {
+    const c = camera(this);
+    c.rotate(1, 0, 0, x); c.rotate(0, -1, 0, y); c.rotate(0, 0, 1, z);
+  },
+  "setLocation(FFF)V": function (this: object, x: number, y: number, z: number) { camera(this).location = [x, y, z].map((v) => Math.fround(v * 72)); },
+  "getLocationX()F": function (this: object) { return Math.fround(camera(this).location[0] / 72); },
+  "getLocationY()F": function (this: object) { return Math.fround(camera(this).location[1] / 72); },
+  "getLocationZ()F": function (this: object) { return Math.fround(camera(this).location[2] / 72); },
+  "nativeGetMatrix(J)V": function (this: object, m: bigint) { camera(this).matrix(matrix(m)); },
+  "nativeApplyToCanvas(J)V": function (this: object, h: bigint) {
+    const m = identity();
+    camera(this).matrix(m);
+    applyMatrix(canvas(h).ctx, m);
+  },
+  // SkPatch3D::dotWith, whose y term Skia computes as u.z*v.x - u.x*v.y
+  "dotWithNormal(FFF)F": function (this: object, x: number, y: number, z: number) {
+    const { u, v } = camera(this).patch();
+    return Math.fround((u[1] * v[2] - u[2] * v[1]) * x + (u[2] * v[0] - u[0] * v[1]) * y + (u[0] * v[1] - u[1] * v[0]) * z);
+  },
+});
+
 // ── android.graphics.Canvas / BaseCanvas ───────────────────────────────────────────────
 // Every one of these routes into canvasMethods, which is the table our own Canvas native
 // already uses: one copy of each draw body, reached under two sets of names.
-const canvas = (h: bigint) => deref<JCanvas>(h);
+/** a TS-spec canvas hands out a weak handle (handles.ts' weakHandle) */
+const canvas = (h: bigint) => { const c = deref<JCanvas | WeakRef<JCanvas>>(h); return c instanceof WeakRef ? c.deref()! : c; };
 /** one of our own native method bodies, by its Java descriptor */
 function specFn<T>(table: Record<string, unknown> | undefined, what: string, desc: string) {
   const fn = table?.[desc];
