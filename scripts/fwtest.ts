@@ -486,6 +486,37 @@ await exercise("Camera (device values)", async () => {
   near("facing away", [await vcall(turned, "dotWithNormal", "(FFF)F", 0, 0, 1) as number], [1]);
 });
 
+await exercise("Interpolator (device values)", async () => {
+  const run = async (ip: unknown, cases: [number, string][], out: Float32Array) => {
+    for (const [time, want] of cases) {
+      const result = await vcall(ip, "timeToValues", "(I[F)Landroid/graphics/Interpolator$Result;", time, out);
+      const got = `${await vcall(result, "name", "()Ljava/lang/String;")} ${[...out].join(" ")}`;
+      if (got !== want) throw new Error(`at ${time}: ${got}, not ${want}`);
+    }
+  };
+  const two = new Float32Array(2), one = new Float32Array(1);
+  const ip = await newObj("android/graphics/Interpolator", "(II)V", 2, 3);
+  await vcall(ip, "setKeyFrame", "(II[F)V", 0, 100, Float32Array.of(0, 10));
+  await vcall(ip, "setKeyFrame", "(II[F)V", 1, 200, Float32Array.of(1, 20));
+  await vcall(ip, "setKeyFrame", "(II[F[F)V", 2, 400, Float32Array.of(3, 0), Float32Array.of(0, 0, 1, 1));
+  await run(ip, [[0, "FREEZE_START 0 10"], [100, "NORMAL 0 10"], [125, "NORMAL 0.2500610351562 12.500610351562"],
+    [199, "NORMAL 0.990051269531 19.900512695312"], [200, "NORMAL 1 20"], [250, "NORMAL 1.500122070312 14.998779296875"],
+    [399, "NORMAL 2.990112304687 0.098876953125"], [400, "FREEZE_END 3 0"], [1000, "FREEZE_END 3 0"]].map(([t, s]) => [t as number, fl(s as string)]), two);
+  await vcall(ip, "setRepeatMirror", "(FZ)V", 2.5, 1);
+  await run(ip, [[350, "NORMAL 2.500122070312 4.998779296875"], [450, "NORMAL 2.500122070312 4.998779296875"], [550, "NORMAL 1.500122070312 14.998779296875"],
+    [650, "NORMAL 0.5000610351562 15.000610351562"], [800, "NORMAL 1 20"], [900, "FREEZE_END 1.500122070312 14.998779296875"]].map(([t, s]) => [t as number, fl(s as string)]), two);
+  await vcall(ip, "setRepeatMirror", "(FZ)V", 2, 0);
+  await run(ip, [[450, "NORMAL 0.5000610351562 15.000610351562"], [700, "FREEZE_END 3 0"]].map(([t, s]) => [t as number, fl(s as string)]), two);
+  const eased = await newObj("android/graphics/Interpolator", "(I)V", 1);
+  await vcall(eased, "setKeyFrame", "(II[F)V", 0, 0, Float32Array.of(255));
+  await vcall(eased, "setKeyFrame", "(II[F[F)V", 1, 250, Float32Array.of(0), Float32Array.of(0.25, 0.1, 0.25, 1));
+  // a negative time is a large unsigned one
+  await run(eased, [[-10, "FREEZE_END 0"], [0, "NORMAL 255"], [30, "NORMAL 224.38568"], [60, "NORMAL 193.78693"], [125, "NORMAL 127.484436"],
+    [200, "NORMAL 51.003113"], [250, "FREEZE_END 0"]].map(([t, s]) => [t as number, fl(s as string)]), one);
+});
+/** "NAME a b" with each number as the float nearest the device's printed value */
+function fl(s: string) { const [name, ...v] = s.split(" "); return [name, ...v.map((x) => Math.fround(+x))].join(" "); }
+
 await exercise("Bitmap.createBitmap + pixels", async () => {
   const cfg = await linkInit("android/graphics/Bitmap$Config");
   const argb = (cfg.ctor as Record<string, unknown>).s$ARGB_8888;
