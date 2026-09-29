@@ -59,7 +59,10 @@ const inputStreamMethods: NativeSpec["methods"] = {
     return (this as any)[readBII](out, 0, out.length);
   },
   "read([BII)I": function (this: JInputStream, out: Int8Array, off: number, len: number) {
+    if (!out) rt.npe();
+    checkFromIndexSize(off, len, out.length);
     if (len === 0) return 0;
+    if ((this as unknown as Record<string, unknown>)[readI] !== ownRead) return readThroughRead(this, out, off, len);
     if (this.wrapped) return vcall(this.wrapped, "read", "([BII)I", out, off, len);
     if (this.source) {
       return after(this.source.read(this.pos, len), (bytes) => {
@@ -79,8 +82,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "skip(J)J": function (this: JInputStream, n: bigint) {
     if (this.wrapped) return vcall(this.wrapped, "skip", "(J)J", n);
     if (n <= 0n) return 0n;
-    const ownRead = (JInputStream.prototype as unknown as Record<string, unknown>)[readBII];
-    if ((this as unknown as Record<string, unknown>)[readBII] !== ownRead) return skipThroughRead(this, n);
+    if (!usesReads(this)) return skipThroughRead(this, n);
     const k = Math.min(Number(n), Math.max(0, (this.source?.size ?? this.buf.length) - this.pos));
     this.pos += k;
     return BigInt(k);
@@ -95,6 +97,23 @@ const inputStreamMethods: NativeSpec["methods"] = {
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
+const ownRead = inputStreamMethods["read()I"];
+/** InputStream.read(byte[], int, int) over a subclass's own read(): up to the first end or IOException */
+const readThroughRead = driven(function* (stream: JInputStream, out: Int8Array, off: number, len: number): Gen {
+  const thread = curThread;
+  const first: number = yield vcallOn(thread, stream, "read", "()I");
+  if (first < 0) return -1;
+  out[off] = first;
+  let i = 1;
+  try {
+    for (; i < len; i++) {
+      const c: number = yield vcallOn(thread, stream, "read", "()I");
+      if (c < 0) break;
+      out[off + i] = c;
+    }
+  } catch (e) { if (!rt.iof(e, "java/io/IOException")) throw e; }
+  return i;
+});
 async function skipThroughRead(stream: JInputStream, count: bigint): Promise<bigint> {
   const scratch = new Int8Array(Number(count < 2048n ? count : 2048n));
   let remaining = count;
