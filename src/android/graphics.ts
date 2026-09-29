@@ -7,7 +7,7 @@ import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } fr
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
-import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
@@ -65,67 +65,6 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
   const i = new JInsets(); i.left = l; i.top = t; i.right = r; i.bottom = b; return i;
 }
 rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
-
-/** Color's sColorNameMap, which Color.parseColor and Html's colour attributes both read */
-const COLOR_NAMES: Record<string, number> = {
-  black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
-  red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
-  magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
-  grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
-  navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
-};
-class JColor extends JObj {}
-rt.register({
-  name: "android/graphics/Color", ctor: JColor,
-  statics: {
-    BLACK: -16777216, DKGRAY: -12303292, GRAY: -7829368, LTGRAY: -3355444, WHITE: -1,
-    RED: -65536, GREEN: -16711936, BLUE: -16776961, YELLOW: -256, CYAN: -16711681,
-    MAGENTA: -65281, TRANSPARENT: 0,
-  },
-  methods: {
-    "static argb(IIII)I": (a: number, r: number, g: number, b: number) => ((a << 24) | (r << 16) | (g << 8) | b) | 0,
-    "static rgb(III)I": (r: number, g: number, b: number) => (0xff000000 | (r << 16) | (g << 8) | b) | 0,
-    "static alpha(I)I": (c: number) => c >>> 24,
-    "static red(I)I": (c: number) => (c >> 16) & 0xff,
-    "static green(I)I": (c: number) => (c >> 8) & 0xff,
-    "static blue(I)I": (c: number) => c & 0xff,
-    "static parseColor(Ljava/lang/String;)I": (s: string) => {
-      const hex = /^#([\da-f]{6}|[\da-f]{8})$/i.exec(s)?.[1];
-      if (hex) return parseInt(hex.length === 6 ? `ff${hex}` : hex, 16) | 0;
-      const v = COLOR_NAMES[s.toLowerCase()];
-      if (v === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown color " + s);
-      return v;
-    },
-    // a @ColorLong is the sRGB argb in the high word; argbOfColorLong reads the same encoding
-    "static pack(I)J": (c: number) => colorLongOfArgb(c),
-    "static toArgb(J)I": (v: bigint) => argbOfColorLong(v),
-    "static alpha(J)F": (v: bigint) => (argbOfColorLong(v) >>> 24) / 255,
-    "static red(J)F": (v: bigint) => ((argbOfColorLong(v) >> 16) & 0xff) / 255,
-    "static green(J)F": (v: bigint) => ((argbOfColorLong(v) >> 8) & 0xff) / 255,
-    "static blue(J)F": (v: bigint) => (argbOfColorLong(v) & 0xff) / 255,
-    "static isSrgb(J)Z": () => 1,
-    "static colorToHSV(I[F)V": (c: number, hsv: Float32Array) => {
-      const r = ((c >> 16) & 0xff) / 255, g = ((c >> 8) & 0xff) / 255, b = (c & 0xff) / 255;
-      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-      let h = 0;
-      if (d) {
-        if (mx === r) h = 60 * (((g - b) / d) % 6);
-        else if (mx === g) h = 60 * ((b - r) / d + 2);
-        else h = 60 * ((r - g) / d + 4);
-      }
-      hsv[0] = (h + 360) % 360; hsv[1] = mx ? d / mx : 0; hsv[2] = mx;
-    },
-    "static HSVToColor([F)I": (hsv: Float32Array) => hsvToColor(255, hsv),
-    "static HSVToColor(I[F)I": (alpha: number, hsv: Float32Array) => hsvToColor(alpha, hsv),
-  },
-});
-
-function hsvToColor(alpha: number, hsv: Float32Array): number {
-  const [h, s, v] = [hsv[0], hsv[1], hsv[2]];
-  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
-  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-  return ((alpha << 24) | (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255)) | 0;
-}
 
 const ROBOTO = "Roboto, sans-serif";
 export const SYSTEM_FONTS = [
@@ -730,25 +669,8 @@ rt.register({
     "getColorMatrix(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, out: JColorMatrix) { out.a.set(this.matrix); },
   },
 });
-class JColorSpace extends JObj { cname = "sRGB"; }
-const srgbSpace = new JColorSpace();
-mkEnumSet("android/graphics/ColorSpace$Named",
-  ["SRGB", "LINEAR_SRGB", "EXTENDED_SRGB", "LINEAR_EXTENDED_SRGB", "BT709", "BT2020", "DCI_P3",
-    "DISPLAY_P3", "NTSC_1953", "SMPTE_C", "ADOBE_RGB", "PRO_PHOTO_RGB", "ACES", "ACESCG", "CIE_XYZ", "CIE_LAB"]);
-rt.register({
-  name: "android/graphics/ColorSpace", ctor: JColorSpace,
-  methods: {
-    "static get(Landroid/graphics/ColorSpace$Named;)Landroid/graphics/ColorSpace;": () => srgbSpace,
-    "getName()Ljava/lang/String;": function (this: JColorSpace) { return this.cname; },
-    ...stubs(1, "isSrgb()Z"),
-    ...stubs(0, "isWideGamut()Z", "getId()I"),
-    ...stubs(null, "getModel()Landroid/graphics/ColorSpace$Model;"),
-    // AOSP's Bitmap passes this pointer to nativeCreate/nativeErase. There is no native colour
-    // space behind a 2D context, and 0 is the null handle — which those delegates ignore.
-    "getNativeInstance()J": () => 0n,
-    "equals(Ljava/lang/Object;)Z": function (this: JColorSpace, o: unknown) { return o === this ? 1 : 0; },
-  },
-});
+/** ColorSpace.get(Named.SRGB), what a 2D context's pixels are in */
+const srgb = () => scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 0);
 mkEnumSet("android/graphics/BlendMode",
   ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
     "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
@@ -1337,7 +1259,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
     },
     "getWidth()I": function (this: JBitmap) { return this.w; },
     "getHeight()I": function (this: JBitmap) { return this.h; },
-    "getColorSpace()Landroid/graphics/ColorSpace;": () => srgbSpace,
+    "getColorSpace()Landroid/graphics/ColorSpace;": srgb,
     "getDensity()I": function (this: JBitmap) { return this.density; },
     "getNinePatchChunk()[B": function (this: JBitmap) { return this.ninePatchChunk; },
     "setDensity(I)V": function (this: JBitmap, d: number) { this.density = d; },
@@ -2860,16 +2782,17 @@ rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionD
       const sample = Math.max(1, opts?.inSampleSize ?? 1);
       const width = Math.max(1, Math.ceil((rect.right - rect.left) / sample));
       const height = Math.max(1, Math.ceil((rect.bottom - rect.top) / sample));
-      if (opts) {
-        opts.outWidth = width; opts.outHeight = height;
-        opts.outConfig = bitmapConfigs[3]; opts.outColorSpace = srgbSpace;
-        if (opts.inJustDecodeBounds) return null;
-      }
-      const bitmap = JBitmap.create(width, height);
-      bitmap.ctx.drawImage(source.canvas, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-        0, 0, width, height);
-      bitmap.immutable = !opts?.inMutable;
-      return bitmap;
+      return after(opts && srgb(), (cs) => {
+        if (opts) {
+          opts.outWidth = width; opts.outHeight = height; opts.outConfig = bitmapConfigs[3]; opts.outColorSpace = cs;
+          if (opts.inJustDecodeBounds) return null;
+        }
+        const bitmap = JBitmap.create(width, height);
+        bitmap.ctx.drawImage(source.canvas, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+          0, 0, width, height);
+        bitmap.immutable = !opts?.inMutable;
+        return bitmap;
+      });
     },
 } });
 

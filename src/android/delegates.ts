@@ -138,6 +138,36 @@ const isIdentity = (m: Mat) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] ==
 
 interface Rect { left: number; top: number; right: number; bottom: number }
 
+// Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
+const f = Math.fround, round = (x: number) => Math.floor(x + 0.5);
+delegate("android/graphics/Color", {
+  "nativeRGBToHSV(III[F)V": (r: number, g: number, b: number, hsv: Float32Array) => {
+    const max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
+    let h = 0, s = 0;
+    if (delta) {
+      s = f(delta / max);
+      h = f(r === max ? (g - b) / delta : g === max ? 2 + f((b - r) / delta) : 4 + f((r - g) / delta));
+      h = f(h * 60);
+      if (h < 0) h = f(h + 360);
+    }
+    hsv[0] = h; hsv[1] = s; hsv[2] = f(max / 255);
+  },
+  "nativeHSVToColor(I[F)I": (a: number, hsv: Float32Array) => {
+    const s = Math.min(Math.max(hsv[1], 0), 1), v = Math.min(Math.max(hsv[2], 0), 1), vb = round(f(v * 255));
+    if (Math.abs(s) <= 1 / 4096) return (a << 24 | vb << 16 | vb << 8 | vb) | 0;
+    const hx = hsv[0] < 0 || hsv[0] >= 360 ? 0 : f(hsv[0] / 60), w = Math.floor(hx), fr = f(hx - w);
+    const p = round(f(f(f(1 - s) * v) * 255)), q = round(f(f(f(1 - f(s * fr)) * v) * 255)), t = round(f(f(f(1 - f(s * f(1 - fr))) * v) * 255));
+    const [r, g, b] = [[vb, t, p], [q, vb, p], [p, vb, t], [p, q, vb], [t, p, vb]][w] ?? [vb, p, q];
+    return (a << 24 | r << 16 | g << 8 | b) | 0;
+  },
+});
+
+// skcms' transfer function (g, a, b, c, d, e, f) and a D50 XYZ matrix; the 2D context draws in sRGB
+delegate("android/graphics/ColorSpace$Rgb$Native", {
+  "nativeCreate(FFFFFFF[F)J": (...args: [...number[], Float32Array]) => handle({ transfer: args.slice(0, 7), xyz: Float32Array.from(args[7] as Float32Array) }),
+  "nativeGetNativeFinalizer()J": () => FINALIZER,
+});
+
 delegate("android/graphics/Matrix$ExtraNatives", {
   "nCreate(J)J": (src: bigint) => handle(src ? Float64Array.from(deref<Mat>(src)) : identity()),
   "nGetNativeFinalizer()J": () => FINALIZER,
