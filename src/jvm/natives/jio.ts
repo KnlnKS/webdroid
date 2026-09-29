@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
-import { charsetName, encodeModifiedUtf8, encodeString } from "../charset";
+import { charsetName, encodeString } from "../charset";
 import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, type FileSource } from "../../shell/lazyfile";
@@ -862,36 +862,6 @@ rt.register({
       this.in = null; this.s = "";
       return vcall(input, "close", "()V");
     },
-  },
-});
-
-class JDataOut extends JOutputStream { sink: unknown = null; written = 0; }
-function emit(s: JDataOut, b: Int8Array, off: number, len: number): unknown {
-  return after(vcall(s.sink, "write", "([BII)V", b, off, len), () => { s.written += len; });
-}
-rt.register({
-  name: "java/io/DataOutputStream", ctor: JDataOut, sup: "java/io/OutputStream",
-  ifaces: ["java/io/DataOutput"],
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: unknown) { this.sink = s; },
-    "write(I)V": function (this: JDataOut, b: number) { return after(vcall(this.sink, "write", "(I)V", b), () => { this.written++; }); },
-    "write([BII)V": function (this: JDataOut, b: Int8Array, off: number, len: number) { return emit(this, b, off, len); },
-    "writeBytes(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
-      const bytes = new Int8Array(s.length);
-      for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
-      return emit(this, bytes, 0, bytes.length);
-    },
-    ...writers((n, put) => function (this: JDataOut, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); return emit(this, b, 0, n); }),
-    "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
-      const b = encodeModifiedUtf8(s);
-      if (b.length > 65535) throw rt.mkThrowable("java/io/UTFDataFormatException", "encoded string too long: " + b.length + " bytes");
-      const out = new Int8Array(b.length + 2);
-      out[0] = b.length >>> 8; out[1] = b.length; out.set(b, 2);
-      return emit(this, out, 0, out.length);
-    },
-    "flush()V": function (this: JDataOut) { return vcall(this.sink, "flush", "()V"); },
-    "close()V": function (this: JDataOut) { return after(vcall(this.sink, "flush", "()V"), () => vcall(this.sink, "close", "()V")); },
-    "size()I": function (this: JDataOut) { return this.written; },
   },
 });
 
