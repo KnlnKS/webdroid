@@ -610,8 +610,10 @@ commit message states what it measured. The implementation history (the 2026-09-
   `*Impl` natives, with `platformClinit` letting a spec class run its platform `<clinit>` and
   `Class.getPrimitiveClass` (5eb441da); Region (a real rect-list SkRegion), RegionIterator,
   Outline, NinePatch and Picture from AOSP, with Camera's and Interpolator's natives; owned handles
-  for the classes that free native state in `finalize()` (fb3e6a2f). Not yet run on these: the live
-  set and `lat`.
+  for the classes that free native state in `finalize()` (fb3e6a2f). Gated on 19534e7c: the live set
+  6/6 but TikTok's known wedge once (3/3 alone), conform at every baseline (5eb441da), `lat` cold and
+  warm. 28fd6e26..90e404e2 carried local e2e diagnostics by mistake (per-job stack tracing in the
+  probe); e2e timings from those commits are inflated.
 - **Next: the rest of Stage C.2/C.3.** `fwtest android/graphics/` lists what the natives lack; the
   TS references left are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields (167,
   which stay a layout), Bitmap (144) and Typeface (52). Next: the fonts (Font, FontFamily,
