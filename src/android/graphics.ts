@@ -6,7 +6,7 @@ import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
-import { handle, deref, replace } from "./handles";
+import { handle, deref, replace, weakHandle } from "./handles";
 import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
@@ -16,7 +16,7 @@ import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
-import { NativePath, inversePath, nativePathOf } from "./path";
+import { type NativePath, inversePath, nativePathOf } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
@@ -607,8 +607,8 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
   "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
   "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
   "HUE", "SATURATION", "COLOR", "LUMINOSITY"];
-/** PorterDuff.Mode's or BlendMode's constant `name`, once the (bytecode) enum has initialized */
-export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode", name: string): unknown {
+/** PorterDuff.Mode's, BlendMode's or Region.Op's constant `name`, once the (bytecode) enum has initialized */
+export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode" | "android/graphics/Region$Op", name: string): unknown {
   const info = rt.link(cls);
   return after(rt.initClass(info), () => (info.ctor as unknown as Record<string, unknown>)["s$" + name]);
 }
@@ -1154,7 +1154,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       yield vcall(p, "writeByteArray", "([B)V", new Int8Array(this.pixels().buffer, this.pixels().byteOffset, this.w * this.h * 4));
     }),
 };
-rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods,
+rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods, fields: { mDensity: "density" },
   statics: { get CREATOR() { return parcelCreator("android/graphics/Bitmap", async (p) => {
     const f: number[] = [];
     for (let i = 0; i < 7; i++) f.push(await vcall(p, "readInt", "()I"));
@@ -1419,7 +1419,7 @@ export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   while (cv.saveCount > count) restoreCanvas(cv);
 }
 /** Canvas.drawPicture(Picture, Rect[F]): the picture's own size scaled onto dst */
-const drawPictureInto = driven(function* (this: JCanvas, picture: JPicture, dst: JRect | JRectF): Gen {
+const drawPictureInto = driven(function* (this: JCanvas, picture: object, dst: JRect | JRectF): Gen {
   yield vcall(this, "save", "()I");
   yield vcall(this, "translate", "(FF)V", dst.left, dst.top);
   const w: number = yield vcall(picture, "getWidth", "()I"), h: number = yield vcall(picture, "getHeight", "()I");
@@ -1782,17 +1782,26 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 type RectLike = { left: number; top: number; right: number; bottom: number };
 const clipRectObj = function (this: JCanvas, r: RectLike) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); };
-function clipRectOp(this: JCanvas, l: number, t: number, r: number, b: number, op: { ename?: string } | null) {
-  if (op?.ename === "DIFFERENCE") return clipOutRect.call(this, l, t, r, b);
-  return op && op.ename && op.ename !== "INTERSECT" ? 1 : clipRect.call(this, l, t, r, b);
+let opNativeInt = "";
+/** a Java Region.Op's SkRegion::Op: 0 DIFFERENCE, 1 INTERSECT (the only two a canvas clips with) */
+const regionOpOf = (op: object | null): number => op ? (op as Record<string, number>)[opNativeInt ||= declaredField("android/graphics/Region$Op", "nativeInt")] : 1;
+function clipRectOp(this: JCanvas, l: number, t: number, r: number, b: number, op: object | null) {
+  const code = regionOpOf(op);
+  return code === 0 ? clipOutRect.call(this, l, t, r, b) : code === 1 ? clipRect.call(this, l, t, r, b) : 1;
 }
-const clipRectObjOp = function (this: JCanvas, r: RectLike, op: { ename?: string } | null) { return clipRectOp.call(this, r.left, r.top, r.right, r.bottom, op); };
+const clipRectObjOp = function (this: JCanvas, r: RectLike, op: object | null) { return clipRectOp.call(this, r.left, r.top, r.right, r.bottom, op); };
 const clipOutRectObj = function (this: JCanvas, r: RectLike) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); };
 const drawRectObj = function (this: JCanvas, r: RectLike, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); };
 export const canvasMethods: NativeSpec["methods"] = {
   "drawPaint(Landroid/graphics/Paint;)V": drawPaint,
   "<init>()V": function (this: JCanvas) { setCanvasBitmap(this, null); },
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
+  // Canvas(long): a subclass (Picture's recording canvas) over a native canvas, which it becomes
+  "<init>(J)V": function (this: JCanvas, h: bigint) {
+    const native = deref<JCanvas>(h);
+    this.ctx = native.ctx; this.w = native.w; this.h = native.h; this.bmp = native.bmp;
+    replace(h, this);
+  },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
   "getMaximumBitmapWidth()I": () => 32766,
@@ -1857,16 +1866,16 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipOutRect(Landroid/graphics/RectF;)Z": clipOutRectObj,
   "clipRect(Landroid/graphics/Rect;)Z": clipRectObj,
   "clipRect(Landroid/graphics/RectF;)Z": clipRectObj,
-  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: object, op: { ename?: string } | null) {
-    const name = op?.ename ?? "INTERSECT";
-    if (name !== "INTERSECT" && name !== "DIFFERENCE") return 1;
-    return clipPath(this, nativePathOf(path), name === "DIFFERENCE") ? 1 : 0;
+  "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: object, op: object | null) {
+    const code = regionOpOf(op);
+    if (code > 1) return 1;
+    return clipPath(this, nativePathOf(path), code === 0) ? 1 : 0;
   },
   "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: object) {
-    return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[1]);
+    return after(modeConstant("android/graphics/Region$Op", "INTERSECT"), (op) => vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, op));
   },
   "clipOutPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: object) {
-    return vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, regionOps[0]);
+    return after(modeConstant("android/graphics/Region$Op", "DIFFERENCE"), (op) => vcall(this, "clipPath", "(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z", path, op));
   },
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
     return viewportClipBounds(this, r);
@@ -1950,16 +1959,19 @@ export const canvasMethods: NativeSpec["methods"] = {
       try { drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, 0, 0)); }
       finally { this.ctx.restore(); }
     },
-  "drawPicture(Landroid/graphics/Picture;)V": driven(function* (this: JCanvas, picture: JPicture): Gen {
+  "drawPicture(Landroid/graphics/Picture;)V": driven(function* (this: JCanvas, picture: object): Gen {
     yield vcall(picture, "endRecording", "()V");
     const count: number = yield vcall(this, "save", "()I");
     yield vcall(picture, "draw", "(Landroid/graphics/Canvas;)V", this);
     yield vcall(this, "restoreToCount", "(I)V", count);
   }),
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": drawPictureInto,
+  "drawPatch(Landroid/graphics/NinePatch;Landroid/graphics/Rect;Landroid/graphics/Paint;)V": drawPatchMethod,
+  "drawPatch(Landroid/graphics/NinePatch;Landroid/graphics/RectF;Landroid/graphics/Paint;)V": drawPatchMethod,
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": drawPictureInto,
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
+  "getNativeCanvasWrapper()J": function (this: JCanvas) { return weakHandle(this); },
   // a bitmap's canvas is software; the one a window or RenderNode records into is not
   "isHardwareAccelerated()Z": function (this: JCanvas) { return +(this instanceof JRecordingCanvas); },
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
@@ -2078,54 +2090,25 @@ export function matrixColor(k: Float32Array, color: number): number {
     | (clamp(k[5] * r + k[6] * g + k[7] * b + k[8] * a + k[9]) << 8) | clamp(k[10] * r + k[11] * g + k[12] * b + k[13] * a + k[14])) | 0;
 }
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
-// android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's
-// Modifier.clip(shape) is exactly this, so a round button's ripple and children stay inside it.
-export class JOutline extends JObj {
-  kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
-  l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
-  path: NativePath | null = null;
-  setRR(l: number, t: number, r: number, b: number, rad: number) { this.kind = 1; this.l = l; this.t = t; this.r = r; this.b = b; this.rad = rad; this.path = null; }
-  /** intersect ctx's clip with the outline shape */
-  trace(ctx: Ctx2D) {
-    ctx.beginPath();
-    if (this.kind === 3 && this.path) { ctx.clip(this.path.path(), this.path.fillRule); return; }
-    if (this.kind === 2) ctx.ellipse((this.l + this.r) / 2, (this.t + this.b) / 2, (this.r - this.l) / 2, (this.b - this.t) / 2, 0, 0, Math.PI * 2);
-    else if (this.rad > 0) ctx.roundRect(this.l, this.t, this.r - this.l, this.b - this.t, this.rad);
-    else ctx.rect(this.l, this.t, this.r - this.l, this.b - this.t);
-    ctx.clip();
-  }
+// android.graphics.Outline is AOSP's own (pure Java): the shape a RenderNode or view clips to
+// (clipToOutline), which is what Compose's Modifier.clip(shape) sets.
+let outlineFields: { mode: string; rect: string; radius: string; path: string } | null = null;
+/** intersect ctx's clip with a Java Outline's shape; an empty outline does not clip */
+export function clipToOutline(ctx: Ctx2D, outline: object): void {
+  const f = outlineFields ??= {
+    mode: declaredField("android/graphics/Outline", "mMode"), rect: declaredField("android/graphics/Outline", "mRect"),
+    radius: declaredField("android/graphics/Outline", "mRadius"), path: declaredField("android/graphics/Outline", "mPath"),
+  };
+  const o = outline as Record<string, unknown>, mode = o[f.mode];
+  if (!mode) return;
+  ctx.beginPath();
+  // MODE_PATH, else MODE_ROUND_RECT
+  if (mode === 2) { const p = nativePathOf(o[f.path] as object); ctx.clip(p.path(), p.fillRule); return; }
+  const r = o[f.rect] as JRect, radius = o[f.radius] as number;
+  if (radius > 0) ctx.roundRect(r.left, r.top, r.right - r.left, r.bottom - r.top, radius);
+  else ctx.rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+  ctx.clip();
 }
-/** Outline.setPath copies the path into the outline's own */
-function setOutlinePath(this: JOutline, p: object) {
-  this.kind = 3;
-  (this.path ??= new NativePath()).set(nativePathOf(p));
-}
-rt.register({
-  name: "android/graphics/Outline", ctor: JOutline,
-  methods: {
-    "<init>()V": () => {},
-    "setRoundRect(IIIIF)V": function (this: JOutline, l: number, t: number, r: number, b: number, rad: number) { this.setRR(l, t, r, b, asF(rad)); },
-    "setRoundRect(Landroid/graphics/Rect;F)V": function (this: JOutline, rc: JRect, rad: number) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, asF(rad)); },
-    "setRect(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); },
-    "setRect(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); },
-    "setOval(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); this.kind = 2; },
-    "setOval(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); this.kind = 2; },
-    "setPath(Landroid/graphics/Path;)V": setOutlinePath,
-    "setConvexPath(Landroid/graphics/Path;)V": setOutlinePath,
-    "setEmpty()V": function (this: JOutline) { this.kind = 0; this.path = null; },
-    "offset(II)V": function (this: JOutline, dx: number, dy: number) { this.l += dx; this.r += dx; this.t += dy; this.b += dy; },
-    "canClip()Z": () => 1,
-    "isEmpty()Z": function (this: JOutline) { return this.kind === 0 ? 1 : 0; },
-    "getAlpha()F": function (this: JOutline) { return this.alpha; },
-    "setAlpha(F)V": function (this: JOutline, a: number) { this.alpha = asF(a); },
-    "getRadius()F": function (this: JOutline) { return this.kind === 1 ? this.rad : -1; },
-    "getRect(Landroid/graphics/Rect;)Z": function (this: JOutline, rc: JRect) {
-      if (this.kind !== 1) return 0;
-      rc.left = this.l; rc.top = this.t; rc.right = this.r; rc.bottom = this.b;
-      return 1;
-    },
-  },
-});
 export class JRecordingCanvas extends JCanvas {}
 
 // RenderNode: Compose GraphicsLayer (API 29+) records layers here. Each node keeps a display
@@ -2137,7 +2120,7 @@ class JRenderNode extends JObj {
   alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0; camera = 8;
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)
   clip = true;
-  clipOutline = false; outline: JOutline | null = null;
+  clipOutline = false; outline: object | null = null;
   octx: OffscreenCanvasRenderingContext2D | null = null;
   // deferred display list: replayed against the target ctx each draw so child layers
   // re-recorded AFTER this layer keep showing fresh content (real RenderNode semantics)
@@ -2148,30 +2131,6 @@ class JRenderNode extends JObj {
   /** setUseCompositingLayer: the content composites as one offscreen layer, through this paint */
   layer: JPaint | true | null = null;
 }
-// android.graphics.Picture is the same recording the render node already does, without the
-// transform properties: what it recorded is replayed into whatever canvas is drawing it.
-class JPicture extends JObj { node = new JRenderNode(); recording = false; }
-rt.register({
-  name: "android/graphics/Picture", ctor: JPicture,
-  methods: {
-    "<init>()V": function () {},
-    "beginRecording(II)Landroid/graphics/Canvas;": function (this: JPicture, w: number, h: number) {
-      this.node.w = w; this.node.h = h; this.recording = true;
-      return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
-    },
-    "endRecording()V": function (this: JPicture) {
-      if (!this.recording) return;
-      this.recording = false;
-      return vcall(this.node, "endRecording", "()V");
-    },
-    "getWidth()I": function (this: JPicture) { return this.node.w; },
-    "getHeight()I": function (this: JPicture) { return this.node.h; },
-    "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
-      return after(this.recording ? vcall(this, "endRecording", "()V") : undefined,
-        () => replayWithSemantics(cv, () => { if (this.node.hasDL) replay(cv.ctx, this.node.ops); }));
-    },
-  },
-});
 /** replay a node's display list into ctx with its transform props applied */
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
@@ -2187,7 +2146,7 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
     ctx.translate(-px, -py);
   }
   if (n.clip) { ctx.beginPath(); ctx.rect(0, 0, n.w, n.h); ctx.clip(); }
-  if (n.clipOutline && n.outline && n.outline.kind) n.outline.trace(ctx);
+  if (n.clipOutline && n.outline) clipToOutline(ctx, n.outline);
   perf.rnReplay += displayListLength(n.ops);
   // The display list stays a deferred command list (recorded ops replayed against the real
   // target). A bad op must not abandon this node's save, or its clip leaks into the frame.
@@ -2294,7 +2253,7 @@ rt.register({
     },
     "setClipToBounds(Z)Z": function (this: JRenderNode, c: number) { this.clip = !!c; return 1; },
     "setClipToOutline(Z)Z": function (this: JRenderNode, c: number) { this.clipOutline = !!c; return 1; },
-    "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
+    "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: object | null) { this.outline = o; return 1; },
     "setAmbientShadowColor(I)Z": rn1, "setSpotShadowColor(I)Z": rn1,
     "setUseCompositingLayer(ZLandroid/graphics/Paint;)Z": function (this: JRenderNode, force: number, paint: JPaint | null) {
       this.layer = force ? paint ?? true : null;
@@ -2331,74 +2290,9 @@ canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this
   replayWithSemantics(this, () => recordOrRun(this.ctx, ctx => drawNodeInto(ctx, n)));
 };
 rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas",
-  methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V"]) });
+  methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V", "<init>(J)V"]) });
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);
-const regionOps = mkEnumSet("android/graphics/Region$Op", ["DIFFERENCE", "INTERSECT", "REPLACE", "REVERSE_DIFFERENCE", "UNION", "XOR"]);
-
-// Region: modelled by its bounds only. What reads a Region back here — a shape drawable's
-// transparent region, a clip op — needs the rectangle; a subtractive op cannot shrink the bounds
-// without real geometry, so it leaves them alone.
-class JRegion extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
-function setRegion(this: JRegion, l: number, t: number, r: number, b: number) {
-  if (l >= r || t >= b) { l = t = r = b = 0; }
-  this.left = l; this.top = t; this.right = r; this.bottom = b;
-  return l < r ? 1 : 0;
-}
-function regionOp(this: JRegion, l: number, t: number, r: number, b: number, op: JSimpleEnum | null) {
-  const empty = this.left >= this.right;
-  switch (op?.ename) {
-    case "REPLACE": return setRegion.call(this, l, t, r, b);
-    case "UNION": return empty ? setRegion.call(this, l, t, r, b)
-      : setRegion.call(this, Math.min(this.left, l), Math.min(this.top, t), Math.max(this.right, r), Math.max(this.bottom, b));
-    case "INTERSECT": return setRegion.call(this, Math.max(this.left, l), Math.max(this.top, t), Math.min(this.right, r), Math.min(this.bottom, b));
-    case "REVERSE_DIFFERENCE": return setRegion.call(this, l, t, r, b);
-    default: return empty ? 0 : 1;
-  }
-}
-const regionRect = (r: JRect) => [r.left, r.top, r.right, r.bottom] as const;
-rt.register({
-  name: "android/graphics/Region", ctor: JRegion, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "<init>()V": function () {},
-    "<init>(IIII)V": setRegion,
-    "<init>(Landroid/graphics/Rect;)V": function (this: JRegion, r: JRect) { setRegion.call(this, ...regionRect(r)); },
-    "<init>(Landroid/graphics/Region;)V": function (this: JRegion, r: JRegion) { setRegion.call(this, ...regionRect(r)); },
-    "set(IIII)Z": setRegion,
-    "set(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return setRegion.call(this, ...regionRect(r)); },
-    "set(Landroid/graphics/Region;)Z": function (this: JRegion, r: JRegion) { return setRegion.call(this, ...regionRect(r)); },
-    "setEmpty()V": function (this: JRegion) { setRegion.call(this, 0, 0, 0, 0); },
-    "isEmpty()Z": function (this: JRegion) { return this.left >= this.right ? 1 : 0; },
-    "isRect()Z": () => 1,
-    "isComplex()Z": () => 0,
-    "getBounds()Landroid/graphics/Rect;": function (this: JRegion) {
-      const r = rt.make("android/graphics/Rect") as JRect;
-      r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
-      return r;
-    },
-    "getBounds(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) {
-      r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
-      return this.left < this.right ? 1 : 0;
-    },
-    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": function (this: JRegion, p: object, clip: JRegion) {
-      const b = { left: 0, top: 0, right: 0, bottom: 0 };
-      nativePathOf(p).bounds(b);
-      return setRegion.call(this, Math.max(Math.floor(b.left), clip.left), Math.max(Math.floor(b.top), clip.top),
-        Math.min(Math.ceil(b.right), clip.right), Math.min(Math.ceil(b.bottom), clip.bottom));
-    },
-    "op(IIIILandroid/graphics/Region$Op;)Z": regionOp,
-    "op(Landroid/graphics/Rect;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRect, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
-    "op(Landroid/graphics/Region;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRegion, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
-    "union(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return regionOp.call(this, ...regionRect(r), regionOps[4]); },
-    "contains(II)Z": function (this: JRegion, x: number, y: number) { return x >= this.left && x < this.right && y >= this.top && y < this.bottom ? 1 : 0; },
-    "quickContains(IIII)Z": function (this: JRegion, l: number, t: number, r: number, b: number) { return l >= this.left && t >= this.top && r <= this.right && b <= this.bottom ? 1 : 0; },
-    "quickReject(IIII)Z": function (this: JRegion, l: number, t: number, r: number, b: number) { return r <= this.left || l >= this.right || b <= this.top || t >= this.bottom ? 1 : 0; },
-    "quickReject(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return r.right <= this.left || r.left >= this.right || r.bottom <= this.top || r.top >= this.bottom ? 1 : 0; },
-    "translate(II)V": function (this: JRegion, dx: number, dy: number) { this.left += dx; this.right += dx; this.top += dy; this.bottom += dy; },
-    "toString()Ljava/lang/String;": function (this: JRegion) { return `Region(${this.left}, ${this.top} - ${this.right}, ${this.bottom})`; },
-  },
-});
-
 export class JBFOptions extends JObj {
   inJustDecodeBounds = 0; inSampleSize = 1; outWidth = 0; outHeight = 0;
   inDensity = 0; inTargetDensity = 0; inScaled = 1; inPreferredConfig: unknown = null;
@@ -2421,16 +2315,127 @@ const streamBytes = driven(function* streamBytes(s: unknown): Gen<Uint8Array> {
   if (!b.length) console.warn("[decode] empty stream from", jclsNameOf(s));
   return b;
 });
-export interface NinePatchChunk { xDivs: number[]; yDivs: number[]; padding: [left: number, top: number, right: number, bottom: number] }
-/** Res_png_9patch: flags and counts, int32 offsets and padding (left, right, top, bottom), then xDivs and yDivs */
+/** Res_png_9patch deserialized, as NinePatch's native chunk holds it; colors are per patch (0 transparent) */
+export interface NinePatchChunk { xDivs: number[]; yDivs: number[]; padding: [left: number, top: number, right: number, bottom: number]; colors: number[] }
+/** Res_png_9patch: flags and counts, int32 offsets and padding (left, right, top, bottom), then xDivs, yDivs and colors */
 export function readNinePatchChunk(chunk: Int8Array): NinePatchChunk | null {
   if (chunk.length < 32) return null;
   const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-  const nx = chunk[1] & 0xff, ny = chunk[2] & 0xff;
-  if (32 + (nx + ny) * 4 > chunk.length) return null;
+  const nx = chunk[1] & 0xff, ny = chunk[2] & 0xff, nc = chunk[3] & 0xff;
+  if (32 + (nx + ny + nc) * 4 > chunk.length) return null;
   const at = (i: number) => view.getInt32(i, true);
-  const divs = (from: number, n: number) => Array.from({ length: n }, (_, i) => at(from + i * 4));
-  return { xDivs: divs(32, nx), yDivs: divs(32 + nx * 4, ny), padding: [at(12), at(20), at(16), at(24)] };
+  const ints = (from: number, n: number) => Array.from({ length: n }, (_, i) => at(from + i * 4));
+  return { xDivs: ints(32, nx), yDivs: ints(32 + nx * 4, ny), padding: [at(12), at(20), at(16), at(24)], colors: ints(32 + (nx + ny) * 4, nc) };
+}
+/** NinePatch.isNinePatchChunk: long enough, and its first byte (wasDeserialized) is not -1 */
+export const isNinePatchChunk = (chunk: Int8Array | null): chunk is Int8Array => !!chunk && chunk.length >= 32 && chunk[0] !== -1;
+/** NinePatch.validateNinePatchChunk's deserialized copy */
+export function validNinePatchChunk(chunk: Int8Array | null): NinePatchChunk {
+  if (!chunk) throw rt.npe();
+  const parsed = readNinePatchChunk(chunk);
+  if (!parsed) throw rt.mkThrowable("java/lang/RuntimeException", "Array too small for chunk.");
+  return parsed;
+}
+let ninePatchProps: { bitmap: string; chunk: string } | null = null;
+/** a Java NinePatch's bitmap and native chunk, written into `out` */
+export function ninePatchOf<T extends { bmp: JBitmap | null; chunk: NinePatchChunk | null }>(patch: object, out: T): T {
+  const p = ninePatchProps ??= { bitmap: declaredField("android/graphics/NinePatch", "mBitmap"), chunk: declaredField("android/graphics/NinePatch", "mNativeChunk") };
+  const o = patch as Record<string, unknown>;
+  out.bmp = o[p.bitmap] as JBitmap; out.chunk = deref<NinePatchChunk>(o[p.chunk] as bigint);
+  return out;
+}
+
+// ── nine-patch geometry: SkCanvas::drawImageLattice over NinePatchUtils::SetLatticeDivs
+/** one axis of SkLatticeIter: the source boundaries, whether the first patch stretches, and the stretching total */
+interface LatticeAxis { src: number[]; scalableFirst: boolean; scalable: number }
+interface Lattice { w: number; h: number; x: LatticeAxis; y: LatticeAxis }
+function latticeAxis(divs: number[], size: number): LatticeAxis | null {
+  // a last div at the edge says nothing, and Skia refuses it
+  const n = divs.length && divs[divs.length - 1] === size ? divs.length - 1 : divs.length;
+  for (let i = 0, prev = -1; i < n; prev = divs[i++]) if (prev >= divs[i] || divs[i] >= size) return null;
+  const scalableFirst = n > 0 && divs[0] === 0, src = [0];
+  for (let i = scalableFirst ? 1 : 0; i < n; i++) src.push(divs[i]);
+  src.push(size);
+  let scalable = 0;
+  for (let i = 1, s = scalableFirst; i < src.length; i++, s = !s) if (s) scalable += src[i] - src[i - 1];
+  return { src, scalableFirst, scalable };
+}
+const lattices = new WeakMap<NinePatchChunk, Lattice | null>();
+/** the chunk's lattice over a w x h image, or null where SkLatticeIter::Valid refuses it (no divs on either axis) */
+function latticeOf(chunk: NinePatchChunk, w: number, h: number): Lattice | null {
+  let l = lattices.get(chunk);
+  if (l === undefined || l && (l.w !== w || l.h !== h)) {
+    const x = latticeAxis(chunk.xDivs, w), y = latticeAxis(chunk.yDivs, h);
+    lattices.set(chunk, l = x && y && (x.src.length > 2 || y.src.length > 2) ? { w, h, x, y } : null);
+  }
+  return l;
+}
+/** SkLatticeIter's set_points: each source boundary's place between start and end; fixed patches keep
+ *  their size and the stretching ones share the rest, or, when the fixed ones do not fit, they shrink */
+function placeAxis(a: LatticeAxis, start: number, end: number, out: number[]) {
+  const f = Math.fround, src = a.src, len = f(end - start), fixed = src[src.length - 1] - a.scalable, fits = fixed <= len;
+  const scale = fits ? f(f(len - fixed) / a.scalable) : f(len / fixed);
+  out[0] = start;
+  for (let i = 1, s = a.scalableFirst; i < src.length - 1; i++, s = !s) {
+    const d = src[i] - src[i - 1];
+    out[i] = f(out[i - 1] + (fits ? (s ? f(scale * d) : d) : (s ? 0 : f(scale * d))));
+  }
+  out[src.length - 1] = end;
+}
+const patchXs: number[] = [], patchYs: number[] = [];
+/** a nine-patch image (sw x sh) stretched into the destination rectangle */
+export function drawNinePatch(ctx: Ctx2D, img: CanvasImageSource, sw: number, sh: number, chunk: NinePatchChunk, dx: number, dy: number, dw: number, dh: number) {
+  if (!(dw > 0 && dh > 0)) return;
+  const lattice = latticeOf(chunk, sw, sh);
+  if (!lattice) { ctx.drawImage(img, 0, 0, sw, sh, dx, dy, dw, dh); return; }
+  const sx = lattice.x.src, sy = lattice.y.src;
+  placeAxis(lattice.x, dx, dx + dw, patchXs);
+  placeAxis(lattice.y, dy, dy + dh, patchYs);
+  for (let j = 0; j + 1 < sy.length; j++) {
+    const top = patchYs[j], h = patchYs[j + 1] - top;
+    if (!(h > 0)) continue;
+    for (let i = 0; i + 1 < sx.length; i++) {
+      const left = patchXs[i], w = patchXs[i + 1] - left;
+      if (w > 0) ctx.drawImage(img, sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j], left, top, w, h);
+    }
+  }
+}
+/** hwui's NinePatch getTransparentRegion: the destination patches whose chunk color is transparent,
+ *  each rounded, as (l, t, r, b) quadruples; none unless the chunk has a color for every patch */
+export function transparentPatches(chunk: NinePatchChunk, sw: number, sh: number, l: number, t: number, r: number, b: number): number[] {
+  const lattice = latticeOf(chunk, sw, sh), out: number[] = [];
+  if (!lattice) return out;
+  const nx = lattice.x.src.length - 1, ny = lattice.y.src.length - 1, xs: number[] = [], ys: number[] = [];
+  if (nx * ny !== chunk.colors.length) return out;
+  placeAxis(lattice.x, l, r, xs);
+  placeAxis(lattice.y, t, b, ys);
+  const round = (v: number) => Math.floor(v + 0.5);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    if (chunk.colors[j * nx + i] === 0 && xs[i] < xs[i + 1] && ys[j] < ys[j + 1]) out.push(round(xs[i]), round(ys[j]), round(xs[i + 1]), round(ys[j + 1]));
+  }
+  return out;
+}
+/** Canvas.drawPatch as android_graphics_Canvas draws it: a patch of another density is drawn in its
+ *  own pixels under a scale; the paint contributes its alpha */
+export function drawPatch(cv: JCanvas, bmp: JBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, paint: JPaint | null, dstDensity: number, srcDensity: number) {
+  const ctx = cv.ctx;
+  ctx.save();
+  if (paint) ctx.globalAlpha *= (paint.renderAlpha ?? paint.color >>> 24) / 255;
+  if (dstDensity === srcDensity || !dstDensity || !srcDensity) drawNinePatch(ctx, bmp.canvas, bmp.w, bmp.h, chunk, l, t, r - l, b - t);
+  else {
+    const s = dstDensity / srcDensity;
+    ctx.translate(l, t);
+    ctx.scale(s, s);
+    drawNinePatch(ctx, bmp.canvas, bmp.w, bmp.h, chunk, 0, 0, (r - l) / s, (b - t) / s);
+  }
+  ctx.restore();
+}
+const patchParts: { bmp: JBitmap | null; chunk: NinePatchChunk | null } = { bmp: null, chunk: null };
+/** Canvas.drawPatch(NinePatch, Rect[F], Paint): the canvas's density is its bitmap's, none otherwise */
+function drawPatchMethod(this: JCanvas, patch: object, dst: RectLike, paint: JPaint | null) {
+  const { bmp, chunk } = ninePatchOf(patch, patchParts);
+  if (bmp && chunk) drawPatch(this, bmp, chunk, dst.left, dst.top, dst.right, dst.bottom, paint, this.bmp?.density ?? 0, bmp.density);
+  patchParts.bmp = patchParts.chunk = null;
 }
 /** A compiled 9-patch PNG's npTc chunk, converted from network to device order as the decoder does */
 function pngNinePatchChunk(png: Uint8Array): Int8Array | null {

@@ -13,7 +13,7 @@
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 
-import { rt, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, deref, replace, release, FINALIZER } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
@@ -21,12 +21,15 @@ import {
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
+  type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches, drawPatch,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
-import { newObj, vcall, scall } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jstream";
 import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
+import { NativeRegion, nativeRegionOf } from "./region";
+import { recordingContext, replay, replayWithSemantics, type DisplayList } from "./recording";
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
@@ -609,11 +612,308 @@ delegate("android/graphics/PathIterator", {
   "nNext(JJ)I": (h: bigint, pts: bigint) => iterator(h).next(deref<Float32Array>(pts), 0),
 });
 
+// ── android.graphics.Region and RegionIterator ─────────────────────────────────────────
+// Both free their native state from finalize(), which never runs here.
+const region = (h: bigint) => deref<NativeRegion>(h);
+const scratch = new NativeRegion();
+delegate("android/graphics/Region", {
+  "nativeConstructor()J": () => handle(new NativeRegion()),
+  "nativeDestructor(J)V": release,
+  "nativeSetRegion(JJ)V": (h: bigint, src: bigint) => { region(h).set(region(src)); },
+  "nativeSetRect(JIIII)Z": (h: bigint, l: number, t: number, r: number, b: number) => +region(h).setRect(l, t, r, b),
+  "nativeSetPath(JJJ)Z": (h: bigint, p: bigint, clip: bigint) => +region(h).setPath(path(p), region(clip)),
+  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => +region(h).bounds(r),
+  "nativeGetBoundaryPath(JJ)Z": (h: bigint, p: bigint) => +region(h).boundaryPath(path(p)),
+  "nativeOp(JIIIII)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => {
+    scratch.setRect(l, t, r, b);
+    return +region(h).op(region(h), scratch, op);
+  },
+  "nativeOp(JLandroid/graphics/Rect;JI)Z": (h: bigint, r: Rect, other: bigint, op: number) => {
+    scratch.setRect(r.left, r.top, r.right, r.bottom);
+    return +region(h).op(scratch, region(other), op);
+  },
+  "nativeOp(JJJI)Z": (h: bigint, a: bigint, b: bigint, op: number) => +region(h).op(region(a), region(b), op),
+  // the rects as one int vector, which is Parcel's int-array form
+  "nativeWriteToParcel(JLandroid/os/Parcel;)Z": (h: bigint, parcel: object | null) =>
+    parcel ? after(vcall(parcel, "writeIntArray", "([I)V", Int32Array.from(region(h).rects())), () => 1) : 0,
+  "nativeCreateFromParcel(Landroid/os/Parcel;)J": (parcel: object | null) => parcel ? after(vcall(parcel, "createIntArray", "()[I"), (rects: Int32Array | null) => {
+    if (rects && rects.length % 4) return 0n;
+    const r = new NativeRegion();
+    if (rects) r.setRects(rects);
+    return handle(r);
+  }) : 0n,
+  "nativeEquals(JJ)Z": (a: bigint, b: bigint) => +region(a).equals(region(b)),
+  "nativeToString(J)Ljava/lang/String;": (h: bigint) => region(h).toString(),
+  "isEmpty()Z": function (this: object) { return +nativeRegionOf(this).isEmpty(); },
+  "isRect()Z": function (this: object) { return +nativeRegionOf(this).isRect(); },
+  "isComplex()Z": function (this: object) { return +nativeRegionOf(this).isComplex(); },
+  "contains(II)Z": function (this: object, x: number, y: number) { return +nativeRegionOf(this).contains(x, y); },
+  "quickContains(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickContains(l, t, r, b); },
+  "quickReject(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickReject(l, t, r, b); },
+  "quickReject(Landroid/graphics/Region;)Z": function (this: object, o: object) {
+    const b = { left: 0, top: 0, right: 0, bottom: 0 };
+    return +(!nativeRegionOf(o).bounds(b) || nativeRegionOf(this).quickReject(b.left, b.top, b.right, b.bottom));
+  },
+  "translate(IILandroid/graphics/Region;)V": function (this: object, dx: number, dy: number, dst: object | null) {
+    const r = nativeRegionOf(this);
+    r.translate(dx, dy, dst ? nativeRegionOf(dst) : r);
+  },
+  // hwui's scale_rgn: each rect's edges scaled and rounded half away from zero, then unioned
+  "scale(FLandroid/graphics/Region;)V": function (this: object, s: number, dst: object | null) {
+    const r = nativeRegionOf(this), round = (v: number) => Math.sign(v) * Math.round(Math.abs(v));
+    (dst ? nativeRegionOf(dst) : r).setRects(r.rects().map((v) => round(Math.fround(v * s))));
+  },
+});
+// the iterator walks its own copy of the region, as hwui's RgnIterPair does
+delegate("android/graphics/RegionIterator", {
+  "nativeConstructor(J)J": (h: bigint) => handle({ rects: region(h).rects(), at: 0 }),
+  "nativeDestructor(J)V": release,
+  "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
+    const it = deref<{ rects: number[]; at: number }>(h);
+    if (it.at >= it.rects.length) return 0;
+    [r.left, r.top, r.right, r.bottom] = it.rects.slice(it.at, it.at += 4);
+    return 1;
+  },
+});
+
+
+// ── android.graphics.Camera: Sk3DView ──────────────────────────────────────────────────
+// A stack of 4x4 transforms (SkM44, row-major, float) viewed by SkCamera3D, whose location is
+// in inches (72 points each) and whose observer sits on the view axis at the location's depth.
+class Camera3D {
+  stack = [Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)];
+  location = [0, 0, -576];
+  get top() { return this.stack[this.stack.length - 1]; }
+  /** top = top * m (SkM44::preConcat) */
+  preConcat(m: ArrayLike<number>) {
+    const a = this.top.slice(), out = this.top;
+    for (let r = 0; r < 16; r += 4) for (let c = 0; c < 4; c++) out[r + c] = a[r] * m[c] + a[r + 1] * m[4 + c] + a[r + 2] * m[8 + c] + a[r + 3] * m[12 + c];
+  }
+  /** SkM44::Rotate about a unit axis */
+  rotate(x: number, y: number, z: number, deg: number) {
+    const rad = Math.fround(Math.fround(deg * Math.fround(Math.PI)) / 180), s = Math.sin(rad), c = Math.cos(rad), t = 1 - c;
+    this.preConcat([t * x * x + c, t * x * y - s * z, t * x * z + s * y, 0, t * x * y + s * z, t * y * y + c, t * y * z - s * x, 0,
+      t * x * z - s * y, t * y * z + s * x, t * z * z + c, 0, 0, 0, 0, 1]);
+  }
+  /** SkPatch3D (u = (1,0,0), v = (0,-1,0) at the origin) through the top transform */
+  patch() {
+    const m = this.top;
+    return { u: [m[0], m[4], m[8]], v: [-m[1], -m[5], -m[9]], origin: [m[3], m[7], m[11]] };
+  }
+  /** SkCamera3D::patchToMatrix, with the orientation its doUpdate derives for the fixed axis
+   *  (0,0,1) and zenith (0,-1,0) and an observer at (0, 0, location z) */
+  matrix(out: Mat) {
+    const { u, v, origin } = this.patch(), z = this.location[2];
+    const rows = [[-z, 0, 0], [0, z, 0], [0, 0, 1]];
+    const diff = [origin[0] - this.location[0], origin[1] - this.location[1], origin[2] - z];
+    const dot = diff[2], at = (p: number[], row: number) => (p[0] * rows[row][0] + p[1] * rows[row][1] + p[2] * rows[row][2]) / dot;
+    out.set([at(u, 0), at(v, 0), at(diff, 0), at(u, 1), at(v, 1), at(diff, 1), at(u, 2), at(v, 2), 1].map(Math.fround));
+  }
+}
+let nativeInstance = "";
+/** where a Java Camera keeps its Sk3DView, which its natives set and read themselves */
+const cameraSlot = (c: object) => c as Record<string, bigint>;
+const instanceField = () => nativeInstance ||= declaredField("android/graphics/Camera", "native_instance");
+const camera = (c: object) => deref<Camera3D>(cameraSlot(c)[instanceField()]);
+delegate("android/graphics/Camera", {
+  "nativeConstructor()V": function (this: object) { cameraSlot(this)[instanceField()] = handle(new Camera3D()); },
+  "nativeDestructor()V": function (this: object) { release(cameraSlot(this)[instanceField()]); },
+  "save()V": function (this: object) { const c = camera(this); c.stack.push(c.top.slice()); },
+  "restore()V": function (this: object) { const c = camera(this); if (c.stack.length > 1) c.stack.pop(); },
+  // SkM44::preTranslate
+  "translate(FFF)V": function (this: object, x: number, y: number, z: number) { camera(this).preConcat([1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1]); },
+  "rotateX(F)V": function (this: object, deg: number) { camera(this).rotate(1, 0, 0, deg); },
+  "rotateY(F)V": function (this: object, deg: number) { camera(this).rotate(0, -1, 0, deg); },
+  "rotateZ(F)V": function (this: object, deg: number) { camera(this).rotate(0, 0, 1, deg); },
+  "rotate(FFF)V": function (this: object, x: number, y: number, z: number) {
+    const c = camera(this);
+    c.rotate(1, 0, 0, x); c.rotate(0, -1, 0, y); c.rotate(0, 0, 1, z);
+  },
+  "setLocation(FFF)V": function (this: object, x: number, y: number, z: number) { camera(this).location = [x, y, z].map((v) => Math.fround(v * 72)); },
+  "getLocationX()F": function (this: object) { return Math.fround(camera(this).location[0] / 72); },
+  "getLocationY()F": function (this: object) { return Math.fround(camera(this).location[1] / 72); },
+  "getLocationZ()F": function (this: object) { return Math.fround(camera(this).location[2] / 72); },
+  "nativeGetMatrix(J)V": function (this: object, m: bigint) { camera(this).matrix(matrix(m)); },
+  "nativeApplyToCanvas(J)V": function (this: object, h: bigint) {
+    const m = identity();
+    camera(this).matrix(m);
+    applyMatrix(canvas(h).ctx, m);
+  },
+  // SkPatch3D::dotWith, whose y term Skia computes as u.z*v.x - u.x*v.y
+  "dotWithNormal(FFF)F": function (this: object, x: number, y: number, z: number) {
+    const { u, v } = camera(this).patch();
+    return Math.fround((u[1] * v[2] - u[2] * v[1]) * x + (u[2] * v[0] - u[0] * v[1]) * y + (u[0] * v[1] - u[1] * v[0]) * z);
+  },
+});
+
+// ── android.graphics.Interpolator: hwui's SkiaInterpolator ─────────────────────────────
+// Key frames at unsigned millisecond times, each with the cubic that eases toward the next;
+// timeToValues answers SkiaInterpolatorBase::Result (0 normal, 1 freeze start, 2 freeze end).
+const IDENTITY_BLEND = [0.33333333, 0.33333333, 0.66666667, 0.66666667].map(Math.fround);
+class KeyFrames {
+  times!: Uint32Array; blends!: Float32Array; values!: Float32Array;
+  elems = 0; repeat = 1; mirror = false;
+  constructor(elems: number, frames: number) { this.reset(elems, frames); }
+  reset(elems: number, frames: number) {
+    this.elems = elems & 0xff; this.repeat = 1; this.mirror = false;
+    this.times = new Uint32Array(frames); this.blends = new Float32Array(frames * 4); this.values = new Float32Array(frames * this.elems);
+  }
+  /** SkiaInterpolator's binarySearch over the first `count` times: the index of a time the
+   *  bisection lands on, else ~ where `time` would go, after an equal time it did not land on
+   *  (so the last frame's own time is past the end: the device freezes there) */
+  search(time: number, count = this.times.length): number {
+    if (count <= 0) return ~0;
+    let lo = 0, hi = count - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1, t = this.times[mid];
+      if (t === time) return mid;
+      if (t < time) lo = mid + 1; else hi = mid;
+    }
+    return time < this.times[lo] ? ~lo : ~(lo + 1);
+  }
+  timeToValues(time: number, out: Float32Array | null): number {
+    const times = this.times, n = times.length, f = Math.fround;
+    let result = 0;
+    time >>>= 0;
+    if (this.repeat !== 1) {
+      const start = times[0], total = (times[n - 1] - start) >>> 0, end = Math.floor(f(this.repeat * total)) >>> 0;
+      let offset = (time - start) >>> 0;
+      if (offset >= end) {
+        const fraction = f(this.repeat - Math.trunc(this.repeat));
+        offset = fraction === 0 && this.repeat > 0 ? total : Math.floor(f(fraction * total)) >>> 0;
+        result = 2;
+      } else {
+        offset %= this.mirror ? total * 2 : total;
+        if (offset > total) offset = total * 2 - offset;
+      }
+      time = (offset + start) >>> 0;
+    }
+    let index = this.search(time), exact = true;
+    if (index < 0) {
+      index = ~index;
+      if (index === 0) result = 1;
+      else if (index === n) { index--; result = 2; }
+      else exact = false;
+    }
+    if (out) {
+      const e = this.elems, next = index * e;
+      if (exact) out.set(this.values.subarray(next, next + e));
+      else {
+        const b = (index - 1) * 4, t = unitCubicInterp(f((time - times[index - 1]) / (times[index] - times[index - 1])),
+          this.blends[b], this.blends[b + 1], this.blends[b + 2], this.blends[b + 3]);
+        for (let i = 0; i < e; i++) { const p = this.values[next - e + i]; out[i] = f(p + f(f(this.values[next + i] - p) * t)); }
+      }
+    }
+    return result;
+  }
+}
+/** SkiaInterpolatorBase::UnitCubicInterp: y on the unit cubic (0,0) (bx,by) (cx,cy) (1,1) at x,
+ *  found by bisection in 2.14 fixed point */
+function unitCubicInterp(value: number, bx: number, by: number, cx: number, cy: number): number {
+  const ONE = 1 << 14, dot14 = (v: number) => (v <= 0 ? 0 : v >= 1 ? ONE : Math.floor(v * 65536) >> 2);
+  const mul = (a: number, b: number) => (a * b + (1 << 13)) >> 14;
+  const evalCubic = (t: number, a: number, b: number, c: number) => mul(mul(mul(c, t) + b, t) + a, t);
+  const x = dot14(value);
+  if (x === 0) return 0;
+  if (x === ONE) return 1;
+  let b = dot14(bx), c = dot14(cx), A = 3 * b, B = 3 * (c - 2 * b), C = 3 * (b - c) + ONE;
+  let t = ONE >> 1, dt = ONE >> 1;
+  for (let i = 0; i < 13; i++) {
+    dt >>= 1;
+    if (x < evalCubic(t, A, B, C)) t -= dt;
+    else t += dt;
+  }
+  b = dot14(by); c = dot14(cy); A = 3 * b; B = 3 * (c - 2 * b); C = 3 * (b - c) + ONE;
+  return Math.fround(evalCubic(t, A, B, C) / ONE);
+}
+// Interpolator frees its native state from finalize(), which never runs here
+const keyFrames = (h: bigint) => deref<KeyFrames>(h);
+delegate("android/graphics/Interpolator", {
+  "nativeConstructor(II)J": (elems: number, frames: number) => handle(new KeyFrames(elems, frames)),
+  "nativeDestructor(J)V": release,
+  "nativeReset(JII)V": (h: bigint, elems: number, frames: number) => keyFrames(h).reset(elems, frames),
+  // a key frame must come after the ones before it, or SkiaInterpolator leaves it unset
+  "nativeSetKeyFrame(JII[F[F)V": (h: bigint, index: number, msec: number, values: Float32Array, blend: Float32Array | null) => {
+    const k = keyFrames(h), time = msec >>> 0;
+    if (k.search(time, index) !== ~index) return;
+    k.times[index] = time;
+    k.blends.set(blend ? blend.subarray(0, 4) : IDENTITY_BLEND, index * 4);
+    k.values.set(values.subarray(0, k.elems), index * k.elems);
+  },
+  "nativeSetRepeatMirror(JFZ)V": (h: bigint, repeat: number, mirror: number) => {
+    const k = keyFrames(h);
+    k.repeat = Math.min(repeat, 32000); k.mirror = !!mirror;
+  },
+  "nativeTimeToValues(JI[F)I": (h: bigint, msec: number, values: Float32Array | null) => keyFrames(h).timeToValues(msec, values),
+});
+
+// ── android.graphics.NinePatch: its chunk deserialized ─────────────────────────────────
+// NinePatch frees its chunk from finalize(), which never runs here
+delegate("android/graphics/NinePatch", {
+  "isNinePatchChunk([B)Z": (chunk: Int8Array | null) => +isNinePatchChunk(chunk),
+  "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => handle(validNinePatchChunk(chunk)),
+  "nativeFinalize(J)V": release,
+  "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, dst: Rect) => {
+    const bmp = deref<JBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
+    if (!rects.length) return 0n;
+    const r = new NativeRegion();
+    r.setRects(rects);
+    return handle(r);
+  },
+});
+
+// ── android.graphics.Picture: a recorded display list ──────────────────────────────────
+// The recording canvas records as a RenderNode's does, and drawing the picture replays it into
+// the target canvas inside a save/restore, as SkRecordDraw does. SkPicture's serialized form
+// (createFromStream, writeToStream) is not implemented.
+class NativePicture {
+  w = 0; h = 0;
+  ops: DisplayList | null = null;
+  /** while recording: the canvas handle and the list it records into */
+  canvas = 0n; recording: DisplayList | null = null;
+  endRecording() {
+    if (!this.recording) return;
+    this.ops = this.recording; this.recording = null;
+    release(this.canvas); this.canvas = 0n;
+  }
+}
+const picture = (h: bigint) => deref<NativePicture>(h);
+delegate("android/graphics/Picture", {
+  // a copy of a picture still recording holds what was recorded so far
+  "nativeConstructor(J)J": (src: bigint) => {
+    const p = new NativePicture();
+    if (src) { const s = picture(src); p.w = s.w; p.h = s.h; p.ops = s.recording ? s.recording.slice() : s.ops; }
+    return handle(p);
+  },
+  "nativeDestructor(J)V": (h: bigint) => { picture(h).endRecording(); release(h); },
+  "nativeBeginRecording(JII)J": (h: bigint, w: number, ht: number) => {
+    const p = picture(h), c = new JCanvas();
+    p.endRecording();
+    p.w = w; p.h = ht; p.ops = null; p.recording = [];
+    c.ctx = recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, p.recording);
+    c.w = w; c.h = ht;
+    return p.canvas = handle(c);
+  },
+  "nativeEndRecording(J)V": (h: bigint) => picture(h).endRecording(),
+  "nativeGetWidth(J)I": (h: bigint) => picture(h).w,
+  "nativeGetHeight(J)I": (h: bigint) => picture(h).h,
+  "nativeDraw(JJ)V": (c: bigint, h: bigint) => {
+    const p = picture(h), cv = canvas(c);
+    p.endRecording();
+    const ops = p.ops;
+    if (!ops) return;
+    replayWithSemantics(cv, () => {
+      cv.ctx.save();
+      try { replay(cv.ctx, ops); } finally { cv.ctx.restore(); }
+    });
+  },
+});
 
 // ── android.graphics.Canvas / BaseCanvas ───────────────────────────────────────────────
 // Every one of these routes into canvasMethods, which is the table our own Canvas native
 // already uses: one copy of each draw body, reached under two sets of names.
-const canvas = (h: bigint) => deref<JCanvas>(h);
+/** a TS-spec canvas hands out a weak handle (handles.ts' weakHandle) */
+const canvas = (h: bigint) => { const c = deref<JCanvas | WeakRef<JCanvas>>(h); return c instanceof WeakRef ? c.deref()! : c; };
 /** one of our own native method bodies, by its Java descriptor */
 function specFn<T>(table: Record<string, unknown> | undefined, what: string, desc: string) {
   const fn = table?.[desc];
@@ -728,11 +1028,8 @@ delegate("android/graphics/BaseCanvas", {
     doubleRoundRect(canvas(h), [ol, ot, or, ob], [orx, ory], [il, it, ir, ib], [irx, iry], paint(pt)),
   "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array, il: number, it: number, ir: number, ib: number, irad: Float32Array, pt: bigint) =>
     doubleRoundRect(canvas(h), [ol, ot, or, ob], [orad[0], orad[1]], [il, it, ir, ib], [irad[0], irad[1]], paint(pt)),
-  // a nine-patch's stretch regions live in its chunk, which the drawable layer already
-  // resolves; from here it is the bitmap scaled into the destination
-  "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, _chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint) =>
-    cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), deref<JBitmap>(b) as never, null as never, rect(l, t, r, bo) as never, optPaint(pt) as never),
+  "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint, dstDensity: number, srcDensity: number) =>
+    drawPatch(canvas(h), deref<JBitmap>(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(pt), dstDensity, srcDensity),
   // positioned glyph ids, which only a shaping engine produces: there is none behind
   // Canvas2D, and the text entry points above are what the framework actually uses
   "nDrawGlyphs(J[I[FIIIJJ)V": () => {},

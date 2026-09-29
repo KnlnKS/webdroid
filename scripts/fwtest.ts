@@ -353,6 +353,206 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   same("reverse difference outline", await corners(rev), ["10,10", "10,5", "15,15", "15,5", "5,10", "5,15"].join(" "));
 });
 
+// Expected values are the reference AVD's (API 35) for the same calls.
+await exercise("Region, RegionIterator (device values)", async () => {
+  const R = "Landroid/graphics/Region;", OP = "Landroid/graphics/Region$Op;", P = "Landroid/graphics/Path;";
+  const ops = (await linkInit("android/graphics/Region$Op")).ctor as Record<string, unknown>;
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  const region = (...a: number[]) => a.length ? newObj("android/graphics/Region", "(IIII)V", ...a) : newObj("android/graphics/Region", "()V");
+  const op = (r: unknown, l: number, t: number, rr: number, b: number, o: string) => vcall(r, "op", `(IIII${OP})Z`, l, t, rr, b, ops[`s$${o}`]);
+  const rects = async (r: unknown) => {
+    const it = await newObj("android/graphics/RegionIterator", `(${R})V`, r), rc = await newObj("android/graphics/Rect", "()V") as any, out: string[] = [];
+    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
+    return out.join(" ");
+  };
+  const dump = async (p: unknown) => {
+    const it = await vcall(p, "getPathIterator", "()Landroid/graphics/PathIterator;"), pts = new Float32Array(8), out: string[] = [];
+    while (await vcall(it, "hasNext", "()Z")) {
+      const v = await vcall(it, "next", "([FI)I", pts, 0) as number;
+      out.push("MLQKCZ"[v] + [...pts.subarray(0, [2, 4, 6, 6, 8, 0][v])].join(","));
+    }
+    return out.join(" ");
+  };
+  const str = (r: unknown) => vcall(r, "toString", "()Ljava/lang/String;");
+  const r = await region(0, 0, 100, 100);
+  same("rect", [await rects(r), await vcall(r, "isRect", "()Z"), await vcall(r, "isComplex", "()Z"), await str(r)], ["0,0,100,100", 1, 0, "SkRegion((0,0,100,100))"]);
+  await op(r, 20, 20, 50, 50, "DIFFERENCE");
+  same("difference", [await rects(r), await vcall(r, "isRect", "()Z"), await vcall(r, "isComplex", "()Z")], ["0,0,100,20 0,20,20,50 50,20,100,50 0,50,100,100", 0, 1]);
+  same("toString", await str(r), "SkRegion((0,0,100,20)(0,20,20,50)(50,20,100,50)(0,50,100,100))");
+  same("contains", [await vcall(r, "contains", "(II)Z", 10, 10), await vcall(r, "contains", "(II)Z", 30, 30), await vcall(r, "contains", "(II)Z", 99, 99), await vcall(r, "contains", "(II)Z", 100, 50)], [1, 0, 1, 0]);
+  same("quick", [await vcall(r, "quickContains", "(IIII)Z", 0, 0, 10, 10), await vcall(r, "quickReject", "(IIII)Z", 200, 0, 300, 10), await vcall(r, "quickReject", "(IIII)Z", 20, 20, 30, 30)], [0, 1, 0]);
+  const u = await region(0, 0, 10, 10);
+  await op(u, 10, 0, 20, 10, "UNION");
+  await op(u, 0, 10, 20, 20, "UNION");
+  same("touching unions", await rects(u), "0,0,20,20");
+  const x = await region(0, 0, 10, 10);
+  await op(x, 5, 5, 15, 15, "XOR");
+  same("xor", await rects(x), "0,0,10,5 0,5,5,10 10,5,15,10 5,10,15,15");
+  const rd = await region(0, 0, 10, 10);
+  same("reverse difference", [await op(rd, 5, 5, 15, 15, "REVERSE_DIFFERENCE"), await rects(rd)], [1, "10,5,15,10 5,10,15,15"]);
+  const inter = await region(0, 0, 10, 10);
+  same("empty intersection", [await op(inter, 20, 20, 30, 30, "INTERSECT"), await vcall(inter, "isEmpty", "()Z"), await str(inter)], [0, 1, "SkRegion()"]);
+  const two = await region();
+  same("rect op region", [await vcall(two, "op", `(Landroid/graphics/Rect;${R}${OP})Z`, await newObj("android/graphics/Rect", "(IIII)V", 0, 0, 30, 30), x, ops.s$DIFFERENCE), await rects(two)],
+    [1, "10,0,30,5 5,5,10,10 15,5,30,10 0,10,5,15 15,10,30,15 0,15,30,30"]);
+  same("empty rect", [await vcall(await region(), "set", "(IIII)Z", 5, 5, 5, 10), await vcall(await region(1, 1, 0, 5), "isEmpty", "()Z")], [0, 1]);
+  const bp = await newObj("android/graphics/Path", "()V");
+  same("boundary", [await vcall(r, "getBoundaryPath", `(${P})Z`, bp), await dump(bp)],
+    [1, "M0,20 L0,20,0,0 L0,0,100,0 L100,0,100,100 L100,100,0,100 L0,100,0,20 Z M20,20 L20,20,20,50 L20,50,50,50 L50,50,50,20 Z"]);
+  const pre = await newObj("android/graphics/Path", "()V");
+  await vcall(pre, "moveTo", "(FF)V", 1, 1); await vcall(pre, "lineTo", "(FF)V", 2, 2);
+  await vcall(x, "getBoundaryPath", `(${P})Z`, pre);
+  same("boundary appended", await dump(pre), "M1,1 L1,1,2,2 M0,5 L0,5,0,0 L0,0,10,0 L10,0,10,5 L10,5,5,5 L5,5,5,10 L5,10,0,10 L0,10,0,5 Z M5,15 L5,15,5,10 L5,10,10,10 L10,10,10,5 L10,5,15,5 L15,5,15,15 Z");
+  same("boundary of a rect", await dump(await vcall(await region(1, 2, 3, 4), "getBoundaryPath", `()${P}`)), "M1,2 L1,2,3,2 L3,2,3,4 L3,4,1,4 Z");
+  const l = await region(0, 0, 30, 10);
+  await op(l, 0, 10, 10, 30, "UNION"); await op(l, 20, 20, 40, 40, "UNION");
+  same("boundary L", await dump(await vcall(l, "getBoundaryPath", `()${P}`)),
+    "M0,10 L0,10,0,0 L0,0,30,0 L30,0,30,10 L30,10,10,10 L10,10,10,30 L10,30,0,30 L0,30,0,10 Z M20,30 L20,30,20,20 L20,20,40,20 L40,20,40,40 L40,40,20,40 L20,40,20,30 Z");
+  const sc = await newObj("android/graphics/Region", `(${R})V`, r), sc2 = await region();
+  await vcall(sc, "scale", "(F)V", 1.5);
+  await vcall(r, "scale", `(F${R})V`, 0.333, sc2);
+  same("scale", [await rects(sc), await rects(sc2)], ["0,0,150,30 0,30,30,75 75,30,150,75 0,75,150,150", "0,0,33,7 0,7,7,17 17,7,33,17 0,17,33,33"]);
+  const t = await newObj("android/graphics/Region", `(${R})V`, r);
+  await vcall(t, "translate", "(II)V", 5, -3);
+  same("translate", await rects(t), "5,-3,105,17 5,17,25,47 55,17,105,47 5,47,105,97");
+  same("equals", [await vcall(await newObj("android/graphics/Region", `(${R})V`, r), "equals", "(Ljava/lang/Object;)Z", r), await vcall(r, "equals", "(Ljava/lang/Object;)Z", x)], [1, 0]);
+  const q = await region(0, 0, 10, 10);
+  same("quickReject(Region)", [await vcall(q, "quickReject", `(${R})Z`, await region(10, 0, 20, 10)), await vcall(q, "quickReject", `(${R})Z`, await region(9, 9, 20, 10)), await vcall(q, "quickReject", `(${R})Z`, await region())], [1, 0, 1]);
+
+  // setPath: SkScan's non-anti-aliased fill
+  const DIR = "Landroid/graphics/Path$Direction;", dirs = (await linkInit("android/graphics/Path$Direction")).ctor as Record<string, unknown>;
+  const fts = (await linkInit("android/graphics/Path$FillType")).ctor as Record<string, unknown>;
+  const path = async (...calls: [string, string, ...unknown[]][]) => {
+    const p = await newObj("android/graphics/Path", "()V");
+    for (const [name, desc, ...args] of calls) await vcall(p, name, desc, ...args);
+    return p;
+  };
+  const clip = await region(0, 0, 1000, 1000), sp = await region();
+  const setPath = async (p: unknown, c: unknown = clip) => [await vcall(sp, "setPath", `(${P}${R})Z`, p, c), await rects(sp)].join(" ");
+  const rp = await path(["addRect", `(FFFF${DIR})V`, 0.3, 0.5, 10.5, 10.49, dirs.s$CW]);
+  same("fractional rect", await setPath(rp), "1 0,1,11,10");
+  same("triangle", await setPath(await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 10, 0], ["lineTo", "(FF)V", 0, 10], ["close", "()V"])),
+    "1 0,0,10,1 0,1,9,2 0,2,8,3 0,3,7,4 0,4,6,5 0,5,5,6 0,6,4,7 0,7,3,8 0,8,2,9 0,9,1,10");
+  const ring = "1 0,0,20,5 0,5,5,15 15,5,20,15 0,15,20,20";
+  same("even-odd", await setPath(await path(["addRect", `(FFFF${DIR})V`, 0, 0, 20, 20, dirs.s$CW], ["addRect", `(FFFF${DIR})V`, 5, 5, 15, 15, dirs.s$CW], ["setFillType", "(Landroid/graphics/Path$FillType;)V", fts.s$EVEN_ODD])), ring);
+  same("winding", await setPath(await path(["addRect", `(FFFF${DIR})V`, 0, 0, 20, 20, dirs.s$CW], ["addRect", `(FFFF${DIR})V`, 5, 5, 15, 15, dirs.s$CCW])), ring);
+  same("inverse", await setPath(await path(["addRect", `(FFFF${DIR})V`, 5, 5, 15, 15, dirs.s$CW], ["setFillType", "(Landroid/graphics/Path$FillType;)V", fts.s$INVERSE_WINDING]), await region(0, 0, 20, 20)), ring);
+  same("complex clip", await setPath(rp, x), "1 0,1,10,5 0,5,5,10 10,5,11,10");
+  same("empty path", await setPath(await path()), "0 ");
+  same("circle", await setPath(await path(["addCircle", `(FFF${DIR})V`, 10, 10, 8, dirs.s$CW])), "1 7,2,13,3 6,3,14,4 4,4,16,6 3,6,17,7 2,7,18,13 3,13,17,14 4,14,16,16 6,16,14,17 7,17,13,18");
+  same("clipped circle", await setPath(await path(["addCircle", `(FFF${DIR})V`, 10, 10, 8, dirs.s$CW]), await region(0, 0, 10, 10)), "1 7,2,10,3 6,3,10,4 4,4,10,6 3,6,10,7 2,7,10,10");
+  same("quad", await setPath(await path(["moveTo", "(FF)V", 0, 0], ["quadTo", "(FFFF)V", 20, 0, 20, 20], ["lineTo", "(FF)V", 0, 20], ["close", "()V"])),
+    "1 0,0,5,1 0,1,9,2 0,2,11,3 0,3,13,4 0,4,14,5 0,5,15,6 0,6,16,7 0,7,17,9 0,9,18,11 0,11,19,15 0,15,20,20");
+
+  // a parcel carries the rects as one int array
+  const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
+  await vcall(l, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
+  await vcall(parcel, "setDataPosition", "(I)V", 0);
+  same("parcel", [...await vcall(parcel, "createIntArray", "()[I") as Int32Array], [0, 0, 30, 10, 0, 10, 10, 20, 0, 20, 10, 30, 20, 20, 40, 30, 20, 30, 40, 40]);
+  await vcall(parcel, "setDataPosition", "(I)V", 0);
+  const creator = (await linkInit("android/graphics/Region")).ctor as Record<string, unknown>;
+  same("from parcel", await rects(await vcall(creator.s$CREATOR, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel)), await rects(l));
+});
+
+await exercise("Camera (device values)", async () => {
+  const near = (what: string, got: number[], want: number[]) => {
+    if (got.length !== want.length || got.some((g, i) => Math.abs(g - want[i]) > 1e-5 * Math.max(1, Math.abs(want[i])))) throw new Error(`${what}: [${got}], not [${want}]`);
+  };
+  const c = await newObj("android/graphics/Camera", "()V"), m = await newObj("android/graphics/Matrix", "()V"), values = new Float32Array(9);
+  const matrixOf = async (cam: unknown) => { await vcall(cam, "getMatrix", "(Landroid/graphics/Matrix;)V", m); await vcall(m, "getValues", "([F)V", values); return [...values]; };
+  const dots = async (cam: unknown) => [await vcall(cam, "dotWithNormal", "(FFF)F", 0, 0, 1), await vcall(cam, "dotWithNormal", "(FFF)F", 1, 2, 3)] as number[];
+  const location = async (cam: unknown) => [await vcall(cam, "getLocationX", "()F"), await vcall(cam, "getLocationY", "()F"), await vcall(cam, "getLocationZ", "()F")] as number[];
+  near("identity", [...await matrixOf(c), ...await location(c)], [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8]);
+  await vcall(c, "rotateX", "(F)V", 30);
+  const rotX = [1, 0, 0, 0, 0.8660254, 0, 0, -8.6805556e-4, 1];
+  near("rotateX", [...await matrixOf(c), ...await dots(c)], [...rotX, -0.8660254, -0.8660253]);
+  await vcall(c, "save", "()V");
+  await vcall(c, "rotateY", "(F)V", 45);
+  await vcall(c, "translate", "(FFF)V", 10, 20, 30);
+  near("rotateY, translate", [...await matrixOf(c), ...await dots(c)],
+    [0.667153, 0, -13.3430605, 0.3335765, 0.81709224, -2.9987836, 0.0010030754, -8.190077e-4, 1, -0.6123724, 0.09473443]);
+  await vcall(c, "restore", "()V");
+  near("restored", await matrixOf(c), rotX);
+  await vcall(c, "rotateZ", "(F)V", 90);
+  await vcall(c, "rotate", "(FFF)V", 10, 20, 30);
+  await vcall(c, "setLocation", "(FFF)V", 1, 2, -4);
+  near("rotate, setLocation", [...await matrixOf(c), ...await location(c)],
+    [-0.44096962, 0.88256407, -72, -0.51550823, -0.39788473, 144, 0.002551072, 8.6991704e-4, 1, 1, 2, -4]);
+  const far = await newObj("android/graphics/Camera", "()V");
+  await vcall(far, "translate", "(FFF)V", 0, 0, 100);
+  near("translate z", await matrixOf(far), [0.852071, 0, 0, 0, 0.852071, 0, 0, 0, 1]);
+  const turned = await newObj("android/graphics/Camera", "()V");
+  await vcall(turned, "rotateY", "(F)V", 180);
+  near("facing away", [await vcall(turned, "dotWithNormal", "(FFF)F", 0, 0, 1) as number], [1]);
+});
+
+await exercise("Interpolator (device values)", async () => {
+  const run = async (ip: unknown, cases: [number, string][], out: Float32Array) => {
+    for (const [time, want] of cases) {
+      const result = await vcall(ip, "timeToValues", "(I[F)Landroid/graphics/Interpolator$Result;", time, out);
+      const got = `${await vcall(result, "name", "()Ljava/lang/String;")} ${[...out].join(" ")}`;
+      if (got !== want) throw new Error(`at ${time}: ${got}, not ${want}`);
+    }
+  };
+  const two = new Float32Array(2), one = new Float32Array(1);
+  const ip = await newObj("android/graphics/Interpolator", "(II)V", 2, 3);
+  await vcall(ip, "setKeyFrame", "(II[F)V", 0, 100, Float32Array.of(0, 10));
+  await vcall(ip, "setKeyFrame", "(II[F)V", 1, 200, Float32Array.of(1, 20));
+  await vcall(ip, "setKeyFrame", "(II[F[F)V", 2, 400, Float32Array.of(3, 0), Float32Array.of(0, 0, 1, 1));
+  await run(ip, [[0, "FREEZE_START 0 10"], [100, "NORMAL 0 10"], [125, "NORMAL 0.2500610351562 12.500610351562"],
+    [199, "NORMAL 0.990051269531 19.900512695312"], [200, "NORMAL 1 20"], [250, "NORMAL 1.500122070312 14.998779296875"],
+    [399, "NORMAL 2.990112304687 0.098876953125"], [400, "FREEZE_END 3 0"], [1000, "FREEZE_END 3 0"]].map(([t, s]) => [t as number, fl(s as string)]), two);
+  await vcall(ip, "setRepeatMirror", "(FZ)V", 2.5, 1);
+  await run(ip, [[350, "NORMAL 2.500122070312 4.998779296875"], [450, "NORMAL 2.500122070312 4.998779296875"], [550, "NORMAL 1.500122070312 14.998779296875"],
+    [650, "NORMAL 0.5000610351562 15.000610351562"], [800, "NORMAL 1 20"], [900, "FREEZE_END 1.500122070312 14.998779296875"]].map(([t, s]) => [t as number, fl(s as string)]), two);
+  await vcall(ip, "setRepeatMirror", "(FZ)V", 2, 0);
+  await run(ip, [[450, "NORMAL 0.5000610351562 15.000610351562"], [700, "FREEZE_END 3 0"]].map(([t, s]) => [t as number, fl(s as string)]), two);
+  const eased = await newObj("android/graphics/Interpolator", "(I)V", 1);
+  await vcall(eased, "setKeyFrame", "(II[F)V", 0, 0, Float32Array.of(255));
+  await vcall(eased, "setKeyFrame", "(II[F[F)V", 1, 250, Float32Array.of(0), Float32Array.of(0.25, 0.1, 0.25, 1));
+  // a negative time is a large unsigned one
+  await run(eased, [[-10, "FREEZE_END 0"], [0, "NORMAL 255"], [30, "NORMAL 224.38568"], [60, "NORMAL 193.78693"], [125, "NORMAL 127.484436"],
+    [200, "NORMAL 51.003113"], [250, "FREEZE_END 0"]].map(([t, s]) => [t as number, fl(s as string)]), one);
+});
+/** "NAME a b" with each number as the float nearest the device's printed value */
+function fl(s: string) { const [name, ...v] = s.split(" "); return [name, ...v.map((x) => Math.fround(+x))].join(" "); }
+
+await exercise("NinePatch (device values)", async () => {
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  /** Res_png_9patch, serialized: the header, then xDivs, yDivs and colors */
+  const chunk = (xs: number[], ys: number[], colors: number[]) => {
+    const b = new DataView(new ArrayBuffer(32 + (xs.length + ys.length + colors.length) * 4));
+    b.setUint8(1, xs.length); b.setUint8(2, ys.length); b.setUint8(3, colors.length);
+    [1, 2, 3, 4].forEach((v, i) => b.setInt32(12 + i * 4, v, true));
+    [...xs, ...ys, ...colors].forEach((v, i) => b.setInt32(32 + i * 4, v, true));
+    return new Int8Array(b.buffer);
+  };
+  const cfg = ((await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>).s$ARGB_8888;
+  const bmp = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 30, 30, cfg);
+  const rects = async (r: unknown) => {
+    if (!r) return "null";
+    const it = await newObj("android/graphics/RegionIterator", "(Landroid/graphics/Region;)V", r), rc = await newObj("android/graphics/Rect", "()V") as any, out: string[] = [];
+    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
+    return out.join(" ");
+  };
+  const transparent = async (np: unknown, ...dst: number[]) =>
+    rects(await vcall(np, "getTransparentRegion", "(Landroid/graphics/Rect;)Landroid/graphics/Region;", await newObj("android/graphics/Rect", "(IIII)V", ...dst)));
+  const centre = chunk([10, 20], [10, 20], [1, 1, 1, 1, 0, 1, 1, 0, 1]);
+  const np = await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, centre);
+  same("transparent patches", await transparent(np, 0, 0, 100, 50), "10,10,90,50");
+  same("shrunk away", await transparent(np, 5, 5, 20, 20), "null");
+  same("none transparent", await transparent(await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, chunk([10, 20], [10, 20], [1, 1, 1, 1, 1, 1, 1, 1, 1])), 0, 0, 100, 50), "null");
+  same("edge divs", await transparent(await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, chunk([0, 10], [10, 30], [0, 1, 1, 0])), 0, 0, 100, 50), "0,0,80,10 80,10,100,50");
+  const isChunk = (c: Int8Array | null) => scall("android/graphics/NinePatch", "isNinePatchChunk", "([B)Z", c);
+  same("isNinePatchChunk", [await isChunk(centre), await isChunk(new Int8Array(10)), await isChunk(null)], [1, 0, 0]);
+  same("density and size", [await vcall(np, "getDensity", "()I"), await vcall(np, "getWidth", "()I"), await vcall(np, "getHeight", "()I")],
+    [await vcall(bmp, "getDensity", "()I"), 30, 30]);
+  let thrown = "";
+  try { await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, new Int8Array(8)); }
+  catch (e) { thrown = String(await vcall(e, "toString", "()Ljava/lang/String;")); }
+  same("short chunk", thrown, "java.lang.RuntimeException: Array too small for chunk.");
+});
+
 await exercise("Bitmap.createBitmap + pixels", async () => {
   const cfg = await linkInit("android/graphics/Bitmap$Config");
   const argb = (cfg.ctor as Record<string, unknown>).s$ARGB_8888;

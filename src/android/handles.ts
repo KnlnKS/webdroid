@@ -26,6 +26,21 @@ export function handle(o: object): bigint {
   return h;
 }
 
+const collected = new FinalizationRegistry<number>((n) => { objs[n] = undefined; free.push(n); });
+/** A long for an object no Java finalizer releases (a TS-spec Canvas asked for its native
+ *  wrapper): the slot holds a WeakRef, which its reader unwraps, and frees itself once the
+ *  object is collected. Such a handle is never released or replaced by hand. */
+export function weakHandle(o: object): bigint {
+  let h = byObj.get(o);
+  if (h === undefined) {
+    const n = free.pop() ?? objs.push(undefined) - 1;
+    objs[n] = new WeakRef(o);
+    byObj.set(o, (h = BigInt(n)));
+    collected.register(o, n);
+  }
+  return h;
+}
+
 /** the object behind a long, or undefined for the null handle */
 export function deref<T>(h: bigint): T {
   return objs[Number(h)] as T;
