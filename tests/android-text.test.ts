@@ -27,6 +27,25 @@ describe("linkify", () => {
   });
 });
 
+describe("span queries", () => {
+  rt.linkNatives();
+
+  test("getSpans reports empty spans at the query edges and nextSpanTransition stops at span edges", async () => {
+    const text = await newObj("android/text/SpannableStringBuilder");
+    const mark = await newObj("java/lang/Object"), point = await newObj("java/lang/Object"), style = await newObj("android/text/style/UnderlineSpan");
+    await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", mark, 0, 0, 17);
+    await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", point, 0, 0, 34);
+    await vcall(text, "append", "(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;", "abcd");
+    await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", style, 1, 3, 33);
+    const spans = (a: number, b: number) => vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", a, b, rt.classFor("java/lang/Object"));
+    expect(await spans(0, 4)).toEqual([mark, point, style]);
+    expect(await spans(3, 4)).toEqual([point]);
+    expect(await spans(3, 3)).toEqual([style]);
+    const next = (a: number, b: number, cls: string) => vcall(text, "nextSpanTransition", "(IILjava/lang/Class;)I", a, b, rt.classFor(cls));
+    expect([await next(0, 4, "java/lang/Object"), await next(1, 4, "android/text/style/UnderlineSpan"), await next(3, 4, "java/lang/Object")]).toEqual([1, 3, 4]);
+  });
+});
+
 describe("locale-span", () => {
   rt.linkNatives();
   test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {

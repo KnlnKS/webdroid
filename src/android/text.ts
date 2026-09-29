@@ -210,7 +210,11 @@ const spanMethods: NativeSpec["methods"] = {
   },
   "getSpans(IILjava/lang/Class;)[Ljava/lang/Object;": function (this: JSpannable, start: number, end: number, cls: any) {
     const name = cls?.ci?.name;
-    const out = this.spans.filter((s) => s.start < end && s.end > start && (!name || rt.iof(s.span, name))).map((s) => s.span);
+    // AOSP's overlap test: an empty span or query touches its edges; otherwise shared edges don't count
+    const hits = this.spans.filter((s) => s.start <= end && s.end >= start && (s.start === s.end || start === end || s.start !== end && s.end !== start)
+      && (!name || rt.iof(s.span, name)));
+    if (hits.some((s) => s.flags & 0xff0000)) hits.sort((a, b) => (b.flags & 0xff0000) - (a.flags & 0xff0000));
+    const out = hits.map((s) => s.span);
     // AOSP returns a T[] built from the requested Class, and callers assign it to one: the
     // array's own type tag has to be the queried class, not Object.
     (out as any).$t = name ? "L" + name + ";" : "Ljava/lang/Object;";
@@ -225,7 +229,15 @@ const spanMethods: NativeSpec["methods"] = {
   "getSpanFlags(Ljava/lang/Object;)I": function (this: JSpannable, span: unknown) {
     return this.spans.find((s) => s.span === span)?.flags ?? 0;
   },
-  "nextSpanTransition(IILjava/lang/Class;)I": function (this: JSpannable, start: number, limit: number) { return limit; },
+  "nextSpanTransition(IILjava/lang/Class;)I": function (this: JSpannable, start: number, limit: number, cls: any) {
+    const name = cls?.ci?.name;
+    for (const s of this.spans) {
+      if (name && !rt.iof(s.span, name)) continue;
+      if (s.start > start && s.start < limit) limit = s.start;
+      if (s.end > start && s.end < limit) limit = s.end;
+    }
+    return limit;
+  },
 };
 rt.register({
   name: "android/text/SpannableString", ctor: JSpannable,
