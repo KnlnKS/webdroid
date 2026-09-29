@@ -23,8 +23,6 @@ export interface PreparedMethod {
   readonly params: readonly string[];
   readonly widths: readonly number[];
   readonly sync: boolean;
-  /** every branch goes forward: blocks in pc order need no dispatch loop */
-  readonly forward: boolean;
   /** registers a numeric constant may reach: only these can hold 0 standing for null */
   readonly nullable: ReadonlySet<number>;
 }
@@ -115,7 +113,7 @@ function decodeInstructions(insns: Uint16Array): MutableInstruction[] {
   return instructions;
 }
 
-function endsBlock(op: number): boolean {
+export function endsBlock(op: number): boolean {
   return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
 }
 
@@ -162,7 +160,7 @@ export function switchCases(code: CodeItem, instruction: PreparedInstruction): [
   return out;
 }
 
-function branchTargets(code: CodeItem, instruction: PreparedInstruction): readonly number[] {
+export function branchTargets(code: CodeItem, instruction: PreparedInstruction): readonly number[] {
   const op = instruction.op;
   if (op >= 0x28 && op <= 0x2a) return [instruction.pc + instruction.a];
   if (op === 0x2b || op === 0x2c) return switchCases(code, instruction).map(([, target]) => target);
@@ -398,10 +396,9 @@ export function prepareMethod(
   started = observe ? performance.now() : 0;
   const leaders = new Uint8Array(code.insns.length + 1);
   leaders[0] = 1;
-  let forward = true;
   for (const instruction of instructions) {
     const targets = branchTargets(code, instruction);
-    for (const target of targets) { leaders[target] = 1; if (target <= instruction.pc) forward = false; }
+    for (const target of targets) leaders[target] = 1;
     if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
   }
   for (const region of code.tries) {
@@ -424,7 +421,6 @@ export function prepareMethod(
     params: signature.params,
     widths: signature.params.map((param) => isWide(param) ? 2 : 1),
     sync: instructions.every((instruction) => !maySuspend(instruction.op)),
-    forward,
     nullable: carriers ?? NO_CARRIERS,
   };
 }

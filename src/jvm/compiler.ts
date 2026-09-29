@@ -11,8 +11,10 @@ import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
 import { coverageProbeSource, jvmCoverage } from "./coverage";
 import { codeKey, persistedBody, recordBody, recordLater, type Factory } from "./codecache";
+import { type Flow, Go, structure } from "./structure";
 import {
   coldInstructions,
+  endsBlock,
   ifTarget,
   prepareMethod,
   switchCases,
@@ -362,9 +364,9 @@ class MethodEmitter {
   private get cold(): boolean { return this.backend === "cold"; }
   /** the hot body being compiled is a leaf: it has no suspension points */
   private sync = false;
-  /** the hot entry being compiled runs its blocks in pc order (see compile) */
-  private structured = false;
-  private targets = new Set<number>();
+  /** the hot entry's structured control flow, and the block being emitted */
+  private flow: Flow | null = null;
+  private block = 0;
 
   private reg(index: number): string { return this.cold ? `F.v[${this.literal(index)}]` : `v${index}`; }
   /** registers a constant may reach, the only ones a reference read normalizes from 0 to null */
@@ -419,23 +421,31 @@ class MethodEmitter {
     this.nullable = prepared.nullable;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
-    // Forward-only control flow runs its blocks in pc order: a branch breaks out of the labelled
-    // block that ends where its target starts, so there is no dispatch loop to pay for. Depth is
-    // bounded for parsers; handlers and resumption re-enter by pc, so they keep the loop.
-    this.structured = !this.resuming && !this.hasTries && prepared.forward &&
-      prepared.instructions.reduce((n, ins) => n + prepared.leaders[ins.pc], 0) <= 256;
-    const blocks: string[] = [], starts: number[] = [];
-    let cur: string[] | null = null;
+    // A resumable body re-enters mid-block by pc, so only the entry is structured.
+    const flow = this.flow = this.resuming ? null : structure(prepared, this.code);
+    const blocks: string[] = [];
+    let cur: string[] | null = null, last: Ins | null = null;
+    const end = () => {
+      if (!cur) return;
+      if (flow && last && !endsBlock(last.op)) {
+        const taken = last.op >= 0x32 && last.op <= 0x3d ? flow.blockAt[ifTarget(last)] : -1;
+        const target = flow.fallTarget(this.block, taken);
+        if (target >= 0) cur.push(this.jumpStr(flow.starts[target], last.pc, true));
+      }
+      blocks.push(cur.join("\n"));
+    };
     for (const ins of prepared.instructions) {
       if (prepared.leaders[ins.pc]) {
-        if (cur) blocks.push(cur.join("\n"));
-        starts.push(ins.pc);
-        cur = [`case ${ins.pc}:${this.hasTries ? `pc=${ins.pc};` : ""}`];
+        end();
+        if (flow) this.block = flow.blockAt[ins.pc];
+        const at = this.hasTries ? `pc=${ins.pc};` : "";
+        cur = [flow ? at : `case ${ins.pc}:${at}`];
       }
       if (!cur) throw new Error(`instruction ${ins.pc} has no emitted block`);
       this.emitIns(ins, cur);
+      last = ins;
     }
-    if (cur) blocks.push(cur.join("\n"));
+    end();
 
     const params = prepared.params;
     const regs = this.code.regs, ins = this.code.ins;
@@ -463,8 +473,9 @@ class MethodEmitter {
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.resuming ? "" : "P.entry($pn);"}try{`
       : "";
     const profileEnd = jvmProfiler.enabled ? `}finally{P.add($pn,"hotRun",performance.now()-$pt);}` : "";
-    const dispatch = this.structured ? this.inOrder(blocks, starts)
-      : `switch(${this.resuming ? "$r?-$r:pc" : "pc"}){\n${blocks.join("\n")}\ndefault:R.badPc(pc);\n}`;
+    const regions = flow?.assemble((b) => blocks[b]);
+    const dispatch = regions?.length === 1 ? `{${regions[0]}}`
+      : `switch(${this.resuming ? "$r?-$r:pc" : "pc"}){\n${regions ? regions.map((r, i) => `case ${flow!.starts[flow!.regions[i].entry]}:{${r}}`).join("\n") : blocks.join("\n")}\ndefault:R.badPc(pc);\n}`;
     const body = `try{${this.sync ? "" : "$d:"}${dispatch}
 ${this.sync ? "" : this.saveFrame()}
 }catch($e){
@@ -475,19 +486,11 @@ ${catchBody}
 ${this.resuming ? "" : coverageProbeSource(profileName)}
 ${profileStart}
 ${init}
-${this.structured ? body : `for(;;){\n${body}\n}`}
+${regions?.length === 1 && !this.hasTries ? body : `$l:for(;;){\n${body}\n}`}
 ${profileEnd}
 }`;
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "hotEmit", performance.now() - started);
     return source;
-  }
-
-  /** Blocks in pc order, each branch target opening where the labelled block it closes ends. */
-  private inOrder(blocks: string[], starts: number[]): string {
-    const targets = [...this.targets].sort((a, b) => b - a);
-    let text = `{${targets.map((t) => `L${t}:{`).join("")}`;
-    for (let j = 0; j < blocks.length; j++) text += `${this.targets.has(starts[j]) ? "}" : ""}\n${blocks[j].slice(blocks[j].indexOf(":") + 1)}`;
-    return text + "\n}";
   }
 
   /** One save point per method: suspension sites set `$r` (0 for a back-edge yield) and `pc`, then
@@ -641,7 +644,7 @@ ${profileEnd}
         break;
       }
       case "throw": out.push(`throw ${this.reg(i.a)};`); break;
-      case "goto": case "goto/16": case "goto/32": out.push(this.jumpStr(i.pc + i.a, i.pc)); break;
+      case "goto": case "goto/16": case "goto/32": out.push(this.jumpStr(i.pc + i.a, i.pc, true)); break;
       case "packed-switch": case "sparse-switch":
         out.push(`switch(${this.reg(i.a)}){${switchCases(this.code, i).map(([k, t]) => `case ${this.literal(k)}:${this.jumpStr(t, i.pc)}`).join("")}}`);
         break;
@@ -684,18 +687,33 @@ ${profileEnd}
     }
   }
 
-  private jumpStr(target: number, from: number): string {
+  /** `final` ends the block; any other jump sits inside a test. */
+  private jumpStr(target: number, from: number, final = false): string {
     if (this.cold) {
       const fuel = target <= from ? `if(--R.fuel<0){F.$fu=R.refuel();if(F.$fu){F.$w=0;return F.$fu;}}` : "";
       return `${fuel}F.next=${this.literal(target)};return;`;
     }
-    if (this.structured) { this.targets.add(target); return `break L${target};`; }
-    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){pc=${target};break $d}}` : "";
-    return `${fuel}pc=${target};continue;`;
+    // every cycle takes a backward edge, which yields to the scheduler when fuel runs out
+    const fuel = (back: boolean) => !this.sync && back ? `if(--R.fuel<0){$fu=R.refuel();if($fu){pc=${target};break $d}}` : "";
+    const flow = this.flow;
+    if (!flow) return `${fuel(target <= from)}pc=${target};continue;`;
+    const v = flow.blockAt[target];
+    switch (flow.go(this.block, v, final)) {
+      case Go.Next: return "";
+      case Go.Break: return `break B${target};`;
+      case Go.Continue: return `${fuel(true)}continue L${target};`;
+      case Go.Dispatch: return `${fuel(flow.back(this.block, v))}pc=${target};continue $l;`;
+    }
   }
 
   private emitIf(cond: string, i: Ins, out: string[]) {
-    out.push(`if(${cond}){${this.jumpStr(ifTarget(i), i.pc)}}`);
+    const flow = this.flow, target = ifTarget(i);
+    if (!flow) { out.push(`if(${cond}){${this.jumpStr(target, i.pc)}}`); return; }
+    const fall = i.pc + i.len;
+    // both edges reaching the same block leave nothing to test; the block's end takes them
+    if (flow.blockAt[target] === flow.blockAt[fall]) return;
+    if (flow.inverted.has(this.block)) out.push(`if(!(${cond})){${this.jumpStr(fall, i.pc)}}`);
+    else out.push(`if(${cond}){${this.jumpStr(target, i.pc)}}`);
   }
 
   private emitStaticField(i: Ins, out: string[], isGet: boolean) {
