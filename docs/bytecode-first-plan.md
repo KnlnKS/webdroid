@@ -788,7 +788,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      (3) FileDescriptor and the file streams over Linux read/write/pread/pwrite (`stdio.ts` needs
      Uint8Array `java*` wrappers for write, pread, pwrite and truncate). (4) the rest of java/io,
      ObjectStreams last. (5) NIO channels, after deciding whether Buffers stay a TS boundary
-     (§4.7), together with a lazily paged `mmap` (the ICU file). (6) java/nio/file, then ZipFile.
+     (§4.7); the paged mapping is done (item 4). (6) java/nio/file, then ZipFile.
      (7) java.net value classes (URI blocks the cookie classes: AOSP's cookie store needs
      `URI.compareTo`). (8) sockets over `native/net.ts`.
    - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
@@ -827,8 +827,12 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      compile time.
    - Keep org.json in TS as an intrinsic candidate: libcore's is 2.3x slower on a 237 KB
      document. That needs a differential test (§4.7).
-4. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap, because
-   `FileChannelImpl.map` copies it (`jio.ts`). A lazily paged mapping would match the device's mmap.
+4. **Memory.** Done: a READ_ONLY mapping of an immutable source loads 64 KB pages on first touch
+   (`Paging` in `jnio.ts`), and the apex mount fetches the ICU file in 64 KB ranges. A date format
+   holds 2.2 MB of ICU pages instead of 27.3 MB and fetches 2.8 MB in 44 requests; hot reads are
+   unchanged. TS readers of a buffer's bytes call `resident(b)` first. Open: prefetching the pages
+   a previous launch touched (each first touch is a round trip), and libcore's tzdata, which
+   `Os.mmap` still reads whole into guest memory.
 5. **Known limits.**
    - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
    - TS `eraseThreadLocals` does not clear the TS locals.

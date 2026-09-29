@@ -5,9 +5,9 @@ import { mangleStaticField, mangleMethod, charsToString, utf8, concat, i8, u8, d
 import { charsetName, encodeString } from "../charset";
 import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
-import { readFully, type FileSource } from "../../shell/lazyfile";
+import { readFully, writable, type FileSource } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, pagedMapping, mkByteBuffer, remainingBytes, resident, type JBuffer } from "./jnio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
@@ -902,14 +902,16 @@ function channelRead(channel: JFileChannel, dst: JBuffer, position = -1): number
     return n;
   });
 }
-function channelWrite(channel: JFileChannel, src: JBuffer, position = -1): number {
+function channelWrite(channel: JFileChannel, src: JBuffer, position = -1): number | Promise<number> {
   if (!src) throw rt.mkThrowable("java/lang/NullPointerException", "src");
   const fd = channel.writing();
   if (src.lim === src.pos) return 0;
-  const bytes = u8(remainingBytes(src));
-  const n = lastError(position < 0 ? javaWriteFd(fd, bytes) : javaPwriteFd(fd, bytes, position), null);
-  src.pos += n;
-  return n;
+  return after(resident(src), () => {
+    const bytes = u8(remainingBytes(src));
+    const n = lastError(position < 0 ? javaWriteFd(fd, bytes) : javaPwriteFd(fd, bytes, position), null);
+    src.pos += n;
+    return n;
+  });
 }
 rt.register({ name: "java/nio/channels/FileChannel", ctor: class extends JObj {} });
 rt.register({
@@ -958,6 +960,8 @@ rt.register({
       if (mode.ename === "READ_ONLY") {
         if (start + length > source.size) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
         if (file && !file.source) { vfs.sync(file); return mappedReadOnlyBuffer(file.data.subarray(start, start + length)); }
+        // the mapping outlives the descriptor, so it pages from the file's own source
+        if (file?.source && !writable(file.source)) return pagedMapping(file.source, start, length);
         return readFully(source, start, length).then(mappedReadOnlyBuffer);
       }
       if (!file) return lastError(-E.INVAL, null);

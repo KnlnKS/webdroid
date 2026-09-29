@@ -9,7 +9,7 @@ import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array, type RsaScheme } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams, invalidKey } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
-import { type JBuffer, remainingBytes } from "./jnio";
+import { type JBuffer, remainingBytes, resident } from "./jnio";
 import { JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 
 rt.markers("java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec");
@@ -353,7 +353,7 @@ rt.register({
     "updateAAD([B)V": function (this: JCipher, b: Int8Array) { requireAad(this); this.aad.push(bytes(b)); },
     "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { requireAad(this); this.aad.push(bytes(b, off, len)); },
     "updateAAD(Ljava/nio/ByteBuffer;)V": function (this: JCipher, bb: JBuffer) {
-      this.aad.push(u8(remainingBytes(bb)).slice()); bb.pos = bb.lim;
+      return after(resident(bb), () => { this.aad.push(u8(remainingBytes(bb)).slice()); bb.pos = bb.lim; });
     },
     "doFinal()[B": function (this: JCipher) { return doFinal(this); },
     "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
