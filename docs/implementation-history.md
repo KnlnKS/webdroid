@@ -729,6 +729,15 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   returned placeholders for op, interpolate and approximate, ignored the clip op and lost the current
   point after relative moves, and clipOutPath did nothing. Arcs stay cubics where Skia keeps conics.
   Released handle slots are now reused, since recreated shaders and paths otherwise grew the table.
+- 2026-09-30, measured and not built: precompiling a first launch from static reachability. Of the
+  5,112 bodies a cold Calculator M launch persisted, 667 are platform code and 4,445 the app's, so a
+  platform image (§4.1) pays little until the view stack is bytecode. For apps without a baseline
+  profile, RTA from the launcher Activity (breadth-first discovery order, platform included so
+  framework callbacks reach app overrides) reaches 20,117 app methods; covering 78% of the 3,830 app
+  methods the launch ran takes its first 8,000 (37% precision), 49% at 4,000. The compile worker
+  starts after the apk and the platform are loaded, so it could not deliver that ahead of a
+  one-second first frame. The link table (5536ffbb) was the cheaper win: every realm of a first
+  launch found its fallthrough gaps itself (93 ms of the cold Calculator launch).
 
 ## Java, storage and framework semantics
 
