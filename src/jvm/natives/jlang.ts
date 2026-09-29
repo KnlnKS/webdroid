@@ -990,23 +990,24 @@ function sbSpec(name: string): NativeSpec {
   const c = name === "java/lang/StringBuilder" ? class SB extends JSB {} : class SBuf extends JSB {};
   const L = "Ljava/lang/" + name.slice(10) + ";"; // return own type
   const app = (fn: (this: JSB, v: any) => void) => function (this: JSB, v: any) { fn.call(this, v); return this; };
-  const appendObj = async function (this: JSB, v: unknown) {
-    this.s += v === null ? "null" : await vcall(v, "toString", "()Ljava/lang/String;");
+  const appendObj = function (this: JSB, v: unknown) {
+    if (v === null || typeof v === "string") { this.s += v ?? "null"; return this; }
+    return after(vcall(v, "toString", "()Ljava/lang/String;") as string | Promise<string>, (s) => { this.s += s; return this; });
+  };
+  const appendRange = function (this: JSB, v: unknown, a: number, b: number) {
+    if (v !== null && typeof v !== "string" && !(v instanceof JSB)) return appendChars(this, v, a, b);
+    const str = v === null ? "null" : typeof v === "string" ? v : v.s;
+    if (a < 0 || b < a || b > str.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    this.s += str.slice(a, b);
     return this;
   };
-  const appendRange = async function (this: JSB, v: unknown, a: number, b: number) {
-    if (v === null || typeof v === "string" || v instanceof JSB) {
-      const str = v === null ? "null" : typeof v === "string" ? v : v.s;
-      if (a < 0 || b < a || b > str.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-      this.s += str.slice(a, b);
-      return this;
-    }
+  const appendChars = async function (sb: JSB, v: unknown, a: number, b: number) {
     const len = await vcall(v, "length", "()I") as number;
     if (a < 0 || b < a || b > len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
     const chars = new Uint16Array(b - a);
     for (let i = a; i < b; i++) chars[i - a] = await vcall(v, "charAt", "(I)C", i) as number;
-    this.s += charsToString(chars, 0, chars.length);
-    return this;
+    sb.s += charsToString(chars, 0, chars.length);
+    return sb;
   };
   const appendChar = app(function (v) { this.s += String.fromCharCode(v); });
   const insertAt = (sb: JSB, i: number, text: string) => {
