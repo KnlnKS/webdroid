@@ -1,11 +1,10 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
-import { mangleStaticField, mangleMethod, charsToString, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
-import { charsetName, encodeString } from "../charset";
-import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
+import { mangleField, charsToString, utf8, concat, i8, u8 } from "../abi";
+import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
-import { readFully, writable, type FileSource } from "../../shell/lazyfile";
+import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
 import { mappedBuffer, mappedReadOnlyBuffer, pagedMapping, mkByteBuffer, remainingBytes, resident, type JBuffer } from "./jnio";
 import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile } from "../../native/stdio";
@@ -17,142 +16,63 @@ rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, iface
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
 /** `new File(path)` */
 export const newFile = (path: string): Promise<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
-const markUnsupported = (): never => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); };
-/** the mark/reset trio of a stream that cannot rewind */
-export const noMark = { "markSupported()Z": () => 0, "mark(I)V": () => {}, "reset()V": markUnsupported };
 
-
-export class JInputStream extends JObj {
-  buf: Uint8Array = new Uint8Array(0);
-  source: FileSource | null = null;
-  wrapped: unknown = null;   // a bytecode InputStream this one reads through
-  pos = 0;
-  declare markPos?: number;
+// the stream a TS subclass of FilterInputStream or FilterOutputStream wraps
+const FILTER_IN = mangleField("java/io/FilterInputStream", "in"), FILTER_OUT = mangleField("java/io/FilterOutputStream", "out");
+type Fields = Record<string, unknown>;
+export const filterIn = (s: object): unknown => (s as Fields)[FILTER_IN];
+export const filterOut = (s: object): unknown => (s as Fields)[FILTER_OUT];
+export const setFilterIn = (s: object, stream: unknown): void => { (s as Fields)[FILTER_IN] = stream; };
+export const setFilterOut = (s: object, stream: unknown): void => { (s as Fields)[FILTER_OUT] = stream; };
+const BAIS = "java/io/ByteArrayInputStream", BAOS = "java/io/ByteArrayOutputStream";
+/** `new ByteArrayInputStream(bytes)`, sharing them; the class has no <clinit>, so this is synchronous */
+export function streamOf(bytes: Uint8Array): JObj {
+  const info = rt.link(BAIS);
+  rt.initClass(info);
+  const s = new info.ctor() as Record<string, unknown>;
+  s[declaredField(BAIS, "buf")] = i8(bytes);
+  s[declaredField(BAIS, "count")] = bytes.length;
+  return s as unknown as JObj;
 }
-class JByteArrayInputStream extends JInputStream {}
-/** A seekable stream over bytes already in hand or a lazy file source. */
-export function streamOf(bytes: Uint8Array): JInputStream {
-  const s = new JByteArrayInputStream();
-  s.buf = bytes;
-  return s;
+/** the bytes a ByteArrayOutputStream holds, without copying */
+export function baosBytes(s: JObj): Uint8Array {
+  const o = s as unknown as Record<string, Int8Array | number>;
+  const buf = o[declaredField(BAOS, "buf")] as Int8Array;
+  return new Uint8Array(buf.buffer, buf.byteOffset, o[declaredField(BAOS, "count")] as number);
 }
-export function streamOfSource(source: FileSource): JInputStream {
-  const s = new JByteArrayInputStream();
-  s.source = source;
-  return s;
-}
-const inputStreamMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
-  "read()I": function (this: JInputStream) {
-    if (this.wrapped) return vcall(this.wrapped, "read", "()I");
-    if (this.source) {
-      return after(this.source.read(this.pos, 1), (bytes) => {
-        if (!bytes.length) return -1;
-        this.pos++;
-        return bytes[0];
-      });
-    }
-    return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
-  },
-  "read([B)I": function (this: JInputStream, out: Int8Array) {
-    return (this as any)[readBII](out, 0, out.length);
-  },
-  "read([BII)I": function (this: JInputStream, out: Int8Array, off: number, len: number) {
+/** InputStream's reads over bytes a TS stream holds in `buf` from `pos` */
+export interface HeldBytes { buf: Uint8Array; pos: number }
+export const heldByteReads: NativeSpec["methods"] = {
+  "read()I": function (this: HeldBytes) { return this.pos < this.buf.length ? this.buf[this.pos++] : -1; },
+  "read([BII)I": function (this: HeldBytes, out: Int8Array, off: number, len: number) {
     if (!out) rt.npe();
     checkFromIndexSize(off, len, out.length);
     if (len === 0) return 0;
-    if ((this as unknown as Record<string, unknown>)[readI] !== ownRead) return readThroughRead(this, out, off, len);
-    if (this.wrapped) return vcall(this.wrapped, "read", "([BII)I", out, off, len);
-    if (this.source) {
-      return after(this.source.read(this.pos, len), (bytes) => {
-        if (!bytes.length) return -1;
-        out.set(i8(bytes), off);
-        this.pos += bytes.length;
-        return bytes.length;
-      });
-    }
     if (this.pos >= this.buf.length) return -1;
     const n = Math.min(len, this.buf.length - this.pos);
     out.set(i8(this.buf, this.pos, n), off);
     this.pos += n;
     return n;
   },
-  "available()I": function (this: JInputStream) { return this.wrapped ? vcall(this.wrapped, "available", "()I") : (this.source?.size ?? this.buf.length) - this.pos; },
-  "skip(J)J": function (this: JInputStream, n: bigint) {
-    if (this.wrapped) return vcall(this.wrapped, "skip", "(J)J", n);
-    if (n <= 0n) return 0n;
-    if (!usesReads(this)) return skipThroughRead(this, n);
-    const k = Math.min(Number(n), Math.max(0, (this.source?.size ?? this.buf.length) - this.pos));
+  "available()I": function (this: HeldBytes) { return this.buf.length - this.pos; },
+  "skip(J)J": function (this: HeldBytes, n: bigint) {
+    const k = n <= 0n ? 0 : Math.min(Number(n), this.buf.length - this.pos);
     this.pos += k;
     return BigInt(k);
   },
-  "close()V": function (this: JInputStream) { if (this.wrapped) return vcall(this.wrapped, "close", "()V"); },
-  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcall(this.wrapped, "mark", "(I)V", limit); },
-  "reset()V": function (this: JInputStream) {
-    if (this.wrapped) return vcall(this.wrapped, "reset", "()V");
-    return markUnsupported();
-  },
-  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcall(this.wrapped, "markSupported", "()Z") : 0; },
 };
-const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
-const writeBII = mangleMethod("write", "([BII)V");
-const ownRead = inputStreamMethods["read()I"];
-/** InputStream.read(byte[], int, int) over a subclass's own read(): up to the first end or IOException */
-const readThroughRead = driven(function* (stream: JInputStream, out: Int8Array, off: number, len: number): Gen {
-  const thread = curThread;
-  const first: number = yield vcallOn(thread, stream, "read", "()I");
-  if (first < 0) return -1;
-  out[off] = first;
-  let i = 1;
-  try {
-    for (; i < len; i++) {
-      const c: number = yield vcallOn(thread, stream, "read", "()I");
-      if (c < 0) break;
-      out[off + i] = c;
-    }
-  } catch (e) { if (!rt.iof(e, "java/io/IOException")) throw e; }
-  return i;
-});
-async function skipThroughRead(stream: JInputStream, count: bigint): Promise<bigint> {
-  const scratch = new Int8Array(Number(count < 2048n ? count : 2048n));
-  let remaining = count;
-  while (remaining > 0n) {
-    const length = Number(remaining < BigInt(scratch.length) ? remaining : BigInt(scratch.length));
-    const read = await vcall(stream, "read", "([BII)I", scratch, 0, length) as number;
-    if (read <= 0) break;
-    remaining -= BigInt(read);
-  }
-  return count - remaining;
-}
-function usesReads(stream: unknown, prototype = JInputStream.prototype): stream is JInputStream {
-  const s = stream as Record<string, unknown> | null, p = prototype as unknown as Record<string, unknown>;
-  return stream instanceof JInputStream && s![readI] === p[readI] && s![readBII] === p[readBII];
-}
-// the DataInput/DataOutput primitives, big-endian as the JDK reads and writes them
-type Get = (v: DataView) => unknown;
-type Put = (v: DataView, x: never) => void;
-const PRIMS: [string, string, number, Get, Put][] = [
-  ["Int", "I", 4, (v) => v.getInt32(0), (v, x: number) => v.setInt32(0, x)],
-  ["Short", "S", 2, (v) => v.getInt16(0), (v, x: number) => v.setInt16(0, x)],
-  ["Char", "C", 2, (v) => v.getUint16(0), (v, x: number) => v.setUint16(0, x)],
-  ["Byte", "B", 1, (v) => v.getInt8(0), (v, x: number) => v.setInt8(0, x)],
-  ["Boolean", "Z", 1, (v) => (v.getUint8(0) ? 1 : 0), (v, x: number) => v.setUint8(0, x ? 1 : 0)],
-  ["Long", "J", 8, (v) => v.getBigInt64(0), (v, x: bigint) => v.setBigInt64(0, x)],
-  ["Float", "F", 4, (v) => v.getFloat32(0), (v, x: number) => v.setFloat32(0, x)],
-  ["Double", "D", 8, (v) => v.getFloat64(0), (v, x: number) => v.setFloat64(0, x)],
-];
-const READS: [string, string, number, Get, Put?][] = [...PRIMS, ["UnsignedShort", "I", 2, (v) => v.getUint16(0)], ["UnsignedByte", "I", 1, (v) => v.getUint8(0)]];
-export const readers = (read: (n: number, get: Get) => unknown) =>
-  Object.fromEntries(READS.map(([name, d, n, get]) => [`read${name}()${d}`, read(n, get)])) as NonNullable<NativeSpec["methods"]>;
-export const writers = (write: (n: number, put: Put) => unknown) =>
-  Object.fromEntries(PRIMS.map(([name, d, n, , put]) => [`write${name}(${"SBC".includes(d) ? "I" : d})V`, write(n, put)])) as NonNullable<NativeSpec["methods"]>;
-/** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
+/** OutputStream's writes into bytes a TS stream collects in `chunks` */
+export interface HeldWrites { chunks: number[] }
+export const heldByteWrites: NativeSpec["methods"] = {
+  "write(I)V": function (this: HeldWrites, b: number) { this.chunks.push(b & 0xff); },
+  "write([BII)V": function (this: HeldWrites, b: Int8Array, off: number, len: number) {
+    if (!b) rt.npe();
+    checkFromIndexSize(off, len, b.length);
+    for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
+  },
+};
+/** every byte an InputStream has left, through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
-  if (usesReads(s) && !s.wrapped) {
-    const out = s.source ? await readFully(s.source, s.pos) : s.buf.subarray(s.pos);
-    s.pos += out.length;
-    return out;
-  }
   const chunks: Uint8Array[] = [];
   const tmp = new Int8Array(1 << 16);
   for (;;) {
@@ -162,127 +82,7 @@ export async function readStreamFully(s: unknown): Promise<Uint8Array> {
   }
   return concat(chunks);
 }
-rt.register({ name: "java/io/InputStream", ctor: JInputStream, ifaces: ["java/io/Closeable"], methods: inputStreamMethods });
-rt.register({
-  name: "java/io/ByteArrayInputStream", ctor: JByteArrayInputStream, sup: "java/io/InputStream",
-  methods: {
-    "<init>([B)V": function (this: JInputStream, b: Int8Array) { this.buf = u8(b); },
-    "<init>([BII)V": function (this: JInputStream, b: Int8Array, off: number, len: number) {
-      this.buf = u8(b, off, len);
-    },
-    "mark(I)V": function (this: JInputStream) { this.markPos = this.pos; },
-    "reset()V": function (this: JInputStream) { this.pos = this.markPos ?? 0; },
-    "markSupported()Z": () => 1,
-  },
-});
-function adoptStream(this: JInputStream, src: JInputStream) {
-  this.wrapped = src;
-}
-class JBufferedIn extends JInputStream {
-  count = 0; marked = -1; markLimit = 0; closed = false;
-  check() { if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed"); }
-  async fill(): Promise<void> {
-    if (this.marked < 0) this.pos = 0;
-    else if (this.pos >= this.buf.length) {
-      if (this.marked > 0) { this.buf.copyWithin(0, this.marked, this.pos); this.pos -= this.marked; this.marked = 0; }
-      else if (this.buf.length >= this.markLimit) { this.marked = -1; this.pos = 0; }
-      else { const bytes = new Uint8Array(Math.min(this.buf.length * 2, this.markLimit)); bytes.set(this.buf); this.buf = bytes; }
-    }
-    this.count = this.pos;
-    const n = await vcall(this.wrapped, "read", "([BII)I", i8(this.buf), this.pos, this.buf.length - this.pos);
-    if (n > 0) this.count = this.pos + n;
-  }
-}
-function bufferedIn(this: JBufferedIn, source: unknown, size = 8192): void {
-  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
-  this.wrapped = source; this.buf = new Uint8Array(size);
-}
-rt.register({
-  name: "java/io/BufferedInputStream", ctor: JBufferedIn, sup: "java/io/InputStream",
-  fields: { markpos: "marked" },
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": bufferedIn,
-    "<init>(Ljava/io/InputStream;I)V": bufferedIn,
-    "read()I": driven(function* (this: JBufferedIn): Gen { this.check(); if (this.pos >= this.count) yield this.fill(); return this.pos < this.count ? this.buf[this.pos++] : -1; }),
-    "read([BII)I": driven(function* (this: JBufferedIn, out: Int8Array, offset: number, count: number): Gen {
-      this.check();
-      if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      checkFromIndexSize(offset, count, out.length);
-      if (!count) return 0;
-      if (this.pos >= this.count) {
-        if (count >= this.buf.length && this.marked < 0) return vcall(this.wrapped, "read", "([BII)I", out, offset, count);
-        yield this.fill(); if (this.pos >= this.count) return -1;
-      }
-      const n = Math.min(count, this.count - this.pos);
-      out.set(i8(this.buf, this.pos, n), offset); this.pos += n; return n;
-    }),
-    "available()I": function (this: JBufferedIn) { this.check(); return after(vcall(this.wrapped, "available", "()I"), n => Math.min(2147483647, this.count - this.pos + n)); },
-    "skip(J)J": driven(function* (this: JBufferedIn, count: bigint): Gen {
-      this.check(); if (count <= 0n) return 0n;
-      if (this.pos >= this.count) { if (this.marked < 0) return vcall(this.wrapped, "skip", "(J)J", count); yield this.fill(); }
-      const n = Math.min(Number(count), this.count - this.pos); this.pos += n; return BigInt(n);
-    }),
-    "mark(I)V": function (this: JBufferedIn, limit: number) { this.marked = this.pos; this.markLimit = limit; },
-    "reset()V": function (this: JBufferedIn) { this.check(); if (this.marked < 0) throw rt.mkThrowable("java/io/IOException", "Resetting to invalid mark"); this.pos = this.marked; },
-    "markSupported()Z": () => 1,
-    "close()V": function (this: JBufferedIn) { if (!this.closed) { this.closed = true; this.buf = new Uint8Array(0); return vcall(this.wrapped, "close", "()V"); } },
-  },
-});
-rt.register({
-  name: "java/io/DataInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
-  ifaces: ["java/io/DataInput"],
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": adoptStream,
-    ...readers((n, get) => dataRead(n, (b) => get(new DataView(b.buffer, b.byteOffset, n)))),
-    "readFully([B)V": function (this: JInputStream, out: Int8Array) {
-      return after(dataBytes(this, out.length), (bytes) => { out.set(i8(bytes)); });
-    },
-    "skipBytes(I)I": driven(function* (this: JInputStream, n: number): Gen {
-      const thread = curThread;
-      let total = 0;
-      while (total < n) {
-        const skipped = Number(yield vcallOn(thread, this.wrapped, "skip", "(J)J", BigInt(n - total)));
-        if (skipped <= 0) break;
-        total += skipped;
-      }
-      return total;
-    }),
-    "readUTF()Ljava/lang/String;": driven(function* (this: JInputStream): Gen {
-      const head = yield dataBytes(this, 2);
-      return decodeModifiedUtf8(yield dataBytes(this, (head[0] << 8) | head[1]));
-    }),
-  },
-});
-function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
-  return function (this: JInputStream) { return after(dataBytes(this, length), decode); };
-}
-export function dataBytes(stream: JInputStream, length: number, thread = curThread): Uint8Array | Promise<Uint8Array> {
-  const take = (bytes: Uint8Array) => {
-    if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
-    stream.pos += length;
-    return bytes;
-  };
-  if (stream.wrapped) {
-    const source = stream.wrapped;
-    if (usesReads(source)) return after(dataBytes(source, length, thread), take);
-    if (source instanceof JBufferedIn && usesReads(source, JBufferedIn.prototype) && source.count - source.pos >= length) {
-      source.check(); const bytes = source.buf.subarray(source.pos, source.pos + length); source.pos += length; return take(bytes);
-    }
-    return wrappedBytes(stream, length, thread).then(take);
-  }
-  return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
-}
-/** as many of `length` bytes as the wrapped stream has, one virtual read at a time */
-async function wrappedBytes(stream: JInputStream, length: number, thread: typeof curThread): Promise<Uint8Array> {
-  const out = new Int8Array(length);
-  let got = 0;
-  while (got < length) {
-    const n = Number(await vcallOn(thread, stream.wrapped, "read", "([BII)I", out, got, length - got));
-    if (n <= 0) break;
-    got += n;
-  }
-  return new Uint8Array(out.buffer, 0, got);
-}
+
 
 const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;
 /** a FileDescriptor's int, -1 for none (JNIHelp's jniGetFDFromFileDescriptor) */
@@ -343,348 +143,7 @@ const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
   },
 };
 for (const [sig, fn] of Object.entries(fisNatives)) rt.registerJni("java/io/FileInputStream", sig, fn);
-export class JOutputStream extends JObj {
-  chunks: number[] = [];
-}
-rt.register({
-  name: "java/io/OutputStream", ctor: JOutputStream, ifaces: ["java/io/Closeable", "java/io/Flushable"],
-  methods: {
-    "<init>()V": function () {},
-    "write(I)V": function (this: JOutputStream, b: number) { this.chunks.push(b & 0xff); },
-    "write([B)V": function (this: JOutputStream, b: Int8Array) {
-      return (this as any)[writeBII](b, 0, b.length);
-    },
-    // OutputStream.write(byte[],int,int) is write(int) per byte, reaching a subclass's override
-    "write([BII)V": driven(function* (this: JOutputStream, b: Int8Array, off: number, len: number): Gen {
-      if (!b) rt.npe();
-      checkFromIndexSize(off, len, b.length);
-      for (let i = 0; i < len; i++) yield vcall(this, "write", "(I)V", b[off + i]);
-    }),
-    "flush()V": function () {},
-    "close()V": function () {},
-  },
-});
-// ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
-// buffers, size probes) swap the array and read the count directly, so the bytes live in the
-// Int8Array itself rather than in the base stream's chunk list.
-export class JBAOS extends JOutputStream {
-  buf = new Int8Array(32);
-  count = 0;
-  grow(min: number) {
-    if (min <= this.buf.length) return;
-    const nb = new Int8Array(Math.max(min, this.buf.length * 2));
-    nb.set(this.buf.subarray(0, this.count));
-    this.buf = nb;
-  }
-  bytes(): Uint8Array { return u8(this.buf, 0, this.count); }
-}
-function baosString(this: JBAOS) { return utf8.dec.decode(this.bytes()); }
-rt.register({
-  name: "java/io/ByteArrayOutputStream", ctor: JBAOS, sup: "java/io/OutputStream",
-  fields: { buf: "buf", count: "count" },
-  methods: {
-    "<init>()V": function () {},
-    "<init>(I)V": function (this: JBAOS, n: number) {
-      if (n < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative initial size: " + n);
-      this.buf = new Int8Array(n);
-    },
-    "write(I)V": function (this: JBAOS, b: number) { this.grow(this.count + 1); this.buf[this.count++] = b; },
-    "write([BII)V": function (this: JBAOS, b: Int8Array, off: number, len: number) {
-      checkFromIndexSize(off, len, b.length);
-      this.grow(this.count + len);
-      this.buf.set(b.subarray(off, off + len), this.count);
-      this.count += len;
-    },
-    "writeBytes([B)V": function (this: JBAOS, b: Int8Array) { return (this as any)[writeBII](b, 0, b.length); },
-    "toByteArray()[B": function (this: JBAOS) { return this.buf.slice(0, this.count); },
-    "size()I": function (this: JBAOS) { return this.count; },
-    "reset()V": function (this: JBAOS) { this.count = 0; },
-    "toString()Ljava/lang/String;": baosString,
-    "toString(Ljava/lang/String;)Ljava/lang/String;": baosString,
-    "toString(Ljava/nio/charset/Charset;)Ljava/lang/String;": baosString,
-    "writeTo(Ljava/io/OutputStream;)V": driven(function* (this: JBAOS, out: unknown): Gen {
-      yield vcall(out, "write", "([BII)V", this.buf, 0, this.count);
-    }),
-    "close()V": function () {},
-  },
-});
 
-export class JFilterOutputStream extends JOutputStream { out: unknown = null; closed = false; }
-rt.register({
-  name: "java/io/FilterOutputStream", ctor: JFilterOutputStream, sup: "java/io/OutputStream",
-  fields: { out: "out" },
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": function (this: any, o: unknown) { this.out = o; },
-    "write(I)V": function (this: any, b: number) { return vcall(this.out, "write", "(I)V", b); },
-    "write([BII)V": function (this: any, b: Int8Array, o: number, l: number) { return vcall(this.out, "write", "([BII)V", b, o, l); },
-    "flush()V": function (this: any) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
-    "close()V": driven(function* (this: JFilterOutputStream): Gen {
-      if (this.closed) return;
-      this.closed = true;
-      const t = rt.th();
-      try { yield vcall(this, "flush", "()V"); } finally { rt.st(t); if (this.out) yield vcall(this.out, "close", "()V"); }
-    }),
-  },
-});
-export async function skipStream(this: unknown, count: bigint): Promise<bigint> {
-  if (count <= 0n) return 0n;
-  const bytes = new Int8Array(Number(count > 2048n ? 2048n : count)); let remaining = count;
-  while (remaining > 0n) {
-    let n = await vcall(this, "read", "([BII)I", bytes, 0, Number(remaining > BigInt(bytes.length) ? BigInt(bytes.length) : remaining));
-    if (n < 0) break;
-    if (!n) { if (await vcall(this, "read", "()I") < 0) break; n = 1; }
-    remaining -= BigInt(n);
-  }
-  return count - remaining;
-}
-class JSequenceInputStream extends JInputStream {
-  enumeration: unknown = null; streams: unknown[] = []; current: unknown = null;
-  async advance(): Promise<void> {
-    if (this.current) await vcall(this.current, "close", "()V");
-    this.current = null;
-    if (this.enumeration ? await vcall(this.enumeration, "hasMoreElements", "()Z") : this.streams.length) {
-      this.current = this.enumeration ? await vcall(this.enumeration, "nextElement", "()Ljava/lang/Object;") : this.streams.shift();
-      if (!this.current) throw rt.mkThrowable("java/lang/NullPointerException", "stream");
-    }
-  }
-}
-rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, sup: "java/io/InputStream", methods: {
-  "<init>(Ljava/io/InputStream;Ljava/io/InputStream;)V": driven(function* (this: JSequenceInputStream, first: unknown, second: unknown): Gen { this.streams = [first, second]; yield this.advance(); }),
-  "<init>(Ljava/util/Enumeration;)V": driven(function* (this: JSequenceInputStream, enumeration: unknown): Gen {
-    if (!enumeration) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    this.enumeration = enumeration; yield this.advance();
-  }),
-  "read()I": driven(function* (this: JSequenceInputStream): Gen {
-    while (this.current) { const value = yield vcall(this.current, "read", "()I"); if (value >= 0) return value; yield this.advance(); } return -1;
-  }),
-  "read([BII)I": driven(function* (this: JSequenceInputStream, out: Int8Array, offset: number, count: number): Gen {
-    if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    checkFromIndexSize(offset, count, out.length);
-    if (!count) return 0;
-    while (this.current) { const n = yield vcall(this.current, "read", "([BII)I", out, offset, count); if (n > 0) return n; yield this.advance(); } return -1;
-  }),
-  "available()I": function (this: JSequenceInputStream) { return this.current ? vcall(this.current, "available", "()I") : 0; },
-  "close()V": driven(function* (this: JSequenceInputStream): Gen { while (this.current) yield this.advance(); }),
-  ...noMark,
-  "skip(J)J": skipStream,
-} });
-
-// every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
-// reaches the stream it wrapped, whether that is one of ours or app code over a socket
-export class JFilterInputStream extends JInputStream { in_: unknown = null; }
-const fwd = (name: string, desc: string) => function (this: JFilterInputStream, ...a: unknown[]) { return vcall(this.in_, name, desc, ...a); };
-rt.register({
-  name: "java/io/FilterInputStream", ctor: JFilterInputStream, sup: "java/io/InputStream",
-  fields: { in: "in_" },
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": function (this: JFilterInputStream, s: unknown) { this.in_ = s; },
-    "read()I": fwd("read", "()I"),
-    "read([BII)I": fwd("read", "([BII)I"),
-    "available()I": fwd("available", "()I"),
-    "skip(J)J": fwd("skip", "(J)J"),
-    "close()V": fwd("close", "()V"),
-    "mark(I)V": fwd("mark", "(I)V"),
-    "reset()V": fwd("reset", "()V"),
-    "markSupported()Z": fwd("markSupported", "()Z"),
-  },
-});
-/** PushbackInputStream: `pbuf[ppos..]` holds the unread bytes, which reads return first */
-class JPushbackIn extends JFilterInputStream { pbuf: Int8Array | null = null; ppos = 0; }
-function pushbackInit(this: JPushbackIn, s: unknown, size = 1) {
-  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size <= 0");
-  this.in_ = s;
-  this.pbuf = new Int8Array(size);
-  this.ppos = size;
-}
-function pushbackOpen(p: JPushbackIn): Int8Array {
-  if (!p.pbuf) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-  return p.pbuf;
-}
-function unread(this: JPushbackIn, b: Int8Array, off: number, len: number) {
-  const buf = pushbackOpen(this);
-  if (len > this.ppos) throw rt.mkThrowable("java/io/IOException", "Push back buffer is full");
-  this.ppos -= len;
-  buf.set(b.subarray(off, off + len), this.ppos);
-}
-rt.register({
-  name: "java/io/PushbackInputStream", ctor: JPushbackIn, sup: "java/io/FilterInputStream",
-  fields: { buf: "pbuf", pos: "ppos" },
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": pushbackInit,
-    "<init>(Ljava/io/InputStream;I)V": pushbackInit,
-    "read()I": function (this: JPushbackIn) {
-      const buf = pushbackOpen(this);
-      return this.ppos < buf.length ? buf[this.ppos++] & 0xff : vcall(this.in_, "read", "()I");
-    },
-    "read([BII)I": driven(function* (this: JPushbackIn, b: Int8Array, off: number, len: number): Gen {
-      const buf = pushbackOpen(this);
-      if (!b) rt.npe();
-      checkFromIndexSize(off, len, b.length);
-      if (!len) return 0;
-      const avail = Math.min(buf.length - this.ppos, len);
-      b.set(buf.subarray(this.ppos, this.ppos + avail), off);
-      this.ppos += avail;
-      if (avail === len) return avail;
-      const n = yield vcall(this.in_, "read", "([BII)I", b, off + avail, len - avail);
-      return n < 0 ? (avail || -1) : avail + n;
-    }),
-    "unread(I)V": function (this: JPushbackIn, v: number) { unread.call(this, Int8Array.of(v), 0, 1); },
-    "unread([B)V": function (this: JPushbackIn, b: Int8Array) { unread.call(this, b, 0, b.length); },
-    "unread([BII)V": unread,
-    "available()I": function (this: JPushbackIn) {
-      const n = pushbackOpen(this).length - this.ppos;
-      return after(vcall(this.in_, "available", "()I"), (a: number) => Math.min(0x7fffffff, n + a));
-    },
-    "skip(J)J": function (this: JPushbackIn, n: bigint) {
-      const buf = pushbackOpen(this);
-      if (n <= 0n) return 0n;
-      const own = Math.min(buf.length - this.ppos, Number(n));
-      this.ppos += own;
-      return BigInt(own) < n ? after(vcall(this.in_, "skip", "(J)J", n - BigInt(own)), (m: bigint) => BigInt(own) + m) : BigInt(own);
-    },
-    ...noMark,
-    "close()V": function (this: JPushbackIn) {
-      if (!this.in_) return;
-      const s = this.in_;
-      this.in_ = null;
-      this.pbuf = null;
-      return vcall(s, "close", "()V");
-    },
-  },
-});
-class JBufferedOut extends JFilterOutputStream { buf = new Int8Array(8192); count = 0; }
-function drain(s: JBufferedOut) {
-  if (!s.count) return;
-  return after(vcall(s.out, "write", "([BII)V", s.buf, 0, s.count), () => { s.count = 0; });
-}
-const wrapOut = function (this: JBufferedOut, o: unknown, size = 8192) {
-  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
-  this.out = o;
-  if (size !== this.buf.length) this.buf = new Int8Array(size);
-  this.count = 0;
-};
-rt.register({
-  name: "java/io/BufferedOutputStream", ctor: JBufferedOut, sup: "java/io/FilterOutputStream",
-  fields: { buf: "buf", count: "count" },
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": wrapOut,
-    "<init>(Ljava/io/OutputStream;I)V": wrapOut,
-    "write(I)V": function (this: JBufferedOut, b: number) {
-      return after(this.count === this.buf.length ? drain(this) : undefined, () => { this.buf[this.count++] = b; });
-    },
-    "write([BII)V": function (this: JBufferedOut, b: Int8Array, off: number, len: number) {
-      checkFromIndexSize(off, len, b.length);
-      if (len >= this.buf.length) {
-        const t = rt.th();
-        return after(drain(this), () => { rt.st(t); return vcall(this.out, "write", "([BII)V", b, off, len); });
-      }
-      return after(len > this.buf.length - this.count ? drain(this) : undefined, () => {
-        this.buf.set(b.subarray(off, off + len), this.count);
-        this.count += len;
-      });
-    },
-    "flush()V": function (this: JBufferedOut) {
-      const t = rt.th();
-      return after(drain(this), () => { rt.st(t); return vcall(this.out, "flush", "()V"); });
-    },
-    "close()V": driven(function* (this: JBufferedOut): Gen {
-      const t = rt.th();
-      try { yield vcall(this, "flush", "()V"); } finally { rt.st(t); yield vcall(this.out, "close", "()V"); }
-    }),
-  },
-});
-
-// ── print/println overloads shared by PrintStream and PrintWriter: each argument type → its
-// Java string form, then one sink per class takes (text, newline?)
-const PRINT_ARGS: [string, (v: any) => string | Promise<string>][] = [
-  ["Ljava/lang/String;", (s: string | null) => s ?? "null"],
-  ["Ljava/lang/Object;", async (o: unknown) => (o === null ? "null" : String(await vcall(o, "toString", "()Ljava/lang/String;")))],
-  ["I", String], ["J", String], ["D", String], ["F", String],
-  ["Z", (v: number) => (v ? "true" : "false")],
-  ["C", (v: number) => String.fromCharCode(v)],
-  ["[C", (v: Uint16Array) => charsToString(v, 0, v.length)],
-];
-function printMethods<T>(sink: (self: T, s: string, ln: boolean) => unknown, self: string): NativeSpec["methods"] {
-  const m: NativeSpec["methods"] = { "println()V": function (this: T) { return sink(this, "", true); } };
-  for (const [desc, str] of PRINT_ARGS) {
-    m[`print(${desc})V`] = async function (this: T, v: unknown) { return sink(this, await str(v), false); };
-    m[`println(${desc})V`] = async function (this: T, v: unknown) { return sink(this, await str(v), true); };
-  }
-  // printf/format are String.format into the same sink, and both return the stream
-  const fmt = async function (this: T, f: string, a: unknown[]) { await sink(this, javaFormat(f, a), false); return this; };
-  const fmtL = async function (this: T, _l: unknown, f: string, a: unknown[]) { await sink(this, javaFormat(f, a), false); return this; };
-  for (const name of ["printf", "format"]) {
-    m[`${name}(Ljava/lang/String;[Ljava/lang/Object;)L${self};`] = fmt;
-    m[`${name}(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)L${self};`] = fmtL;
-  }
-  return m;
-}
-
-// ── PrintStream; the unwrapped System streams feed the console.
-class JPrintStream extends JOutputStream {
-  out: unknown = null; auto = false; closed = false; trouble = false; charset = "UTF-8";
-  line = ""; err = false; decoder = new TextDecoder();
-}
-async function pr(ps: JPrintStream, s: string, ln: boolean) {
-  if (ps.closed) { ps.trouble = true; return; }
-  if (ps.out !== null) {
-    const bytes = encodeString(ln ? s + "\n" : s, ps.charset);
-    await vcall(ps, "write", "([BII)V", bytes, 0, bytes.length);
-    return;
-  }
-  ps.line += s + (ln ? "\n" : "");
-  let end: number;
-  while ((end = ps.line.indexOf("\n")) >= 0) {
-    (ps.err ? console.error : console.log)("[java]", ps.line.slice(0, end));
-    ps.line = ps.line.slice(end + 1);
-  }
-}
-async function printCall(p: JPrintStream, name: string, desc: string, ...args: unknown[]) {
-  if (p.closed) { p.trouble = true; return; }
-  try { await vcall(p.out, name, desc, ...args); }
-  catch (e) { if (!(e instanceof rt.link("java/io/IOException").ctor)) throw e; p.trouble = true; }
-}
-const initPrint = function (this: JPrintStream, out: unknown, auto = 0, charset: string | null = "UTF-8") {
-  if (out == null) throw rt.mkThrowable("java/lang/NullPointerException", "Null output stream");
-  this.out = out; this.auto = !!auto; this.charset = charsetName(charset);
-};
-rt.register({
-  name: "java/io/PrintStream", ctor: JPrintStream, sup: "java/io/FilterOutputStream",
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": initPrint,
-    "<init>(Ljava/io/OutputStream;Z)V": initPrint,
-    "<init>(Ljava/io/OutputStream;ZLjava/lang/String;)V": initPrint,
-    ...printMethods(pr, "java/io/PrintStream"),
-    "flush()V": function (this: JPrintStream) { return this.out !== null ? printCall(this, "flush", "()V") : this.line ? pr(this, "", true) : undefined; },
-    "close()V": driven(function* (this: JPrintStream): Gen {
-      if (this.closed) return;
-      yield vcall(this, "flush", "()V");
-      if (this.out !== null) yield printCall(this, "close", "()V");
-      this.closed = true;
-    }),
-    "checkError()Z": driven(function* (this: JPrintStream): Gen {
-      if (!this.closed) yield vcall(this, "flush", "()V");
-      return this.trouble || this.out instanceof JPrintStream && (yield vcall(this.out, "checkError", "()Z")) ? 1 : 0;
-    }),
-    "write(I)V": driven(function* (this: JPrintStream, b: number): Gen {
-      if (this.out === null) { yield pr(this, this.decoder.decode(Uint8Array.of(b), { stream: true }), false); return; }
-      yield printCall(this, "write", "(I)V", b);
-      if (this.auto && (b & 255) === 10) yield vcall(this, "flush", "()V");
-    }),
-    "write([BII)V": driven(function* (this: JPrintStream, bytes: Int8Array, off: number, len: number): Gen {
-      if (this.out === null) { yield pr(this, this.decoder.decode(bytes.subarray(off, off + len), { stream: true }), false); return; }
-      yield printCall(this, "write", "([BII)V", bytes, off, len);
-      if (this.auto) yield vcall(this, "flush", "()V");
-    }),
-  },
-});
-{
-  const sysInfo = rt.link("java/lang/System");
-  const out = new JPrintStream();
-  const err = new JPrintStream(); err.err = true;
-  sysInfo.ctor[mangleStaticField("out")] = out;
-  sysInfo.ctor[mangleStaticField("err")] = err;
-}
 
 // BufferedReader stays TS over libcore's Reader: compiled bytecode scans a line at about 3.5 ns a
 // char and builds it from a char[], 2.3x this model's time for readLine over 1 MB. Here each chunk of

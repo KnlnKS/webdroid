@@ -584,6 +584,51 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   within noise. Making it work needs a pending-exception protocol (a suspended throw unwinding
   through try-free leaves to the first frame with handlers, cold frames and TS boundaries), and
   persisted bodies would still run the conservative form.
+- 2026-09-29, java.io's streams from libcore (B.7 cut 4 finished). InputStream, OutputStream, the
+  ByteArray, Filter, Buffered, Data, Pushback, Sequence and Print streams, java.util.zip's Checked
+  streams and InflaterInputStream, and java.security's Digest streams run from libcore; only the
+  ObjectStreams stay TS (B.4). Findings: the TS InflaterInputStream was an empty stub whose reads
+  returned -1 without reading, so `new InflaterInputStream(in)` never inflated; the TS
+  `ByteArrayOutputStream.toString(String)` decoded UTF-8 whatever it was asked, and libcore's asks
+  Charset.forName, so luni-io's `toString("8859_2")` test now fails (the charset boundary serves 9
+  charsets); System had no `setOut0`/`setErr0`/`setIn0`, so `System.setOut` threw
+  UnsatisfiedLinkError; ObjectInputStream's read methods read the underlying stream past the
+  block-data framing. System.out/err/in are built as a device builds them: System's native spec
+  has a `<clinit>` making the standard streams over descriptors 0 to 2 through the platform's
+  `newPrintStream`, and zygoteInit runs `RuntimeInit.redirectLogStreams`, so out and err are
+  AndroidPrintStreams writing lines through `Log.println` (INFO "System.out", WARN "System.err").
+  Static reads are cached per site once a class is initialized, so the `<clinit>` costs nothing after
+  it; it costs 12 ms cold in V8 but takes work out of zygoteInit (39.1 to 31.2 ms), net +4 ms. TS
+  subclasses (sockets, the HTTP body and connection output, channels, local sockets, parcel
+  descriptor streams, documents, Base64, Cipher, Deflater, GZIP and Zip streams, the ObjectStreams)
+  re-parent onto libcore's classes and reach FilterInput/OutputStream's `in`/`out` through
+  `filterIn`/`filterOut`; a lazy asset is an `AssetManager$AssetInputStream` over its entry, with
+  mark and reset as on a device. The first measurement was far off: libcore's ByteArrayInputStream
+  read() cost 14.5 ns a byte against 2.3 in TS, 12 ns of it the monitor of a synchronized method. A
+  WeakMap lookup per enter and exit, and then a property load inside Monitors that every lock reaches
+  (megamorphic), were both slow; the monitor is now `$mon` on the object, loaded at the compiled
+  site (monomorphic) and handed to R.me/R.mx. Profiling the rest showed V8 never inlined an
+  invoke-direct target: `$u.call(recv, ...)` records Function.prototype.call as the call target.
+  Constructors and private methods are now also installed as `d<class hash>$<mangled>` on their
+  class's prototype and called as methods (5 to 20% on these workloads; installing the names when a
+  class's methods are installed, not at first resolution, kept cold boot level: adding them to a
+  prototype whose objects exist cost zygoteInit 10%). invoke-super still calls through `.call`. V8
+  (node 24), tip against the result, 7 interleaved process pairs, medians, first call and steady ms:
+  ByteArrayInputStream.read() x1M 7.2/8.5 and 2.20/4.20; BufferedInputStream.read() x1M 31.3/15.8
+  and 20.4/10.5; ByteArrayOutputStream.write(int) x1M 6.0/10.7 and 1.86/8.25; BufferedOutputStream
+  .write(int) x1M 8.9/13.6 and 2.44/4.98; PushbackInputStream read/unread 41.9/19.9 and 34.9/13.2;
+  4 KB and 700-byte bulk reads 0.52/0.50 and 700-byte buffered writes 1.18/1.12 (steady at 100
+  calls); DataInputStream.readInt x200k over a buffer 18.1/30.1 and 14.1/12.7; mixed Data reads
+  26.5/19.9 and 22.6/11.9; DataOutputStream 12.0/11.1; PrintStream print+println x50k 113/41.7 and
+  108/28.8; System.out.println x20k (console stubbed) 8.3/1.1; readLine over InputStreamReader 5.8/5.6.
+  Byte-at-a-time calls into synchronized streams stay slower: about 2 ns is the monitor (the TS
+  bodies took no lock) and the rest is frame cost in the emitted body (try/catch dispatch, Promise
+  checks), the §4.6 leaf-frame item. luni-io went from 1,223 to 1,275 (the one regression above);
+  guava 40,085, luni-net 537, jsr166 2,544 and ojluni-time 27,514 unchanged. ojluni-time first lost
+  13 tests: libcore's PrintStream.printf asks its Formatter for `locale()`, which the TS Formatter
+  lacked. libcore's DeflaterOutputStreamTest now reaches its pipe
+  read and times out at 240 s instead of failing at once: PipedInputStream waits for the writer
+  thread to die, and the TS executor's worker never reports `isAlive() == false` after shutdown.
 
 ## Java, storage and framework semantics
 

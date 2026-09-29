@@ -9,8 +9,8 @@
  * URI algebra needs no special case; the volume is the picked directory's own name.
  */
 
-import { rt, driven, type Gen } from "../jvm/runtime";
-import { JOutputStream, streamOf, type JInputStream } from "../jvm/natives/jio";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { streamOf, heldByteWrites } from "../jvm/natives/jio";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
 
@@ -250,13 +250,14 @@ export async function pickDocuments(opts: { multiple?: boolean; save?: string; m
 }
 
 // ── the streams ContentResolver hands out for a document
-export function docInputStream(docId: string): Promise<JInputStream> {
+export function docInputStream(docId: string): Promise<JObj> {
   return docRead(docId).then(streamOf);
 }
-class JDocOutputStream extends JOutputStream { docId = ""; }
+class JDocOutputStream extends JObj { docId = ""; chunks: number[] = []; }
 rt.register({
   name: "webdroid/DocOutputStream", ctor: JDocOutputStream, sup: "java/io/OutputStream",
   methods: {
+    ...heldByteWrites,
     // A handle's writable truncates on open, so the bytes are buffered here and committed once,
     // on close. flush() cannot be that commit: a BufferedOutputStream wrapper flushes per block,
     // which would rewrite the whole file for every buffer's worth of a backup.

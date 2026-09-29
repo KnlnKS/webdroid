@@ -19,7 +19,7 @@ export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
-import { newFile, pathOf, JInputStream, JOutputStream, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
+import { newFile, pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
@@ -926,15 +926,16 @@ rt.register({
     "checkError()V": () => {},
   },
 });
-class JPfdIn extends JInputStream { pfd: JParcelFileDescriptor | null = null; }
+class JPfdIn extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; pfd: JParcelFileDescriptor | null = null; }
 rt.register({
   name: "android/os/ParcelFileDescriptor$AutoCloseInputStream", ctor: JPfdIn, sup: "java/io/InputStream",
   methods: {
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdIn, p: JParcelFileDescriptor) { this.buf = p.bytes; this.pfd = p; },
+    ...heldByteReads,
     "close()V": function (this: JPfdIn) { const pfd = this.pfd; this.pfd = null; if (pfd) return vcall(pfd, "close", "()V"); },
   },
 });
-class JPfdOut extends JOutputStream { pfd: JParcelFileDescriptor | null = null; }
+class JPfdOut extends JObj { chunks: number[] = []; pfd: JParcelFileDescriptor | null = null; }
 const pfdFlush = async function (this: JPfdOut, closed = false) {
   const pfd = this.pfd, bytes = Uint8Array.from(this.chunks);
   // a backed descriptor's sink takes its file when the last holder closes
@@ -945,6 +946,7 @@ rt.register({
   name: "android/os/ParcelFileDescriptor$AutoCloseOutputStream", ctor: JPfdOut, sup: "java/io/OutputStream",
   methods: {
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
+    ...heldByteWrites,
     "flush()V": pfdFlush,
     "close()V": driven(function* (this: JPfdOut): Gen { yield pfdFlush.call(this, true); const pfd = this.pfd; this.pfd = null; if (pfd) yield vcall(pfd, "close", "()V"); }),
   },

@@ -2,7 +2,6 @@
 // process. A server owns a name in the abstract namespace; a client's connect pairs it with a
 // socket the server's accept() hands out, and each side's streams are the other's queue.
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { JInputStream, JOutputStream } from "../jvm/natives/jio";
 import { mkEnumSet } from "../jvm/natives/jlang";
 import { u8 } from "../jvm/abi";
 
@@ -38,8 +37,8 @@ class Queue {
     return n;
   }
 }
-class JLocalSocketIn extends JInputStream { q!: Queue; }
-class JLocalSocketOut extends JOutputStream {
+class JLocalSocketIn extends JObj { q!: Queue; }
+class JLocalSocketOut extends JObj {
   peer!: Queue;
   send(bytes: Uint8Array): void {
     if (this.peer.closed) throw rt.mkThrowable("java/io/IOException", "Broken pipe");

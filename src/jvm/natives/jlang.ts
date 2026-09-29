@@ -907,15 +907,21 @@ export function javaFormat(fmt: string, args: unknown[]): string {
       return s;
     });
 }
-class JFormatter extends JObj { out: unknown = null; s = ""; }
-const formatterInit = function (this: JFormatter, ...a: unknown[]) { this.out = a.find((x) => x !== null && !rt.iof(x, "java/util/Locale")) ?? null; };
+class JFormatter extends JObj { out: unknown = null; s = ""; locale: unknown = null; }
+/** a Formatter without a locale takes the default FORMAT locale when made, as libcore's does */
+const formatterInit = function (this: JFormatter, out: unknown = null) {
+  this.out = out;
+  return after(linkInit("java/util/Locale$Category"), (category) =>
+    after(scall("java/util/Locale", "getDefault", "(Ljava/util/Locale$Category;)Ljava/util/Locale;", category.ctor[mangleStaticField("FORMAT")]), (l) => { this.locale = l; }));
+};
 rt.register({
   name: "java/util/Formatter", ctor: JFormatter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
   methods: {
-    "<init>()V": formatterInit,
+    "<init>()V": function (this: JFormatter) { return formatterInit.call(this); },
     "<init>(Ljava/lang/Appendable;)V": formatterInit,
-    "<init>(Ljava/util/Locale;)V": formatterInit,
-    "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": formatterInit,
+    "<init>(Ljava/util/Locale;)V": function (this: JFormatter, l: unknown) { this.locale = l; },
+    "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": function (this: JFormatter, out: unknown, l: unknown) { this.out = out; this.locale = l; },
+    "locale()Ljava/util/Locale;": function (this: JFormatter) { return this.locale; },
     "format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": driven(function* (this: JFormatter, fmt: string, args: unknown[]): Gen {
       const s = javaFormat(fmt, args ?? []);
       if (this.out) yield vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
@@ -1799,7 +1805,17 @@ const sysEnv: Record<string, string> = {
 rt.register({
   name: "java/lang/System", ctor: JSystem,
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
-  statics: { out: null, err: null, "in": null }, // filled by jio
+  statics: { out: null, err: null, "in": null },
+  // System.<clinit>'s standard streams over descriptors 0 to 2; zygoteInit redirects out and err to logcat
+  clinit: async () => {
+    const system = rt.link("java/lang/System").ctor, fd = (await linkInit("java/io/FileDescriptor")).ctor;
+    const std = (cls: string, name: string) => newObj(cls, "(Ljava/io/FileDescriptor;)V", fd[mangleStaticField(name)]);
+    system[mangleStaticField("in")] = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;I)V", await std("java/io/FileInputStream", "in"), 128);
+    for (const name of ["out", "err"]) {
+      system[mangleStaticField(name)] = await vcall(system, "newPrintStream", "(Ljava/io/FileOutputStream;Ljava/lang/String;)Ljava/io/PrintStream;",
+        await std("java/io/FileOutputStream", name), sysProps[`sun.std${name}.encoding`] ?? null);
+    }
+  },
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
     "static currentTimeMillis()J": () => BigInt(Date.now()),
@@ -1837,6 +1853,9 @@ rt.register({
   },
 });
 // Clock.systemUTC's wall time: nanoseconds past `offset` seconds, or -1 beyond ±2^32 s as libcore expects
+for (const [name, desc] of [["In", "Ljava/io/InputStream;"], ["Out", "Ljava/io/PrintStream;"], ["Err", "Ljava/io/PrintStream;"]]) {
+  rt.registerJni("java/lang/System", `set${name}0(${desc})V`, (stream: unknown) => { rt.link("java/lang/System").ctor[mangleStaticField(name.toLowerCase())] = stream; });
+}
 rt.registerJni("jdk/internal/misc/VM", "getNanoTimeAdjustment(J)J", (offset: bigint) => {
   const adjustment = BigInt(Date.now()) * 1_000_000n - offset * 1_000_000_000n;
   return adjustment > MAX_NANO_ADJUSTMENT || adjustment < -MAX_NANO_ADJUSTMENT ? -1n : adjustment;

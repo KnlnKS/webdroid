@@ -1,12 +1,16 @@
-interface Monitor {
+export interface Monitor {
   owner: unknown;
   depth: number;
   entrants: (() => void)[];
   waiters: (() => void)[];
 }
+const newMonitor = (): Monitor => ({ owner: null, depth: 0, entrants: [], waiters: [] });
+/** An object's monitor lives on the object as `$mon`, which compiled code loads at each monitor
+ *  instruction (Runtime.me/mx) so that the load stays monomorphic. Non-enumerable, so clone() does
+ *  not copy it. */
+type Lockable = { $mon?: Monitor };
 
 export class Monitors {
-  private objects = new WeakMap<object, Monitor>();
   private strings = new Map<string, Monitor>();
   /** threads parked on a contended enter, and what they wait for: the answer to "who holds the lock main wants" */
   private waiting = new Map<unknown, object | string>();
@@ -18,12 +22,11 @@ export class Monitors {
 
   private get(obj: object | string | null | 0): Monitor {
     if (obj == null || obj === 0) throw this.exception("NullPointerException");
-    let monitor = typeof obj === "string" ? this.strings.get(obj) : this.objects.get(obj);
-    if (!monitor) {
-      monitor = { owner: null, depth: 0, entrants: [], waiters: [] };
-      if (typeof obj === "string") this.strings.set(obj, monitor);
-      else this.objects.set(obj, monitor);
+    if (typeof obj !== "string") {
+      return (obj as Lockable).$mon ?? (Object.defineProperty(obj, "$mon", { value: newMonitor() }) as Lockable).$mon!;
     }
+    let monitor = this.strings.get(obj);
+    if (!monitor) this.strings.set(obj, monitor = newMonitor());
     return monitor;
   }
   private owned(obj: object | string | null | 0, thread: unknown): Monitor {

@@ -1,6 +1,5 @@
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall, checkFromIndexSize } from "./jlang";
-import { JInputStream, JOutputStream, skipStream, noMark } from "./jio";
 import { remainingBytes, resident, type JBuffer } from "./jnio";
 
 class JStreamChannel extends JObj { stream: unknown = null; open = true; }
@@ -29,8 +28,8 @@ rt.register({ name: "webdroid/OutputStreamChannel", ctor: class extends JStreamC
     buffer.pos += count; return count;
   }),
 } });
-class JChannelInput extends JInputStream { channel: unknown = null; }
-class JChannelOutput extends JOutputStream { channel: unknown = null; }
+class JChannelInput extends JObj { channel: unknown = null; }
+class JChannelOutput extends JObj { channel: unknown = null; }
 function wrap(bytes: Int8Array, offset: number, count: number): JBuffer | Promise<JBuffer> {
   if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
   checkFromIndexSize(offset, count, bytes.length);
@@ -42,9 +41,6 @@ rt.register({ name: "webdroid/ChannelInputStream", ctor: JChannelInput, sup: "ja
     const buffer = yield wrap(bytes, offset, count); return count ? vcall(this.channel, "read", "(Ljava/nio/ByteBuffer;)I", buffer) : 0;
   }),
   "close()V": function (this: JChannelInput) { return vcall(this.channel, "close", "()V"); },
-  "available()I": () => 0,
-  "skip(J)J": skipStream,
-  ...noMark,
 } });
 rt.register({ name: "webdroid/ChannelOutputStream", ctor: JChannelOutput, sup: "java/io/OutputStream", methods: {
   "write(I)V": function (this: JChannelOutput, value: number) { return vcall(this, "write", "([BII)V", Int8Array.of(value), 0, 1); },

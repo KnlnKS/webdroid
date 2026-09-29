@@ -10,7 +10,7 @@ import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain
 import { generateEc, isEcCurve, curveOfParams, invalidKey } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
 import { type JBuffer, remainingBytes, resident } from "./jnio";
-import { JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
+import { filterIn, filterOut, setFilterIn, setFilterOut, readStreamFully } from "./jio";
 
 rt.markers("java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec");
 defineException("java/security/InvalidAlgorithmParameterException", "java/security/GeneralSecurityException");
@@ -147,36 +147,37 @@ class JCipher extends JObj {
   aad: Uint8Array[] = [];
 }
 rt.register({ name: "javax/crypto/CipherSpi", ctor: class extends JObj {}, methods: { "<init>()V": () => {} } });
-class JCipherOutputStream extends JFilterOutputStream { cipher: JCipher | null = null; closed = false; }
+class JCipherOutputStream extends JObj { cipher: JCipher | null = null; closed = false; }
 rt.register({
   name: "javax/crypto/CipherOutputStream", ctor: JCipherOutputStream, sup: "java/io/FilterOutputStream",
   methods: {
     "<init>(Ljava/io/OutputStream;Ljavax/crypto/Cipher;)V": function (this: JCipherOutputStream, out: unknown, cipher: JCipher) {
-      this.out = out; this.cipher = cipher;
+      setFilterOut(this, out); this.cipher = cipher;
     },
     "write(I)V": driven(function* (this: JCipherOutputStream, b: number): Gen {
       const result: Int8Array = yield vcall(this.cipher, "update", "([B)[B", Int8Array.of(b));
-      if (result?.length) yield vcall(this.out, "write", "([B)V", result);
+      if (result?.length) yield vcall(filterOut(this), "write", "([B)V", result);
     }),
     "write([BII)V": driven(function* (this: JCipherOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!len) return;
       const result: Int8Array = yield vcall(this.cipher, "update", "([BII)[B", bytes, off, len);
-      if (result?.length) yield vcall(this.out, "write", "([B)V", result);
+      if (result?.length) yield vcall(filterOut(this), "write", "([B)V", result);
     }),
     "close()V": driven(function* (this: JCipherOutputStream): Gen {
       if (this.closed) return;
       this.closed = true;
       try {
         const result: Int8Array = yield vcall(this.cipher, "doFinal", "()[B");
-        if (result?.length) yield vcall(this.out, "write", "([B)V", result);
-        yield vcall(this.out, "flush", "()V");
+        if (result?.length) yield vcall(filterOut(this), "write", "([B)V", result);
+        yield vcall(filterOut(this), "flush", "()V");
       } finally {
-        yield vcall(this.out, "close", "()V");
+        yield vcall(filterOut(this), "close", "()V");
       }
     }),
   },
 });
-class JCipherInputStream extends JFilterInputStream {
+class JCipherInputStream extends JObj {
+  pos = 0;
   cipher: JCipher | null = null;
   plain: Int8Array | null = null;
   loading: Promise<void> | null = null;
@@ -184,7 +185,7 @@ class JCipherInputStream extends JFilterInputStream {
   async load() {
     if (this.plain) return;
     if (!this.loading) this.loading = (async () => {
-      const encrypted = await readStreamFully(this.in_);
+      const encrypted = await readStreamFully(filterIn(this));
       this.plain = await vcall(this.cipher, "doFinal", "([B)[B", new Int8Array(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength));
     })();
     await this.loading;
@@ -194,7 +195,7 @@ rt.register({
   name: "javax/crypto/CipherInputStream", ctor: JCipherInputStream, sup: "java/io/FilterInputStream",
   methods: {
     "<init>(Ljava/io/InputStream;Ljavax/crypto/Cipher;)V": function (this: JCipherInputStream, input: unknown, cipher: JCipher) {
-      this.in_ = input; this.cipher = cipher;
+      setFilterIn(this, input); this.cipher = cipher;
     },
     "read()I": driven(function* (this: JCipherInputStream): Gen {
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
@@ -226,7 +227,7 @@ rt.register({
       if (this.closed) return;
       this.closed = true;
       this.plain = null;
-      yield vcall(this.in_, "close", "()V");
+      yield vcall(filterIn(this), "close", "()V");
     }),
     "markSupported()Z": () => 0,
   },

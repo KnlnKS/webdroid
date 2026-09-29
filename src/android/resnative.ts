@@ -8,10 +8,10 @@ import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, loadDrawableFi
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
 import { sizeClass } from "./arsc";
-import { javaFormat, defineException, vcall, after, scall } from "../jvm/natives/jlang";
+import { javaFormat, defineException, vcall, after, scall, checkFromIndexSize } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, localeForTag, tagDirection } from "../jvm/natives/jvalues";
-import { jarray } from "../jvm/abi";
-import { streamOf, streamOfSource } from "../jvm/natives/jio";
+import { jarray, i8 } from "../jvm/abi";
+import { streamOf } from "../jvm/natives/jio";
 import { mkPfd } from "./os";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { fontResource } from "./fonts";
@@ -314,9 +314,40 @@ function assetNames(res: Resources, dir: string): Set<string> {
   }
   return names;
 }
+// an asset still in the archive is read from its entry as the stream advances
+class JAssetInputStream extends JObj { source!: FileSource; pos = 0; markPos = 0; }
+rt.register({
+  name: "android/content/res/AssetManager$AssetInputStream", ctor: JAssetInputStream, sup: "java/io/InputStream",
+  methods: {
+    "read()I": function (this: JAssetInputStream) {
+      return after(this.source.read(this.pos, 1), (bytes) => bytes.length ? (this.pos++, bytes[0]) : -1);
+    },
+    "read([BII)I": function (this: JAssetInputStream, out: Int8Array, off: number, len: number) {
+      if (!out) rt.npe();
+      checkFromIndexSize(off, len, out.length);
+      if (len === 0) return 0;
+      return after(this.source.read(this.pos, len), (bytes) => {
+        if (!bytes.length) return -1;
+        out.set(i8(bytes), off);
+        this.pos += bytes.length;
+        return bytes.length;
+      });
+    },
+    "available()I": function (this: JAssetInputStream) { return this.source.size - this.pos; },
+    "skip(J)J": function (this: JAssetInputStream, n: bigint) {
+      const k = n <= 0n ? 0 : Math.min(Number(n), this.source.size - this.pos);
+      this.pos += k;
+      return BigInt(k);
+    },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JAssetInputStream) { this.markPos = this.pos; },
+    "reset()V": function (this: JAssetInputStream) { this.pos = this.markPos; },
+    "close()V": () => {},
+  },
+});
 const assetOpen = function (this: JAssetManager, p: string) {
   const bytes = this.host.zip["assets/" + p];
-  return bytes ? streamOf(bytes) : streamOfSource(assetSource(this, p));
+  return bytes ? streamOf(bytes) : Object.assign(rt.make("android/content/res/AssetManager$AssetInputStream") as JAssetInputStream, { source: assetSource(this, p) });
 };
 rt.register({
   name: "android/content/res/AssetManager", ctor: JAssetManager,
