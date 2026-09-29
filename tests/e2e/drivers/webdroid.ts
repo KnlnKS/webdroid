@@ -80,16 +80,6 @@ export class WebdroidDriver {
       Object.defineProperty(window, name, { value: undefined, configurable: true });` });
     const page = await ctx.newPage();
     const drv = new WebdroidDriver(browser, page, screen);
-    if (process.env.WEBDROID_CPUPROFILE) {
-      const cdp = await ctx.newCDPSession(page);
-      if (process.env.WEBDROID_HEAP) {
-        await cdp.send("HeapProfiler.enable"); await cdp.send("HeapProfiler.startSampling", { samplingInterval: 65536, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true } as any);
-        (drv as any).stopProfile = async () => { const { profile } = await cdp.send("HeapProfiler.stopSampling"); await Bun.write(process.env.WEBDROID_CPUPROFILE!, JSON.stringify(profile)); };
-      } else {
-        await cdp.send("Profiler.enable"); await cdp.send("Profiler.setSamplingInterval", { interval: 500 }); await cdp.send("Profiler.start");
-        (drv as any).stopProfile = async () => { const { profile } = await cdp.send("Profiler.stop"); await Bun.write(process.env.WEBDROID_CPUPROFILE!, JSON.stringify(profile)); };
-      }
-    }
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
     await drv.open(!!opts.controlled);
@@ -156,8 +146,7 @@ export class WebdroidDriver {
     return this.page.evaluate((ms) => (globalThis as any).wd.alive(ms), timeoutMs);
   }
 
-  async close(): Promise<void> {
-    await (this as any).stopProfile?.();
+  close(): Promise<void> {
     return this.browser.close();
   }
 }
