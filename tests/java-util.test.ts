@@ -462,6 +462,31 @@ describe("map-equality", () => {
     expect(await hash(a)).toBe(await hash(b));
   });
 
+  test("collection equality follows the List and Set contracts across implementations", async () => {
+    const collections = rt.link("java/util/Collections").ctor;
+    const lists = [
+      newArrayList(["a"]),
+      await vcall(collections, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", newArrayList(["a"])),
+      await vcall(collections, "synchronizedList", "(Ljava/util/List;)Ljava/util/List;", newArrayList(["a"])),
+    ];
+    for (const a of lists) for (const b of lists) expect(await equals(a, b)).toBe(1);
+    expect(await equals(lists[0], await vcall(collections, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", newArrayList(["a", "b"])))).toBe(0);
+
+    const keys = await map();
+    await put(keys, "a", 1);
+    const set = await newObj("java/util/HashSet");
+    await vcall(set, "add", `(${O})Z`, "a");
+    const keySet = await vcall(keys, "keySet", "()Ljava/util/Set;");
+    expect(await equals(keySet, set)).toBe(1);
+    expect(await hash(keySet)).toBe(await hash(set));
+    expect(await equals(set, await vcall(keys, "values", "()Ljava/util/Collection;"))).toBe(0);
+
+    const deque = await newObj("java/util/ArrayDeque");
+    expect(await equals(newArrayList([]), deque)).toBe(0);
+    expect(await equals(deque, newArrayList([]))).toBe(0);
+    expect(await equals(deque, await newObj("java/util/ArrayDeque"))).toBe(0);
+  });
+
   test("IdentityHashMap uses reference identity for keys and values", async () => {
     const target = await map("java/util/IdentityHashMap");
     const first = new Value(7), equalValue = new Value(7);

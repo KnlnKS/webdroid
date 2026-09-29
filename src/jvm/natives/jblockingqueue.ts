@@ -1,6 +1,6 @@
 import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../runtime";
 import { vcall } from "./jlang";
-import { JList, mkIter, listMethods, toJsArray, LIST_ONLY, INDEX_OF, DEQUE_ONLY, SEQUENCED, CAPACITY } from "./jutil";
+import { JList, mkIter, listMethods, toJsArray, LIST_ONLY, IDENTITY_EQUALITY, INDEX_OF, DEQUE_ONLY, SEQUENCED, CAPACITY } from "./jutil";
 import type { JTimeUnit } from "./jconc";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
@@ -85,6 +85,7 @@ async function removeOccurrence(this: JBlockingQueue, value: unknown): Promise<n
 }
 const queueMethods: NonNullable<NativeSpec["methods"]> = {
   ...Object.fromEntries(Object.entries(without(listMethods(), LIST_ONLY, INDEX_OF, CAPACITY, DEQUE_ONLY, SEQUENCED)).filter(([k]) => !k.startsWith("<init>"))),
+  ...IDENTITY_EQUALITY,
   "<init>()V": function () {},
   "<init>(I)V": queueCapacity,
   "<init>(Ljava/util/Collection;)V": driven(function* (this: JBlockingQueue, c: unknown): Gen {
@@ -123,6 +124,6 @@ rt.register({
 rt.register({
   name: "java/util/concurrent/ConcurrentLinkedQueue", ctor: class extends JList {}, sup: "java/util/AbstractQueue",
   ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-  methods: without(listMethods(), ["<init>(I)V"], LIST_ONLY, INDEX_OF, CAPACITY, DEQUE_ONLY, SEQUENCED),
+  methods: { ...without(listMethods(), ["<init>(I)V"], LIST_ONLY, INDEX_OF, CAPACITY, DEQUE_ONLY, SEQUENCED), ...IDENTITY_EQUALITY },
 });
 rt.register({ name: "java/util/concurrent/BlockingQueue", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });

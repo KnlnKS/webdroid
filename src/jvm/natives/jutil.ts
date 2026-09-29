@@ -368,6 +368,11 @@ export const DEQUE_ONLY = ["descendingIterator()Ljava/util/Iterator;", "offerFir
 export const SEQUENCED = ["addFirst(Ljava/lang/Object;)V", "addLast(Ljava/lang/Object;)V", "getFirst()Ljava/lang/Object;",
   "getLast()Ljava/lang/Object;", "removeFirst()Ljava/lang/Object;", "removeLast()Ljava/lang/Object;"];
 export const CAPACITY = ["ensureCapacity(I)V", "trimToSize()V"];
+/** Object's identity equality for a JList-backed queue, which would otherwise inherit JList's List equality */
+export const IDENTITY_EQUALITY: Methods = {
+  "equals(Ljava/lang/Object;)Z": function (this: JObj, o: unknown) { return this === o ? 1 : 0; },
+  "hashCode()I": function (this: JObj) { return idHash(this); },
+};
 export function listMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -476,12 +481,23 @@ export function listMethods(): Methods {
     "sort(Ljava/util/Comparator;)V": function (this: JList, cmp: unknown) { return sortInPlace(this.a, cmp); },
     "equals(Ljava/lang/Object;)Z": driven(function* (this: JList, o: unknown): Gen {
       if (o === this) return 1;
-      if (!(o instanceof JList) || o.a.length !== this.a.length) return 0;
-      for (let i = 0; i < this.a.length; i++) {
-        const r = jeq(this.a[i], o.a[i]);
+      if (!(o instanceof JObj) || !rt.iof(o, "java/util/List")) return 0;
+      const a = this.a;
+      if (o instanceof JList) {
+        if (o.a.length !== a.length) return 0;
+        for (let i = 0; i < a.length; i++) {
+          const r = jeq(a[i], o.a[i]);
+          if (!(r instanceof Promise ? yield r : r)) return 0;
+        }
+        return 1;
+      }
+      const it = yield iterOf(o);
+      for (let i = 0; i < a.length; i++) {
+        if (!(yield vcall(it, "hasNext", "()Z"))) return 0;
+        const r = jeq(a[i], yield vcall(it, "next", "()Ljava/lang/Object;"));
         if (!(r instanceof Promise ? yield r : r)) return 0;
       }
-      return 1;
+      return (yield vcall(it, "hasNext", "()Z")) ? 0 : 1;
     }),
     "hashCode()I": function (this: JList) { return hashSeq(this.a); },
     "toString()Ljava/lang/String;": function (this: JList) { return seqText(this, this.a); },
@@ -709,6 +725,7 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
   }),
   "java/util/Vector": (base) => ({ "<init>(II)V": function () {}, ...vectorMethods(base) }),
   "java/util/Stack": (base) => ({ ...vectorMethods(base), ...stackMethods }),
+  "java/util/ArrayDeque": () => IDENTITY_EQUALITY,
 };
 const listOmits: Record<string, string[][]> = {
   "java/util/ArrayList": [QUEUE_ONLY, DEQUE_ONLY],
@@ -724,7 +741,8 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
     serialization: n === "java/util/ArrayList" ? { uid: 8683452581122892189n, fields: [{ name: "size", desc: "I", prop: "serialSize" }] } : undefined,
     sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection"
       : n === "java/util/LinkedList" ? "java/util/AbstractSequentialList" : "java/util/AbstractList",
-    ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
+    ifaces: [...n === "java/util/ArrayDeque" ? [] : ["java/util/List"], "java/util/Collection", "java/lang/Iterable",
+      "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...without(base, ...listOmits[n]), ...listExtras[n]?.(base) },
   });
 }
@@ -891,7 +909,7 @@ function mapMethods(): Methods {
     "clear()V": function (this: JMap) { ensureMapMutable(this); this.m.clear(); this.slow.length = 0; this.slowVersion++; },
     "putAll(Ljava/util/Map;)V": driven(function* (this: JMap, src: unknown): Gen { ensureMapMutable(this); if (src) yield copyMapInto(src, this); }),
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
-    "values()Ljava/util/Collection;": function (this: JMap) { return new JSetView(this, "v"); },
+    "values()Ljava/util/Collection;": function (this: JMap) { return new JValuesView(this, "v"); },
     "entrySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "e"); },
     "toString()Ljava/lang/String;": function (this: JMap) { return mapText(this, allEnts(this)); },
     "hashCode()I": function (this: JMap) {
@@ -1035,75 +1053,92 @@ class JSetView extends JObj {
     return out;
   }
 }
+/** values() is a plain Collection: its equality stays Object's identity */
+class JValuesView extends JSetView {}
 function setViewStream(this: JSetView) { return mkStream(this.snapshot()); }
+const mapViewMethods: Methods = {
+  "size()I": function (this: JSetView) { return this.map.m.size + this.map.slow.length; },
+  "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
+  "iterator()Ljava/util/Iterator;": function (this: JSetView) {
+    const entries = [...allEnts(this.map)], values = this.snapshot(entries);
+    const iterator = mkIter(values, { removeAt: (i) => {
+      const entry = entries[i], key = mapKeyFor(this.map, entry.k);
+      if (key !== SLOW) {
+        if (this.map.m.get(key) === entry) this.map.m.delete(key);
+      } else {
+        const index = this.map.slow.indexOf(entry);
+        if (index >= 0) { this.map.slow.splice(index, 1); this.map.slowVersion++; }
+      }
+      entries.splice(i, 1); values.splice(i, 1);
+    } });
+    iterator.readOnly = !this.map.mutable;
+    return iterator;
+  },
+  "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JSetView, c: unknown): Gen {
+    for (const v of this.snapshot()) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
+  }),
+  "stream()Ljava/util/stream/Stream;": setViewStream,
+  "parallelStream()Ljava/util/stream/Stream;": setViewStream,
+  "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
+    if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
+    return after(indexIn(this.snapshot(), v), (i) => (i >= 0 ? 1 : 0));
+  },
+  "remove(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
+    if (this.kind !== "k") return 0;
+    return after(vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v), (r) => (r !== null ? 1 : 0));
+  },
+  "toArray()[Ljava/lang/Object;": function (this: JSetView) { return jarray(this.snapshot()); },
+  "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSetView, out: unknown[]) {
+    return fillToArray(this.snapshot(), out);
+  },
+  "removeAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
+    if (this.kind !== "k") return 0;
+    let ch = 0;
+    for (const v of yield toJsArray(c)) {
+      const r = yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v);
+      if (r !== null) ch = 1;
+    }
+    return ch;
+  }),
+  "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
+    if (this.kind !== "k") return 0;
+    const keep = yield toJsArray(c);
+    let ch = 0;
+    for (const k of this.snapshot()) {
+      if ((yield indexIn(keep, k)) < 0) {
+        yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+        ch = 1;
+      }
+    }
+    return ch;
+  }),
+  "containsAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
+    if (this.kind === "k") {
+      for (const v of yield toJsArray(c)) if (!(yield vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v))) return 0;
+      return 1;
+    }
+    const snap = this.snapshot();
+    for (const v of yield toJsArray(c)) if ((yield indexIn(snap, v)) < 0) return 0;
+    return 1;
+  }),
+  "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
+  "toString()Ljava/lang/String;": function (this: JSetView) { return seqText(this, this.snapshot()); },
+};
 rt.register({
   name: "webdroid/SetView", ctor: JSetView,
   ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable"],
   methods: {
-    "size()I": function (this: JSetView) { return this.map.m.size + this.map.slow.length; },
-    "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
-    "iterator()Ljava/util/Iterator;": function (this: JSetView) {
-      const entries = [...allEnts(this.map)], values = this.snapshot(entries);
-      const iterator = mkIter(values, { removeAt: (i) => {
-        const entry = entries[i], key = mapKeyFor(this.map, entry.k);
-        if (key !== SLOW) {
-          if (this.map.m.get(key) === entry) this.map.m.delete(key);
-        } else {
-          const index = this.map.slow.indexOf(entry);
-          if (index >= 0) { this.map.slow.splice(index, 1); this.map.slowVersion++; }
-        }
-        entries.splice(i, 1); values.splice(i, 1);
-      } });
-      iterator.readOnly = !this.map.mutable;
-      return iterator;
-    },
-    "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JSetView, c: unknown): Gen {
-      for (const v of this.snapshot()) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
+    ...mapViewMethods,
+    "equals(Ljava/lang/Object;)Z": driven(function* (this: JSetView, o: unknown): Gen {
+      if (o === this) return 1;
+      if (!(o instanceof JObj) || !rt.iof(o, "java/util/Set")) return 0;
+      if ((yield size(o)) !== this.map.m.size + this.map.slow.length) return 0;
+      return vcall(this, "containsAll", "(Ljava/util/Collection;)Z", o);
     }),
-    "stream()Ljava/util/stream/Stream;": setViewStream,
-    "parallelStream()Ljava/util/stream/Stream;": setViewStream,
-    "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
-      if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
-      return after(indexIn(this.snapshot(), v), (i) => (i >= 0 ? 1 : 0));
-    },
-    "remove(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
-      if (this.kind !== "k") return 0;
-      return after(vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v), (r) => (r !== null ? 1 : 0));
-    },
-    "toArray()[Ljava/lang/Object;": function (this: JSetView) { return jarray(this.snapshot()); },
-    "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSetView, out: unknown[]) {
-      return fillToArray(this.snapshot(), out);
-    },
-    "removeAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
-      if (this.kind !== "k") return 0;
-      let ch = 0;
-      for (const v of yield toJsArray(c)) {
-        const r = yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v);
-        if (r !== null) ch = 1;
-      }
-      return ch;
-    }),
-    "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
-      if (this.kind !== "k") return 0;
-      const keep = yield toJsArray(c);
-      let ch = 0;
-      for (const k of this.snapshot()) {
-        if ((yield indexIn(keep, k)) < 0) {
-          yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-          ch = 1;
-        }
-      }
-      return ch;
-    }),
-    "containsAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
-      const snap = this.snapshot();
-      for (const v of yield toJsArray(c)) if ((yield indexIn(snap, v)) < 0) return 0;
-      return 1;
-    }),
-    "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
-    "toString()Ljava/lang/String;": function (this: JSetView) { return seqText(this, this.snapshot()); },
+    "hashCode()I": function (this: JSetView) { return hashSum(this.snapshot()); },
   },
 });
+rt.register({ name: "webdroid/ValuesView", ctor: JValuesView, ifaces: ["java/util/Collection", "java/lang/Iterable"], methods: mapViewMethods });
 
 rt.register({ name: "webdroid/BaseMap", ctor: JMap, ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods() });
 // ArrayMap is a Map that also answers by index: the index is its entries' insertion order.
@@ -1656,6 +1691,7 @@ const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown): Gen {
 });
 const priorityQueueMethods: NonNullable<NativeSpec["methods"]> = {
   ...without(listMethods(), LIST_ONLY, DEQUE_ONLY, SEQUENCED, CAPACITY),
+  ...IDENTITY_EQUALITY,
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
