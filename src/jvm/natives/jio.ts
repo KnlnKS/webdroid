@@ -2,12 +2,12 @@
 
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
-import { charsetName, encodeModifiedUtf8, encodeString, streamDecoder, type StreamDecoder } from "../charset";
+import { charsetName, encodeModifiedUtf8, encodeString } from "../charset";
 import { vcall, vcallOn, curThread, after, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer, type JCharsetDecoder } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, remainingBytes, type JBuffer } from "./jnio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
@@ -684,242 +684,187 @@ rt.register({
   sysInfo.ctor[mangleStaticField("err")] = err;
 }
 
-rt.markers("java/lang/Readable");
-class JReader extends JObj {
-  s = ""; pos = 0;
-  /** the stream or reader still to be decoded into `s`; null once the text is complete */
-  src: unknown = null;
-  srcChars = false;   // src reads chars (a Reader) rather than bytes (an InputStream)
-  dec: StreamDecoder | null = null;
-  markPos = -1;
+// BufferedReader stays TS over libcore's Reader: compiled bytecode scans a line at about 3.5 ns a
+// char and builds it from a char[], 2.3x this model's time for readLine over 1 MB. Here each chunk of
+// the wrapped Reader becomes one string, and lines are slices of it. The semantics are libcore's:
+// \n, \r and \r\n end a line, skipLF carries a trailing \r's pending \n across calls, and a mark
+// holds the text back until reading passes its read-ahead limit.
+const UNMARKED = -1, INVALIDATED = -2, LF = 10, CR = 13;
+class JBufferedReader extends JObj {
+  in: unknown = null;
+  size = 8192;
+  s = "";
+  pos = 0;
+  markPos = UNMARKED;
   markLimit = 0;
+  skipLF = false;
+  markedSkipLF = false;
 }
-const READ_CHUNK = 8192;
-/**
- * One chunk out of the wrapped source, through its VIRTUAL read: an app's own InputStream or
- * Reader is bytecode, and reading the native class's byte buffer off it finds an empty one.
- */
-function fill(r: JReader): void | Promise<void> {
-  const src = r.src;
-  if (!src) return;
-  if (r.pos > 0 && (r.markPos < 0 || r.pos - r.markPos > r.markLimit)) {
-    r.s = r.s.slice(r.pos);
-    r.pos = 0;
-    r.markPos = -1;
-  }
-  if (r.srcChars) {
-    const out = new Uint16Array(READ_CHUNK);
-    return after(vcall(src, "read", "([CII)I", out, 0, READ_CHUNK), (n: number) => {
-      if (n > 0) r.s += charsToString(out, 0, n); else if (n < 0) r.src = null;
-    });
-  }
-  const out = new Int8Array(READ_CHUNK);
-  return after(vcall(src, "read", "([BII)I", out, 0, READ_CHUNK), (n: number) => {
-    const dec = (r.dec ??= streamDecoder("UTF-8"));
-    if (n > 0) r.s += dec.decode(new Uint8Array(out.buffer, 0, n), { stream: true });
-    else if (n < 0) { r.s += dec.decode(); r.src = null; }
-  });
-}
-/** decode until a character is available or the source ends */
-function need(r: JReader): void | Promise<void> {
-  while (r.pos >= r.s.length && r.src) {
-    const p = fill(r);
-    if (p) return p.then(() => need(r));
-  }
-}
-// Every Reader here is the same model — a decoded string and a cursor — so the whole read
-// surface lives on the base and the subclasses inherit it instead of each re-declaring read().
-rt.register({
-  name: "java/io/Reader", ctor: JReader, ifaces: ["java/io/Closeable", "java/lang/Readable"],
-  methods: {
-    "<init>()V": function () {},
-    "close()V": function (this: JReader) { this.src = null; },
-    "read()I": function (this: JReader) {
-      return after(need(this), () => (this.pos < this.s.length ? this.s.charCodeAt(this.pos++) : -1));
-    },
-    "read([CII)I": function (this: JReader, out: Uint16Array, off: number, len: number) {
-      if (len === 0) return 0;
-      return after(need(this), () => {
-        if (this.pos >= this.s.length) return -1;
-        const n = Math.min(len, this.s.length - this.pos);
-        for (let i = 0; i < n; i++) out[off + i] = this.s.charCodeAt(this.pos + i);
-        this.pos += n;
-        return n;
-      });
-    },
-    "read([C)I": function (this: JReader, out: Uint16Array) {
-      return vcall(this, "read", "([CII)I", out, 0, out.length);
-    },
-    "ready()Z": function (this: JReader) { return this.pos < this.s.length ? 1 : 0; },
-    "skip(J)J": function (this: JReader, n: bigint) {
-      let left = Number(n), skipped = 0;
-      const step = (): number | Promise<number> => {
-        const k = Math.min(left, this.s.length - this.pos);
-        this.pos += k; left -= k; skipped += k;
-        return left > 0 && this.src ? after(fill(this), step) : skipped;
-      };
-      return after(step(), BigInt);
-    },
-    "markSupported()Z": () => 0,
-  },
-});
-rt.register({
-  name: "java/io/StringReader", ctor: class extends JReader {}, sup: "java/io/Reader",
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JReader, s: string) { this.s = s; },
-    "markSupported()Z": () => 1,
-    "mark(I)V": function (this: JReader, limit: number) {
-      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "readAheadLimit < 0");
-      this.markPos = this.pos;
-    },
-    "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
-    "ready()Z": () => 1,
-  },
-});
-rt.register({
-  name: "java/io/CharArrayReader", ctor: class extends JReader {}, sup: "java/io/Reader",
-  methods: {
-    "<init>([C)V": function (this: JReader, chars: Uint16Array) {
-      if (chars === null) return rt.npe();
-      this.s = charsToString(chars, 0, chars.length);
-      this.markPos = 0;
-      this.markLimit = chars.length;
-    },
-    "<init>([CII)V": function (this: JReader, chars: Uint16Array, off: number, len: number) {
-      if (chars === null) return rt.npe();
-      if (off < 0 || len < 0 || off > chars.length || off + len < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-      this.s = charsToString(chars, off, Math.min(len, chars.length - off));
-      this.markPos = 0;
-      this.markLimit = this.s.length;
-    },
-    "markSupported()Z": () => 1,
-    "mark(I)V": function (this: JReader) { this.markPos = this.pos; this.markLimit = this.s.length; },
-    "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
-  },
-});
-const decodeStream = function (this: JReader, s: unknown, charset: unknown = "UTF-8") {
-  if (s === null) rt.npe();
-  this.src = s; this.dec = streamDecoder(charset);
-};
-rt.register({
-  name: "java/io/InputStreamReader", ctor: class extends JReader {}, sup: "java/io/Reader",
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": decodeStream,
-    "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": decodeStream,
-    "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": decodeStream,
-    "<init>(Ljava/io/InputStream;Ljava/nio/charset/CharsetDecoder;)V": function (this: JReader, s: unknown, d: JCharsetDecoder | null) {
-      decodeStream.call(this, s, (d ?? rt.npe()).cs);
-    },
-  },
-});
-// FileReader is an InputStreamReader over a file: the file's bytes, decoded, in one go.
-const fileText = driven(function* fileText(p: string): Gen<string> {
-  const d: Uint8Array | null = yield vfs.readFile(p);
-  if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  return utf8.dec.decode(d);
-});
-const openReader = driven(function* (this: JReader, p: string): Gen { this.s = yield fileText(p); });
-rt.register({
-  name: "java/io/FileReader", ctor: class extends JReader {}, sup: "java/io/InputStreamReader",
-  methods: {
-    "<init>(Ljava/lang/String;)V": openReader,
-    "<init>(Ljava/io/File;)V": function (this: JReader, f: JObj) { openReader.call(this, pathOf(f)); },
-  },
-});
-/** A buffering Reader over another Reader, which may be the app's own subclass. */
-const wrapReader = function (this: JReader, r: JReader) { this.src = r; this.srcChars = true; };
-rt.register({
-  name: "java/io/BufferedReader", ctor: class extends JReader {}, sup: "java/io/Reader",
-  methods: {
-    "<init>(Ljava/io/Reader;)V": wrapReader,
-    "<init>(Ljava/io/Reader;I)V": wrapReader,
-    "readLine()Ljava/lang/String;": function (this: JReader) {
-      const step = (): string | null | Promise<string | null> => {
-        const i = this.s.indexOf("\n", this.pos);
-        if (i < 0 && this.src) return after(fill(this), step);
-        if (this.pos >= this.s.length) return null;
-        const line = i < 0 ? this.s.slice(this.pos) : this.s.slice(this.pos, i);
-        this.pos = i < 0 ? this.s.length : i + 1;
-        return line.endsWith("\r") ? line.slice(0, -1) : line;
-      };
-      return step();
-    },
-    "markSupported()Z": () => 1,
-    "mark(I)V": function (this: JReader, limit: number) {
-      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Read-ahead limit < 0");
-      this.markPos = this.pos;
-      this.markLimit = limit;
-    },
-    "reset()V": function (this: JReader) {
-      if (this.markPos < 0 || this.pos - this.markPos > this.markLimit) throw rt.mkThrowable("java/io/IOException", "Mark invalid");
-      this.pos = this.markPos;
-    },
-  },
-});
-class JFilterReader extends JReader { in: JReader | null = null; }
-const filterInput = (r: JFilterReader) => {
-  if (!r.in) throw rt.mkThrowable("java/io/IOException", "Reader is closed");
+function openReader(r: JBufferedReader): unknown {
+  if (r.in === null) throw rt.mkThrowable("java/io/IOException", "Stream closed");
   return r.in;
+}
+/** one read of the wrapped Reader into the text; false at its end */
+function fillReader(r: JBufferedReader): boolean | Promise<boolean> {
+  if (r.markPos < 0) { r.s = r.s.slice(r.pos); r.pos = 0; }
+  else if (r.pos - r.markPos >= r.markLimit) { r.markPos = INVALIDATED; r.markLimit = 0; r.s = r.s.slice(r.pos); r.pos = 0; }
+  else { r.s = r.s.slice(r.markPos); r.pos -= r.markPos; r.markPos = 0; }
+  const chunk = new Uint16Array(r.size), thread = curThread;
+  const step = (n: number): boolean | Promise<boolean> => {
+    if (n > 0) { r.s += charsToString(chunk, 0, n); return true; }
+    if (n < 0) return false;
+    return after(vcallOn(thread, r.in, "read", "([CII)I", chunk, 0, chunk.length) as number | Promise<number>, step);
+  };
+  return after(vcallOn(thread, r.in, "read", "([CII)I", chunk, 0, chunk.length) as number | Promise<number>, step);
+}
+function readerLine(r: JBufferedReader, ignoreLF: boolean): string | null | Promise<string | null> {
+  openReader(r);
+  let line: string | null = null, omitLF = ignoreLF || r.skipLF;
+  const step = (): string | null | Promise<string | null> => {
+    for (;;) {
+      if (r.pos >= r.s.length) {
+        const got = fillReader(r);
+        if (got instanceof Promise) return got.then((more) => more ? step() : line !== null && line.length > 0 ? line : null);
+        if (!got) return line !== null && line.length > 0 ? line : null;
+      }
+      const s = r.s;
+      if (omitLF && s.charCodeAt(r.pos) === LF) r.pos++;
+      r.skipLF = false; omitLF = false;
+      let i = r.pos, c = 0;
+      for (; i < s.length; i++) if ((c = s.charCodeAt(i)) === LF || c === CR) break;
+      const part = s.slice(r.pos, i);
+      line = line === null ? part : line + part;
+      if (i < s.length) {
+        r.pos = i + 1;
+        if (c === CR) r.skipLF = true;
+        return line;
+      }
+      r.pos = i;
+    }
+  };
+  return step();
+}
+/** the next char after a pending \n is dropped, or -1 at the end */
+function readerChar(r: JBufferedReader): number | Promise<number> {
+  openReader(r);
+  for (;;) {
+    if (r.pos >= r.s.length) {
+      const got = fillReader(r);
+      if (got instanceof Promise) return got.then((more) => more ? readerChar(r) : -1);
+      if (!got) return -1;
+    }
+    if (r.skipLF) { r.skipLF = false; if (r.s.charCodeAt(r.pos) === LF) { r.pos++; continue; } }
+    return r.s.charCodeAt(r.pos++);
+  }
+}
+/** BufferedReader.read1: from the text, or straight from the wrapped Reader for a large read */
+function readerChunk(r: JBufferedReader, out: Uint16Array, off: number, len: number): number | Promise<number> {
+  if (r.pos >= r.s.length) {
+    if (len >= r.size && r.markPos <= UNMARKED && !r.skipLF) return vcall(r.in, "read", "([CII)I", out, off, len);
+    const got = fillReader(r);
+    if (got instanceof Promise) return got.then((more) => more ? readerChunk(r, out, off, len) : -1);
+    if (!got) return -1;
+  }
+  if (r.skipLF) {
+    r.skipLF = false;
+    if (r.s.charCodeAt(r.pos) === LF) { r.pos++; return readerChunk(r, out, off, len); }
+  }
+  const n = Math.min(len, r.s.length - r.pos), s = r.s, from = r.pos;
+  for (let i = 0; i < n; i++) out[off + i] = s.charCodeAt(from + i);
+  r.pos += n;
+  return n;
+}
+const bufferReader = function (this: JBufferedReader, input: unknown, size = 8192) {
+  if (input === null) rt.npe();
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
+  (this as unknown as Record<string, unknown>)[declaredField("java/io/Reader", "lock")] = input;
+  this.in = input; this.size = size;
 };
 rt.register({
-  name: "java/io/FilterReader", ctor: JFilterReader, sup: "java/io/Reader", fields: ["in"],
+  name: "java/io/BufferedReader", ctor: JBufferedReader, sup: "java/io/Reader",
   methods: {
-    "<init>(Ljava/io/Reader;)V": function (this: JFilterReader, input: JReader) { if (!input) return rt.npe(); this.in = input; },
-    "read()I": function (this: JFilterReader) { return vcall(filterInput(this), "read", "()I"); },
-    "read([CII)I": function (this: JFilterReader, out: Uint16Array, off: number, len: number) { return vcall(filterInput(this), "read", "([CII)I", out, off, len); },
-    "ready()Z": function (this: JFilterReader) { return vcall(filterInput(this), "ready", "()Z"); },
-    "skip(J)J": function (this: JFilterReader, n: bigint) { return vcall(filterInput(this), "skip", "(J)J", n); },
-    "markSupported()Z": function (this: JFilterReader) { return vcall(filterInput(this), "markSupported", "()Z"); },
-    "mark(I)V": function (this: JFilterReader, limit: number) { return vcall(filterInput(this), "mark", "(I)V", limit); },
-    "reset()V": function (this: JFilterReader) { return vcall(filterInput(this), "reset", "()V"); },
-    "close()V": function (this: JFilterReader) { const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
-  },
-});
-class JPushbackReader extends JFilterReader { push: number[] = []; capacity = 1; }
-function unreadChars(r: JPushbackReader, chars: Uint16Array, off: number, len: number): void {
-  filterInput(r);
-  if (!chars) return rt.npe();
-  checkFromIndexSize(off, len, chars.length);
-  if (r.push.length + len > r.capacity) throw rt.mkThrowable("java/io/IOException", "Pushback buffer full");
-  for (let i = off + len - 1; i >= off; i--) r.push.push(chars[i]);
-}
-rt.register({
-  name: "java/io/PushbackReader", ctor: JPushbackReader, sup: "java/io/FilterReader",
-  methods: {
-    "<init>(Ljava/io/Reader;)V": function (this: JPushbackReader, input: JReader) { if (!input) return rt.npe(); this.in = input; },
-    "<init>(Ljava/io/Reader;I)V": function (this: JPushbackReader, input: JReader, size: number) {
-      if (!input) return rt.npe();
-      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size <= 0");
-      this.in = input; this.capacity = size;
-    },
-    "read()I": function (this: JPushbackReader) { const input = filterInput(this); return this.push.length ? this.push.pop() ?? -1 : vcall(input, "read", "()I"); },
-    "read([CII)I": function (this: JPushbackReader, out: Uint16Array, off: number, len: number) {
-      const input = filterInput(this);
-      if (!out) return rt.npe();
+    "<init>(Ljava/io/Reader;)V": bufferReader,
+    "<init>(Ljava/io/Reader;I)V": bufferReader,
+    "read()I": function (this: JBufferedReader) { return readerChar(this); },
+    "read([CII)I": driven(function* (this: JBufferedReader, out: Uint16Array, off: number, len: number): Gen {
+      const thread = curThread;
+      openReader(this);
+      if (!out) rt.npe();
       checkFromIndexSize(off, len, out.length);
       if (!len) return 0;
-      let copied = 0;
-      while (copied < len && this.push.length) out[off + copied++] = this.push.pop() ?? 0;
-      if (copied === len) return copied;
-      return after(vcall(input, "read", "([CII)I", out, off + copied, len - copied), (n: number) => n < 0 ? copied || -1 : copied + n);
+      let n: number = yield readerChunk(this, out, off, len);
+      if (n <= 0) return n;
+      while (n < len && (yield vcallOn(thread, this.in, "ready", "()Z"))) {
+        const more: number = yield readerChunk(this, out, off + n, len - n);
+        if (more <= 0) break;
+        n += more;
+      }
+      return n;
+    }),
+    // Reader's own methods: this class's JS prototype does not reach the platform Reader's
+    "read([C)I": function (this: JBufferedReader, out: Uint16Array) {
+      if (!out) rt.npe();
+      return vcall(this, "read", "([CII)I", out, 0, out.length);
     },
-    "unread(I)V": function (this: JPushbackReader, c: number) { unreadChars(this, Uint16Array.of(c), 0, 1); },
-    "unread([C)V": function (this: JPushbackReader, chars: Uint16Array) { unreadChars(this, chars, 0, chars?.length ?? 0); },
-    "unread([CII)V": function (this: JPushbackReader, chars: Uint16Array, off: number, len: number) { unreadChars(this, chars, off, len); },
-    "ready()Z": function (this: JPushbackReader) { const input = filterInput(this); return this.push.length ? 1 : vcall(input, "ready", "()Z"); },
-    "skip(J)J": function (this: JPushbackReader, count: bigint) {
-      const input = filterInput(this);
+    "read(Ljava/nio/CharBuffer;)I": driven(function* (this: JBufferedReader, target: JObj): Gen {
+      const thread = curThread, chars = new Uint16Array(yield vcallOn(thread, target, "remaining", "()I"));
+      const n: number = yield vcallOn(thread, this, "read", "([CII)I", chars, 0, chars.length);
+      if (n > 0) yield vcallOn(thread, target, "put", "([CII)Ljava/nio/CharBuffer;", chars, 0, n);
+      return n;
+    }),
+    "transferTo(Ljava/io/Writer;)J": driven(function* (this: JBufferedReader, out: unknown): Gen {
+      if (out === null) rt.npe();
+      const thread = curThread, chars = new Uint16Array(8192);
+      let total = 0n;
+      for (let n: number; (n = yield vcallOn(thread, this, "read", "([CII)I", chars, 0, chars.length)) >= 0;) {
+        yield vcallOn(thread, out, "write", "([CII)V", chars, 0, n);
+        total += BigInt(n);
+      }
+      return total;
+    }),
+    "readLine()Ljava/lang/String;": function (this: JBufferedReader) { return readerLine(this, false); },
+    "readLine(Z)Ljava/lang/String;": function (this: JBufferedReader, ignoreLF: number) { return readerLine(this, !!ignoreLF); },
+    "skip(J)J": driven(function* (this: JBufferedReader, count: bigint): Gen {
       if (count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "skip value is negative");
-      const buffered = Math.min(this.push.length, Number(count));
-      this.push.length -= buffered;
-      return BigInt(buffered) === count ? count : after(vcall(input, "skip", "(J)J", count - BigInt(buffered)), (n: bigint) => BigInt(buffered) + n);
+      openReader(this);
+      let left = count;
+      while (left > 0n) {
+        if (this.pos >= this.s.length && !(yield fillReader(this))) break;
+        if (this.skipLF) { this.skipLF = false; if (this.s.charCodeAt(this.pos) === LF) this.pos++; }
+        const available = BigInt(this.s.length - this.pos);
+        if (left <= available) { this.pos += Number(left); left = 0n; break; }
+        left -= available; this.pos = this.s.length;
+      }
+      return count - left;
+    }),
+    "ready()Z": driven(function* (this: JBufferedReader): Gen {
+      const thread = curThread, input = openReader(this);
+      if (this.skipLF) {
+        if (this.pos >= this.s.length && (yield vcallOn(thread, input, "ready", "()Z"))) yield fillReader(this);
+        if (this.pos < this.s.length) { if (this.s.charCodeAt(this.pos) === LF) this.pos++; this.skipLF = false; }
+      }
+      return this.pos < this.s.length ? 1 : (yield vcallOn(thread, input, "ready", "()Z"));
+    }),
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JBufferedReader, limit: number) {
+      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Read-ahead limit < 0");
+      openReader(this);
+      this.markLimit = limit; this.markPos = this.pos; this.markedSkipLF = this.skipLF;
     },
-    "markSupported()Z": () => 0,
-    "mark(I)V": markUnsupported,
-    "reset()V": markUnsupported,
-    "close()V": function (this: JPushbackReader) { this.push.length = 0; const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
+    "reset()V": function (this: JBufferedReader) {
+      openReader(this);
+      if (this.markPos < 0) throw rt.mkThrowable("java/io/IOException", this.markPos === INVALIDATED ? "Mark invalid" : "Stream not marked");
+      this.pos = this.markPos; this.skipLF = this.markedSkipLF;
+    },
+    "close()V": function (this: JBufferedReader) {
+      const input = this.in;
+      if (input === null) return;
+      this.in = null; this.s = "";
+      return vcall(input, "close", "()V");
+    },
   },
 });
+
 class JDataOut extends JOutputStream { sink: unknown = null; written = 0; }
 function emit(s: JDataOut, b: Int8Array, off: number, len: number): unknown {
   return after(vcall(s.sink, "write", "([BII)V", b, off, len), () => { s.written += len; });
@@ -1301,6 +1246,12 @@ rt.register({
 rt.register({ name: "java/nio/file/LinkOption", ctor: class extends JObj {}, sup: "java/lang/Enum",
   statics: { NOFOLLOW_LINKS: new JObj() } });
 
+// a file's bytes, decoded as UTF-8
+const fileText = driven(function* fileText(p: string): Gen<string> {
+  const d: Uint8Array | null = yield vfs.readFile(p);
+  if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  return utf8.dec.decode(d);
+});
 // ── java.util.Scanner: tokens and lines over a source read whole up front (a stream, a string, a file)
 // delim anchors at the cursor; delimAll is the same pattern searching ahead for the token's end
 class JScanner extends JObj { text = ""; pos = 0; delim = /\s+/y; delimAll = /\s+/g; }

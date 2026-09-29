@@ -693,7 +693,7 @@ rt.register({
     }),
   },
 });
-export class JCharsetDecoder extends JCharsetCoder {
+class JCharsetDecoder extends JCharsetCoder {
   replacement = "\ufffd";
   endian: boolean | null = null;
 }
