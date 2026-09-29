@@ -19,7 +19,7 @@ export const komikku: Flow = {
     { id: "dismiss-update", label: "Dismiss update notes", action: { type: "tapText", text: "OK" }, wait: wait.quiescent(1500) },
     { id: "storage-step", label: "Open storage step", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1500) },
     { id: "select-storage", label: "Grant storage folder", action: { type: "tapText", text: "Select a folder" },
-      wait: wait.state({ kind: "text", text: "Selected folder:" }, 5000, 20000) },
+      wait: wait.state({ kind: "text", text: "content://com.android.externalstorage.documents" }, 5000, 20000) },
     { id: "permissions-step", label: "Continue to permissions", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1500) },
     { id: "finish-step", label: "Finish onboarding permissions", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1500) },
     { id: "library", label: "Open library", action: { type: "tapText", text: "Get started" }, wait: wait.quiescent(2500) },
