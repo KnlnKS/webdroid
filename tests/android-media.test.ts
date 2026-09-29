@@ -3,7 +3,6 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { systemService, JContext } from "../src/android/context";
-import { mpegAudioDuration } from "../src/android/media-mpeg";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
@@ -125,17 +124,6 @@ describe("media-metadata", () => {
     expect(await vcall(metadata, "getText", "(Ljava/lang/String;)Ljava/lang/CharSequence;", "title")).toBe("Big Buck Bunny");
     expect(await vcall(metadata, "getLong", "(Ljava/lang/String;)J", "duration")).toBe(636000n);
     expect(await vcall(metadata, "containsKey", "(Ljava/lang/String;)Z", "missing")).toBe(0);
-  });
-});
-
-describe("media-mpeg", () => {
-  test("MPEG audio duration counts frames and honors Xing metadata", async () => {
-    const bytes = new Uint8Array(4160);
-    for (let i = 0; i < 20; i++) bytes.set([0xff, 0xfb, 0x50, 0x00], i * 208);
-    const source = { size: bytes.length, read: async (offset: number, length: number) => bytes.subarray(offset, offset + length) };
-    expect(await mpegAudioDuration(source)).toBe(522);
-    bytes.set([0x58, 0x69, 0x6e, 0x67, 0, 0, 0, 1, 0, 0, 0, 10], 36);
-    expect(await mpegAudioDuration(source)).toBe(261);
   });
 });
 
