@@ -617,11 +617,11 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,376 pass);
+- `bun run test` (1,378 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,088, 2,538, 27,514,
-  974 and 318; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+  1,012 and 318; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -664,6 +664,10 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   access/remove/rename (`src/android/os.ts`), with VFS modification times. TS reads a File with
   `pathOf` and makes one with `newFile` (`jio.ts`). The TS java.nio.file layer stays and answers
   `FileSystems.getDefault()` for `File.toPath`.
+- **java.io file streams (B.7 cut 3).** libcore's FileDescriptor, FileInputStream,
+  FileOutputStream and RandomAccessFile over the Linux read/write/pread/pwrite/fstat natives. TS
+  reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel stays TS, as
+  `sun/nio/ch/FileChannelImpl` over the stream's descriptor. luni-io went from 974 to 1,012.
 - **java.util.logging.** libcore's Logger/LogManager reach logcat through AndroidHandler. The flip
   needed `Reference.refersTo0`, `VMStack.getThreadStackTrace` (LogRecord.inferCaller) and the
   ResourceBundle loader/Control overloads, and removed the TS Permission specs, whose empty-name
@@ -731,7 +735,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      the rest; single classes need an exact-match form. About 60 TS sites read TS layout
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
-   - **Done:** cut 2 (File). **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
+   - **Done:** cuts 2 (File) and 3 (FileDescriptor and the file streams). **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
      getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,
      which fflate's push API does not expose; there is no line or speed gain to pay for that risk.
    - **Cut order.** (1) zip codecs (CRC32, Adler32, Inflater, Deflater and their streams; 26
@@ -744,7 +748,12 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      `URI.compareTo`). (8) sockets over `native/net.ts`.
    - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
      streams (`streamOfSource`), and probably the Buffers and charset codecs.
-   - `luni-io` (974 of 1,543 at the TS io layer) is the conformance suite for cuts 3 and 4.
+   - `luni-io` (1,012 of 1,543 after cut 3) is the conformance suite for cut 4.
+   - Cut 3 limits. Unbuffered IO pays a syscall per call, as on a device: RandomAccessFile.readLine
+     reads a byte at a time (about 30x the TS time), readInt 2.4x, 1-byte FileOutputStream writes
+     8x; 8 KB and buffered patterns match. Streams nobody closes keep their descriptor, since no
+     finalizer runs. Each write publishes to the VFS, and a disk-backed file posts one worker
+     message per write.
 2. **B.4 collections.** Performance does not rule it out: 20,000 mixed String/Integer keys through
    HashMap put/get, ArrayList add/get and an entrySet walk took 12.3 ms from libcore against 11.3 ms
    in TS at steady state (Bun), and 29.9 against 15.4 ms on the first, cold run. The blocker is TS
@@ -768,7 +777,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
    - Keep org.json in TS as an intrinsic candidate: libcore's is 2.3x slower on a 237 KB
      document. That needs a differential test (§4.7).
 4. **Memory.** An app that formats dates reads the whole 28 MB ICU file into the JS heap, because
-   `FileChannel.map` copies it (`jio.ts`). A lazily paged mapping would match the device's mmap.
+   `FileChannelImpl.map` copies it (`jio.ts`). A lazily paged mapping would match the device's mmap.
 5. **Known limits.**
    - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
    - TS `eraseThreadLocals` does not clear the TS locals.

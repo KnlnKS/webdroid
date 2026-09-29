@@ -303,6 +303,22 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   makes on a device, and the native threw ErrnoException where the JNI throws IOException, the one
   ProfileInstaller catches. libcore's UnixFileSystem also needs `java.home`, and `File.toPath` reaches
   `FileSystems.getDefault()`.
+- 2026-09-28/29, java.io file streams from libcore (B.7 cut 3). The TS FileOutputStream held
+  every write until close and created files where no directory existed; its descriptors named a
+  path that consumers reopened lazily, so a stream over a RandomAccessFile's descriptor needed a
+  special case. libcore's streams run over the Linux natives. A FileDescriptor made with `rt.make`
+  alone has no `releaseLock`, so `release$` threw an NPE; `mkFd` runs `<init>()V` as
+  jniCreateFileDescriptor does. libcore's FileChannelImpl cannot run on the TS FileChannel (no
+  AbstractInterruptibleChannel state, NativeThreadSet or address-based dispatcher natives), so a TS
+  FileChannelImpl answers `getChannel()` over the stream's descriptor; ICU's data mapping goes
+  through it. openFileOutput now makes the files directory, as ContextImpl does. Writable provider
+  descriptors had no file behind them, so a FileOutputStream over one failed; they get a backing
+  file, and AutoCloseOutputStream writes a backed descriptor's file, since the last close used to
+  send the stale backing bytes after the stream's own. Warm Bun timings through vcall, before and
+  after: 8 KB reads and writes of 4 MB 1 ms both ways, buffered 1-byte writes of 4 MB 150 to 183 ms,
+  unbuffered 1-byte writes of 256 KB 10 to 81 ms, RandomAccessFile readInt x100k 26 to 62 ms and
+  readLine over 1 MB 5 to 155 ms (one read per byte, as on a device). luni-io went from 974 to
+  1,012, mostly RandomAccessFile, FileInputStream and FileWriter tests.
 - 2026-09-28, java.util.logging from libcore. zygoteInit ran from platform-jar loading, before
   `linkNatives`; once its time-zone setup reached libcore logging, a TS-built HashMap view had no
   linked methods and every app failed to boot. It now runs after linking and also installs
