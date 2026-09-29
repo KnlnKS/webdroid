@@ -616,9 +616,10 @@ commit message states what it measured. The implementation history (the 2026-09-
   probe); e2e timings from those commits are inflated.
 - **Next: the rest of Stage C.2/C.3.** `fwtest android/graphics/` lists what the natives lack; the
   TS references left are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields (167,
-  which stay a layout), Bitmap (144) and Typeface (52). Next: the fonts (Font, FontFamily,
-  FontStyle, FontVariationAxis: 85 references) and Typeface, then Layout/StaticLayout with the
-  minikin natives; Paint, Canvas and Bitmap last, with the view stack (Stage D).
+  which stay a layout), Bitmap (144) and Typeface (52). The fonts package is AOSP's (merged after
+  a6c01947; fast e2e, textcmp 6/6). Next: Typeface, then Layout/StaticLayout with the minikin natives
+  (LineBreaker, MeasuredText, TextRunShaper; textcmp is the gate); Paint, Canvas and Bitmap last, with
+  the view stack (Stage D).
 - **Finalizers do not run**, and cannot as such: a JS finalizer cannot see the object it
   finalizes. Platform classes whose `finalize()` frees a handle in a long field get owned handles
   instead (`ownedHandle`, `Runtime.claimOnStore`); any other finalize() is not run.
