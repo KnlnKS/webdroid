@@ -401,6 +401,35 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   BufferedInput/OutputStream from libcore passes all 99 Buffered tests but is 1.13x slower on byte
   streams and 8x under the TS DataInputStream; PrintStream is blocked on `System.out`/`err`, which
   are TS console streams set at module load.
+- 2026-09-29, paged file mappings. ICUBinary maps the whole 27.3 MB `icudt75l.dat` at class init,
+  and `FileChannelImpl.map` copied it, so the first date format fetched and held all of it. Tracing
+  DataView reads in V8 (a headless node bundle) showed a date format touches 165 4 KB pages
+  (660 KB, 29 64 KB pages) over about 140,000 reads, the TOC's binary search plus a few `.res`
+  items; formatting a date in all 853 locales touches 5.2 MB. A READ_ONLY mapping of an immutable
+  source (a mount, not a writable or in-memory file) is now a table of 64 KB pages, each read from
+  the file's own source on first touch (the descriptor may close first, as ICU's does). A
+  MappedByteBuffer read of a missing page returns a Promise, so the Java caller suspends as a
+  device thread blocks on a fault; missing pages of one access load in parallel. Slices and
+  duplicates stay paged (and stay MappedByteBuffers, as on ART); a typed view loads its span and
+  reads a contiguous copy, shared per range. TS code reading a buffer's bytes itself calls
+  `resident(b)` first, which gives the buffer a contiguous copy; `ab` throws for a paged buffer, so
+  a reader that misses the call fails loudly instead of reading zeros. A first attempt kept one
+  full-size lazily zeroed ArrayBuffer with a residency bitmap, which keeps every existing reader
+  working, but the process's footprint did not drop: libmalloc served the 28 MB calloc from its
+  resident large-block cache and zeroed it (vmmap "Malloc Large" 115.6 MB in both), so savings
+  would depend on the allocator. With the page table, `arrayBuffers` grows 4.5 MB for the date
+  format instead of 28.5 MB (2.2 MB of pages, the rest view copies and other files), and Malloc
+  Large stays at 74.9 MB. Reads stay as fast (copy, then paged): a mapped `getInt(I)` loop measured 11.2 and 12.0 ns
+  and `getChar()` 12.0 and 8.6 ns, heap buffers unchanged, date formatting loops, resource
+  lookups and the 853-locale sweep within noise. Explicit per-type read methods (no shared closure
+  feedback) measured the same as the generated ones and were dropped. The apex mount fetches large
+  files in 64 KB ranges: with a simulated fetch the first date format took 1.30 s against 1.56 s
+  at 30 ms/200 Mbit, 1.64 against 4.95 s at 30 ms/50 Mbit, 3.7 against 12.1 s at 80 ms/20 Mbit and
+  318 against 320 ms on a near-local link, fetching 2.8 MB in 44 requests; 256 KB ranges took
+  20 requests and 5 MB for similar times, and serial 64 KB runs 1.72 s. The production worker sends
+  no validators, so the whole file was fetched on every launch before. Unresolved: each fault is a
+  round trip on a first touch, and no page profile prefetches the set a launch touched before;
+  libcore's tzdata goes through `Os.mmap` into guest memory, still read whole.
 
 ## Java, storage and framework semantics
 

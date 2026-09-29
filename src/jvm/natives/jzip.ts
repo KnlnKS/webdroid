@@ -3,10 +3,10 @@
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
-import { vcall, newObj, defineException, checkFromIndexSize } from "./jlang";
+import { vcall, newObj, defineException, checkFromIndexSize, after } from "./jlang";
 import { pathOf, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 import { vfs } from "../../shell/vfs";
-import { JBuffer } from "./jnio";
+import { JBuffer, resident } from "./jnio";
 import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
@@ -230,10 +230,12 @@ const checksumMethods = {
   "update([B)V": function (this: unknown, b: Int8Array) { if (!b) rt.npe(); return feed(this, b, 0, b.length); },
   "update([BII)V": updateBytes,
   "update(Ljava/nio/ByteBuffer;)V": function (this: unknown, bb: JBuffer) {
-    const n = bb.lim - bb.pos, bytes = new Uint8Array(bb.ab, bb.dv.byteOffset + bb.pos, n);
-    bb.pos = bb.lim;
-    if (this instanceof JChecksum) this.state = this.algo.step(this.state, bytes, 0, n);
-    else return vcall(this, "update", "([BII)V", new Int8Array(bytes), 0, n);
+    return after(resident(bb), () => {
+      const n = bb.lim - bb.pos, bytes = new Uint8Array(bb.ab, bb.dv.byteOffset + bb.pos, n);
+      bb.pos = bb.lim;
+      if (this instanceof JChecksum) this.state = this.algo.step(this.state, bytes, 0, n);
+      else return vcall(this, "update", "([BII)V", new Int8Array(bytes), 0, n);
+    });
   },
 };
 rt.register({ name: "java/util/zip/Checksum", ctor: class extends JObj {}, methods: checksumMethods });

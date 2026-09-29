@@ -7,7 +7,7 @@ import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
 import { vfs } from "../../shell/vfs";
 import { packedArchives } from "../../shell/packedarchive";
-import type { JBuffer } from "./jnio";
+import { resident, type JBuffer } from "./jnio";
 
 function initRuntime(loader: JClassLoader, parent: JClassLoader | null): void {
   loader.parent = parent;
@@ -90,15 +90,19 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, path: string, _optimized: string, libraries: string | null, parent: JClassLoader | null) { return init.call(this, path, libraries, parent); },
   },
 });
-function initMemory(this: JClassLoader, buffers: JBuffer[], parent: JClassLoader | null): void {
+function initMemory(this: JClassLoader, buffers: JBuffer[], parent: JClassLoader | null): void | Promise<void> {
   if (!buffers) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffers");
-  initRuntime(this, parent);
-  for (const [index, buffer] of buffers.entries()) {
-    if (!buffer) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffer");
-    const view = buffer.dv;
-    const bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos).slice();
-    for (const dex of dexesIn(bytes, `memory:${index}`)) this.runtime.loadDex(dex);
-  }
+  for (const buffer of buffers) if (!buffer) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffer");
+  const load = () => {
+    initRuntime(this, parent);
+    for (const [index, buffer] of buffers.entries()) {
+      const view = buffer.dv;
+      const bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos).slice();
+      for (const dex of dexesIn(bytes, `memory:${index}`)) this.runtime.loadDex(dex);
+    }
+  };
+  const waits = buffers.map(resident).filter((wait) => wait !== null);
+  return waits.length ? Promise.all(waits).then(load) : load();
 }
 rt.register({
   name: "dalvik/system/InMemoryDexClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",

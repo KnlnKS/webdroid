@@ -5,6 +5,7 @@ import { defineException, vcall, after, checkFromIndexSize } from "./jlang";
 import { mem } from "../../native/mem";
 import { charsToString, mangleMethod } from "../abi";
 import { charsetName, decodeString, encodeString } from "../charset";
+import { readFully, type FileSource } from "../../shell/lazyfile";
 
 /** A native buffer's array is ART's accessible one for allocateDirect (a view over its own guest
  *  bytes) and null for one over native memory (NewDirectByteBuffer, a promoted direct buffer).
@@ -19,11 +20,17 @@ function accessibleArray(b: JBuffer): ArrayBufferView | null {
 
 export class JBuffer extends JObj {
   backing!: { storage: BufferStorage };
+  /** the pages of a mapping that loads them on first touch */
+  paging: Paging | null = null;
   byteOffset = 0;
   private view: DataView | null = null;
   // JSC copies a small typed array out to its own ArrayBuffer on its first .buffer, so a heap
   // array's is read only when needed, not on every CharBuffer.wrap of a fresh char[]
-  get ab(): ArrayBuffer { const s = this.backing.storage; return s.kind === "native" ? mem.buf : s.kind === "heap" ? s.array.buffer as ArrayBuffer : s.ab; }
+  get ab(): ArrayBuffer {
+    const s = this.backing.storage;
+    if (this.paging) throw new Error("a paged mapping's bytes read before `resident`");
+    return s.kind === "native" ? mem.buf : s.kind === "heap" ? s.array.buffer as ArrayBuffer : s.ab;
+  }
   get direct(): boolean { return this.backing.storage.kind !== "heap"; }
   get dv(): DataView {
     const s = this.backing.storage;
@@ -85,125 +92,259 @@ function bufferBaseMethods(): NativeSpec["methods"] {
   };
 }
 
+const PAGE_SHIFT = 16, PAGE = 1 << PAGE_SHIFT;
+type Read = (view: DataView, at: number, little: boolean) => number | bigint;
+/** A read-only mapping of an immutable file holds the pages it has touched, each loaded on first
+ *  touch as a device's mmap faults it in. A read waits for its pages; TS code that reads the bytes
+ *  itself waits for `resident`. */
+class Paging {
+  readonly pages: (DataView | undefined)[];
+  private readonly loading = new Map<number, Promise<void>>();
+  private readonly copies = new Map<string, ArrayBuffer>();
+  constructor(private readonly source: FileSource, private readonly offset: number, private readonly size: number) {
+    this.pages = new Array((size + PAGE - 1) >>> PAGE_SHIFT);
+  }
+  missing(at: number, n: number): boolean {
+    for (let p = at >>> PAGE_SHIFT, last = (at + n - 1) >> PAGE_SHIFT; p <= last; p++) if (!this.pages[p]) return true;
+    return false;
+  }
+  /** null when [at, at + n) is resident, else a Promise that settles once it is. Its missing pages
+   *  load together, each by its own read. */
+  load(at: number, n: number): Promise<void> | null {
+    let waits: Promise<void>[] | null = null;
+    for (let p = at >>> PAGE_SHIFT, last = (at + n - 1) >> PAGE_SHIFT; p <= last; p++)
+      if (!this.pages[p]) (waits ??= []).push(this.loading.get(p) ?? this.fetch(p));
+    return waits && (waits.length === 1 ? waits[0] : Promise.all(waits).then(() => {}));
+  }
+  private fetch(p: number): Promise<void> {
+    const start = p << PAGE_SHIFT, n = Math.min(PAGE, this.size - start);
+    const wait = readFully(this.source, this.offset + start, n).then((data) => {
+      if (data.length !== n) throw new Error(`short read of a mapped page at ${this.offset + start}`);
+      this.pages[p] = new DataView(data.buffer, data.byteOffset, n);
+    }).finally(() => this.loading.delete(p));
+    this.loading.set(p, wait);
+    return wait;
+  }
+  /** resident [at, at + n) into `out` at `to` */
+  copy(at: number, n: number, out: Uint8Array, to: number): void {
+    for (let end = at + n; at < end;) {
+      const page = this.pages[at >>> PAGE_SHIFT]!, from = at & (PAGE - 1), k = Math.min(end - at, page.byteLength - from);
+      out.set(new Uint8Array(page.buffer, page.byteOffset + from, k), to);
+      at += k; to += k;
+    }
+  }
+  /** `b` reads resident [at, at + n) of the mapping as its own direct bytes: its page, or a copy
+   *  of the pages it spans shared by the buffers over that range */
+  rebase(b: JBuffer, at: number, n: number): void {
+    const page = this.pages[at >>> PAGE_SHIFT];
+    let ab: ArrayBuffer | undefined, offset = 0;
+    if (!n) ab = new ArrayBuffer(0);
+    else if (at >>> PAGE_SHIFT === (at + n - 1) >>> PAGE_SHIFT) { ab = page!.buffer as ArrayBuffer; offset = page!.byteOffset + (at & (PAGE - 1)); }
+    else {
+      const key = `${at}+${n}`;
+      ab = this.copies.get(key);
+      if (!ab) { ab = new ArrayBuffer(n); this.copy(at, n, new Uint8Array(ab), 0); this.copies.set(key, ab); }
+    }
+    b.paging = null;
+    b.backing = { storage: { kind: "direct", ab } };
+    b.byteOffset = offset;
+  }
+  /** a read that waits for its pages or crosses one */
+  read(at: number, width: number, read: Read, little: boolean): number | bigint | Promise<number | bigint> {
+    const wait = this.load(at, width);
+    if (wait) return wait.then(() => this.read(at, width, read, little));
+    const bytes = new Uint8Array(8);
+    this.copy(at, width, bytes, 0);
+    return read(new DataView(bytes.buffer), 0, little);
+  }
+}
+/** null when TS code can read `b`'s bytes, else a Promise that settles once it can: a paged
+ *  mapping's buffer loads the pages it spans and reads them as one contiguous range */
+export function resident(b: JBuffer): Promise<void> | null {
+  const paging = b.paging;
+  if (!paging) return null;
+  const at = b.byteOffset, n = b.cap;
+  const wait = paging.load(at, n);
+  if (wait) return wait.then(() => paging.rebase(b, at, n));
+  paging.rebase(b, at, n);
+  return null;
+}
+
 class JByteBuffer extends JBuffer {}
 export const remainingBytes = (b: JBuffer) => new Int8Array(b.dv.buffer, b.dv.byteOffset + b.pos, b.lim - b.pos);
 function compareByteBuffers(this: JByteBuffer, other: JByteBuffer) {
-  const a = remainingBytes(this), b = remainingBytes(other);
-  for (let i = 0, n = Math.min(a.length, b.length); i < n; i++) if (a[i] !== b[i]) return a[i] - b[i];
-  return a.length - b.length;
+  return after(resident(this), () => after(resident(other), () => {
+    const a = remainingBytes(this), b = remainingBytes(other);
+    for (let i = 0, n = Math.min(a.length, b.length); i < n; i++) if (a[i] !== b[i]) return a[i] - b[i];
+    return a.length - b.length;
+  }));
 }
+/** ByteBuffer's typed reads; a mapping's wait for their pages */
+const READS: [string, string, number, Read][] = [
+  ["get", "B", 1, (view, at) => view.getInt8(at)],
+  ["getShort", "S", 2, (view, at, little) => view.getInt16(at, little)],
+  ["getChar", "C", 2, (view, at, little) => view.getUint16(at, little)],
+  ["getInt", "I", 4, (view, at, little) => view.getInt32(at, little)],
+  ["getLong", "J", 8, (view, at, little) => view.getBigInt64(at, little)],
+  ["getFloat", "F", 4, (view, at, little) => view.getFloat32(at, little)],
+  ["getDouble", "D", 8, (view, at, little) => view.getFloat64(at, little)],
+];
 rt.register({
   name: "java/nio/Buffer", ctor: JBuffer,
   methods: bufferBaseMethods(),
 });
 
-rt.register({
-  name: "java/nio/ByteBuffer", ctor: JByteBuffer, sup: "java/nio/Buffer",
-  ifaces: ["java/lang/Comparable"],
-  methods: {
-    ...bufferBaseMethods(),
-    ...chaining("Ljava/nio/ByteBuffer;"),
-    "setAccessible(Z)V": () => {},
-    "static allocateDirect(I)Ljava/nio/ByteBuffer;": allocateDirect,
-    "static allocate(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap),
-    "static wrap([B)Ljava/nio/ByteBuffer;": (arr: Int8Array) => wrapArray(JByteBuffer, arr, 0),
-    "static wrap([BII)Ljava/nio/ByteBuffer;": (arr: Int8Array, off: number, len: number) => wrapArray(JByteBuffer, arr, 0, off, len),
-    "order(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, o: { little: boolean }) {
-      this.little = !!o?.little; return this;
-    },
-    "order()Ljava/nio/ByteOrder;": function (this: JByteBuffer) { rt.link("java/nio/ByteOrder"); return this.little ? byteOrderLE : byteOrderBE; },
-    "put(B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(1); this.dv.setInt8(this.pos++, v); return this; },
-    "put(IB)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt8(i, v); return this; },
-    "put([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
-      this.clampPut(arr.length);
-      bytes(this).set(arr, this.pos); this.pos += arr.length; return this;
-    },
-    "put([BII)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array, off: number, len: number) {
-      this.clampPut(len);
-      bytes(this).set(arr.subarray(off, off + len), this.pos); this.pos += len; return this;
-    },
-    "put(Ljava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, src: JByteBuffer) {
-      const n = src.lim - src.pos;
-      this.clampPut(n);
+const byteBufferMethods: Record<string, (this: JByteBuffer, ...a: any[]) => unknown> = {
+  ...bufferBaseMethods(),
+  ...chaining("Ljava/nio/ByteBuffer;"),
+  "setAccessible(Z)V": () => {},
+  "static allocateDirect(I)Ljava/nio/ByteBuffer;": allocateDirect,
+  "static allocate(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap),
+  "static wrap([B)Ljava/nio/ByteBuffer;": (arr: Int8Array) => wrapArray(JByteBuffer, arr, 0),
+  "static wrap([BII)Ljava/nio/ByteBuffer;": (arr: Int8Array, off: number, len: number) => wrapArray(JByteBuffer, arr, 0, off, len),
+  "order(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, o: { little: boolean }) {
+    this.little = !!o?.little; return this;
+  },
+  "order()Ljava/nio/ByteOrder;": function (this: JByteBuffer) { rt.link("java/nio/ByteOrder"); return this.little ? byteOrderLE : byteOrderBE; },
+  "put(B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(1); this.dv.setInt8(this.pos++, v); return this; },
+  "put(IB)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt8(i, v); return this; },
+  "put([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
+    this.clampPut(arr.length);
+    bytes(this).set(arr, this.pos); this.pos += arr.length; return this;
+  },
+  "put([BII)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array, off: number, len: number) {
+    this.clampPut(len);
+    bytes(this).set(arr.subarray(off, off + len), this.pos); this.pos += len; return this;
+  },
+  "put(Ljava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, src: JByteBuffer) {
+    const n = src.lim - src.pos;
+    this.clampPut(n);
+    return after(resident(src), () => {
       bytes(this).set(bytes(src).subarray(src.pos, src.lim), this.pos);
       this.pos += n; src.pos += n; return this;
-    },
-    // AOSP compares and hashes the remaining bytes, not the object: Tink checks a GCM
-    // ciphertext's prepended IV with wrap(iv).equals(wrap(ciphertext, 0, 12))
-    "equals(Ljava/lang/Object;)Z": function (this: JByteBuffer, o: unknown) {
-      return +(o instanceof JByteBuffer && compareByteBuffers.call(this, o) === 0);
-    },
-    "hashCode()I": function (this: JByteBuffer) {
+    });
+  },
+  // AOSP compares and hashes the remaining bytes, not the object: Tink checks a GCM
+  // ciphertext's prepended IV with wrap(iv).equals(wrap(ciphertext, 0, 12))
+  "equals(Ljava/lang/Object;)Z": function (this: JByteBuffer, o: unknown) {
+    return o instanceof JByteBuffer ? after(compareByteBuffers.call(this, o), (c) => +(c === 0)) : 0;
+  },
+  "hashCode()I": function (this: JByteBuffer) {
+    return after(resident(this), () => {
       const a = remainingBytes(this);
       let h = 1;
       for (let i = a.length - 1; i >= 0; i--) h = (Math.imul(31, h) + a[i]) | 0;
       return h;
-    },
-    "compareTo(Ljava/nio/ByteBuffer;)I": compareByteBuffers,
-    "compareTo(Ljava/lang/Object;)I": compareByteBuffers,
-    "get()B": function (this: JByteBuffer) { this.clampGet(1); return this.dv.getInt8(this.pos++); },
-    "get(I)B": function (this: JByteBuffer, i: number) { return this.dv.getInt8(i); },
-    "get([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
-      this.clampGet(arr.length);
-      arr.set(bytes(this).subarray(this.pos, this.pos + arr.length)); this.pos += arr.length; return this;
-    },
-    "get([BII)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array, off: number, len: number) {
-      this.clampGet(len);
-      arr.set(bytes(this).subarray(this.pos, this.pos + len), off); this.pos += len; return this;
-    },
-    "putShort(S)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(2); this.dv.setInt16(this.pos, v, this.little); this.pos += 2; return this; },
-    "putShort(IS)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt16(i, v, this.little); return this; },
-    "getShort()S": function (this: JByteBuffer) { this.clampGet(2); const v = this.dv.getInt16(this.pos, this.little); this.pos += 2; return v; },
-    "getShort(I)S": function (this: JByteBuffer, i: number) { return this.dv.getInt16(i, this.little); },
-    "putChar(C)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(2); this.dv.setUint16(this.pos, v, this.little); this.pos += 2; return this; },
-    "getChar()C": function (this: JByteBuffer) { this.clampGet(2); const v = this.dv.getUint16(this.pos, this.little); this.pos += 2; return v; },
-    "getChar(I)C": function (this: JByteBuffer, i: number) { return this.dv.getUint16(i, this.little); },
-    "putChar(IC)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setUint16(i, v, this.little); return this; },
-    "putInt(I)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setInt32(this.pos, v, this.little); this.pos += 4; return this; },
-    "putInt(II)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i, v, this.little); return this; },
-    "getInt()I": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getInt32(this.pos, this.little); this.pos += 4; return v; },
-    "getInt(I)I": function (this: JByteBuffer, i: number) { return this.dv.getInt32(i, this.little); },
-    "putLong(J)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: bigint) { this.clampPut(8); this.dv.setBigInt64(this.pos, v, this.little); this.pos += 8; return this; },
-    "getLong()J": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getBigInt64(this.pos, this.little); this.pos += 8; return v; },
-    "getLong(I)J": function (this: JByteBuffer, i: number) { return this.dv.getBigInt64(i, this.little); },
-    "putLong(IJ)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: bigint) { this.clampPut(0); this.dv.setBigInt64(i, v, this.little); return this; },
-    "putFloat(F)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setFloat32(this.pos, v, this.little); this.pos += 4; return this; },
-    "putFloat(IF)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i, v, this.little); return this; },
-    "getFloat()F": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getFloat32(this.pos, this.little); this.pos += 4; return v; },
-    "getFloat(I)F": function (this: JByteBuffer, i: number) { return this.dv.getFloat32(i, this.little); },
-    "putDouble(D)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(8); this.dv.setFloat64(this.pos, v, this.little); this.pos += 8; return this; },
-    "getDouble()D": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getFloat64(this.pos, this.little); this.pos += 8; return v; },
-    "getDouble(I)D": function (this: JByteBuffer, i: number) { return this.dv.getFloat64(i, this.little); },
-    "putDouble(ID)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat64(i, v, this.little); return this; },
-    "asFloatBuffer()Ljava/nio/FloatBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/FloatBuffer").ctor, 2); },
-    "asIntBuffer()Ljava/nio/IntBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/IntBuffer").ctor, 2); },
-    "asShortBuffer()Ljava/nio/ShortBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/ShortBuffer").ctor, 1); },
-    "asCharBuffer()Ljava/nio/CharBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/CharBuffer").ctor, 1); },
-    "asDoubleBuffer()Ljava/nio/DoubleBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/DoubleBuffer").ctor, 3); },
-    "asLongBuffer()Ljava/nio/LongBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/LongBuffer").ctor, 3); },
-    "slice()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
-      const b = new JByteBuffer();
-      b.backing = this.backing; b.byteOffset = this.byteOffset + this.pos;
-      b.cap = b.lim = this.lim - this.pos; b.pos = 0; b.little = this.little; b.readOnly = this.readOnly;
-      return b;
-    },
-    "duplicate()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
-      return duplicateBuffer(this);
-    },
-    "asReadOnlyBuffer()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) { const b = duplicateBuffer(this); b.readOnly = true; return b; },
-    "compact()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
-      this.clampPut(0);
-      const n = this.lim - this.pos;
-      bytes(this).copyWithin(0, this.pos, this.lim);
-      this.pos = n; this.lim = this.cap;
-      return this;
-    },
-    "array()[B": backingArray,
+    });
   },
-});
+  "compareTo(Ljava/nio/ByteBuffer;)I": compareByteBuffers,
+  "compareTo(Ljava/lang/Object;)I": compareByteBuffers,
+  "get()B": function (this: JByteBuffer) { this.clampGet(1); return this.dv.getInt8(this.pos++); },
+  "get(I)B": function (this: JByteBuffer, i: number) { return this.dv.getInt8(i); },
+  "get([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
+    this.clampGet(arr.length);
+    arr.set(bytes(this).subarray(this.pos, this.pos + arr.length)); this.pos += arr.length; return this;
+  },
+  "get([BII)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array, off: number, len: number) {
+    this.clampGet(len);
+    arr.set(bytes(this).subarray(this.pos, this.pos + len), off); this.pos += len; return this;
+  },
+  "putShort(S)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(2); this.dv.setInt16(this.pos, v, this.little); this.pos += 2; return this; },
+  "putShort(IS)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt16(i, v, this.little); return this; },
+  "getShort()S": function (this: JByteBuffer) { this.clampGet(2); const v = this.dv.getInt16(this.pos, this.little); this.pos += 2; return v; },
+  "getShort(I)S": function (this: JByteBuffer, i: number) { return this.dv.getInt16(i, this.little); },
+  "putChar(C)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(2); this.dv.setUint16(this.pos, v, this.little); this.pos += 2; return this; },
+  "getChar()C": function (this: JByteBuffer) { this.clampGet(2); const v = this.dv.getUint16(this.pos, this.little); this.pos += 2; return v; },
+  "getChar(I)C": function (this: JByteBuffer, i: number) { return this.dv.getUint16(i, this.little); },
+  "putChar(IC)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setUint16(i, v, this.little); return this; },
+  "putInt(I)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setInt32(this.pos, v, this.little); this.pos += 4; return this; },
+  "putInt(II)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i, v, this.little); return this; },
+  "getInt()I": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getInt32(this.pos, this.little); this.pos += 4; return v; },
+  "getInt(I)I": function (this: JByteBuffer, i: number) { return this.dv.getInt32(i, this.little); },
+  "putLong(J)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: bigint) { this.clampPut(8); this.dv.setBigInt64(this.pos, v, this.little); this.pos += 8; return this; },
+  "getLong()J": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getBigInt64(this.pos, this.little); this.pos += 8; return v; },
+  "getLong(I)J": function (this: JByteBuffer, i: number) { return this.dv.getBigInt64(i, this.little); },
+  "putLong(IJ)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: bigint) { this.clampPut(0); this.dv.setBigInt64(i, v, this.little); return this; },
+  "putFloat(F)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setFloat32(this.pos, v, this.little); this.pos += 4; return this; },
+  "putFloat(IF)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i, v, this.little); return this; },
+  "getFloat()F": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getFloat32(this.pos, this.little); this.pos += 4; return v; },
+  "getFloat(I)F": function (this: JByteBuffer, i: number) { return this.dv.getFloat32(i, this.little); },
+  "putDouble(D)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(8); this.dv.setFloat64(this.pos, v, this.little); this.pos += 8; return this; },
+  "getDouble()D": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getFloat64(this.pos, this.little); this.pos += 8; return v; },
+  "getDouble(I)D": function (this: JByteBuffer, i: number) { return this.dv.getFloat64(i, this.little); },
+  "putDouble(ID)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat64(i, v, this.little); return this; },
+  "asFloatBuffer()Ljava/nio/FloatBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/FloatBuffer").ctor, 2); },
+  "asIntBuffer()Ljava/nio/IntBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/IntBuffer").ctor, 2); },
+  "asShortBuffer()Ljava/nio/ShortBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/ShortBuffer").ctor, 1); },
+  "asCharBuffer()Ljava/nio/CharBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/CharBuffer").ctor, 1); },
+  "asDoubleBuffer()Ljava/nio/DoubleBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/DoubleBuffer").ctor, 3); },
+  "asLongBuffer()Ljava/nio/LongBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/LongBuffer").ctor, 3); },
+  "slice()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
+    const b = new (this.constructor as new () => JByteBuffer)();
+    b.backing = this.backing; b.paging = this.paging; b.byteOffset = this.byteOffset + this.pos;
+    b.cap = b.lim = this.lim - this.pos; b.pos = 0; b.little = this.little; b.readOnly = this.readOnly;
+    return b;
+  },
+  "duplicate()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
+    return duplicateBuffer(this);
+  },
+  "asReadOnlyBuffer()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) { const b = duplicateBuffer(this); b.readOnly = true; return b; },
+  "compact()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
+    this.clampPut(0);
+    const n = this.lim - this.pos;
+    bytes(this).copyWithin(0, this.pos, this.lim);
+    this.pos = n; this.lim = this.cap;
+    return this;
+  },
+  "array()[B": backingArray,
+};
+rt.register({ name: "java/nio/ByteBuffer", ctor: JByteBuffer, sup: "java/nio/Buffer", ifaces: ["java/lang/Comparable"], methods: byteBufferMethods });
+// a mapping's reads wait for their pages
+function getPaged(this: JByteBuffer, paging: Paging, arr: Int8Array, off: number, len: number): JByteBuffer | Promise<JByteBuffer> {
+  checkFromIndexSize(off, len, arr.length);
+  this.clampGet(len);
+  const at = this.byteOffset + this.pos;
+  return after(paging.load(at, len), () => {
+    paging.copy(at, len, new Uint8Array(arr.buffer, arr.byteOffset, arr.length), off);
+    this.pos += len;
+    return this;
+  });
+}
+const getArray = byteBufferMethods["get([B)Ljava/nio/ByteBuffer;"], getRange = byteBufferMethods["get([BII)Ljava/nio/ByteBuffer;"];
+const pagedReads: typeof byteBufferMethods = {
+  "get([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
+    const paging = this.paging;
+    return paging ? getPaged.call(this, paging, arr, 0, arr.length) : getArray.call(this, arr);
+  },
+  "get([BII)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array, off: number, len: number) {
+    const paging = this.paging;
+    return paging ? getPaged.call(this, paging, arr, off, len) : getRange.call(this, arr, off, len);
+  },
+};
+for (const [name, d, width, read] of READS) {
+  const next = byteBufferMethods[`${name}()${d}`], at = byteBufferMethods[`${name}(I)${d}`];
+  const paged = (b: JByteBuffer, paging: Paging, i: number) => {
+    const abs = b.byteOffset + i, page = paging.pages[abs >>> PAGE_SHIFT], off = abs & (PAGE - 1);
+    return page !== undefined && off <= page.byteLength - width ? read(page, off, b.little) : paging.read(abs, width, read, b.little);
+  };
+  pagedReads[`${name}()${d}`] = function (this: JByteBuffer) {
+    const paging = this.paging;
+    if (!paging) return next.call(this);
+    this.clampGet(width);
+    this.pos += width;
+    return paged(this, paging, this.pos - width);
+  };
+  pagedReads[`${name}(I)${d}`] = function (this: JByteBuffer, i: number) {
+    const paging = this.paging;
+    if (!paging) return at.call(this, i);
+    if (i < 0 || i > this.lim - width) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(i));
+    return paged(this, paging, i);
+  };
+}
+// a mapping's slices and duplicates are mappings, as a device's DirectByteBuffer's are
 function duplicateBuffer(source: JByteBuffer): JByteBuffer {
-  const b = new JByteBuffer();
-  b.backing = source.backing; b.byteOffset = source.byteOffset;
+  const b = new (source.constructor as new () => JByteBuffer)();
+  b.backing = source.backing; b.paging = source.paging; b.byteOffset = source.byteOffset;
   b.cap = source.cap; b.lim = source.lim; b.pos = source.pos; b.mark = source.mark; b.little = source.little; b.readOnly = source.readOnly;
   return b;
 }
@@ -213,11 +354,33 @@ rt.register({
   name: "java/nio/MappedByteBuffer", ctor: JMappedByteBuffer, sup: "java/nio/ByteBuffer",
   methods: {
     ...chaining("Ljava/nio/MappedByteBuffer;"),
-    "isLoaded()Z": () => 1,
-    "load()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
+    ...pagedReads,
+    "asFloatBuffer()Ljava/nio/FloatBuffer;": pagedView("java/nio/FloatBuffer", 2),
+    "asIntBuffer()Ljava/nio/IntBuffer;": pagedView("java/nio/IntBuffer", 2),
+    "asShortBuffer()Ljava/nio/ShortBuffer;": pagedView("java/nio/ShortBuffer", 1),
+    "asCharBuffer()Ljava/nio/CharBuffer;": pagedView("java/nio/CharBuffer", 1),
+    "asDoubleBuffer()Ljava/nio/DoubleBuffer;": pagedView("java/nio/DoubleBuffer", 3),
+    "asLongBuffer()Ljava/nio/LongBuffer;": pagedView("java/nio/LongBuffer", 3),
+    "isLoaded()Z": function (this: JMappedByteBuffer) { return +!this.paging?.missing(this.byteOffset, this.cap); },
+    "load()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) {
+      return after(this.paging?.load(this.byteOffset, this.cap) ?? null, () => this);
+    },
     "force()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { this.flush?.(); return this; },
   },
 });
+/** A mapping's typed view reads the pages it spans as one contiguous range. */
+function pagedView(name: string, shift: number) {
+  return function (this: JMappedByteBuffer) {
+    const paging = this.paging, Ctor = rt.link(name).ctor;
+    if (!paging) return viewBuffer(this, Ctor, shift);
+    const at = this.byteOffset + this.pos, n = this.lim - this.pos;
+    return after(paging.load(at, n), () => {
+      const view = viewBuffer(this, Ctor, shift);
+      paging.rebase(view, at, n);
+      return view;
+    });
+  };
+}
 /** A buffer over `data` itself; `flush` (force) persists the file a READ_WRITE mapping shares its bytes with, and a read-only
  *  mapping has none. The bytes are the mapping, so a writer's stores are in the file's storage before any force. */
 export function mappedBuffer(data: Uint8Array, flush: (() => void) | null): JBuffer {
@@ -229,6 +392,13 @@ export function mappedBuffer(data: Uint8Array, flush: (() => void) | null): JBuf
   return buffer;
 }
 export const mappedReadOnlyBuffer = (data: Uint8Array): JBuffer => mappedBuffer(data, null);
+/** a read-only mapping of an immutable source, whose pages load on first touch */
+export function pagedMapping(source: FileSource, offset: number, length: number): JBuffer {
+  const buffer = mappedBuffer(new Uint8Array(0), null);
+  buffer.cap = buffer.lim = length;
+  if (length) buffer.paging = new Paging(source, offset, length);
+  return buffer;
+}
 export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();
@@ -271,6 +441,7 @@ export function nativeByteBuffer(address: number, cap: number): JBuffer {
 export function directBufferAddress(b: JBuffer): number | bigint {
   let s = b.backing.storage;
   if (s.kind === "heap") return 0;
+  if (b.paging) throw new Error("a paged mapping's address taken before `resident`");
   if (s.kind === "direct") {
     // Promotion waits for native ABI selection and updates every existing slice/view together;
     // it ends any array's aliasing, which only code outside the app's own libraries can reach.
@@ -865,6 +1036,7 @@ rt.register({
     "implReplaceWith(Ljava/lang/String;)V": () => {},
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": driven(function* (this: JCharsetDecoder, src: JBuffer): Gen {
       this.endian = null;
+      yield resident(src);
       const out = allocCharBuffer(src.lim - src.pos);
       const result = decodeBuffer(this, src, out, 1);
       if (result.length) yield vcall(result, "throwException", "()V");
@@ -877,7 +1049,7 @@ rt.register({
     // a subclass's own decodeLoop does the decoding, the error actions stay here
     "decode(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;":
       function (this: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) {
-        if (typeof (this as any)[DECODE_LOOP] !== "function") return decodeBuffer(this, src, dst, end);
+        if (typeof (this as any)[DECODE_LOOP] !== "function") return after(resident(src), () => decodeBuffer(this, src, dst, end));
         return codeVia(this, "decodeLoop", "(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;", src, dst, end, (out) => {
           if (out.lim - out.pos < this.replacement.length) return false;
           for (let i = 0; i < this.replacement.length; i++) out.dv.setUint16(out.pos++ << 1, this.replacement.charCodeAt(i), out.little);

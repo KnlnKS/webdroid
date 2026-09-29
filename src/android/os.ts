@@ -25,7 +25,7 @@ import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
-import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
+import { JBuffer, mkByteBuffer, resident } from "../jvm/natives/jnio";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
@@ -1298,9 +1298,9 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
       readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position))),
     [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      ioResult("write", javaWriteFd(fdInt(d), ioRegion(buffer, offset, count))),
+      after(buffer instanceof JBuffer ? resident(buffer) : null, () => ioResult("write", javaWriteFd(fdInt(d), ioRegion(buffer, offset, count)))),
     [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      ioResult("pwrite", javaPwriteFd(fdInt(d), ioRegion(buffer, offset, count), Number(position))),
+      after(buffer instanceof JBuffer ? resident(buffer) : null, () => ioResult("pwrite", javaPwriteFd(fdInt(d), ioRegion(buffer, offset, count), Number(position)))),
     [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => sys("ftruncate", javaTruncateFd(fdInt(d), Number(length))),
     [`fsync(${FD})V`]: (d: JObj | null) => sys("fsync", javaSyncFd(fdInt(d))),
     [`fdatasync(${FD})V`]: (d: JObj | null) => sys("fdatasync", javaSyncFd(fdInt(d))),

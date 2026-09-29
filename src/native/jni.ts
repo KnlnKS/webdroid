@@ -8,7 +8,7 @@ import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8 } from "../jvm/abi";
 import { curThread, callOn, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
-import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
+import { JBuffer, directBufferAddress, nativeByteBuffer, resident } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
 
 export const jniMissing = new Set<string>();
@@ -525,8 +525,10 @@ export function jniInit(): void {
   });
   def(230, "GetDirectBufferAddress", (cpu, a) => {
     a.p(); const b = deref(a.p());
-    try { return b instanceof JBuffer ? directBufferAddress(b) : 0; }
-    catch (e) { pend(cpu, e); return 0; }
+    if (!(b instanceof JBuffer)) return 0;
+    const address = () => { try { return directBufferAddress(b); } catch (e) { pend(cpu, e); return 0; } };
+    const wait = resident(b);
+    return wait ? wait.then(address, (e) => { pend(cpu, e); return 0; }) : address();
   });
   def(231, "GetDirectBufferCapacity", (_cpu, a) => {
     a.p(); const b = deref(a.p());

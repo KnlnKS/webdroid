@@ -5,13 +5,13 @@
 
 import { rt, JObj, type NativeSpec, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray, i8 } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, after } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
 import { pathOf, fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { readFully } from "../shell/lazyfile";
 import { javaFdSource } from "../native/stdio";
-import { JBuffer, bufferView } from "../jvm/natives/jnio";
+import { JBuffer, bufferView, resident } from "../jvm/natives/jnio";
 import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader } from "./graphics";
 import type { Resources } from "./res";
 import type { JResources, JAssetManager } from "./resnative";
@@ -196,8 +196,10 @@ rt.register({
     "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": fromAsset,
     "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": fromAsset,
     "<init>(Ljava/nio/ByteBuffer;)V": function (this: JFontBuilder, bb: JBuffer) {
-      const v = bufferView(bb);
-      this.bytes = new Uint8Array(v.ab, v.byteOffset, bb.lim);
+      return after(resident(bb), () => {
+        const v = bufferView(bb);
+        this.bytes = new Uint8Array(v.ab, v.byteOffset, bb.lim);
+      });
     },
     "setWeight(I)Landroid/graphics/fonts/Font$Builder;": function (this: JFontBuilder, w: number) {
       if (w < 1 || w > 1000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "weight value must be [1, 1000]");

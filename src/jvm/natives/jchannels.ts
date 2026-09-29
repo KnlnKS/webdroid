@@ -1,7 +1,7 @@
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall, checkFromIndexSize } from "./jlang";
 import { JInputStream, JOutputStream, skipStream, noMark } from "./jio";
-import { remainingBytes, type JBuffer } from "./jnio";
+import { remainingBytes, resident, type JBuffer } from "./jnio";
 
 class JStreamChannel extends JObj { stream: unknown = null; open = true; }
 const channelMethods = {
@@ -23,6 +23,7 @@ rt.register({ name: "webdroid/OutputStreamChannel", ctor: class extends JStreamC
   ...channelMethods,
   "write(Ljava/nio/ByteBuffer;)I": driven(function* (this: JStreamChannel, buffer: JBuffer): Gen {
     if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+    yield resident(buffer);
     const bytes = remainingBytes(buffer), count = bytes.length;
     yield vcall(this.stream, "write", "([BII)V", buffer.backing.storage.kind === "native" ? bytes.slice() : bytes, 0, count);
     buffer.pos += count; return count;
