@@ -189,6 +189,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     // ContextImpl.getTheme: the manifest's theme, or the platform default for the target SDK
     registerApk(apkPath(), tables);
     jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
+    // ActivityThread.handleBindApplication: the system Resources take the device configuration and
+    // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
+    await applyDeviceConfiguration();
     res = nativeRes(jres);
     theme = await newTheme(res, jres, null, await scall("android/content/res/Resources", "selectDefaultTheme", "(II)I", themeResId, target));
   } else {

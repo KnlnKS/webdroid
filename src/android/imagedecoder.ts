@@ -1,5 +1,5 @@
-import { JObj, rt, noops } from "../jvm/runtime";
-import { newObj, vcall, after } from "../jvm/natives/jlang";
+import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
+import { newObj, vcall, vcallOn, curThread, after } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { resident, type JBuffer } from "../jvm/natives/jnio";
 import { decodeBytes } from "./graphics";
@@ -29,13 +29,15 @@ async function sourceBytes(source: JImageSource): Promise<Uint8Array> {
   finally { await vcall(stream, "close", "()V"); }
 }
 async function decode(source: JImageSource, listener: unknown) {
+  // the listener runs on the decoding thread, whichever thread the awaits below resume on
+  const thread = curThread;
   const decoder = rt.make("android/graphics/ImageDecoder") as JImageDecoder;
   try {
     const bitmap = await decodeBytes(await sourceBytes(source), null, async (width, height) => {
       decoder.width = width; decoder.height = height;
       const info = rt.make("android/graphics/ImageDecoder$ImageInfo") as JImageInfo;
       info.size = await newObj("android/util/Size", "(II)V", width, height);
-      if (listener) await vcall(listener, "onHeaderDecoded",
+      if (listener) await vcallOn(thread, listener, "onHeaderDecoded",
         "(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;Landroid/graphics/ImageDecoder$Source;)V", decoder, info, source);
       return [decoder.width, decoder.height];
     });
@@ -73,13 +75,13 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
   "static decodeBitmap(Landroid/graphics/ImageDecoder$Source;Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/Bitmap;": decode,
   // a bitmap at its source's density, as a nine-patch when it carries a chunk
   "static decodeDrawable(Landroid/graphics/ImageDecoder$Source;Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/drawable/Drawable;":
-    async (source: JImageSource, listener: unknown) => {
+    driven(function* (source: JImageSource, listener: unknown): Gen {
       if (!listener) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener cannot be null! Use decodeDrawable(Source) to not have a listener");
-      const bitmap = await decode(source, listener);
-      const density: number = await vcall(source, "getDensity", "()I");
+      const bitmap = yield decode(source, listener);
+      const density: number = yield vcall(source, "getDensity", "()I");
       if (density) bitmap.density = density;
       return drawableFromBitmap(bitmap, device.densityDpi, null);
-    },
+    }),
   "setTargetSize(II)V": function (this: JImageDecoder, width: number, height: number) {
     if (width <= 0 || height <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Target size must be positive");
     this.width = width; this.height = height;

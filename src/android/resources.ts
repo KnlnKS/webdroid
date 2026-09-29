@@ -46,6 +46,8 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
   if (!aospResources()) return deviceConfiguration();
   const C = "android/content/res/Configuration";
   const config = yield javaConfiguration(deviceConfiguration());
+  // the system Resources exist before any configuration reaches them, as the zygote preloads them
+  yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
   yield scall("android/content/res/Resources", "updateSystemConfiguration",
     `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, new JDisplayMetrics(), null);
   for (const entry of built.slice()) {
@@ -76,13 +78,14 @@ export function newTheme(res: Resources, jres: unknown, base: JTheme | null, sty
     if (styleId) t.apply(styleId);
     return t;
   }
-  return (async () => {
-    const t = await vcall(jres, "newTheme", "()Landroid/content/res/Resources$Theme;");
-    if (base?.jobj) await vcall(t, "setTo", "(Landroid/content/res/Resources$Theme;)V", base.jobj);
-    if (styleId) await vcall(t, "applyStyle", "(IZ)V", styleId, 1);
-    return nativeTheme(t)!;
-  })();
+  return javaBackedTheme(jres, base, styleId);
 }
+const javaBackedTheme = driven(function* javaBackedTheme(jres: unknown, base: JTheme | null, styleId: number): Gen<JTheme> {
+  const t = yield vcall(jres, "newTheme", "()Landroid/content/res/Resources$Theme;");
+  if (base?.jobj) yield vcall(t, "setTo", "(Landroid/content/res/Resources$Theme;)V", base.jobj);
+  if (styleId) yield vcall(t, "applyStyle", "(IZ)V", styleId, 1);
+  return nativeTheme(t)!;
+});
 /** the Java object a context hands out for its theme */
 export const javaTheme = (t: JTheme | null): unknown => (t && aospResources() ? t.jobj : t);
 

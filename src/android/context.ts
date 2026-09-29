@@ -4,7 +4,7 @@ import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, nativeTheme, nativeRes, type JAttrSet } from "./res";
-import { newObj, vcall, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
+import { newObj, vcall, vcallOn, curThread, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
@@ -54,11 +54,14 @@ const packageContexts = new Map<string, Promise<JContext>>();
 export const services = new Map<string, unknown>();
 /** a string resource of the running app ("" before boot) */
 export const appString = (id: number) => (appHost ? resString(appHost.res, id) : "");
-/** a Context getter that is getResources().name(args[, getTheme()]) through the virtual entries */
+/** A Context getter that is getResources().name(args[, getTheme()]) through the virtual entries,
+ *  every call on the caller's thread: another thread may resume between them, and AOSP's
+ *  ResourcesImpl keeps per-thread state (its drawable lookup stack). */
 const viaResources = (name: string, desc: string, themed = false) => async function (this: JContext, ...args: unknown[]) {
-  const resources = await vcall(this, "getResources", "()Landroid/content/res/Resources;");
-  if (themed) args.push(await vcall(this, "getTheme", "()Landroid/content/res/Resources$Theme;"));
-  return vcall(resources, name, desc, ...args);
+  const thread = curThread;
+  const resources = await vcallOn(thread, this, "getResources", "()Landroid/content/res/Resources;");
+  if (themed) args.push(await vcallOn(thread, this, "getTheme", "()Landroid/content/res/Resources$Theme;"));
+  return vcallOn(thread, resources, name, desc, ...args);
 };
 // the one logical display (Display.DEFAULT_DISPLAY = 0); AOSP hands out one Display per id
 let defaultDisplay: unknown;
@@ -448,12 +451,13 @@ rt.register({ name: "android/content/Context", ctor: JContext, methods: contextM
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
 class JAttributionContext extends JContextWrapper {}
+const aospConfigurationContext = driven(function* (source: JContext, config: JConfiguration): Gen<JContext> {
+  const jresources = yield configuredResources(source.$host.jresources, config);
+  const theme: JTheme = yield newTheme(nativeRes(jresources), jresources, themeOf(source) ?? source.$host.theme, 0);
+  return newContextImpl(Object.assign(Object.create(source.$host), { res: nativeRes(jresources), jresources, theme }));
+});
 function configurationContext(source: JContext, config: JConfiguration): JContext | Promise<JContext> {
-  if (aospResources()) return (async () => {
-    const jresources = await configuredResources(source.$host.jresources, config);
-    const theme = await newTheme(nativeRes(jresources), jresources, themeOf(source) ?? source.$host.theme, 0);
-    return newContextImpl(Object.assign(Object.create(source.$host), { res: nativeRes(jresources), jresources, theme }));
-  })();
+  if (aospResources()) return aospConfigurationContext(source, config);
   return after(scopedResources(source.$host.res, config), (jresources) => {
     const theme = new JTheme();
     theme.res = jresources.host;
