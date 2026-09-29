@@ -16,7 +16,7 @@ import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
 import { getPM, registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jutil";
-import { Resources, JTheme, themeOf } from "../src/android/res";
+import { Resources, JTheme, themeOf, rvString } from "../src/android/res";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { JIntent } from "../src/android/intent";
 import { encodeIntent } from "../src/android/intentipc";
@@ -590,6 +590,15 @@ describe("resource-type-id-offset", () => {
     for (const pkg of packages) { bytes.set(pkg, pos); pos += pkg.length; }
     return bytes;
   }
+
+  test("a file resource resolves to a reference to itself, once", async () => {
+    const zip = zipTree(new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer()));
+    const table = new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null), res = new Resources(table, zip, undefined, true);
+    const id = table.findId("layout", "activity_main"), ref = res.ref(id);
+    expect(ref).toMatchObject({ t: TV.REFERENCE, d: id });
+    expect(res.resolveRefs(ref)).toBe(ref);
+    expect(rvString(res, { t: TV.REFERENCE, d: id })).toBe(res.fileOf(id)!.path);
+  });
 
   test("package type ID offsets apply to resource lookup", () => {
     const resources = new Arsc(resourceTable(packageChunk("id", "item", 0, 1, 9)));

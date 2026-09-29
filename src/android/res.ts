@@ -353,7 +353,11 @@ export class Resources {
     this.resolveReference(sv);
     // a reference to itself (a bag) or one that did not resolve stays the value it was
     if (sv.t === TV.REFERENCE && sv.d === v.d) return v;
-    return this.toRV(sv) ?? v;
+    const rv = this.toRV(sv);
+    // a file resource reads back as a reference to its own id: resolving it again must answer the
+    // same object, or a caller that resolves until nothing changes (rvString) never stops
+    if (!rv || (rv.t === TV.REFERENCE && rv.d === v.d && (v.s !== undefined || rv.s === undefined))) return v;
+    return rv;
   }
 
   /** the bag `resId` names with its parents merged in, or null (AssetManager2::GetBag) */
