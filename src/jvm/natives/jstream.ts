@@ -1,6 +1,6 @@
 import { JObj, rt, driven, type Gen, type NativeSpec } from "../runtime";
 import { mkIter, newArrayList, toJsArray, sortInPlace, newLinkedHashSet } from "./jutil";
-import { vcall, after, box, boxInt, JLong, JDouble } from "./jlang";
+import { vcall, after, box, boxInt, scall, JLong, JDouble } from "./jlang";
 import { jarray } from "../abi";
 import { JStream, JIntStream, JLongStream, JDoubleStream, mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
 
@@ -182,7 +182,6 @@ for (const [P, d] of PRIMS) {
 // here is an async compiled method on one thread, so laziness would buy nothing and cost the
 // whole Spliterator machinery. Stream sources arrive as an already-drained array; infinite
 // sources (generate, two-argument iterate) are not offered.
-class JSpliterator extends JObj { a: unknown[] = []; }
 class JPrimIterator extends JObj { a: unknown[] = []; i = 0; box: (v: any) => unknown = (v) => v; }
 interface StreamKind {
   P: "" | "Int" | "Long" | "Double";
@@ -313,9 +312,11 @@ function streamMethods(k: StreamKind): Methods {
   m[`iterator()${iterator}`] = iterate;
   m["iterator()Ljava/util/Iterator;"] = iterate;
   // BaseStream's erased signature answers too, as a bridge would
-  m[`spliterator()Ljava/util/Spliterator${prim ? "$Of" + P : ""};`] = m["spliterator()Ljava/util/Spliterator;"] = function (this: Stage) {
-    rt.link(`java/util/Spliterator${prim ? "$Of" + P : ""}`);
-    return Object.assign(new (spliterators.get(P)!)(), { a: this.a.slice() });
+  const spliterator = `Ljava/util/Spliterator${prim ? "$Of" + P : ""};`;
+  m[`spliterator()${spliterator}`] = m["spliterator()Ljava/util/Spliterator;"] = function (this: Stage) {
+    const values = P === "Int" ? Int32Array.from(this.a as number[]) : P === "Long" ? BigInt64Array.from(this.a as bigint[])
+      : P === "Double" ? Float64Array.from(this.a as number[]) : jarray(this.a.slice());
+    return scall("java/util/Spliterators", "spliterator", `([${d}I)${spliterator}`, values, ORDERED);
   };
   const same = function (this: Stage) { return this; };
   // only the primitive streams redeclare parallel() and sequential() with their own type
@@ -363,15 +364,11 @@ function streamMethods(k: StreamKind): Methods {
   if (P === "Int") m[`asLongStream()L${S}LongStream;`] = function (this: Stage) { return mkLongStream((this.a as number[]).map(BigInt)); };
   return m;
 }
-const spliterators = new Map<string, new () => JSpliterator>([["", JSpliterator]]);
 const primIterators = new Map<string, new () => JPrimIterator>();
-rt.register({ name: "java/util/Spliterator", ctor: JSpliterator });
 rt.register({ name: "java/util/PrimitiveIterator", ctor: class extends JObj {}, ifaces: ["java/util/Iterator"] });
 for (const [P, d] of PRIMS) {
-  const Sp = class extends JSpliterator {}, It = class extends JPrimIterator {};
-  spliterators.set(P, Sp);
+  const It = class extends JPrimIterator {};
   primIterators.set(P, It);
-  rt.register({ name: `java/util/Spliterator$Of${P}`, ctor: Sp, ifaces: ["java/util/Spliterator"] });
   const nextValue = function (this: JPrimIterator) {
     if (this.i >= this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
     return this.a[this.i++];
@@ -433,26 +430,27 @@ rt.register({
     [`collect(L${S}Collector;)${O}`]: function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });
-rt.register({
-  name: "java/util/Spliterators", ctor: class extends JObj {},
-  methods: {
-    "static spliteratorUnknownSize(Ljava/util/Iterator;I)Ljava/util/Spliterator;": driven(function* (it: unknown): Gen {
-      const s = new JSpliterator();
-      while (yield vcall(it, "hasNext", "()Z")) s.a.push(yield vcall(it, "next", `()${O}`));
-      return s;
-    }),
-    "static spliterator(Ljava/util/Collection;I)Ljava/util/Spliterator;": driven(function* (c: unknown): Gen {
-      const s = new JSpliterator(); s.a = yield toJsArray(c); return s;
-    }),
-  },
+/** Spliterator.ORDERED and SIZED */
+const ORDERED = 0x10, SIZED = 0x40;
+/** a spliterator's elements, drained through libcore's Spliterators.iterator adapter */
+const drain = driven(function* drain(sp: unknown, k: StreamKind): Gen<unknown[]> {
+  if (sp == null) rt.npe();
+  // an eager stream cannot hold a sized source past an array's length (ThreadLocalRandom.ints())
+  if ((yield vcall(sp, "characteristics", "()I")) & SIZED && (yield vcall(sp, "estimateSize", "()J")) > 0xffffffffn)
+    throw rt.mkThrowable("java/lang/UnsupportedOperationException", "unbounded stream source");
+  const it = yield scall("java/util/Spliterators", "iterator", k.P
+    ? `(Ljava/util/Spliterator$Of${k.P};)Ljava/util/PrimitiveIterator$Of${k.P};` : "(Ljava/util/Spliterator;)Ljava/util/Iterator;", sp);
+  const out: unknown[] = [];
+  while (yield vcall(it, "hasNext", "()Z")) out.push(yield vcall(it, `next${k.P}`, `()${k.d}`));
+  return out;
 });
 rt.register({
   name: S + "StreamSupport", ctor: class extends JObj {},
   methods: {
-    [`static stream(Ljava/util/Spliterator;Z)L${S}Stream;`]: (sp: JSpliterator) => mkStream(sp.a.slice()),
-    [`static stream(${fnDesc("Supplier")}IZ)L${S}Stream;`]: (s: unknown) => after(invoke("Supplier", s), (sp: JSpliterator) => mkStream(sp.a.slice())),
+    [`static stream(Ljava/util/Spliterator;Z)L${S}Stream;`]: (sp: unknown) => after(drain(sp, OBJ_KIND), mkStream),
+    [`static stream(${fnDesc("Supplier")}IZ)L${S}Stream;`]: (s: unknown) => after(invoke("Supplier", s), (sp) => after(drain(sp, OBJ_KIND), mkStream)),
     ...Object.fromEntries(PRIMS.map(([P]) => [`static ${P.toLowerCase()}Stream(Ljava/util/Spliterator$Of${P};Z)L${S}${P}Stream;`,
-      (sp: JSpliterator) => kindOf(P).mk(sp.a.slice())])),
+      (sp: unknown) => after(drain(sp, kindOf(P)), (values) => kindOf(P).mk(values))])),
   },
 });
 
