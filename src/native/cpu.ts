@@ -604,7 +604,7 @@ export class Cpu {
           continue;
         default: {
           const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
-          if ((code === Fault.Undefined || code === Fault.Extension) && this.trapsIllegal(word)) { jitDrain(); return SliceExit.IllegalInstruction; }
+          if ((code === Fault.Undefined || code === Fault.Extension) && this.trapsIllegal()) { jitDrain(); return SliceExit.IllegalInstruction; }
           const what = code === Fault.BadAddress ? `bad address 0x${(this.u32[OFF_ADDR >> 2] >>> 0).toString(16)}` : code === Fault.UnsupportedSyscall ? `${FAULTS[code]} ${word}` : `${FAULTS[code] ?? "fault " + code} 0x${word.toString(16).padStart(8, "0")}`;
           this.fault(what);
         }
@@ -683,7 +683,7 @@ export class Cpu {
   }
   /** an instruction this CPU does not have, under a SIGILL handler (a feature probe such as
    *  OpenSSL's armcap) */
-  private trapsIllegal(word: number): boolean {
+  private trapsIllegal(): boolean {
     if (!sigHandlers.has(SIGILL) || this.signalMask & 1n << BigInt(SIGILL - 1)) return false;
     return true;
   }

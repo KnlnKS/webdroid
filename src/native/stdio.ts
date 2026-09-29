@@ -228,11 +228,6 @@ export function javaFdSource(fd: number): FileSource | null {
     },
   };
 }
-export function javaAvailableFd(fd: number): number {
-  const f = fds.get(fd);
-  if (!f || f.dir || (f.statusFlags & O_ACCMODE) === 1) return -1;
-  return f.rpipe ? f.rpipe.q.reduce((n, b) => n + b.length, 0) : Math.max(0, f.content.len - f.pos);
-}
 export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
   const f = fds.get(fd);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return f.dir ? -E.ISDIR : -E.BADF;
