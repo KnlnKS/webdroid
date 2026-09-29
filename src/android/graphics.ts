@@ -36,164 +36,25 @@ export function cssColor(argb: number): string {
 }
 
 export class JRect extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
-function setRectFrom(this: JRect, o: JRect) {
-  this.left = o.left; this.top = o.top; this.right = o.right; this.bottom = o.bottom;
-}
-const rectMethods = (F: boolean): NativeSpec["methods"] => ({
-  "<init>()V": function () {},
-  [`<init>(${F ? "FFFF" : "IIII"})V`]: function (this: JRect, l: number, t: number, r: number, b: number) {
-    this.left = l; this.top = t; this.right = r; this.bottom = b;
-  },
-  [`<init>(L${F ? "android/graphics/RectF" : "android/graphics/Rect"};)V`]: function (this: JRect, o: JRect) {
-    if (o) { this.left = o.left; this.top = o.top; this.right = o.right; this.bottom = o.bottom; }
-  },
-  [`width()${F ? "F" : "I"}`]: function (this: JRect) { return this.right - this.left; },
-  [`height()${F ? "F" : "I"}`]: function (this: JRect) { return this.bottom - this.top; },
-  [`centerX()${F ? "F" : "I"}`]: function (this: JRect) { return F ? (this.left + this.right) / 2 : (this.left + this.right) >> 1; },
-  [`centerY()${F ? "F" : "I"}`]: function (this: JRect) { return F ? (this.top + this.bottom) / 2 : (this.top + this.bottom) >> 1; },
-  [`set(${F ? "FFFF" : "IIII"})V`]: function (this: JRect, l: number, t: number, r: number, b: number) {
-    this.left = l; this.top = t; this.right = r; this.bottom = b;
-  },
-  "set(Landroid/graphics/Rect;)V": setRectFrom,
-  ...(F ? { "set(Landroid/graphics/RectF;)V": setRectFrom } : {}),
-  "setEmpty()V": function (this: JRect) { this.left = this.top = this.right = this.bottom = 0; },
-  "isEmpty()Z": function (this: JRect) { return this.left >= this.right || this.top >= this.bottom ? 1 : 0; },
-  [`offset(${F ? "FF" : "II"})V`]: function (this: JRect, dx: number, dy: number) {
-    this.left += dx; this.right += dx; this.top += dy; this.bottom += dy;
-  },
-  [`offsetTo(${F ? "FF" : "II"})V`]: function (this: JRect, x: number, y: number) {
-    this.right += x - this.left; this.bottom += y - this.top; this.left = x; this.top = y;
-  },
-  [`inset(${F ? "FF" : "II"})V`]: function (this: JRect, dx: number, dy: number) {
-    this.left += dx; this.right -= dx; this.top += dy; this.bottom -= dy;
-  },
-  [`contains(${F ? "FF" : "II"})Z`]: function (this: JRect, x: number, y: number) {
-    return x >= this.left && x < this.right && y >= this.top && y < this.bottom ? 1 : 0;
-  },
-  "toString()Ljava/lang/String;": function (this: JRect) {
-    return `Rect(${this.left}, ${this.top} - ${this.right}, ${this.bottom})`;
-  },
-  "equals(Ljava/lang/Object;)Z": function (this: JRect, o: unknown) {
-    return o instanceof JRect && o.left === this.left && o.top === this.top && o.right === this.right && o.bottom === this.bottom ? 1 : 0;
-  },
-  [`intersect(${F ? "Landroid/graphics/RectF;" : "Landroid/graphics/Rect;"})Z`]: function (this: JRect, o: JRect) {
-    const l = Math.max(this.left, o.left), t = Math.max(this.top, o.top);
-    const r = Math.min(this.right, o.right), b = Math.min(this.bottom, o.bottom);
-    if (l < r && t < b) { this.left = l; this.top = t; this.right = r; this.bottom = b; return 1; }
-    return 0;
-  },
-  [`setIntersect(${F ? "Landroid/graphics/RectF;Landroid/graphics/RectF;" : "Landroid/graphics/Rect;Landroid/graphics/Rect;"})Z`]: function (this: JRect, a: JRect, b: JRect) {
-    if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
-      this.left = Math.max(a.left, b.left); this.top = Math.max(a.top, b.top);
-      this.right = Math.min(a.right, b.right); this.bottom = Math.min(a.bottom, b.bottom);
-      return 1;
-    }
-    return 0;
-  },
-  [`union(${F ? "Landroid/graphics/RectF;" : "Landroid/graphics/Rect;"})V`]: function (this: JRect, o: JRect) {
-    this.left = Math.min(this.left, o.left); this.top = Math.min(this.top, o.top);
-    this.right = Math.max(this.right, o.right); this.bottom = Math.max(this.bottom, o.bottom);
-  },
-  [`intersect(${F ? "FFFF" : "IIII"})Z`]: function (this: JRect, l: number, t: number, r: number, b: number) {
-    if (this.left < r && l < this.right && this.top < b && t < this.bottom) {
-      if (this.left < l) this.left = l; if (this.top < t) this.top = t;
-      if (this.right > r) this.right = r; if (this.bottom > b) this.bottom = b;
-      return 1;
-    }
-    return 0;
-  },
-  [`intersects(${F ? "FFFF" : "IIII"})Z`]: function (this: JRect, l: number, t: number, r: number, b: number) {
-    return this.left < r && l < this.right && this.top < b && t < this.bottom ? 1 : 0;
-  },
-  [`static intersects(${F ? "Landroid/graphics/RectF;Landroid/graphics/RectF;" : "Landroid/graphics/Rect;Landroid/graphics/Rect;"})Z`]: (a: JRect, b: JRect) =>
-    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom ? 1 : 0,
-  [`contains(${F ? "Landroid/graphics/RectF;" : "Landroid/graphics/Rect;"})Z`]: function (this: JRect, o: JRect) {
-    return this.left < this.right && this.top < this.bottom && this.left <= o.left && this.top <= o.top && this.right >= o.right && this.bottom >= o.bottom ? 1 : 0;
-  },
-  [`contains(${F ? "FFFF" : "IIII"})Z`]: function (this: JRect, l: number, t: number, r: number, b: number) {
-    return this.left < this.right && this.top < this.bottom && this.left <= l && this.top <= t && this.right >= r && this.bottom >= b ? 1 : 0;
-  },
-  "toShortString()Ljava/lang/String;": function (this: JRect) { return `[${this.left},${this.top}][${this.right},${this.bottom}]`; },
-  ...(F ? {
-    "round(Landroid/graphics/Rect;)V": function (this: JRect, o: JRect) {
-      o.left = Math.round(this.left); o.top = Math.round(this.top); o.right = Math.round(this.right); o.bottom = Math.round(this.bottom);
-    },
-    "roundOut(Landroid/graphics/Rect;)V": function (this: JRect, o: JRect) {
-      o.left = Math.floor(this.left); o.top = Math.floor(this.top); o.right = Math.ceil(this.right); o.bottom = Math.ceil(this.bottom);
-    },
-  } : {
-    "exactCenterX()F": function (this: JRect) { return (this.left + this.right) * 0.5; },
-    "exactCenterY()F": function (this: JRect) { return (this.top + this.bottom) * 0.5; },
-  }),
-});
-/** Rect, RectF, Point and PointF parcel their coordinates as ints or floats, in field order */
-function parcelGeometry(name: string, fields: string[], float: boolean) {
+/** CREATOR for Rect, RectF, Point and PointF, whose platform <clinit> does not run under a spec:
+ *  it reads the coordinates as ints or floats, in field order, as their readFromParcel does */
+function geometryCreator(name: string, fields: string[], float: boolean) {
   const type = float ? "Float" : "Int", desc = float ? "F" : "I";
   const read = driven(function* readGeometry(o: Record<string, unknown>, p: JParcel): Gen {
     for (const f of fields) o[f] = yield vcall(p, `read${type}`, `()${desc}`);
     return o;
   });
-  return {
-    statics: { get CREATOR() { return parcelCreator(name, (p) => read(rt.make(name) as JObj & Record<string, unknown>, p)); } },
-    methods: {
-      "describeContents()I": () => 0,
-      "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: Record<string, unknown>, p: JParcel): Gen {
-        for (const f of fields) yield vcall(p, `write${type}`, `(${desc})V`, this[f]);
-      }),
-      "readFromParcel(Landroid/os/Parcel;)V": function (this: Record<string, unknown>, p: JParcel) { return read(this, p); },
-    } as NativeSpec["methods"],
-  };
+  return { get CREATOR() { return parcelCreator(name, (p) => read(rt.make(name) as JObj & Record<string, unknown>, p)); } };
 }
-const RECT_FIELDS = ["left", "top", "right", "bottom"], POINT_FIELDS = ["x", "y"];
-const rectParcel = parcelGeometry("android/graphics/Rect", RECT_FIELDS, false);
-rt.register({
-  name: "android/graphics/Rect", ctor: JRect, ifaces: ["android/os/Parcelable"],
-  fields: RECT_FIELDS, statics: rectParcel.statics,
-  methods: { ...rectMethods(false), ...rectParcel.methods },
-});
-export class JRectF extends JRect {}
-const rectFParcel = parcelGeometry("android/graphics/RectF", RECT_FIELDS, true);
-rt.register({
-  name: "android/graphics/RectF", ctor: JRectF, ifaces: ["android/os/Parcelable"],
-  fields: RECT_FIELDS, statics: rectFParcel.statics,
-  methods: { ...rectMethods(true), ...rectFParcel.methods },
-});
+const RECT_FIELDS = ["left", "top", "right", "bottom"], POINT_FIELDS = ["x", "y"], PARCELABLE = ["android/os/Parcelable"];
+// The geometry values keep only their layout, which our stack reads; every method is AOSP's.
+rt.register({ name: "android/graphics/Rect", ctor: JRect, ifaces: PARCELABLE, fields: RECT_FIELDS, statics: geometryCreator("android/graphics/Rect", RECT_FIELDS, false) });
+/** a RectF: its own class, since fallthrough would otherwise give it Rect's same-descriptor bodies */
+export class JRectF extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
+rt.register({ name: "android/graphics/RectF", ctor: JRectF, ifaces: PARCELABLE, fields: RECT_FIELDS, statics: geometryCreator("android/graphics/RectF", RECT_FIELDS, true) });
 export class JPoint extends JObj { x = 0; y = 0; }
-const pointParcel = parcelGeometry("android/graphics/Point", POINT_FIELDS, false);
-rt.register({
-  name: "android/graphics/Point", ctor: JPoint, ifaces: ["android/os/Parcelable"],
-  fields: POINT_FIELDS, statics: pointParcel.statics,
-  methods: {
-    ...pointParcel.methods,
-    "offset(II)V": function (this: JPoint, dx: number, dy: number) { this.x += dx; this.y += dy; },
-    "negate()V": function (this: JPoint) { this.x = -this.x; this.y = -this.y; },
-    "<init>()V": function () {},
-    "<init>(II)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
-    "set(II)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
-    "equals(Ljava/lang/Object;)Z": function (this: JPoint, o: unknown) { return o instanceof JPoint && o.x === this.x && o.y === this.y ? 1 : 0; },
-  },
-});
-const pointFParcel = parcelGeometry("android/graphics/PointF", POINT_FIELDS, true);
-rt.register({
-  name: "android/graphics/PointF", ctor: class extends JPoint {}, ifaces: ["android/os/Parcelable"],
-  fields: POINT_FIELDS, statics: pointFParcel.statics,
-  methods: {
-    ...pointFParcel.methods,
-    "<init>()V": function () {},
-    "<init>(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
-    "<init>(Landroid/graphics/Point;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
-    "<init>(Landroid/graphics/PointF;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
-    "set(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
-    "set(Landroid/graphics/PointF;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
-    "offset(FF)V": function (this: JPoint, dx: number, dy: number) { this.x += dx; this.y += dy; },
-    "negate()V": function (this: JPoint) { this.x = -this.x; this.y = -this.y; },
-    "length()F": function (this: JPoint) { return Math.fround(Math.hypot(this.x, this.y)); },
-    "static length(FF)F": (x: number, y: number) => Math.fround(Math.hypot(x, y)),
-    "equals(FF)Z": function (this: JPoint, x: number, y: number) { return this.x === x && this.y === y ? 1 : 0; },
-    "equals(Ljava/lang/Object;)Z": function (this: JPoint, o: unknown) { return o instanceof JPoint && o.x === this.x && o.y === this.y ? 1 : 0; },
-    "toString()Ljava/lang/String;": function (this: JPoint) { return `PointF(${this.x}, ${this.y})`; },
-  },
-});
+rt.register({ name: "android/graphics/Point", ctor: JPoint, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/Point", POINT_FIELDS, false) });
+rt.register({ name: "android/graphics/PointF", ctor: class extends JObj { x = 0; y = 0; }, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/PointF", POINT_FIELDS, true) });
 
 // android.graphics.Insets — immutable 4-sided inset value (WindowInsets.getInsets() etc).
 export class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
@@ -203,21 +64,7 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
   if (l === 0 && t === 0 && r === 0 && b === 0) return INSETS_NONE;
   const i = new JInsets(); i.left = l; i.top = t; i.right = r; i.bottom = b; return i;
 }
-rt.register({
-  name: "android/graphics/Insets", ctor: JInsets,
-  fields: ["left", "top", "right", "bottom"],
-  statics: { NONE: INSETS_NONE },
-  methods: {
-    "static of(IIII)Landroid/graphics/Insets;": (l: number, t: number, r: number, b: number) => insetsOf(l, t, r, b),
-    "static of(Landroid/graphics/Rect;)Landroid/graphics/Insets;": (r: JRect) => insetsOf(r.left, r.top, r.right, r.bottom),
-    "toString()Ljava/lang/String;": function (this: JInsets) {
-      return `Insets{left=${this.left}, top=${this.top}, right=${this.right}, bottom=${this.bottom}}`;
-    },
-    "equals(Ljava/lang/Object;)Z": function (this: JInsets, o: unknown) {
-      return o instanceof JInsets && o.left === this.left && o.top === this.top && o.right === this.right && o.bottom === this.bottom ? 1 : 0;
-    },
-  },
-});
+rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
 
 /** Color's sColorNameMap, which Color.parseColor and Html's colour attributes both read */
 const COLOR_NAMES: Record<string, number> = {
@@ -2757,7 +2604,7 @@ const regionOps = mkEnumSet("android/graphics/Region$Op", ["DIFFERENCE", "INTERS
 // Region: modelled by its bounds only. What reads a Region back here — a shape drawable's
 // transparent region, a clip op — needs the rectangle; a subtractive op cannot shrink the bounds
 // without real geometry, so it leaves them alone.
-class JRegion extends JRect {}
+class JRegion extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 function setRegion(this: JRegion, l: number, t: number, r: number, b: number) {
   if (l >= r || t >= b) { l = t = r = b = 0; }
   this.left = l; this.top = t; this.right = r; this.bottom = b;
