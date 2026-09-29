@@ -517,6 +517,42 @@ await exercise("Interpolator (device values)", async () => {
 /** "NAME a b" with each number as the float nearest the device's printed value */
 function fl(s: string) { const [name, ...v] = s.split(" "); return [name, ...v.map((x) => Math.fround(+x))].join(" "); }
 
+await exercise("NinePatch (device values)", async () => {
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  /** Res_png_9patch, serialized: the header, then xDivs, yDivs and colors */
+  const chunk = (xs: number[], ys: number[], colors: number[]) => {
+    const b = new DataView(new ArrayBuffer(32 + (xs.length + ys.length + colors.length) * 4));
+    b.setUint8(1, xs.length); b.setUint8(2, ys.length); b.setUint8(3, colors.length);
+    [1, 2, 3, 4].forEach((v, i) => b.setInt32(12 + i * 4, v, true));
+    [...xs, ...ys, ...colors].forEach((v, i) => b.setInt32(32 + i * 4, v, true));
+    return new Int8Array(b.buffer);
+  };
+  const cfg = ((await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>).s$ARGB_8888;
+  const bmp = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 30, 30, cfg);
+  const rects = async (r: unknown) => {
+    if (!r) return "null";
+    const it = await newObj("android/graphics/RegionIterator", "(Landroid/graphics/Region;)V", r), rc = await newObj("android/graphics/Rect", "()V") as any, out: string[] = [];
+    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
+    return out.join(" ");
+  };
+  const transparent = async (np: unknown, ...dst: number[]) =>
+    rects(await vcall(np, "getTransparentRegion", "(Landroid/graphics/Rect;)Landroid/graphics/Region;", await newObj("android/graphics/Rect", "(IIII)V", ...dst)));
+  const centre = chunk([10, 20], [10, 20], [1, 1, 1, 1, 0, 1, 1, 0, 1]);
+  const np = await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, centre);
+  same("transparent patches", await transparent(np, 0, 0, 100, 50), "10,10,90,50");
+  same("shrunk away", await transparent(np, 5, 5, 20, 20), "null");
+  same("none transparent", await transparent(await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, chunk([10, 20], [10, 20], [1, 1, 1, 1, 1, 1, 1, 1, 1])), 0, 0, 100, 50), "null");
+  same("edge divs", await transparent(await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, chunk([0, 10], [10, 30], [0, 1, 1, 0])), 0, 0, 100, 50), "0,0,80,10 80,10,100,50");
+  const isChunk = (c: Int8Array | null) => scall("android/graphics/NinePatch", "isNinePatchChunk", "([B)Z", c);
+  same("isNinePatchChunk", [await isChunk(centre), await isChunk(new Int8Array(10)), await isChunk(null)], [1, 0, 0]);
+  same("density and size", [await vcall(np, "getDensity", "()I"), await vcall(np, "getWidth", "()I"), await vcall(np, "getHeight", "()I")],
+    [await vcall(bmp, "getDensity", "()I"), 30, 30]);
+  let thrown = "";
+  try { await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", bmp, new Int8Array(8)); }
+  catch (e) { thrown = String(await vcall(e, "toString", "()Ljava/lang/String;")); }
+  same("short chunk", thrown, "java.lang.RuntimeException: Array too small for chunk.");
+});
+
 await exercise("Bitmap.createBitmap + pixels", async () => {
   const cfg = await linkInit("android/graphics/Bitmap$Config");
   const argb = (cfg.ctor as Record<string, unknown>).s$ARGB_8888;

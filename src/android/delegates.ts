@@ -21,6 +21,7 @@ import {
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
+  type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches, drawPatch,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
@@ -845,6 +846,21 @@ delegate("android/graphics/Interpolator", {
   "nativeTimeToValues(JI[F)I": (h: bigint, msec: number, values: Float32Array | null) => keyFrames(h).timeToValues(msec, values),
 });
 
+// ── android.graphics.NinePatch: its chunk deserialized ─────────────────────────────────
+// NinePatch frees its chunk from finalize(), which never runs here
+delegate("android/graphics/NinePatch", {
+  "isNinePatchChunk([B)Z": (chunk: Int8Array | null) => +isNinePatchChunk(chunk),
+  "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => handle(validNinePatchChunk(chunk)),
+  "nativeFinalize(J)V": release,
+  "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, dst: Rect) => {
+    const bmp = deref<JBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
+    if (!rects.length) return 0n;
+    const r = new NativeRegion();
+    r.setRects(rects);
+    return handle(r);
+  },
+});
+
 // ── android.graphics.Canvas / BaseCanvas ───────────────────────────────────────────────
 // Every one of these routes into canvasMethods, which is the table our own Canvas native
 // already uses: one copy of each draw body, reached under two sets of names.
@@ -964,11 +980,8 @@ delegate("android/graphics/BaseCanvas", {
     doubleRoundRect(canvas(h), [ol, ot, or, ob], [orx, ory], [il, it, ir, ib], [irx, iry], paint(pt)),
   "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array, il: number, it: number, ir: number, ib: number, irad: Float32Array, pt: bigint) =>
     doubleRoundRect(canvas(h), [ol, ot, or, ob], [orad[0], orad[1]], [il, it, ir, ib], [irad[0], irad[1]], paint(pt)),
-  // a nine-patch's stretch regions live in its chunk, which the drawable layer already
-  // resolves; from here it is the bitmap scaled into the destination
-  "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, _chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint) =>
-    cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), deref<JBitmap>(b) as never, null as never, rect(l, t, r, bo) as never, optPaint(pt) as never),
+  "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint, dstDensity: number, srcDensity: number) =>
+    drawPatch(canvas(h), deref<JBitmap>(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(pt), dstDensity, srcDensity),
   // positioned glyph ids, which only a shaping engine produces: there is none behind
   // Canvas2D, and the text entry points above are what the framework actually uses
   "nDrawGlyphs(J[I[FIIIJJ)V": () => {},

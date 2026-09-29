@@ -80,7 +80,7 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
       const bitmap = yield decode(source, listener);
       const density: number = yield vcall(source, "getDensity", "()I");
       if (density) bitmap.density = density;
-      return drawableFromBitmap(bitmap, device.densityDpi, null);
+      return drawableFromBitmap(bitmap, device.densityDpi);
     }),
   "setTargetSize(II)V": function (this: JImageDecoder, width: number, height: number) {
     if (width <= 0 || height <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Target size must be positive");
