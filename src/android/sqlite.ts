@@ -654,7 +654,7 @@ class JSQLiteProgram extends JObj {
   binds: unknown[] = [];
 }
 rt.register({
-  name: "android/database/sqlite/SQLiteProgram", ctor: JSQLiteProgram, ifaces: ["java/io/Closeable"],
+  name: "android/database/sqlite/SQLiteProgram", ctor: JSQLiteProgram, ifaces: ["java/io/Closeable"], fields: { mSql: "sql" },
   methods: {
     "bindString(ILjava/lang/String;)V": function (this: JSQLiteProgram, i: number, v: string) { this.binds[i - 1] = v; },
     "bindLong(IJ)V": function (this: JSQLiteProgram, i: number, v: bigint) { this.binds[i - 1] = v; },
