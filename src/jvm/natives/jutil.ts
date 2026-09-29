@@ -98,9 +98,24 @@ function entryComparator(accessor: "getKey" | "getValue", comparator: unknown) {
     await vcall(left, accessor, "()Ljava/lang/Object;"),
     await vcall(right, accessor, "()Ljava/lang/Object;")));
 }
+// Map.Entry's equality and text, shared by the map entries and AbstractMap's
+const GETKEY_NAME = mangleMethod("getKey", "()Ljava/lang/Object;");
+const GETVALUE_NAME = mangleMethod("getValue", "()Ljava/lang/Object;");
+const entryEquals = driven(function* (this: { e: Ent }, o: unknown): Gen {
+  if (o === this) return 1;
+  const gk = (o as any)?.[GETKEY_NAME], gv = (o as any)?.[GETVALUE_NAME];
+  if (typeof gk !== "function" || typeof gv !== "function") return 0; // not a Map.Entry
+  if (!(yield jeq(this.e.k, yield vcall(o, "getKey", "()Ljava/lang/Object;")))) return 0;
+  return (yield jeq(this.e.v, yield vcall(o, "getValue", "()Ljava/lang/Object;"))) ? 1 : 0;
+});
+const valueText = (x: unknown): string | Promise<string> =>
+  x == null ? "null" : typeof x === "object" ? vcall(x, "toString", "()Ljava/lang/String;") : String(x);
+function entryText(this: { e: Ent }) { return after(valueText(this.e.k), (k) => after(valueText(this.e.v), (v) => k + "=" + v)); }
 rt.register({
   name: "webdroid/MapEntry", ctor: JMapEntry, ifaces: ["java/util/Map$Entry"],
   methods: {
+    "equals(Ljava/lang/Object;)Z": entryEquals,
+    "toString()Ljava/lang/String;": entryText,
     "getKey()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.v; },
     "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) {
@@ -115,8 +130,6 @@ rt.register({
 });
 
 // AbstractMap.SimpleImmutableEntry and its mutable sibling SimpleEntry, which only adds setValue
-const GETKEY_NAME = mangleMethod("getKey", "()Ljava/lang/Object;");
-const GETVALUE_NAME = mangleMethod("getValue", "()Ljava/lang/Object;");
 class JSimpleImmutableEntry extends JObj {
   e: Ent = { k: null, v: null };
 }
@@ -134,23 +147,12 @@ rt.register({
     "getKey()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.v; },
     "setValue(Ljava/lang/Object;)Ljava/lang/Object;": uoe,
-    "equals(Ljava/lang/Object;)Z": driven(function* (this: JSimpleImmutableEntry, o: unknown): Gen {
-      if (o === this) return 1;
-      const gk = (o as any)?.[GETKEY_NAME], gv = (o as any)?.[GETVALUE_NAME];
-      if (typeof gk !== "function" || typeof gv !== "function") return 0; // not a Map.Entry
-      const rk = jeq(this.e.k, yield vcall(o, "getKey", "()Ljava/lang/Object;"));
-      if (!(rk instanceof Promise ? yield rk : rk)) return 0;
-      const rv = jeq(this.e.v, yield vcall(o, "getValue", "()Ljava/lang/Object;"));
-      return (rv instanceof Promise ? yield rv : rv) ? 1 : 0;
-    }),
+    "equals(Ljava/lang/Object;)Z": entryEquals,
     "hashCode()I": driven(function* (this: JSimpleImmutableEntry): Gen {
       const rk = jhash(this.e.k), rv = jhash(this.e.v);
       return ((rk instanceof Promise ? yield rk : rk) ^ (rv instanceof Promise ? yield rv : rv)) | 0;
     }),
-    "toString()Ljava/lang/String;": driven(function* (this: JSimpleImmutableEntry): Gen {
-      const str = async (x: unknown) => (x === null ? "null" : String(typeof x === "object" ? await vcall(x, "toString", "()Ljava/lang/String;") : x));
-      return `${yield str(this.e.k)}=${yield str(this.e.v)}`;
-    }),
+    "toString()Ljava/lang/String;": entryText,
   },
 });
 
@@ -1049,6 +1051,11 @@ function* allEnts(s: { m: Map<unknown, Ent>; slow: Ent[] }): Generator<Ent> {
   }
   while (j < slow.length) yield slow[j++];
 }
+/** AbstractCollection.remove over values(): the first mapping whose value `o` equals */
+const firstValue = driven(function* firstValue(map: JMap, o: unknown): Gen<Ent | undefined> {
+  for (const entry of [...allEnts(map)]) if (o === null ? entry.v === null : yield jeq(o, entry.v)) return entry;
+  return undefined;
+});
 function mapEquals(entries: Ent[], other: unknown, from = 0): number | Promise<number> {
   for (let i = from; i < entries.length; i++) {
     const entry = entries[i];
@@ -1189,30 +1196,60 @@ for (let count = 0; count <= 10; count++) {
 /** live-ish view over a JMap for keySet/values/entrySet (iteration + size + contains + remove) */
 class JSetView extends JObj {
   constructor(public map: JMap, public kind: "k" | "v" | "e") { super(); }
+  elem(e: Ent): unknown { return this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e, this.map.mutable); }
   snapshot(entries: Iterable<Ent> = allEnts(this.map)): unknown[] {
     const out: unknown[] = [];
-    for (const e of entries) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e, this.map.mutable));
+    for (const e of entries) out.push(this.elem(e));
     return out;
   }
 }
 /** values() is a plain Collection: its equality stays Object's identity */
 class JValuesView extends JSetView {}
 function setViewStream(this: JSetView) { return mkStream(this.snapshot()); }
+/** drop `entry` if it is still the map's mapping for its key */
+function removeEnt(map: JMap, entry: Ent): void {
+  ensureMapMutable(map);
+  const key = mapKeyFor(map, entry.k);
+  if (key !== SLOW) {
+    if (map.m.get(key) === entry) map.m.delete(key);
+  } else {
+    const index = map.slow.indexOf(entry);
+    if (index >= 0) { map.slow.splice(index, 1); map.slowVersion++; }
+  }
+}
+function entOf(map: JMap, k: unknown): Ent | undefined | Promise<Ent | undefined> {
+  const key = mapKeyFor(map, k);
+  if (key !== SLOW) return map.m.get(key);
+  return after(slowFind(map.slow, k), (i) => (i < 0 ? undefined : map.slow[i]));
+}
+/** the mapping an entry-set member names: same key, and a value equal as the map's own entry judges it */
+function mappingOf(map: JMap, o: unknown): Ent | undefined | Promise<Ent | undefined> {
+  const match = (k: unknown, v: unknown) => after(entOf(map, k), (entry) => entry === undefined ? undefined
+    : after(map.identity ? +(entry.v === v) : jeq(entry.v, v), (equal) => (equal ? entry : undefined)));
+  if (o instanceof JMapEntry) return match(o.e.k, o.e.v);
+  if (!(o instanceof JObj) || !rt.iof(o, "java/util/Map$Entry")) return undefined;
+  return after(entryKey(o), (k) => after(entryVal(o), (v) => match(k, v)));
+}
+function viewContains(view: JSetView, o: unknown): unknown {
+  if (view.kind === "k") return vcall(view.map, "containsKey", "(Ljava/lang/Object;)Z", o);
+  if (view.kind === "v") return vcall(view.map, "containsValue", "(Ljava/lang/Object;)Z", o);
+  return after(mappingOf(view.map, o), (entry) => (entry ? 1 : 0));
+}
+/** AbstractCollection.removeAll/retainAll: each member `c` does (or, retaining, does not) contain goes */
+const viewFilter = driven(function* viewFilter(view: JSetView, c: unknown, remove: boolean): Gen<number> {
+  if (c === null) rt.npe();
+  let changed = 0;
+  for (const entry of [...allEnts(view.map)]) {
+    if (((yield vcall(c, "contains", "(Ljava/lang/Object;)Z", view.elem(entry))) !== 0) === remove) { removeEnt(view.map, entry); changed = 1; }
+  }
+  return changed;
+});
 const mapViewMethods: Methods = {
   "size()I": function (this: JSetView) { return this.map.m.size + this.map.slow.length; },
   "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
   "iterator()Ljava/util/Iterator;": function (this: JSetView) {
     const entries = [...allEnts(this.map)], values = this.snapshot(entries);
-    const iterator = mkIter(values, { removeAt: (i) => {
-      const entry = entries[i], key = mapKeyFor(this.map, entry.k);
-      if (key !== SLOW) {
-        if (this.map.m.get(key) === entry) this.map.m.delete(key);
-      } else {
-        const index = this.map.slow.indexOf(entry);
-        if (index >= 0) { this.map.slow.splice(index, 1); this.map.slowVersion++; }
-      }
-      entries.splice(i, 1); values.splice(i, 1);
-    } });
+    const iterator = mkIter(values, { removeAt: (i) => { removeEnt(this.map, entries[i]); entries.splice(i, 1); values.splice(i, 1); } });
     iterator.readOnly = !this.map.mutable;
     return iterator;
   },
@@ -1221,46 +1258,30 @@ const mapViewMethods: Methods = {
   }),
   "stream()Ljava/util/stream/Stream;": setViewStream,
   "parallelStream()Ljava/util/stream/Stream;": setViewStream,
-  "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
-    if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
-    return after(indexIn(this.snapshot(), v), (i) => (i >= 0 ? 1 : 0));
-  },
-  "remove(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
-    if (this.kind !== "k") return 0;
-    return after(vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v), (r) => (r !== null ? 1 : 0));
+  "contains(Ljava/lang/Object;)Z": function (this: JSetView, o: unknown) { return viewContains(this, o); },
+  "remove(Ljava/lang/Object;)Z": function (this: JSetView, o: unknown) {
+    if (this.kind === "k") {
+      if (!this.map.mutable) return after(vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", o) as number | Promise<number>, changes);
+      return after(vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", o), (r) => (r !== null ? 1 : 0));
+    }
+    if (this.kind === "e") return after(mappingOf(this.map, o), (entry) => entry ? (removeEnt(this.map, entry), 1) : 0);
+    return after(firstValue(this.map, o), (entry) => entry ? (removeEnt(this.map, entry), 1) : 0);
   },
   "toArray()[Ljava/lang/Object;": function (this: JSetView) { return jarray(this.snapshot()); },
   "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSetView, out: unknown[]) {
     return fillToArray(this.snapshot(), out);
   },
+  // AbstractSet.removeAll removes each of a smaller `c` in turn; values() is AbstractCollection's
   "removeAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
-    if (this.kind !== "k") return 0;
-    let ch = 0;
-    for (const v of yield toJsArray(c)) {
-      const r = yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v);
-      if (r !== null) ch = 1;
-    }
-    return ch;
+    if (c === null) rt.npe();
+    if (this.kind === "v" || this.map.m.size + this.map.slow.length <= (yield size(c))) return viewFilter(this, c, true);
+    let changed = 0;
+    for (const o of (yield toJsArray(c)).slice()) if (yield vcall(this, "remove", "(Ljava/lang/Object;)Z", o)) changed = 1;
+    return changed;
   }),
-  "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
-    if (this.kind !== "k") return 0;
-    const keep = yield toJsArray(c);
-    let ch = 0;
-    for (const k of this.snapshot()) {
-      if ((yield indexIn(keep, k)) < 0) {
-        yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-        ch = 1;
-      }
-    }
-    return ch;
-  }),
+  "retainAll(Ljava/util/Collection;)Z": function (this: JSetView, c: unknown) { return viewFilter(this, c, false); },
   "containsAll(Ljava/util/Collection;)Z": driven(function* (this: JSetView, c: unknown): Gen {
-    if (this.kind === "k") {
-      for (const v of yield toJsArray(c)) if (!(yield vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v))) return 0;
-      return 1;
-    }
-    const snap = this.snapshot();
-    for (const v of yield toJsArray(c)) if ((yield indexIn(snap, v)) < 0) return 0;
+    for (const o of yield toJsArray(c)) if (!(yield viewContains(this, o))) return 0;
     return 1;
   }),
   "clear()V": function (this: JSetView) {

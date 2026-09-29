@@ -487,6 +487,24 @@ describe("map-equality", () => {
     expect(await equals(deque, await newObj("java/util/ArrayDeque"))).toBe(0);
   });
 
+  test("entry and value views look mappings up and remove them", async () => {
+    const target = await map();
+    await put(target, "a", "1");
+    await put(target, new Value(7), "x");
+    await put(target, "b", "2");
+    const entry = (k: unknown, v: unknown) => newObj("java/util/AbstractMap$SimpleEntry", `(${O}${O})V`, k, v);
+    const entries = await vcall(target, "entrySet", "()Ljava/util/Set;");
+    expect(await vcall(entries, "contains", `(${O})Z`, await entry(new Value(7), "x"))).toBe(1);
+    expect(await vcall(entries, "contains", `(${O})Z`, await entry("a", "2"))).toBe(0);
+    expect(await vcall(entries, "remove", `(${O})Z`, await entry("a", "2"))).toBe(0);
+    expect(await vcall(entries, "removeAll", "(Ljava/util/Collection;)Z", newArrayList([await entry("a", "1")]))).toBe(1);
+    expect(await vcall(entries, "retainAll", "(Ljava/util/Collection;)Z", newArrayList([await entry(new Value(7), "x")]))).toBe(1);
+    expect(await vcall(target, "size", "()I")).toBe(1);
+    const values = await vcall(target, "values", "()Ljava/util/Collection;");
+    expect(await vcall(values, "remove", `(${O})Z`, "x")).toBe(1);
+    expect(await vcall(target, "isEmpty", "()Z")).toBe(1);
+  });
+
   test("List equality walks an overriding subclass's iterator rather than its storage", async () => {
     class Shadow extends rt.link("java/util/ArrayList").ctor {}
     rt.register({ name: "test/ShadowList", ctor: Shadow, sup: "java/util/ArrayList", methods: {
