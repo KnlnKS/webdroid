@@ -6,6 +6,7 @@ import { JInputStream } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { scall } from "./java";
+import { decodeString, encodeString } from "../src/jvm/charset";
 
 rt.linkNatives();
 
@@ -59,6 +60,20 @@ describe("charbuffer-sequence", () => {
     await expect(vcallAsync(slice, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
     await expect(vcallAsync(b, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
   });
+  test("UTF-16 and UTF-32 match the reference device's byte orders, marks and replacements", async () => {
+    const hex = (b: Int8Array) => [...b].map((x) => (x & 255).toString(16).padStart(2, "0")).join("");
+    const text = (name: string, h: string) => decodeString(Uint8Array.from(h.match(/../g)!.map((x) => parseInt(x, 16))), name);
+    expect(hex(encodeString("A\u00e9\ud83d\ude00", "UTF-32"))).toBe("fffe000041000000e900000000f60100");
+    expect(hex(encodeString("A\ud800x", "UTF-32BE"))).toBe("000000410000fffd00000078");
+    expect(hex(encodeString("", "UTF-16"))).toBe("");
+    expect(text("UTF-32", "0000004142000000")).toBe("A\ufffd");
+    expect(text("utf_32", "fffe000041000000")).toBe("A");
+    expect(text("UTF-32BE", "0000feff00000041")).toBe("\ufeffA");
+    const encoder = await vcall(await scall("java/nio/charset/Charset", "forName", "(Ljava/lang/String;)Ljava/nio/charset/Charset;", "UTF-16LE"), "newEncoder", "()Ljava/nio/charset/CharsetEncoder;");
+    expect(hex(await vcall(encoder, "replacement", "()[B"))).toBe("fdff");
+    expect(await vcall(encoder, "maxBytesPerChar", "()F")).toBe(2);
+  });
+
   test("one-shot charset encoding consumes UTF-16 input and reports malformed surrogates", async () => {
     const charset = rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8;
     const encoder = await vcall(charset, "newEncoder", "()Ljava/nio/charset/CharsetEncoder;");
