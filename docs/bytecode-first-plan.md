@@ -395,7 +395,8 @@ interpreting and 47–93 ms compiling after a tap.
   - Where throws appear in tap breakdowns, omit capture for throwables the compiler proves
     are caught without their trace being read.
 - **Stable object shapes.** Generated constructors initialize every field in declaration
-  order, and no properties are added after construction.
+  order, and no properties are added after construction, except an object's monitor (`$mon`),
+  added on its first lock.
 - **Frame work** (measure, layout, draw, display-list replay and present) fits the host
   display frame. Only dirty regions redraw, and there is no synchronous GPU readback on the
   presentation path.
@@ -597,9 +598,12 @@ commit message states what it measured. The implementation history (the 2026-09-
   (`binderServices` in `src/android/binder.ts` is empty), so Shizuku's `ServiceManager.getService
   ("activity")` reports a gap in every Mihon and Komikku run; audio, window, activity_task,
   connectivity, webviewupdate and media_projection are missing (Stage D.3). Resumable bodies keep the
-  dispatch loop. Cut 4 leftovers: PrintStream needs `System.out`/`err` as bytecode streams; libcore's
-  Buffered streams are 1.13x slower on byte streams. `Charset.availableCharsets()` reaches
-  NativeConverter natives; the other 217 ICU charsets are not served. The TS TreeMap's `keySet()`
+  dispatch loop. Cut 4 is done but for the ObjectStreams (they wait for B.4); byte-at-a-time calls into
+  libcore's synchronized streams stay 1.8x to 4.4x slower than the TS bodies were (monitor plus frame
+  cost, see §9 "Done in Stage B"), and libcore's DeflaterOutputStreamTest times out: the TS executor's
+  worker never reports `isAlive() == false`, which PipedInputStream waits for.
+  `Charset.availableCharsets()` reaches NativeConverter natives; the other 217 ICU charsets are not
+  served (luni-io's `ByteArrayOutputStream.toString("8859_2")` test fails on it). The TS TreeMap's `keySet()`
   seems not to be a SortedSet: guava's Maps suite fails to initialise (unconfirmed).
 - **Continue with the whole plan.** Work through "Next steps, in plan order" below, then the rest of
   the plan's stages (C to F), under the standing constraints and gates above.
@@ -692,9 +696,20 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   FileOutputStream and RandomAccessFile over the Linux read/write/pread/pwrite/fstat natives. TS
   reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel stays TS, as
   `sun/nio/ch/FileChannelImpl` over the stream's descriptor. luni-io went from 974 to 1,012.
-- **java.io Writer, Reader and DataOutputStream (B.7 cut 4, partial).** Writer and Reader and their
-  subclasses run from libcore, with BufferedReader over them staying TS; an InputStream subclass is
-  read through its own `read()`. luni-io went from 1,014 to 1,219.
+- **java.io streams (B.7 cut 4).** Writer and Reader and their subclasses, and InputStream,
+  OutputStream and every stream class but the ObjectStreams, with java.util.zip's Checked streams and
+  InflaterInputStream and java.security's Digest streams; BufferedReader stays TS. System.out/err/in
+  come from System's `<clinit>` over descriptors 0 to 2, and zygoteInit redirects out and err to
+  logcat through `RuntimeInit.redirectLogStreams` (AndroidPrintStream). TS stream subclasses
+  re-parent onto libcore's classes (`filterIn`/`filterOut` reach the wrapped stream, `heldByteReads`/
+  `heldByteWrites` serve TS streams holding bytes); `streamOf` makes a libcore ByteArrayInputStream,
+  and a lazy asset is an `AssetManager$AssetInputStream`. It needed an object's monitor on the object
+  (`$mon`, loaded at the compiled site) and constructors and private methods called through
+  class-unique prototype names (V8 never inlined a `.call`). In V8, buffered, pushback, Data and
+  Print streams run 1.1x to 3.8x faster than TS and bulk reads and writes match; byte-at-a-time
+  ByteArrayInputStream.read(), BufferedOutputStream.write(int) and ByteArrayOutputStream.write(int)
+  cost 4.2, 5.0 and 8.2 ns against 2.2, 2.4 and 1.9. luni-io went from 1,014 to 1,275 (one
+  `toString("8859_2")` test lost: the TS stream ignored the charset).
 - **android.text.Html.** AOSP's HtmlToSpannedConverter over TagSoup from ext.jar, so a TagHandler
   gets the real XMLReader. It needed getSpans to report zero-length marks at query edges. About
   260 µs per 2 KB comment against 60 µs in TS, and about 50 ms on the first call.
@@ -781,11 +796,12 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      the rest; single classes need an exact-match form. About 60 TS sites read TS layout
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
      blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
-   - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 4 in part (Writer, Reader,
-     DataOutputStream), 7a (java.net leaf classes), 7b (URI and cookies) and 7c (URL and its
+   - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 4 (java.io but the
+     ObjectStreams), 7a (java.net leaf classes), 7b (URI and cookies) and 7c (URL and its
      handlers). **Next in cut 7:** URLConnection's base (`getContentHandler`, the content handler
-     statics) and InetAddress/InetSocketAddress, then sockets (cut 8). Moving ByteArrayInputStream
-     to libcore unblocks JarVerifier, after which ClassPathURLStreamHandler's TS constructor goes.
+     statics) and InetAddress/InetSocketAddress, then sockets (cut 8). ByteArrayInputStream is
+     libcore's now, which unblocks JarVerifier: ClassPathURLStreamHandler's TS constructor can go
+     (check TikTok's v1-signed apk, whose MANIFEST.MF is 2.2 MB).
      **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
      getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,
      which fflate's push API does not expose; there is no line or speed gain to pay for that risk.
@@ -797,9 +813,9 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      (§4.7); the paged mapping is done (item 4). (6) java/nio/file, then ZipFile.
      (7) java.net value classes (URI blocks the cookie classes: AOSP's cookie store needs
      `URI.compareTo`). (8) sockets over `native/net.ts`.
-   - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, asset
-     streams (`streamOfSource`), and probably the Buffers and charset codecs.
-   - `luni-io` (1,012 of 1,543 after cut 3) is the conformance suite for cut 4.
+   - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, lazy asset
+     streams (`AssetManager$AssetInputStream`), and probably the Buffers and charset codecs.
+   - `luni-io` (1,275 of 1,541 after cut 4) is the conformance suite for java.io and java.util.zip.
    - Cut 3 limits. Unbuffered IO pays a syscall per call, as on a device: RandomAccessFile.readLine
      reads a byte at a time (about 30x the TS time), readInt 2.4x, 1-byte FileOutputStream writes
      8x; 8 KB and buffered patterns match. Streams nobody closes keep their descriptor, since no
@@ -811,8 +827,10 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
    String-keyed HashMap, LinkedHashMap, HashSet and small allocations, and first use costs 5 to
    16 ms more. Not flipped, and the refactor below is not started: the loss is about 2 ns per
    compiled frame (`ArrayList.get` is four), so the next step is cheaper leaf frames in the hot tier
-   (§4.6), then remeasure the same workloads in V8. With the cut guava's Maps
-   suite runs (213,181 passes; TS fails its initialization) and jsr166 gains 72; the 9,469 guava
+   (§4.6), then remeasure the same workloads in V8. Two frame costs are fixed since (cut 4): V8 never
+   inlined an invoke-direct target (constructors, private methods) called through `.call`, and every
+   monitor enter/exit took a megamorphic lookup; invoke-super still calls through `.call`. With the
+   cut guava's Maps suite runs (213,181 passes; TS fails its initialization) and jsr166 gains 72; the 9,469 guava
    regressions are TS consumers (reserialization, `Collections.reverse` on `l.a`). The blocker is TS
    code built on the TS objects: `newArrayList` (83 sites in 28 files; a bytecode ArrayList needs
    class init and a constructor that can suspend), `toJsArray` (42, already Java-call based),
