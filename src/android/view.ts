@@ -2,7 +2,7 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JOutline, clipEmptyCanvas, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize, cslBoundary } from "./drawable";
@@ -446,7 +446,7 @@ export class JView extends JObj {
   surfaceLayer: OffscreenCanvas | ImageBitmap | VideoFrame | null = null;
   surfaceBacked = false;
   syncSurface(): void {}
-  surfaceTransform: JMatrix["m"] | null = null;
+  surfaceTransform: Mat | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
   translationX = 0; translationY = 0; translationZ = 0;
@@ -490,7 +490,7 @@ export class JView extends JObj {
   tooltip: unknown = null;
   /** the running android.view.animation.Animation and the transformation it last produced */
   jAnim: unknown = null;
-  animTf: { alpha: number; matrix: { m: number[] } } | null = null;
+  animTf: { alpha: number; mat: Mat } | null = null;
   /** properties few views ever set, allocated on the first write */
   rare: ViewRare | null = null;
 
@@ -834,8 +834,7 @@ export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?
     const tf = v.animTf;
     if (tf) {
       if (tf.alpha < 1) ctx.globalAlpha *= tf.alpha;
-      const m = tf.matrix.m;
-      if (m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0) ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+      if (!isIdentity(tf.mat)) applyMatrix(ctx, tf.mat);
     }
     if (v.rotationV || v.scaleXv !== 1 || v.scaleYv !== 1) {
       const px = v.pivotXv ?? v.width() / 2, py = v.pivotYv ?? v.height() / 2;
@@ -959,7 +958,7 @@ function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
     ctx.beginPath();
     ctx.rect(0, 0, v.width(), v.height());
     ctx.clip();
-    ctx.transform(...v.surfaceTransform);
+    applyMatrix(ctx, v.surfaceTransform);
     ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
     ctx.restore();
   } else ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
@@ -1538,15 +1537,11 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
     return scrolled;
   }),
   "getMatrix()Landroid/graphics/Matrix;": function (this: JView) {
-    const m = new JMatrix();
     const px = this.pivotXv ?? this.width() / 2, py = this.pivotYv ?? this.height() / 2;
-    let a = [1, 0, 0, 1, this.translationX, this.translationY] as [number, number, number, number, number, number];
-    if (this.rotationV) a = matMul(a, rotM(this.rotationV, px, py));
-    if (this.scaleXv !== 1 || this.scaleYv !== 1) {
-      a = matMul(a, [this.scaleXv, 0, 0, this.scaleYv, px - this.scaleXv * px, py - this.scaleYv * py]);
-    }
-    m.m = a;
-    return m;
+    let m = translateM(this.translationX, this.translationY);
+    if (this.rotationV) m = mul(m, about(rotateM(this.rotationV), px, py));
+    if (this.scaleXv !== 1 || this.scaleYv !== 1) m = mul(m, about(scaleM(this.scaleXv, this.scaleYv), px, py));
+    return javaMatrix(m);
   },
   "hashCode()I": function (this: JView) { return idHash(this); },
   "getY()F": function (this: JView) { return this.top + this.translationY; },

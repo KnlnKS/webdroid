@@ -15,7 +15,7 @@ import { newArrayList } from "../jvm/natives/jutil";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
 import { JEditable, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate, rootOf } from "./view";
-import { JMatrix } from "./graphics";
+import { matrixOf, javaMatrix, identity, type Mat } from "./graphics";
 import { AID, type JAttrSet, obtainStyled } from "./res";
 import { loadDrawableRV } from "./drawable";
 import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, textDiff, fireEditorAction, editorAction } from "./textview";
@@ -376,7 +376,7 @@ rt.register({
 class JCursorAnchorInfo extends JObj {
   selStart = -1; selEnd = -1; compStart = -1; compText: unknown = null;
   marker: number[] | null = null; markerFlags = 0;
-  bounds: number[] = []; matrix: JMatrix | null = null;
+  bounds: number[] = []; matrix: Mat | null = null;
 }
 rt.register({
   name: "android/view/inputmethod/CursorAnchorInfo", ctor: JCursorAnchorInfo, ifaces: ["android/os/Parcelable"],
@@ -389,9 +389,7 @@ rt.register({
     "getInsertionMarkerBaseline()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[2] : NaN; },
     "getInsertionMarkerBottom()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[3] : NaN; },
     "getMatrix()Landroid/graphics/Matrix;": function (this: JCursorAnchorInfo) {
-      const m = new JMatrix();
-      if (this.matrix) m.m = [...this.matrix.m];
-      return m;
+      return javaMatrix(this.matrix ? Float64Array.from(this.matrix) : identity());
     },
     ...PARCELABLE,
   },
@@ -419,10 +417,8 @@ rt.register({
       this.info.bounds.push(i, l, t, r, b, f);
       return this;
     },
-    [`setMatrix(Landroid/graphics/Matrix;)${CAB}`]: function (this: JCursorAnchorInfoBuilder, m: JMatrix | null) {
-      const c = new JMatrix();
-      if (m) c.m = [...m.m];
-      this.info.matrix = c; this.matrixSet = true;
+    [`setMatrix(Landroid/graphics/Matrix;)${CAB}`]: function (this: JCursorAnchorInfoBuilder, m: object | null) {
+      this.info.matrix = m ? Float64Array.from(matrixOf(m)) : identity(); this.matrixSet = true;
       return this;
     },
     [`addVisibleLineBounds(FFFF)${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },

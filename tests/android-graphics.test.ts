@@ -1,10 +1,10 @@
 import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
 import "../src/natives";
-import { JCanvas, JPaint, JMatrix, locateDrawnText, fillFontMetrics, mkTypeface, JTypeface, setFamilyMetrics, matrixColor } from "../src/android/graphics";
+import { JCanvas, JPaint, locateDrawnText, fillFontMetrics, mkTypeface, JTypeface, setFamilyMetrics, matrixColor } from "../src/android/graphics";
 import { JPath, pathIsConvex, pathTransform } from "../src/android/path";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
-import { newObj, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
+import { newObj, linkInit, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
 import { JTextView } from "../src/android/textview";
 import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 import { ST, JDrawable } from "../src/android/drawable";
@@ -42,7 +42,7 @@ describe("canvas-text", () => {
   test("Canvas maps layered semantic text through its parent transform", async () => {
     const cv = canvas(), paint = new JPaint();
     const owner = semanticOwner();
-    cv.semanticBase = [1, 0, 0, 1, 100, 200];
+    cv.semanticBase = { a: 1, b: 0, c: 0, d: 1, e: 100, f: 200 } as DOMMatrix;
     cv.semanticOwner = owner;
 
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "layered", 0, 0, paint);
@@ -518,20 +518,21 @@ describe("matrix", () => {
 
 describe("matrix-fit", () => {
   rt.linkNatives();
-  const fit = (name: string) => (rt.link("android/graphics/Matrix$ScaleToFit").ctor as any)[mangleStaticField(name)];
+  const values = async (m: unknown) => { const v = new Float32Array(9); await vcall(m, "getValues", "([F)V", v); return [...v]; };
+  const fit = async (name: string) => ((await linkInit("android/graphics/Matrix$ScaleToFit")).ctor as any)[mangleStaticField(name)];
   const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/RectF", "(FFFF)V", l, t, r, b);
 
   test("Matrix.setRectToRect maps the source onto the destination per ScaleToFit", async () => {
     const m = await newObj("android/graphics/Matrix", "()V");
     const src = await rect(0, 0, 100, 50), dst = await rect(10, 10, 210, 210);
-    expect(await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", src, dst, fit("FILL"))).toBe(1);
-    expect(m.m).toEqual([2, 0, 0, 4, 10, 10]);
-    await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", src, dst, fit("CENTER"));
-    expect(m.m).toEqual([2, 0, 0, 2, 10, 60]);
-    await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", src, dst, fit("END"));
-    expect(m.m).toEqual([2, 0, 0, 2, 10, 110]);
-    expect(await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", await rect(0, 0, 0, 5), dst, fit("START"))).toBe(0);
-    expect(m.m).toEqual([1, 0, 0, 1, 0, 0]);
+    expect(await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", src, dst, await fit("FILL"))).toBe(1);
+    expect(await values(m)).toEqual([2, 0, 10, 0, 4, 10, 0, 0, 1]);
+    await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", src, dst, await fit("CENTER"));
+    expect(await values(m)).toEqual([2, 0, 10, 0, 2, 60, 0, 0, 1]);
+    await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", src, dst, await fit("END"));
+    expect(await values(m)).toEqual([2, 0, 10, 0, 2, 110, 0, 0, 1]);
+    expect(await vcall(m, "setRectToRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z", await rect(0, 0, 0, 5), dst, await fit("START"))).toBe(0);
+    expect(await values(m)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 
   test("Paint.setARGB packs the channels", async () => {
@@ -569,8 +570,8 @@ describe("path-copy", () => {
     await vcall(source, "moveTo", "(FF)V", 1, 2);
     await vcall(source, "lineTo", "(FF)V", 3, 4);
     const target = rt.make("android/graphics/Path") as JPath;
-    const matrix = rt.make("android/graphics/Matrix") as JMatrix;
-    matrix.m = [0, 1, -1, 0, 10, 20];
+    const matrix = await newObj("android/graphics/Matrix", "()V");
+    await vcall(matrix, "setValues", "([F)V", Float32Array.of(0, -1, 10, 1, 0, 20, 0, 0, 1));
     await vcall(target, "addPath", "(Landroid/graphics/Path;Landroid/graphics/Matrix;)V", source, matrix);
     await vcall(target, "rLineTo", "(FF)V", 5, 6);
     expect(target.ops).toEqual([["m", 8, 21], ["l", 6, 23], ["l", 11, 29]]);

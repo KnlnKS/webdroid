@@ -20,6 +20,7 @@ beforeAll(async () => {
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
+    if (path.startsWith("/vendor/aosp/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
 }, PAGE_TIMEOUT);
@@ -108,7 +109,7 @@ test.concurrent("ImageView reports and draws scale-type matrices and copies cust
     [7.2, 0, 0, 7.2, -25, 0], [1, 0, 0, 1, 37, 31]];
   for (let i = 0; i < expected.length; i++) {
     expect(results[i].type).toBe(i);
-    expect(results[i].matrix).toEqual(expected[i]);
+    for (let j = 0; j < 6; j++) expect(results[i].matrix[j]).toBeCloseTo(expected[i][j], 5);
     for (let j = 0; j < 6; j++) expect(results[i].transform[j]).toBeCloseTo(expected[i][j] + (j === 4 ? 2 : j === 5 ? 3 : 0), 5);
     expect(results[i].bounds).toEqual([0, 0, i === 1 ? 94 : 20, i === 1 ? 72 : 10]);
     expect(results[i].restored).toBe(true);
