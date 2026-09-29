@@ -668,6 +668,9 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   FileOutputStream and RandomAccessFile over the Linux read/write/pread/pwrite/fstat natives. TS
   reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel stays TS, as
   `sun/nio/ch/FileChannelImpl` over the stream's descriptor. luni-io went from 974 to 1,012.
+- **android.text.Html.** AOSP's HtmlToSpannedConverter over TagSoup from ext.jar, so a TagHandler
+  gets the real XMLReader. It needed getSpans to report zero-length marks at query edges. About
+  260 µs per 2 KB comment against 60 µs in TS, and about 50 ms on the first call.
 - **java.util.logging.** libcore's Logger/LogManager reach logcat through AndroidHandler. The flip
   needed `Reference.refersTo0`, `VMStack.getThreadStackTrace` (LogRecord.inferCaller) and the
   ResourceBundle loader/Control overloads, and removed the TS Permission specs, whose empty-name

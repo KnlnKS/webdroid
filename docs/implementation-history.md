@@ -337,6 +337,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Random), so a plain Random keeps its direct LCG and only a subclass overriding next(bits) takes
   the dispatching path; and per-frame paths (layout's setFrame, refreshDrawableState's invalidate,
   Drawable.setBounds) call an override only when the app declares one.
+- 2026-09-28, android.text.Html from AOSP bytecode. The TS converter walked the browser's DOM and
+  passed a null XMLReader to Html.TagHandler, so Harmonic (htmltextview) threw an NPE: its handler
+  calls `getContentHandler()` and installs itself as the parser's ContentHandler to read
+  attributes. Html, HtmlToSpannedConverter and TagSoup (ext.jar) now run unchanged. A differential
+  over 29 inputs first showed every span of an element starting at offset 0 missing: the TS
+  getSpans hid the converter's zero-length marks there. With that fixed, the remaining differences
+  are AOSP's: html/body and `</img>` reach the TagHandler, unknown tags close where TagSoup's schema
+  closes them, text-align makes AlignmentSpans, FROM_HTML_OPTION_USE_CSS_COLORS and `@color`
+  references apply, script text is kept, sizes are floats, and toHtml emits markup (the TS one
+  returned plain text) while escapeHtml leaves quotes alone. Headless Chromium, a 1.9 KB HN comment:
+  TS 60 µs per call, bytecode 257 µs (4.2x); the first call costs about 50 ms (HTMLSchema's
+  initializer about 17 ms of it). TagSoup's HTMLScanner.scan is a quarter of steady-state time.
 
 ## Java, storage and framework semantics
 
