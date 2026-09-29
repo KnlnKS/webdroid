@@ -404,13 +404,23 @@ export function mpStart(mp: JMediaPlayer) {
   players.add(mp);
   void el?.play().then(() => { if (el instanceof HTMLVideoElement && mp.display) pumpFrames(mp, el); }).catch(() => { /* */ });
 }
-async function mpLoadFd(this: JMediaPlayer, fd: JObj | null, offset = 0n, length = 0x7fffffffffffffffn) {
+/** The bytes of a descriptor's range, or null when the descriptor or range is not readable */
+async function fdRange(fd: JObj | null, offset: bigint, length: bigint) {
   if (fd === null) rt.npe();
   const source = javaFdSource(fdInt(fd));
-  if (!source || offset < 0n || length <= 0n || offset >= BigInt(source.size)) {
-    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media file descriptor or range");
-  }
-  mpLoad(this, await readFully(source, Number(offset), Math.min(Number(length), source.size - Number(offset))));
+  if (!source || offset < 0n || length <= 0n || offset >= BigInt(source.size)) return null;
+  return readFully(source, Number(offset), Math.min(Number(length), source.size - Number(offset)));
+}
+const afdRange = driven(function* afdRange(asset: unknown): Gen {
+  const fd = yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+  return fdRange(fd, yield vcall(asset, "getStartOffset", "()J"), yield vcall(asset, "getLength", "()J"));
+});
+function mpLoadBytes(mp: JMediaPlayer, bytes: Uint8Array | null) {
+  if (!bytes) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media file descriptor or range");
+  mpLoad(mp, bytes);
+}
+async function mpLoadFd(this: JMediaPlayer, fd: JObj | null, offset = 0n, length = 0x7fffffffffffffffn) {
+  mpLoadBytes(this, await fdRange(fd, offset, length));
 }
 /** OnPrepared follows the source's metadata, which carries the duration and video size */
 function mpPrepare(mp: JMediaPlayer) {
@@ -433,10 +443,7 @@ const mpLoadUri = driven(function* mpLoadUri(this: JMediaPlayer, context: unknow
   try { yield mpLoadAsset.call(this, asset); } finally { yield vcall(asset, "close", "()V"); }
 });
 const mpLoadAsset = driven(function* mpLoadAsset(this: JMediaPlayer, asset: unknown): Gen {
-  const fd = yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
-  const offset = yield vcall(asset, "getStartOffset", "()J");
-  const length = yield vcall(asset, "getLength", "()J");
-  yield mpLoadFd.call(this, fd, offset, length);
+  mpLoadBytes(this, yield afdRange(asset));
 });
 /** setDataSource(String): a path in the file system, or a URL fetched through the proxy */
 async function mpLoadPath(mp: JMediaPlayer, path: string) {
@@ -548,7 +555,8 @@ rt.register({
   name: "android/media/SoundPool", ctor: JSoundPool,
   methods: {
     "<init>(III)V": function (this: JSoundPool, max: number) { this.maxStreams = max; pools.add(this); },
-    "load(Landroid/content/res/AssetFileDescriptor;I)I": function (this: JSoundPool, afd: any) { return this.load(afd?.bytes ?? null); },
+    "load(Landroid/content/res/AssetFileDescriptor;I)I": driven(function* (this: JSoundPool, afd: unknown): Gen { return this.load(yield afdRange(afd)); }),
+    "load(Ljava/io/FileDescriptor;JJI)I": async function (this: JSoundPool, fd: JObj | null, offset: bigint, length: bigint) { return this.load(await fdRange(fd, offset, length)); },
     "load(Landroid/content/Context;II)I": function (this: JSoundPool, c: any, resId: number) {
       const host = c?.$host;
       return this.load(host?.res.fileOf(resId)?.bytes ?? null);

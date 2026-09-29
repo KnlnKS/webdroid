@@ -7,6 +7,7 @@ import { mpegAudioDuration } from "../src/android/media-mpeg";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
+import { mkAssetFd } from "../src/android/resnative";
 
 describe("audio-attributes", () => {
   rt.linkNatives();
@@ -278,5 +279,29 @@ describe("tts", () => {
     expect(init.statuses).toEqual([-1]);
     expect(await vcall(tts, "setLanguage", "(Ljava/util/Locale;)I", null)).toBe(-1);
     expect(await vcall(tts, "speak", "(Ljava/lang/CharSequence;ILandroid/os/Bundle;Ljava/lang/String;)I", "hello", 1, null, "one")).toBe(-1);
+  });
+});
+
+describe("sound-pool", () => {
+  rt.linkNatives();
+
+  class LoadListener extends JObj {
+    loaded: number[][] = [];
+    [mangleMethod("onLoadComplete", "(Landroid/media/SoundPool;II)V")](_pool: unknown, id: number, status: number) { this.loaded.push([id, status]); }
+  }
+
+  test("SoundPool.load(AssetFileDescriptor) decodes the descriptor's bytes and reports the load", async () => {
+    const decoded: number[] = [];
+    (globalThis as { AudioContext?: unknown }).AudioContext ??= class {
+      decodeAudioData(b: ArrayBuffer) { decoded.push(b.byteLength); return Promise.resolve({}); }
+    };
+    const pool = await newObj("android/media/SoundPool", "(III)V", 4, 3, 0);
+    const listener = new LoadListener();
+    await vcall(pool, "setOnLoadCompleteListener", "(Landroid/media/SoundPool$OnLoadCompleteListener;)V", listener);
+    const id = await vcallAsync(pool, "load", "(Landroid/content/res/AssetFileDescriptor;I)I", mkAssetFd(new Uint8Array(7)), 1);
+    expect(id).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
+    expect(decoded).toEqual([7]);
+    expect(listener.loaded).toEqual([[id, 0]]);
   });
 });
