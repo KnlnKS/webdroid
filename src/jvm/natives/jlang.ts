@@ -907,15 +907,21 @@ export function javaFormat(fmt: string, args: unknown[]): string {
       return s;
     });
 }
-class JFormatter extends JObj { out: unknown = null; s = ""; }
-const formatterInit = function (this: JFormatter, ...a: unknown[]) { this.out = a.find((x) => x !== null && !rt.iof(x, "java/util/Locale")) ?? null; };
+class JFormatter extends JObj { out: unknown = null; s = ""; locale: unknown = null; }
+/** a Formatter without a locale takes the default FORMAT locale when made, as libcore's does */
+const formatterInit = function (this: JFormatter, out: unknown = null) {
+  this.out = out;
+  return after(linkInit("java/util/Locale$Category"), (category) =>
+    after(scall("java/util/Locale", "getDefault", "(Ljava/util/Locale$Category;)Ljava/util/Locale;", category.ctor[mangleStaticField("FORMAT")]), (l) => { this.locale = l; }));
+};
 rt.register({
   name: "java/util/Formatter", ctor: JFormatter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
   methods: {
-    "<init>()V": formatterInit,
+    "<init>()V": function (this: JFormatter) { return formatterInit.call(this); },
     "<init>(Ljava/lang/Appendable;)V": formatterInit,
-    "<init>(Ljava/util/Locale;)V": formatterInit,
-    "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": formatterInit,
+    "<init>(Ljava/util/Locale;)V": function (this: JFormatter, l: unknown) { this.locale = l; },
+    "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": function (this: JFormatter, out: unknown, l: unknown) { this.out = out; this.locale = l; },
+    "locale()Ljava/util/Locale;": function (this: JFormatter) { return this.locale; },
     "format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": driven(function* (this: JFormatter, fmt: string, args: unknown[]): Gen {
       const s = javaFormat(fmt, args ?? []);
       if (this.out) yield vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
