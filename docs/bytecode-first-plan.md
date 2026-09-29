@@ -675,7 +675,10 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   The Apache HTTP classes stay TS: they are the optional `org.apache.http.legacy` library, not
   boot class path.
 - **java.util.regex.** libcore's Pattern and Matcher run over PatternNative/MatcherNative,
-  implemented on the JS RegExp translation (`jregex.ts`).
+  implemented on the JS RegExp translation (`jregex.ts`). `.`, `^` and `$` use ICU's line
+  terminators and UNIX_LINES. hitEnd/requireEnd follow ICU's RegexMatcher, including flags
+  kept across find() calls. They are computed only when read, by derived patterns that consume
+  a sentinel appended to the input.
 - **ThreadLocalRandom.** It needed Thread fields reached through Unsafe offsets, and `Random`
   implementing `RandomGenerator`.
 - **java.util.concurrent synchronizers and queues (B.5).** Locks, AQS, LockSupport, the latches,
@@ -762,7 +765,11 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
 5. **Known limits.**
    - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
    - TS `eraseThreadLocals` does not clear the TS locals.
-   - Regex `hitEnd`/`requireEnd` are approximations, and UNIX_LINES is ignored.
+   - Regex: `\G` is unsupported, possessive quantifiers are greedy, `\b` uses JS's ASCII word
+     set, DOTALL `.` does not take CRLF as one character, and anchoring bounds are ignored.
+     hitEnd misses a backreference cut short by the end and ICU's reads at a lookbehind's
+     limit. Patterns whose derived forms do not compile (atomic groups with captures or
+     lookaheads) fall back to "the match reached the end".
    - The expat natives skip external entities.
 
 ### Tools and pitfalls learned

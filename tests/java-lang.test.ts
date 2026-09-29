@@ -229,6 +229,38 @@ describe("pattern-split", () => {
     expect(await vcall(path, "group", "()Ljava/lang/String;")).toBe("/.././");
   });
 
+  test("line terminators, UNIX_LINES and hitEnd/requireEnd follow ICU", async () => {
+    // [pattern, flags, input, ops]; each op reports "found start end hitEnd requireEnd"
+    const cases: [string, number, string, string, string][] = [
+      ["a.b", 0, "a\u0085b", "find", "0 -1 -1 1 0"],
+      ["a.b", 1, "a\rb", "find", "1 0 3 0 0"],
+      ["abc$", 0, "abc\r\n", "find", "1 0 3 1 1"],
+      ["abc$", 1, "abc\r", "find", "0 -1 -1 1 0"],
+      ["^b", 8, "a\rb", "find", "1 2 3 0 0"],
+      ["^b", 9, "a\rb", "find", "0 -1 -1 1 0"],
+      ["^", 8, "a\n", "find,find,find", "1 0 0 0 0;0 -1 -1 1 0;0 -1 -1 1 0"],
+      ["\\d{3}", 0, "123", "find", "1 0 3 0 0"],
+      ["a+", 0, "aa", "lookingAt", "1 0 2 1 0"],
+      ["ab|a", 0, "a", "find", "1 0 1 1 0"],
+      ["a|ab", 0, "a", "find", "1 0 1 0 0"],
+      ["a\\b", 0, "a", "find", "1 0 1 1 0"],
+      ["\\w+(?=\\s*$)", 0, "ab  ", "find", "1 0 2 1 1"],
+      ["^abc", 0, "xyz", "find", "0 -1 -1 0 0"],
+      ["a(?=.*!)|b", 0, "a b!", "find,find", "1 0 1 1 0;1 2 3 1 0"],
+    ];
+    for (const [pattern, flags, input, ops, want] of cases) {
+      const p = await scall("java/util/regex/Pattern", "compile", "(Ljava/lang/String;I)Ljava/util/regex/Pattern;", pattern, flags);
+      const m = await vcall(p, "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", input);
+      const got: string[] = [];
+      for (const op of ops.split(",")) {
+        const found = await vcall(m, op, "()Z");
+        const span = found ? [await vcall(m, "start", "()I"), await vcall(m, "end", "()I")] : [-1, -1];
+        got.push([found, ...span, await vcall(m, "hitEnd", "()Z"), await vcall(m, "requireEnd", "()Z")].join(" "));
+      }
+      expect(`${pattern} ${got.join(";")}`).toBe(`${pattern} ${want}`);
+    }
+  });
+
   test("named groups report text and bounds and reject unknown names", async () => {
     const m = await vcall(await compile("(?<k>[a-z]+)=(?<v>\\d+)?"), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", " ab=");
     expect(await vcall(m, "groupCount", "()I")).toBe(2);
