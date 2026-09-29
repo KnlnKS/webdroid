@@ -55,7 +55,7 @@ function openFd(cpu: Cpu, handle: number, fd: number, offset: number, length: nu
   const copy = javaDupFd(fd), file = javaFdSource(copy);
   if (!file || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset > file.size) { if (copy >= 0) javaCloseFd(copy); return INVALID; }
   const source = new SliceFile(file, offset, Math.min(length, file.size - offset));
-  return openExtractor(cpu, handle, () => source, () => javaCloseFd(copy));
+  return openExtractor(cpu, handle, () => source, () => { javaCloseFd(copy); });
 }
 export function mediaInit(): void {
   const api: Record<string, HostFn> = {

@@ -409,12 +409,16 @@ export function nativeSocketIoctl(cpu: Cpu, fd: number, request: number, argumen
   if (!descriptor) return -1;
   if (request !== 0x541b) return fail(cpu, 25);
   if (!argument) return fail(cpu, E.FAULT);
-  const socket = descriptor.socket;
-  mem.st32(argument, socket.kind === "stream" ? socket.relay?.available() ?? 0 : socket.queue[0]?.bytes.length ?? 0);
+  mem.st32(argument, nativeSocketAvailable(fd));
   return 0;
 }
+/** FIONREAD on an open socket: a stream's buffered bytes, a datagram socket's next packet */
+export function nativeSocketAvailable(fd: number): number {
+  const socket = sockets.get(fd)!.socket;
+  return socket.kind === "stream" ? socket.relay?.available() ?? 0 : socket.queue[0]?.bytes.length ?? 0;
+}
 
-export function nativeSocketClose(cpu: Cpu, fd: number): number {
+export function nativeSocketClose(cpu: Cpu | null, fd: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -438,7 +442,7 @@ export function nativeSocketDup(cpu: Cpu | null, fd: number, min = 0, cloexec = 
   return duplicate;
 }
 
-export function nativeSocketFcntl(cpu: Cpu, fd: number, command: number, value: number): number {
+export function nativeSocketFcntl(cpu: Cpu | null, fd: number, command: number, value: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
