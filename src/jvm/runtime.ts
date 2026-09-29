@@ -602,6 +602,8 @@ export class Runtime {
     info.ctor = info.isInterface ? class {}
       : new Function("S", `return class extends S {constructor(){super();${fieldsInit}}}`)(info.superInfo?.ctor ?? JObj);
     info.ctor.$i = info;
+    if (this.platformClasses.has(name) && def.virtualMethods.some((m) => m.codeOff && dex.method(m.methodIdx).name === "finalize" && dex.methodDesc(m.methodIdx) === "()V"))
+      this.claimOnStore(info, def, dex);
     const staticNames = new Map<string, number>();
     for (const f of def.staticFields) {
       const name = dex.field(f.fieldIdx).name;
@@ -614,6 +616,23 @@ export class Runtime {
       info.ctor[prop] = defaultValue(desc);
     }
     return info;
+  }
+
+  /** the handle-table owner hook (src/android/handles.ts) */
+  claimHandle?: (owner: object, h: bigint) => void;
+  /** A platform class whose finalize() frees the native handle in one of its long fields: storing
+   *  a handle there makes the object its owner, since no finalizer runs here. */
+  private claimOnStore(info: ClassInfo, def: ClassDef, dex: DexFile): void {
+    const R = this;
+    for (const f of def.instanceFields) {
+      const fr = dex.field(f.fieldIdx);
+      if (dex.type(fr.type) !== "J") continue;
+      const prop = info.fieldTable.get(fr.name)!, slot = prop + "$v";
+      Object.defineProperty(info.ctor.prototype, prop, {
+        get(this: Record<string, bigint>) { return this[slot]; },
+        set(this: Record<string, bigint>, h: bigint) { this[slot] = h; R.claimHandle?.(this, h); },
+      });
+    }
   }
 
   /** link the supertypes and take on every name the class is assignable to */

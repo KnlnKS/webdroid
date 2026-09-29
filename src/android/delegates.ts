@@ -14,7 +14,7 @@
 // there because that said so.
 
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
-import { handle, deref, replace, release, FINALIZER } from "./handles";
+import { handle, ownedHandle, deref, replace, release, FINALIZER } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
@@ -590,7 +590,7 @@ delegate("android/graphics/PathMeasure", {
   "native_create(JZ)J": (p: bigint, forceClosed: number) => {
     const m = new PathMeasure();
     m.setPath(p ? path(p) : undefined, !!forceClosed);
-    return handle(m);
+    return ownedHandle(m);
   },
   "native_setPath(JJZ)V": (h: bigint, p: bigint, forceClosed: number) => measure(h).setPath(p ? path(p) : undefined, !!forceClosed),
   "native_getLength(J)F": (h: bigint) => measure(h).length(),
@@ -617,7 +617,7 @@ delegate("android/graphics/PathIterator", {
 const region = (h: bigint) => deref<NativeRegion>(h);
 const scratch = new NativeRegion();
 delegate("android/graphics/Region", {
-  "nativeConstructor()J": () => handle(new NativeRegion()),
+  "nativeConstructor()J": () => ownedHandle(new NativeRegion()),
   "nativeDestructor(J)V": release,
   "nativeSetRegion(JJ)V": (h: bigint, src: bigint) => { region(h).set(region(src)); },
   "nativeSetRect(JIIII)Z": (h: bigint, l: number, t: number, r: number, b: number) => +region(h).setRect(l, t, r, b),
@@ -640,7 +640,7 @@ delegate("android/graphics/Region", {
     if (rects && rects.length % 4) return 0n;
     const r = new NativeRegion();
     if (rects) r.setRects(rects);
-    return handle(r);
+    return ownedHandle(r);
   }) : 0n,
   "nativeEquals(JJ)Z": (a: bigint, b: bigint) => +region(a).equals(region(b)),
   "nativeToString(J)Ljava/lang/String;": (h: bigint) => region(h).toString(),
@@ -666,7 +666,7 @@ delegate("android/graphics/Region", {
 });
 // the iterator walks its own copy of the region, as hwui's RgnIterPair does
 delegate("android/graphics/RegionIterator", {
-  "nativeConstructor(J)J": (h: bigint) => handle({ rects: region(h).rects(), at: 0 }),
+  "nativeConstructor(J)J": (h: bigint) => ownedHandle({ rects: region(h).rects(), at: 0 }),
   "nativeDestructor(J)V": release,
   "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
     const it = deref<{ rects: number[]; at: number }>(h);
@@ -716,7 +716,7 @@ const cameraSlot = (c: object) => c as Record<string, bigint>;
 const instanceField = () => nativeInstance ||= declaredField("android/graphics/Camera", "native_instance");
 const camera = (c: object) => deref<Camera3D>(cameraSlot(c)[instanceField()]);
 delegate("android/graphics/Camera", {
-  "nativeConstructor()V": function (this: object) { cameraSlot(this)[instanceField()] = handle(new Camera3D()); },
+  "nativeConstructor()V": function (this: object) { cameraSlot(this)[instanceField()] = ownedHandle(new Camera3D()); },
   "nativeDestructor()V": function (this: object) { release(cameraSlot(this)[instanceField()]); },
   "save()V": function (this: object) { const c = camera(this); c.stack.push(c.top.slice()); },
   "restore()V": function (this: object) { const c = camera(this); if (c.stack.length > 1) c.stack.pop(); },
@@ -829,7 +829,7 @@ function unitCubicInterp(value: number, bx: number, by: number, cx: number, cy: 
 // Interpolator frees its native state from finalize(), which never runs here
 const keyFrames = (h: bigint) => deref<KeyFrames>(h);
 delegate("android/graphics/Interpolator", {
-  "nativeConstructor(II)J": (elems: number, frames: number) => handle(new KeyFrames(elems, frames)),
+  "nativeConstructor(II)J": (elems: number, frames: number) => ownedHandle(new KeyFrames(elems, frames)),
   "nativeDestructor(J)V": release,
   "nativeReset(JII)V": (h: bigint, elems: number, frames: number) => keyFrames(h).reset(elems, frames),
   // a key frame must come after the ones before it, or SkiaInterpolator leaves it unset
@@ -851,14 +851,14 @@ delegate("android/graphics/Interpolator", {
 // NinePatch frees its chunk from finalize(), which never runs here
 delegate("android/graphics/NinePatch", {
   "isNinePatchChunk([B)Z": (chunk: Int8Array | null) => +isNinePatchChunk(chunk),
-  "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => handle(validNinePatchChunk(chunk)),
+  "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => ownedHandle(validNinePatchChunk(chunk)),
   "nativeFinalize(J)V": release,
   "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, dst: Rect) => {
     const bmp = deref<JBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
     if (!rects.length) return 0n;
     const r = new NativeRegion();
     r.setRects(rects);
-    return handle(r);
+    return ownedHandle(r);
   },
 });
 
@@ -883,7 +883,7 @@ delegate("android/graphics/Picture", {
   "nativeConstructor(J)J": (src: bigint) => {
     const p = new NativePicture();
     if (src) { const s = picture(src); p.w = s.w; p.h = s.h; p.ops = s.recording ? s.recording.slice() : s.ops; }
-    return handle(p);
+    return ownedHandle(p);
   },
   "nativeDestructor(J)V": (h: bigint) => { picture(h).endRecording(); release(h); },
   "nativeBeginRecording(JII)J": (h: bigint, w: number, ht: number) => {

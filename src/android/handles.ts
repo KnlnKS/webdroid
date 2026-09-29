@@ -10,6 +10,8 @@
 // because getNativeInstance() is called per text run and a fresh slot per call would grow this
 // table without bound.
 
+import { rt } from "../jvm/runtime";
+
 const objs: (object | undefined)[] = [undefined];
 const byObj = new WeakMap<object, bigint>();
 /** released slots, reused so a native object recreated every frame does not grow the table */
@@ -64,6 +66,22 @@ export function release(h: bigint): void {
   objs[n] = undefined;
   free.push(n);
 }
+
+// A platform class that frees its native state in finalize() (Region, Picture, PathMeasure, ...)
+// would leak its handle here, where finalizers never run: a JS finalizer cannot see the object it
+// finalizes. What it frees is the handle in a long field, so the handle's native state lives as
+// long as the first Java object to store it (Runtime.link routes those classes' long fields here).
+const owned = new WeakSet<object>();
+const owners = new FinalizationRegistry<{ h: bigint; o: object }>(({ h, o }) => { if (objs[Number(h)] === o) release(h); });
+/** a handle whose native state belongs to the Java object that stores it */
+export function ownedHandle(o: object): bigint {
+  owned.add(o);
+  return handle(o);
+}
+rt.claimHandle = (owner: object, h: bigint) => {
+  const o = h ? objs[Number(h)] : undefined;
+  if (o && owned.delete(o)) owners.register(owner, { h, o });
+};
 
 /** A finalizer is a function pointer the class hands to NativeAllocationRegistry, which only
  *  ever passes it back to us. One shared handle to the release function is enough. */
