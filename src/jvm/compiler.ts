@@ -99,8 +99,9 @@ export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> }
 type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
 /** Re-enters a suspended frame (Runtime.dfr) or an on-stack-replaced cold frame. */
 export type ResumeBody = (this: unknown, frame: object) => unknown;
-/** Direct-call caches (`D.dp`) holding an interim entry, as flat [cache, index] pairs; a platform
- *  fallthrough entry also says whether its body touches fields its native class lacks. */
+/** Direct-call caches (`D.dp`, and hot sites in `$ic`) holding an interim entry, as flat
+ *  [cache, index] pairs; a platform fallthrough entry also says whether its body touches fields
+ *  its native class lacks. */
 export type Cells = { $c?: unknown[]; $unsafe?: () => boolean };
 
 /** Point the direct-call caches holding `from` at `to`, so they stop paying for the indirection. */
@@ -747,8 +748,15 @@ ${profileEnd}
         }
         // same-class: entry into this class's code implies inited (or initing in
         // this chain — JVM reentrancy); skip init to avoid clinit self-deadlock
-        if (clsName === this.info.name) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
-        else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
+        const own = clsName === this.info.name;
+        if (this.cold) {
+          if (own) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
+          else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
+        } else {
+          const k = this.ics++;
+          if (own) out.push(`$u=$ic[${k}]??D.rdc0($ic,${k},${i.b});`);
+          else this.guard(`$ic[${k}]??D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
+        }
         this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out);
         break;
       }

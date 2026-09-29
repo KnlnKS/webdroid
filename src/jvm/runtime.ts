@@ -126,8 +126,15 @@ interface DexLink {
   init(i: number, from?: number): Promise<any> | any;  // inited ctor (from = clinit accessor's type)
   rdp(i: number, from?: number): Promise<any> | any;   // resolve direct-dispatch fn
   rdp0(i: number): any;                 // resolve w/o init (same-class call sites)
+  rdc(c: unknown[], k: number, i: number, from?: number): Promise<any> | any; // rdp into a hot method's site cache
+  rdc0(c: unknown[], k: number, i: number): any;
   rsf(i: number, from?: number): Promise<any> | any;   // resolve+init static field owner ctor
   ics(i: number): any;                  // link an invoke-custom call site
+}
+
+function siteCache(c: unknown[], k: number, fn: Cells): unknown {
+  fn.$c?.push(c, k);
+  return (c[k] = fn);
 }
 
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
@@ -343,6 +350,12 @@ export class Runtime {
         fn.$c?.push(this.dp, i);
         return (this.dp[i] = fn);
       },
+      // dp is sparse, so V8 keeps it in dictionary mode; a hot site reads its own dense slot
+      rdc(c, k, i, from) {
+        const fn = this.dp[i] ?? this.rdp(i, from);
+        return fn instanceof Promise ? fn : siteCache(c, k, fn);
+      },
+      rdc0(c, k, i) { return siteCache(c, k, this.dp[i] ?? this.rdp0(i)); },
       rsf(i, from) {
         const fr = dex.field(i);
         const start = this.linfo(fr.cls);
