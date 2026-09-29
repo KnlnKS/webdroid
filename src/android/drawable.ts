@@ -1715,7 +1715,7 @@ export function tsCsl(c: unknown): JColorStateList | null {
   return t;
 }
 /** the ColorStateList Java code sees for one of ours */
-export function javaCsl(c: JColorStateList | null): unknown {
+function javaCsl(c: JColorStateList | null): unknown {
   if (!c || !(c instanceof JColorStateList)) return c;
   const known = toJava.get(c);
   if (known) return known;
@@ -2086,7 +2086,7 @@ const DPI: Record<string, number> = { l: 120, m: 160, h: 240, xh: 320, xxh: 480,
 function densityOfPath(path: string): number { return DPI[DPI_RE.exec(path)?.[1] ?? ""] ?? device.densityDpi; }
 /** a table configuration's density as BitmapFactory.decodeResourceStream reads it: none is
  *  DENSITY_DEFAULT (mdpi), nodpi is never scaled */
-export const bitmapDensity = (config: number) => config === 0 ? 160 : config === 0xffff ? device.densityDpi : config;
+const bitmapDensity = (config: number) => config === 0 ? 160 : config === 0xffff ? device.densityDpi : config;
 
 export const loadDrawableRV = driven(function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): Gen<JDrawable> {
   if (!v || v.t === TV.NULL) return new JColorDrawable();

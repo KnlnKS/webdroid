@@ -220,7 +220,7 @@ rt.register({
 });
 
 /** Color's sColorNameMap, which Color.parseColor and Html's colour attributes both read */
-export const COLOR_NAMES: Record<string, number> = {
+const COLOR_NAMES: Record<string, number> = {
   black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
   red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
   magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
