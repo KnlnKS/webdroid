@@ -519,6 +519,13 @@ export class Runtime {
       if (this.nativeIfaces().has(name)) info.flags |= ACC.INTERFACE;
       info.ctor = native.ctor;
       this.adopt(info, name !== "java/lang/Object" ? native.sup ?? "java/lang/Object" : null, native.ifaces ?? []);
+      // a spec declared over a bytecode superclass inherits its fields and methods
+      const sup = info.superInfo;
+      if (sup && !sup.native && Object.getPrototypeOf(native.ctor) === JObj) {
+        Object.setPrototypeOf(native.ctor, sup.ctor);
+        Object.setPrototypeOf(native.ctor.prototype, sup.ctor.prototype);
+        this.ensureCompiled(sup);
+      }
       this.setupNativeMembers(info, native);
       this.copyDefaults(info);
       return info;

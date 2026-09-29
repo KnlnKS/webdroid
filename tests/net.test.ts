@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { systemService } from "../src/android/context";
@@ -397,6 +397,19 @@ describe("uri-syntax", () => {
     expect(await vcall(uri, "toString", "()Ljava/lang/String;")).toBe("https://example.com:443/a%20b%3Fc?#");
     expect(await vcall(uri, "getPath", "()Ljava/lang/String;")).toBe("/a b?c");
     expect(await vcall(uri, "getQuery", "()Ljava/lang/String;")).toBe("");
+  });
+});
+
+describe("url-handlers", () => {
+  test("URL resolves http, https and class path jar handlers as a device does", async () => {
+    const connection = async (spec: string) => vcall(await newObj("java/net/URL", "(Ljava/lang/String;)V", spec), "openConnection", "()Ljava/net/URLConnection;");
+    expect(rt.iof(await connection("https://example.test/a"), "javax/net/ssl/HttpsURLConnection")).toBeTruthy();
+    const http = await connection("http://example.test/a");
+    expect(rt.iof(http, "java/net/HttpURLConnection") && !rt.iof(http, "javax/net/ssl/HttpsURLConnection")).toBeTruthy();
+    const url = await vcall(systemClassLoader(), "getResource", "(Ljava/lang/String;)Ljava/net/URL;", "calendars.properties");
+    expect(await vcall(url, "toString", "()Ljava/lang/String;")).toBe("jar:file:/apex/com.android.art/javalib/core-oj.jar!/calendars.properties");
+    const stream = await vcall(url, "openStream", "()Ljava/io/InputStream;");
+    expect(await vcall(stream, "read", "()I")).toBe("#".charCodeAt(0));
   });
 });
 
