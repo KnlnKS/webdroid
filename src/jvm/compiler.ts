@@ -174,11 +174,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   const bind = (factory: Factory, $R?: unknown) => factory(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
   let resumable: ResumeBody | undefined;
   /** The body that continues a suspended frame: only built once a frame actually suspends. */
-  const resume = (): ResumeBody => {
+  const resume = (prepared = prepare): ResumeBody => {
     if (resumable) return resumable;
     const persisted = persist ? persistedBody(resumeKey) : undefined;
     if (persisted) return resumable = bind(persisted) as ResumeBody;
-    const body = `${resumableSource(R, dex, info, rec.m, prepare())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`;
+    const body = `${resumableSource(R, dex, info, rec.m, prepared())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`;
     if (persist) recordBody(resumeKey, body, "r");
     return resumable = new Function("C", "D", "R", "S", "P", "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
   };
@@ -219,11 +219,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
-  const promote = (): JvmFunction | undefined => {
+  const promote = (prepared = prepare): JvmFunction | undefined => {
     if (hot) return hot;
     // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
     // every cold method costs substantially more heap than the saved promotion work.
-    const start = performance.now(), src = source(prepare(), false);
+    const start = performance.now(), src = source(prepared(), false);
     if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
     if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
       calls = -Infinity;
@@ -243,9 +243,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   if (jvmProfiler.tier !== "cold") {
     // On-stack replacement: the hot body resumes the cold frame at its backedge.
     cold.promote = (frame: ColdFrame, receiver: unknown) => {
-      if (!promote()) return undefined;
+      let prepared: PreparedMethod | undefined;
+      const once = () => prepared ??= prepare();
+      if (!promote(once)) return undefined;
       perf.osrMethods++;
-      return { value: resume().call(receiver, frame) };
+      return { value: resume(once).call(receiver, frame) };
     };
   }
   const invoke: JvmFunction & Cells = function(this: unknown, ...args: unknown[]) {
