@@ -31,7 +31,6 @@ import "./jvm/natives/jcrypto";
 import "./jvm/natives/jec";
 import "./jvm/natives/jsignature";
 import "./jvm/natives/jnet";
-import "./jvm/natives/jcookies";
 import "./jvm/natives/jhttp";
 import "./jvm/natives/jchannels";
 import "./jvm/natives/jzip";

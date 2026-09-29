@@ -10,7 +10,7 @@
 import { rt, JObj, type NativeSpec, driven, noops, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { JThrowable, stringHash, newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
+import { stringHash, newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8, sameBytes, mangleMethod } from "../abi";
 import { type JBAOS, noMark } from "./jio";
@@ -637,92 +637,6 @@ rt.register({
   },
 });
 
-export class JURI extends JObj {
-  u = "";
-  private parsed: ReturnType<typeof parseURI> | null = null;
-  parts(): ReturnType<typeof parseURI> { return this.parsed ??= parseURI(this.u); }
-}
-function parseURI(uri: string) {
-  const match = /^(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(uri)!;
-  const scheme = match[1] ?? null, authority = match[2] || null;
-  const opaque = scheme !== null && !uri.slice(scheme.length + 1).startsWith("/");
-  const server = authority ? /^(?:([^@]*)@)?(\[[^\]]+\]|[^:]+)(?::([0-9]*))?$/.exec(authority) : null;
-  const candidate = server?.[2] ?? null;
-  let host: string | null = null;
-  if (candidate?.startsWith("[")) { try { new URL("http://" + candidate.replace(/%[^\]]+/, "")); host = candidate; } catch {} }
-  else if (candidate && /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$/.test(candidate)) host = candidate;
-  const port = host && server?.[3] ? Number(server[3]) : -1;
-  return { scheme, authority, host, port, userInfo: host ? server?.[1] ?? null : null,
-    path: opaque ? null : match[3], query: opaque ? null : match[4] ?? null, fragment: match[5] ?? null,
-    ssp: uri.slice(scheme ? scheme.length + 1 : 0).split("#", 1)[0] };
-}
-const decodeUriPart = (part: string | null): string | null => part === null ? null : decodeURIComponent(part);
-function quoteUriPart(value: string, delimiters: string): string {
-  let result = "";
-  for (const c of value) result += /[A-Za-z0-9_.!~*'()-]/.test(c) || delimiters.includes(c) || c.charCodeAt(0) > 159 && !/\s/u.test(c) ? c : encodeURIComponent(c);
-  return result;
-}
-function hierarchicalURI(scheme: string | null, authority: string | null, path: string | null, query: string | null, fragment: string | null): string {
-  const uri = (scheme === null ? "" : scheme + ":") + (authority === null ? "" : "//" + quoteUriPart(authority, ";:@&=+$,[]")) +
-    quoteUriPart(path ?? "", ";:@&=+$,/") + (query === null ? "" : "?" + quoteUriPart(query, ";/?:@&=+$,[]")) +
-    (fragment === null ? "" : "#" + quoteUriPart(fragment, ";/?:@&=+$,[]"));
-  if (scheme !== null && !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme) || (scheme !== null || authority !== null) && path && !path.startsWith("/")) {
-    rt.link("java/net/URISyntaxException"); const error = new JURISyntaxException(); uriSyntax.call(error, uri, "Invalid scheme or relative path"); throw error;
-  }
-  return uri;
-}
-export const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
-rt.register({
-  name: "java/net/URI", ctor: JURI, ifaces: ["java/lang/Comparable", "java/io/Serializable"],
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JURI, s: string) { this.u = s ?? ""; },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
-      function (this: JURI, scheme: string | null, user: string | null, host: string | null, port: number, path: string | null, query: string | null, fragment: string | null) {
-        const authority = host === null ? null : (user === null ? "" : user + "@") + (host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host) + (port === -1 ? "" : ":" + port);
-        this.u = hierarchicalURI(scheme, authority, path, query, fragment);
-      },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
-      function (this: JURI, scheme: string | null, authority: string | null, path: string | null, query: string | null, fragment: string | null) { this.u = hierarchicalURI(scheme, authority, path, query, fragment); },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, scheme: string | null, host: string | null, path: string | null, fragment: string | null) {
-      this.u = hierarchicalURI(scheme, host?.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host, path, null, fragment);
-    },
-
-    "static create(Ljava/lang/String;)Ljava/net/URI;": mkURI,
-    "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
-    // RFC 2396 path normalisation: "." and ".." segments resolved, the rest of the URI untouched
-    "normalize()Ljava/net/URI;": function (this: JURI) {
-      const m = /^([^:/?#]+:)?(\/\/[^/?#]*)?([^?#]*)(.*)$/.exec(this.u)!;
-      const out: string[] = [];
-      for (const seg of (m[3] ?? "").split("/")) {
-        if (seg === ".") continue;
-        if (seg === ".." && out.length > 1) { out.pop(); continue; }
-        out.push(seg);
-      }
-      return mkURI((m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]);
-    },
-    "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
-    "isAbsolute()Z": function (this: JURI) { return +(this.parts().scheme !== null); },
-    "getScheme()Ljava/lang/String;": function (this: JURI) { return this.parts().scheme; },
-    "getHost()Ljava/lang/String;": function (this: JURI) { return this.parts().host; },
-    "getAuthority()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().authority); },
-    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return this.parts().authority; },
-    "getPath()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().path); },
-    "toURL()Ljava/net/URL;": function (this: JURI) { return mkURL(this.u); },
-    "getUserInfo()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().userInfo); },
-    "getRawUserInfo()Ljava/lang/String;": function (this: JURI) { return this.parts().userInfo; },
-    "getPort()I": function (this: JURI) { return this.parts().port; },
-    "getQuery()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().query); },
-    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return this.parts().query; },
-    "getFragment()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().fragment); },
-    "getRawFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
-    "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.parts().path; },
-    "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().ssp); },
-    "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { try { return mkURI(new URL(o, this.u).href); } catch { return mkURI(o); } },
-    "equals(Ljava/lang/Object;)Z": function (this: JURI, o: unknown) { return o instanceof JURI && o.u === this.u ? 1 : 0; },
-    "hashCode()I": function (this: JURI) { return stringHash(this.u); },
-  },
-});
-
 // ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
 // raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
@@ -735,21 +649,6 @@ defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLExcepti
 defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLProtocolException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLKeyException", "javax/net/ssl/SSLException");
-class JURISyntaxException extends JThrowable { input = ""; reason = ""; index = -1; }
-function uriSyntax(this: JURISyntaxException, input: string | null, reason: string | null, index = -1): void {
-  if (input === null || reason === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  if (index < -1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "index < -1");
-  this.input = input; this.reason = reason; this.index = index;
-  this.msg = reason + (index >= 0 ? " at index " + index : "") + ": " + input;
-}
-rt.register({ name: "java/net/URISyntaxException", ctor: JURISyntaxException, sup: "java/lang/Exception", methods: {
-  "<init>(Ljava/lang/String;Ljava/lang/String;)V": uriSyntax,
-  "<init>(Ljava/lang/String;Ljava/lang/String;I)V": uriSyntax,
-  "getInput()Ljava/lang/String;": function (this: JURISyntaxException) { return this.input; },
-  "getReason()Ljava/lang/String;": function (this: JURISyntaxException) { return this.reason; },
-  "getIndex()I": function (this: JURISyntaxException) { return this.index; },
-} });
-
 const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
 const DEFAULT_PORT: Record<string, number> = { "http:": 80, "https:": 443, "ftp:": 21 };
 const userInfo = (u: URL) => u.username ? u.username + (u.password ? ":" + u.password : "") : null;
@@ -897,7 +796,7 @@ type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: 
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
-export async function headerMap(groups: Iterable<[string | null, string[]]>) {
+async function headerMap(groups: Iterable<[string | null, string[]]>) {
   const m = rt.make("java/util/HashMap");
   for (const [k, v] of groups) await vcall(m, "put", PUT, k, newArrayList(v));
   return m;
@@ -1235,17 +1134,5 @@ rt.register({
     "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
       return after(vcall(this, "getServerCertificates", "()[Ljava/security/cert/Certificate;") as unknown[], subjectOf);
     },
-  },
-});
-
-// ── CookieHandler: the process default consulted by HttpURLConnection; java.net's cookie
-// model lives in jcookies
-let defaultCookieHandler: JObj | null = null;
-rt.register({
-  name: "java/net/CookieHandler", ctor: class extends JObj {},
-  methods: {
-    "<init>()V": function () {},
-    "static getDefault()Ljava/net/CookieHandler;": () => defaultCookieHandler,
-    "static setDefault(Ljava/net/CookieHandler;)V": (h: JObj | null) => { defaultCookieHandler = h; },
   },
 });
