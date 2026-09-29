@@ -622,6 +622,9 @@ commit message states what it measured. The implementation history (the 2026-09-
   TikTok reaches `ActivityThread.installProvider` by reflection. System services audio, window,
   activity_task, connectivity, webviewupdate and media_projection are missing. Every small emitted
   method pays the full call overhead (the `small-method-overhead` branch starts on this).
+- **After that, continue with the whole plan.** Once the tip is gated and the three branches are
+  verified and merged or dropped, work through "Next steps, in plan order" below, then the rest of
+  the plan's stages (C to F), under the standing constraints and gates above.
 
 ### Standing constraints from the user
 
