@@ -75,6 +75,20 @@ async function compileWorker(): Promise<Response> {
   return new Response(await workerBuild.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
 }
 
+/** scripts/link-table.ts for a bytecode switch, rerun when a source file or platform jar has changed */
+const linkTables = new Map<string, { stamp: number; json: Promise<string> }>();
+async function linkTable(req: Request): Promise<Response> {
+  const bytecode = new URL(req.url).searchParams.get("bytecode") ?? "";
+  let stamp = 0;
+  for (const f of [...new Bun.Glob("src/**/*.ts").scanSync(), ...new Bun.Glob("vendor/aosp/*.jar").scanSync()]) stamp = Math.max(stamp, Bun.file(f).lastModified);
+  let entry = linkTables.get(bytecode);
+  if (entry?.stamp !== stamp) {
+    const run = Bun.spawn(["bun", "scripts/link-table.ts", bytecode], { stdout: "pipe", stderr: "inherit" });
+    linkTables.set(bytecode, entry = { stamp, json: new Response(run.stdout).text() });
+  }
+  return new Response(await entry.json, { headers: { "content-type": "application/json", "cache-control": "no-cache" } });
+}
+
 const server: Bun.Server<SocketData> = Bun.serve({
   port: Number(process.env.PORT ?? 4080),
   development: { hmr: false },
@@ -91,6 +105,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
       return Response.json(url.origin);
     },
     "/compile-worker.js": () => compileWorker(),
+    "/link-table.json": linkTable,
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
     "/dns-query": forwardDnsMessage,
     "/proxy": (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),

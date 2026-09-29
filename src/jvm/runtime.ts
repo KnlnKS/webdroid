@@ -9,7 +9,7 @@ import { yieldToLoop } from "./yield";
 import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
+import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, addCell, type Cells, type CompiledCtor, type ResumeBody, type LazyMethod } from "./compiler";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, type Gap } from "./codecache";
@@ -327,6 +327,18 @@ export class Runtime {
     };
     if (sliceMs === undefined) { link(0, Infinity); return; }
     return (async () => { for (let i = 0; i < names.length; await yieldToLoop()) i = link(i, performance.now() + sliceMs); })();
+  }
+
+  /** what a link table depends on: the shape of every native spec a platform class backs, and the
+   *  dex indexed so far, which the zygote reads before an app's dex arrives */
+  linkFingerprint(): string {
+    let text = "";
+    for (const name of [...this.natives.keys()].filter((n) => this.dexIndex.has(n)).sort()) {
+      const spec = this.natives.get(name)!;
+      text += `${name}<${spec.sup ?? ""}|${spec.ifaces ?? ""}|${Object.keys(spec.methods ?? {})};`;
+    }
+    for (const d of this.dexes) text += d.id;
+    return hash36(text);
   }
 
   dexLink(dex: DexFile): DexLink {

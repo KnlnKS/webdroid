@@ -20,6 +20,9 @@ if (await build.exited !== 0) throw new Error("Browser build failed");
 const worker = await Bun.build({ entrypoints: ["src/jvm/compileworker.ts"], target: "browser", minify: true, define: { "process.env.NODE_ENV": '"production"' } });
 if (!worker.success) throw new Error("Compile worker build failed");
 await Bun.write(join(out, "compile-worker.js"), worker.outputs[0]);
+const linkTable = Bun.spawn(["bun", "scripts/link-table.ts"], { stdout: "pipe", stderr: "inherit" });
+await Bun.write(join(out, "link-table.json"), await new Response(linkTable.stdout).text());
+if (await linkTable.exited !== 0) throw new Error("Link table failed");
 
 async function copyFile(source: string, target = source): Promise<void> {
   await mkdir(dirname(join(out, target)), { recursive: true });

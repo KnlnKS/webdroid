@@ -11,7 +11,7 @@ import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
-import { loadCode, loadLinkTable, saveLinkTable, startupDone } from "../jvm/codecache";
+import { loadCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
@@ -113,10 +113,10 @@ let zygote: Promise<void> | null = null;
  *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed. */
 export function startZygote(): Promise<void> {
   return zygote ??= (async () => {
-    // a native class the framework links falls through to the platform once it is indexed
-    await Promise.all([loadFramework(), loadLinkTable().then(loadPlatformDex)]);
+    const table = fetchLinkTable();
+    await Promise.all([loadFramework(), loadPlatformDex()]);
+    useLinkTable(await table, rt.linkFingerprint());
     await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
-    saveLinkTable();
   })();
 }
 

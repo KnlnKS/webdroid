@@ -204,26 +204,27 @@ function saveCode(): Promise<void> {
 
 // Link metadata (§4.1): per native class, the platform methods its spec leaves out, which
 // Runtime.fallThrough stubs at every boot of every realm. Finding them decodes and mangles every
-// method of each class a spec covers; the gaps depend only on the bundle's specs and platform dex
-// (and the bytecode switch), so a table one boot records replays at the next.
+// method of each class a spec covers; the gaps depend only on the specs and the platform dex, so
+// the server computes them once (scripts/link-table.ts) and a boot replays the table.
 /** a gap: its method list (0 direct, 1 virtual), index there, mangled name and how it is filled
  *  (0 the platform body, 1 its JNI binding, 2 the superclass's implementation) */
 export type Gap = [list: number, index: number, mangled: string, kind: number];
-const LINKS = `/wd-link/${bundle}/${encodeURIComponent(BYTECODE.join(","))}.json`;
+export type LinkTable = { fingerprint: string; gaps: Record<string, Gap[]> };
 let gaps: Record<string, Gap[]> | null = null, foundGaps: Record<string, Gap[]> | null = null;
-export async function loadLinkTable(): Promise<void> {
-  if (typeof caches === "undefined") return;
-  try { gaps = await (await (await caches.open(CACHE)).match(LINKS))?.json() ?? null; }
-  catch (e) { console.warn("[webdroid] link table unavailable", e); }
+/** the served table for this bytecode switch, if the page has one to ask */
+export async function fetchLinkTable(): Promise<LinkTable | null> {
+  if (typeof location === "undefined") return null;
+  try {
+    const res = await fetch(`/link-table.json${BYTECODE.length ? "?bytecode=" + encodeURIComponent(BYTECODE.join(",")) : ""}`);
+    return res.ok ? await res.json() : null;
+  } catch (e) { console.warn("[webdroid] link table unavailable", e); return null; }
+}
+/** replay `table` if it was made for these specs and this platform; otherwise each boot finds its own */
+export function useLinkTable(table: LinkTable | null, fingerprint: string): void {
+  gaps = table?.fingerprint === fingerprint ? table.gaps : null;
+  if (table && !gaps) console.warn("[webdroid] link table is stale; finding gaps");
 }
 export const gapsOf = (cls: string): Gap[] | undefined => gaps?.[cls];
 export function recordGaps(cls: string, found: Gap[]): void { if (!gaps) (foundGaps ??= {})[cls] = found; }
-/** after the boot that found them */
-export function saveLinkTable(): void {
-  if (!foundGaps || typeof caches === "undefined") return;
-  const body = JSON.stringify(foundGaps);
-  foundGaps = null;
-  void caches.open(CACHE).then((cache) => cache.put(LINKS, new Response(body, { headers: { "content-type": "application/json" } })))
-    .catch((e) => console.warn("[webdroid] saving the link table failed", e));
-}
-
+/** what a boot without a table found: the table the server serves */
+export const foundLinkTable = (): Record<string, Gap[]> | null => foundGaps;

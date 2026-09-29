@@ -13,7 +13,7 @@
 // Static via ctor: Ctor[`m$...`], Ctor[`s$fieldName`]
 // Instance fields: `f$name$H2` where H2 = hash(declaringClass) — avoids R8 shadowing collisions
 
-function hash36(s: string): string {
+export function hash36(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
   return h.toString(36);
