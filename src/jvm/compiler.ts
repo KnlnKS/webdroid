@@ -766,10 +766,11 @@ ${profileEnd}
         break;
       }
       case "invoke-static": {
-        if (clsName === this.info.name) out.push(`${this.u}=D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)});`);
-        else this.guard(`D.ic[${this.literal(mref.cls)}]??D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
+        const own = clsName === this.info.name;
+        if (own && this.cold) out.push(`${this.u}=D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)});`);
+        else if (!own) this.guard(`D.ic[${this.literal(mref.cls)}]??D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
         const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
-        this.guard(`${this.u}${this.prop(mangled)}(${args})`, out);
+        this.guard(`${own && !this.cold ? "C" : this.u}${this.prop(mangled)}(${args})`, out);
         break;
       }
       default: out.push(this.unsupported(`${kind} ${clsName}.${mref.name}${desc}`));
