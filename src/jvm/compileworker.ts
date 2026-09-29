@@ -17,8 +17,9 @@ export type CompileRequest = { dexes: [name: string, bytes: Uint8Array][]; work:
 const CHUNK_MS = 15;
 
 onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
-  for (const [name, bytes] of data.dexes) for (const d of dexesIn(bytes, name)) rt.loadDex(d);
+  // the page's precedence: the boot class path ahead of the app
   (await fetchPlatformJars()).forEach(loadPlatformJar);
+  for (const [name, bytes] of data.dexes) for (const d of dexesIn(bytes, name)) rt.loadDex(d);
   rt.linkNatives();
   console.warn = () => {};
   let chunk: [string, string][] = [], since = performance.now();

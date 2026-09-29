@@ -106,6 +106,20 @@ function launcherOrientation(root: XmlNode): number {
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
 export function currentApp(): BootedApp | null { return booted; }
+let zygote: Promise<void> | null = null;
+/** What a device's zygote holds before it forks an app: the framework package, the boot class
+ *  path indexed and the natives linked. It needs no app, so a page starts it while the app
+ *  downloads. Natives link after the platform is indexed, never before: a native whose super or
+ *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed. */
+export function startZygote(): Promise<void> {
+  return zygote ??= (async () => {
+    // a native class the framework links falls through to the platform once it is indexed
+    await Promise.all([loadFramework(), loadLinkTable().then(loadPlatformDex)]);
+    await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+    saveLinkTable();
+  })();
+}
+
 export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
@@ -118,9 +132,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcherOrientation(manifest));
-  // a native class the framework links now falls through to the platform once it is indexed
-  const linkTable = loadLinkTable();
-  await Promise.all([loadFramework(), restoreRoots()]);
+  const code = loadCode(processName ?? pkg);
+  await Promise.all([startZygote(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
@@ -132,20 +145,16 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   }
   onStatus("Loading app code…");
   await inflateTree(zip, isDexEntry);
-  // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
-  // framework class keeps it, as on a device where the app's dex is ahead on the class path.
+  // The app's dex goes in after the boot class path, which loadDex's first-wins keeps ahead: an
+  // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
   for (const name of Object.keys(zip)) {
     if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
-  await Promise.all([linkTable.then(loadPlatformDex), loadCode(processName ?? pkg)]);
+  await code;
   const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);
   if (profile) compileProfile(rt, Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]), profile);
-  // Natives materialize AFTER every dex is indexed, never before: a native whose super or
-  // interface is a class provenance withheld would otherwise link it, find no dex yet, and
-  // auto-stub it into the class cache for the rest of the run.
-  await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
-  saveLinkTable();
-  // after linking: the time zone setup runs Java that reaches TS-built objects
+  // after linking, and after the app's persisted code is in: the time zone setup runs Java that
+  // reaches TS-built objects
   await zygoteInit();
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();

@@ -13,7 +13,7 @@ import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
-import { bootApk, tick, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, startZygote, tick, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -96,6 +96,7 @@ async function boot(file: string, local?: File) {
   shell.setState({ kind: "loading", file, stage: local ? "Opening package…" : "Downloading package…" });
   let rollbackAssets: (() => void) | undefined;
   try {
+    void startZygote();
     const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
