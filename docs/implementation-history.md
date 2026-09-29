@@ -332,6 +332,17 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   emitted dispatch loop around small methods and the nest-access trampoline in front of
   `match`, general emitter costs rather than URI's. indexOf(int) also truncated supplementary
   code points to their low half.
+- 2026-09-29, live-flow fixes. YouTube's MediaRouteButton failed its main-thread check in about
+  half the runs because `curThread` was still `Binder:1000`: a resumed generator that suspended
+  again (`driveStep`), `withCallingIdentity` and the WebView bridge kept their thread across an
+  await, and `launchActivity` restored its caller's thread asynchronously. Each now releases the
+  thread when its work suspends or scopes it to the synchronous call (0 failures in 9 runs). A
+  lazily read native static pinned any write to its declaring class, so a subclass declaring a
+  same-named static nulled the parent's: Region nulled `Rect.CREATOR` at every boot and a TikTok
+  Intent subclass nulled `Intent.CREATOR`. WindowInsets reports each bar's frame clipped to the
+  window as its bounding rect, as `InsetsSource.calculateBoundingRects` does for a bar without
+  explicit rects. XML `<transition>` had inflated as its first layer, which YouTube casts to
+  TransitionDrawable.
 - 2026-09-28, java.util.logging from libcore. zygoteInit ran from platform-jar loading, before
   `linkNatives`; once its time-zone setup reached libcore logging, a TS-built HashMap view had no
   linked methods and every app failed to boot. It now runs after linking and also installs

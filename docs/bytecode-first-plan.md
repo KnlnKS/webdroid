@@ -581,9 +581,47 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-28. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`. Each
-commit message states what it measured. The implementation history (the 2026-09-27 and
-2026-09-28 Stage A/B entries) records failure mechanisms.
+Last updated 2026-09-29. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`. Each
+commit message states what it measured. The implementation history (the 2026-09-27 to
+2026-09-29 Stage A/B entries) records failure mechanisms.
+
+### Handoff state (2026-09-29)
+
+- **Tip `4dfc6a57` is not fully gated.** The last full gate (e2e twice, the live set, `lat` cold and
+  warm, every conform suite) passed at `59e1581f`. Merged since, with typecheck, `bun run test`
+  (1,384 pass), FitNotes smoke and each change's own conform runs only: Html from AOSP bytecode,
+  cut 7b (URI and cookies), and the live-flow fixes (a borrowed thread released at every
+  suspension, subclass statics, WindowInsets bounding rects, `<transition>` inflation, TikTok's
+  reflective StorageManager/Choreographer calls). Run the full gate first. Watch Harmonic's
+  comments (Html's first call costs about 52 ms, mostly TagSoup's schema), YouTube's media router,
+  and `lat`, since the thread release changes when queued work sees the main thread.
+- **Unmerged branches.** Each came from an agent the 2026-09-29 crash interrupted before its final
+  gates, so its report and measurements are lost. All three merge cleanly onto the tip and pass
+  typecheck and `bun run test`; none has run e2e or `lat`.
+  - `collections-followups` (6 commits on `59e1581f`): unmodifiable `Collections.*`,
+    `Arrays.asList` and `List/Set/Map.of`; the List equals fast path only against our own
+    iterators; synchronous AbstractCollection bodies when element equality is; entry and value views
+    answered through their mapping; libcore spliterators with the JDK's interfaces for ArrayList,
+    LinkedList and ArrayDeque. Its guava (40,085) and jsr166 (2,544) baselines came from the agent's
+    final `--update` runs and lose no earlier pass. Still needed: hot-path benchmarks (ArrayList
+    add/get, HashMap put/get, equals), luni-net, e2e and `lat`.
+  - `cut4-java-io` (7 commits on `59e1581f`), cut 4 in progress: an uncontended monitor release
+    skips the queue shift; streaming charset encode stops at the output limit and decode avoids
+    per-char views; arraycopy, `String.getChars`, `subSequence` and `String(char[],int,int)` are
+    bounds-checked; `Charset.forName` rejects unsupported and illegal names; an InputStream subclass
+    is read through its own `read()`; Writer and its subclasses, then Reader and its subclasses, run
+    from libcore with BufferedReader over them staying TS. Still needed: luni-io (baseline 1,012) and
+    guava, the readLine/InputStreamReader/StringWriter benchmarks, the docs, and the remaining classes
+    (the streams, Data*, PrintStream, ByteArray*).
+  - `small-method-overhead` (4 commits on `a3e8e10b`): hot invoke-direct targets and const-class
+    results cached per site, and a hot body's own static methods called on `C`. The last commit is a
+    WIP: forward-only hot bodies run in pc order without the dispatch loop, unmeasured. Measure each
+    commit (libcore `new URI(s)` is the motivating case: 4.8 µs against 0.34 µs for the old TS
+    regex), check emitted bytes and warm launch, and drop what does not pay.
+- **Open follow-ups found this session.** `<level-list>` still inflates as its first item.
+  TikTok reaches `ActivityThread.installProvider` by reflection. System services audio, window,
+  activity_task, connectivity, webviewupdate and media_projection are missing. Every small emitted
+  method pays the full call overhead (the `small-method-overhead` branch starts on this).
 
 ### Standing constraints from the user
 
@@ -617,7 +655,7 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,382 pass);
+- `bun run test` (1,384 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 38,148, 2,538, 27,514,
