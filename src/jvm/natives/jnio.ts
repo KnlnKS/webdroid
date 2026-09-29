@@ -684,6 +684,7 @@ rt.register({
     "static allocate(I)Ljava/nio/LongBuffer;": (cap: number) => allocateTyped(JLongBuffer, BigInt64Array, cap, 3),
     "array()[J": backingArray,
     "get()J": function (this: JLongBuffer) { this.clampGet(1); return this.dv.getBigInt64(this.pos++ << 3, this.little); },
+    "get(I)J": function (this: JLongBuffer, i: number) { return this.dv.getBigInt64(i << 3, this.little); },
     "put(J)Ljava/nio/LongBuffer;": function (this: JLongBuffer, v: bigint) { this.clampPut(1); this.dv.setBigInt64(this.pos++ << 3, v, this.little); return this; },
   },
 });
