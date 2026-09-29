@@ -582,34 +582,75 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-29. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`. Each
+Last updated 2026-09-29 (night). The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
+read "Handoff state" first. Each
 commit message states what it measured. The implementation history (the 2026-09-27 to
 2026-09-29 Stage A/B entries) records failure mechanisms.
 
-### Handoff state (2026-09-29, evening)
+### Handoff state (2026-09-29, night): start here
 
-- **The tip is gated** (typecheck, `bun run test` 1,391, smoke, e2e twice, the live set, `lat` cold
-  and warm, every conform suite). Merged since the morning handoff: structured hot entries
-  (`src/jvm/structure.ts`), java.net.URL from libcore (cut 7c), paged file mappings, the first-launch
-  compile worker (`src/jvm/compileworker.ts`, §4.4) and the charset table with UTF-32. B.4 was
-  measured and not flipped (see "Next steps" item 2).
-- **Open follow-ups.** `<level-list>` still inflates as its first item. TikTok reaches
-  `ActivityThread.installProvider` by reflection. No system service is hosted behind binder yet
-  (`binderServices` in `src/android/binder.ts` is empty), so Shizuku's `ServiceManager.getService
-  ("activity")` reports a gap in every Mihon and Komikku run; audio, window, activity_task,
-  connectivity, webviewupdate and media_projection are missing (Stage D.3). Resumable bodies keep the
-  dispatch loop. Cut 4 is done but for the ObjectStreams (they wait for B.4); byte-at-a-time calls into
-  libcore's synchronized streams stay 1.8x to 4.4x slower than the TS bodies were (monitor plus frame
-  cost, see §9 "Done in Stage B"), and libcore's DeflaterOutputStreamTest times out: the TS executor's
-  worker never reports `isAlive() == false`, which PipedInputStream waits for.
-  `Charset.availableCharsets()` reaches NativeConverter natives; the other 217 ICU charsets are not
-  served (luni-io's `ByteArrayOutputStream.toString("8859_2")` test fails on it). The TS TreeMap's `keySet()`
-  seems not to be a SortedSet: guava's Maps suite fails to initialise (unconfirmed).
-- **Continue with the whole plan.** Work through "Next steps, in plan order" below, then the rest of
-  the plan's stages (C to F), under the standing constraints and gates above.
-- **Process note.** Run conform from a worktree at a committed snapshot (`git worktree add --detach
-  ../webdroid-gate HEAD`, symlink `vendor/{aosp,microg}`, `apks` and `conform-cache`): its runner
-  spawns a process per class that imports `src/`, so edits during a run contaminate it.
+- **`knlnks/bytecode` tip `4d5b9ac2` is gated and pushed.** Gated on it (and on each merge before
+  it): typecheck; `bun run test` 1,393 pass; FitNotes smoke 0 method failures; fast e2e 7/7 twice;
+  the live set; `lat` cold and warm; every conform suite (guava 40,085, jsr166 2,544, ojluni-time
+  27,514, luni-io 1,277, luni-net 537, luni-nio-file 173). The resource switch
+  `?bytecode=android/content/res/` also passes there (fast e2e twice; live set but YouTube's known
+  `video-open` flake; Lichess and TikTok 2/2 alone).
+- **First task: gate and merge `c1-resources` tip `f48221b3` (pushed, not merged).** It makes
+  `android/content/res/` AOSP bytecode by default and deletes about 1,050 lines of TS (the Resources,
+  Theme, TypedArray, AssetManager, Configuration, XmlBlock/XmlResourceParser, AssetFileDescriptor and
+  ColorStateList specs and every `aospResources()` branch); `resnative.ts` keeps only the device
+  configuration and locales, LocaleManager/LocaleList and `android.util.Xml`. Headless: typecheck,
+  `bun run test` 1,391/0, smoke, `fwtest android/content/res/` (94/97 natives, 6/6 exercises), and 20
+  apks boot with view trees identical to the switch path. **Not run: browser e2e, the live set,
+  `lat`, conform.** Merge it (`git merge c1-resources`), run the full gate with no query (the default
+  is now the cut), then conform from a gate worktree. If a flow regresses, compare with `4d5b9ac2`
+  under `?bytecode=android/content/res/`, which is the same code path before the deletion.
+- **Then: the cold-launch cost of the resource cut.** In the browser, `lat` showed cold Calculator
+  launching in about 1.73 s under the switch against 1.35-1.5 s before (warm launches unchanged,
+  every tap within the gate). Headless V8 shows only 20-35 ms (resource setup 1.7 -> 20.9 ms,
+  classes compiled 1,755 -> 1,810, cold calls 35,976 -> 37,531), so find the rest in the browser:
+  compare `lat --json` launch counters (`compileMs`, `classesCompiled`, `clinitMs`, `coldCalls`) and a
+  `lat --cpuprofile` of both paths. Each realm pays `AssetManager.getSystem()`'s OverlayConfig
+  partition scan (about 27 ms in V8, mostly first-use compile and cold code; it logs "partition_order.xml
+  does not exist" once per realm), and an app runs 2-3 realms on one main thread. Candidate fixes:
+  feed `vendor/aosp/boot-image-profile.txt` (see §4 "Platform image") to the compile worker, or the
+  build-time platform image (§4.1/§4.3).
+- **Then continue Stage C** (C.2 graphics is the next cut; `audit ... --cut android/graphics/`
+  reports 121 native specs and 1,963 TS references to re-home) and the rest of the plan, under the
+  standing constraints and gates below. Record C.1's history entry (f136d416, 33424e7e, 0c998fc6,
+  2ce12bbe, 4d5b9ac2, f48221b3; the failure mechanisms are summarized in "Stage C.1" below).
+- **Open follow-ups.**
+  - TikTok reaches `ActivityThread.installProvider` by reflection (unsafe fallthrough).
+  - No system service is hosted behind binder (`binderServices` in `src/android/binder.ts` is empty),
+    so Shizuku's `ServiceManager.getService("activity")` reports a gap in every Mihon and Komikku run;
+    audio, window, activity_task, connectivity, webviewupdate and media_projection are missing
+    (Stage D.3).
+  - Resumable bodies keep the dispatch loop (only hot entries are structured).
+  - The ObjectStreams stay TS until B.4. Byte-at-a-time calls into libcore's synchronized streams are
+    1.8x-4.4x slower than the TS bodies were (monitor plus per-call cost). libcore's
+    DeflaterOutputStreamTest times out: the TS executor's worker never reports `isAlive() == false`,
+    which PipedInputStream waits for.
+  - The TS TreeMap's `keySet()` seems not to be a SortedSet: guava's Maps suite fails to initialise
+    (unconfirmed). TS HashSet iterates in insertion order (Charset alias sets differ from the device).
+  - V8 does not inline small compiled non-leaf methods (§4 "Link metadata", "Throw cost" and the
+    history's "where the per-call cost lies"); this blocks B.4 and will matter more in Stage C/D.
+- **Process notes.**
+  - Run conform from a worktree at a committed snapshot (`git worktree add --detach ../webdroid-gate
+    HEAD`, symlink `vendor/{aosp,microg}`, `apks` and `conform-cache`, `bun install`): its runner
+    spawns a process per class that imports `src/`, so edits during a run contaminate it. The first
+    run in a new worktree builds sql.js; don't start two suites at once there.
+  - Parallel agents' suites load the host; TikTok wedges and YouTube's video flake get more frequent.
+    Rerun a failing live flow alone before judging it, and run `lat` on a quiet host.
+  - Measure performance in V8, not Bun (JSC disagrees, e.g. a loop 52% slower in Bun, unchanged in
+    V8): bundle a harness with `bun build --target=node` and run it under `node`. It needs a
+    `setInterval` keep-alive (the yield channel is unref'd), and `--cpu-prof` needs an absolute
+    `--cpu-prof-dir` and a process that is not ended with `process.exit`.
+  - Headless scripts must run `zygoteInit()` (`src/android/delegates.ts`) after `rt.linkNatives()` to
+    see `System.out`: since cut 4 it writes descriptor 1, which only zygoteInit routes to logcat.
+  - Device evidence: compile a probe with javac + d8, `adb push` it, run it with
+    `CLASSPATH=/data/local/tmp/x.dex app_process / Main`, and diff its output with the same probe run
+    headless (the charset tables and UTF-32 behaviour came from this). gen-framework does this for
+    OsConstants and the single-byte charsets, and runs `profman` as root for the boot image profile.
 
 ### Standing constraints from the user
 
@@ -643,11 +684,11 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,391 pass);
+- `bun run test` (1,393 pass; 1,391 on `c1-resources`, which deletes spec-only tests);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net`. Baselines are 40,085, 2,544, 27,514,
-  1,277 and 537; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file`. Baselines are 40,085,
+  2,544, 27,514, 1,277, 537 and 173; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -902,7 +943,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      lookaheads) fall back to "the match reached the end".
    - The expat natives skip external entities.
 
-### Stage C.1: resources (in progress, branch `c1-resources`)
+### Stage C.1: resources (default on `c1-resources`, awaiting the browser gate)
 
 Inventory taken 2026-09-29 (`fwscan`, `fwtest`, `audit apks/FitNotes.apk --framework --cut
 android/content/res/`):
@@ -937,23 +978,26 @@ android/content/res/`):
   `nativeList` of the framework apk's assets (its archive is not listed) and fd-backed ApkAssets
   (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
   runs AOSP's Resources end to end headless. Measurements are in the history entry.
-- **Not yet flippable; next, in order:**
-  1. Boot under the switch: `device.ts`, `context.ts`, `pm.ts` build `JResources`/`JTheme`/
-     `JConfiguration` themselves. They must load ApkAssets, build the AssetManager and Resources
-     through AOSP (ResourcesManager, as LoadedApk does), and hand Contexts the Java Resources and
-     Theme; device configuration changes go through `Resources.updateConfiguration`.
-  2. Bridges for the TS view stack, which stays TS until Stage D: the native state behind a Java
-     object (`Resources.mResourcesImpl.mAssets.mObject` → `Resources`, `Theme.mThemeImpl.mTheme` →
-     `JTheme`, `XmlBlock$Parser.mParseState` → the element). AOSP's ThemeImpl casts the
-     AttributeSet to `XmlBlock$Parser`, so the TS inflater must pass the parser `getLayout` returns,
-     not `webdroid/AttrSet`.
-  3. Drawables: `ResourcesImpl.loadXmlDrawable` runs AOSP's DrawableInflater over the TS drawables,
-     which lack AOSP's fields (`Drawable.mSrcDensityOverride`); either a TS
-     `Drawable.createFromXmlForDensity` over the bridge or C.2 first. Bitmap drawables go through
-     `ImageDecoder.decodeDrawable` (added; needs a browser to decode).
-  4. ColorStateList consumers (69 references in drawable, widget, textview, text, view, imageview)
-     read the TS list's items; with the cut they get AOSP's and must call it.
-  5. Then e2e/lat under `?bytecode=android/content/res/`, and delete `resnative.ts`'s specs.
+- **Done (steps 2-5), on `knlnks/bytecode` behind `?bytecode=android/content/res/` and on
+  `c1-resources` as the default:** apps boot through AOSP's ApkAssets, AssetManager and Resources
+  (`src/android/resources.ts`), Contexts hold the Java Resources and Theme, and the system Resources
+  get the device configuration and metrics at boot (as ActivityThread's
+  `applyConfigurationToResources` does). The TS view stack reaches native state through bridges;
+  preferences, view tags, text appearances and custom XML drawables get AOSP's parser.
+- **Failure mechanisms found under the cut (browser only; headless view trees matched):**
+  - Harmonic: a file resource (`@font/...`) resolved to a fresh reference each call, so `rvString`
+    (which resolves until the value stops changing) recursed forever (f136d416).
+  - TikTok "Recursive reference in drawable": Context's resource getters awaited between
+    `getResources`, `getTheme` and the final call, so the call could resume on another Java thread; a
+    background load pushed the id onto the main thread's `ThreadLocal` LookupStack. The getters now
+    pin every call to the caller's thread (2ce12bbe).
+  - `Resources.getSystem()` had 0x0 metrics and an empty Configuration (2ce12bbe).
+  - Lichess blank screen: `SoundPool.load(AssetFileDescriptor)` read a TS-only field, returned 0 and
+    never completed, and Flutter's sound plugin blocks Dart init on it. The visible symptom was Cronet
+    never loading (4d5b9ac2). Lesson: diff the page's logcat between paths (headless Chrome console)
+    to find where init diverges; a blank Flutter surface says nothing on its own.
+- **Left:** the browser gate of `f48221b3` and the cold-launch cost (see "Handoff state"); ObbScanner,
+  ResourceTimer, resolution logging, `nativeList` of the framework apk and fd-backed ApkAssets.
 
 ### Tools and pitfalls learned
 
