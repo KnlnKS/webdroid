@@ -860,6 +860,36 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      lookaheads) fall back to "the match reached the end".
    - The expat natives skip external entities.
 
+### Stage C.1: resources (in progress, branch `c1-resources`)
+
+Inventory taken 2026-09-29 (`fwscan`, `fwtest`, `audit apks/FitNotes.apk --framework --cut
+android/content/res/`):
+- **Declared natives: 97** in `android/content/res/`: AssetManager 55, XmlBlock 22, ApkAssets 12,
+  StringBlock 5, ResourceTimer 2, ObbScanner 1. Configuration, Resources, ResourcesImpl, Theme,
+  TypedArray and ColorStateList declare none. FitNotes reaches 67 of them statically (every
+  AssetManager, XmlBlock and StringBlock native it can, and ApkAssets load, string block, open-xml,
+  path and destroy).
+- **Before this stage** 82 had delegates (`src/android/delegates.ts`), none for ApkAssets. They
+  answered off one shared TS `Resources`: `nativeCreate` returned the app's, `nativeSetApkAssets`
+  and `nativeSetConfiguration` were no-ops, every cookie was 0 and every density the device's, so
+  `TypedArray` string reads (`getPooledStringForCookie(0, …)`) and XML-literal strings (which AOSP
+  reports with cookie -1 and an index into the XML block's pool) could not work, and theme values
+  lost their changing-configuration flags.
+- **TS specs withheld by the cut: 11** (Resources, Resources$Theme, TypedArray, AssetManager,
+  Configuration, ColorStateList, XmlBlock, XmlBlock$Parser, XmlResourceParser,
+  AssetFileDescriptor, Resources$NotFoundException). The audit counts 349 references to their TS
+  classes; outside `res.ts`/`resnative.ts` they are JTheme (8 files), JColorStateList (drawable,
+  widget, textview, text, view, imageview), JResources (fonts, apphost), JConfiguration (context),
+  JTypedArray (delegates, text), JXmlParser (inflate) and JAssetManager (fonts, context). The TS view
+  stack reads resources below that line as well: `obtainStyled` (30 sites, 14 files),
+  `JTheme.lookup` (27, 8), `themeOf`/`askTheme` (15), `loadDrawable*` (50, 17),
+  `.jres` (115, 16) and `JResources.host` (59, 13).
+- **Hot paths.** `obtainStyledAttributes` (`AttributeResolution::ApplyStyle`): every widget
+  constructor, about 100 attributes for View's styleable. Theme attribute lookup
+  (`Theme::GetAttribute` + `ResolveReference`). `getValue` (`nativeGetResourceValue`). Layout XML
+  through XmlBlock (today the TS inflater parses AXML itself). String reads with spans
+  (StringBlock styles).
+
 ### Tools and pitfalls learned
 
 - Scratch probes: load platform jars with `loadPlatformJar(bytes, i)` and call
