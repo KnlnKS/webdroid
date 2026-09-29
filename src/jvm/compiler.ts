@@ -141,8 +141,7 @@ function promoteWaiting(deadline: IdleDeadline): void {
   }
 }
 
-/** `profiled` installs the fast body at once, skipping the cold tier, for a method a profile names */
-export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profiled = false): JvmFunction {
+export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
   const info = C.$i, rec = info.lazy![i], dex = rec.dex;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
@@ -208,7 +207,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   const prepared = prepare();
   // Leaf methods cannot suspend and go straight to their only (sync) form.
   if (prepared.sync) return install(compile(source(prepared, true)));
-  if (profiled || jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
+  if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
     .compileCold(prepared, coldInstructions(code, prepared));
   if (persist) {
@@ -221,6 +220,12 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
   while (owner.parent) owner = owner.parent;
   const promote = (prepared = prepare): JvmFunction | undefined => {
     if (hot) return hot;
+    // a body the compile worker emitted since this method first ran
+    const offered = persist ? persistedBody(entryKey) : undefined;
+    if (offered) {
+      bind(offered, resume);
+      return hot = settle(installed());
+    }
     // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
     // every cold method costs substantially more heap than the saved promotion work.
     const start = performance.now(), src = source(prepared(), false);
@@ -234,11 +239,14 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
     hot = compile(src);
     owner.hotSourceBytes += src.length;
     perf.compileMs += performance.now() - start;
+    return settle(hot);
+  };
+  const settle = (fn: JvmFunction): JvmFunction => {
     perf.hotMethods++;
     if (jvmProfiler.enabled) jvmProfiler.promoted(profileName);
     cold = null;
-    retarget(invoke, hot);
-    return hot;
+    retarget(invoke, fn);
+    return fn;
   };
   if (jvmProfiler.tier !== "cold") {
     // On-stack replacement: the hot body resumes the cold frame at its backedge.
@@ -271,14 +279,16 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number, profil
 
 type MethodKey = { name: string; desc: string; mangled: string };
 const methodKeys = new WeakMap<DexFile, MethodKey[]>();
-/** a method ref's name, descriptor and mangled property: every class compile needs them */
-/** compile a profiled method's hot body ahead of its first call, if nothing has compiled it yet */
-export function precompile(R: Runtime, info: ClassInfo, methodIdx: number): void {
-  const i = info.lazy?.findIndex((rec) => rec.m.methodIdx === methodIdx) ?? -1;
-  if (i < 0) return;
-  const rec = info.lazy![i];
-  if ((rec.isStatic ? info.ctor : info.ctor.prototype)[rec.mangled] === rec.stub) compileLazyMethod(R, info.ctor, i, true);
+/** A method's hot entry as the code cache keys and stores it, emitted without compiling: a compile
+ *  worker's output (§4.4). Platform fallthrough bodies depend on the page's native classes. */
+export function entryBody(R: Runtime, info: ClassInfo, methodIdx: number): [key: string, body: string] | undefined {
+  const rec = info.lazy?.find((r) => r.m.methodIdx === methodIdx);
+  if (!rec || rec.fallthrough) return undefined;
+  const prepared = prepareDexMethod(rec.dex, rec.dex.code(rec.m.codeOff), rec.desc, rec.isStatic, "");
+  return [codeKey(rec.dex.id, methodIdx, "e"), emitMethod(R, rec.dex, info, rec.m, prepared, false)];
 }
+
+/** a method ref's name, descriptor and mangled property: every class compile needs them */
 
 export function methodKey(dex: DexFile, methodIdx: number): MethodKey {
   let keys = methodKeys.get(dex);

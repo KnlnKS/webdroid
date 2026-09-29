@@ -17,6 +17,9 @@ const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", 
   stdout: "inherit", stderr: "inherit",
 });
 if (await build.exited !== 0) throw new Error("Browser build failed");
+const worker = await Bun.build({ entrypoints: ["src/jvm/compileworker.ts"], target: "browser", minify: true, define: { "process.env.NODE_ENV": '"production"' } });
+if (!worker.success) throw new Error("Compile worker build failed");
+await Bun.write(join(out, "compile-worker.js"), worker.outputs[0]);
 
 async function copyFile(source: string, target = source): Promise<void> {
   await mkdir(dirname(join(out, target)), { recursive: true });

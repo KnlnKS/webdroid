@@ -1,9 +1,11 @@
 // An APK's own ART baseline profile (assets/dexopt/baseline.prof, docs/bytecode-first-plan.md §4.4):
-// the methods its developers measured as hot or run at startup. Idle time after launch compiles
-// their fast bodies, so their first calls skip the cold tier and no tap waits on their compile.
+// the methods its developers measured as hot or run at startup. A compile worker emits their fast
+// bodies, so their first calls skip the cold tier and no tap waits on their compile.
 import { unzlibSync } from "fflate";
-import { descToName } from "./abi";
-import { precompile } from "./compiler";
+import { codeStats, offerCode } from "./codecache";
+import type { CompileRequest } from "./compileworker";
+import { jvmCoverage } from "./coverage";
+import { jvmProfiler } from "./profile";
 import type { Runtime } from "./runtime";
 
 /** the profile's hot and startup methods, as method indices per dex name; null when unreadable */
@@ -40,26 +42,16 @@ export function parseBaselineProfile(bytes: Uint8Array): Map<string, number[]> |
   return out;
 }
 
-/** compile the profiled methods of `R`'s dex files in idle time, a few milliseconds at a time */
-export function precompileProfile(R: Runtime, profile: Map<string, number[]>): void {
-  if (typeof requestIdleCallback === "undefined") return;
-  const work: [dexName: string, methodIdx: number][] = [...profile].flatMap(([dex, methods]) => methods.map((m) => [dex, m] as [string, number]));
-  let next = 0;
-  // 5 ms slices: input arriving during a slice waits for it
-  requestIdleCallback(function step(deadline) {
-    const until = performance.now() + Math.min(5, deadline.timeRemaining());
-    while (next < work.length && performance.now() < until) {
-      const [dexName, methodIdx] = work[next++];
-      const dex = R.dexes.find((d) => d.name === dexName);
-      if (!dex || methodIdx >= dex.methodCount) continue;
-      const cls = descToName(dex.type(dex.method(methodIdx).cls));
-      if (R.classDefOf(cls)?.dex !== dex) continue;
-      try {
-        const info = R.link(cls);
-        R.ensureCompiled(info);
-        precompile(R, info, methodIdx);
-      } catch { /* it compiles on its first call instead */ }
-    }
-    if (next < work.length) requestIdleCallback(step);
-  });
+/** On a launch without persisted code, emit the profiled methods' hot bodies in a compile worker
+ *  (compileworker.ts); each chunk installs as it arrives. Once a launch has persisted what it ran,
+ *  that is the app's own profile. `dexes` are the app's dex entries. */
+export function compileProfile(R: Runtime, dexes: [name: string, bytes: Uint8Array][], profile: Map<string, number[]>): void {
+  if (typeof Worker === "undefined" || typeof document === "undefined" || jvmProfiler.enabled || jvmCoverage.enabled ||
+    jvmProfiler.tier === "cold" || codeStats().loaded) return;
+  const work: CompileRequest["work"] = [];
+  for (const [name, methods] of profile) if (R.dexes.some((d) => d.name === name)) for (const m of methods) work.push([name, m]);
+  const worker = new Worker(`/compile-worker.js${location.search}`, { type: "module" });
+  worker.onmessage = ({ data }: MessageEvent<[string, string][]>) => void offerCode(data);
+  const copies = dexes.map(([name, bytes]) => [name, bytes.slice()] as [string, Uint8Array]);
+  worker.postMessage({ dexes: copies, work } satisfies CompileRequest, copies.map(([, bytes]) => bytes.buffer));
 }

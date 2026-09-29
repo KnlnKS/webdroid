@@ -66,6 +66,15 @@ function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   return pending;
 }
 
+/** src/jvm/compileworker.ts bundled for the page, rebuilt when a source file has changed since */
+let workerBuild: { stamp: number; code: Promise<string> } | null = null;
+async function compileWorker(): Promise<Response> {
+  let stamp = 0;
+  for (const f of new Bun.Glob("src/**/*.ts").scanSync()) stamp = Math.max(stamp, Bun.file(f).lastModified);
+  if (workerBuild?.stamp !== stamp) workerBuild = { stamp, code: Bun.build({ entrypoints: ["src/jvm/compileworker.ts"], target: "browser" }).then((r) => r.outputs[0].text()) };
+  return new Response(await workerBuild.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+}
+
 const server: Bun.Server<SocketData> = Bun.serve({
   port: Number(process.env.PORT ?? 4080),
   development: { hmr: false },
@@ -81,6 +90,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
       url.hostname = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
       return Response.json(url.origin);
     },
+    "/compile-worker.js": () => compileWorker(),
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
     "/dns-query": forwardDnsMessage,
     "/proxy": (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),

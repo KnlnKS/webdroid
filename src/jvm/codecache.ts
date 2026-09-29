@@ -8,6 +8,8 @@
 // first needed before its first frame go to startup chunks, which the next launch awaits; the
 // rest load after that launch's first frame, so they do not delay it.
 
+import { inputSettled } from "./yield";
+
 /** installs an entry body into C/C.prototype, or returns a resumable body */
 export type Factory = (C: unknown, D: unknown, R: unknown, S: unknown, P: unknown, $R?: unknown) => unknown;
 
@@ -38,28 +40,78 @@ export const codeStats = () => ({ dir, loaded: Object.keys(loaded).length, pendi
 
 export const codeKey = (dexId: string, methodIdx: number, form: "e" | "r") => `${dexId}:${methodIdx}:${form}`;
 
-/** the persisted body for `key`, if an earlier launch compiled one */
-export function persistedBody(key: string): Factory | undefined { return loaded[key]; }
+/** bodies a compile worker emitted this launch and no method has used yet */
+const offered = new Set<string>();
 
-/** a body compiled in this launch: `body` is the factory's statements (an entry) or expression (resumable) */
-export function recordBody(key: string, body: string, form: "e" | "r"): void {
-  if (loaded[key] || pending.has(key)) return;
-  const at = firstUse.get(entryOf(key)) ?? phase;
-  if (form === "e") firstUse.set(key, at);
+/** the persisted body for `key`, if an earlier launch or this launch's compile worker made one */
+export function persistedBody(key: string): Factory | undefined {
+  claim(key);
+  return loaded[key];
+}
+
+/** an offered body a method has reached persists, whether it installs it or compiles its own */
+function claim(key: string): boolean {
+  if (!offered.delete(key)) return false;
+  record(key, loaded[key].toString(), "e");
+  return true;
+}
+
+/** the factory source of a body: `body` is its statements (an entry) or expression (resumable) */
+export function factorySource(body: string, form: "e" | "r"): string {
   // a chunk holds many bodies, and its last sourceURL would name them all; their function names
   // name each one instead
   body = body.replace(/\n\/\/# sourceURL=\S*\s*$/, "");
-  pending.set(key, { source: form === "e" ? `(C,D,R,S,P,$R)=>{${body}\n}` : `(C,D,R,S,P)=>(${body}\n)`, phase: at });
+  return form === "e" ? `(C,D,R,S,P,$R)=>{${body}\n}` : `(C,D,R,S,P)=>(${body}\n)`;
+}
+
+/** a body compiled in this launch */
+export function recordBody(key: string, body: string, form: "e" | "r"): void {
+  if (claim(key) || loaded[key] || pending.has(key)) return;
+  record(key, factorySource(body, form), form);
+}
+
+function record(key: string, source: string, form: "e" | "r"): void {
+  const at = firstUse.get(entryOf(key)) ?? phase;
+  if (form === "e") firstUse.set(key, at);
+  pending.set(key, { source, phase: at });
   deferred.delete(key);
   idle();
 }
 
 /** a body a method has not compiled yet but the next launch will want; `make` emits it */
 export function recordLater(key: string, make: () => string): void {
-  if (loaded[key] || pending.has(key)) return;
+  if (claim(key) || loaded[key] || pending.has(key)) return;
   deferred.set(key, make);
   if (!firstUse.has(key)) firstUse.set(key, phase);
   idle();
+}
+
+/** A compile worker's bodies (factory sources). Those the page has not compiled meanwhile import
+ *  as a module, which V8 compiles off the main thread and finalizes there, and install like
+ *  persisted bodies; one persists once a method uses it. Idle time would be too late: a launching
+ *  page is not idle until after its first taps. */
+export function offerCode(bodies: [key: string, source: string][]): void {
+  offers.push(bodies);
+  if (importing < MAX_IMPORTS) void importOffers();
+}
+/** Finalizing a chunk takes the main thread, so imports wait while input is being answered, and a
+ *  few at a time keep the worker's pace without finalizing a burst at once. */
+const MAX_IMPORTS = 3, offers: [key: string, source: string][][] = [];
+let importing = 0;
+async function importOffers(): Promise<void> {
+  importing++;
+  for (let bodies; (bodies = offers.shift());) {
+    await inputSettled();
+    const needed = bodies.filter(([key]) => !loaded[key] && !pending.has(key));
+    if (!needed.length) continue;
+    const url = URL.createObjectURL(new Blob([codeText(needed)], { type: "text/javascript" }));
+    try {
+      const factories: Record<string, Factory> = (await import(/* @vite-ignore */ url)).default;
+      for (const key in factories) if (!loaded[key] && !pending.has(key)) { loaded[key] = factories[key]; offered.add(key); }
+    } catch (e) { console.warn("[webdroid] compiled code unavailable", e); }
+    finally { URL.revokeObjectURL(url); }
+  }
+  importing--;
 }
 
 /** install persisted bodies: what loadCode imports from codeText's modules */
@@ -136,7 +188,7 @@ function saveCode(): Promise<void> {
     const rewrite = compact && !later;
     if (!dir || !(pending.size || rewrite) || typeof caches === "undefined") return;
     const chunks: Record<Phase, [string, string][]> = { s: [], l: [] };
-    if (rewrite) for (const [key, factory] of Object.entries(loaded)) chunks[startupKeys.has(key) ? "s" : "l"].push([key, factory.toString()]);
+    if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!offered.has(key) && !pending.has(key)) chunks[startupKeys.has(key) ? "s" : "l"].push([key, factory.toString()]);
     for (const [key, { source, phase }] of pending) chunks[phase].push([key, source]);
     pending.clear();
     lastSave = performance.now();
