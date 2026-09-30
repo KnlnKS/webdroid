@@ -609,6 +609,17 @@ commit message states what it measured. The implementation history (the 2026-09-
     DynamicLayout, TextUtils, LineBreakConfig, BidiFormatter, TextDirectionHeuristics and
     android.text.method now run from bytecode; the TS TextView lays out and draws through AOSP's
     StaticLayout, and links fire through LinkMovementMethod.
+  - Stage D.3 started: system services hosted behind binder as TS subclasses of AOSP's generated
+    Stubs (`src/android/services.ts`, `hostService`/`hostedService` in binder.ts), with AOSP's
+    managers from bytecode built as SystemServiceRegistry builds them (`AOSP_MANAGERS` in
+    context.ts): activity and activity_task (ActivityManager, AppTask), audio (codec loudness
+    only), window (animator scale, screen recording callbacks only), connectivity
+    (ConnectivityManager, NetworkCallback over CALLBACK_* messages, NetworkUtils natives), power,
+    thermalservice and deviceidle (PowerManager, WakeLock, PowerExemptionManager). Values come from
+    probes of the reference AVD. A Stub method this process does not implement fails as "not a
+    function" naming the AIDL method. Next services by reach: user, uimode, keyguard, appops,
+    notification, alarm, jobscheduler, clipboard, vibrator, location, account; window and
+    input_method stay with the TS view stack until Stage D's flip.
 - **Done 2026-09-30** (details in the history, latest entries of "JVM, DEX and process ownership"):
   - `android/content/res/` from AOSP (131efb48), and its cold-launch cost gone.
   - Platform overrides of Object's toString/equals/hashCode run on spec classes (a61f89c4).
