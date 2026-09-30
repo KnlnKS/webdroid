@@ -1058,6 +1058,91 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   (libcore's own java.util tests), passes 2,237 of 2,586 against 1,663 before the java.util flip;
   an array larger than the 512 MiB heap limit now throws OutOfMemoryError as on ART instead of
   hanging in `new Array(n).fill(null)`.
+- 2026-10-01, Stage B completion: System and Runtime from libcore. System is a `platformClinit`
+  spec whose TS keeps arraycopy, the clocks, identityHashCode, `specialProperties`, mapLibraryName,
+  setIn0/Out0/Err0 and caller-sensitive loadLibrary/load (`Reflection.getCallerClass` resolves a
+  frame's class by name in the root runtime, so a DexClassLoader child would get the wrong loader);
+  Runtime is libcore's over nativeLoad/nativeGc and the memory natives, and nativeExit marks the
+  process exited after the shutdown hooks. The `<clinit>` needed VMRuntime's bootClassPath,
+  classPath, vmVersion and properties (`user.locale`), Linux getuid/getpwuid and
+  ProcessEnvironment.environ. ICU4J cannot answer ICU's version natives during it (ICUBinary reads
+  System properties, still null), so getUnicodeVersion/getCldrVersion read the .dat as ICU4C does
+  (15.1, 45.0). Device behaviour now followed: java.home /apex/com.android.art, http.agent from
+  RuntimeInit.getDefaultUserAgent, java.io.tmpdir and TMPDIR the app's cache directory, the ART/i18n/
+  tzdata roots in the environment, os.version from uname, `user.name` root because the zygote runs
+  `<clinit>` as uid 0 (reasoned from AOSP, not probed). `Thread.started` must be a Java int (libcore's
+  addShutdownHook reads it). The zygote pays about 35 ms for System's `<clinit>`. Limits:
+  android.zlib.version/android.openssl.version are unset; a direct Runtime.loadLibrary(String) finds
+  its caller by stack scan (root runtime only).
+- 2026-10-01, the last libcore remainders: ClassPathURLStreamHandler verifies the archive as
+  DexPathList asks; Modifier, InvocationTargetException (Method.invoke builds it through its
+  constructor; stack text walks causes through `getCause`, so UndeclaredThrowable and
+  PrivilegedAction causes print), WrongMethodTypeException, javax.net.ssl's exceptions,
+  HostnameVerifier, KeyManager, SSLSession and SSLContextSpi; java.lang.reflect.Array over ART's
+  createObjectArray/createMultiArray. The TS Array.get returned a primitive element unboxed, so
+  `JSONObject.wrap(int[])` failed with "equals(Ljava/lang/Object;)Z is not a function" in every
+  reddit and TikTok run (appsflyer). TikTok's v1-signed APK (26,422 entries, 2.2 MB MANIFEST.MF and
+  signature file): opening is unchanged at 130-146 ms, the first class-path resource read went from
+  6.9 ms to about 500 ms cold (first use of Manifest, JarVerifier, PKCS7, X.509 and the JCA) and
+  135-170 ms compiled (inflate 22, SHA-256 15, Manifest parsing 65, ManifestDigester 10, GC 20); later
+  reads 0.5-1.2 ms. SSLSocket and its factories, SSLContext, SSLEngine, SSLParameters,
+  HttpsURLConnection, the TS SSLSession and conscrypt's SSLParametersImpl marker (OkHttp's platform
+  check) stay TS for TLS at the relay; `TS_SPECS` in provenance.ts lists every allowed TS spec in
+  libcore's namespaces and tests/provenance.test.ts holds registrations to it.
+- 2026-10-01, throw cost and the formatting debts. A failed Integer.parseInt spent 4.5 of 6.3 us in
+  `new Error()`: V8 builds a deopt TranslatedState for every optimized frame (150-225 ns each);
+  stackTraceLimit 1 still costs 1.2 us and captureStackTrace(o, fn) saves nothing. A lazy capture
+  cannot be exact (frames are gone after unwinding; 166 TS catch sites) and capping frames does not
+  help at typical depths. `discard.ts` instead marks, at a hot compile, calls whose handlers all
+  leave the exception dead and whose reachable platform bytecode cannot observe or keep a
+  throwable; while one runs, `R.quiet.types` names the handled classes and captureStack skips them
+  (cleared on return, throw, suspension and runClinit). The analysis links and compiles nothing:
+  a first version that linked field types stubbed classes a realm lacked. parseFail 6.0-6.3 ->
+  1.5 us; Double.parseDouble is not covered (it reaches Matcher and an interface call). FloatingDecimal's
+  dtoa is a §4.7 intrinsic keeping libcore's digits (4,000 calls 2.07 -> 1.43 ms; BigInt64 beat
+  32-bit halves); String.format 3.03 -> 2.71 us is a flat profile (parsing 40%, FloatingDecimal 30%);
+  compiled instance-of/check-cast cache two receiver classes; arraycopy of up to 16 elements loops.
+  Scanner is unchanged (2,000 ints about 10 ms): every Matcher.region() resets and stringifies the
+  1,024-char CharBuffer, and an exact fix needs a Scanner- or Matcher-level design.
+- 2026-10-01, crypto debts. SHA-256 in JS is at its ceiling (3.1 ms/MB; unrolled 2.9); the old
+  0.61 ms was WebCrypto's SHA instructions. A digest now holds its message (to 64 MB) while nothing
+  is hashed, and EVP_DigestFinal_ex of 64 KB or more returns `crypto.subtle.digest`, suspending once
+  (1 MB 3.3 -> 0.46 ms); smaller messages, SHA-224/MD5, clones and sign/verify hash in JS. ECDSA P-256
+  verify 467 -> 310-322 us: 85% was point arithmetic and in it the bigint `%` (105 ns on a 512-bit
+  product); Barrett reduction (75 ns), folded subtractions, per-point odd-multiple tables and an X
+  compared against r*Z^2 instead of an inversion. Limbs in Int32/Float64 (no 64-bit products),
+  Lehmer inversion (one per verify) and per-verify WebCrypto (a suspension per call) were rejected;
+  the rest needs Wasm or WebCrypto. The first certificate parse (~200 ms) is not certificate code:
+  about 100 ms is the JCA provider list (8 ClassNotFoundExceptions; ZygoteInit.warmUpJcaProviders
+  pays it on a device) and 116 ms the first `Calendar.getInstance(UTC)` from
+  OpenSSLX509Certificate.toDate loading ICU locale data cold; the certificate is 11 ms cold. jbench's
+  runner had read the whole ICU file for every range, overstating earlier first-use numbers.
+- 2026-10-01, collection, zip, json and address debts. Strings from bytes skip the argument array,
+  the subarray view and the charset lookup (byte-range constructors now throw as libcore's
+  checkBoundsOffCount does); a String compareTo whose result feeds only zero tests compiles to JS
+  comparison (`markSignOnly` in prepared.ts; UTF-16 order is JS's); equalsIgnoreCase compares ASCII
+  without regular expressions. V8: TreeMap 0.72 -> 0.45 ms (TS 0.26; the rest is the red-black tree,
+  0.19 ms as hand-written JS), zipOpen 0.60 -> 0.50, org.json parse 4.2 -> 3.9 (TS 2.0; no single
+  hotspot, megamorphic instance-of about 10% of writes). InetAddress.getByName of a cached host
+  stays 8.9 us (TS 0.4): 70% is the stack capture of the GaiException libcore provokes on every
+  non-numeric host, the rest per-frame rethrows in ForwardingOs/BlockGuardOs and socket.ts glue.
+  Back-edge fuel checks cost 12-18% of tight loops; moving or batching the counter gained nothing.
+  Rejected: dropping the suspension check after leaf calls (0-6%), loop fills instead of
+  `fill(null)` (holey arrays; listRemove +16%). A matched jbench run of the whole pass against
+  0fd5fe74 shows no steady regression beyond run-to-run spread (b64java 1.00-1.13 and mix
+  1.34-1.45 ms within one commit).
+- 2026-10-01, a launch race and cold Mihon latency. provisionPackages runs beside startZygote and
+  built a ComponentName per disabled microG component; linking the spec before the platform dex was
+  indexed stubbed java/lang/Comparable, and a launch that lost the race failed (2 of 5 fast gates
+  under load; 0 of 6 after component state became keyed by name). Cold Mihon `light` is bimodal
+  because its answering frame is either a ripple frame presented ahead of the recomposition (17-36
+  ms) or the recomposed one; interleaved against 8c8796fb (before the java.lang flips) both trees
+  measured 147-183 ms in the slow mode, so the flips did not cause it. A slow tap's 190 ms: about
+  60 ms runtime and JIT TS (13 ms V8 parsing new bodies, 47 classes compiled on the tap), 90 ms Java
+  and 27 ms cold tier; libcore Java about 3 ms, plus a one-time 8 ms ICU property-set build that
+  lands in whichever tap is running. Compose's ScatterMap calls Long.numberOfTrailingZeros 14,251
+  times per theme switch. After this pass the slow mode measures 128-148 ms and the gate passed
+  5 of 5 cold runs and warm.
 
 ## Java, storage and framework semantics
 
