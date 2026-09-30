@@ -102,8 +102,10 @@ export function mkFd(fd: number): JObj | Promise<JObj> {
 rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
 // OpenJDK tests the bits of F_GETFL's result as is, so a failure reads as appending
 rt.registerJni("java/io/FileDescriptor", "getAppend(I)Z", (fd: number) => +((javaFcntlFd(fd, 3 /* F_GETFL */, 0) & O_APPEND) !== 0));
+// the bytes are already in the VFS; a sync is what asks for them to persist now
 rt.registerJni("java/io/FileDescriptor", "sync()V", function (this: JObj) {
   if (javaSyncFd(fdInt(this)) < 0) throw rt.mkThrowable("java/io/SyncFailedException", "sync failed");
+  return vfs.flush();
 });
 /** OpenJDK's FileInputStream natives (io_util_md.c) over the stream's descriptor */
 function streamFd(stream: JObj): number {
