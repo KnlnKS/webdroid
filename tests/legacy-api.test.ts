@@ -425,25 +425,6 @@ test("ColorMatrix saturation, scale and concat feed a ColorMatrixColorFilter", a
   await expect((async () => newObj("android/graphics/ColorMatrix", "([F)V", new Float32Array(3)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/ArrayIndexOutOfBoundsException").ctor });
 });
 
-test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitizes values", async () => {
-  const strict = await newObj("android/net/UrlQuerySanitizer");
-  await vcall(strict, "parseUrl", "(Ljava/lang/String;)V", "http://x/?a=1&b=2");
-  expect(await vcall(strict, "hasParameter", "(Ljava/lang/String;)Z", "a")).toBe(0);
-  const convenient = await newObj("android/net/UrlQuerySanitizer", "(Ljava/lang/String;)V", "http://x/?a=1&b=2");
-  expect(await vcall(convenient, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "a")).toBe("1");
-  const open = await newObj("android/net/UrlQuerySanitizer");
-  await vcall(open, "setAllowUnregisteredParamaters", "(Z)V", 1);
-  await vcall(open, "setUnregisteredParameterValueSanitizer", "(Landroid/net/UrlQuerySanitizer$ValueSanitizer;)V",
-    await scall("android/net/UrlQuerySanitizer", "getUrlAndSpaceLegal", "()Landroid/net/UrlQuerySanitizer$ValueSanitizer;"));
-  await vcall(open, "parseUrl", "(Ljava/lang/String;)V", "http://x/p?q=hello+w%21rld&z=<b>&q=second");
-  expect(await vcall(open, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "q")).toBe("second");
-  expect(await vcall(open, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "z")).toBe("b");
-  const list = await vcall(open, "getParameterList", "()Ljava/util/List;");
-  expect(await vcall(list, "size", "()I")).toBe(3);
-  const first = await vcall(list, "get", "(I)Ljava/lang/Object;", 0);
-  expect(first.mParameter).toBe("q"); expect(first.mValue).toBe("hello w!rld");
-});
-
 test("JSON text prints a stored long's digits", async () => {
   const map = await newObj("java/util/HashMap");
   await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "big", await newObj("java/lang/Long", "(J)V", 9007199254740993n));

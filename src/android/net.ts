@@ -1,4 +1,4 @@
-// android.net: Uri, UrlQuerySanitizer and Wi-Fi. The network itself is the connectivity service's
+// android.net: Uri and Wi-Fi. The network itself is the connectivity service's
 // (services.ts), under AOSP's ConnectivityManager.
 
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
@@ -416,111 +416,6 @@ rt.register({
     "isP2pSupported()Z": () => 0,
   },
 });
-// ── UrlQuerySanitizer: AOSP's parser with its IllegalCharacterValueSanitizer flag set
-const SAN = { SPACE_OK: 1, OTHER_WHITESPACE_OK: 2, SCRIPT_URL_OK: 4, AMP_OK: 8, AMP_AND_SPACE_OK: 9, DQUOTE_OK: 16, SQUOTE_OK: 32, LT_OK: 64, GT_OK: 128, PCT_OK: 256, NUL_OK: 512, NON_7_BIT_ASCII_OK: 1024,
-  ALL_OK: 2047, URL_LEGAL: 4 | 8 | 256 | 1024, ALL_BUT_NUL_LEGAL: 2047 & ~512, ALL_BUT_WHITESPACE_LEGAL: 2047 & ~3, ALL_BUT_NUL_AND_ANGLE_BRACKETS_LEGAL: 2047 & ~(512 | 64 | 128) };
-class JParameterValuePair extends JObj { mParameter = ""; mValue = ""; }
-class JIllegalCharacterValueSanitizer extends JObj { flags = 0; }
-function sanitizeIllegal(flags: number, value: string | null): string | null {
-  if (value === null) return null;
-  let out = "";
-  for (const c of value) {
-    const code = c.charCodeAt(0);
-    let ok = false;
-    if (c === " ") ok = !!(flags & SAN.SPACE_OK);
-    else if (c === "\t" || c === "\n" || c === "\r" || c === "\f") ok = !!(flags & SAN.OTHER_WHITESPACE_OK);
-    else if (c === "&") ok = !!(flags & SAN.AMP_OK);
-    else if (c === "\"") ok = !!(flags & SAN.DQUOTE_OK);
-    else if (c === "'") ok = !!(flags & SAN.SQUOTE_OK);
-    else if (c === "<") ok = !!(flags & SAN.LT_OK);
-    else if (c === ">") ok = !!(flags & SAN.GT_OK);
-    else if (c === "%") ok = !!(flags & SAN.PCT_OK);
-    else if (code === 0) ok = !!(flags & SAN.NUL_OK);
-    else if (code > 127) ok = !!(flags & SAN.NON_7_BIT_ASCII_OK);
-    else ok = true;
-    out += ok ? c : " ";
-  }
-  if (!(flags & SAN.SCRIPT_URL_OK) && /^\s*(javascript|vbscript):/i.test(out)) out = "";
-  return out.trim();
-}
-const sanitizerFor = (flags: number) => Object.assign(new JIllegalCharacterValueSanitizer(), { flags });
-class JUrlQuerySanitizer extends JObj {
-  sanitizers = new Map<string, unknown>();
-  entries = new Map<string, JParameterValuePair>();
-  list: JParameterValuePair[] = [];
-  allowUnregistered = false;
-  preferFirst = false;
-  unregisteredSanitizer: unknown = sanitizerFor(0);
-  effective(parameter: string): unknown { return this.sanitizers.get(parameter) ?? (this.allowUnregistered ? this.unregisteredSanitizer : null); }
-  async parseQuery(query: string): Promise<void> {
-    this.entries.clear(); this.list.length = 0;
-    for (const part of query.split("&")) {
-      if (!part) continue;
-      const eq = part.indexOf("="), parameter = unescapeQuery(eq < 0 ? part : part.slice(0, eq)), raw = eq < 0 ? "" : unescapeQuery(part.slice(eq + 1));
-      const sanitizer = this.effective(parameter);
-      if (!sanitizer) continue;
-      const value = String(await vcall(sanitizer, "sanitize", "(Ljava/lang/String;)Ljava/lang/String;", raw));
-      if (this.entries.has(parameter) && this.preferFirst) continue;
-      const pair = Object.assign(new JParameterValuePair(), { mParameter: parameter, mValue: value });
-      this.entries.set(parameter, pair);
-      this.list.push(pair);
-    }
-  }
-}
-function unescapeQuery(s: string): string {
-  return s.replace(/\+/g, " ").replace(/%([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-}
-rt.markers("android/net/UrlQuerySanitizer$ValueSanitizer");
-rt.register({
-  name: "android/net/UrlQuerySanitizer$ParameterValuePair", ctor: JParameterValuePair, fields: ["mParameter", "mValue"],
-  methods: { "<init>(Landroid/net/UrlQuerySanitizer;Ljava/lang/String;Ljava/lang/String;)V": function (this: JParameterValuePair, _outer: unknown, p: string, v: string) { this.mParameter = p; this.mValue = v; } },
-});
-rt.register({
-  name: "android/net/UrlQuerySanitizer$IllegalCharacterValueSanitizer", ctor: JIllegalCharacterValueSanitizer, ifaces: ["android/net/UrlQuerySanitizer$ValueSanitizer"],
-  statics: { ...Object.fromEntries(Object.entries(SAN)) },
-  methods: {
-    "<init>(I)V": function (this: JIllegalCharacterValueSanitizer, flags: number) { this.flags = flags; },
-    "sanitize(Ljava/lang/String;)Ljava/lang/String;": function (this: JIllegalCharacterValueSanitizer, v: string | null) { return sanitizeIllegal(this.flags, v); },
-  },
-});
-rt.register({
-  name: "android/net/UrlQuerySanitizer", ctor: JUrlQuerySanitizer,
-  methods: {
-    "<init>()V": function () {},
-    // AOSP: the convenience constructor accepts unregistered parameters before it parses
-    "<init>(Ljava/lang/String;)V": function (this: JUrlQuerySanitizer, url: string) { this.allowUnregistered = true; return parseSanitizerUrl.call(this, url); },
-    "parseUrl(Ljava/lang/String;)V": parseSanitizerUrl,
-    "parseQuery(Ljava/lang/String;)V": function (this: JUrlQuerySanitizer, query: string) { return this.parseQuery(query ?? ""); },
-    "getParameterSet()Ljava/util/Set;": function (this: JUrlQuerySanitizer) { return newLinkedHashSet([...this.entries.keys()]); },
-    "getParameterList()Ljava/util/List;": function (this: JUrlQuerySanitizer) { return newArrayList(this.list.slice()); },
-    "hasParameter(Ljava/lang/String;)Z": function (this: JUrlQuerySanitizer, p: string) { return this.entries.has(p) ? 1 : 0; },
-    "getValue(Ljava/lang/String;)Ljava/lang/String;": function (this: JUrlQuerySanitizer, p: string) { return this.entries.get(p)?.mValue ?? null; },
-    "registerParameter(Ljava/lang/String;Landroid/net/UrlQuerySanitizer$ValueSanitizer;)V": function (this: JUrlQuerySanitizer, p: string, s: unknown) { if (s === null) this.sanitizers.delete(p); else this.sanitizers.set(p, s); },
-    "registerParameters([Ljava/lang/String;Landroid/net/UrlQuerySanitizer$ValueSanitizer;)V": function (this: JUrlQuerySanitizer, ps: string[], s: unknown) { for (const p of ps) this.sanitizers.set(p, s); },
-    "setAllowUnregisteredParamaters(Z)V": function (this: JUrlQuerySanitizer, b: number) { this.allowUnregistered = !!b; },
-    "getAllowUnregisteredParamaters()Z": function (this: JUrlQuerySanitizer) { return this.allowUnregistered ? 1 : 0; },
-    "setPreferFirstRepeatedParameter(Z)V": function (this: JUrlQuerySanitizer, b: number) { this.preferFirst = !!b; },
-    "getPreferFirstRepeatedParameter()Z": function (this: JUrlQuerySanitizer) { return this.preferFirst ? 1 : 0; },
-    "setUnregisteredParameterValueSanitizer(Landroid/net/UrlQuerySanitizer$ValueSanitizer;)V": function (this: JUrlQuerySanitizer, s: unknown) { this.unregisteredSanitizer = s; },
-    "getUnregisteredParameterValueSanitizer()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": function (this: JUrlQuerySanitizer) { return this.unregisteredSanitizer; },
-    "getValueSanitizer(Ljava/lang/String;)Landroid/net/UrlQuerySanitizer$ValueSanitizer;": function (this: JUrlQuerySanitizer, p: string) { return this.sanitizers.get(p) ?? null; },
-    "getEffectiveValueSanitizer(Ljava/lang/String;)Landroid/net/UrlQuerySanitizer$ValueSanitizer;": function (this: JUrlQuerySanitizer, p: string) { return this.effective(p); },
-    "unescape(Ljava/lang/String;)Ljava/lang/String;": (s: string) => unescapeQuery(s),
-    "static getAllIllegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(0),
-    "static getAllButNulLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.ALL_BUT_NUL_LEGAL),
-    "static getAllButWhitespaceLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.ALL_BUT_WHITESPACE_LEGAL),
-    "static getUrlLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.URL_LEGAL),
-    "static getUrlAndSpaceLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.URL_LEGAL | SAN.SPACE_OK),
-    "static getAmpLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.AMP_OK),
-    "static getAmpAndSpaceLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.AMP_AND_SPACE_OK),
-    "static getSpaceLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.SPACE_OK),
-    "static getAllButNulAndAngleBracketsLegal()Landroid/net/UrlQuerySanitizer$ValueSanitizer;": () => sanitizerFor(SAN.ALL_BUT_NUL_AND_ANGLE_BRACKETS_LEGAL),
-  },
-});
-function parseSanitizerUrl(this: JUrlQuerySanitizer, url: string): Promise<void> {
-  const q = url.indexOf("?");
-  return this.parseQuery(q < 0 ? "" : url.slice(q + 1));
-}
 // TrafficStats: per-thread socket tagging for the kernel's accounting. Bytes are counted per
 // tag nowhere here, so the tag is kept per thread and the totals answer UNSUPPORTED (-1).
 const threadTags = new WeakMap<object, number>();
