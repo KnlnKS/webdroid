@@ -129,7 +129,6 @@ const SERVICE_CLASS: Record<string, string> = {
   notification: "android/app/NotificationManager",
   accessibility: "android/view/accessibility/AccessibilityManager",
   captioning: "android/view/accessibility/CaptioningManager",
-  jobscheduler: "android/app/job/JobScheduler",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
   fingerprint: "android/hardware/fingerprint/FingerprintManager",
@@ -178,6 +177,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   keyguard: ["android/app/KeyguardManager", (ctx) => newObj("android/app/KeyguardManager", "(Landroid/content/Context;)V", ctx)],
   usagestats: ["android/app/usage/UsageStatsManager", async (ctx) => newObj("android/app/usage/UsageStatsManager",
     "(Landroid/content/Context;Landroid/app/usage/IUsageStatsManager;)V", ctx, await hostedService("usagestats"))],
+  jobscheduler: ["android/app/job/JobScheduler", async (ctx) =>
+    newObj("android/app/JobSchedulerImpl", "(Landroid/content/Context;Landroid/app/job/IJobScheduler;)V", ctx, await hostedService("jobscheduler"))],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

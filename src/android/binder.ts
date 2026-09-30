@@ -1,8 +1,8 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, newObj, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
-import { jarray } from "../jvm/abi";
+import { jarray, mangleMethod } from "../jvm/abi";
 
 /** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
@@ -163,8 +163,14 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
 // returns for an absent service, and is reported as a boundary gap.
 const binderServices = new Map<string, JObj | Promise<JObj> | (() => Promise<JObj>)>();
-/** host a system service, made when first asked for */
-export function hostService(name: string, make: () => Promise<JObj>): void { binderServices.set(name, make); }
+const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
+/** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
+ *  methods declare @EnforcePermission takes its enforcer at construction (its no-argument
+ *  constructor asks the system context for one); none of the hosted methods calls it. */
+export function hostStub(name: string, cls: string): void {
+  binderServices.set(name, async () => M_ENFORCED in rt.link(cls).ctor.prototype
+    ? newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer")) : newObj(cls));
+}
 class JServiceManager extends JObj { binder: JBinder | null = null; }
 /** a hosted service's binder, made when first asked for */
 export function hostedService(name: string): JObj | Promise<JObj> | null {

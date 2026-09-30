@@ -330,7 +330,7 @@ describe("job-scheduler", () => {
     Reflect.set(app, "$host", host); setAppHost(host);
     try {
       await loadFrameworkJar();
-      const scheduler = rt.make("android/app/job/JobScheduler");
+      const scheduler = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "jobscheduler");
       const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, pkg + ".Worker");
       const info = await vcall(await newObj("android/app/job/JobInfo$Builder", "(ILandroid/content/ComponentName;)V", 7, component), "build", "()Landroid/app/job/JobInfo;");
       for (const action of ["a", "b"]) {

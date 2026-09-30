@@ -15,7 +15,7 @@ import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
 import { JConfigurationInfo, getPM } from "./pm";
 import { deviceConfiguration } from "./resnative";
-import { hostService } from "./binder";
+import { hostStub } from "./binder";
 import { registerSystemActivity } from "./intent";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
@@ -23,15 +23,6 @@ import { isRuntimePermission, permissionGranted } from "./context";
 import { stickyBroadcasts } from "./broadcast";
 import type { JIntent } from "./intent";
 import { bundleBox } from "./os";
-
-const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
-/** Host a Stub subclass as a system service. A Stub whose methods declare @EnforcePermission takes
- *  its enforcer at construction (its no-argument constructor asks the system context for one);
- *  none of these services calls it, as no method here is one that checks a permission. */
-function hostStub(name: string, cls: string): void {
-  hostService(name, async () => M_ENFORCED in rt.link(cls).ctor.prototype
-    ? newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer")) : newObj(cls));
-}
 
 class JRunningAppProcessInfo extends JObj {
   processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];
