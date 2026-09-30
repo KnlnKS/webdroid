@@ -2,7 +2,7 @@ import type { pki } from "node-forge";
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, sameBytes, charsToString } from "../abi";
 import { vcall } from "./jlang";
-import { mkBI } from "./jmath";
+import { mkBigInteger } from "./jmath";
 
 export const forge = () => import("../../forge").then((m) => m.default);
 export const binary = (b: Uint8Array) => charsToString(b, 0, b.length);
@@ -39,15 +39,15 @@ for (const name of ["java/security/PublicKey", "java/security/PrivateKey"]) {
   rt.register({ name, ctor: class extends JObj {}, ifaces: ["java/security/Key"] });
 }
 rt.markers("java/security/interfaces/RSAKey", "java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAPrivateKey");
-const bigInt = (v: { toString(radix: number): string }) => mkBI(BigInt("0x" + v.toString(16)));
+const bigInt = (v: { toString(radix: number): string }) => mkBigInteger(BigInt("0x" + v.toString(16)));
 rt.register({
   name: "webdroid/RsaPublicKey", ctor: JRsaPublicKey, ifaces: ["java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAKey", "java/security/PublicKey", "java/security/Key"],
   methods: {
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": () => "X.509",
     "getEncoded()[B": function (this: JRsaPublicKey) { return new Int8Array(this.encoded); },
-    "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return bigInt((yield this.key()).n); }),
-    "getPublicExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return bigInt((yield this.key()).e); }),
+    "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return yield bigInt((yield this.key()).n); }),
+    "getPublicExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return yield bigInt((yield this.key()).e); }),
     "equals(Ljava/lang/Object;)Z": function (this: JRsaPublicKey, o: unknown) { return o instanceof JRsaPublicKey && sameBytes(o.encoded, this.encoded) ? 1 : 0; },
     "hashCode()I": function (this: JRsaPublicKey) { let h = 0; for (const b of this.encoded) h = (Math.imul(h, 31) + b) | 0; return h; },
   },
@@ -55,8 +55,8 @@ rt.register({
 rt.register({
   name: "webdroid/RsaPrivateKey", ctor: JRsaPrivateKey, ifaces: ["java/security/interfaces/RSAPrivateKey", "java/security/interfaces/RSAKey", "java/security/PrivateKey", "java/security/Key"],
   methods: {
-    "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPrivateKey): Gen { return bigInt((yield this.key()).n); }),
-    "getPrivateExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPrivateKey): Gen { return bigInt((yield this.key()).d); }),
+    "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPrivateKey): Gen { return yield bigInt((yield this.key()).n); }),
+    "getPrivateExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPrivateKey): Gen { return yield bigInt((yield this.key()).d); }),
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": function (this: JRsaPrivateKey) { return this.stored ? null : "PKCS#8"; },
     "getEncoded()[B": function (this: JRsaPrivateKey) { return this.stored ? null : new Int8Array(this.encoded); },

@@ -12,6 +12,7 @@ import { vfs, apkPath } from "../../shell/vfs";
 import { appUserName, procIdentity } from "../../shell/procfs";
 import { csText } from "./jchars";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
+import { bigOf } from "./jmath";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
   if (separator == null || parts == null) rt.npe();
@@ -807,6 +808,7 @@ function javaTrim(value: string): string {
 const JAVA_WHITESPACE = /^[\t-\r\x1c-\x1f \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]+|[\t-\r\x1c-\x1f \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]+$/g;
 sm("trim()Ljava/lang/String;", function () { return javaTrim(this); });
 sm("strip()Ljava/lang/String;", function () { return this.replace(JAVA_WHITESPACE, ""); });
+sm("doRepeat(I)Ljava/lang/String;", function (n: number) { return this.repeat(n); });
 sm("toLowerCase()Ljava/lang/String;", function () { return this.toLowerCase(); });
 sm("toUpperCase()Ljava/lang/String;", function () { return this.toUpperCase(); });
 sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function () { return this.toLowerCase(); });
@@ -890,7 +892,8 @@ export function javaFormat(fmt: string, args: unknown[]): string {
       const arg = args[idx];
       let v = arg;
       // BigInteger prints its whole signed magnitude; int/long print two's-complement at their width.
-      const big = rt.iof(v, "java/math/BigInteger") ? (v as { v: bigint }).v : null;
+      const big = rt.iof(v, "java/math/BigInteger") ? bigOf(v as JObj) : null;
+      if (big !== null) v = big;
       // %x/%o print two's complement at the ARGUMENT's width, so a Byte -1 is "ff", not "ffffffff"
       const mask = v instanceof JByte ? 0xff : v instanceof JShort ? 0xffff : -1;
       if (v !== null && typeof v === "object" && "v" in (v as object)) {

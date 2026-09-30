@@ -4,7 +4,7 @@
 // bare scalar) still agree on a secret, and lets a point be checked before it is trusted.
 import { rt, JObj } from "../runtime";
 import { sameBytes } from "../abi";
-import { JBigInteger, mkBI, modInverse, bytesToBig } from "./jmath";
+import { bigOf, mkBigInteger, modInverse, bytesToBig } from "./jmath";
 import { valueClass } from "./jsec";
 import { JRsaPublicKey, JRsaPrivateKey, array } from "./jrsa";
 
@@ -111,19 +111,18 @@ function ecPrivate(c: Curve, s: bigint): JEcPrivateKey {
 }
 const inst = <T extends JObj>(cls: string, fields: Record<string, unknown>): T => Object.assign(rt.make(cls), fields) as T;
 const specs = new Map<Curve, JObj>();
-function paramSpec(c: Curve): JObj {
-  let s = specs.get(c);
-  if (!s) {
-    const field = inst("java/security/spec/ECFieldFp", { p: mkBI(c.p), size: c.p.toString(2).length });
-    const curve = inst("java/security/spec/EllipticCurve", { field, a: mkBI(c.a), b: mkBI(c.b) });
-    specs.set(c, (s = inst("java/security/spec/ECParameterSpec", { curve, g: ecPoint(c.gx, c.gy), n: mkBI(c.n), h: 1 })));
-  }
+const paramSpec = (c: Curve): JObj | Promise<JObj> => specs.get(c) ?? (async () => {
+  const field = inst("java/security/spec/ECFieldFp", { p: await mkBigInteger(c.p), size: c.p.toString(2).length });
+  const curve = inst("java/security/spec/EllipticCurve", { field, a: await mkBigInteger(c.a), b: await mkBigInteger(c.b) });
+  const s = inst("java/security/spec/ECParameterSpec", { curve, g: await ecPoint(c.gx, c.gy), n: await mkBigInteger(c.n), h: 1 });
+  specs.set(c, s);
   return s;
-}
-const ecPoint = (x: bigint, y: bigint) => inst("java/security/spec/ECPoint", { x: mkBI(x), y: mkBI(y) });
+})();
+const ecPoint = async (x: bigint, y: bigint) => inst("java/security/spec/ECPoint", { x: await mkBigInteger(x), y: await mkBigInteger(y) });
 /** the curve an app-built ECParameterSpec describes */
 export function curveOfParams(params: any): Curve {
-  const c = params && curveOf((params.curve?.field?.p as JBigInteger)?.v, (params.n as JBigInteger)?.v);
+  const p = params?.curve?.field?.p, n = params?.n;
+  const c = p && n && curveOf(bigOf(p), bigOf(n));
   if (!c) throw badSpec("unsupported curve");
   return c;
 }
@@ -147,7 +146,7 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": () => "EC",
     "getFormat()Ljava/lang/String;": () => "PKCS#8",
     "getEncoded()[B": function (this: JEcPrivateKey) { return new Int8Array(pkcs8(this)); },
-    "getS()Ljava/math/BigInteger;": function (this: JEcPrivateKey) { return mkBI(this.s); },
+    "getS()Ljava/math/BigInteger;": function (this: JEcPrivateKey) { return mkBigInteger(this.s); },
     "getParams()Ljava/security/spec/ECParameterSpec;": function (this: JEcPrivateKey) { return paramSpec(this.c); },
   },
 });
@@ -181,27 +180,11 @@ export const isEcCurve = (name: string) => !!curveNamed(name);
 
 // RSA key specs: the numbers, encoded into the SubjectPublicKeyInfo / PKCS#8 the RSA keys carry
 const big = (v: bigint) => { const b = be(v, Math.ceil((v.toString(2).length + 1) / 8) || 1); return tlv(2, b); };
-const bigOf = (o: unknown) => (o as JBigInteger)?.v ?? 0n;
 const rsaAlg = tlv(0x30, [...tlv(6, oidBytes(ID_RSA)), 5, 0]);
 const rsaSpki = (n: bigint, e: bigint) => Uint8Array.from(tlv(0x30, [...rsaAlg, ...tlv(3, [0, ...tlv(0x30, [...big(n), ...big(e)])])]));
 const rsaPkcs8 = (parts: bigint[]) => Uint8Array.from(tlv(0x30, [...tlv(2, [0]), ...rsaAlg, ...tlv(4, tlv(0x30, parts.flatMap(big)))]));
 const RSA_CRT = ["n", "e", "d", "p", "q", "dp", "dq", "qinv"];
 const BI = "Ljava/math/BigInteger;", KEY_SPEC = ["java/security/spec/KeySpec"];
-class JRSAKeyGenParameterSpec extends JObj { keysize = 0; publicExponent: JBigInteger | null = null; keyParams: unknown = null; }
-rt.register({ name: "java/security/spec/RSAKeyGenParameterSpec", ctor: JRSAKeyGenParameterSpec,
-  ifaces: ["java/security/spec/AlgorithmParameterSpec"], statics: { F0: mkBI(3n), F4: mkBI(65537n) },
-  methods: {
-    "<init>(ILjava/math/BigInteger;)V": function (this: JRSAKeyGenParameterSpec, size: number, exponent: JBigInteger) {
-      this.keysize = size; this.publicExponent = exponent;
-    },
-    "<init>(ILjava/math/BigInteger;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JRSAKeyGenParameterSpec, size: number, exponent: JBigInteger, params: unknown) {
-      this.keysize = size; this.publicExponent = exponent; this.keyParams = params;
-    },
-    "getKeysize()I": function (this: JRSAKeyGenParameterSpec) { return this.keysize; },
-    "getPublicExponent()Ljava/math/BigInteger;": function (this: JRSAKeyGenParameterSpec) { return this.publicExponent; },
-    "getKeyParams()Ljava/security/spec/AlgorithmParameterSpec;": function (this: JRSAKeyGenParameterSpec) { return this.keyParams; },
-  },
-});
 valueClass("java/security/spec/RSAPublicKeySpec", ["n", "e"], `(${BI}${BI})V`, [[`getModulus()${BI}`, "n"], [`getPublicExponent()${BI}`, "e"]], KEY_SPEC);
 valueClass("java/security/spec/RSAPrivateKeySpec", ["n", "d"], `(${BI}${BI})V`, [[`getModulus()${BI}`, "n"], [`getPrivateExponent()${BI}`, "d"]], KEY_SPEC);
 valueClass("java/security/spec/RSAPrivateCrtKeySpec", RSA_CRT, `(${BI.repeat(8)})V`, [[`getPublicExponent()${BI}`, "e"], [`getPrimeP()${BI}`, "p"],
@@ -226,7 +209,7 @@ rt.register({
     },
     "getAlgorithm()Ljava/lang/String;": function (this: JKeyFactory) { return this.algo; },
     "generatePublic(Ljava/security/spec/KeySpec;)Ljava/security/PublicKey;": function (this: JKeyFactory, spec: any) {
-      if (rt.iof(spec, "java/security/spec/ECPublicKeySpec")) return ecPublic(curveOfParams(spec.params), spec.w.x.v, spec.w.y.v);
+      if (rt.iof(spec, "java/security/spec/ECPublicKeySpec")) return ecPublic(curveOfParams(spec.params), bigOf(spec.w.x), bigOf(spec.w.y));
       if (rt.iof(spec, "java/security/spec/RSAPublicKeySpec")) return rsaKey<JRsaPublicKey>("webdroid/RsaPublicKey", rsaSpki(bigOf(spec.n), bigOf(spec.e)));
       if (!(spec instanceof JEncodedKeySpec)) throw badSpec("unsupported key spec");
       const [alg, bits] = children(read(spec.encoded, 0).body);
@@ -236,7 +219,7 @@ rt.register({
       return pointOf(c, bits.body.subarray(1));
     },
     "generatePrivate(Ljava/security/spec/KeySpec;)Ljava/security/PrivateKey;": function (this: JKeyFactory, spec: any) {
-      if (rt.iof(spec, "java/security/spec/ECPrivateKeySpec")) return ecPrivate(curveOfParams(spec.params), spec.s.v);
+      if (rt.iof(spec, "java/security/spec/ECPrivateKeySpec")) return ecPrivate(curveOfParams(spec.params), bigOf(spec.s));
       if (rt.iof(spec, "java/security/spec/RSAPrivateCrtKeySpec")) return rsaKey<JRsaPrivateKey>("webdroid/RsaPrivateKey", rsaPkcs8([0n, ...RSA_CRT.map((k) => bigOf(spec[k]))]));
       if (!(spec instanceof JEncodedKeySpec)) throw badSpec("unsupported key spec");
       const [, alg, key] = children(read(spec.encoded, 0).body);
@@ -246,10 +229,10 @@ rt.register({
       const [, scalar] = children(read(key.body, 0).body);
       return ecPrivate(c, bytesToBig(scalar.body));
     },
-    "getKeySpec(Ljava/security/Key;Ljava/lang/Class;)Ljava/security/spec/KeySpec;": (key: JObj, cls: { ci: { name: string } | null }) => {
+    "getKeySpec(Ljava/security/Key;Ljava/lang/Class;)Ljava/security/spec/KeySpec;": async (key: JObj, cls: { ci: { name: string } | null }) => {
       const want = cls.ci?.name ?? "";
-      if (key instanceof JEcPublicKey && want.endsWith("ECPublicKeySpec")) return inst("java/security/spec/ECPublicKeySpec", { w: ecPoint(key.x, key.y), params: paramSpec(key.c) });
-      if (key instanceof JEcPrivateKey && want.endsWith("ECPrivateKeySpec")) return inst("java/security/spec/ECPrivateKeySpec", { s: mkBI(key.s), params: paramSpec(key.c) });
+      if (key instanceof JEcPublicKey && want.endsWith("ECPublicKeySpec")) return inst("java/security/spec/ECPublicKeySpec", { w: await ecPoint(key.x, key.y), params: await paramSpec(key.c) });
+      if (key instanceof JEcPrivateKey && want.endsWith("ECPrivateKeySpec")) return inst("java/security/spec/ECPrivateKeySpec", { s: await mkBigInteger(key.s), params: await paramSpec(key.c) });
       if (want.endsWith("EncodedKeySpec")) return inst(want, { encoded: (key as any).encoded ?? (key instanceof JEcPublicKey ? spki(key) : pkcs8(key as JEcPrivateKey)) });
       throw badSpec("unsupported key spec " + want);
     },

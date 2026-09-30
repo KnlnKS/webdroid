@@ -281,12 +281,6 @@ test("network support objects retain packet and HTTP parameter state", async () 
   expect(await vcall(params, "setBooleanParameter", "(Ljava/lang/String;Z)Lorg/apache/http/params/HttpParams;", "enabled", 1)).toBe(params);
   expect(await vcall(params, "getBooleanParameter", "(Ljava/lang/String;Z)Z", "enabled", 0)).toBe(1);
   expect(await vcall(params, "getIntParameter", "(Ljava/lang/String;I)I", "missing", 42)).toBe(42);
-
-  const random = await newObj("java/util/Random", "(J)V", 7n);
-  const integer = await newObj("java/math/BigInteger", "(ILjava/util/Random;)V", 13, random);
-  expect(await vcall(integer, "bitLength", "()I")).toBeLessThanOrEqual(13);
-  expect(await vcall(integer, "signum", "()I")).toBeGreaterThanOrEqual(0);
-
 });
 
 test("optional device services report their unavailable state", async () => {
@@ -315,14 +309,6 @@ test("sets retain their intersection and a non-HDR display reports no modes", as
   const display = await newObj("android/view/Display");
   const hdr = await vcall(display, "getHdrCapabilities", "()Landroid/view/Display$HdrCapabilities;");
   expect(await vcall(hdr, "getSupportedHdrTypes", "()[I")).toHaveLength(0);
-});
-
-test("BigInteger returns quotient and remainder together", async () => {
-  const value = await newObj("java/math/BigInteger", "(Ljava/lang/String;)V", "23");
-  const divisor = await newObj("java/math/BigInteger", "(Ljava/lang/String;)V", "5");
-  const result = await vcall(value, "divideAndRemainder", "(Ljava/math/BigInteger;)[Ljava/math/BigInteger;", divisor);
-  expect(await vcall(result[0], "intValue", "()I")).toBe(4);
-  expect(await vcall(result[1], "intValue", "()I")).toBe(3);
 });
 
 test("ZipInputStream walks entries in local order and serves each entry's bytes", async () => {

@@ -447,6 +447,35 @@ describe("string-format", () => {
   });
 });
 
+describe("java-math-boundary", () => {
+  const big = (s: string) => newObj("java/math/BigInteger", "(Ljava/lang/String;)V", s);
+  test("bigOf and mkBigInteger cross libcore's sign and magnitude", async () => {
+    const { bigOf, mkBigInteger } = await import("../src/jvm/natives/jmath");
+    for (const s of ["0", "1", "-1", "4294967295", "-4294967296", "18446744073709551617", "-" + "9".repeat(80)]) {
+      expect(bigOf(await big(s))).toBe(BigInt(s));
+      const b = await mkBigInteger(BigInt(s));
+      expect(await vcall(b, "toString", "()Ljava/lang/String;")).toBe(s);
+      expect(await vcall(b, "equals", "(Ljava/lang/Object;)Z", await big(s))).toBe(1);
+    }
+    expect(await vcall(await big("255"), "toString", "(I)Ljava/lang/String;", 16)).toBe("ff");
+    const args = jarray([await big("-123456789012345678901234567890")], "Ljava/lang/Object;");
+    expect(scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "%1$d %1$x", args)).toBe("-123456789012345678901234567890 -18ee90ff6c373e0ee4e3f0ad2");
+  });
+  test("NativeBN serves modPow, multiply and divide on large operands", async () => {
+    const p = (1n << 521n) - 1n, a = 3n ** 300n, e = (1n << 200n) + 12345n;
+    const text = (o: unknown) => vcall(o, "toString", "()Ljava/lang/String;");
+    let r = 1n;
+    for (let b = a % p, x = e; x > 0n; x >>= 1n, b = b * b % p) if (x & 1n) r = r * b % p;
+    expect(await text(await vcall(await big(a.toString()), "modPow", "(Ljava/math/BigInteger;Ljava/math/BigInteger;)Ljava/math/BigInteger;", await big(e.toString()), await big(p.toString())))).toBe(r.toString());
+    expect(await text(await vcall(await big((-a).toString()), "modPow", "(Ljava/math/BigInteger;Ljava/math/BigInteger;)Ljava/math/BigInteger;", await big("3"), await big(p.toString())))).toBe((((-a) ** 3n % p) + p) % p + "");
+    const x = 7n ** 900n, y = -(5n ** 700n);
+    expect(await text(await vcall(await big(x.toString()), "multiply", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;", await big(y.toString())))).toBe((x * y).toString());
+    const qr = await vcall(await big(x.toString()), "divideAndRemainder", "(Ljava/math/BigInteger;)[Ljava/math/BigInteger;", await big(y.toString())) as unknown[];
+    expect(await text(qr[0])).toBe((x / y).toString());
+    expect(await text(qr[1])).toBe((x % y).toString());
+  });
+});
+
 describe("string-trim", () => {
   test("String.trim removes a proc cmdline terminator", () => {
     const trim = String.prototype[mangleMethod("trim", "()Ljava/lang/String;") as keyof String] as unknown as (this: string) => string;
