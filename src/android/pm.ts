@@ -16,7 +16,7 @@ import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
 import { DOCS_AUTHORITY } from "./documents";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { JIntent, type JComponentName, componentState, mkComponentName, systemActivity, SYSTEM_ACTIVITY } from "./intent";
+import { JIntent, type JComponentName, componentState, systemActivity, SYSTEM_ACTIVITY } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
 import type { JActivity } from "./app";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
@@ -591,7 +591,7 @@ function resolveActivity(intent: JIntent | null, flags: number): unknown {
 const queryActivities = (intent: JIntent | null, flags: number) => newArrayList(queryComponents(intent, flags, "activity"));
 
 function componentEnabled(name: string, node: XmlNode, owner = currentPackage): boolean {
-  const state = componentState.get(mkComponentName(owner?.pkg ?? appHost?.pkg ?? "", name));
+  const state = componentState.get({ pkg: owner?.pkg ?? appHost?.pkg ?? "", cls: name });
   return state === 1 || state === 0 && attr(node, "enabled")?.data !== 0;
 }
 function visibleComponent(name: string, node: XmlNode, flags: number, owner = currentPackage): boolean {

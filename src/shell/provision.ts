@@ -6,7 +6,7 @@ import { attr, attrStr, TV } from "../android/axml";
 import { resString } from "../android/res";
 import { vfs } from "./vfs";
 import { packages, signaturePermissions } from "../android/packages";
-import { JIntent, componentState, mkComponentName } from "../android/intent";
+import { JIntent, componentState } from "../android/intent";
 import { serviceTransport } from "../android/runningservices";
 import { boxBool } from "../jvm/natives/jbox";
 import { hexBytes } from "../jvm/abi";
@@ -28,7 +28,7 @@ export function provisionPackages(): Promise<void> {
     record.system = true;
     for (const name of spec.disabledComponents) {
       if (!Object.values(record.components).some(components => components.has(name))) throw new Error("Provisioned component unavailable: " + name);
-      const component = mkComponentName(record.pkg, name);
+      const component = { pkg: record.pkg, cls: name };
       if (globalThis.localStorage?.getItem(componentState.key(component)) === null) componentState.set(component, 2);
     }
     for (const permission of spec.grants) { record.grants.add(permission); signaturePermissions.add(permission); }

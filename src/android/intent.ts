@@ -350,10 +350,11 @@ function readComponent(p: JParcel): JComponentName | null {
 }
 /** PackageManager component enabled states an app set (DEFAULT until then); part of the
  *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
+type Component = { pkg: string; cls: string };
 export const componentState = {
-  key: (c: JComponentName) => "wd:install:" + c.pkg + ":component:" + c.cls,
-  get(c: JComponentName): number { return Number(globalThis.localStorage?.getItem(this.key(c)) ?? 0); },
-  set(c: JComponentName, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
+  key: (c: Component) => "wd:install:" + c.pkg + ":component:" + c.cls,
+  get(c: Component): number { return Number(globalThis.localStorage?.getItem(this.key(c)) ?? 0); },
+  set(c: Component, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
 };
 export function mkComponentName(pkg: string, cls: string): JComponentName {
   rt.link("android/content/ComponentName");
