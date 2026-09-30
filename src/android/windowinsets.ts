@@ -3,7 +3,7 @@ import { insetsOf, JRect } from "./graphics";
 import { device } from "../shell/config";
 import type { JView } from "./view";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 
 // ── WindowInsets. AOSP keeps one Insets value per Type bit and dispatches the window's insets
 // down the tree on every traversal; androidx's WindowInsetsCompat is a thin wrapper over it, and

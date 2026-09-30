@@ -2,7 +2,7 @@ import { JIntent } from "../android/intent";
 import { contentResolver, openPfd } from "../android/contentresolver";
 import { mkUri } from "../android/net";
 import { vcall } from "../jvm/natives/jlang";
-import { toJsArray } from "../jvm/natives/jutil";
+import { toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../android/text";
 
 async function sharedFiles(intent: JIntent): Promise<File[]> {

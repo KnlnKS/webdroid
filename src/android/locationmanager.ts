@@ -5,7 +5,7 @@
 // LocationManagerService, locations need ACCESS_COARSE_LOCATION or ACCESS_FINE_LOCATION (a coarse
 // grant is not fudged here) and a caller without either sees no providers.
 import { JObj, noops, rt, stubs } from "../jvm/runtime";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { reportUncaught, bootTime, uptimeMillis } from "./os";
 import { onMain } from "./mainloop";

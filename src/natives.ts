@@ -4,18 +4,15 @@
 // a registered native shadows the dex class, and those three exist to compile or dump the
 // app's own bytecode.
 import "./jvm/natives/jlang";
-import "./jvm/natives/jutil";
+import "./jvm/natives/jcoll";
 import "./jvm/natives/jrandom";
 import "./jvm/natives/jvalues";
 import "./jvm/natives/junicode";
 import "./jvm/natives/jtimer";
-import "./jvm/natives/jstream";
 import "./jvm/natives/jjson";
 import "./jvm/natives/jmath";
 import "./jvm/natives/jio";
-import "./jvm/natives/jobjectstream";
 import "./jvm/natives/jdex";
-import "./jvm/natives/jblockingqueue";
 import "./jvm/natives/jsync";
 import "./jvm/natives/jregex";
 import "./jvm/natives/jicu";
@@ -130,7 +127,6 @@ import "./android/cookies";
 import "./android/hardware";
 import "./android/geocoder";
 import "./android/locationmanager";
-import "./android/worksource";
 import "./android/job";
 import "./android/service";
 import "./android/documents";

@@ -4,7 +4,6 @@ import { curThread, idHash, stringHash, vcall } from "../jvm/natives/jlang";
 import { JHandler, JFnRunnable, JLooper, type JBundle } from "./os";
 import { type JContext } from "./context";
 import { JService } from "./app";
-import type { JList } from "../jvm/natives/jutil";
 
 class JMediaSession extends JObj {
   token = new JSessionToken(this);
@@ -21,7 +20,7 @@ class JMediaSession extends JObj {
   playback: unknown = null;
   audioAttributes: unknown = null;
   metadata: unknown = null;
-  queue: JList | null = null;
+  queue: unknown = null;
   queueTitle: unknown = null;
   extras: JBundle | null = null;
   ratingType = 0;
@@ -123,7 +122,7 @@ rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, m
   "setPlaybackState(Landroid/media/session/PlaybackState;)V": function (this: JMediaSession, playback: unknown) { this.playback = playback; },
   "setPlaybackToLocal(Landroid/media/AudioAttributes;)V": function (this: JMediaSession, attributes: unknown) { this.audioAttributes = attributes; },
   "setMetadata(Landroid/media/MediaMetadata;)V": function (this: JMediaSession, metadata: unknown) { this.metadata = metadata; },
-  "setQueue(Ljava/util/List;)V": function (this: JMediaSession, queue: JList | null) { this.queue = queue; },
+  "setQueue(Ljava/util/List;)V": function (this: JMediaSession, queue: unknown) { this.queue = queue; },
   "setQueueTitle(Ljava/lang/CharSequence;)V": function (this: JMediaSession, title: unknown) { this.queueTitle = title; },
   "setExtras(Landroid/os/Bundle;)V": function (this: JMediaSession, extras: JBundle | null) { this.extras = extras; },
   "setRatingType(I)V": function (this: JMediaSession, type: number) { this.ratingType = type; },

@@ -12,7 +12,7 @@ import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
-import { JList, jeq, toJsArray } from "../jvm/natives/jutil";
+import { jeq, toJsArray } from "../jvm/natives/jcoll";
 import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay, popupInput } from "./popup";
@@ -73,7 +73,6 @@ class JArrayAdapter extends JBaseAdapter {
 }
 function adapterList(adapter: JArrayAdapter, list: unknown) {
   adapter.source = list;
-  adapter.items = list instanceof JList ? list.a : [];
 }
 const appendAdapterItems = driven(function* appendAdapterItems(adapter: JArrayAdapter, values: unknown[]): Gen {
   if (adapter.source) {
@@ -106,13 +105,13 @@ rt.register({
       adapterList(this, list);
     },
     "getCount()I": function (this: JArrayAdapter) {
-      return this.source && !(this.source instanceof JList) ? vcall(this.source, "size", "()I") : this.items.length;
+      return this.source ? vcall(this.source, "size", "()I") : this.items.length;
     },
     "getItem(I)Ljava/lang/Object;": function (this: JArrayAdapter, i: number) {
-      return this.source && !(this.source instanceof JList) ? vcall(this.source, "get", "(I)Ljava/lang/Object;", i) : this.items[i] ?? null;
+      return this.source ? vcall(this.source, "get", "(I)Ljava/lang/Object;", i) : this.items[i] ?? null;
     },
     "getPosition(Ljava/lang/Object;)I": driven(function* (this: JArrayAdapter, item: unknown): Gen {
-      if (this.source && !(this.source instanceof JList)) return vcall(this.source, "indexOf", "(Ljava/lang/Object;)I", item);
+      if (this.source) return vcall(this.source, "indexOf", "(Ljava/lang/Object;)I", item);
       for (let i = 0; i < this.items.length; i++) if (yield jeq(item, this.items[i])) return i;
       return -1;
     }),

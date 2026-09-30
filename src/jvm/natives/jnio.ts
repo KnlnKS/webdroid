@@ -6,7 +6,7 @@ import { mem } from "../../native/mem";
 import { charsToString, jarray, mangleMethod } from "../abi";
 import { CHARSETS, charsetInfo, decodeString, encodeByte, encodeString } from "../charset";
 import { handle } from "../../android/handles";
-import { newStringSet } from "./jutil";
+import { newStringSet } from "./jcoll";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
 /** A native buffer's array is ART's accessible one for allocateDirect (a view over its own guest

@@ -6,7 +6,7 @@
 import { JObj, rt, noops, stubs, declaredField, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost, jclsNameOf } from "./apphost";
 import { type JComponentName, mkComponentName } from "./intent";

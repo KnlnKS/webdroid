@@ -21,7 +21,7 @@ import { resString } from "./res";
 import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { spannedString } from "./text";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";

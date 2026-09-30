@@ -6,7 +6,7 @@
 import { JObj, rt, noops, declaredField } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { boxInt, newObj, scall, vcall } from "../jvm/natives/jlang";
-import { toJsArray } from "../jvm/natives/jutil";
+import { toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { packages, qualifyComponent } from "./packages";

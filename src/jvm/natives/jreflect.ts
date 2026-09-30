@@ -528,6 +528,8 @@ const sunMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(([
     ["Boolean", "Z", (v: DataView, at: number) => (v.getUint8(at) ? 1 : 0), (v: DataView, at: number, x: number) => v.setUint8(at, x ? 1 : 0)],
     ["Byte", "B", (v: DataView, at: number) => v.getInt8(at), (v: DataView, at: number, x: number) => v.setInt8(at, x)],
+    ["Char", "C", (v: DataView, at: number) => v.getUint16(at, true), (v: DataView, at: number, x: number) => v.setUint16(at, x, true)],
+    ["Short", "S", (v: DataView, at: number) => v.getInt16(at, true), (v: DataView, at: number, x: number) => v.setInt16(at, x, true)],
     ["Float", "F", (v: DataView, at: number) => v.getFloat32(at, true), (v: DataView, at: number, x: number) => v.setFloat32(at, x, true)],
     ["Double", "D", (v: DataView, at: number) => v.getFloat64(at, true), (v: DataView, at: number, x: number) => v.setFloat64(at, x, true)],
   ] as const).flatMap(([n, d, get, put]) => [
@@ -564,7 +566,7 @@ rt.register({ name: "sun/misc/Unsafe", ctor: JUnsafe, statics: { theUnsafe: unsa
     [`getAndSetReference(${O}J${O})${O}`]: getAndSetRef, [`getAndSetObject(${O}J${O})${O}`]: getAndSetRef,
   };
   for (const sig of ["allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;", "allocateMemory(J)J", "freeMemory(J)V", "putByte(JB)V",
-    ...[["Boolean", "Z"], ["Byte", "B"], ["Float", "F"], ["Double", "D"]].flatMap(([n, d]) => [`get${n}(${O}J)${d}`, `put${n}(${O}J${d})V`])])
+    ...[["Boolean", "Z"], ["Byte", "B"], ["Char", "C"], ["Short", "S"], ["Float", "F"], ["Double", "D"]].flatMap(([n, d]) => [`get${n}(${O}J)${d}`, `put${n}(${O}J${d})V`])])
     jdk[sig] = sunMethods[sig];
   for (const n of ["compareAndSwapInt", "compareAndSetInt", "weakCompareAndSetInt"]) jdk[`${n}(${O}JII)Z`] = casInt;
   for (const n of ["compareAndSwapLong", "compareAndSetLong"]) jdk[`${n}(${O}JJJ)Z`] = casLong;

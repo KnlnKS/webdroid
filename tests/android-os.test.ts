@@ -524,3 +524,17 @@ describe("system-health", () => {
     await expect(vcallAsync(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID + 1)).rejects.toBeDefined();
   });
 });
+
+describe("long-sparse-array", () => {
+  test("LongSparseArray orders full-width keys and searches insertion positions", async () => {
+    const a = await newObj("android/util/LongSparseArray");
+    const hi = 9007199254740993n;
+    for (const [key, value] of [[hi, "high"], [-hi, "low"], [0n, "zero"]]) await vcall(a, "put", "(JLjava/lang/Object;)V", key, value);
+    expect(await vcall(a, "keyAt", "(I)J", 0)).toBe(-hi);
+    expect(await vcall(a, "indexOfKey", "(J)I", hi - 1n)).toBe(~2);
+    expect(await vcall(a, "indexOfValue", "(Ljava/lang/Object;)I", "high")).toBe(2);
+    const copy = await vcall(a, "clone", "()Landroid/util/LongSparseArray;");
+    await vcall(a, "remove", "(J)V", hi);
+    expect(await vcall(copy, "get", "(J)Ljava/lang/Object;", hi)).toBe("high");
+  });
+});

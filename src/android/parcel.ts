@@ -4,7 +4,7 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException, callOn, curThread, vcallOn } from "../jvm/natives/jlang";
-import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
 import { csText } from "./text";
 
@@ -188,13 +188,14 @@ async function writeList(p: JParcel, list: unknown) {
   writeInt(p, items.length);
   for (const v of items) await writeValue(p, v);
 }
-async function readList(p: JParcel, loader: unknown): Promise<JList | null> {
+async function readItems(p: JParcel, loader: unknown): Promise<unknown[] | null> {
   const n = readInt(p);
   if (n < 0) return null;
   const out: unknown[] = [];
   for (let i = 0; i < n; i++) out.push(await readValue(p, loader));
-  return newArrayList(out);
+  return out;
 }
+const readList = async (p: JParcel, loader: unknown) => { const items = await readItems(p, loader); return items && newArrayList(items); };
 async function writeMap(p: JParcel, m: unknown) {
   if (m === null) return writeInt(p, -1);
   const entries = await toJsArray(await vcall(m, "entrySet", "()Ljava/util/Set;"));
@@ -397,7 +398,7 @@ rt.register({
     "readStringList(Ljava/util/List;)V": driven(function* (this: JParcel, out: unknown): Gen { yield vcall(out, "clear", "()V"); for (const s of readStrings(this) ?? []) yield vcall(out, "add", "(Ljava/lang/Object;)Z", s); }),
     [`readValue(${L})Ljava/lang/Object;`]: function (this: JParcel, loader: unknown) { return readValue(this, loader); },
     [`readArrayList(${L})Ljava/util/ArrayList;`]: function (this: JParcel, loader: unknown) { return readList(this, loader); },
-    [`readList(Ljava/util/List;${L})V`]: driven(function* (this: JParcel, out: unknown, loader: unknown): Gen { for (const v of (yield readList(this, loader))?.a ?? []) yield vcall(out, "add", "(Ljava/lang/Object;)Z", v); }),
+    [`readList(Ljava/util/List;${L})V`]: driven(function* (this: JParcel, out: unknown, loader: unknown): Gen { for (const v of (yield readItems(this, loader)) ?? []) yield vcall(out, "add", "(Ljava/lang/Object;)Z", v); }),
     [`readHashMap(${L})Ljava/util/HashMap;`]: function (this: JParcel, loader: unknown) { return readMap(this, loader); },
     [`readMap(Ljava/util/Map;${L})V`]: driven(function* (this: JParcel, out: unknown, loader: unknown): Gen { const m = yield readMap(this, loader); if (m) yield vcall(out, "putAll", "(Ljava/util/Map;)V", m); }),
     "readPersistableBundle()Landroid/os/PersistableBundle;": function (this: JParcel) { return readBundle(this, null, true); },

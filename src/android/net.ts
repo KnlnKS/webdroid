@@ -3,7 +3,7 @@
 
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, curThread, stringHash, mkEnumSet } from "../jvm/natives/jlang";
-import { newArrayList, newLinkedHashSet } from "../jvm/natives/jutil";
+import { newArrayList, newLinkedHashSet } from "../jvm/natives/jcoll";
 import { pathOf } from "../jvm/natives/jio";
 import { type JParcel, parcelCreator } from "./parcel";
 

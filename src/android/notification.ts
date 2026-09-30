@@ -5,7 +5,7 @@
 // what was set — androidx's NotificationCompat writes and re-reads `n.flags`, `n.when`,
 // `n.extras` and friends directly rather than through getters.
 
-import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { rt, JObj, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";

@@ -4,7 +4,7 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, vcallUncaught, after } from "../jvm/natives/jlang";
-import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { type JLocale, defaultLocale } from "../jvm/natives/jvalues";
 import { JBinder, INTERFACE_TRANSACTION } from "./binder";
 import { JParcel, readDouble, readInt, readString, writeDouble, writeInt, writeString } from "./parcel";

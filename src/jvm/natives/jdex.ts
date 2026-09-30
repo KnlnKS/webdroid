@@ -1,5 +1,5 @@
 import { slashName, dotName } from "../abi";
-import { mkIter } from "./jutil";
+import { mkEnumeration } from "./jcoll";
 import { JObj, rt, type Runtime, driven, type Gen } from "../runtime";
 import { zipTree } from "./jzip";
 import { pathOf } from "./jio";
@@ -57,7 +57,7 @@ rt.register({
       const runtime = this.runtime;
       if (runtime) for (const [name, loc] of runtime.dexIndex)
         if (runtime.dexAtClassLocation(loc).name.startsWith(this.path + "!")) names.push(dotName(name));
-      return mkIter(names);
+      return mkEnumeration(names);
     },
     "loadClass(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;": function (this: JDexFile, name: string) {
       const cls = slashName(name);

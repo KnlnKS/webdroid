@@ -4,7 +4,7 @@
 
 import { rt, JObj, driven, declaredField, type Gen } from "../jvm/runtime";
 import { vcall, newObj, defineException } from "../jvm/natives/jlang";
-import { toJsArray, newArrayList } from "../jvm/natives/jutil";
+import { toJsArray, newArrayList } from "../jvm/natives/jcoll";
 import { JBundle } from "./os";
 
 const S = "Ljava/lang/String;", URI = "Landroid/net/Uri;", CR = "Landroid/content/ContentResolver;";

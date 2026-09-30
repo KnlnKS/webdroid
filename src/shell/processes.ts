@@ -22,7 +22,7 @@ import { device, formatScreen } from "./config";
 import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
 import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
 import { getPM, JResolveInfo } from "../android/pm";
-import { toJsArray } from "../jvm/natives/jutil";
+import { toJsArray } from "../jvm/natives/jcoll";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";

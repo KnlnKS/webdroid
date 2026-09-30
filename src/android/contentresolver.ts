@@ -10,8 +10,8 @@ import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle } from 
 import { newFile, streamOf } from "../jvm/natives/jio";
 import { mkAssetFd, rawResourceBytes } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
-import { mkCursor, contentValues, type JContentValues } from "./sqlite";
-import { newArrayList } from "../jvm/natives/jutil";
+import { mkCursor, contentValues } from "./sqlite";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { getPM } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
@@ -326,7 +326,7 @@ const resolverMethods: NativeSpec["methods"] = {
   "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/os/ParcelFileDescriptor;": openPfd,
   "openAssetFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": openAfd,
   "openTypedAssetFile(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/content/res/AssetFileDescriptor;": openAfd,
-  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: JContentValues | null): Gen {
+  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: JObj | null): Gen {
     if (isMediaUri(u)) return mediaInsert(u, values ? contentValues(values) : new Map());
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "insert", providerOperations.insert, u, values) : null;
@@ -336,7 +336,7 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "bulkInsert", providerOperations.bulkInsert, u, values) : 0;
   }),
-  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: JContentValues | null, where: string | null, args: string[] | null): Gen {
+  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: JObj | null, where: string | null, args: string[] | null): Gen {
     if (isMediaUri(u)) return mediaUpdate(u, values ? contentValues(values) : new Map(), where, args);
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "update", providerOperations.update, u, values, where, args) : 0;

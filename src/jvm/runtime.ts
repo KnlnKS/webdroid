@@ -26,6 +26,10 @@ const CLASS_INDEX_BASE = 0x10000;
 export class JObj {
   declare static $i: ClassInfo;
 }
+// a Java object inspects as its class and message, not its reachable heap (debuggers, test diffs)
+Object.defineProperty(JObj.prototype, Symbol.for("nodejs.util.inspect.custom"), {
+  value(this: JObj & { msg?: unknown }) { return `${(this.constructor as typeof JObj).$i?.name ?? "?"}${this.msg !== undefined ? ": " + String(this.msg) : ""}`; },
+});
 
 export interface NativeSpec {
   name: string;

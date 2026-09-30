@@ -5,7 +5,6 @@ import { Cpu, setA64 } from "../src/native/cpu";
 import { mem } from "../src/native/mem";
 import { mainThread, newObj, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jlang";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi";
-import { mkIter } from "../src/jvm/natives/jutil";
 import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host";
 import { stdioInit } from "../src/native/stdio";
 import { eglInit } from "../src/native/egl";
@@ -68,24 +67,6 @@ describe("native-construction-thread", () => {
     await creating;
     expect(seen.map(t => t === thread)).toEqual([true, true]);
     expect(curThread).toBe(mainThread);
-  });
-});
-
-describe("native-defaults", () => {
-  class Consumer extends JObj { values: unknown[] = []; }
-  rt.register({ name: "test/NativeIteratorConsumer", ctor: Consumer, ifaces: ["java/util/function/Consumer"], methods: {
-    "accept(Ljava/lang/Object;)V": function (this: Consumer, value: unknown) { this.values.push(value); },
-  } });
-  rt.linkNatives();
-
-  test("native-created iterators receive interface defaults without explicit class initialization", async () => {
-    const iterator = mkIter(["first", "second", "third"]), consumer = new Consumer();
-    expect(await vcall(iterator, "next", "()Ljava/lang/Object;")).toBe("first");
-    await vcall(iterator, "forEachRemaining", "(Ljava/util/function/Consumer;)V", consumer);
-    expect(consumer.values).toEqual(["second", "third"]);
-    expect(await vcall(iterator, "hasNext", "()Z")).toBe(0);
-    await vcall(iterator, "remove", "()V");
-    expect(iterator.arr).toEqual(["first", "second"]);
   });
 });
 

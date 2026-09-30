@@ -5,7 +5,7 @@ import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
 import { JRect } from "./graphics";
 import { type JParcel, parcelCreator, readInt, readString, readString8, writeInt, writeString, writeString8 } from "./parcel";
-import { newLinkedHashSet } from "../jvm/natives/jutil";
+import { newLinkedHashSet } from "../jvm/natives/jcoll";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";

@@ -15,7 +15,7 @@ import { mergeInstall } from "../src/shell/install";
 import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
 import { getPM, registerPackage, FLAG_IS_GAME } from "../src/android/pm";
-import { newArrayList, toJsArray } from "../src/jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
 import { Resources, JTheme, themeOf, rvString, newSV, nativeRes, AID } from "../src/android/res";
 import { newTheme } from "../src/android/resources";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
@@ -651,6 +651,7 @@ describe("search-recent-suggestions", () => {
     const resolver = {
       [mangleMethod("insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;")]:
         (target: { uri: string }, values: unknown) => { uri = target.uri; inserted = values; return null; },
+      [mangleMethod("delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I")]: () => 0,
     };
     const context = {
       [mangleMethod("getContentResolver", "()Landroid/content/ContentResolver;")]: () => resolver,
@@ -658,6 +659,7 @@ describe("search-recent-suggestions", () => {
     const recent = await newObj("android/provider/SearchRecentSuggestions", "(Landroid/content/Context;Ljava/lang/String;I)V", context, "history", 1);
 
     await vcall(recent, "saveRecentQuery", "(Ljava/lang/String;Ljava/lang/String;)V", "android", null);
+    await vcall(recent, "waitForSave", "()V");
 
     expect(uri).toBe("content://history/suggestions");
     expect(await vcall(inserted, "getAsString", "(Ljava/lang/String;)Ljava/lang/String;", "display1")).toBe("android");

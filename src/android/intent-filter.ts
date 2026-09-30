@@ -1,6 +1,6 @@
 import { type JParcel, readInt, writeInt, readString, writeString, writeStrings, parcelCreator } from "./parcel";
 import { vcall } from "../jvm/natives/jlang";
-import { mkIter, toJsArray } from "../jvm/natives/jutil";
+import { mkIter, toJsArray } from "../jvm/natives/jcoll";
 import type { JPersistableBundle } from "./os";
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { attr, attrStr, TV, type XmlNode } from "./axml";

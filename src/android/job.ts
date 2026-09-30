@@ -5,7 +5,7 @@
 
 import { rt, JObj, noops } from "../jvm/runtime";
 import { newObj, reportUncaught, scall, vcall } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { bindAsSystem } from "./runningservices";
 import { hostStub } from "./binder";
 import { batteryLow, netUp } from "./services";

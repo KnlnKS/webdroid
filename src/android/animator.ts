@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jarray, jmethod } from "../jvm/abi";
 import { vcall, vcallOn, curThread, boxInt, box, JFloat, after } from "../jvm/natives/jlang";
-import { toJsArray, newArrayList } from "../jvm/natives/jutil";
+import { toJsArray, newArrayList } from "../jvm/natives/jcoll";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
 import { stateSetMatches } from "./util";

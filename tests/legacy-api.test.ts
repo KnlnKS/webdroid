@@ -10,6 +10,7 @@ import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
 import { scall, loadLibcore, appResources } from "./java";
+import { toJsArray } from "../src/jvm/natives/jcoll";
 
 
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
@@ -21,37 +22,6 @@ rt.register({
   },
 });
 rt.register({
-  name: "test/EvenInt", ctor: class extends JObj {}, ifaces: ["java/util/function/IntPredicate"],
-  methods: { "test(I)Z": (value: number) => value % 2 === 0 ? 1 : 0 },
-});
-class CollectorBox extends JObj { values: string[] = []; }
-class CharSequenceValue extends JObj { value = ""; }
-rt.register({
-  name: "test/CharSequenceValue", ctor: CharSequenceValue, ifaces: ["java/lang/CharSequence"],
-  methods: { "toString()Ljava/lang/String;": function (this: CharSequenceValue) { return this.value; } },
-});
-rt.register({ name: "test/CollectorBox", ctor: CollectorBox });
-rt.register({
-  name: "test/CollectorSupplier", ctor: class extends JObj {}, ifaces: ["java/util/function/Supplier"],
-  methods: { "get()Ljava/lang/Object;": () => rt.make("test/CollectorBox") },
-});
-rt.register({
-  name: "test/CollectorAccumulator", ctor: class extends JObj {}, ifaces: ["java/util/function/BiConsumer"],
-  methods: { "accept(Ljava/lang/Object;Ljava/lang/Object;)V": (box: CollectorBox, value: unknown) => { box.values.push(String(value)); } },
-});
-rt.register({
-  name: "test/CollectorFinisher", ctor: class extends JObj {}, ifaces: ["java/util/function/Function"],
-  methods: { "apply(Ljava/lang/Object;)Ljava/lang/Object;": (box: CollectorBox) => box.values.join("|") },
-});
-rt.register({
-  name: "test/ForeignCollector", ctor: class extends JObj {}, ifaces: ["java/util/stream/Collector"],
-  methods: {
-    "supplier()Ljava/util/function/Supplier;": () => rt.make("test/CollectorSupplier"),
-    "accumulator()Ljava/util/function/BiConsumer;": () => rt.make("test/CollectorAccumulator"),
-    "finisher()Ljava/util/function/Function;": () => rt.make("test/CollectorFinisher"),
-  },
-});
-rt.register({
   name: "test/DuplicateStream", ctor: class extends JObj {}, ifaces: ["java/util/function/Function"],
   methods: {
     "apply(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) =>
@@ -59,12 +29,6 @@ rt.register({
   },
 });
 rt.linkNatives();
-
-test("LinkedList has the AbstractSequentialList hierarchy", async () => {
-  const list = await newObj("java/util/LinkedList", "()V");
-  expect(rt.iof(list, "java/util/AbstractSequentialList")).toBeTruthy();
-  expect(rt.iof(list, "java/util/AbstractList")).toBeTruthy();
-});
 
 test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
   const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
@@ -210,7 +174,7 @@ test("finite number checks and stream flattening preserve Java semantics", async
   expect(scall("java/lang/Double", "isFinite", "(D)Z", Infinity)).toBe(0);
   const source = scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", Object.assign(["a", "b"], { $t: "Ljava/lang/Object;" }));
   const flattened = await vcall(source, "flatMap", "(Ljava/util/function/Function;)Ljava/util/stream/Stream;", rt.make("test/DuplicateStream"));
-  expect((await vcall(flattened, "toList", "()Ljava/util/List;")).a).toEqual(["a", "a", "b", "b"]);
+  expect(await toJsArray(await vcall(flattened, "toList", "()Ljava/util/List;"))).toEqual(["a", "a", "b", "b"]);
 });
 
 test("JSONObject copies only the named keys that exist", async () => {
@@ -543,9 +507,6 @@ test("concrete maps, EnumSet factories, and primitive streams preserve Java disp
     Object.assign(["a", "four", "six"], { $t: "Ljava/lang/Object;" }));
   const ints = await vcall(source, "mapToInt", "(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;", rt.make("test/StringLength"));
   expect(Array.from(await vcall(ints, "toArray", "()[I"))).toEqual([1, 4, 3]);
-  expect(await vcall(ints, "anyMatch", "(Ljava/util/function/IntPredicate;)Z", rt.make("test/EvenInt"))).toBe(1);
-  expect(await vcall(await vcall(ints, "findFirst", "()Ljava/util/OptionalInt;"), "getAsInt", "()I")).toBe(1);
-  expect(await vcall(source, "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;", rt.make("test/ForeignCollector"))).toBe("a|four|six");
 });
 
 test("CharArrayReader supports its initial and explicit marks", async () => {

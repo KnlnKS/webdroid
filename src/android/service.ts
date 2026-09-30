@@ -3,7 +3,7 @@
 
 import { rt, JObj, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { hostStub } from "./binder";
 import { JUserHandle, PARCELABLE, reportUncaught, userHandleForUid } from "./os";
 import { onMain } from "./mainloop";

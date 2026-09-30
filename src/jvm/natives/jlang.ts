@@ -11,7 +11,6 @@ import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
 import { appUserName, procIdentity } from "../../shell/procfs";
 import { csText } from "./jchars";
-import { mkIntStream } from "./jstream-values";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
@@ -413,18 +412,18 @@ rt.register({
       return inherited || vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
     }),
     "findResources(Ljava/lang/String;)Ljava/util/Enumeration;": driven(function* (this: JClassLoader, path: string): Gen {
-      const { mkIter } = yield import("./jutil");
+      const { mkEnumeration } = yield import("./jcoll");
       const url = yield vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
-      return mkIter(url ? [url] : []);
+      return mkEnumeration(url ? [url] : []);
     }),
     "getResources(Ljava/lang/String;)Ljava/util/Enumeration;": driven(function* (this: JClassLoader, path: string): Gen {
-      const { mkIter } = yield import("./jutil");
+      const { mkEnumeration } = yield import("./jcoll");
       const urls: unknown[] = [];
       const inherited = this.parent && (yield vcall(this.parent, "getResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path));
       if (inherited) while (yield vcall(inherited, "hasMoreElements", "()Z")) urls.push(yield vcall(inherited, "nextElement", "()Ljava/lang/Object;"));
       const own = yield vcall(this, "findResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path);
       while (yield vcall(own, "hasMoreElements", "()Z")) urls.push(yield vcall(own, "nextElement", "()Ljava/lang/Object;"));
-      return mkIter(urls);
+      return mkEnumeration(urls);
     }),
     "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": driven(function* (this: JClassLoader, path: string): Gen {
       const url = yield vcall(this, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path.replace(/^\//, ""));
@@ -534,6 +533,11 @@ const stackClass = (n: number) => { const frame = framesHere()[n]; return frame 
 rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, methods: {
   "static getStackClass1()Ljava/lang/Class;": () => stackClass(1),
   "static getStackClass2()Ljava/lang/Class;": () => stackClass(2),
+  // the defining loader of the innermost frame whose class is not the platform's
+  "static getClosestUserClassLoader()Ljava/lang/ClassLoader;": () => {
+    for (const [cls] of framesHere()) if (!rt.platformClasses.has(cls) && !rt.natives.has(cls)) return (rt.link(cls).owner ?? rt).classLoader ?? null;
+    return null;
+  },
   // another cooperative thread's frames are not on the JS stack: none, as for a thread not running
   "static getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;": (t: JThread | null) =>
     stackTrace(t === curThread ? [["dalvik/system/VMStack", "getThreadStackTrace"], ...framesHere()] : []),
@@ -646,10 +650,6 @@ for (const [sup, names] of [
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));
 }
 
-defineException("java/io/ObjectStreamException", "java/io/IOException");
-for (const name of ["NotSerializableException", "InvalidClassException", "InvalidObjectException", "NotActiveException", "StreamCorruptedException"])
-  defineException("java/io/" + name, "java/io/ObjectStreamException");
-defineException("java/io/UTFDataFormatException", "java/io/IOException");
 
 class JAssertionError extends JThrowable {}
 rt.register({ name: "java/lang/AssertionError", ctor: JAssertionError, sup: "java/lang/Error", methods: {
@@ -854,8 +854,9 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
 sm("codePointCount(II)I", function (a: number, b: number) { return cpCount(this, a, b); });
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
-sm("chars()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
-sm("codePoints()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from(this, char => char.codePointAt(0)!)); });
+const intStream = (values: number[]) => scall("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;", Int32Array.from(values));
+sm("chars()Ljava/util/stream/IntStream;", function () { return intStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
+sm("codePoints()Ljava/util/stream/IntStream;", function () { return intStream(Array.from(this, char => char.codePointAt(0)!)); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return stringMatches(this as string, p); });
 sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, true); });
@@ -2121,11 +2122,20 @@ rt.register({
       return (i?.owner ?? rt).classFor(i?.name ?? "java/lang/Enum");
     },
     "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;": driven(function* (cls: JClass, n: string): Gen {
-      const info = cls.ci!;
-      const p = rt.initClass(info); if (p) yield p;
-      return enumValueOf(yield vcall(info.ctor, "values", `()[L${info.name};`), n);
+      return enumValueOf(yield sharedConstants(cls.ci!), n);
     }),
+    // Class.getEnumConstantsShared: the values() array, made once and shared
+    "static getSharedConstants(Ljava/lang/Class;)[Ljava/lang/Enum;": (cls: JClass) => sharedConstants(cls.ci!),
   },
+});
+const enumConstants = new WeakMap<ClassInfo, JEnum[]>();
+const sharedConstants = driven(function* sharedConstants(info: ClassInfo): Gen<JEnum[]> {
+  const cached = enumConstants.get(info);
+  if (cached) return cached;
+  const p = rt.initClass(info); if (p) yield p;
+  const values: JEnum[] = yield vcall(info.ctor, "values", `()[L${info.name};`);
+  enumConstants.set(info, values);
+  return values;
 });
 function enumCmp(this: JEnum, o: JEnum) { return this.ord - o.ord; }
 export function enumValueOf<T extends JEnum>(values: T[], name: string): T {

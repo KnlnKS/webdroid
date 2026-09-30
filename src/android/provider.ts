@@ -12,7 +12,7 @@ import { csText } from "../jvm/natives/jchars";
 import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
 import { isMediaUri, mediaDelete, mediaFlag } from "./mediastore";
-import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, pickDocuments, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
@@ -79,34 +79,6 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
 });
 
 const enc = encodeURIComponent;
-
-class JSearchRecentSuggestions extends JObj {
-  ctx: unknown = null;
-  authority = "";
-  twoLine = false;
-}
-rt.register({
-  name: "android/provider/SearchRecentSuggestions", ctor: JSearchRecentSuggestions,
-  methods: {
-    "<init>(Landroid/content/Context;Ljava/lang/String;I)V": function (this: JSearchRecentSuggestions, ctx: unknown, authority: string | null, mode: number) {
-      if (!authority || !(mode & 1)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown mode or empty authority");
-      this.ctx = ctx;
-      this.authority = authority;
-      this.twoLine = !!(mode & 2);
-    },
-    "saveRecentQuery(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (this: JSearchRecentSuggestions, query: string | null, line2: string | null): Gen {
-      if (!query?.length) return;
-      if (line2 != null && !this.twoLine) throw rt.mkThrowable("java/lang/IllegalArgumentException", "twoLineDisplay must be enabled");
-      const values = yield newObj("android/content/ContentValues");
-      yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display1", query);
-      yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "query", query);
-      yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/Long;)V", "date", BigInt(Date.now()));
-      if (this.twoLine) yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display2", line2);
-      const resolver = yield vcall(this.ctx, "getContentResolver", "()Landroid/content/ContentResolver;");
-      yield vcall(resolver, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri(`content://${this.authority}/suggestions`), values);
-    }),
-  },
-});
 
 rt.register({
   name: "android/provider/DocumentsContract", ctor: class extends JObj {},

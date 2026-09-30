@@ -7,7 +7,7 @@ import { vcall, newObj, after, defineException, checkFromIndexSize } from "./jla
 import { pathOf, readStreamFully, heldByteReads, filterOut, setFilterOut } from "./jio";
 import { vfs } from "../../shell/vfs";
 import { JBuffer, resident } from "./jnio";
-import { mkIter, newArrayList } from "./jutil";
+import { mkEnumeration, newArrayList } from "./jcoll";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib | Gzip;
@@ -534,7 +534,7 @@ rt.register({
     "entries()Ljava/util/Enumeration;": driven(function* (this: JZipFile): Gen {
       const entries = [];
       for (const e of this.entries.values()) entries.push(yield entryOf(this, e));
-      return mkIter(entries);
+      return mkEnumeration(entries);
     }),
     "getEntry(Ljava/lang/String;)Ljava/util/zip/ZipEntry;": function (this: JZipFile, name: string) {
       const e = this.entries.get(name) ?? this.entries.get(name + "/");

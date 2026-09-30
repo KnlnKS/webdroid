@@ -5,7 +5,7 @@ import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, 
 import { mangleMethod, parseMethodDesc, jmethod } from "../jvm/abi";
 import { vcall, callOn, mkEnumSet, JThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
-import { toJsArray } from "../jvm/natives/jutil";
+import { toJsArray } from "../jvm/natives/jcoll";
 import { JViewGroup, initViewFromCtx, defaultSize, rootOf, type JView } from "./view";
 import { overlays } from "./popup";
 import { device } from "../shell/config";

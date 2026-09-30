@@ -14,7 +14,7 @@ import { lookupHost } from "../src/native/host";
 import { mem, guestAt } from "../src/native/mem";
 import { javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, renamePath, stdioInit } from "../src/native/stdio";
 import { BytesFile } from "../src/shell/lazyfile";
-import { mkIter } from "../src/jvm/natives/jutil";
+import { mkEnumeration } from "../src/jvm/natives/jcoll";
 import { scall, loadLibcore } from "./java";
 
 rt.linkNatives();
@@ -449,7 +449,7 @@ describe("sequence-input", () => {
   rt.linkNatives();
   test("SequenceInputStream advances lazily and closes exhausted and remaining streams", async () => {
     const streams = [new Uint8Array(0), Uint8Array.of(1, 2), Uint8Array.of(3)].map(buf => Object.assign(rt.make("test/ClosingStream"), { buf }));
-    const sequence = await newObj("java/io/SequenceInputStream", "(Ljava/util/Enumeration;)V", mkIter(streams));
+    const sequence = await newObj("java/io/SequenceInputStream", "(Ljava/util/Enumeration;)V", mkEnumeration(streams));
     const bytes = new Int8Array(4);
     expect(await vcall(sequence, "read", "([BII)I", bytes, 1, 3)).toBe(2);
     expect([...bytes]).toEqual([0, 1, 2, 0]);

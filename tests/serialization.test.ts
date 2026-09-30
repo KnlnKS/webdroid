@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import "../src/natives";
-import { newObj, vcall, vcallAsync, vcallOn, JThread, curThread, callOn } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, vcallOn, JThread, curThread, callOn, scall } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
 import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";
@@ -130,6 +130,7 @@ describe("object-stream-external", () => {
         const n = Math.min(length, 17, this.bytes.length - this.pos);
         out.set(this.bytes.subarray(this.pos, this.pos + n), offset); this.pos += n; return n || -1;
       },
+      "read()I": function (this: ShortInput) { return this.pos < this.bytes.length ? this.bytes[this.pos++] & 0xff : -1; },
     } });
     rt.linkNatives();
     const values = [await callOn(worker, () => newObj("test/ThreadExternal")), await callOn(worker, () => newObj("test/ThreadExternal"))];
@@ -191,7 +192,7 @@ describe("objectstream", () => {
     const list = await newObj("java/util/ArrayList", "()V");
     await vcall(list, "add", "(Ljava/lang/Object;)Z", "saved");
     await vcall(list, "add", "(Ljava/lang/Object;)Z", await newObj("java/util/concurrent/atomic/AtomicInteger", "(I)V", 7));
-    const view = await vcall(rt.link("java/util/Collections").ctor, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
+    const view = await scall("java/util/Collections", "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
     const restored = await vcall(await input(await encode(view)), "readObject", "()Ljava/lang/Object;");
     expect(rt.iof(restored, "java/util/RandomAccess")).toBe(1);
     expect(await vcall(restored, "get", "(I)Ljava/lang/Object;", 0)).toBe("saved");

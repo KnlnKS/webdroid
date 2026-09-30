@@ -8,7 +8,7 @@
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
-import { newArrayList, toJsArray } from "./jutil";
+import { newArrayList, toJsArray } from "./jcoll";
 import { newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, u8, mangleMethod } from "../abi";

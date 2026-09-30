@@ -3,7 +3,7 @@
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
 import { rt, JObj, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { hostStub } from "./binder";
 import { getPM } from "./pm";

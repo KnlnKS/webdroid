@@ -11,7 +11,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
 import { JEditable, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate, rootOf } from "./view";

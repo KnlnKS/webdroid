@@ -1,6 +1,6 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
 import { mangleField, charsToString, utf8, concat, i8, u8 } from "../abi";
 import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
@@ -538,3 +538,36 @@ rt.register({
     "close()V": () => {},
   },
 });
+
+// java.io serialization's natives: ObjectStreamClass asks whether a class has a static initializer
+// (the default serialVersionUID hashes it), and the object streams convert float and double
+// arrays to and from big-endian bytes
+const hasClinit = (info: ClassInfo) => info.def
+  ? info.def.directMethods.some((m) => info.dex!.method(m.methodIdx).name === "<clinit>")
+  : !!rt.natives.get(info.name)?.methods?.["<clinit>()V"];
+function floatBytes(size: 4 | 8) {
+  const view = new DataView(new ArrayBuffer(8));
+  return {
+    toBytes: (src: Float32Array | Float64Array, from: number, dst: Int8Array, at: number, n: number) => {
+      for (let i = 0; i < n; i++, at += size) {
+        if (size === 4) view.setFloat32(0, src[from + i]); else view.setFloat64(0, src[from + i]);
+        for (let b = 0; b < size; b++) dst[at + b] = view.getInt8(b);
+      }
+    },
+    fromBytes: (src: Int8Array, at: number, dst: Float32Array | Float64Array, to: number, n: number) => {
+      for (let i = 0; i < n; i++, at += size) {
+        for (let b = 0; b < size; b++) view.setInt8(b, src[at + b]);
+        dst[to + i] = size === 4 ? view.getFloat32(0) : view.getFloat64(0);
+      }
+    },
+  };
+}
+const F4 = floatBytes(4), F8 = floatBytes(8);
+rt.registerJnis("java/io/ObjectStreamClass", {
+  "hasStaticInitializer(Ljava/lang/Class;Z)Z": (cls: { ci?: ClassInfo }, inherit: number) => {
+    for (let info = cls.ci ?? null; info; info = inherit ? info.superInfo : null) if (hasClinit(info)) return 1;
+    return 0;
+  },
+});
+rt.registerJnis("java/io/ObjectOutputStream", { "floatsToBytes([FI[BII)V": F4.toBytes, "doublesToBytes([DI[BII)V": F8.toBytes });
+rt.registerJnis("java/io/ObjectInputStream", { "bytesToFloats([BI[FII)V": F4.fromBytes, "bytesToDoubles([BI[DII)V": F8.fromBytes });

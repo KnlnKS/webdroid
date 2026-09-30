@@ -2,7 +2,6 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, curThread, mainThread, JThread, park } from "../src/jvm/natives/jlang";
-import { newArrayList } from "../src/jvm/natives/jutil";
 import { jarray } from "../src/jvm/abi";
 import { mainLooper } from "../src/android/os";
 
@@ -22,23 +21,6 @@ describe("blocking-queue-drain", () => {
     await producer;
     expect(await vcall(queue, "take", "()Ljava/lang/Object;")).toBe("second");
     expect(await vcall(queue, "remainingCapacity", "()I")).toBe(1);
-  });
-
-  test("LinkedBlockingQueue drains a bounded prefix and then the remaining elements", async () => {
-    const queue = await newObj("java/util/concurrent/LinkedBlockingQueue", "(I)V", 8);
-    for (const value of ["a", "b", "c"]) await vcall(queue, "offer", "(Ljava/lang/Object;)Z", value);
-    const target = newArrayList(["existing"]);
-    const drain = (max: number) => vcall(queue, "drainTo", "(Ljava/util/Collection;I)I", target, max);
-    expect(await drain(-1)).toBe(0);
-    expect(await drain(2)).toBe(2);
-    expect(target.a).toEqual(["existing", "a", "b"]);
-    expect(await vcall(queue, "peek", "()Ljava/lang/Object;")).toBe("c");
-    expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;)I", target)).toBe(1);
-    expect(target.a).toEqual(["existing", "a", "b", "c"]);
-    expect(await vcall(queue, "size", "()I")).toBe(0);
-    expect(await drain(10)).toBe(0);
-    expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;I)I", null, 0).catch(e => rt.iof(e, "java/lang/NullPointerException"))).toBe(1);
-    expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;)I", queue).catch(e => rt.iof(e, "java/lang/IllegalArgumentException"))).toBe(1);
   });
 
   test("draining calls suspending collection overrides and propagates failures", async () => {

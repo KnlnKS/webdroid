@@ -4,7 +4,7 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, boxInt, vcallAsync, JThread, curThread, mainThread, setCurThread, vcallOn } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
-import { newStringSet, toJsArray } from "../src/jvm/natives/jutil";
+import { newStringSet, toJsArray } from "../src/jvm/natives/jcoll";
 import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/shell/vfs";

@@ -3,7 +3,6 @@ import { rt, JObj, driven, type Gen } from "../runtime";
 import { vcall, after, defineException } from "./jlang";
 import { jarray, concat, u8, mangleMethod } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
-import { JProps } from "./jutil";
 import { md5, sha1, sha256 } from "./digest";
 
 defineException("java/security/GeneralSecurityException", "java/lang/Exception");
@@ -125,7 +124,7 @@ rt.register({
 // reached through Cipher.getInstance with no provider, so a Provider here carries no service
 // of its own. The list is still the platform's, in the platform's order: an empty one is not a
 // state any device is in, and callers index it (`getProviders()[0].getName()`) unguarded.
-class JProvider extends JProps { pname = ""; version = 0; info = ""; }
+class JProvider extends JObj { pname = ""; version = 0; info = ""; }
 rt.register({
   name: "java/security/Provider", ctor: JProvider, sup: "java/util/Properties",
   methods: {

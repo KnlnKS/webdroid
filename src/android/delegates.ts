@@ -25,7 +25,7 @@ import {
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
-import { lambda } from "../jvm/natives/jstream";
+import { lambda } from "../jvm/natives/jlambda";
 import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
@@ -1126,7 +1126,7 @@ export async function zygoteInit(): Promise<void> {
   await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
   await rt.initClass(hooks);
-  await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("Supplier", deviceProperties["persist.sys.timezone"]));
+  await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", deviceProperties["persist.sys.timezone"]));
   await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
   await newObj("com/android/internal/logging/AndroidConfig", "()V");
   await loadSystemFontMap();

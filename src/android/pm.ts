@@ -15,7 +15,7 @@ import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
 import { DOCS_AUTHORITY } from "./documents";
-import { type JList, newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { JIntent, type JComponentName, componentState, mkComponentName, systemActivity, SYSTEM_ACTIVITY } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
 import type { JActivity } from "./app";
@@ -510,7 +510,7 @@ const sysProviderInfo = ([auth, cls]: [string, string, string]) => {
   return info;
 };
 
-function queryContentProviders(processName: string | null, uid: number, flags: number, nonNull = false): JList | null {
+function queryContentProviders(processName: string | null, uid: number, flags: number, nonNull = false): unknown {
   const providers: JProviderInfo[] = [];
   for (const system of systemProviders) {
     const info = sysProviderInfo(system);
@@ -525,7 +525,7 @@ function queryContentProviders(processName: string | null, uid: number, flags: n
   return providers.length || nonNull ? newArrayList(providers) : null;
 }
 
-function queryProviders(intent: { action?: string | null } | null, flags = 0): JList {
+function queryProviders(intent: { action?: string | null } | null, flags = 0): unknown {
   const action = intent?.action ?? null;
   return newArrayList([
     ...systemProviders.filter(([, , act]) => !action || act === action).map(sysProviderInfo),
@@ -555,11 +555,9 @@ function launcherActivity(): string | null {
   return null;
 }
 function resolveActivity(intent: JIntent | null, flags: number): unknown {
-  return queryActivities(intent, flags).a[0] ?? null;
+  return queryComponents(intent, flags, "activity")[0] ?? null;
 }
-function queryActivities(intent: JIntent | null, flags: number): JList {
-  return queryComponents(intent, flags, "activity");
-}
+const queryActivities = (intent: JIntent | null, flags: number) => newArrayList(queryComponents(intent, flags, "activity"));
 
 function componentEnabled(name: string, node: XmlNode, owner = currentPackage): boolean {
   const state = componentState.get(mkComponentName(owner?.pkg ?? appHost?.pkg ?? "", name));
@@ -606,8 +604,8 @@ function getServiceInfo(component: JComponentName, flags: number): JServiceInfo 
   const [name, node, owner] = lookupComponent(component, "service", flags);
   return serviceInfo(name, node, flags, owner);
 }
-function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<ComponentKind, "provider"> = "service"): JList {
-  const result = newArrayList();
+function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<ComponentKind, "provider"> = "service"): { priority: number }[] {
+  const result: { priority: number }[] = [];
   if (!intent) return result;
   for (const owner of packages.values()) {
     const pkg = owner.pkg;
@@ -626,17 +624,17 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
       else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags, owner);
       else info.serviceInfo = serviceInfo(name, node, flags, owner);
       info.priority = priority;
-      result.a.push(info);
+      result.push(info);
     }
   }
-  result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
+  result.sort((a, b) => b.priority - a.priority);
   if (kind === "activity" && systemActivity(intent) && (!intent.pkg || intent.pkg === "android")) {
     const info = rt.make("android/content/pm/ResolveInfo"), activity: JActivityInfo = rt.make("android/content/pm/ActivityInfo");
     const platform = packages.get("android");
     activity.name = SYSTEM_ACTIVITY; activity.packageName = "android"; activity.processName = "system"; activity.exported = activity.enabled = 1;
     activity.applicationInfo = platform ? recordAppInfo(platform) : null;
     info.activityInfo = activity;
-    result.a.push(info);
+    result.push(info);
   }
   return result;
 }
@@ -645,24 +643,24 @@ rt.markers("android/content/pm/PackageManager$OnChecksumsReadyListener");
 
 const APK_CHECKSUM = "android/content/pm/ApkChecksum";
 const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"]];
-async function apkChecksums(pkg: string, includeSplits: boolean, required: number): Promise<JList> {
+async function apkChecksums(pkg: string, includeSplits: boolean, required: number): Promise<unknown[]> {
   if (!packages.has(pkg)) await installedPackage(pkg);
   const record = packages.get(pkg);
   if (!record) throw nameNotFound(pkg);
   const files: [string | null, string][] = [[null, record.path]];
   if (includeSplits && pkg === appHost?.pkg) files.push(...appHost.splits.map((name): [string, string] => [name, apkPath(name)]));
-  const result = newArrayList();
+  const result: unknown[] = [];
   for (const [splitName, path] of files) {
     const bytes = await vfs.readFile(path);
     if (!bytes) continue;
     for (const [type, algorithm] of wholeChecksumAlgorithms) {
       if (!(required & type)) continue;
       const value = await digestBytes(algorithm, bytes);
-      if (value) result.a.push(await newObj(APK_CHECKSUM, "(Ljava/lang/String;I[B)V", splitName, type, new Int8Array(value)));
+      if (value) result.push(await newObj(APK_CHECKSUM, "(Ljava/lang/String;I[B)V", splitName, type, new Int8Array(value)));
     }
     if (required & 16) {
       const value = new Uint8Array(await crypto.subtle.digest("SHA-512", bytes.slice()));
-      result.a.push(await newObj(APK_CHECKSUM, "(Ljava/lang/String;I[B)V", splitName, 16, new Int8Array(value)));
+      result.push(await newObj(APK_CHECKSUM, "(Ljava/lang/String;I[B)V", splitName, 16, new Int8Array(value)));
     }
   }
   return result;
@@ -692,7 +690,7 @@ rt.register({
       driven(function* (pkg: string | null, includeSplits: number, required: number, trustedInstallers: unknown, listener: unknown): Gen {
         if (pkg === null || trustedInstallers === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
         const checksums = yield apkChecksums(pkg, includeSplits !== 0, required);
-        yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", checksums);
+        yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", newArrayList(checksums));
       }),
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
       const [cls, node, owner] = lookupComponent(comp, "provider", flags);
@@ -788,12 +786,12 @@ rt.register({
     "queryContentProviders(Ljava/lang/String;ILandroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (process: string | null, uid: number, flags: JInfoFlags) => queryContentProviders(process, uid, Number(flags.value), true),
     "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": resolveProvider,
     "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string, flags: JInfoFlags) => resolveProvider(a, Number(flags.value)),
-    "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => queryComponents(i, f, "receiver"),
-    "queryBroadcastReceivers(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value), "receiver"),
-    "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": queryComponents,
-    "queryIntentServices(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value)),
-    "resolveService(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: number) => queryComponents(i, f).a[0] ?? null,
-    "resolveService(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value)).a[0] ?? null,
+    "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => newArrayList(queryComponents(i, f, "receiver")),
+    "queryBroadcastReceivers(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => newArrayList(queryComponents(i, Number(f.value), "receiver")),
+    "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => newArrayList(queryComponents(i, f)),
+    "queryIntentServices(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => newArrayList(queryComponents(i, Number(f.value))),
+    "resolveService(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: number) => queryComponents(i, f)[0] ?? null,
+    "resolveService(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value))[0] ?? null,
     "getComponentEnabledSetting(Landroid/content/ComponentName;)I": (c: JComponentName) => componentState.get(c),
     "getApplicationEnabledSetting(Ljava/lang/String;)I": (pkg: string) => {
       if (!packages.has(pkg)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package " + pkg);
@@ -879,13 +877,11 @@ rt.register({
       }
       return 0;
     }),
-    "getInstalledPackages(I)Ljava/util/List;": installedPackages,
+    "getInstalledPackages(I)Ljava/util/List;": async (flags: number) => newArrayList(await installedPackages(flags)),
     "getInstalledApplications(I)Ljava/util/List;": driven(function* (flags: number): Gen {
-      const list = yield installedPackages(flags);
-      list.a = list.a.map((info: unknown) => (info as JPackageInfo).applicationInfo);
-      return list;
+      return newArrayList((yield installedPackages(flags)).map((info: JPackageInfo) => info.applicationInfo));
     }),
-    "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": (flags: JInfoFlags) => installedPackages(Number(flags.value)),
+    "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": async (flags: JInfoFlags) => newArrayList(await installedPackages(Number(flags.value))),
     "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: JComponentName, flags: number) => {
       const [name, , owner] = lookupComponent(comp, "activity", flags);
       return mkActivityInfo(name, flags, owner);
@@ -1065,16 +1061,16 @@ async function installedPackage(pkg: string) {
   if (archive && !packages.has(pkg)) registerPackage(archive, path);
   return archive ? { path, archive } : null;
 }
-async function installedPackages(flags: number): Promise<JList> {
+async function installedPackages(flags: number): Promise<unknown[]> {
   const thread = curThread;
   await restorePackages();
-  const result = newArrayList();
+  const result: unknown[] = [];
   for (const path of vfs.files.keys()) {
     if (!/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
     const archive = await readArchive(path);
     if (archive && !packages.has(archive.pkg)) registerPackage(archive, path);
   }
-  for (const record of packages.values()) result.a.push(await vcallOn(thread, getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", record.pkg, flags));
+  for (const record of packages.values()) result.push(await vcallOn(thread, getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", record.pkg, flags));
   return result;
 }
 export async function installPackageArchive(bytes: Uint8Array, expectedPackage: string | null = null): Promise<string> {

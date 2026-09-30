@@ -3,7 +3,7 @@
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { vcall, scall, newObj, stringHash, vcallUncaught } from "../jvm/natives/jlang";
-import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
+import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdSource } from "../native/stdio";
@@ -78,12 +78,13 @@ class JPlaybackState extends JObj {
   actions = 0n;
   errorMessage: unknown = null;
   updateTime = 0n;
-  customActions: JList = newArrayList();
+  customActions: unknown = null;
   activeQueueItemId = -1n;
   extras: unknown = null;
 }
 class JPlaybackStateBuilder extends JObj {
   value = new JPlaybackState();
+  customActions: unknown[] = [];
 }
 class JMediaMetadata extends JObj { values = new Map<string, unknown>(); description: JMediaDescription | null = null; }
 class JMediaMetadataBuilder extends JObj { value = new JMediaMetadata(); }
@@ -155,11 +156,11 @@ rt.register({ name: "android/media/session/PlaybackState$Builder", ctor: JPlayba
   "setBufferedPosition(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, position: bigint) { this.value.bufferedPosition = position; return this; },
   "setActions(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, actions: bigint) { this.value.actions = actions; return this; },
   "setErrorMessage(Ljava/lang/CharSequence;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, message: unknown) { this.value.errorMessage = message; return this; },
-  "addCustomAction(Landroid/media/session/PlaybackState$CustomAction;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, action: unknown) { this.value.customActions.a.push(action); return this; },
+  "addCustomAction(Landroid/media/session/PlaybackState$CustomAction;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, action: unknown) { this.customActions.push(action); return this; },
   "setActiveQueueItemId(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, id: bigint) { this.value.activeQueueItemId = id; return this; },
   "setExtras(Landroid/os/Bundle;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, extras: unknown) { this.value.extras = extras; return this; },
   "build()Landroid/media/session/PlaybackState;": function (this: JPlaybackStateBuilder) {
-    return Object.assign(new JPlaybackState(), this.value, { customActions: newArrayList(this.value.customActions.a.slice()) });
+    return Object.assign(new JPlaybackState(), this.value, { customActions: newArrayList(this.customActions.slice()) });
   },
 } });
 rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces: ["android/os/Parcelable"], methods: {

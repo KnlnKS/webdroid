@@ -13,7 +13,7 @@ import { mainHandler, reportUncaught, uptimeMillis } from "./os";
 import { keyDispatcherState } from "./keyevent";
 import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "./text";
-import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
 import { mkVPA } from "./viewanimator";

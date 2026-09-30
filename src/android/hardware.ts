@@ -3,7 +3,7 @@
 
 import { rt, JObj, stubs, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 
 rt.markers("android/hardware/SensorEventListener");
 rt.markers("android/hardware/TriggerEventListener");

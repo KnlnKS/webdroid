@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE, vcall, after } from "./jlang";
-import { mkIter, newLinkedHashSet, toJsArray } from "./jutil";
+import { mkIter, newLinkedHashSet, toJsArray } from "./jcoll";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = Object.create(null); }
 class JJSONArray extends JObj { a: unknown[] = []; }

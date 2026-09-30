@@ -3,7 +3,7 @@
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
 import { JObj, rt } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { toJsArray } from "../jvm/natives/jutil";
+import { toJsArray } from "../jvm/natives/jcoll";
 import { reportUncaught } from "./os";
 
 const VIBRATOR_ID = 1;

@@ -5,7 +5,7 @@ import type { asn1 } from "node-forge";
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, i8, sameBytes } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall, after } from "./jlang";
-import { newArrayList, mkIter, newStringSet } from "./jutil";
+import { newArrayList, mkEnumeration, newStringSet } from "./jcoll";
 import { JRsaPublicKey, forge, binary, array as bytes } from "./jrsa";
 import { readStreamFully } from "./jio";
 
@@ -295,7 +295,7 @@ rt.register({
 const hasSystemCa = driven(function* (a: string): Gen { return (yield systemCaEntries()).has(a) ? 1 : 0; });
 /** the AndroidCAStore KeyStore's view: every anchor under its system: alias */
 export const caStoreMethods = {
-  "aliases()Ljava/util/Enumeration;": driven(function* (): Gen { return mkIter([...(yield systemCaEntries()).keys()]); }),
+  "aliases()Ljava/util/Enumeration;": driven(function* (): Gen { return mkEnumeration([...(yield systemCaEntries()).keys()]); }),
   "size()I": driven(function* (): Gen { return (yield systemCaEntries()).size; }),
   "containsAlias(Ljava/lang/String;)Z": hasSystemCa,
   "isCertificateEntry(Ljava/lang/String;)Z": hasSystemCa,

@@ -7,7 +7,7 @@ import { restVelocity, type JMotionEvent } from "./motionevent";
 import { identity, javaMatrix, about, rotateM, scaleM, translateM, IDENTITY } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
 import { onMain, inMainJob } from "./mainloop";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { reportUncaught, uptimeMillis } from "./os";
 import { currentResources, rvDimen, rvFloat, rvInt, namedAttrRV, type Resources } from "./res";

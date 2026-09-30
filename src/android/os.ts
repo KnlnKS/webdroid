@@ -23,7 +23,7 @@ import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { JBuffer, mkByteBuffer, resident } from "../jvm/natives/jnio";
 import { clearGuestTimeout, guestNow, guestSleep, setGuestTimeout, type GuestTimer } from "../guest-clock";
 

@@ -1,6 +1,6 @@
 import { jarray } from "../jvm/abi";
 import { curThread } from "../jvm/natives/jlang";
-import { newStringSet } from "../jvm/natives/jutil";
+import { newStringSet } from "../jvm/natives/jcoll";
 import { JObj, noops, rt, type NativeSpec } from "../jvm/runtime";
 
 rt.register({

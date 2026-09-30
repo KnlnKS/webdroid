@@ -1,15 +1,15 @@
 import { JObj, rt } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JUri, mkUri } from "./net";
-import { JContentValues, mkCursor } from "./sqlite";
-import { JBundle, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
+import { mkCursor } from "./sqlite";
+import { mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
 import { JParcel } from "./parcel";
 import { exportParcel, importParcel, withCallingIdentity, type ParcelData, type Caller } from "./binder";
 import { attachProvider, providerTransport, providerOperations } from "./contentresolver";
 import { getPM } from "./pm";
 import { appHost } from "./apphost";
 
-type Value = { kind: "uri"; value: string } | { kind: "values" | "value"; data: ParcelData }
+type Value = { kind: "uri"; value: string } | { kind: "value"; data: ParcelData }
   | { kind: "pfd"; bytes: Uint8Array; token: number | null; closed?: boolean };
 export type ProviderRequest = { authority: string; name: string; desc: string; args: Value[]; access?: "read" | "write" };
 export type ProviderReply = { kind: "cursor"; columns: string[]; rows: Value[][] } | { kind: "value"; value: Value };
@@ -18,20 +18,16 @@ export async function encodeProviderValue(value: unknown): Promise<Value> {
   if (value instanceof JUri) return { kind: "uri", value: value.uri };
   const pfd = parcelFileDescriptorData(value);
   if (pfd) return { kind: "pfd", bytes: pfd.bytes, token: null };
-  const p = new JParcel(), values = value instanceof JContentValues;
-  if (value instanceof JContentValues) { const bundle = new JBundle(); bundle.map = new Map([...value.data.m.values()].map((e) => [String(e.k), e.v])); value = bundle; }
+  const p = new JParcel();
   await vcall(p, "writeValue", "(Ljava/lang/Object;)V", value);
-  return { kind: values ? "values" : "value", data: exportParcel(p) };
+  return { kind: "value", data: exportParcel(p) };
 }
 let providerPfds = 0;
 export async function decodeProviderValue(value: Value, writeback: ((bytes: Uint8Array, closed?: boolean) => unknown) | null = null): Promise<unknown> {
   if (value.kind === "uri") return mkUri(value.value);
   // a writable descriptor gets a file for its writes, which the writeback takes on the last close
   if (value.kind === "pfd") return mkPfd(value.bytes.slice(), writeback, writeback ? `provider:${++providerPfds}` : undefined);
-  const decoded: unknown = await vcall(importParcel(value.data), "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null);
-  if (value.kind !== "values") return decoded;
-  if (!(decoded instanceof JBundle)) throw rt.mkThrowable("android/os/BadParcelableException", "Expected ContentValues");
-  const values = new JContentValues(); values.data.m = new Map([...decoded.map].map(([k, v]) => [k, { k, v }])); return values;
+  return vcall(importParcel(value.data), "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null);
 }
 class JRemoteProvider extends JObj { pkg = ""; process = ""; authority = ""; call!: ProviderCall; }
 rt.register({ name: "webdroid/RemoteContentProvider", ctor: JRemoteProvider, methods: Object.fromEntries(Object.entries(providerOperations).map(([name, desc]) => [name + desc,

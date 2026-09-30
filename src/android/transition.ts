@@ -5,7 +5,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList } from "../jvm/natives/jcoll";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
 

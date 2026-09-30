@@ -3,7 +3,7 @@
 // update() buffers, doFinal() awaits the whole operation.
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { vcall, after, newObj, defineException, checkFromIndexSize } from "./jlang";
-import { mkIter } from "./jutil";
+import { mkEnumeration } from "./jcoll";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array, type RsaScheme } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams, invalidKey } from "./jec";
@@ -519,7 +519,7 @@ rt.register({
     "getType()Ljava/lang/String;": function (this: JKeyStore) { return this.type; },
     "load(Ljava/io/InputStream;[C)V": function (this: JKeyStore) { this.loaded = true; },
     "load(Ljava/security/KeyStore$LoadStoreParameter;)V": function (this: JKeyStore) { this.loaded = true; },
-    "aliases()Ljava/util/Enumeration;": function (this: JKeyStore) { return mkIter([...this.entries.keys(), ...this.certs.keys(), ...this.pendingCerts.keys()]); },
+    "aliases()Ljava/util/Enumeration;": function (this: JKeyStore) { return mkEnumeration([...this.entries.keys(), ...this.certs.keys(), ...this.pendingCerts.keys()]); },
     "size()I": function (this: JKeyStore) { return ready(this).entries.size + this.certs.size + this.pendingCerts.size; },
     "containsAlias(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return ready(this).entries.has(a) || this.hasCert(a) ? 1 : 0; },
     "isKeyEntry(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return this.entries.has(a) ? 1 : 0; },

@@ -1,6 +1,6 @@
 import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
-import { mainThread, vcallOn } from "../jvm/natives/jlang";
-import { newStringSet, toJsArray } from "../jvm/natives/jutil";
+import { mainThread, vcallOn, vcall, newObj, box, boxObject, JFloat } from "../jvm/natives/jlang";
+import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { removeFrom } from "./view";
 import { onMain } from "./mainloop";
 
@@ -156,12 +156,14 @@ rt.register({
         return e;
       },
       "contains(Ljava/lang/String;)Z": function (this: JSharedPrefs, k: string) { return this.map.has(k) ? 1 : 0; },
-      "getAll()Ljava/util/Map;": function (this: JSharedPrefs) {
-        const info = rt.link("java/util/HashMap");
-        const map = new info.ctor();
-        for (const [k, v] of this.map) map.m.set(k, { k, v: Array.isArray(v) ? newStringSet(v) : v });
+      "getAll()Ljava/util/Map;": driven(function* (this: JSharedPrefs): Gen {
+        const map = yield newObj("java/util/HashMap");
+        for (const [k, v] of this.map) {
+          const value = Array.isArray(v) ? yield newStringSet(v) : typeof v === "number" && !Number.isInteger(v) ? box(JFloat, v) : boxObject(v);
+          yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
+        }
         return map;
-      },
+      }),
       "registerOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
         function (this: JSharedPrefs, l: unknown) { this.listeners.push(l); },
       "unregisterOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
