@@ -864,6 +864,48 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     FEATURE_DEVICE_ADMIN nor FEATURE_TELEPHONY while framework-res is the AVD's (a phone, voice
     capable), so AOSP's managers would answer from a mixed device model; the device's features
     have to be decided first.
+- 2026-09-30, java.util's collections, streams and ObjectStreams from libcore (Stage B.4). jutil.ts,
+  jwrappers.ts, jstream.ts, jblockingqueue.ts and jobjectstream.ts are gone (about 6,000 lines),
+  with them the TS ArrayMap, ContentValues, WorkSource, SearchRecentSuggestions, the
+  android.database Observables, Timer, UnicodeBlock, both Base64s, the xmlpull parser (a replayed
+  DOMParser tree) and org.json. TS reaches collections through `jcoll.ts`: ArrayLists it builds or
+  reads through the list's own fields, everything else through Java calls.
+  - Per-call cost, measured in V8 (node 24, one process per side, medians, TS / libcore ms):
+    ArrayList add+5 gets of 2,000 0.19 / 0.11, iteration 0.16 / 0.19, String-keyed HashMap 0.25 /
+    0.27, Integer-keyed 0.37 / 0.27, entry and key walks 0.45 / 0.48, LinkedHashMap 0.27 / 0.33,
+    HashSet 0.20 / 0.24, two-element allocations 0.19 / 0.26, TreeMap 0.26 / 0.82 (the TS TreeMap
+    was a sorted array; libcore's walks a red-black tree), the 20,000-key mix 0.97 / 1.41, first use
+    10-20 ms more. Before intrinsics, get and iteration were 1.7x and 2.4x slower: the compiled
+    frames were not inlined. §4.7 intrinsics (`rt.intrinsic`, differentially tested in
+    tests/intrinsics.test.ts against the AOSP bodies) cover ArrayList get/set/add/size/isEmpty,
+    its iterator, HashMap lookups of String and Integer keys, Arrays.copyOf(Object[]) and
+    ConcurrentHashMap's bin accessors. They are compiled with their fields' literal names: written
+    as `this[FIELD]` over a module binding (which a bundler turns into a mutable variable) each
+    access stayed a keyed, megamorphic load and the intrinsics gained nothing. Arrays.copyOf's
+    `getClass()` resolved the array's owning runtime from its descriptor on every call (180 of
+    960 ms in the mix); array classes are now kept per asking runtime once their element class is
+    linked. org.json from libcore parses a 150 KB document in 4.5 ms against 2.0 for the TS copy;
+    intrinsics for JSONTokener's scanning loops changed nothing, so there are none.
+  - Conformance: guava 40,085 -> 366,001 (its Map suites initialise now), jsr166 2,920 -> 3,130,
+    luni-io 1,277 -> 1,321, luni-net 767 -> 779, ojluni-time 27,514 -> 30,603.
+  - Latency, interleaved under the same (heavy) load: the tree passed `bun run lat` twice where
+    its parent failed twice; FitNotes' first tap 52-72 against 263-274 ms, cold Mihon `light`
+    127/24 against 186/139 ms.
+  - The TS copies had diverged: every map iterated in insertion order, ArrayList also claimed to be
+    a Deque, streams ran again after a terminal operation, org.json iterated integer-like keys in
+    numeric order, ContentValues took a raw bigint as a Long, the TS Timer answered
+    scheduledExecutionTime with the current time.
+  - VM gaps the flip exposed: `Enum.getSharedConstants` (EnumMap), `VMStack.getClosestUserClassLoader`
+    (ObjectInputStream.resolveClass), ObjectStreamClass.hasStaticInitializer and the object streams'
+    float/double conversions, Unsafe's char and short accessors, `System.log`, UNIXProcess's natives
+    (ProcessBuilder and Runtime.exec now fail in forkAndExec). Reflection bugs: getDeclaredMethod
+    searched inherited methods (a LinkedHashMap serialized HashMap's data twice), native classes'
+    fields were typed Object and their statics non-final (libcore hashed default serialVersionUIDs
+    for the boxes), a serialization constructor did not initialize the class it allocates, and
+    getConstructors returned non-public constructors (ForkJoinTask copied exceptions a device hands
+    back as-is).
+  - Harness: bun's test runner spends tens of seconds formatting a failed expectation whose value is
+    a Java object (it walks the reachable heap); a Java object now inspects as its class and message.
 
 ## Java, storage and framework semantics
 
