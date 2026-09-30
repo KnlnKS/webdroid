@@ -92,6 +92,13 @@ if (one) {
     for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
   for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), i);
   rt.linkNatives();
+  // the suite's resource roots answer Class.getResource* as the test's class path would
+  const roots = (suite.source?.resources ?? []).map((r) => `${CACHE}/src/${suiteName}/${suite.source!.root}/${r}`);
+  const resource = (name: string) => roots.map((r) => `${r}/${name}`).find((p) => existsSync(p) && !p.endsWith(".java"));
+  if (roots.length) rt.classpathSource = {
+    has: (name) => !!resource(name), names: () => [],
+    entry: async (name) => { const p = resource(name); return p ? new Uint8Array(await Bun.file(p).arrayBuffer()) : null; },
+  };
   const debug = process.env.CONFORM_DEBUG;
   console.warn = () => {};
   if (debug) rt.throwables = [];

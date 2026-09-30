@@ -1,7 +1,7 @@
 /** conformance suites: Maven jars to fetch, optional test sources to compile (an AOSP gitiles
  *  archive of the reference build's tag), and the JUnit classes to run (for sources, every
  *  class whose file name matches `tests`) */
-type Suite = { maven: string[]; source?: { archive: string; root: string; tests: RegExp; include?: RegExp; exclude?: RegExp }; classes?: string[]; testng?: boolean };
+type Suite = { maven: string[]; source?: { archive: string; root: string; tests: RegExp; include?: RegExp; exclude?: RegExp; resources?: string[] }; classes?: string[]; testng?: boolean };
 const JUNIT = ["junit:junit:4.13.2", "org.hamcrest:hamcrest-core:1.3"];
 export const SUITES: Record<string, Suite> = {
   guava: {
@@ -40,6 +40,19 @@ export const SUITES: Record<string, Suite> = {
       include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests\/java|luni\/src\/test\/java\/libcore\/java)\/net|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/testframework|libcore\/testing\/io)|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Support_|Abstract)\w+Test\.java$/,
       exclude: /\/net\/(\w*(JarURLConnection|URLClassLoader)\w*|OldUnixSocketTest|ServerSocketConcurrentCloseTest|FtpURLConnectionTest|URLConnectionTest|DelegatingSocketFactory|OldCookieHandlerTest)\.java$|libcore\/java\/net\/(InetAddress|NetworkInterface|DatagramSocket|Socket|SocketTimeout)Test\.java$|harmony\/tests\/java\/net\/(URLDecoder|DatagramSocket|ServerSocket)Test\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
+    },
+  },
+  // libcore's java.security, javax.crypto and javax.security tests at the same commit
+  // (TestKeyStore builds its certificates with upstream bouncycastle; those needing mockito are left out)
+  "luni-security": {
+    maven: ["org.bouncycastle:bcprov-jdk15on:1.68", "org.bouncycastle:bcpkix-jdk15on:1.68", ...JUNIT],
+    source: {
+      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      include: /^(luni\/src\/test\/java\/(libcore\/java\/security|libcore\/javax\/(crypto|security)|tests\/security)|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/(testframework|security\/tests\/support)|libcore\/testing\/io|libcore\/java\/(security|io)|libcore\/javax\/net\/ssl)|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
+      tests: /^(?!Support_|Abstract)\w+Test\.java$/,
+      resources: ["support/src/test/java", "luni/src/test/resources"],
+      exclude: /(\/security\/SignatureTest|CipherInputStreamTest|CertPathValidatorExceptionTest|X509CertSelectorTest|X509CRLSelector2Test|cert\/TrustAnchorTest|auth\/SubjectTest|ProtectionDomainTest|CodeSourceTest|OldPKIXParametersTest|cert\/X509CRLTest|SubjectAlternativeNameTest|security\/(Provider|SecureRandom)Test|test-rules\/src\/main\/java\/libcore\/junit\/util\/EnableDeprecatedBouncyCastleAlgorithmsRule)\.java$/,
     },
   },
   // libcore's java.nio.file tests at the same commit, without those needing mockito, junitparams or

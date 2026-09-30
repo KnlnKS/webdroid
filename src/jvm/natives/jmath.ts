@@ -44,7 +44,6 @@ export function mkBigInteger(v: bigint): JObj | Promise<JObj> {
   };
   return init ? init.then(make) : make();
 }
-export function bytesToBig(b: Int8Array | Uint8Array): bigint { let v = 0n; for (const x of b) v = (v << 8n) | BigInt(x & 0xff); return v; }
 export function modInverse(a: bigint, m: bigint): bigint {
   let [r0, r1, t0, t1] = [((a % m) + m) % m, m, 1n, 0n];
   while (r0 !== 0n) { const q = r1 / r0; [r0, r1] = [r1 - q * r0, r0]; [t0, t1] = [t1 - q * t0, t0]; }

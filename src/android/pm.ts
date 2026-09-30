@@ -20,7 +20,7 @@ import { JIntent, type JComponentName, componentState, mkComponentName, systemAc
 import { matchesIntentFilter } from "./intent-filter";
 import type { JActivity } from "./app";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
-import { digestBytes } from "../jvm/natives/jsec";
+import { digestBytes } from "../jvm/natives/digest";
 import { parcelCreator, readInt, readString8, writeInt, writeString8, type JParcel } from "./parcel";
 import { readApplicationInfo, readPackageInfo, writeApplicationInfo, writePackageInfo } from "./pm-parcel";
 

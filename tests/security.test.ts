@@ -144,6 +144,10 @@ describe("signature", () => {
     await vcall(gen, "initialize", "(I)V", size);
     return vcall(gen, "generateKeyPair", "()Ljava/security/KeyPair;");
   }
+  async function keyPairOf(algo: string, size: number) {
+    const pair = await keyPair(algo, size);
+    return { priv: await vcall(pair, "getPrivate", "()Ljava/security/PrivateKey;"), pub: await vcall(pair, "getPublic", "()Ljava/security/PublicKey;") };
+  }
   async function sign(algo: string, priv: unknown, data: Int8Array, spec?: unknown): Promise<Int8Array> {
     const s = await scall("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", algo);
     await vcall(s, "initSign", "(Ljava/security/PrivateKey;)V", priv);
@@ -161,58 +165,58 @@ describe("signature", () => {
   }
 
   test("SHA256withRSA signs and verifies; a changed message fails", async () => {
-    const pair: any = await keyPair("RSA", 2048);
+    const pair = await keyPairOf("RSA", 2048);
     const data = bytes("hello signature");
-    const sig = await sign("SHA256withRSA", pair.privateKey, data);
+    const sig = await sign("SHA256withRSA", pair.priv, data);
     expect(sig.length).toBe(256);
-    expect(await verify("SHA256withRSA", pair.publicKey, data, sig)).toBe(1);
-    expect(await verify("SHA256withRSA", pair.publicKey, bytes("hello signaturf"), sig)).toBe(0);
-    expect(await verify("SHA512withRSA", pair.publicKey, data, sig)).toBe(0);
+    expect(await verify("SHA256withRSA", pair.pub, data, sig)).toBe(1);
+    expect(await verify("SHA256withRSA", pair.pub, bytes("hello signaturf"), sig)).toBe(0);
+    expect(await verify("SHA512withRSA", pair.pub, data, sig)).toBe(0);
   });
 
   test("RSA/ECB/PKCS1Padding encrypts with the public key and decrypts with the private key", async () => {
-    const pair: any = await keyPair("RSA", 2048);
+    const pair = await keyPairOf("RSA", 2048);
     const cipher = async (mode: number, key: unknown, data: Int8Array): Promise<Int8Array> => {
       const c = await scall("javax/crypto/Cipher", "getInstance", "(Ljava/lang/String;)Ljavax/crypto/Cipher;", "RSA/ECB/PKCS1Padding");
       await vcall(c, "init", "(ILjava/security/Key;)V", mode, key);
       return vcall(c, "doFinal", "([B)[B", data);
     };
-    const encrypted = await cipher(1, pair.publicKey, bytes("password"));
+    const encrypted = await cipher(1, pair.pub, bytes("password"));
     expect(encrypted.length).toBe(256);
-    expect(await cipher(2, pair.privateKey, encrypted)).toEqual(bytes("password"));
+    expect(await cipher(2, pair.priv, encrypted)).toEqual(bytes("password"));
   });
 
   test("RSA-PSS uses the digest-length salt by default and PSSParameterSpec otherwise", async () => {
-    const pair: any = await keyPair("RSA", 2048);
+    const pair = await keyPairOf("RSA", 2048);
     const data = bytes("pss message");
-    const sig = await sign("SHA256withRSA/PSS", pair.privateKey, data);
-    expect(await verify("SHA256withRSA/PSS", pair.publicKey, data, sig)).toBe(1);
-    expect(await verify("SHA256withRSAandMGF1", pair.publicKey, data, sig)).toBe(1);
+    const sig = await sign("SHA256withRSA/PSS", pair.priv, data);
+    expect(await verify("SHA256withRSA/PSS", pair.pub, data, sig)).toBe(1);
+    expect(await verify("SHA256withRSAandMGF1", pair.pub, data, sig)).toBe(1);
     const mgf = await newObj("java/security/spec/MGF1ParameterSpec", "(Ljava/lang/String;)V", "SHA-256");
     const spec = await newObj("java/security/spec/PSSParameterSpec", "(Ljava/lang/String;Ljava/lang/String;Ljava/security/spec/AlgorithmParameterSpec;II)V", "SHA-256", "MGF1", mgf, 20, 1);
-    const salted = await sign("RSASSA-PSS", pair.privateKey, data, spec);
-    expect(await verify("RSASSA-PSS", pair.publicKey, data, salted, spec)).toBe(1);
-    expect(await verify("SHA256withRSA/PSS", pair.publicKey, data, salted)).toBe(0);
+    const salted = await sign("SHA256withRSA/PSS", pair.priv, data, spec);
+    expect(await verify("SHA256withRSA/PSS", pair.pub, data, salted, spec)).toBe(1);
+    expect(await verify("SHA256withRSA/PSS", pair.pub, data, salted)).toBe(0);
   });
 
   test("SHA256withECDSA produces DER signatures that verify", async () => {
-    const pair: any = await keyPair("EC", 256);
+    const pair = await keyPairOf("EC", 256);
     const data = bytes("ecdsa message");
-    const sig = await sign("SHA256withECDSA", pair.privateKey, data);
+    const sig = await sign("SHA256withECDSA", pair.priv, data);
     expect(sig[0]).toBe(0x30);
     expect(sig[1] + 2).toBe(sig.length);
-    expect(await verify("SHA256withECDSA", pair.publicKey, data, sig)).toBe(1);
-    expect(await verify("SHA256withECDSA", pair.publicKey, bytes("ecdsa messagf"), sig)).toBe(0);
-    expect(await verify("SHA256withECDSA", pair.publicKey, data, sig.subarray(0, sig.length - 1))).toBe(0);
+    expect(await verify("SHA256withECDSA", pair.pub, data, sig)).toBe(1);
+    expect(await verify("SHA256withECDSA", pair.pub, bytes("ecdsa messagf"), sig)).toBe(0);
+    expect(await verify("SHA256withECDSA", pair.pub, data, sig.subarray(0, sig.length - 1))).toBe(0);
   });
 
   test("unknown algorithms, null providers and uninitialized use are rejected", async () => {
     expect(await thrown(() => scall("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", "MD2withDSA"))).toBe("java/security/NoSuchAlgorithmException");
     expect(await thrown(() => scall("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", null))).toBe("java/lang/IllegalArgumentException");
-    const s = await scall("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", await newObj("java/security/Provider"));
+    const s = await scall("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", "SHA256withRSA");
     expect(await thrown(() => vcall(s, "update", "([B)V", bytes("x")))).toBe("java/security/SignatureException");
-    const pair: any = await keyPair("EC", 256);
-    expect(await thrown(() => vcallAsync(s, "initSign", "(Ljava/security/PrivateKey;)V", pair.privateKey).then(() => vcall(s, "sign", "()[B")))).toBe("java/security/InvalidKeyException");
+    const pair = await keyPairOf("EC", 256);
+    expect(await thrown(() => vcallAsync(s, "initSign", "(Ljava/security/PrivateKey;)V", pair.priv).then(() => vcall(s, "sign", "()[B")))).toBe("java/security/InvalidKeyException");
   });
 });
 

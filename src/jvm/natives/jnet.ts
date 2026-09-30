@@ -10,9 +10,9 @@
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
 import { newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
-import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, u8, mangleMethod } from "../abi";
+import { strArray, u8, mangleMethod } from "../abi";
 import { baosBytes, fdInt } from "./jio";
+import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
 import { abandonConnection } from "../../native/net";
 
@@ -309,13 +309,9 @@ rt.register({
     "getProtocol()Ljava/lang/String;": () => PROTOCOLS[1],
     "getPeerHost()Ljava/lang/String;": function (this: JSSLSession) { return this.host; },
     "getPeerPort()I": function (this: JSSLSession) { return this.port; },
-    "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) {
-      const c = rt.make("java/security/cert/X509Certificate") as JX509;
-      c.host = this.host; c.relayPeer = true;
-      return jarray([c], "Ljava/security/cert/Certificate;");
-    },
+    "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) { return relayChain(this.host); },
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
-    "getPeerPrincipal()Ljava/security/Principal;": function (this: JSSLSession) { return mkPrincipal("CN=" + this.host); },
+    "getPeerPrincipal()Ljava/security/Principal;": function (this: JSSLSession) { return after(relayChain(this.host), (chain) => vcall(chain[0], "getSubjectX500Principal", "()Ljavax/security/auth/x500/X500Principal;")); },
     "getLocalPrincipal()Ljava/security/Principal;": () => null,
     "getId()[B": () => new Int8Array(0),
     "isValid()Z": () => 1,
@@ -715,11 +711,7 @@ rt.register({
       return after(vcall(this, "getLocalCertificates", "()[Ljava/security/cert/Certificate;") as unknown[] | null, (certs) => certs === null ? null : subjectOf(certs));
     },
     "getServerCertificates()[Ljava/security/cert/Certificate;": function (this: JHttpsURLConnection) {
-      return after(vcall(this.url, "getHost", "()Ljava/lang/String;") as string | Promise<string>, (host) => {
-        const cert = rt.make("java/security/cert/X509Certificate") as JX509;
-        cert.host = host; cert.relayPeer = true;
-        return jarray([cert], "Ljava/security/cert/Certificate;");
-      });
+      return after(vcall(this.url, "getHost", "()Ljava/lang/String;") as string | Promise<string>, relayChain);
     },
     "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
       return after(vcall(this, "getServerCertificates", "()[Ljava/security/cert/Certificate;") as unknown[], subjectOf);

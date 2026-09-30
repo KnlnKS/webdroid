@@ -10,15 +10,20 @@ export async function loadFrameworkJar(): Promise<void> {
   for (const dex of jarDexes(jar, "framework.jar")) rt.loadDex(dex, true);
 }
 
+let apex: Promise<void> | null = null;
+/** the /apex ICU and tz data every realm mounts */
+export function mountApexData(): Promise<void> {
+  return apex ??= import("../src/shell/apex").then((m) => m.mountPlatformData((path, size) => ({
+    size, read: async (at, length) => new Uint8Array(await Bun.file(new URL(`../vendor/aosp${path}`, import.meta.url)).slice(at, at + length).arrayBuffer()),
+  })));
+}
 let fontMap: Promise<void> | null = null;
 /** /system/fonts and the font map the zygote preloads (whose locale scripts are ICU's), as a booted
  *  page has them */
 export function loadSystemFonts(): Promise<void> {
   return fontMap ??= (async () => {
     const { SYSTEM_FONT_FILES, mountSystemFonts, loadSystemFontMap } = await import("../src/android/fonts");
-    (await import("../src/shell/apex")).mountPlatformData((path, size) => ({
-      size, read: async (at, length) => new Uint8Array(await Bun.file(new URL(`../vendor/aosp${path}`, import.meta.url)).slice(at, at + length).arrayBuffer()),
-    }));
+    await mountApexData();
     mountSystemFonts(await Promise.all(SYSTEM_FONT_FILES.map(async (file) =>
       new Uint8Array(await Bun.file(new URL(`../vendor/fonts/${file}`, import.meta.url)).arrayBuffer()))));
     await loadSystemFontMap();

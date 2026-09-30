@@ -216,8 +216,8 @@ test("security providers retain their constructor metadata", async () => {
   expect(await vcall(provider, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "Cipher.Test", "Implementation")).toBeNull();
   expect(await vcall(provider, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "Cipher.Test")).toBe("Implementation");
   expect(scall("javax/net/ssl/SSLServerSocketFactory", "getDefault", "()Ljavax/net/ServerSocketFactory;")).not.toBeNull();
-  scall("java/security/Security", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)V", "test.key", "value");
-  expect(scall("java/security/Security", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "test.key")).toBe("value");
+  await scall("java/security/Security", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)V", "test.key", "value");
+  expect(await scall("java/security/Security", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "test.key")).toBe("value");
 });
 
 test("reached JDK utility primitives preserve their Java behavior", async () => {

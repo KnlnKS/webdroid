@@ -200,7 +200,6 @@
  "android/widget/TextView.setLineHeight(IF)V → getTextSize()F",
  "java/lang/Thread.getThreadGroup()Ljava/lang/ThreadGroup; → getState()Ljava/lang/Thread$State;",
  "java/lang/Throwable.printStackTrace()V → printStackTrace(Ljava/io/PrintStream;)V",
- "java/security/MessageDigest.getDigestLength()I → clone()Ljava/lang/Object;",
  "javax/net/ssl/SSLSocket.getSSLParameters()Ljavax/net/ssl/SSLParameters; → getEnabledCipherSuites()[Ljava/lang/String;",
  "javax/net/ssl/SSLSocket.getSSLParameters()Ljavax/net/ssl/SSLParameters; → getEnabledProtocols()[Ljava/lang/String;",
  "javax/net/ssl/SSLSocket.getSSLParameters()Ljavax/net/ssl/SSLParameters; → getNeedClientAuth()Z",

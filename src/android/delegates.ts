@@ -1119,7 +1119,7 @@ delegate("android/os/SystemProperties", {
 
 /** What the zygote sets up in a forked process before app code runs: System.out and System.err
  *  reach logcat, the default time zone follows persist.sys.timezone, java.util.logging reaches
- *  logcat, and the system font map is loaded. */
+ *  logcat, the JCA providers are installed and warmed, and the system font map is loaded. */
 export async function zygoteInit(): Promise<void> {
   await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
@@ -1127,6 +1127,8 @@ export async function zygoteInit(): Promise<void> {
   await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", deviceProperties["persist.sys.timezone"]));
   await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
   await newObj("com/android/internal/logging/AndroidConfig", "()V");
+  // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
+  await scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
   await loadSystemFontMap();
 }
 
