@@ -5,7 +5,7 @@
 // authoritiesOf) lives with PackageManager in pm.ts; DocumentsContract reads it from there.
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { isDocumentsProvider, getPM, type JResolveInfo } from "./pm";
 import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, type JIntent } from "./intent";
 import { csText } from "../jvm/natives/jchars";
@@ -13,7 +13,6 @@ import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
 import { isMediaUri, mediaDelete, mediaFlag } from "./mediastore";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { uriListClip } from "./clipdata";
 import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, pickDocuments, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
@@ -37,7 +36,12 @@ registerSystemActivity("android.provider.action.PICK_IMAGES", async (intent) => 
   const uris = await pickDocuments({ mime, multiple });
   if (!uris.length) return null;
   const result = mkResultIntent(multiple ? null : uris[0], 1 | 0x40);
-  if (multiple) result.clipData = uriListClip(uris.map(mkUri));
+  if (multiple) {
+    const [first, ...rest] = uris.map(mkUri);
+    const clip = await scall("android/content/ClipData", "newRawUri", "(Ljava/lang/CharSequence;Landroid/net/Uri;)Landroid/content/ClipData;", null, first);
+    for (const uri of rest) await vcall(clip, "addItem", "(Landroid/content/ClipData$Item;)V", await newObj("android/content/ClipData$Item", "(Landroid/net/Uri;)V", uri));
+    result.clipData = clip;
+  }
   return result;
 });
 for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.action.GET_CONTENT",

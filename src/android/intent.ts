@@ -1,4 +1,4 @@
-import { readClipData, type JClipData } from "./clipdata";
+import { parcelledClip } from "./clipboard";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
@@ -26,7 +26,7 @@ export class JIntent extends JObj {
   identifier: string | null = null;
   sourceBounds: JRect | null = null;
   selector: JIntent | null = null;
-  clipData: JClipData | null = null;
+  clipData: JObj | null = null;
   contentUserHint = -2;
   originalIntent: JIntent | null = null;
   copyFrom(o: JIntent) {
@@ -93,7 +93,7 @@ async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> 
   if (count > (p.size - p.pos) / 4) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid category count");
   for (let i = 0; i < count; i++) { const category = readString8(p); if (category !== null) intent.categories.add(category); }
   intent.selector = readInt(p) ? await readIntent(p) : null;
-  intent.clipData = readInt(p) ? await readClipData(p) : null; intent.contentUserHint = readInt(p);
+  intent.clipData = readInt(p) ? await parcelledClip(p) : null; intent.contentUserHint = readInt(p);
   intent.extras = await vcall(p, "readBundle", "()Landroid/os/Bundle;") ?? new JBundle();
   intent.originalIntent = readInt(p) ? await readIntent(p) : null;
   return intent;
@@ -511,8 +511,10 @@ export function deliverActivityResult(act: JActivity, code: number, resultCode: 
     // the grant flags cover the result's data and every ClipData item URI, as ActivityManager's
     if (resultCode === RESULT_OK && data && (data.flags & 3)) {
       const { grantUriPermission } = await import("./contentresolver");
-      const items = data.clipData?.items ?? [];
-      for (const uri of [data.dataUri, ...items.map((item) => item.uri?.uri)]) if (uri) grantUriPermission(act.$host.pkg, mkUri(uri), data.flags);
+      const uris = [data.dataUri];
+      for (let i = 0, n = data.clipData ? await vcall(data.clipData, "getItemCount", "()I") : 0; i < n; i++)
+        uris.push((await vcall(await vcall(data.clipData, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;"))?.uri);
+      for (const uri of uris) if (uri) grantUriPermission(act.$host.pkg, mkUri(uri), data.flags);
     }
     const target = act.fragmentResults.get(code);
     if (target) {

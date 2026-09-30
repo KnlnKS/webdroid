@@ -1,8 +1,10 @@
-import { rt, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+// IClipboard, the TS half of AOSP's ClipboardManager. The clip itself is the broker's, shared by
+// every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
+import { JObj, rt } from "../jvm/runtime";
+import { vcall, linkInit } from "../jvm/natives/jlang";
+import { mangleStaticField } from "../jvm/abi";
 import { exportParcel, importParcel, type ParcelData } from "./binder";
 import { JParcel } from "./parcel";
-import { JClipData, plainTextClip, readClipData } from "./clipdata";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
 
@@ -18,38 +20,47 @@ export const clipboardTransport: {
 
 const listeners = new Set<unknown>();
 export function clipboardChanged(): void {
-  for (const listener of listeners) void onMain(() => vcall(listener, "onPrimaryClipChanged", "()V")).catch(reportUncaught);
+  for (const listener of listeners) void onMain(() => vcall(listener, "dispatchPrimaryClipChanged", "()V")).catch(reportUncaught);
 }
-
-/** stamp the clip as copied now and hand its parcel to the clipboard service */
-async function publish(clip: JClipData): Promise<void> {
-  clip.description.time = BigInt(Date.now());
-  const parcel = new JParcel();
-  await vcall(clip, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-  clipboardTransport.set(exportParcel(parcel));
+/** a ClipData read back from its parcel */
+export async function parcelledClip(parcel: JParcel): Promise<JObj> {
+  const creator = (await linkInit("android/content/ClipData")).ctor[mangleStaticField("CREATOR")];
+  return vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);
 }
-async function current(): Promise<JClipData | null> {
+async function current(): Promise<JObj | null> {
   const data = clipboardTransport.get();
-  return data ? readClipData(importParcel(data)) : null;
+  return data ? parcelledClip(importParcel(data)) : null;
 }
-
-export const clipboardMethods = {
-  "setPrimaryClip(Landroid/content/ClipData;)V": (clip: JClipData | null) => {
-    if (!clip) throw rt.mkThrowable("java/lang/NullPointerException", "clip");
-    return publish(clip);
+const P = "Ljava/lang/String;Ljava/lang/String;II";
+rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, sup: "android/content/IClipboard$Stub", methods: {
+  // ClipboardService stamps the clip as copied now
+  [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: async (clip: JObj) => {
+    await vcall(await vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
+    const parcel = new JParcel();
+    await vcall(clip, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
+    clipboardTransport.set(exportParcel(parcel));
   },
-  "getPrimaryClip()Landroid/content/ClipData;": current,
-  "hasPrimaryClip()Z": () => +(clipboardTransport.get() !== null),
-  "getPrimaryClipDescription()Landroid/content/ClipDescription;": driven(function* (): Gen { return (yield current())?.description ?? null; }),
-  "clearPrimaryClip()V": () => clipboardTransport.set(null),
-  "addPrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V": (listener: unknown) => {
-    if (!listener) throw rt.mkThrowable("java/lang/NullPointerException", "listener");
+  [`getPrimaryClip(${P})Landroid/content/ClipData;`]: current,
+  [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: async () => {
+    const clip = await current();
+    return clip && vcall(clip, "getDescription", "()Landroid/content/ClipDescription;");
+  },
+  [`hasPrimaryClip(${P})Z`]: () => +(clipboardTransport.get() !== null),
+  [`hasClipboardText(${P})Z`]: async () => {
+    const clip = await current();
+    if (!clip || !await vcall(clip, "getItemCount", "()I")) return 0;
+    const text = await vcall(await vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", 0), "getText", "()Ljava/lang/CharSequence;");
+    return +(text != null && await vcall(text, "length", "()I") > 0);
+  },
+  [`clearPrimaryClip(${P})V`]: () => clipboardTransport.set(null),
+  [`addPrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: (listener: unknown) => {
     listeners.add(listener); clipboardTransport.listen(true);
   },
-  "removePrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V": (listener: unknown) => {
+  [`removePrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: (listener: unknown) => {
     listeners.delete(listener); if (!listeners.size) clipboardTransport.listen(false);
   },
-  "setText(Ljava/lang/CharSequence;)V": (text: unknown) => publish(plainTextClip(null, text)),
-  "getText()Ljava/lang/CharSequence;": driven(function* (): Gen { return (yield current())?.items[0]?.text ?? null; }),
-  "hasText()Z": driven(function* (): Gen { return +!!((yield current())?.items[0]?.text); }),
-};
+  // a clip's source app is not disclosed to other apps
+  [`getPrimaryClipSource(${P})Ljava/lang/String;`]: () => null,
+  // the platform default: an app reading the clipboard is announced
+  "areClipboardAccessNotificationsEnabledForUser(I)Z": () => 1,
+} });

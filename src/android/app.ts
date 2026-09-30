@@ -31,7 +31,6 @@ import { getPM } from "./pm";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
-import { clipboardMethods } from "./clipboard";
 import { JActionMode, startActionMode } from "./actionmode";
 
 export { fireActivityLifecycle } from "./lifecycle";
@@ -787,7 +786,6 @@ for (const [name, methods, statics] of [
       return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
     },
   }],
-  ["android/content/ClipboardManager", clipboardMethods],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(),
     ...stubs(0, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",

@@ -87,7 +87,7 @@ import "./android/net";
 import "./android/localsocket";
 import "./android/sharedprefs";
 import "./android/intent";
-import "./android/clipdata";
+import "./android/clipboard";
 import "./android/statsevent";
 import "./android/contentresolver";
 import "./android/context";

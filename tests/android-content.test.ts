@@ -89,19 +89,9 @@ describe("app-ops", () => {
 describe("clip-data", () => {
   rt.linkNatives();
 
-  test("ClipData.newIntent retains its description and intent item", async () => {
-    const intent = await newObj("android/content/Intent");
-    const clip = await (rt.link("android/content/ClipData").ctor as any)[mangleMethod("newIntent", "(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;")]("label", intent);
-    expect(await vcall(clip, "getItemCount", "()I")).toBe(1);
-    const item = await vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", 0);
-    expect(await vcall(item, "getIntent", "()Landroid/content/Intent;")).toBe(intent);
-    const description = await vcall(clip, "getDescription", "()Landroid/content/ClipDescription;");
-    expect(await vcall(description, "getMimeType", "(I)Ljava/lang/String;", 0)).toBe("text/vnd.android.intent");
-  });
-
   test("ClipData carries nested intents across a Parcel boundary", async () => {
     const inner = await newObj("android/content/Intent", "(Ljava/lang/String;)V", "test.action");
-    const clip = await vcall(rt.link("android/content/ClipData").ctor, "newIntent", "(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;", "label", inner);
+    const clip = await scall("android/content/ClipData", "newIntent", "(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;", "label", inner);
     const outer = await newObj("android/content/Intent");
     await vcall(outer, "setClipData", "(Landroid/content/ClipData;)V", clip);
     const parcel = await newObj("android/os/Parcel");
