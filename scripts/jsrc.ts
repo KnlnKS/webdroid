@@ -5,7 +5,6 @@ import "../src/jvm/natives/jlang";
 import "../src/jvm/natives/jcoll";
 import "../src/jvm/natives/jrandom";
 import "../src/jvm/natives/jvalues";
-import "../src/jvm/natives/jtimer";
 import "../src/jvm/natives/jio";
 import "../src/jvm/natives/jsync";
 import { compileClassSource } from "../src/jvm/compiler";

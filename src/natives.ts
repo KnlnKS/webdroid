@@ -8,7 +8,6 @@ import "./jvm/natives/jcoll";
 import "./jvm/natives/jrandom";
 import "./jvm/natives/jvalues";
 import "./jvm/natives/junicode";
-import "./jvm/natives/jtimer";
 import "./jvm/natives/jjson";
 import "./jvm/natives/jmath";
 import "./jvm/natives/jio";
