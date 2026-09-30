@@ -5,6 +5,7 @@ import { i8, u8, mangleField } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, newObj, defineException } from "../jvm/natives/jlang";
+import { unbox } from "../jvm/natives/jbox";
 import { arrayMapEntries, newArrayList } from "../jvm/natives/jcoll";
 import { pathOf } from "../jvm/natives/jio";
 import { JAbstractCursor } from "./abstractcursor";
@@ -210,10 +211,8 @@ function bindArgs(args: unknown[] | null): (string | number | bigint | Uint8Arra
     if (typeof a === "bigint") return a;
     if (typeof a === "number" || typeof a === "string") return a;
     if (a instanceof Int8Array) return u8(a);
-    if (typeof a === "object" && "v" in (a as object)) {
-      const v = (a as { v: unknown }).v;
-      return v as number | bigint;
-    }
+    const boxed = unbox(a);
+    if (boxed !== undefined) return boxed;
     return String(a);
   });
 }
@@ -222,7 +221,7 @@ function bindArgs(args: unknown[] | null): (string | number | bigint | Uint8Arra
 class JCursor extends JAbstractCursor {
   cols: string[] = [];
   rows: unknown[][] = [];
-  val(i: number): unknown { return unbox(this.rows[this.mPos]?.[i] ?? null); }
+  val(i: number): unknown { const v = this.rows[this.mPos]?.[i] ?? null; return unbox(v) ?? v; }
 }
 export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
   rt.link("webdroid/Cursor");
@@ -335,11 +334,7 @@ rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor
 const CV_MAP = mangleField("android/content/ContentValues", "mMap");
 /** a ContentValues' entries, with boxed numbers unwrapped */
 export const contentValues = (values: JObj): Map<string, unknown> =>
-  new Map(arrayMapEntries((values as unknown as Record<string, JObj>)[CV_MAP]).map(([k, v]) => [k as string, unbox(v)]));
-function unbox(v: unknown): unknown {
-  if (v !== null && typeof v === "object" && "v" in (v as object)) return (v as { v: unknown }).v;
-  return v;
-}
+  new Map(arrayMapEntries((values as unknown as Record<string, JObj>)[CV_MAP]).map(([k, v]) => [k as string, unbox(v) ?? v]));
 
 /** SQLiteDatabase.query, with or without its trailing limit */
 function tableQuery(this: JSQLiteDatabase, table: string, cols: string[] | null, sel: string | null, selArgs: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null = null) {

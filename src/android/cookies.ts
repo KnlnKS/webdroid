@@ -1,5 +1,6 @@
 import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
-import { box, JBool, vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
+import { boxBool } from "../jvm/natives/jbox";
 import type { WebCookies } from "../shell/webcookies";
 import { appHost } from "./apphost";
 import { onMain } from "./mainloop";
@@ -16,7 +17,7 @@ export let webCookies = (pkg: string): Promise<WebCookies> => {
 export function useWebCookies(get: typeof webCookies) { webCookies = (pkg) => Promise.resolve(get(pkg)); }
 const store = () => webCookies(appHost?.pkg ?? "");
 const complete = (callback: unknown, value: boolean) => {
-  if (callback) void onMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", box(JBool, value ? 1 : 0))).catch(reportUncaught);
+  if (callback) void onMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", boxBool(value))).catch(reportUncaught);
 };
 export const thirdPartyCookies = new WeakSet<JObj>();
 class JCookieManager extends JObj {}

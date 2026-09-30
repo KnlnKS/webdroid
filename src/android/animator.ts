@@ -2,7 +2,8 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jarray, jmethod } from "../jvm/abi";
-import { vcall, vcallOn, curThread, boxInt, box, JFloat, after } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, after } from "../jvm/natives/jlang";
+import { boxFloat, boxInt, unbox } from "../jvm/natives/jbox";
 import { toJsArray, newArrayList } from "../jvm/natives/jcoll";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
@@ -149,15 +150,13 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
   return true;
 }
 function boxedCur(a: { cur: unknown; isInt: boolean; objKeys: unknown[] | null }): unknown {
-  return a.objKeys ? a.cur : a.isInt ? boxInt(a.cur as number) : box(JFloat, a.cur as number);
+  return a.objKeys ? a.cur : a.isInt ? boxInt(a.cur as number) : boxFloat(a.cur as number);
 }
 /** ObjectAnimator.ofObject(target, "name", ...): the setter takes the evaluated object */
 async function applyAnimObj(target: unknown, prop: string, v: unknown) {
   const setter = "set" + prop[0].toUpperCase() + prop.slice(1);
-  if (v && typeof v === "object" && "v" in (v as object)) {
-    const raw = (v as { v: unknown }).v;
-    if (typeof raw === "number") return applyAnimProp(target, prop, raw);
-  }
+  const raw = unbox(v);
+  if (typeof raw === "number") return applyAnimProp(target, prop, raw);
   try { await vcall(target, setter, "(Ljava/lang/Object;)V", v); } catch { /* */ }
 }
 // A holder that names neither a Property nor a property has nothing to set: its value is read
@@ -178,7 +177,7 @@ async function applyHolder(target: unknown, h: JPVH, t: number) {
 async function currentValue(target: unknown, prop: unknown, name: string, isInt: boolean): Promise<number> {
   if (!prop) return name ? readAnimProp(target, name, isInt) : 0;
   const v: unknown = await vcall(prop, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", target);
-  return Number(v && typeof v === "object" && "v" in v ? (v as { v: unknown }).v : v ?? 0);
+  return Number(unbox(v) ?? v ?? 0);
 }
 async function readAnimProp(target: unknown, prop: string, isInt: boolean): Promise<number> {
   const field = VIEW_ANIM_PROPS[prop];
@@ -314,8 +313,8 @@ rt.register({
   },
 });
 const lerp = (f: number, a: number, b: number) => a + (b - a) * f;
-const evalFloat = (f: number, a: { v: number }, b: { v: number }) => box(JFloat, Math.fround(lerp(f, Number(a.v), Number(b.v))));
-const evalInt = (f: number, a: { v: number }, b: { v: number }) => boxInt(Math.trunc(lerp(f, a.v, b.v)));
+const evalFloat = (f: number, a: unknown, b: unknown) => boxFloat(Math.fround(lerp(f, Number(unbox(a)), Number(unbox(b)))));
+const evalInt = (f: number, a: unknown, b: unknown) => boxInt(Math.trunc(lerp(f, unbox(a) as number, unbox(b) as number)));
 rt.register({
   name: "android/animation/FloatEvaluator", ctor: class extends JObj {}, ifaces: ["android/animation/TypeEvaluator"],
   methods: {
@@ -340,7 +339,7 @@ rt.register({
   name: "android/animation/ArgbEvaluator", ctor: JArgbEvaluator, ifaces: ["android/animation/TypeEvaluator"],
   methods: {
     "<init>()V": function () {},
-    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: { v: number }, b: { v: number }) => boxInt(argbLerp(f, a.v, b.v)),
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: unknown, b: unknown) => boxInt(argbLerp(f, unbox(a) as number, unbox(b) as number)),
   },
 });
 function setDur(this: JValueAnimator, d: bigint) {

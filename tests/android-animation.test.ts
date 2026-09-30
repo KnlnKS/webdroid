@@ -1,7 +1,8 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { vcall, newObj, vcallOn, curThread, JThread, JFloat, box, vcallAsync } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallOn, curThread, JThread, vcallAsync } from "../src/jvm/natives/jlang";
+import { boxDesc, boxFloat, unbox } from "../src/jvm/natives/jbox";
 import { type JPoint } from "../src/android/graphics";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
@@ -13,12 +14,12 @@ describe("animator-start", () => {
 
   test("a started object animator reports its first key before the first frame", async () => {
     const anim = await newObj("android/animation/ValueAnimator", "()V");
-    await vcall(anim, "setObjectValues", "([Ljava/lang/Object;)V", jarray([box(JFloat, 30), box(JFloat, 90)], "Ljava/lang/Float;"));
+    await vcall(anim, "setObjectValues", "([Ljava/lang/Object;)V", jarray([boxFloat(30), boxFloat(90)], "Ljava/lang/Float;"));
     await vcall(anim, "setEvaluator", "(Landroid/animation/TypeEvaluator;)V", await newObj("android/animation/FloatEvaluator", "()V"));
     await vcall(anim, "setDuration", "(J)Landroid/animation/ValueAnimator;", 1000n);
     await vcall(anim, "start", "()V");
     const value = await vcall(anim, "getAnimatedValue", "()Ljava/lang/Object;");
-    expect(value).toBeInstanceOf(JFloat);
+    expect(boxDesc(value)).toBe("F");
     expect(await vcall(value, "floatValue", "()F")).toBe(30);
     await vcall(anim, "cancel", "()V");
   });
@@ -32,8 +33,8 @@ describe("animator-start", () => {
 
   class Alpha extends JObj {
     value = 0.25;
-    [mangleMethod("get", "(Ljava/lang/Object;)Ljava/lang/Object;")]() { return box(JFloat, this.value); }
-    [mangleMethod("set", "(Ljava/lang/Object;Ljava/lang/Object;)V")](_t: unknown, v: JFloat) { this.value = v.v as number; }
+    [mangleMethod("get", "(Ljava/lang/Object;)Ljava/lang/Object;")]() { return boxFloat(this.value); }
+    [mangleMethod("set", "(Ljava/lang/Object;Ljava/lang/Object;)V")](_t: unknown, v: unknown) { this.value = unbox(v) as number; }
   }
 
   class LegacyListener extends JObj { ended = 0; }
@@ -101,7 +102,7 @@ describe("animator-start", () => {
     points: JPoint[] = [];
     [mangleMethod("convert", "(Ljava/lang/Object;)Ljava/lang/Object;")](point: JPoint) {
       this.points.push(point);
-      return box(JFloat, point.x);
+      return boxFloat(point.x);
     }
   }
 
@@ -158,7 +159,7 @@ describe("animator-start", () => {
     await rt.initClass(rt.link("android/view/View"));
     const prop = rt.link("android/view/View").ctor.s$ALPHA, target = rt.make("test/CustomAlpha");
     expect(await vcall(prop, "getName", "()Ljava/lang/String;")).toBe("alpha");
-    await vcall(prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, box(JFloat, 0.25));
+    await vcall(prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, boxFloat(0.25));
     const anim = scall("android/animation/ObjectAnimator", "ofFloat", "(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;", target, prop, new Float32Array([1]));
     await vcall(anim, "start", "()V");
     expect(anim.from).toBe(0.25);

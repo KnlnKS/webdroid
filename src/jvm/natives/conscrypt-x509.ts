@@ -4,7 +4,8 @@
 import { rt, type JObj } from "../runtime";
 import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles";
 import { jarray } from "../abi";
-import { vcall, boxInt } from "./jlang";
+import { vcall } from "./jlang";
+import { boxInt } from "./jbox";
 import { nc, u8, i8, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt";
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253, sameBytes,
   KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509";

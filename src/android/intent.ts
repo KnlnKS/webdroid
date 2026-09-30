@@ -9,7 +9,8 @@ import { newLinkedHashSet } from "../jvm/natives/jcoll";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
-import { vcall, defineException, stringHash, JBool, JByte, JChar, JDouble, JFloat, JShort } from "../jvm/natives/jlang";
+import { vcall, defineException, stringHash } from "../jvm/natives/jlang";
+import { boxDesc, unbox } from "../jvm/natives/jbox";
 import { TV, type XmlAttr, type XmlNode } from "./axml";
 import { normRV } from "./res";
 
@@ -368,11 +369,11 @@ function extraUri(v: unknown): [string, string] | null {
   if (typeof v === "string") return ["S", v];
   if (typeof v === "number") return ["i", String(v)];
   if (typeof v === "bigint") return ["l", String(v)];
-  const n = (v as { v: number }).v;
-  if (v instanceof JBool) return ["B", String(!!n)];
-  if (v instanceof JChar) return ["c", String.fromCharCode(n)];
-  if (v instanceof JDouble || v instanceof JFloat) return [v instanceof JDouble ? "d" : "f", Number.isInteger(n) ? n.toFixed(1) : String(n)];
-  return v instanceof JByte ? ["b", String(n)] : v instanceof JShort ? ["s", String(n)] : null;
+  const d = boxDesc(v), n = unbox(v) as number;
+  if (d === "Z") return ["B", String(!!n)];
+  if (d === "C") return ["c", String.fromCharCode(n)];
+  if (d === "D" || d === "F") return [d === "D" ? "d" : "f", Number.isInteger(n) ? n.toFixed(1) : String(n)];
+  return d === "B" ? ["b", String(n)] : d === "S" ? ["s", String(n)] : null;
 }
 function intentUri(it: JIntent, flags: number): string {
   const intentScheme = (flags & 1) !== 0, match = it.dataUri ? /^([^:/?#]+):/.exec(it.dataUri) : null;

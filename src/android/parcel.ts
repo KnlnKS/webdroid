@@ -3,7 +3,8 @@
 // form here — a binder — rides in a side table keyed by its position.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
-import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException, callOn, curThread, vcallOn } from "../jvm/natives/jlang";
+import { newObj, vcall, defineException, callOn, curThread, vcallOn } from "../jvm/natives/jlang";
+import { box, boxDesc, unbox, type BoxDesc } from "../jvm/natives/jbox";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
 import { csText } from "./text";
@@ -234,20 +235,19 @@ const readStrings = (p: JParcel) => readPrimArray(p, (n) => jarray(new Array<str
 export const writeStrings = (p: JParcel, a: (string | null)[] | null) => { if (!a) return writeInt(p, -1); writeInt(p, a.length); for (const s of a) writeString(p, s); };
 function readStringList(p: JParcel) { const a = readStrings(p); return a ? newArrayList(a) : null; }
 
+const BOX_TAGS: Record<BoxDesc, V> = { I: V.INTEGER, J: V.LONG, F: V.FLOAT, D: V.DOUBLE, Z: V.BOOLEAN, B: V.BYTE, S: V.SHORT, C: V.CHAR };
 async function writeValue(p: JParcel, v: unknown) {
   const tag = (t: V) => writeInt(p, t);
   if (v === null || v === undefined) return tag(V.NULL);
   if (typeof v === "string") { tag(V.STRING); return writeString(p, v); }
   if (typeof v === "number") { if (Number.isInteger(v)) { tag(V.INTEGER); writeInt(p, v); } else { tag(V.DOUBLE); writeDouble(p, v); } return; }
   if (typeof v === "bigint") { tag(V.LONG); return writeLong(p, v); }
-  if (v instanceof JInt) { tag(V.INTEGER); return writeInt(p, v.v); }
-  if (v instanceof JLong) { tag(V.LONG); return writeLong(p, v.v); }
-  if (v instanceof JFloat) { tag(V.FLOAT); return writeFloat(p, v.v); }
-  if (v instanceof JDouble) { tag(V.DOUBLE); return writeDouble(p, v.v); }
-  if (v instanceof JBool) { tag(V.BOOLEAN); return writeInt(p, v.v); }
-  if (v instanceof JByte) { tag(V.BYTE); return writeInt(p, v.v); }
-  if (v instanceof JShort) { tag(V.SHORT); return writeInt(p, v.v); }
-  if (v instanceof JChar) { tag(V.CHAR); return writeInt(p, v.v); }
+  const boxed = boxDesc(v);
+  if (boxed) {
+    const n = unbox(v)!;
+    tag(BOX_TAGS[boxed]);
+    return boxed === "J" ? writeLong(p, n as bigint) : boxed === "F" ? writeFloat(p, n as number) : boxed === "D" ? writeDouble(p, n as number) : writeInt(p, n as number);
+  }
   if (v instanceof Int8Array) { tag(V.BYTEARRAY); return writeBytes(p, v); }
   for (const [C, code, w] of PRIM_PARCEL) if (v instanceof C) { tag(code); return writePrimArray(p, v as ArrayLike<number>, (x: never) => w(p, x)); }
   if (Array.isArray(v)) {
@@ -274,14 +274,14 @@ async function readValue(p: JParcel, loader: unknown): Promise<unknown> {
   switch (t) {
     case V.NULL: return null;
     case V.STRING: case V.CHARSEQUENCE: return readString(p);
-    case V.INTEGER: return box(JInt, readInt(p));
-    case V.LONG: return box(JLong, readLong(p));
-    case V.FLOAT: return box(JFloat, readFloat(p));
-    case V.DOUBLE: return box(JDouble, readDouble(p));
-    case V.BOOLEAN: return box(JBool, readInt(p));
-    case V.BYTE: return box(JByte, readInt(p));
-    case V.SHORT: return box(JShort, readInt(p));
-    case V.CHAR: return box(JChar, readInt(p));
+    case V.INTEGER: return box("I", readInt(p));
+    case V.LONG: return box("J", readLong(p));
+    case V.FLOAT: return box("F", readFloat(p));
+    case V.DOUBLE: return box("D", readDouble(p));
+    case V.BOOLEAN: return box("Z", readInt(p));
+    case V.BYTE: return box("B", (readInt(p) << 24) >> 24);
+    case V.SHORT: return box("S", (readInt(p) << 16) >> 16);
+    case V.CHAR: return box("C", readInt(p) & 0xffff);
     case V.BYTEARRAY: return readBytes(p);
     case V.STRINGARRAY: return readStrings(p);
     case V.PARCELABLEARRAY: case V.OBJECTARRAY: {

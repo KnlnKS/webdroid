@@ -3,6 +3,7 @@ import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { unbox } from "../src/jvm/natives/jbox";
 import { checkUriPermission, grantUriPermission, revokeUriPermission, providerOperations } from "../src/android/contentresolver";
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
@@ -241,7 +242,7 @@ describe("intent-typed-extras", () => {
     await vcall(bundleParcel, "setDataPosition", "(I)V", 0);
     const bundle = await newObj("android/os/Bundle", "()V");
     await vcall(bundle, "readFromParcel", "(Landroid/os/Parcel;)V", bundleParcel);
-    expect((await vcall(bundle, "getByte", "(Ljava/lang/String;B)Ljava/lang/Byte;", "b", 0)).v).toBe(-7);
+    expect(unbox(await vcall(bundle, "getByte", "(Ljava/lang/String;B)Ljava/lang/Byte;", "b", 0))).toBe(-7);
     expect([...await vcall(bundle, "getDoubleArray", "(Ljava/lang/String;)[D", "D")]).toEqual([0.25]);
     expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"))).toBeNull();
     await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "p", component);

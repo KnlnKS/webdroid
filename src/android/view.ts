@@ -4,7 +4,8 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, clipToOutline, clipEmptyCanvas, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, callOn, after, newObj, idHash, box, JFloat, curThread, type JThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, after, newObj, idHash, curThread, type JThread } from "../jvm/natives/jlang";
+import { boxFloat, unboxAs } from "../jvm/natives/jbox";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize, cslBoundary } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -2541,9 +2542,9 @@ rt.register({
 /** View's FloatProperty constants, each over the view's own accessor pair */
 class JViewProperty extends JProperty { getter = ""; setter = ""; }
 rt.register({ name: "webdroid/ViewProperty", ctor: JViewProperty, sup: "android/util/FloatProperty", methods: {
-  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return box(JFloat, yield vcall(view, this.getter, "()F")); }),
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return boxFloat(yield vcall(view, this.getter, "()F")); }),
   "setValue(Ljava/lang/Object;F)V": function (this: JViewProperty, view: unknown, v: number) { return vcall(view, this.setter, "(F)V", v); },
-  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: JFloat) { return vcall(view, this.setter, "(F)V", Math.fround(v?.v ?? 0)); },
+  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: unknown) { return vcall(view, this.setter, "(F)V", Math.fround(unboxAs(v, "F", 0) as number)); },
 } });
 const VIEW_PROPERTIES = ["ALPHA", "TRANSLATION_X", "TRANSLATION_Y", "TRANSLATION_Z", "X", "Y", "Z", "ROTATION", "ROTATION_X", "ROTATION_Y", "SCALE_X", "SCALE_Y"];
 /** View's protected *_STATE_SET arrays: every combination of these five, named in this order */

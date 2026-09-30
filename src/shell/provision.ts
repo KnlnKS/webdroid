@@ -8,7 +8,7 @@ import { vfs } from "./vfs";
 import { packages, signaturePermissions } from "../android/packages";
 import { JIntent, componentState, mkComponentName } from "../android/intent";
 import { serviceTransport } from "../android/runningservices";
-import { box, JBool } from "../jvm/natives/jlang";
+import { boxBool } from "../jvm/natives/jbox";
 import { hexBytes } from "../jvm/abi";
 
 let ready: Promise<void> | null = null;
@@ -50,7 +50,7 @@ export async function provisionServices(options: { attestationEnabled: boolean }
     const intent = new JIntent(); intent.component = spec.provision.component; intent.componentPkg = spec.pkg;
     const extras = { ...spec.provision.extras,
       ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
-    for (const [key, value] of Object.entries(extras)) intent.extras.map.set(key, box(JBool, value ? 1 : 0));
+    for (const [key, value] of Object.entries(extras)) intent.extras.map.set(key, boxBool(value));
     await serviceTransport.start(owner, owner.process(component), intent, false);
   }
 }

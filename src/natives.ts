@@ -3,6 +3,7 @@
 // classes as missing. smoke.ts, jsrc.ts and nrun.ts deliberately load a partial list instead:
 // a registered native shadows the dex class, and those three exist to compile or dump the
 // app's own bytecode.
+import "./jvm/natives/jbox";
 import "./jvm/natives/jlang";
 import "./jvm/natives/jcoll";
 import "./jvm/natives/jvalues";

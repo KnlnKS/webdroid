@@ -12,7 +12,8 @@ import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, JByte, JShort, vcallUncaught, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, vcallUncaught, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
+import { box, boxObject, unboxAs, type BoxDesc } from "../jvm/natives/jbox";
 import { E, ERRSTR } from "../native/abi";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
@@ -534,15 +535,14 @@ export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
-const bundleBoxes: Record<string, new () => { v: unknown }> = { I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool, C: JChar, B: JByte, S: JShort };
 export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
   if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
-  return value instanceof bundleBoxes[descriptor] ? value.v : fallback;
+  return unboxAs(value, descriptor as BoxDesc, fallback);
 }
 /** What put<Type> stores: I and J stay bare (their JS type names them); the other primitives
  *  keep their declared width in a box, as a Parcel round trip will too. */
 export function bundleBox(value: unknown, descriptor: string): unknown {
-  return typeof value === "number" && descriptor !== "I" && descriptor.length === 1 ? box(bundleBoxes[descriptor], value) : value;
+  return typeof value === "number" && descriptor !== "I" && descriptor.length === 1 ? box(descriptor as BoxDesc, value) : value;
 }
 export function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallback: unknown): unknown {
   const v = b.map.get(k);
@@ -614,7 +614,7 @@ for (const [t, d] of BUNDLE_TYPES) {
   bundleMethods[`put${t}(Ljava/lang/String;${d})V`] = function (this: JBundle, k: string, v: unknown) { this.map.set(k, bundleBox(v, d)); };
   bundleMethods[`get${t}(Ljava/lang/String;)${d}`] ??= function (this: JBundle, k: string) { return bundleGet(this, k, d, zero); };
   // AOSP boxes getByte's default; the reference types with a default overload are the two strings
-  if (d === "B") bundleMethods["getByte(Ljava/lang/String;B)Ljava/lang/Byte;"] = function (this: JBundle, k: string, dv: number) { return box(JByte, bundleGet(this, k, d, dv) as number); };
+  if (d === "B") bundleMethods["getByte(Ljava/lang/String;B)Ljava/lang/Byte;"] = function (this: JBundle, k: string, dv: number) { return box("B", bundleGet(this, k, d, dv) as number); };
   else if (zero !== null || t === "String" || t === "CharSequence") {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dv: unknown) { return bundleGet(this, k, d, dv); };
   }

@@ -2,11 +2,11 @@
 // through these helpers: ArrayList by its own fields, anything else through its Java API.
 import { jarray, mangleField } from "../abi";
 import { rt, driven, type Gen, type Intrinsic } from "../runtime";
-import { vcall, scall, stringHash, JInt } from "./jlang";
+import { vcall, scall, stringHash } from "./jlang";
 
 const AL = "java/util/ArrayList", HM = "java/util/HashMap", NODE = "java/util/HashMap$Node", ITR = "java/util/ArrayList$Itr";
 const DATA = mangleField(AL, "elementData"), SIZE = mangleField(AL, "size"), MOD = mangleField("java/util/AbstractList", "modCount");
-const TABLE = mangleField(HM, "table");
+const TABLE = mangleField(HM, "table"), IVALUE = mangleField("java/lang/Integer", "value");
 const HASH = mangleField(NODE, "hash"), KEY = mangleField(NODE, "key"), VALUE = mangleField(NODE, "value"), NEXT = mangleField(NODE, "next");
 const OUTER = mangleField(ITR, "this$0"), CURSOR = mangleField(ITR, "cursor"), LIMIT = mangleField(ITR, "limit"),
   LAST = mangleField(ITR, "lastRet"), EXPECTED = mangleField(ITR, "expectedModCount");
@@ -81,7 +81,7 @@ export function arrayMapEntries(map: Obj): [unknown, unknown][] {
 // fields' own names (`$field` below): a named load stays monomorphic where a keyed one would not.
 const FIELDS: Record<string, string> = { data: DATA, size: SIZE, mod: MOD, outer: OUTER, cursor: CURSOR, limit: LIMIT, last: LAST,
   expected: EXPECTED, table: TABLE, hash: HASH, key: KEY, value: VALUE, next: NEXT,
-  seed: mangleField("java/util/Random", "seed"), long: mangleField("java/util/concurrent/atomic/AtomicLong", "value") };
+  seed: mangleField("java/util/Random", "seed"), long: mangleField("java/util/concurrent/atomic/AtomicLong", "value"), ivalue: IVALUE };
 const compile = (params: string, body: string, env: Record<string, unknown> = {}): Intrinsic => (base) =>
   new Function("base", ...Object.keys(env), `return function(${params}){${body.replace(/\$(\w+)/g, (_, f: string) => FIELDS[f])}}`)(base, ...Object.values(env));
 rt.intrinsic(AL, {
@@ -121,11 +121,13 @@ rt.intrinsic("java/util/Arrays", {
   },
 });
 
+/** a class's constructor, looked up on first use */
+const linked = (cls: string) => { let c: unknown; return () => c ??= rt.link(cls).ctor; };
 /** the HashMap node holding `key`, null, or undefined when the AOSP body must answer */
 const findNode = compile("map, key", `
   let h;
   if (typeof key === "string") h = stringHash(key);
-  else if (key instanceof JInt) h = key.v;
+  else if (key !== null && key.constructor === integer()) h = key.$ivalue;
   else return undefined;
   h ^= h >>> 16;
   const table = map.$table;
@@ -136,10 +138,10 @@ const findNode = compile("map, key", `
   if (typeof key === "string") {
     for (; e !== null; e = e.$next) if (e.$hash === h && e.$key === key) return e;
   } else {
-    const v = key.v;
-    for (; e !== null; e = e.$next) if (e.$hash === h && (e.$key === key || e.$key instanceof JInt && e.$key.v === v)) return e;
+    const v = key.$ivalue, I = key.constructor;
+    for (; e !== null; e = e.$next) if (e.$hash === h && (e.$key === key || e.$key !== null && e.$key.constructor === I && e.$key.$ivalue === v)) return e;
   }
-  return null;`, { stringHash, JInt, treeNode: (() => { let c: unknown; return () => c ??= rt.link("java/util/HashMap$TreeNode").ctor; })() })(() => undefined);
+  return null;`, { stringHash, treeNode: linked("java/util/HashMap$TreeNode"), integer: linked("java/lang/Integer") })(() => undefined);
 rt.intrinsic(HM, {
   "getNode(Ljava/lang/Object;)Ljava/util/HashMap$Node;": compile("key", "const e = findNode(this, key); return e === undefined ? base.call(this, key) : e;", { findNode }),
   "get(Ljava/lang/Object;)Ljava/lang/Object;": compile("key", "const e = findNode(this, key); return e === undefined ? base.call(this, key) : e === null ? null : e.$value;", { findNode }),

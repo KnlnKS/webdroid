@@ -2,7 +2,8 @@
 
 import { rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, boxInt, vcallUncaught } from "../jvm/natives/jlang";
+import { vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { boxInt, unboxAs } from "../jvm/natives/jbox";
 import { reportUncaught } from "./os";
 import { JAlertDialog, initDialog } from "./dialog";
 import { JView, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
@@ -193,12 +194,12 @@ const timePickerMethods: NativeSpec["methods"] = {
   "setMinute(I)V": function (this: JTimePicker, m: number) { this.minuteVal = m | 0; onChanged(this); },
   // legacy Integer-wrapper API (pre API 23)
   "getCurrentHour()Ljava/lang/Integer;": function (this: JTimePicker) { return boxInt(this.hourVal); },
-  "setCurrentHour(Ljava/lang/Integer;)V": function (this: JTimePicker, v: { v: number } | null) { this.hourVal = v ? v.v | 0 : 0; onChanged(this); },
+  "setCurrentHour(Ljava/lang/Integer;)V": function (this: JTimePicker, v: unknown) { this.hourVal = unboxAs(v, "I", 0) as number; onChanged(this); },
   "getCurrentMinute()Ljava/lang/Integer;": function (this: JTimePicker) { return boxInt(this.minuteVal); },
-  "setCurrentMinute(Ljava/lang/Integer;)V": function (this: JTimePicker, v: { v: number } | null) { this.minuteVal = v ? v.v | 0 : 0; onChanged(this); },
+  "setCurrentMinute(Ljava/lang/Integer;)V": function (this: JTimePicker, v: unknown) { this.minuteVal = unboxAs(v, "I", 0) as number; onChanged(this); },
   "is24HourView()Z": function (this: JTimePicker) { return this.is24 ? 1 : 0; },
-  "setIs24HourView(Ljava/lang/Boolean;)V": function (this: JTimePicker, v: { v: number } | null) {
-    const next = !!v?.v;
+  "setIs24HourView(Ljava/lang/Boolean;)V": function (this: JTimePicker, v: unknown) {
+    const next = !!unboxAs(v, "Z", 0);
     if (next === this.is24) return;
     this.is24 = next;
     return rebuildPicker(this);

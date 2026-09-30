@@ -1,6 +1,7 @@
 import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { after, box, boxInt, JDouble, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
+import { after, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
+import { boxDouble, boxInt } from "../jvm/natives/jbox";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, isBuffer, nativeOrder, remainingBytes, setLimit, setPosition } from "../jvm/natives/jnio";
 import { JMediaFormat } from "./media-format";
 import { JBufferInfo } from "./media";
@@ -131,7 +132,7 @@ rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVid
   "getSupportedFrameRatesFor(II)Landroid/util/Range;": driven(function* (this: JVideoCapabilities, width: number, height: number): Gen {
     const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
     if (!range || !(yield supportsSize.call(this, width, height))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "unsupported size");
-    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", box(JDouble, range[0]), box(JDouble, range[1]));
+    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxDouble(range[0]), boxDouble(range[1]));
   }),
   "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxBitrate"); },
   "getSupportedHeights()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxDimension"); },

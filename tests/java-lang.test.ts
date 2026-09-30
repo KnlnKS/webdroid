@@ -2,12 +2,14 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, box, JDouble, JFloat, JInt } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
+import { boxDouble, boxFloat, boxInt } from "../src/jvm/natives/jbox";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { scall, loadLibcore } from "./java";
 
 rt.linkNatives();
+await loadLibcore();
 
 describe("annotation-enum-init", () => {
   test("explicit enum annotation elements wait for class initialization", async () => {
@@ -91,7 +93,7 @@ describe("assertion-error", () => {
 describe("character-offset", () => {
   test("code point offsets count pairs once and retain unpaired surrogates", async () => {
     const text = "a\ud83d\ude00\ud800b\udc00";
-    const offset = (value: unknown, index: number, count: number) => vcall(rt.link("java/lang/Character").ctor, "offsetByCodePoints", "(Ljava/lang/CharSequence;II)I", value, index, count);
+    const offset = (value: unknown, index: number, count: number) => scall("java/lang/Character", "offsetByCodePoints", "(Ljava/lang/CharSequence;II)I", value, index, count);
     for (const value of [text, await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", text)]) {
       expect(await offset(value, 0, 2)).toBe(3);
       expect(await offset(value, 6, -4)).toBe(1);
@@ -442,7 +444,7 @@ describe("string-codepoints", () => {
 
 describe("string-format", () => {
   test("%s prints a box's own toString", () => {
-    const args = jarray([box(JDouble, 2), box(JFloat, 1.5), box(JInt, 3)], "Ljava/lang/Object;");
+    const args = jarray([boxDouble(2), boxFloat(1.5), boxInt(3)], "Ljava/lang/Object;");
     expect(scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "[%s, %s, %s]", args)).toBe("[2.0, 1.5, 3]");
   });
 });

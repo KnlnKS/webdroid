@@ -1,5 +1,6 @@
 import { JObj, rt } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
+import { unbox } from "../jvm/natives/jbox";
 import { JUri, mkUri } from "./net";
 import { mkCursor } from "./sqlite";
 import { mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
@@ -40,7 +41,8 @@ rt.register({ name: "webdroid/RemoteContentProvider", ctor: JRemoteProvider, met
         ? (bytes: Uint8Array, closed?: boolean) => this.call(this.pkg, this.process, { authority: this.authority, name: "$writeFile", desc: "", args: [{ kind: "pfd", token: encoded.token, bytes, closed }], access: "write" })
         : null;
       const value = await decodeProviderValue(result.value, remote);
-      return desc.endsWith("I") && value instanceof JObj && "v" in value ? value.v : value;
+      const raw = unbox(value);
+      return desc.endsWith("I") && raw !== undefined ? raw : value;
     }
     return mkCursor(result.columns, await Promise.all(result.rows.map((row) => Promise.all(row.map((value) => decodeProviderValue(value))))));
   },

@@ -2,13 +2,15 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { boxInt, newObj, scall, vcall } from "../src/jvm/natives/jlang";
+import { newObj, scall, vcall } from "../src/jvm/natives/jlang";
+import { boxDesc, boxInt } from "../src/jvm/natives/jbox";
 import { bufferBytes, limit, position } from "../src/jvm/natives/jnio";
 import { jarray, mangleField, mangleMethod, splitSig } from "../src/jvm/abi";
 import { loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
 await loadLibcore();
+await mountApexData();
 
 /** the intrinsic and the AOSP body of `cls.sig` */
 async function pair(cls: string, sig: string): Promise<[Function, Function]> {
@@ -320,3 +322,73 @@ test("BigInteger's intrinsics match its AOSP bodies over signs, zero, powers of 
   expect(thrown.get("java/lang/ArithmeticException")).toBeGreaterThan(500);
   expect(thrown.get("java/lang/NullPointerException")).toBeGreaterThan(100);
 }, 600_000);
+
+/** a call's outcome as `outcome` gives it, an NPE by class alone (its message is the engine's text) */
+async function result(fn: Function, self: unknown, args: unknown[]): Promise<unknown> {
+  const r = await outcome(fn, self, args) as { threw?: string; msg?: string };
+  return r.threw === "java/lang/NullPointerException" ? { threw: r.threw } : r;
+}
+const INTS = [0, 1, -1, 127, 128, -128, -129, 255, 256, 1000, -32768, 32767, 65535, 2147483647, -2147483648,
+  ...Array.from({ length: 40 }, () => (random(0x7fffffff) - 0x3fffffff) * (random(3) ? 1 : 97) | 0)];
+const LONGS = [...INTS.map(BigInt), 9007199254740993n, -9223372036854775808n, 9223372036854775807n, 1n << 40n, -(1n << 53n) - 1n];
+const BOX_VALUES: Record<string, unknown[]> = {
+  I: INTS, J: LONGS, S: INTS.map((v) => (v << 16) >> 16), B: INTS.map((v) => (v << 24) >> 24), C: INTS.map((v) => v & 0xffff),
+  F: [0, -0, 1.5, -2.25, NaN, Infinity, 3.4028234663852886e38, 1.401298464324817e-45], D: [0, -0, 0.1, -1e300, NaN, -Infinity, 5e-324, 2 ** 53], Z: [0, 1],
+};
+const BOXES: Record<string, string> = { I: "Integer", J: "Long", S: "Short", B: "Byte", C: "Character", F: "Float", D: "Double", Z: "Boolean" };
+
+test("boxing and unboxing intrinsics match their AOSP bodies, cache identity included", async () => {
+  for (const [d, name] of Object.entries(BOXES)) {
+    const cls = "java/lang/" + name;
+    const [valueOf, base] = await pair(cls, `static valueOf(${d})L${cls};`);
+    const getter = ({ I: "intValue()I", J: "longValue()J", C: "charValue()C", F: "floatValue()F", D: "doubleValue()D", Z: "booleanValue()Z" } as Record<string, string>)[d];
+    const get = getter ? await pair(cls, getter) : null;
+    for (const v of BOX_VALUES[d]) {
+      const mine = valueOf(v), theirs = base(v);
+      expect(mine.constructor).toBe(theirs.constructor);
+      expect(mine === theirs).toBe(theirs === base(v));
+      if (get) expect(Object.is(get[0].call(mine), get[1].call(theirs))).toBe(true);
+    }
+  }
+});
+
+test("box equality, hashing and ordering intrinsics match their AOSP bodies", async () => {
+  const others = [null, boxInt(5), await scall("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;", 5n), "5", jarray([], "Ljava/lang/Object;")];
+  for (const [d, sigs] of [["I", ["equals(Ljava/lang/Object;)Z", "hashCode()I", "compareTo(Ljava/lang/Integer;)I"]],
+    ["J", ["equals(Ljava/lang/Object;)Z"]], ["C", ["equals(Ljava/lang/Object;)Z"]]] as const) {
+    const cls = "java/lang/" + BOXES[d];
+    const valueOf = (await pair(cls, `static valueOf(${d})L${cls};`))[1];
+    const boxes = BOX_VALUES[d].slice(0, 20).map((v) => valueOf(v));
+    for (const sig of sigs) {
+      const [fn, base] = await pair(cls, sig);
+      for (const self of boxes) for (const o of [...boxes.slice(0, 8), valueOf(BOX_VALUES[d][3]), ...others]) {
+        if (sig.startsWith("compareTo") && o !== null && boxDesc(o) !== d) continue;
+        expect(await result(fn, self, [o])).toEqual(await result(base, self, [o]));
+      }
+    }
+  }
+});
+
+test("integer formatting and parsing intrinsics match their AOSP bodies", async () => {
+  const I = "java/lang/Integer", J = "java/lang/Long";
+  const radices = [-1, 0, 1, 2, 8, 10, 16, 36, 37];
+  const cases: [string, string, unknown[][]][] = [
+    [I, "static toString(I)Ljava/lang/String;", INTS.map((v) => [v])],
+    [I, "static toString(II)Ljava/lang/String;", INTS.flatMap((v) => radices.map((r) => [v, r]))],
+    [I, "static toHexString(I)Ljava/lang/String;", INTS.map((v) => [v])],
+    [I, "static toOctalString(I)Ljava/lang/String;", INTS.map((v) => [v])],
+    [I, "static toBinaryString(I)Ljava/lang/String;", INTS.map((v) => [v])],
+    [J, "static toString(J)Ljava/lang/String;", LONGS.map((v) => [v])],
+    [J, "static toString(JI)Ljava/lang/String;", LONGS.flatMap((v) => radices.map((r) => [v, r]))],
+    [J, "static toHexString(J)Ljava/lang/String;", LONGS.map((v) => [v])],
+  ];
+  const texts = [...INTS.map(String), ...LONGS.map(String), ...INTS.map((v) => v.toString(16)), "", "-", "+", "+0", "-0", "007", " 1", "1 ",
+    "2147483648", "-2147483649", "9223372036854775808", "-9223372036854775809", "99999999999999999999", "0x10", "1_000", "12z",
+    "١٢٣", "１２", "-٤", "zz", "ZZ", "1e3", "1.0", null];
+  for (const [cls, sig] of [[I, "static parseInt(Ljava/lang/String;I)I"], [J, "static parseLong(Ljava/lang/String;I)J"]] as const)
+    cases.push([cls, sig, texts.flatMap((s) => radices.map((r) => [s, r]))]);
+  for (const [cls, sig, inputs] of cases) {
+    const [fn, base] = await pair(cls, sig);
+    for (const args of inputs) expect(await result(fn, null, args)).toEqual(await result(base, null, args));
+  }
+});

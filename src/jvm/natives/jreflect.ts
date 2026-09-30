@@ -1,8 +1,9 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
-import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
+import { mangleMethod, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
+import { vcall, packageNamed, stringHash, idHash, JClass, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
+import { box, boxObject, unbox, type BoxDesc } from "./jbox";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import { unsafeFallthrough } from "../compiler";
 import { device } from "../../shell/config";
@@ -974,8 +975,8 @@ function generics(info: ClassInfo): { vars: JTypeVar[]; ifaces: unknown[]; sup: 
 }
 export function unboxArg(v: unknown): unknown {
   // reflection passes boxed primitives; unwrap to raw for native/compiled calls
-  if (v !== null && typeof v === "object" && "v" in (v as object)) return (v as { v: unknown }).v;
-  return v;
+  const raw = unbox(v);
+  return raw === undefined ? v : raw;
 }
 /** a reflective argument for a parameter of type `desc`: unboxed, then widened as Method.invoke
  *  does (an Integer reaches a long parameter as a long, a Long a double one as a double) */
@@ -988,12 +989,7 @@ function argFor(desc: string | undefined, v: unknown): unknown {
 export function boxReturn(retDesc: string, v: unknown): unknown {
   switch (retDesc[0]) {
     case "V": return null;
-    case "I": case "B": case "S": return boxInt(v as number);
-    case "J": return box(JLong, v as bigint);
-    case "F": return box(JFloat, v as number);
-    case "D": return box(JDouble, v as number);
-    case "Z": return (JBool as any)[mangleStaticField(v ? "TRUE" : "FALSE")];
-    case "C": return box(JChar, v as number);
+    case "I": case "J": case "F": case "D": case "Z": case "C": case "B": case "S": return box(retDesc[0] as BoxDesc, v as number | bigint);
     // native (TS) classes declare their fields as Object, so a primitive read through them
     // must still come back boxed
     default: return boxObject(v);

@@ -1,5 +1,6 @@
 import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
-import { mainThread, vcallOn, vcall, newObj, box, boxObject, JFloat } from "../jvm/natives/jlang";
+import { mainThread, vcallOn, vcall, newObj } from "../jvm/natives/jlang";
+import { boxFloat, boxObject } from "../jvm/natives/jbox";
 import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { removeFrom } from "./view";
 import { onMain } from "./mainloop";
@@ -159,7 +160,7 @@ rt.register({
       "getAll()Ljava/util/Map;": driven(function* (this: JSharedPrefs): Gen {
         const map = yield newObj("java/util/HashMap");
         for (const [k, v] of this.map) {
-          const value = Array.isArray(v) ? yield newStringSet(v) : typeof v === "number" && !Number.isInteger(v) ? box(JFloat, v) : boxObject(v);
+          const value = Array.isArray(v) ? yield newStringSet(v) : typeof v === "number" && !Number.isInteger(v) ? boxFloat(v) : boxObject(v);
           yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
         }
         return map;

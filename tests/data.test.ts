@@ -39,15 +39,6 @@ describe("cursorwindow", () => {
   });
 });
 
-describe("long-unsigned", () => {
-  test("Long unsigned formatting handles the sign bit and invalid radices", async () => {
-    const long = rt.link("java/lang/Long").ctor;
-    expect(await vcall(long, "toUnsignedString", "(J)Ljava/lang/String;", -1n)).toBe("18446744073709551615");
-    expect(await vcall(long, "toUnsignedString", "(JI)Ljava/lang/String;", -1n, 16)).toBe("ffffffffffffffff");
-    expect(await vcall(long, "toUnsignedString", "(JI)Ljava/lang/String;", -9223372036854775808n, 1)).toBe("9223372036854775808");
-  });
-});
-
 describe("sax", () => {
   // libcore's ExpatParser over our expat natives: namespaces, entities, CDATA and well-formedness
   test("libcore's SAX parser reports what expat reports", async () => {
