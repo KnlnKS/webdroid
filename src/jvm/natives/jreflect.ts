@@ -893,7 +893,8 @@ rt.register({
     },
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JCtor, args: unknown[] | null): Gen {
       const info = this.owner;
-      const p = rt.initClass(info); if (p) yield p;
+      // a serialization copy allocates its own class, which the allocation initializes
+      for (const c of this.alloc ? [info, this.alloc] : [info]) { const p = rt.initClass(c); if (p) yield p; }
       const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)];
       if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
