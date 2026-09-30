@@ -851,7 +851,7 @@ Run all of these before committing a flip:
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file|luni-nio`. Baselines are 40,085,
-  2,544, 27,514, 1,337, 537, 173 and 2,616 (luni-nio: buffers, charsets, file channels); jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+  2,544, 27,514, 1,362, 540, 173 and 2,616 (luni-nio: buffers, charsets, file channels); jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -1011,21 +1011,15 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
    - **Blockers.** `isBytecode` matches prefixes, so `java/io/File` also cuts FileInputStream and
      the rest; single classes need an exact-match form. About 60 TS sites read TS layout
      (`mkFile`/`.path`, `JFileDescriptor.fd`, about 20 TS subclasses of TS streams). The largest
-     blocker is `JBuffer`: about 55 uses across GL, media, fonts and JNI read its DataView.
-   - **Done:** cuts 2 (File), 3 (FileDescriptor and the file streams), 4 (java.io but the
-     ObjectStreams), 6 (java.nio.file), 7a (java.net leaf classes), 7b (URI and cookies) and 7c
-     (URL and its handlers). **ZipFile stays TS for now** (measured 2026-09-29): libcore's
-     ZipUtils takes Unsafe offsets of ByteBuffer's `hb` and `offset` in its static initializer,
-     which the TS ByteBuffer lacks, so ZipFile moves with or after cut 5's Buffers decision. The TS
-     Inflater is not the blocker: libcore's ZipInputStream over it reads FitNotes' 682 entries
-     identically. Speed is mixed (history entry). **Next in cut 7:** URLConnection's base
-     (`getContentHandler`, the content handler statics) and InetAddress/InetSocketAddress, then
-     sockets (cut 8). ByteArrayInputStream is libcore's now, which unblocks JarVerifier:
-     ClassPathURLStreamHandler's TS constructor can go (check TikTok's v1-signed apk, whose
-     MANIFEST.MF is 2.2 MB).
-     **Skipped for now:** cut 1 (zip codecs): the TS Inflater encodes okio's
-     getRemaining semantics, and AOSP's Inflater needs natives that report consumed input exactly,
-     which fflate's push API does not expose; there is no line or speed gain to pay for that risk.
+     blocker was `JBuffer` (about 55 uses across GL, media, fonts and JNI), gone with cut 5.
+   - **Done:** cuts 1 (zip codecs, over pako's zlib), 2 (File), 3 (FileDescriptor and the file
+     streams), 4 (java.io but the ObjectStreams), 5 (java.nio's buffers and charsets), 6
+     (java.nio.file, then ZipFile and the Zip streams), 7a (java.net leaf classes), 7b (URI and
+     cookies) and 7c (URL and its handlers); see the 2026-10-01 history entries. **Next in cut 7:**
+     URLConnection's base (`getContentHandler`, the content handler statics) and
+     InetAddress/InetSocketAddress, then sockets (cut 8). ByteArrayInputStream is libcore's now,
+     which unblocks JarVerifier: ClassPathURLStreamHandler's TS constructor can go (check TikTok's
+     v1-signed apk, whose MANIFEST.MF is 2.2 MB).
    - **Cut order.** (1) zip codecs (CRC32, Adler32, Inflater, Deflater and their streams; 26
      natives over fflate; ZipFile stays TS). (2) File (12 UnixFileSystem natives over `vfs`).
      (3) FileDescriptor and the file streams over Linux read/write/pread/pwrite (`stdio.ts` needs

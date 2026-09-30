@@ -959,6 +959,20 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   HEAD → this: CRC32 over 4 MB 7.6 → 2.7 ms, Adler32 10.2 → 2.1, GZIP round trip of 1 MB 9.8 → 9.0,
   InflaterInputStream over 1 MB 2.3 → 1.6. luni-io 1,279 → 1,337 (the harmony codec tests that
   still fail want resource files the suite does not package).
+  pako's updatewindow, unlike zlib's, does not size a kept window again after inflateReset, so a
+  reused Inflater (ZipInputStream resets one per entry) lost its back-references ("invalid
+  distance too far back"); the reset native sizes it.
+- 2026-10-01, ZipFile, ZipEntry and the Zip streams from libcore (B.7 cut 6). ZipUtils' Unsafe
+  offsets of ByteBuffer's `hb` and `offset` resolve now that the buffers are libcore's, so
+  ZipFile, ZipEntry, ZipInputStream and ZipOutputStream run from bytecode over RandomAccessFile and
+  the zlib natives; the TS copies go (the TS ZipInputStream drained its source and read entries
+  from the central directory). The shell's own zip reader (jzip.ts `centralDir`, `zipTree`)
+  still loads apks and resources. V8, steady medians, HEAD → this: open + getEntry of FitNotes'
+  apk 0.14 → 0.34 ms, of Mihon's 67 MB apk on an async source 0.40 → 0.88, entries() over its
+  1,832 entries 0.57 → 2.0, 2,000 getEntry 0.53 → 2.1, stored + deflated reads 29 → 39,
+  ZipInputStream over FitNotes' 4.7 MB 28 → 13; a first open costs about 40 ms of class
+  initialization and compilation. CRC32C is libcore's Java (Unsafe word reads), 1.9 → 8.5 ms per
+  MB. luni-io 1,337 → 1,362, luni-net 537 → 540.
 
 ## Java, storage and framework semantics
 

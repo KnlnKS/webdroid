@@ -2,16 +2,13 @@
 // Inflater and Deflater run zlib itself (pako is a line-for-line port), since callers depend on
 // exactly how much input a call consumed: okio's InflaterSource and GZIP trailers read the rest
 // back through getRemaining. The Java classes above them are libcore's.
-import { Zip, ZipDeflate, ZipPassThrough, inflateSync, type DeflateOptions } from "fflate";
+import { inflateSync } from "fflate";
 import * as zInflate from "pako/lib/zlib/inflate.js";
 import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
-import { rt, JObj, driven, declaredField, type Gen } from "../runtime";
-import { utf8, i8, u8 } from "../abi";
-import { vcall, newObj, after, checkFromIndexSize } from "./jlang";
-import { pathOf, readStreamFully, heldByteReads, filterOut, setFilterOut } from "./jio";
-import { vfs } from "../../shell/vfs";
-import { mkEnumeration, newArrayList } from "./jcoll";
+import { rt, JObj, declaredField } from "../runtime";
+import { utf8, u8 } from "../abi";
+import { after, checkFromIndexSize } from "./jlang";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 import { handle, deref, release } from "../../android/handles";
 import { memoryAt } from "./jmemory";
@@ -176,9 +173,8 @@ const checksum = (step: (sum: number, b: Uint8Array) => number) => ({
 const crc = checksum(crc32);
 rt.registerJnis("java/util/zip/CRC32", { "update(II)I": crc["update(II)I"], "updateBytes0(I[BII)I": crc["updateBytes(I[BII)I"], "updateByteBuffer0(IJII)I": crc["updateByteBuffer(IJII)I"] });
 rt.registerJnis("java/util/zip/Adler32", checksum(adler32));
-// ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
+// ── the shell's zip reader: index the central directory, inflate an entry only when it is read
 export interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
-const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
 function dosTime(date: number, time: number): number {
   return new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).getTime();
 }
@@ -257,9 +253,6 @@ export async function localDataOffset(source: FileSource, e: ZEntry): Promise<nu
   }
   return e.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
 }
-async function entryBytesOfSource(source: FileSource, e: ZEntry): Promise<Uint8Array> {
-  return inflateEntry(await readFully(source, await localDataOffset(source, e), e.csize), e);
-}
 /** A zip as the file tree the rest of the boot reads, materialised one entry at a time: a
  *  stored entry is a view into bytes we already hold and costs nothing, a deflated one is
  *  inflated on first read and then replaces its own accessor, so a second read is a plain
@@ -299,210 +292,4 @@ export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (nam
     if (pending.has(name)) tree[name] = bytes;
   }));
 }
-
-class JZipEntry extends JObj { e: ZEntry = UNKNOWN; }
-function mkZipEntry(e: ZEntry): JZipEntry {
-  const z = rt.make("java/util/zip/ZipEntry") as JZipEntry;
-  z.e = e;
-  return z;
-}
-rt.register({
-  name: "java/util/zip/ZipEntry", ctor: JZipEntry, ifaces: ["java/lang/Cloneable"],
-  statics: { STORED: 0, DEFLATED: 8 },
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JZipEntry, name: string) { this.e = { ...UNKNOWN, name }; },
-    "<init>(Ljava/util/zip/ZipEntry;)V": function (this: JZipEntry, entry: JZipEntry | null) {
-      if (!entry) throw rt.mkThrowable("java/lang/NullPointerException", "entry");
-      this.e = { ...entry.e };
-    },
-    "getName()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
-    "getSize()J": function (this: JZipEntry) { return BigInt(this.e.size); },
-    "getCompressedSize()J": function (this: JZipEntry) { return BigInt(this.e.csize); },
-    "getTime()J": function (this: JZipEntry) { return BigInt(this.e.time); },
-    "getMethod()I": function (this: JZipEntry) { return this.e.method; },
-    "setMethod(I)V": function (this: JZipEntry, method: number) {
-      if (method !== 0 && method !== 8) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid compression method");
-      this.e.method = method;
-    },
-    "isDirectory()Z": function (this: JZipEntry) { return this.e.name.endsWith("/") ? 1 : 0; },
-    "toString()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
-  },
-});
-class JZipOutputStream extends JObj {
-  archive: Zip | null = null;
-  entry: ZipDeflate | ZipPassThrough | null = null;
-  pendingChunks: Uint8Array[] = [];
-  error: Error | null = null;
-  finished = false;
-  names = new Set<string>();
-  level = 6;
-  async flushChunks() {
-    if (this.error) throw rt.mkThrowable("java/util/zip/ZipException", this.error.message);
-    for (const chunk of this.pendingChunks.splice(0)) await vcall(filterOut(this), "write", "([BII)V", i8(chunk), 0, chunk.length);
-  }
-  async closeEntry() {
-    if (!this.entry) return;
-    this.entry.push(new Uint8Array(0), true);
-    this.entry = null;
-    await this.flushChunks();
-  }
-}
-function zipOutInit(this: JZipOutputStream, out: unknown) {
-  if (!out) throw rt.mkThrowable("java/lang/NullPointerException", "out");
-  setFilterOut(this, out);
-  this.archive = new Zip((error, chunk) => {
-    if (error) this.error = error;
-    else if (chunk?.length) this.pendingChunks.push(chunk);
-  });
-}
-rt.register({
-  name: "java/util/zip/ZipOutputStream", ctor: JZipOutputStream, sup: "java/util/zip/DeflaterOutputStream",
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": zipOutInit,
-    "<init>(Ljava/io/OutputStream;Ljava/nio/charset/Charset;)V": zipOutInit,
-    "putNextEntry(Ljava/util/zip/ZipEntry;)V": driven(function* (this: JZipOutputStream, entry: JZipEntry | null): Gen {
-      if (!entry) throw rt.mkThrowable("java/lang/NullPointerException", "entry");
-      if (!this.archive || this.finished) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-      yield this.closeEntry();
-      if (this.names.has(entry.e.name)) throw rt.mkThrowable("java/util/zip/ZipException", "duplicate entry: " + entry.e.name);
-      this.names.add(entry.e.name);
-      const file = entry.e.method === 0 ? new ZipPassThrough(entry.e.name) : new ZipDeflate(entry.e.name, { level: this.level as DeflateOptions["level"] });
-      if (entry.e.time >= 0) file.mtime = new Date(entry.e.time);
-      this.archive.add(file);
-      this.entry = file;
-      yield this.flushChunks();
-    }),
-    "write(I)V": driven(function* (this: JZipOutputStream, byte: number): Gen {
-      yield vcall(this, "write", "([BII)V", Int8Array.of(byte), 0, 1);
-    }),
-    "write([B)V": driven(function* (this: JZipOutputStream, bytes: Int8Array): Gen {
-      yield vcall(this, "write", "([BII)V", bytes, 0, bytes.length);
-    }),
-    "write([BII)V": driven(function* (this: JZipOutputStream, bytes: Int8Array, off: number, len: number): Gen {
-      if (!this.entry) throw rt.mkThrowable("java/util/zip/ZipException", "no current ZIP entry");
-      checkFromIndexSize(off, len, bytes.length);
-      if (len) this.entry.push(u8(bytes, off, len).slice());
-      yield this.flushChunks();
-    }),
-    "closeEntry()V": function (this: JZipOutputStream) { return this.closeEntry(); },
-    "setLevel(I)V": function (this: JZipOutputStream, level: number) {
-      if (level < 0 || level > 9) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression level");
-      this.level = level;
-    },
-    "finish()V": driven(function* (this: JZipOutputStream): Gen {
-      if (this.finished || !this.archive) return;
-      yield this.closeEntry();
-      this.archive.end();
-      this.finished = true;
-      yield this.flushChunks();
-    }),
-    "flush()V": driven(function* (this: JZipOutputStream): Gen { yield this.flushChunks(); yield vcall(filterOut(this), "flush", "()V"); }),
-    "close()V": driven(function* (this: JZipOutputStream): Gen {
-      if (!this.archive) return;
-      yield vcall(this, "finish", "()V");
-      yield vcall(filterOut(this), "close", "()V");
-      this.archive = null;
-    }),
-  },
-});
-class JZipFile extends JObj {
-  name = "";
-  entries = new Map<string, ZEntry>();
-  data: (e: ZEntry) => Uint8Array | Promise<Uint8Array> = () => new Uint8Array(0);
-}
-async function openZip(this: JZipFile, path: string) {
-  this.name = vfs.norm(path);
-  const bytes = vfs.read(path);
-  if (bytes) { this.entries = centralDir(bytes); this.data = (e) => entryBytes(bytes, e); return; }
-  const source = vfs.source(path);
-  if (source) { this.entries = await centralDirOfSource(source); this.data = (e) => entryBytesOfSource(source, e); return; }
-  throw rt.mkThrowable("java/io/FileNotFoundException", path + " (No such file or directory)");
-}
-const openZipFile = function (this: JZipFile, f: JObj) { return openZip.call(this, pathOf(f)); };
-/** a JarFile's entries are its own JarEntry subclass, as ZipFile.getZipEntry makes them */
-function entryOf(zip: JZipFile, e: ZEntry): JZipEntry | Promise<JZipEntry> {
-  if (!rt.iof(zip, "java/util/jar/JarFile")) return mkZipEntry(e);
-  return after(vcall(zip, "entryFor", "(Ljava/lang/String;)Ljava/util/jar/JarEntry;", e.name) as JZipEntry | Promise<JZipEntry>, (entry) => { entry.e = e; return entry; });
-}
-/** the manifest and signature files JarFile verifies with, as ZipFile.Source indexes them:
- *  META-INF/MANIFEST.MF and META-INF's own .SF, .DSA, .RSA and .EC files, ignoring case */
-function jarMeta(zip: JZipFile): { manifest: string | null; signatures: string[] } {
-  let manifest: string | null = null;
-  const signatures: string[] = [];
-  for (const name of zip.entries.keys()) {
-    const upper = name.toUpperCase();
-    if (!upper.startsWith("META-INF/")) continue;
-    if (upper === "META-INF/MANIFEST.MF") manifest ??= name;
-    else if (!upper.includes("/", 9) && /\.(SF|DSA|RSA|EC)$/.test(upper)) signatures.push(name);
-  }
-  return { manifest, signatures };
-}
-rt.register({
-  name: "java/util/zip/ZipFile", ctor: JZipFile, ifaces: ["java/io/Closeable"],
-  methods: {
-    "<init>(Ljava/lang/String;)V": openZip,
-    "<init>(Ljava/io/File;)V": openZipFile,
-    "<init>(Ljava/io/File;I)V": openZipFile,
-    "<init>(Ljava/io/File;IZ)V": openZipFile,
-    "getName()Ljava/lang/String;": function (this: JZipFile) { return this.name; },
-    "getManifestName(Z)Ljava/lang/String;": function (this: JZipFile, onlyIfSigned: number) {
-      const { manifest, signatures } = jarMeta(this);
-      return onlyIfSigned && !signatures.length ? null : manifest;
-    },
-    "getManifestAndSignatureRelatedFiles()Ljava/util/List;": function (this: JZipFile) {
-      const { manifest, signatures } = jarMeta(this);
-      return newArrayList(manifest ? [manifest, ...signatures] : signatures);
-    },
-    "size()I": function (this: JZipFile) { return this.entries.size; },
-    "entries()Ljava/util/Enumeration;": driven(function* (this: JZipFile): Gen {
-      const entries = [];
-      for (const e of this.entries.values()) entries.push(yield entryOf(this, e));
-      return mkEnumeration(entries);
-    }),
-    "getEntry(Ljava/lang/String;)Ljava/util/zip/ZipEntry;": function (this: JZipFile, name: string) {
-      const e = this.entries.get(name) ?? this.entries.get(name + "/");
-      return e ? entryOf(this, e) : null;
-    },
-    "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": driven(function* (this: JZipFile, ze: JZipEntry): Gen {
-      const e = this.entries.get(ze.e.name);
-      if (!e) return null;
-      const b = yield this.data(e);
-      return newObj("java/io/ByteArrayInputStream", "([B)V", i8(b));
-    }),
-    "close()V": function () {},
-  },
-});
-
-// ── ZipInputStream: the source is drained and indexed by its central directory, which is what
-// makes an entry with a data descriptor (sizes only after the data) readable without decoding
-// ahead; entries are then served in local-header order, one buffer-backed entry at a time.
-class JZipInputStream extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; zip: Uint8Array | null = null; entries: ZEntry[] = []; next = 0; }
-async function openZipStream(this: JZipInputStream, src: unknown) {
-  if (src === null) throw rt.mkThrowable("java/lang/NullPointerException", "in == null");
-  this.zip = await readStreamFully(src);
-}
-rt.register({
-  name: "java/util/zip/ZipInputStream", ctor: JZipInputStream, sup: "java/util/zip/InflaterInputStream",
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": openZipStream,
-    "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": openZipStream,
-    ...heldByteReads,
-    "getNextEntry()Ljava/util/zip/ZipEntry;": function (this: JZipInputStream) {
-      if (!this.zip) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-      if (!this.next && !this.entries.length) {
-        try { this.entries = [...centralDir(this.zip).values()].sort((a, b) => a.off - b.off); }
-        catch (e) { throw rt.mkThrowable("java/util/zip/ZipException", (e as Error).message); }
-      }
-      const e = this.entries[this.next];
-      if (!e) { this.buf = new Uint8Array(0); this.pos = 0; return null; }
-      this.next++;
-      this.buf = e.name.endsWith("/") ? new Uint8Array(0) : entryBytes(this.zip, e);
-      this.pos = 0;
-      return mkZipEntry(e);
-    },
-    "closeEntry()V": function (this: JZipInputStream) { this.buf = new Uint8Array(0); this.pos = 0; },
-    "available()I": function (this: JZipInputStream) { return this.pos < this.buf.length ? 1 : 0; },
-    "close()V": function (this: JZipInputStream) { this.zip = null; this.buf = new Uint8Array(0); this.pos = 0; },
-  },
-});
 
