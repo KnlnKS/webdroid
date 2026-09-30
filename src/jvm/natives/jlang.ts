@@ -877,7 +877,8 @@ export function javaFormat(fmt: string, args: unknown[]): string {
       if (conv === "%") return "%";
       if (conv === "n") return "\n";
       const idx = argn ? parseInt(argn) - 1 : ai++;
-      let v = args[idx];
+      const arg = args[idx];
+      let v = arg;
       // BigInteger prints its whole signed magnitude; int/long print two's-complement at their width.
       const big = rt.iof(v, "java/math/BigInteger") ? (v as { v: bigint }).v : null;
       // %x/%o print two's complement at the ARGUMENT's width, so a Byte -1 is "ff", not "ffffffff"
@@ -899,7 +900,7 @@ export function javaFormat(fmt: string, args: unknown[]): string {
         case "c": s = String.fromCharCode(Number(v)); break;
         case "b": s = v === null || v === 0 ? "false" : "true"; break;
         case "h": s = v === null ? "null" : idHash(v).toString(16); break;
-        default: s = jToString(v);
+        default: s = jToString(arg); // a box prints its own toString: a Double 2 is "2.0"
           if (prec) s = s.slice(0, parseInt(prec));
       }
       if (width) {

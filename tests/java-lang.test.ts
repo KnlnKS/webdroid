@@ -1,8 +1,8 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
-import { mangleStaticField, mangleMethod } from "../src/jvm/abi";
+import { mangleStaticField, mangleMethod, jarray } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, box, JDouble, JFloat, JInt } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { scall, loadLibcore } from "./java";
@@ -457,6 +457,13 @@ describe("string-codepoints", () => {
     const valueOf = (rt.link("java/lang/String").ctor as any)[mangleMethod("valueOf", "(Ljava/lang/Object;)Ljava/lang/String;")];
     expect(await valueOf(1)).toBe("1");
     expect(await valueOf(42n)).toBe("42");
+  });
+});
+
+describe("string-format", () => {
+  test("%s prints a box's own toString", () => {
+    const args = jarray([box(JDouble, 2), box(JFloat, 1.5), box(JInt, 3)], "Ljava/lang/Object;");
+    expect(scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "[%s, %s, %s]", args)).toBe("[2.0, 1.5, 3]");
   });
 });
 
