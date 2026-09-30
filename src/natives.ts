@@ -130,6 +130,7 @@ import "./android/notification";
 // they register JNI implementations rather than native classes, so nothing shadows anything
 import "./android/delegates";
 import "./android/services";
+import "./android/keystore";
 import "./android/minikin";
 import "./android/assetmanager";
 import "./native/loader";
