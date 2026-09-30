@@ -5,7 +5,7 @@ import { rt } from "../src/jvm/runtime";
 import { boxInt, newObj, scall, vcall } from "../src/jvm/natives/jlang";
 import { bufferBytes, limit, position } from "../src/jvm/natives/jnio";
 import { jarray, mangleField, mangleMethod, splitSig } from "../src/jvm/abi";
-import { loadLibcore } from "./java";
+import { loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
 await loadLibcore();
@@ -249,3 +249,74 @@ test("Matcher.usePattern's kept MatcherNatives answer as new ones do", async () 
     expect(results[0]).toEqual(results[1]);
   }
 });
+test("BigInteger's intrinsics match its AOSP bodies over signs, zero, powers of two and 1-4096-bit values", async () => {
+  await mountApexData(); // Character.digit's ICU data, for the non-ASCII digits the AOSP parser accepts
+  const BI = "java/math/BigInteger", B = "Ljava/math/BigInteger;", C = rt.link(BI).ctor as new () => any;
+  const pairs = new Map<string, [Function, Function]>();
+  const get = async (sig: string) => pairs.get(sig) ?? (pairs.set(sig, await pair(BI, sig)), pairs.get(sig)!);
+  // operands the AOSP constructor built, so an intrinsic reads them from their words
+  const [, parseBase] = await get("<init>(Ljava/lang/String;I)V");
+  const aosp = async (v: bigint) => { const b = new C(); await parseBase.call(b, v.toString(16), 16); return b; };
+  const randomBits = (bits: number) => { let v = 1n; for (let i = 1; i < bits; i++) v = v << 1n | BigInt(random(2)); return v; };
+  const values = [0n, 1n, -1n, 2n, 16n, -17n, 0xffffffffn, 0x100000000n, -0x7fffffffffffffffn - 1n, 0xffffffffffffffffn];
+  for (const k of [31, 32, 33, 63, 64, 65, 127, 128, 1000]) values.push(1n << BigInt(k), (1n << BigInt(k)) - 1n, -(1n << BigInt(k)));
+  for (const bits of [1, 5, 31, 32, 33, 64, 65, 96, 128, 255, 256, 512, 1024, 2048, 4096]) for (let i = 0; i < 2; i++) values.push(randomBits(bits) * (random(2) ? 1n : -1n));
+  const operands = await Promise.all(values.map(aosp));
+  /** a result as plain data, BigIntegers by their words */
+  const plain = (v: unknown): unknown => v instanceof C ? { signum: (v as any)[mangleField(BI, "signum")], mag: [...(v as any)[mangleField(BI, "mag")]] }
+    : Array.isArray(v) || v instanceof Int8Array ? [...v].map(plain) : v;
+  const name = (a: unknown) => a instanceof C ? String(values[operands.indexOf(a)] ?? "new") : String(a);
+  const thrown = new Map<string, number>();
+  const same = async (sig: string, self: unknown, args: unknown[]) => {
+    const [fn, base] = await get(sig);
+    const [mine, theirs] = [await outcome(fn, self, args), await outcome(base, self, args)] as { value?: unknown }[];
+    if ("value" in mine) mine.value = plain(mine.value);
+    if ("value" in theirs) theirs.value = plain(theirs.value);
+    const threw = (theirs as { threw?: string }).threw ?? "value";
+    thrown.set(threw, (thrown.get(threw) ?? 0) + 1);
+    if (!Bun.deepEquals(mine, theirs)) throw new Error(`${sig} on ${name(self)} (${args.map(name)}): ${JSON.stringify(mine, (_, v) => typeof v === "bigint" ? String(v) : v)} vs ${JSON.stringify(theirs, (_, v) => typeof v === "bigint" ? String(v) : v)}`);
+  };
+  const modest = (i: number) => values[i] >= -(1n << 520n) && values[i] <= 1n << 520n;
+  for (let i = 0; i < operands.length; i++) {
+    const x = operands[i];
+    for (const sig of ["toString()Ljava/lang/String;", "intValue()I", "longValue()J", "bitLength()I", "hashCode()I", "toByteArray()[B"]) await same(sig, x, []);
+    for (const r of [2, 8, 10, 16, 36, 1, 37]) await same("toString(I)Ljava/lang/String;", x, [r]);
+    for (const n of [-1, 0, 5, 31, 63, 64, 100, 5000]) await same("testBit(I)Z", x, [n]);
+    for (const n of [-70, -33, -1, 0, 1, 31, 32, 33, 100, -2147483648]) { await same(`shiftLeft(I)${B}`, x, [n]); await same(`shiftRight(I)${B}`, x, [n]); }
+    for (const e of [-1, 0, 1, 2, 5]) if (modest(i) || e < 2) await same(`pow(I)${B}`, x, [e]);
+    for (const sig of [`add(${B})${B}`, `subtract(${B})${B}`, `multiply(${B})${B}`, `compareTo(${B})I`, "equals(Ljava/lang/Object;)Z"]) await same(sig, x, [null]);
+    await same("equals(Ljava/lang/Object;)Z", x, ["1"]);
+    for (let j = 0; j < operands.length; j++) {
+      const y = operands[j];
+      for (const sig of [`add(${B})${B}`, `subtract(${B})${B}`, `multiply(${B})${B}`, `divide(${B})${B}`, `remainder(${B})${B}`, `mod(${B})${B}`,
+        `divideAndRemainder(${B})[${B}`, `compareTo(${B})I`, "equals(Ljava/lang/Object;)Z"]) await same(sig, x, [y]);
+      if (modest(i) && modest(j)) {
+        await same(`gcd(${B})${B}`, x, [y]);
+        await same(`modInverse(${B})${B}`, x, [y]);
+        await same(`modPow(${B}${B})${B}`, x, [operands[(i + j) % operands.length], y]);
+      }
+    }
+  }
+  // parsing: radixes, signs, and what only the AOSP parser judges (non-ASCII digits, malformed text)
+  for (const [s, r] of [["0", 10], ["-0", 10], ["+12", 10], ["-ff", 16], ["FF", 16], ["zz", 36], ["102", 2], ["777", 8], ["", 10], ["-", 10], ["+-1", 10],
+    [" 1", 10], ["1_0", 10], ["١٢", 10], ["１", 10], ["12", 1], ["12", 37], ["123456789012345678901234567890123456789", 10], ["-" + "f".repeat(300), 16]] as const) {
+    const cases: [string, unknown[]][] = [["<init>(Ljava/lang/String;I)V", [s, r]]];
+    if (r === 10) cases.push(["<init>(Ljava/lang/String;)V", [s]]);
+    for (const [sig, args] of cases) {
+      const [fn, base] = await get(sig), objs = [new C(), new C()];
+      const [mine, theirs] = [await outcome(fn, objs[0], args), await outcome(base, objs[1], args)];
+      expect(JSON.stringify(mine)).toBe(JSON.stringify(theirs));
+      if (!("threw" in (mine as object))) expect(plain(objs[0])).toEqual(plain(objs[1]));
+    }
+  }
+  for (const bytes of [[], [0], [-1], [0, -1], [-1, 0], [-128, 0, 0, 0, 0, 0, 0, 0, 1], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]]) {
+    const [fn, base] = await get("<init>([B)V"), objs = [new C(), new C()];
+    const [mine, theirs] = [await outcome(fn, objs[0], [Int8Array.from(bytes)]), await outcome(base, objs[1], [Int8Array.from(bytes)])];
+    expect(JSON.stringify(mine)).toBe(JSON.stringify(theirs));
+    if (!("threw" in (mine as object))) expect(plain(objs[0])).toEqual(plain(objs[1]));
+  }
+  for (const v of [0n, 16n, -16n, 17n, -17n, 1n << 40n, -(1n << 63n), (1n << 63n) - 1n]) await same(`static valueOf(J)${B}`, null, [v]);
+  expect(thrown.get("value")).toBeGreaterThan(40000);
+  expect(thrown.get("java/lang/ArithmeticException")).toBeGreaterThan(500);
+  expect(thrown.get("java/lang/NullPointerException")).toBeGreaterThan(100);
+}, 600_000);

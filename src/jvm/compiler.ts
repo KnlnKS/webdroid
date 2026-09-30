@@ -102,7 +102,7 @@ export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: Encode
   };
   stub.$c = null;
   // an intrinsic stands in for the body wherever it is reached; the stub stays its AOSP fallback
-  const intrinsic = fallthrough ? undefined : R.intrinsics.get(info.name)?.get(mangled)?.(stub);
+  const intrinsic = fallthrough ? undefined : R.intrinsics.get(info.name)?.get(mangled)?.(stub, C);
   info.lazy.push(new LazyMethod(dex, m, mangled, isStatic, stub, fallthrough, intrinsic));
   (isStatic ? C : C.prototype)[mangled] = intrinsic ?? stub;
   // a constructor or private method also goes under its direct name now: added once a class has

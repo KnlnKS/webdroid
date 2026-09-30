@@ -57,7 +57,8 @@ export interface NativeSpec {
 
 /** A native written as a generator yields each Java result, value or Promise (Runtime.drive). */
 export type Gen<T = any> = Generator<unknown, T, any>;
-export type Intrinsic = (base: (this: any, ...args: any[]) => any) => (this: any, ...args: any[]) => any;
+/** makes a method's TS body from its AOSP body; `C` is the class, not yet holding instances */
+export type Intrinsic = (base: (this: any, ...args: any[]) => any, C?: any) => (this: any, ...args: any[]) => any;
 
 /** A class constructor holds the class's statics and static methods. V8 turns one into a dictionary
  *  as <clinit> first stores to them, after which `new C()` and static loads take a slow path (4x for
