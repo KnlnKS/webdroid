@@ -799,6 +799,26 @@ sm("getBytes(II[BI)V", function (begin: number, end: number, dst: Int8Array, off
   if (offset < 0 || offset + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
   for (let i = begin; i < end; i++) dst[offset + i - begin] = this.charCodeAt(i);
 });
+// ART's compact-string internals, which libcore's builders and StringLatin1/StringUTF16 use: coder
+// 0 (LATIN1) holds each char in a byte, coder 1 (UTF16) in two, low byte first; fills start at a byte index
+const NOT_LATIN1 = /[^\x00-\xff]/;
+sm("coder()B", function () { return NOT_LATIN1.test(this) ? 1 : 0; });
+sm("fillBytesLatin1([BI)V", function (dst: Int8Array, at: number) { for (let i = 0; i < this.length; i++) dst[at + i] = this.charCodeAt(i); });
+sm("fillBytesUTF16([BI)V", function (dst: Int8Array, at: number) {
+  for (let i = 0, j = at; i < this.length; i++, j += 2) { const c = this.charCodeAt(i); dst[j] = c; dst[j + 1] = c >> 8; }
+});
+// ART's string allocations, which String's constructors become
+rt.registerJnis("java/lang/StringFactory", {
+  "newStringFromBytes([BIII)Ljava/lang/String;": (b: Int8Array, high: number, off: number, n: number) => rt.newStr("([BIII)V", [b, high, off, n]),
+  "newStringFromChars(II[C)Ljava/lang/String;": (off: number, n: number, chars: Uint16Array) => rt.strChars(chars, off, n),
+  "newStringFromString(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => s ?? rt.npe(),
+  "newStringFromUtf8Bytes([BII)Ljava/lang/String;": (b: Int8Array, off: number, n: number) => rt.newStr("([BII)V", [b, off, n]),
+  "newStringFromUtf16Bytes([BII)Ljava/lang/String;": (b: Int8Array, off: number, n: number) => {
+    const chars = new Uint16Array(n);
+    for (let i = 0; i < n; i++) chars[i] = (b[off + 2 * i] & 255) | ((b[off + 2 * i + 1] & 255) << 8);
+    return charsToString(chars, 0, n);
+  },
+});
 sm("replace(CC)Ljava/lang/String;", function (a: number, b: number) {
   return this.split(String.fromCharCode(a)).join(String.fromCharCode(b));
 });
@@ -921,8 +941,6 @@ rt.register({
   methods: {
     "static valueOf(I)Ljava/lang/String;": (v: number) => String(v),
     "static valueOf(J)Ljava/lang/String;": (v: bigint) => String(v),
-    "static valueOf(F)Ljava/lang/String;": (v: number) => fmtFloat(v),
-    "static valueOf(D)Ljava/lang/String;": (v: number) => fmtDouble(v),
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": valueOfObject,
@@ -949,150 +967,169 @@ const caseInsensitive = (a: unknown, b: unknown) => {
   const x = String(a).toUpperCase().toLowerCase(), y = String(b).toUpperCase().toLowerCase();
   return x < y ? -1 : x > y ? 1 : 0;
 };
-// Java Double.toString: shortest round-tripping digits (JS agrees), laid out plain with at least
-// one fraction digit inside [1e-3, 1e7) and as "d.dddE±n" outside (BigDecimal.valueOf(double)
-// is specified in terms of this string, so the layout is load-bearing, not cosmetic).
-export function fmtDouble(v: number): string {
-  if (v !== v) return "NaN";
-  if (v === Infinity) return "Infinity";
-  if (v === -Infinity) return "-Infinity";
-  if (v === 0) return 1 / v < 0 ? "-0.0" : "0.0";
-  const a = Math.abs(v);
-  if (a >= 1e-3 && a < 1e7) {
-    const s = String(v);
-    return s.includes(".") ? s : s + ".0";
-  }
-  const [m, e] = v.toExponential().split("e");
-  return (m.includes(".") ? m : m + ".0") + "E" + (e[0] === "+" ? e.slice(1) : e);
-}
-// Float.toString: the shortest digits that round-trip through a 32-bit float, not the double's.
-function fmtFloat(v: number): string {
-  if (v !== v || v === 0 || !Number.isFinite(v)) return fmtDouble(v);
-  for (let p = 1; p < 9; p++) {
-    const d = Number(v.toPrecision(p));
-    if (Math.fround(d) === v) return fmtDouble(d);
-  }
-  return fmtDouble(Number(v.toPrecision(9)));
-}
-
+// §4.7: StringBuilder and StringBuffer over a JS string, which V8 concatenates as a rope: libcore's
+// builders fill a byte[] char by char and measured 8x-15x slower on appends. Every method follows
+// libcore's AbstractStringBuilder, its capacity policy and messages included (tests/intrinsics.test.ts
+// runs both over generated operations); float and double text is libcore's Float/Double.toString.
 class JSB extends JObj {
   s = "";
+  /** the capacity libcore's builder would have: its value array's length in chars */
+  cap = 16;
 }
+const indexError = (msg: string): never => { throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", msg); };
+const checkIndex = (i: number, n: number) => { if (i < 0 || i >= n) indexError(`index ${i},length ${n}`); };
+const checkOffset = (i: number, n: number) => { if (i < 0 || i > n) indexError(`offset ${i},length ${n}`); };
+const checkRange = (start: number, end: number, n: number, cls = "java/lang/StringIndexOutOfBoundsException") => {
+  if (start < 0 || start > end || end > n) throw rt.mkThrowable(cls, `start ${start}, end ${end}, length ${n}`);
+};
+/** AbstractStringBuilder.ensureCapacityInternal: at least `min`, at least twice plus two */
+function grow(sb: JSB, min: number): void { if (min > sb.cap) sb.cap = Math.max(min, sb.cap * 2 + 2); }
+/** the append every builder method but insert takes */
+function add(sb: JSB, text: string): JSB {
+  const s = sb.s, n = s.length + text.length;
+  if (n > sb.cap) sb.cap = Math.max(n, sb.cap * 2 + 2);
+  sb.s = s + text;
+  return sb;
+}
+function put(sb: JSB, at: number, text: string): JSB {
+  grow(sb, sb.s.length + text.length);
+  sb.s = at === sb.s.length ? sb.s + text : sb.s.slice(0, at) + text + sb.s.slice(at);
+  return sb;
+}
+const floatText = (v: number) => scall("java/lang/Float", "toString", "(F)Ljava/lang/String;", v);
+const doubleText = (v: number) => scall("java/lang/Double", "toString", "(D)Ljava/lang/String;", v);
+const charRange = (v: Uint16Array | null, start: number, n: number) => {
+  if (v === null) return rt.npe();
+  checkRange(start, start + n, v.length);
+  return charsToString(v, start, n);
+};
+/** chars [a, b) of a CharSequence (b undefined: its length), read as libcore's builders read one:
+ *  a String's or a builder's text, any other sequence through length() and charAt() */
+const csChars = driven(function* csChars(v: unknown, a: number, b?: number): Gen<string> {
+  if (v === null) v = "null";
+  const text = typeof v === "string" ? v : v instanceof JSB ? v.s : null;
+  const n: number = text?.length ?? (yield vcall(v, "length", "()I"));
+  b ??= n;
+  checkRange(a, b, n, "java/lang/IndexOutOfBoundsException");
+  if (text !== null) return text.slice(a, b);
+  const chars = new Uint16Array(b - a);
+  for (let i = a; i < b; i++) chars[i - a] = yield vcall(v, "charAt", "(I)C", i);
+  return charsToString(chars, 0, chars.length);
+});
 function sbSpec(name: string): NativeSpec {
   const c = name === "java/lang/StringBuilder" ? class SB extends JSB {} : class SBuf extends JSB {};
-  const L = "Ljava/lang/" + name.slice(10) + ";"; // return own type
-  const app = (fn: (this: JSB, v: any) => void) => function (this: JSB, v: any) { fn.call(this, v); return this; };
-  const appendObj = function (this: JSB, v: unknown) {
-    if (v === null || typeof v === "string") { this.s += v ?? "null"; return this; }
-    return after(vcall(v, "toString", "()Ljava/lang/String;") as string | Promise<string>, (s) => { this.s += s; return this; });
-  };
+  const L = `L${name};`;
+  const at = (self: JSB, i: number, text: string | Promise<string>) => after(text, (t: string) => put(self, i, t));
+  const appendText = function (this: JSB, t: string | Promise<string>) { return after(t, (text: string) => add(this, text)); };
+  const appendCs = function (this: JSB, v: unknown) { return appendText.call(this, csChars(v, 0)); };
   const appendRange = function (this: JSB, v: unknown, a: number, b: number) {
-    if (v !== null && typeof v !== "string" && !(v instanceof JSB)) return appendChars(this, v, a, b);
-    const str = v === null ? "null" : typeof v === "string" ? v : v.s;
-    if (a < 0 || b < a || b > str.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-    this.s += str.slice(a, b);
-    return this;
+    return appendText.call(this, csChars(v, a, b));
   };
-  const appendChars = async function (sb: JSB, v: unknown, a: number, b: number) {
-    const len = await vcall(v, "length", "()I") as number;
-    if (a < 0 || b < a || b > len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-    const chars = new Uint16Array(b - a);
-    for (let i = a; i < b; i++) chars[i - a] = await vcall(v, "charAt", "(I)C", i) as number;
-    sb.s += charsToString(chars, 0, chars.length);
-    return sb;
-  };
-  const appendChar = app(function (v) { this.s += String.fromCharCode(v); });
-  const insertAt = (sb: JSB, i: number, text: string) => {
-    if (i < 0 || i > sb.s.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${i}, length ${sb.s.length}`);
-    sb.s = sb.s.slice(0, i) + text + sb.s.slice(i);
-    return sb;
-  };
-  const ins = <T>(text: (v: T) => string) => function (this: JSB, i: number, v: T) { return insertAt(this, i, text(v)); };
-  const insertObj = async function (this: JSB, i: number, v: unknown) {
-    return insertAt(this, i, v === null ? "null" : await vcall(v, "toString", "()Ljava/lang/String;"));
-  };
-  const indexOf = function (this: JSB, value: string | null, from = 0) {
-    if (value === null) return rt.npe();
-    return this.s.indexOf(value, from);
-  };
-  const lastIndexOf = function (this: JSB, value: string | null, from = this.s.length) {
-    if (value === null) return rt.npe();
-    return from < 0 ? -1 : this.s.lastIndexOf(value, from);
-  };
-  return {
-    name, ctor: c,
-    ifaces: ["java/lang/CharSequence", "java/lang/Appendable"],
-    methods: {
-      "<init>()V": function () {},
-      "<init>(I)V": function () {},
-      "<init>(Ljava/lang/String;)V": function (this: JSB, s: string) { this.s = s; },
-      "<init>(Ljava/lang/CharSequence;)V": function (this: JSB, s: unknown) { this.s = jToString(s); },
-      [`append(Ljava/lang/String;)${L}`]: app(function (v) { this.s += v === null ? "null" : v; }),
-      [`append(Ljava/lang/Object;)${L}`]: appendObj,
-      [`append(Ljava/lang/CharSequence;)${L}`]: appendObj,
-      [`append(Ljava/lang/StringBuffer;)${L}`]: appendObj,
-      "append(Ljava/lang/CharSequence;)Ljava/lang/Appendable;": appendObj,
-      "append(C)Ljava/lang/Appendable;": appendChar,
-      "append(Ljava/lang/CharSequence;II)Ljava/lang/Appendable;": appendRange,
-      [`append(Ljava/lang/CharSequence;II)${L}`]: appendRange,
-      [`append(I)${L}`]: app(function (v) { this.s += v; }),
-      [`append(J)${L}`]: app(function (v) { this.s += v; }),
-      [`append(F)${L}`]: app(function (v) { this.s += fmtFloat(v); }),
-      [`append(D)${L}`]: app(function (v) { this.s += fmtDouble(v); }),
-      [`append(Z)${L}`]: app(function (v) { this.s += v ? "true" : "false"; }),
-      [`append(C)${L}`]: appendChar,
-      [`append([C)${L}`]: app(function (v: Uint16Array) { this.s += charsToString(v, 0, v.length); }),
-      [`append([CII)${L}`]: function (this: JSB, v: Uint16Array, o: number, n: number) { this.s += charsToString(v, o, n); return this; },
-      "toString()Ljava/lang/String;": function (this: JSB) { return this.s; },
-      "length()I": function (this: JSB) { return this.s.length; },
-      "ensureCapacity(I)V": function () {},
-      "charAt(I)C": function (this: JSB, i: number) { return this.s.charCodeAt(i); },
-      "getChars(II[CI)V": function (this: JSB, begin: number, end: number, dst: Uint16Array, at: number) {
-        if (begin < 0 || end > this.s.length || begin > end) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `begin ${begin}, end ${end}, length ${this.s.length}`);
-        if (at < 0 || at + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
-        for (let i = begin; i < end; i++) dst[at + i - begin] = this.s.charCodeAt(i);
-      },
-      [`appendCodePoint(I)L${name};`]: function (this: JSB, cp: number) { this.s += String.fromCodePoint(cp); return this; },
-      "codePointAt(I)I": function (this: JSB, i: number) { return cpAt(this.s, i); },
-      "codePointBefore(I)I": function (this: JSB, i: number) { return cpBefore(this.s, i); },
-      "codePointCount(II)I": function (this: JSB, a: number, b: number) { return cpCount(this.s, a, b); },
-      "offsetByCodePoints(II)I": function (this: JSB, i: number, n: number) { return offsetCodePoints(this.s, i, n); },
-      [`replace(IILjava/lang/String;)L${name};`]: function (this: JSB, a: number, b: number, r: string) {
-        this.s = this.s.slice(0, a) + r + this.s.slice(Math.min(b, this.s.length));
-        return this;
-      },
-      "setLength(I)V": function (this: JSB, n: number) {
-        this.s = n <= this.s.length ? this.s.slice(0, n) : this.s.padEnd(n, "\0");
-      },
-      [`reverse()${L}`]: function (this: JSB) { this.s = [...this.s].reverse().join(""); return this; },
-      [`insert(ILjava/lang/String;)${L}`]: ins((v: string | null) => v === null ? "null" : v),
-      [`insert(IC)${L}`]: ins((v: number) => String.fromCharCode(v)),
-      [`insert(II)${L}`]: ins(String),
-      [`insert(IJ)${L}`]: ins(String),
-      [`insert(IF)${L}`]: ins(fmtFloat),
-      [`insert(ID)${L}`]: ins(fmtDouble),
-      [`insert(IZ)${L}`]: ins((v: number) => v ? "true" : "false"),
-      [`insert(I[C)${L}`]: ins((v: Uint16Array) => charsToString(v, 0, v.length)),
-      [`insert(ILjava/lang/Object;)${L}`]: insertObj,
-      [`insert(ILjava/lang/CharSequence;)${L}`]: insertObj,
-      [`deleteCharAt(I)${L}`]: function (this: JSB, i: number) {
-        this.s = this.s.slice(0, i) + this.s.slice(i + 1); return this;
-      },
-      [`delete(II)${L}`]: function (this: JSB, a: number, b: number) {
-        this.s = this.s.slice(0, a) + this.s.slice(b); return this;
-      },
-      "indexOf(Ljava/lang/String;)I": indexOf,
-      "indexOf(Ljava/lang/String;I)I": indexOf,
-      "lastIndexOf(Ljava/lang/String;)I": lastIndexOf,
-      "lastIndexOf(Ljava/lang/String;I)I": lastIndexOf,
-      "substring(I)Ljava/lang/String;": function (this: JSB, i: number) { return this.s.slice(i); },
-      "substring(II)Ljava/lang/String;": function (this: JSB, a: number, b: number) { return this.s.slice(a, b); },
-      "subSequence(II)Ljava/lang/CharSequence;": function (this: JSB, a: number, b: number) { return this.s.slice(a, b); },
-      "setCharAt(IC)V": function (this: JSB, i: number, c: number) {
-        this.s = this.s.slice(0, i) + String.fromCharCode(c) + this.s.slice(i + 1);
-      },
+  const insertText = (text: (v: any) => string | Promise<string>) => function (this: JSB, i: number, v: unknown) { checkOffset(i, this.s.length); return at(this, i, text(v)); };
+  const insertCs = insertText((v) => csChars(v, 0));
+  const codePoints = (s: string) => Array.from(s, (ch) => ch.codePointAt(0)!);
+  const methods: NativeSpec["methods"] = {
+    "<init>()V": function () {},
+    "<init>(I)V": function (this: JSB, n: number) { if (n < 0) throw rt.mkThrowable("java/lang/NegativeArraySizeException", String(n)); this.cap = n; },
+    "<init>(Ljava/lang/String;)V": function (this: JSB, s: string | null) { this.cap = (s ?? rt.npe()).length + 16; this.s = s!; },
+    "<init>(Ljava/lang/CharSequence;)V": function (this: JSB, v: unknown) {
+      return after(csChars(v ?? rt.npe(), 0), (s: string) => { this.cap = s.length + 16; this.s = s; });
+    },
+    [`append(Ljava/lang/String;)${L}`]: function (this: JSB, v: string | null) { return add(this, v ?? "null"); },
+    [`append(Ljava/lang/Object;)${L}`]: function (this: JSB, v: unknown) { return appendText.call(this, stringOf(v)); },
+    [`append(Ljava/lang/CharSequence;)${L}`]: appendCs,
+    [`append(Ljava/lang/StringBuffer;)${L}`]: appendCs,
+    [`append(Ljava/lang/CharSequence;II)${L}`]: appendRange,
+    [`append([C)${L}`]: function (this: JSB, v: Uint16Array) { return add(this, charRange(v, 0, v?.length ?? 0)); },
+    [`append([CII)${L}`]: function (this: JSB, v: Uint16Array, o: number, n: number) { return add(this, charRange(v, o, n)); },
+    [`append(Z)${L}`]: function (this: JSB, v: number) { return add(this, v ? "true" : "false"); },
+    [`append(C)${L}`]: function (this: JSB, v: number) { return add(this, String.fromCharCode(v)); },
+    [`append(I)${L}`]: function (this: JSB, v: number) { return add(this, "" + v); },
+    [`append(J)${L}`]: function (this: JSB, v: bigint) { return add(this, "" + v); },
+    [`append(F)${L}`]: function (this: JSB, v: number) { return appendText.call(this, floatText(v)); },
+    [`append(D)${L}`]: function (this: JSB, v: number) { return appendText.call(this, doubleText(v)); },
+    [`appendCodePoint(I)${L}`]: function (this: JSB, cp: number) {
+      if (cp >>> 0 > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a valid Unicode code point: 0x" + (cp >>> 0).toString(16).toUpperCase());
+      return add(this, String.fromCodePoint(cp));
+    },
+    [`insert(ILjava/lang/String;)${L}`]: insertText((v: string | null) => v ?? "null"),
+    [`insert(ILjava/lang/Object;)${L}`]: insertText(stringOf),
+    [`insert(ILjava/lang/CharSequence;)${L}`]: insertCs,
+    [`insert(ILjava/lang/CharSequence;II)${L}`]: function (this: JSB, i: number, v: unknown, a: number, b: number) {
+      checkOffset(i, this.s.length);
+      return at(this, i, csChars(v, a, b));
+    },
+    [`insert(IC)${L}`]: insertText((v: number) => String.fromCharCode(v)),
+    [`insert(II)${L}`]: insertText((v: number) => "" + v),
+    [`insert(IJ)${L}`]: insertText((v: bigint) => "" + v),
+    [`insert(IF)${L}`]: insertText(floatText),
+    [`insert(ID)${L}`]: insertText(doubleText),
+    [`insert(IZ)${L}`]: insertText((v: number) => (v ? "true" : "false")),
+    [`insert(I[C)${L}`]: insertText((v: Uint16Array) => charRange(v, 0, v?.length ?? 0)),
+    [`insert(I[CII)${L}`]: function (this: JSB, i: number, v: Uint16Array, o: number, n: number) {
+      checkOffset(i, this.s.length);
+      if (v === null) return rt.npe();
+      checkRange(o, o + n, v.length);
+      return put(this, i, charsToString(v, o, n));
+    },
+    "toString()Ljava/lang/String;": function (this: JSB) { return this.s; },
+    "length()I": function (this: JSB) { return this.s.length; },
+    "capacity()I": function (this: JSB) { return this.cap; },
+    "ensureCapacity(I)V": function (this: JSB, n: number) { if (n > 0) grow(this, n); },
+    "trimToSize()V": function (this: JSB) { if (this.s.length < this.cap) this.cap = this.s.length; },
+    "charAt(I)C": function (this: JSB, i: number) { checkIndex(i, this.s.length); return this.s.charCodeAt(i); },
+    "getChars(II[CI)V": function (this: JSB, begin: number, end: number, dst: Uint16Array, at: number) {
+      checkRange(begin, end, this.s.length);
+      if (dst === null) return rt.npe();
+      checkRange(at, at + end - begin, dst.length, "java/lang/IndexOutOfBoundsException");
+      for (let i = begin; i < end; i++) dst[at + i - begin] = this.s.charCodeAt(i);
+    },
+    "codePointAt(I)I": function (this: JSB, i: number) { checkIndex(i, this.s.length); return cpAt(this.s, i); },
+    "codePointBefore(I)I": function (this: JSB, i: number) { checkIndex(i - 1, this.s.length); return cpBefore(this.s, i); },
+    "codePointCount(II)I": function (this: JSB, a: number, b: number) { return cpCount(this.s, a, b); },
+    "offsetByCodePoints(II)I": function (this: JSB, i: number, n: number) { return offsetCodePoints(this.s, i, n); },
+    "chars()Ljava/util/stream/IntStream;": function (this: JSB) { return intStream(Array.from({ length: this.s.length }, (_, i) => this.s.charCodeAt(i))); },
+    "codePoints()Ljava/util/stream/IntStream;": function (this: JSB) { return intStream(codePoints(this.s)); },
+    [`compareTo(${L})I`]: function (this: JSB, o: JSB) { return stringCompare(this.s, (o ?? rt.npe()).s); },
+    [`replace(IILjava/lang/String;)${L}`]: function (this: JSB, a: number, b: number, r: string) {
+      const n = this.s.length;
+      if (b > n) b = n;
+      checkRange(a, b, n);
+      grow(this, n + (r ?? rt.npe()).length - (b - a));
+      this.s = this.s.slice(0, a) + r + this.s.slice(b);
+      return this;
+    },
+    "setLength(I)V": function (this: JSB, n: number) {
+      if (n < 0) indexError("String index out of range: " + n);
+      grow(this, n);
+      this.s = n <= this.s.length ? this.s.slice(0, n) : this.s.padEnd(n, "\0");
+    },
+    [`reverse()${L}`]: function (this: JSB) { this.s = [...this.s].reverse().join(""); return this; },
+    [`deleteCharAt(I)${L}`]: function (this: JSB, i: number) {
+      checkIndex(i, this.s.length);
+      this.s = this.s.slice(0, i) + this.s.slice(i + 1);
+      return this;
+    },
+    [`delete(II)${L}`]: function (this: JSB, a: number, b: number) {
+      const n = this.s.length;
+      if (b > n) b = n;
+      checkRange(a, b, n);
+      this.s = this.s.slice(0, a) + this.s.slice(b);
+      return this;
+    },
+    "indexOf(Ljava/lang/String;)I": function (this: JSB, v: string) { return this.s.indexOf(v ?? rt.npe()); },
+    "indexOf(Ljava/lang/String;I)I": function (this: JSB, v: string, from: number) { return this.s.indexOf(v ?? rt.npe(), from); },
+    "lastIndexOf(Ljava/lang/String;)I": function (this: JSB, v: string) { return this.s.lastIndexOf(v ?? rt.npe()); },
+    "lastIndexOf(Ljava/lang/String;I)I": function (this: JSB, v: string, from: number) { return from < 0 ? (v ?? rt.npe(), -1) : this.s.lastIndexOf(v ?? rt.npe(), from); },
+    "substring(I)Ljava/lang/String;": function (this: JSB, a: number) { checkRange(a, this.s.length, this.s.length); return this.s.slice(a); },
+    "substring(II)Ljava/lang/String;": function (this: JSB, a: number, b: number) { checkRange(a, b, this.s.length); return this.s.slice(a, b); },
+    "subSequence(II)Ljava/lang/CharSequence;": function (this: JSB, a: number, b: number) { checkRange(a, b, this.s.length); return this.s.slice(a, b); },
+    "setCharAt(IC)V": function (this: JSB, i: number, ch: number) {
+      checkIndex(i, this.s.length);
+      this.s = this.s.slice(0, i) + String.fromCharCode(ch) + this.s.slice(i + 1);
     },
   };
+  return { name, ctor: c, ifaces: ["java/lang/CharSequence", "java/lang/Appendable", "java/lang/Comparable"], methods };
 }
 rt.register(sbSpec("java/lang/StringBuilder"));
 rt.register(sbSpec("java/lang/StringBuffer"));

@@ -1170,6 +1170,13 @@ export class Runtime {
       case "([C)V": return charsToString(args[0] as Uint16Array, 0, (args[0] as Uint16Array).length);
       case "([CII)V": return this.strChars(args[0] as Uint16Array, args[1] as number, args[2] as number);
       case "([B)V": return utf8.dec.decode(args[0] as Int8Array);
+      // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
+      case "([BB)V": {
+        const bytes = args[0] as Int8Array, n = args[1] ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
+        if (args[1]) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
+        else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
+        return charsToString(chars, 0, n);
+      }
       case "([BI)V": case "([BIII)V": {
         const bytes = args[0] as Int8Array;
         if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");

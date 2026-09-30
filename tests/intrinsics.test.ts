@@ -419,3 +419,14 @@ test("Math's intrinsics match their AOSP bodies", async () => {
     }
   }
 });
+
+// The TS builders stand for libcore's whole StringBuilder and StringBuffer, so libcore's run in a
+// process that serves them from bytecode; both take the same generated operations.
+test("StringBuilder and StringBuffer match libcore's over generated operation sequences", async () => {
+  const run = (env: Record<string, string>) => new Response(Bun.spawn(["bun", new URL("fixtures/builder-ops.ts", import.meta.url).pathname],
+    { env: { ...process.env, ...env }, stdout: "pipe", stderr: "ignore" }).stdout).text();
+  const [mine, theirs] = await Promise.all([run({}), run({ WEBDROID_BYTECODE: "java/lang/StringBuilder$,java/lang/StringBuffer$" })]);
+  const [a, b] = [mine.trim().split("\n"), theirs.trim().split("\n")];
+  expect(a.length).toBe(3000);
+  expect(a.filter((line, i) => line !== b[i]).slice(0, 5)).toEqual([]);
+}, 120_000);
