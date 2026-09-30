@@ -45,7 +45,16 @@ for (const [name, aliases, replacement, table, oneWay] of SINGLE_BYTE_CHARSETS)
 // ICU matches names ignoring case, '-' and '_'
 const key = (name: string) => name.replace(/[-_]/g, "").toUpperCase();
 const byName = new Map(CHARSETS.flatMap((cs) => [cs.name, ...cs.aliases].map((n) => [key(n), cs] as const)));
-export const charsetNamed = (name: string): CharsetInfo | null => byName.get(key(name)) ?? null;
+// each name as a caller spells it: String and ZipCoder name their charset per call
+const spelled = new Map<string, CharsetInfo | null>();
+export function charsetNamed(name: string): CharsetInfo | null {
+  let cs = spelled.get(name);
+  if (cs === undefined) {
+    cs = byName.get(key(name)) ?? null;
+    if (spelled.size < 1024) spelled.set(name, cs);
+  }
+  return cs;
+}
 
 let charsetName: string | undefined;
 /** the charset named by a string or a Charset, or UnsupportedEncodingException */
@@ -327,11 +336,25 @@ export class Converter {
 }
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, SURROGATE = /[\uD800-\uDFFF]/;
+// a short ASCII string skips TextEncoder and TextDecoder, whose per-call cost is several times its
+// own (zip entry names, each encoded and decoded as ZipFile reads its directory)
+const SHORT = 64;
+function asciiBytes(text: string): Int8Array | null {
+  const n = text.length;
+  if (n > SHORT) return null;
+  const out = new Int8Array(n);
+  for (let i = 0; i < n; i++) { const c = text.charCodeAt(i); if (c >= 0x80) return null; out[i] = c; }
+  return out;
+}
+function isAscii(bytes: Int8Array | Uint8Array): boolean {
+  for (let i = 0; i < bytes.length; i++) if ((bytes[i] & 0x80) !== 0) return false;
+  return true;
+}
 /** String.getBytes: CharsetUtils' fast paths replace each unencodable char with '?', the rest
  *  encode as the charset's encoder does with REPLACE */
 export function encodeString(text: string, charset: unknown): Int8Array {
   const cs = charsetInfo(charset);
-  if (cs.kind === "utf8") return new Int8Array(utf8.enc.encode(SURROGATE.test(text) ? text.replace(LONE_SURROGATE, "?") : text).buffer);
+  if (cs.kind === "utf8") return asciiBytes(text) ?? new Int8Array(utf8.enc.encode(SURROGATE.test(text) ? text.replace(LONE_SURROGATE, "?") : text).buffer);
   const n = text.length;
   if (cs.kind === "ascii" || cs.kind === "latin1") {
     const out = new Int8Array(n), max = cs.kind === "ascii" ? 0x7f : 0xff;
@@ -349,7 +372,7 @@ export function encodeString(text: string, charset: unknown): Int8Array {
  *  Charset.decode */
 export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown): string {
   const cs = charsetInfo(charset);
-  if (cs.kind === "utf8") return utf8.dec.decode(bytes);
+  if (cs.kind === "utf8") return bytes.length <= SHORT && isAscii(bytes) ? Reflect.apply(String.fromCharCode, null, bytes) as string : utf8.dec.decode(bytes);
   if (cs.kind === "latin1" || cs.kind === "ascii") {
     const chars = new Uint16Array(bytes.length);
     for (let i = 0; i < bytes.length; i++) { const b = bytes[i] & 255; chars[i] = cs.kind === "ascii" && b > 0x7f ? 0xfffd : b; }
