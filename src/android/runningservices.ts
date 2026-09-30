@@ -59,6 +59,14 @@ async function createService(service: JRunningServiceInfo, ctx: JContext): Promi
   }
   return service.instance;
 }
+/** ActivityThread.handleStopService: the destroyed service stays reachable until a context-cleanup
+ *  message queued behind it runs, so what onDestroy posts (androidx's ServiceLifecycleDispatcher
+ *  weakly holds the service) still finds it */
+async function destroyService({ instance }: JRunningServiceInfo): Promise<void> {
+  if (!instance) return;
+  await vcallOn(mainThread, instance, "onDestroy", "()V");
+  void onMain(() => instance);
+}
 export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): JComponentName | null {
   const cls = intent?.component;
   if (!cls) return null;
@@ -88,7 +96,7 @@ export function svcStop(cls: string | null | undefined, startId = -1): number {
   service.started = 0; service.flags &= ~1;
   if (service.clientCount) return 1;
   runningServices.delete(cls!);
-  void onMain(async () => { if (service.instance) await vcallOn(mainThread, service.instance, "onDestroy", "()V"); }).catch(reportUncaught);
+  void onMain(() => destroyService(service)).catch(reportUncaught);
   return 1;
 }
 const localConnections = new Map<string, { service: JRunningServiceInfo; filter: string }>();
@@ -118,7 +126,7 @@ export function unbindLocalService(key: string): Promise<void> {
     if (!binding.clients.size) binding.rebind = !!await vcallOn(mainThread, service.instance, "onUnbind", "(Landroid/content/Intent;)Z", binding.intent);
     if (!service.started && !service.clientCount) {
       runningServices.delete(service.service!.cls);
-      await vcallOn(mainThread, service.instance, "onDestroy", "()V");
+      await destroyService(service);
     }
   };
   return inMainJob() ? run() : onMain(run);
