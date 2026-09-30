@@ -1,14 +1,19 @@
-import { JBitmap, copyBitmapPixels } from "../android/graphics";
+import { rt } from "../jvm/runtime";
+import { NativeBitmap, bitmapOf, HARDWARE, ALPHA_8, RGB_565, ARGB_4444, RGBA_F16, RGBA_1010102, encodePixels, decodePixels } from "../android/bitmap";
 import type { Cpu } from "./cpu";
 import { deref } from "./jni";
 import { hostLib, stp, type ArgReader } from "./host";
 import { mem } from "./mem";
 
-const locks = new Map<JBitmap, { pointer: number; count: number; alpha: number }>();
-const alphaOf = (b: JBitmap) => !b.hasAlpha ? 1 : b.premultiplied ? 0 : 2;
-function bitmap(cpu: Cpu, a: ArgReader): JBitmap | null {
-  const env = a.p(), b = deref(a.p(), cpu);
-  return env && env === cpu.env && b instanceof JBitmap ? b : null;
+// libjnigraphics' AndroidBitmap_*: the pixels as the bitmap's memory holds them, locked into guest memory
+const locks = new Map<NativeBitmap, { pointer: number; count: number }>();
+/** AndroidBitmapInfo.flags: ANDROID_BITMAP_FLAGS_ALPHA_PREMUL 0, _OPAQUE 1, _UNPREMUL 2 */
+const alphaOf = (b: NativeBitmap) => !b.hasAlpha ? 1 : b.premultiplied ? 0 : 2;
+/** AndroidBitmapFormat for a legacy config */
+const FORMATS: Record<number, number> = { [ALPHA_8]: 8, [RGB_565]: 4, [ARGB_4444]: 7, [RGBA_F16]: 9, [RGBA_1010102]: 10 };
+function bitmap(cpu: Cpu, a: ArgReader): NativeBitmap | null {
+  const env = a.p(), o = deref(a.p(), cpu);
+  return env && env === cpu.env && rt.iof(o, "android/graphics/Bitmap") ? bitmapOf(o as object) : null;
 }
 
 export function bitmapInit(): void {
@@ -18,21 +23,21 @@ export function bitmapInit(): void {
       if (!b) return -1;
       if (b.recycled) return -2;
       if (out) {
-        mem.st32(out, b.w); mem.st32(out + 4, b.h); mem.st32(out + 8, b.w * 4);
-        mem.st32(out + 12, 1); mem.st32(out + 16, alphaOf(b) | (b.config === 7 ? 0x80000000 : 0));
+        mem.st32(out, b.w); mem.st32(out + 4, b.h); mem.st32(out + 8, b.rowBytes);
+        mem.st32(out + 12, FORMATS[b.config] ?? 1); mem.st32(out + 16, alphaOf(b) | (b.config === HARDWARE ? 0x80000000 : 0));
       }
       return 0;
     },
     AndroidBitmap_lockPixels: (cpu, a) => {
       const b = bitmap(cpu, a), out = a.p();
       if (!b) return -1;
-      if (b.recycled || b.config === 7) return -2;
+      if (b.recycled || b.config === HARDWARE) return -2;
       let lock = locks.get(b);
       if (!lock) {
-        const pixels = b.pixels(), pointer = mem.malloc(pixels.length);
+        const size = b.rowBytes * b.h, pointer = mem.malloc(size);
         if (!pointer) return -3;
-        lock = { pointer, count: 0, alpha: alphaOf(b) };
-        copyBitmapPixels(pixels, mem.bytes(pointer, pixels.length), lock.alpha, false);
+        lock = { pointer, count: 0 };
+        encodePixels(b, mem.bytes(pointer, size));
         locks.set(b, lock);
       }
       lock.count++;
@@ -46,9 +51,7 @@ export function bitmapInit(): void {
       if (!lock) return -1;
       try {
         if (b.recycled) return -2;
-        const pixels = b.pixels();
-        copyBitmapPixels(mem.bytes(lock.pointer, pixels.length), pixels, lock.alpha, true);
-        b.commit(0, 0, b.w, b.h);
+        decodePixels(b, mem.bytes(lock.pointer, b.rowBytes * b.h));
         return 0;
       } finally {
         if (--lock.count === 0) { locks.delete(b); mem.free(lock.pointer); }

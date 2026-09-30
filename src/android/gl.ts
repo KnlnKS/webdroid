@@ -3,7 +3,7 @@
 import { rt, JObj } from "../jvm/runtime";
 import { curThread, threadSwitch } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, bufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
-import { JBitmap } from "./graphics";
+import { bitmapOf } from "./bitmap";
 import { gles1String } from "../native/gles1";
 import { activeUniformInfo, externalSamplersAs2D, gles3Extensions, pixelStore, textureTarget } from "../native/gles3";
 import { perf } from "../perf";
@@ -322,24 +322,24 @@ function glParamToInt(v: unknown): number {
 // Bitmap pixels are premultiplied on AOSP and GLUtils uploads them as-is (engines blend with
 // ONE, ONE_MINUS_SRC_ALPHA); WebGL would un-premultiply a canvas source unless told otherwise.
 const RGBA = 0x1908, UNSIGNED_BYTE = 0x1401;
-function uploadBitmap(bmp: JBitmap | null, upload: (g: WebGLRenderingContext, src: TexImageSource) => void) {
+function uploadBitmap(bmp: object | null, upload: (g: WebGLRenderingContext, src: TexImageSource) => void) {
   if (!bmp || !gl) return;
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
-  upload(gl, bmp.canvas as unknown as TexImageSource);
+  upload(gl, bitmapOf(bmp).image as TexImageSource);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
 }
 rt.register({
   name: "android/opengl/GLUtils", ctor: class extends JObj {},
   methods: {
-    "static texImage2D(IILandroid/graphics/Bitmap;I)V": (target: number, level: number, bmp: JBitmap) =>
+    "static texImage2D(IILandroid/graphics/Bitmap;I)V": (target: number, level: number, bmp: object) =>
       uploadBitmap(bmp, (g, src) => g.texImage2D(target, level, RGBA, RGBA, UNSIGNED_BYTE, src)),
-    "static texImage2D(IIILandroid/graphics/Bitmap;I)V": (target: number, level: number, ifmt: number, bmp: JBitmap) =>
+    "static texImage2D(IIILandroid/graphics/Bitmap;I)V": (target: number, level: number, ifmt: number, bmp: object) =>
       uploadBitmap(bmp, (g, src) => g.texImage2D(target, level, ifmt, ifmt, UNSIGNED_BYTE, src)),
-    "static texImage2D(IIILandroid/graphics/Bitmap;II)V": (target: number, level: number, ifmt: number, bmp: JBitmap, type: number) =>
+    "static texImage2D(IIILandroid/graphics/Bitmap;II)V": (target: number, level: number, ifmt: number, bmp: object, type: number) =>
       uploadBitmap(bmp, (g, src) => g.texImage2D(target, level, ifmt, ifmt, type, src)),
-    "static texSubImage2D(IIIILandroid/graphics/Bitmap;)V": (target: number, level: number, xo: number, yo: number, bmp: JBitmap) =>
+    "static texSubImage2D(IIIILandroid/graphics/Bitmap;)V": (target: number, level: number, xo: number, yo: number, bmp: object) =>
       uploadBitmap(bmp, (g, src) => g.texSubImage2D(target, level, xo, yo, RGBA, UNSIGNED_BYTE, src)),
-    "static texSubImage2D(IIIILandroid/graphics/Bitmap;II)V": (target: number, level: number, xo: number, yo: number, bmp: JBitmap, fmt: number, type: number) =>
+    "static texSubImage2D(IIIILandroid/graphics/Bitmap;II)V": (target: number, level: number, xo: number, yo: number, bmp: object, fmt: number, type: number) =>
       uploadBitmap(bmp, (g, src) => g.texSubImage2D(target, level, xo, yo, fmt, type, src)),
     "static getInternalFormat(Landroid/graphics/Bitmap;)I": () => RGBA,
     "static getType(Landroid/graphics/Bitmap;)I": () => UNSIGNED_BYTE,

@@ -1,0 +1,422 @@
+// The native halves of BitmapFactory and BitmapRegionDecoder (hwui's BitmapFactory.cpp and
+// BitmapRegionDecoder.cpp) over the browser's image decoders.
+//
+// What SkCodec learns from a header (format, size, alpha, frames, EXIF orientation and a
+// nine-patch's npTc/npLb/npOl chunks) is read here, so a bounds-only decode reads no pixels. The
+// pixels come from createImageBitmap (libheif for HEIF), sampled and scaled as the browser decodes
+// them, and become a NativeBitmap without an intermediate raster.
+
+import { rt, declaredField, driven, type Gen } from "../jvm/runtime";
+import { ownedHandle, deref, release } from "./handles";
+import { vcall, scall, construct } from "../jvm/natives/jlang";
+import { fdInt, readStreamFully } from "../jvm/natives/jio";
+import { u8, concat } from "../jvm/abi";
+import { javaFdBytes, javaSeekFd } from "../native/stdio";
+import { assetBytes } from "./assetmanager";
+import { NativeBitmap, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
+import { decodeHeif } from "./heif";
+import type { JRect } from "./graphics";
+
+// ── headers
+export interface ImageHeader {
+  mime: string; width: number; height: number;
+  /** how SkAndroidCodec samples the format: SkSampledCodec's floor, libjpeg's native scales, or SkScalingCodec's rounding */
+  sampling: "floor" | "jpeg" | "round";
+  opaque: boolean;
+  /** one channel: what an ALPHA_8 request decodes */
+  gray: boolean;
+  frames: number;
+  /** EXIF orientation (1-8), and where its value is (and in which byte order), to decode ignoring it */
+  orientation: number; orientationAt: number; orientationLE: boolean;
+  /** the input ends where the format says it does */
+  complete: boolean;
+  /** Res_png_9patch as BitmapFactory hands it out: deserialized, in device order */
+  patch: Int8Array | null;
+  /** npLb's optical insets; npOl's outline insets, radius and alpha */
+  layout: number[] | null; outline: number[] | null;
+}
+/** the input ends before the header does (SkCodec's kIncompleteInput) */
+export const INCOMPLETE = "incomplete";
+type Header = ImageHeader | typeof INCOMPLETE | null;
+const header = (mime: string, width: number, height: number, sampling: ImageHeader["sampling"], opaque: boolean): ImageHeader =>
+  ({ mime, width, height, sampling, opaque, gray: false, frames: 1, orientation: 1, orientationAt: 0, orientationLE: false, complete: true, patch: null, layout: null, outline: null });
+const tag = (b: Uint8Array, at: number) => String.fromCharCode(b[at], b[at + 1], b[at + 2], b[at + 3]);
+
+/** NinePatchPeeker's npTc: a serialized Res_png_9patch, deserialized (offsets filled in) and in device order */
+function devicePatch(data: Uint8Array): Int8Array | null {
+  const nx = data[1], ny = data[2], nc = data[3], size = 32 + (nx + ny + nc) * 4;
+  if (data.length < 32 || data.length !== size) return null;
+  const out = new Int8Array(size), v = new DataView(out.buffer), src = new DataView(data.buffer, data.byteOffset, size);
+  out[0] = 1; out[1] = nx; out[2] = ny; out[3] = nc;
+  for (let at = 12; at < size; at += 4) v.setInt32(at, src.getInt32(at), true);
+  v.setInt32(4, 32, true); v.setInt32(8, 32 + nx * 4, true); v.setInt32(28, 32 + (nx + ny) * 4, true);
+  return out;
+}
+function png(b: Uint8Array, v: DataView): Header {
+  if (b.length < 33) return INCOMPLETE;
+  const colorType = b[25], h = header("image/png", v.getUint32(16), v.getUint32(20), "floor", colorType === 0 || colorType === 2 || colorType === 3);
+  h.gray = colorType === 0; h.complete = false;
+  let data = false;
+  for (let pos = 8; pos + 8 <= b.length;) {
+    const len = v.getUint32(pos), type = tag(b, pos + 4), at = pos + 8;
+    if (type === "IDAT") data = true;
+    if (at + len > b.length) break;
+    const body = b.subarray(at, at + len), le = new DataView(body.buffer, body.byteOffset, len);
+    if (type === "IEND") { h.complete = true; break; }
+    else if (type === "tRNS") h.opaque = h.gray = false;
+    else if (type === "npTc") h.patch = devicePatch(body) ?? h.patch;
+    // aapt2 writes these two in the device's (little-endian) order
+    else if (type === "npLb" && len === 16) h.layout = [0, 4, 8, 12].map((k) => le.getInt32(k, true));
+    else if (type === "npOl" && len === 24) h.outline = [...[0, 4, 8, 12].map((k) => le.getInt32(k, true)), le.getFloat32(16, true), le.getInt32(20, true) & 0xff];
+    pos = at + len + 4;
+  }
+  return data || h.complete ? h : INCOMPLETE;
+}
+function jpeg(b: Uint8Array, v: DataView): Header {
+  let h: ImageHeader | null = null, orientation = 1, orientationAt = 0, orientationLE = false;
+  for (let pos = 2; ;) {
+    while (pos < b.length && b[pos] !== 0xff) pos++;
+    while (pos < b.length && b[pos] === 0xff) pos++;
+    if (pos + 3 > b.length) return INCOMPLETE;
+    const marker = b[pos], at = pos + 1;
+    if (marker === 0xd8 || marker === 0x01 || marker >= 0xd0 && marker <= 0xd7) { pos = at; continue; }
+    const len = v.getUint16(at);
+    if (marker === 0xda) break;
+    if (at + len > b.length) return INCOMPLETE;
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      h = header("image/jpeg", v.getUint16(at + 5), v.getUint16(at + 3), "jpeg", true);
+      h.gray = b[at + 7] === 1;
+    } else if (marker === 0xe1 && tag(b, at + 2) === "Exif") {
+      const t = at + 8, little = b[t] === 0x49, u16 = (o: number) => v.getUint16(t + o, little), ifd = v.getUint32(t + 4, little);
+      for (let i = 0, n = t + ifd + 2 <= at + len ? u16(ifd) : 0; i < n && t + ifd + 14 + i * 12 <= at + len; i++) {
+        const entry = ifd + 2 + i * 12;
+        if (u16(entry) === 0x112) { orientation = u16(entry + 8); orientationAt = t + entry + 8; orientationLE = little; }
+      }
+    }
+    pos = at + len;
+  }
+  if (!h) return null;
+  if (orientation >= 1 && orientation <= 8) Object.assign(h, { orientation, orientationAt, orientationLE });
+  h.complete = b[b.length - 2] === 0xff && b[b.length - 1] === 0xd9;
+  return h;
+}
+function gif(b: Uint8Array, v: DataView): Header {
+  if (b.length < 13) return INCOMPLETE;
+  const h = header("image/gif", v.getUint16(6, true), v.getUint16(8, true), "round", true);
+  const table = (flags: number) => flags & 0x80 ? 3 << ((flags & 7) + 1) : 0;
+  const blocks = (pos: number) => { while (pos < b.length && b[pos]) pos += b[pos] + 1; return pos + 1; };
+  let frames = 0;
+  h.complete = false;
+  for (let pos = 13 + table(b[10]); pos < b.length;) {
+    const c = b[pos];
+    if (c === 0x3b) { h.complete = true; break; }
+    if (c === 0x21) {
+      if (b[pos + 1] === 0xf9 && b[pos + 3] & 1) h.opaque = false;
+      pos = blocks(pos + 2);
+    } else if (c === 0x2c) { frames++; pos = blocks(pos + 11 + table(b[pos + 9])); }
+    else break;
+  }
+  h.frames = Math.max(1, frames);
+  return h;
+}
+function webp(b: Uint8Array, v: DataView): Header {
+  if (b.length < 30) return INCOMPLETE;
+  const kind = tag(b, 12);
+  let h: ImageHeader;
+  if (kind === "VP8 ") h = header("image/webp", v.getUint16(26, true) & 0x3fff, v.getUint16(28, true) & 0x3fff, "round", true);
+  else if (kind === "VP8L") {
+    const bits = v.getUint32(21, true);
+    h = header("image/webp", (bits & 0x3fff) + 1, (bits >>> 14 & 0x3fff) + 1, "round", !(bits >>> 28 & 1));
+  } else if (kind === "VP8X") {
+    const flags = b[20];
+    h = header("image/webp", 1 + (v.getUint32(24, true) & 0xffffff), 1 + (v.getUint32(27, true) & 0xffffff), "round", !(flags & 0x10));
+    if (flags & 2) {
+      let frames = 0;
+      for (let pos = 12; pos + 8 <= b.length; pos += 8 + ((v.getUint32(pos + 4, true) + 1) & ~1)) if (tag(b, pos) === "ANMF") frames++;
+      h.frames = Math.max(1, frames);
+    }
+  } else return null;
+  h.complete = 8 + v.getUint32(4, true) <= b.length;
+  return h;
+}
+function bmp(b: Uint8Array, v: DataView): Header {
+  if (b.length < 30) return INCOMPLETE;
+  const h = header("image/bmp", Math.abs(v.getInt32(18, true)), Math.abs(v.getInt32(22, true)), "floor", v.getUint16(28, true) !== 32);
+  h.complete = v.getUint32(2, true) <= b.length;
+  return h;
+}
+function ico(b: Uint8Array, v: DataView): Header {
+  const n = v.getUint16(4, true);
+  if (b.length < 6 + n * 16) return INCOMPLETE;
+  let w = 0, ht = 0;
+  for (let i = 0; i < n; i++) {
+    const iw = b[6 + i * 16] || 256, ih = b[7 + i * 16] || 256;
+    if (iw * ih > w * ht) { w = iw; ht = ih; }
+  }
+  return n ? header("image/x-ico", w, ht, "floor", false) : null;
+}
+/** ISO BMFF: HEIF (image/heif) or AVIF by the ftyp brands, the largest `ispe` as the primary image's size */
+function bmff(b: Uint8Array, v: DataView): Header {
+  const size = v.getUint32(0);
+  if (b.length < Math.max(16, size)) return INCOMPLETE;
+  const brands: string[] = [];
+  for (let at = 8; at + 4 <= size; at += at === 8 ? 8 : 4) brands.push(tag(b, at));
+  const avif = brands.some((x) => x === "avif" || x === "avis");
+  if (!avif && !brands.some((x) => ["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(x))) return null;
+  let w = 0, ht = 0, alpha = false;
+  for (let at = size; at + 16 <= b.length; at++) {
+    if (b[at] === 0x69 && tag(b, at) === "ispe" && v.getUint32(at + 8) * v.getUint32(at + 12) > w * ht) { w = v.getUint32(at + 8); ht = v.getUint32(at + 12); }
+    else if (b[at] === 0x61 && tag(b, at) === "auxC") alpha = true;
+  }
+  return w ? header(avif ? "image/avif" : "image/heif", w, ht, "round", !alpha) : INCOMPLETE;
+}
+/** SkCodec::MakeFromStream's sniffing: null for a format none of the codecs claims */
+export function readHeader(b: Uint8Array): Header {
+  if (b.length < 4) return b.length ? INCOMPLETE : null;
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (b[0] === 0x89 && tag(b, 1).startsWith("PNG")) return png(b, v);
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return jpeg(b, v);
+  if (tag(b, 0) === "GIF8") return gif(b, v);
+  if (tag(b, 0) === "RIFF") return b.length < 12 ? INCOMPLETE : tag(b, 8) === "WEBP" ? webp(b, v) : null;
+  if (b[0] === 0x42 && b[1] === 0x4d) return bmp(b, v);
+  if (!b[0] && !b[1] && b[2] === 1 && !b[3]) return b.length < 6 ? INCOMPLETE : ico(b, v);
+  if (b.length >= 8 && tag(b, 4) === "ftyp") return bmff(b, v);
+  return null;
+}
+
+/** SkAndroidCodec::getSampledDimensions */
+function sampledSize(h: ImageHeader, sample: number, w = h.width, ht = h.height): [number, number] {
+  if (sample <= 1) return [w, ht];
+  if (h.sampling === "round") {
+    const scale = Math.fround(1 / sample), dim = (d: number) => Math.max(1, Math.floor(Math.fround(Math.fround(d * scale) + 0.5)));
+    return [dim(w), dim(ht)];
+  }
+  if (h.sampling === "jpeg") {
+    // libjpeg scales by 1/2, 1/4 and 1/8 itself, rounding up; SkSampledCodec samples what is left
+    const native = [8, 4, 2].find((n) => sample % n === 0);
+    if (native) { w = Math.ceil(w / native); ht = Math.ceil(ht / native); sample /= native; }
+    if (sample === 1) return [w, ht];
+  }
+  return [sample > w ? 1 : Math.floor(w / sample), sample > ht ? 1 : Math.floor(ht / sample)];
+}
+/** SkAndroidCodec::computeOutputColorType for BitmapFactory's inPreferredConfig */
+function outputConfig(h: ImageHeader, preferred: number): number {
+  if (preferred === RGB_565) return h.opaque ? RGB_565 : ARGB_8888;
+  if (preferred === ALPHA_8) return h.gray ? ALPHA_8 : ARGB_8888;
+  return preferred === RGBA_F16 ? RGBA_F16 : ARGB_8888;
+}
+
+/** The pixels of `region` (image coordinates, the whole image when null) at w x h, or null when
+ *  the browser cannot decode them. `orient` applies EXIF orientation, as ImageDecoder does and
+ *  BitmapFactory does not. */
+export async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean): Promise<ImageBitmap | null> {
+  if (typeof createImageBitmap === "undefined") return null;
+  let heif: ImageBitmap | null = null;
+  try {
+    if (!orient && h.orientation !== 1) { bytes = bytes.slice(); new DataView(bytes.buffer).setUint16(h.orientationAt, 1, h.orientationLE); }
+    const source = h.mime === "image/heif" ? heif = await decodeHeif(bytes) : new Blob([bytes as BlobPart], { type: h.mime });
+    const [sx, sy, sw, sh] = region ?? [0, 0, 0, 0];
+    const resize: ImageBitmapOptions = region ? (sw !== w || sh !== ht ? { resizeWidth: w, resizeHeight: ht } : {})
+      : w !== h.width || ht !== h.height ? { resizeWidth: w, resizeHeight: ht } : {};
+    return await (region ? createImageBitmap(source, sx, sy, sw, sh, resize) : createImageBitmap(source, resize));
+  } catch (e) {
+    if (h.complete) console.warn("[decode]", h.mime, e);
+    return null;
+  } finally { heif?.close(); }
+}
+/** a decoded gray image as ALPHA_8 coverage */
+function grayToAlpha(b: NativeBitmap) {
+  const px = b.pixels();
+  for (let i = 0; i < px.length; i += 4) { px[i + 3] = px[i]; px[i] = px[i + 1] = px[i + 2] = 0; }
+  b.commit(0, 0, b.w, b.h);
+}
+
+// ── nine-patch geometry under density scaling (NinePatchPeeker::scale)
+const nearlyOne = (s: number) => Math.abs(s - 1) <= 1 / 4096;
+function scaleDivs(v: DataView, at: number, n: number, scale: number, max: number) {
+  const get = (i: number) => v.getInt32(at + i * 4, true), set = (i: number, d: number) => v.setInt32(at + i * 4, d, true);
+  for (let i = 0; i < n; i++) {
+    let d = Math.trunc(Math.fround(Math.fround(get(i) * scale) + 0.5));
+    if (i > 0 && d === get(i - 1)) d++;
+    set(i, d);
+  }
+  if (n && get(n - 1) > max) {
+    for (let i = n - 1, highest = max; i >= 0; i--) {
+      set(i, highest);
+      if (i > 0 && get(i) <= get(i - 1)) highest = get(i) - 1;
+      else break;
+    }
+  }
+}
+function scalePatch(chunk: Int8Array, sx: number, sy: number, w: number, h: number) {
+  const v = new DataView(chunk.buffer), scaled = (at: number, s: number) => v.setInt32(at, Math.trunc(Math.fround(Math.fround(v.getInt32(at, true) * s) + 0.5)), true);
+  if (!nearlyOne(sx)) { scaled(12, sx); scaled(16, sx); scaleDivs(v, 32, chunk[1], sx, w - 1); }
+  if (!nearlyOne(sy)) { scaled(20, sy); scaled(24, sy); scaleDivs(v, 32 + chunk[1] * 4, chunk[2], sy, h - 1); }
+}
+/** NinePatchPeeker::getPadding: the chunk's padding, -1s for an image without one */
+function setPadding(pad: JRect, chunk: Int8Array | null) {
+  const v = chunk && new DataView(chunk.buffer, chunk.byteOffset);
+  [pad.left, pad.top, pad.right, pad.bottom] = v ? [12, 20, 16, 24].map((at) => v.getInt32(at, true)) : [-1, -1, -1, -1];
+}
+/** NinePatchPeeker::createNinePatchInsets */
+const insetsOf = (h: ImageHeader, scale: number) => !h.layout && !h.outline ? null
+  : construct("android/graphics/NinePatch$InsetStruct", "(IIIIIIIIFIF)V", ...(h.layout ?? [0, 0, 0, 0]), ...(h.outline ?? [0, 0, 0, 0, 0, 0]), scale);
+
+// ── BitmapFactory
+const OPTIONS = "android/graphics/BitmapFactory$Options";
+const OPTION_FIELDS = ["inJustDecodeBounds", "inSampleSize", "inPreferredConfig", "inMutable", "inPremultiplied", "inScaled", "inDensity",
+  "inTargetDensity", "inScreenDensity", "inBitmap", "outWidth", "outHeight", "outMimeType", "outConfig", "outColorSpace"] as const;
+let O: Record<(typeof OPTION_FIELDS)[number], string> | null = null;
+const opt = () => O ??= Object.fromEntries(OPTION_FIELDS.map((n) => [n, declaredField(OPTIONS, n)])) as NonNullable<typeof O>;
+type Options = Record<string, any>;
+let configInt = "";
+/** GraphicsJNI::getNativeBitmapColorType: a Bitmap.Config's legacy number, 0 for none */
+const nativeConfig = (config: object | null): number =>
+  config ? (config as Record<string, number>)[configInt ||= declaredField("android/graphics/Bitmap$Config", "nativeInt")] : 0;
+const javaConfig = (config: number) => scall("android/graphics/Bitmap$Config", "nativeToConfig", "(I)Landroid/graphics/Bitmap$Config;", config);
+const srgbSpace = () => scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 0);
+
+/** BitmapFactory.cpp's doDecode */
+const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+  const o = opt();
+  if (options) { options[o.outWidth] = options[o.outHeight] = -1; options[o.outMimeType] = options[o.outConfig] = options[o.outColorSpace] = null; }
+  const h = readHeader(bytes);
+  if (!h || h === INCOMPLETE) return null;
+  let sample = 1, preferred = ARGB_8888, mutable = false, unpremul = false, scale = 1;
+  if (options) {
+    sample = Math.max(1, options[o.inSampleSize]); preferred = nativeConfig(options[o.inPreferredConfig]) || ARGB_8888;
+    mutable = !!options[o.inMutable]; unpremul = !options[o.inPremultiplied];
+    const density = options[o.inDensity], target = options[o.inTargetDensity];
+    if (options[o.inScaled] && density && target && density !== options[o.inScreenDensity]) scale = Math.fround(target / density);
+  }
+  const hardware = preferred === HARDWARE, config = outputConfig(h, preferred);
+  const [w, ht] = sampledSize(h, sample);
+  if (options) {
+    options[o.outWidth] = w; options[o.outHeight] = ht; options[o.outMimeType] = h.mime;
+    options[o.outConfig] = yield javaConfig(hardware ? HARDWARE : config);
+    options[o.outColorSpace] = config === ALPHA_8 ? null : yield srgbSpace();
+    if (options[o.inJustDecodeBounds]) return null;
+  }
+  const sw = scale === 1 ? w : Math.trunc(Math.fround(Math.fround(w * scale) + 0.5)), sh = scale === 1 ? ht : Math.trunc(Math.fround(Math.fround(ht * scale) + 0.5));
+  const alphaType = h.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL;
+  let reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null;
+  if (reuse?.immutable) reuse = null;
+  if (reuse && sw * sh * bytesPerPixel(config) > reuse.allocation) return null;
+  const img: ImageBitmap | null = yield decodePixels(bytes, h, sw, sh, null, false);
+  // an incomplete input decodes as far as it goes (here: not at all), a corrupt one fails
+  if (!img && h.complete) return null;
+  const b = reuse ?? new NativeBitmap(sw, sh, hardware ? HARDWARE : config, alphaType);
+  if (reuse) reuse.reconfigure(sw, sh, config, alphaType);
+  if (img) b.setImage(img);
+  if (config === ALPHA_8) grayToAlpha(b);
+  b.immutable = !mutable || hardware;
+  const chunk = h.patch && h.patch.slice();
+  if (chunk && scale !== 1) scalePatch(chunk, sw / w, sh / ht, sw, sh);
+  if (padding) setPadding(padding, chunk);
+  const insets = yield insetsOf(h, scale);
+  if (reuse) { yield reinitJava(options![o.inBitmap], reuse, !unpremul); return options![o.inBitmap]; }
+  return javaBitmap(b, -1, chunk, insets, !unpremul);
+});
+/** The header's worth of a stream, for a bounds-only decode: as a device's front-buffered stream,
+ *  it leaves the rest unread for the caller to reset over. */
+const streamHeader = driven(function* streamHeader(stream: unknown, storage: Int8Array): Gen<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for (let bytes = new Uint8Array(0); ;) {
+    const n: number = yield vcall(stream, "read", "([BII)I", storage, 0, storage.length);
+    if (n <= 0) return bytes;
+    chunks.push(u8(storage).slice(0, n));
+    bytes = concat(chunks);
+    if (readHeader(bytes) !== INCOMPLETE) return bytes;
+  }
+});
+const justBounds = (options: Options | null) => !!options?.[opt().inJustDecodeBounds];
+const fdBytes = async (fd: object | null) => await javaFdBytes(fdInt(fd as never)) ?? new Uint8Array(0);
+rt.registerJnis("android/graphics/BitmapFactory", {
+  "nativeDecodeStream(Ljava/io/InputStream;[BLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
+    driven(function* (stream: unknown, storage: Int8Array, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+      return doDecode(yield justBounds(options) ? streamHeader(stream, storage) : readStreamFully(stream), padding, options, inBitmap);
+    }),
+  // decodes from the descriptor's position and leaves it there, as AutoFDSeek restores it
+  "nativeDecodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
+    driven(function* (fd: object | null, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+      return doDecode(yield fdBytes(fd), padding, options, inBitmap);
+    }),
+  "nativeDecodeAsset(JLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
+    driven(function* (asset: bigint, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+      return doDecode(yield assetBytes(asset), padding, options, inBitmap);
+    }),
+  "nativeDecodeByteArray([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
+    (bytes: Int8Array, off: number, len: number, options: Options | null, inBitmap: bigint) => doDecode(u8(bytes, off, len), null, options, inBitmap),
+  "nativeIsSeekable(Ljava/io/FileDescriptor;)Z": (fd: object | null) => +(javaSeekFd(fdInt(fd as never), 0, 1) >= 0),
+});
+
+/** Decoded for TS callers that need a Java Bitmap from bytes (a drawable file): BitmapFactory's
+ *  defaults at `density`, with the nine-patch chunk and insets the file carries; null when the
+ *  bytes are not an image. */
+export const decodeBitmap = driven(function* decodeBitmap(bytes: Uint8Array, density: number): Gen<object | null> {
+  const h = readHeader(bytes);
+  if (!h || h === INCOMPLETE) return null;
+  const img: ImageBitmap | null = yield decodePixels(bytes, h, h.width, h.height, null, false);
+  if (!img && h.complete) return null;
+  const b = new NativeBitmap(h.width, h.height, ARGB_8888, h.opaque ? OPAQUE : PREMUL);
+  if (img) b.setImage(img);
+  b.immutable = true;
+  return javaBitmap(b, density, h.patch, yield insetsOf(h, 1));
+});
+
+// ── BitmapRegionDecoder: the encoded bytes, decoded a region at a time
+interface RegionSource { bytes: Uint8Array; header: ImageHeader }
+const REGION_FORMATS = ["image/jpeg", "image/png", "image/webp", "image/heif", "image/avif"];
+function regionDecoder(bytes: Uint8Array) {
+  const h = readHeader(bytes);
+  if (!h || h === INCOMPLETE || !REGION_FORMATS.includes(h.mime)) throw rt.mkThrowable("java/io/IOException", "Image format not supported");
+  return construct("android/graphics/BitmapRegionDecoder", "(J)V", ownedHandle({ bytes, header: h } satisfies RegionSource));
+}
+const region = (h: bigint) => deref<RegionSource>(h);
+rt.registerJnis("android/graphics/BitmapRegionDecoder", {
+  "nativeNewInstance([BII)Landroid/graphics/BitmapRegionDecoder;": (bytes: Int8Array, off: number, len: number) => regionDecoder(u8(bytes, off, len).slice()),
+  "nativeNewInstance(Ljava/io/FileDescriptor;)Landroid/graphics/BitmapRegionDecoder;":
+    driven(function* (fd: object | null): Gen { return regionDecoder(yield fdBytes(fd)); }),
+  "nativeNewInstance(Ljava/io/InputStream;[B)Landroid/graphics/BitmapRegionDecoder;":
+    driven(function* (stream: unknown): Gen { return regionDecoder(yield readStreamFully(stream)); }),
+  "nativeNewInstance(J)Landroid/graphics/BitmapRegionDecoder;": driven(function* (asset: bigint): Gen { return regionDecoder(yield assetBytes(asset)); }),
+  "nativeGetWidth(J)I": (h: bigint) => region(h).header.width,
+  "nativeGetHeight(J)I": (h: bigint) => region(h).header.height,
+  "nativeClean(J)V": (h: bigint) => release(h),
+  // SkBitmapRegionDecoder::decodeRegion: the output is the requested rectangle, sampled; the
+  // part outside the image stays transparent
+  "nativeDecodeRegion(JIIIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
+    driven(function* (h: bigint, x: number, y: number, w: number, ht: number, options: Options | null, inBitmap: bigint): Gen {
+      const { bytes, header } = region(h), o = opt();
+      let sample = 1, preferred = ARGB_8888, unpremul = false;
+      if (options) {
+        sample = Math.max(1, options[o.inSampleSize]); preferred = nativeConfig(options[o.inPreferredConfig]) || ARGB_8888;
+        unpremul = !options[o.inPremultiplied];
+        options[o.outWidth] = options[o.outHeight] = -1; options[o.outMimeType] = options[o.outConfig] = options[o.outColorSpace] = null;
+      }
+      const left = Math.max(0, x), top = Math.max(0, y), right = Math.min(header.width, x + w), bottom = Math.min(header.height, y + ht);
+      if (right <= left || bottom <= top) return null;
+      const reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null, hardware = preferred === HARDWARE;
+      const config = reuse ? reuse.config : outputConfig(header, hardware ? ARGB_8888 : preferred);
+      const [iw, ih] = sampledSize(header, sample, right - left, bottom - top);
+      const bw = iw + Math.trunc((left - x) / sample) + Math.trunc((x + w - right) / sample);
+      const bh = ih + Math.trunc((top - y) / sample) + Math.trunc((y + ht - bottom) / sample);
+      if (reuse && bw * bh * bytesPerPixel(config) > reuse.allocation) return null;
+      const alphaType = header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL;
+      // a crop reaching outside the image is transparent there, as the zero-initialized output is
+      const img: ImageBitmap | null = yield decodePixels(bytes, header, bw, bh, [x, y, w, ht], false);
+      if (!img && header.complete) return null;
+      const b = reuse ?? new NativeBitmap(bw, bh, hardware ? HARDWARE : config, alphaType);
+      if (reuse) reuse.reconfigure(bw, bh, config, alphaType);
+      if (img) b.setImage(img);
+      if (config === ALPHA_8) grayToAlpha(b);
+      if (!reuse) b.immutable = true;
+      if (options) {
+        options[o.outWidth] = bw; options[o.outHeight] = bh; options[o.outMimeType] = header.mime;
+        options[o.outConfig] = yield javaConfig(hardware ? HARDWARE : config);
+        options[o.outColorSpace] = config === ALPHA_8 ? null : yield srgbSpace();
+      }
+      if (reuse) { yield reinitJava(options![o.inBitmap], reuse, !unpremul); return options![o.inBitmap]; }
+      return javaBitmap(b, -1, null, null, !unpremul);
+    }),
+});

@@ -18,13 +18,14 @@ import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } f
 import {
   JPaint,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, type JRectF, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
+  JCanvas, JRect, type JRectF, canvasMethods, setCanvasBitmap, drawBitmapAt, drawBitmapRect, CAPS, JOINS, clipPath, drawPath,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
   type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches, drawPatch,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { glyphBounds } from "./shaping";
+import { NativeBitmap, setPixels, ARGB_8888, PREMUL, OPAQUE } from "./bitmap";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
@@ -291,7 +292,7 @@ delegate("android/graphics/SweepGradient", {
 });
 delegate("android/graphics/BitmapShader", {
   "nativeCreate(JJIIIZZJ)J": (m: bigint, b: bigint, tileX: number, tileY: number) =>
-    handle(new NativeBitmapShader(localMatrix(m), deref<JBitmap>(b), tileX, tileY)),
+    handle(new NativeBitmapShader(localMatrix(m), deref<NativeBitmap>(b), tileX, tileY)),
 });
 delegate("android/graphics/ComposeShader", {
   "nativeCreate(JJJI)J": (m: bigint, dst: bigint, src: bigint, mode: number) =>
@@ -878,7 +879,7 @@ delegate("android/graphics/NinePatch", {
   "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => ownedHandle(validNinePatchChunk(chunk)),
   "nativeFinalize(J)V": release,
   "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, dst: Rect) => {
-    const bmp = deref<JBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
+    const bmp = deref<NativeBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
     if (!rects.length) return 0n;
     const r = new NativeRegion();
     r.setRects(rects);
@@ -957,9 +958,9 @@ const withPaint = (desc: string, arity: number) => {
 };
 
 delegate("android/graphics/Canvas", {
-  "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
+  "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(deref<NativeBitmap>(b))),
   "nGetNativeFinalizer()J": () => FINALIZER,
-  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<JBitmap>(b))); },
+  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<NativeBitmap>(b))); },
   "nGetWidth(J)I": (h: bigint) => canvas(h).w,
   "nGetHeight(J)I": (h: bigint) => canvas(h).h,
 
@@ -1019,32 +1020,21 @@ delegate("android/graphics/BaseCanvas", {
     drawText(h, s.slice(start, end), x, y, pt),
   "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, pt: bigint) =>
     drawText(h, charsToString(c, i, n), x, y, pt),
-  "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, pt: bigint) =>
-    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), deref<JBitmap>(b) as never, x as never, y as never, optPaint(pt) as never),
+  "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, pt: bigint) => drawBitmapAt(canvas(h), deref<NativeBitmap>(b), x, y, optPaint(pt)),
   "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, pt: bigint) =>
-    cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), deref<JBitmap>(b) as never, rect(sl, st, sr, sb) as never, rect(dl, dt, dr, db) as never, optPaint(pt) as never),
+    drawBitmapRect(canvas(h), deref<NativeBitmap>(b), rect(sl, st, sr, sb), rect(dl, dt, dr, db), optPaint(pt)),
   "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, pt: bigint) => {
     const c = canvas(h);
     c.ctx.save();
     applyMatrix(c.ctx, matrix(m));
-    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V")
-      .call(c, deref<JBitmap>(b) as never, 0 as never, 0 as never, optPaint(pt) as never);
+    drawBitmapAt(c, deref<NativeBitmap>(b), 0, 0, optPaint(pt));
     c.ctx.restore();
   },
   // a colour array rather than a Bitmap: put the pixels in one and draw that
-  "nDrawBitmap(J[IIIFFIIZJ)V": (h: bigint, colors: Int32Array, offset: number, stride: number, x: number, y: number, w: number, ih: number, _alpha: number, pt: bigint) => {
-    const b = JBitmap.create(w, ih);
-    const img = b.ctx.createImageData(w, ih);
-    for (let row = 0; row < ih; row++) {
-      for (let col = 0; col < w; col++) {
-        const c = colors[offset + row * stride + col], o = (row * w + col) * 4;
-        img.data[o] = (c >> 16) & 0xff; img.data[o + 1] = (c >> 8) & 0xff;
-        img.data[o + 2] = c & 0xff; img.data[o + 3] = (c >>> 24) & 0xff;
-      }
-    }
-    b.ctx.putImageData(img, 0, 0);
-    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), b as never, x as never, y as never, optPaint(pt) as never);
+  "nDrawBitmap(J[IIIFFIIZJ)V": (h: bigint, colors: Int32Array, offset: number, stride: number, x: number, y: number, w: number, ih: number, hasAlpha: number, pt: bigint) => {
+    const b = new NativeBitmap(w, ih, ARGB_8888, hasAlpha ? PREMUL : OPAQUE);
+    setPixels(b, colors, offset, stride, 0, 0, w, ih);
+    drawBitmapAt(canvas(h), b, x, y, optPaint(pt));
   },
   // the ring between two round rects, which is how a ripple's bounded edge is drawn: the
   // outer filled with the inner taken out of it
@@ -1053,7 +1043,7 @@ delegate("android/graphics/BaseCanvas", {
   "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array, il: number, it: number, ir: number, ib: number, irad: Float32Array, pt: bigint) =>
     doubleRoundRect(canvas(h), [ol, ot, or, ob], [orad[0], orad[1]], [il, it, ir, ib], [irad[0], irad[1]], paint(pt)),
   "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint, dstDensity: number, srcDensity: number) =>
-    drawPatch(canvas(h), deref<JBitmap>(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(pt), dstDensity, srcDensity),
+    drawPatch(canvas(h), deref<NativeBitmap>(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(pt), dstDensity, srcDensity),
   // positioned glyph ids, which only a shaping engine produces: there is none behind
   // Canvas2D, and the text entry points above are what the framework actually uses
   "nDrawGlyphs(J[I[FIIIJJ)V": () => {},
@@ -1065,7 +1055,7 @@ delegate("android/graphics/BaseCanvas", {
 });
 
 /** a Canvas over a bitmap's backing context, as Canvas(Bitmap) makes one */
-function bitmapCanvas(b: JBitmap | undefined): JCanvas {
+export function bitmapCanvas(b: NativeBitmap | undefined): JCanvas {
   const c = new JCanvas();
   setCanvasBitmap(c, b ?? null);
   return c;
@@ -1137,90 +1127,3 @@ export async function zygoteInit(): Promise<void> {
   await scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
   await loadSystemFontMap();
 }
-
-// ── android.graphics.Bitmap ────────────────────────────────────────────────────────────
-// The handle is a JBitmap. Several of these build the Java object rather than returning a
-// handle, so they construct AOSP's own Bitmap through its (nativePtr, w, h, density, mutable,
-// ninePatchChunk, insets) constructor — which makes them async.
-//
-// JBitmap.config uses AOSP's native config numbering, not Bitmap.Config's ordinal.
-const bmp = (h: bigint) => deref<JBitmap>(h);
-const bmf = (desc: string) => specFn<JBitmap>(bitmapMethods, "bitmapMethods", desc);
-/** the Java Bitmap around one of ours */
-const wrap = (b: JBitmap) =>
-  newObj("android/graphics/Bitmap", "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;)V",
-    handle(b), b.w, b.h, b.density, b.immutable ? 0 : 1, null, null);
-const copyOf = (src: JBitmap) => {
-  const b = JBitmap.create(src.w, src.h);
-  b.density = src.density; b.hasAlpha = src.hasAlpha; b.premultiplied = src.premultiplied; b.config = src.config;
-  b.pixels().set(src.pixels());
-  return b;
-};
-
-delegate("android/graphics/Bitmap", {
-  "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": (colors: Int32Array | null, off: number, stride: number, w: number, h: number, _cfg: number, mutable: number) => {
-    const b = JBitmap.create(w, h);
-    b.immutable = !mutable;
-    if (colors) bmf("setPixels([IIIIIII)V").call(b, colors as never, off as never, stride as never, 0 as never, 0 as never, w as never, h as never);
-    return wrap(b);
-  },
-  "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, _cfg: number, mutable: number) => {
-    const b = copyOf(bmp(h));
-    b.immutable = !mutable;
-    return wrap(b);
-  },
-  "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
-  // ashmem is a device allocator, not a pixel format: a copy is what the caller asked for
-  "nativeCopyAshmem(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
-  "nativeCopyAshmemConfig(JI)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
-  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bmp(h), paint ? deref<JPaint>(paint) : null, offsetXY)),
-
-  "nativeRecycle(J)V": (h: bigint) => { bmp(h).recycled = true; },
-  "nativeGetNativeFinalizer()J": () => FINALIZER,
-  "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
-  "nativeConfig(J)I": (h: bigint) => bmp(h).config,
-  "nativeRowBytes(J)I": (h: bigint) => bmp(h).rowBytes,
-  "nativeGetAllocationByteCount(J)I": (h: bigint) => bmp(h).rowBytes * bmp(h).h,
-  "nativeReconfigure(JIIIZ)V": (h: bigint, w: number, ht: number, _cfg: number, premul: number) => {
-    const b = bmp(h);
-    b.w = Math.max(1, w | 0); b.h = Math.max(1, ht | 0); b.premultiplied = !!premul;
-  },
-
-  "nativeGetPixel(JII)I": (h: bigint, x: number, y: number) => bmf("getPixel(II)I").call(bmp(h), x as never, y as never),
-  "nativeSetPixel(JIII)V": (h: bigint, x: number, y: number, c: number) => bmf("setPixel(III)V").call(bmp(h), x as never, y as never, c as never),
-  "nativeGetPixels(J[IIIIIII)V": (h: bigint, ...a: unknown[]) => bmf("getPixels([IIIIIII)V").apply(bmp(h), a as never[]),
-  "nativeSetPixels(J[IIIIIII)V": (h: bigint, ...a: unknown[]) => bmf("setPixels([IIIIIII)V").apply(bmp(h), a as never[]),
-  "nativeGetColor(JII)J": (h: bigint, x: number, y: number) => colorLongOfArgb(bmf("getPixel(II)I").call(bmp(h), x as never, y as never) as number),
-  "nativeErase(JI)V": (h: bigint, c: number) => bmf("eraseColor(I)V").call(bmp(h), c as never),
-  "nativeErase(JJJ)V": (h: bigint, _cs: bigint, color: bigint) => bmf("eraseColor(I)V").call(bmp(h), argbOfColorLong(color) as never),
-  "nativeSameAs(JJ)Z": (a: bigint, b: bigint) => {
-    const x = bmp(a), y = bmp(b);
-    if (x.w !== y.w || x.h !== y.h) return 0;
-    const p = x.pixels(), q = y.pixels();
-    for (let i = 0; i < p.length; i++) if (p[i] !== q[i]) return 0;
-    return 1;
-  },
-  "nativeCompress(JIILjava/io/OutputStream;[B)Z": (h: bigint, _fmt: number, q: number, out: unknown) =>
-    bmf("compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z").call(bmp(h), null as never, q as never, out as never),
-
-  "nativeHasAlpha(J)Z": (h: bigint) => (bmp(h).hasAlpha ? 1 : 0),
-  "nativeSetHasAlpha(JZZ)V": (h: bigint, v: number) => { bmp(h).hasAlpha = !!v; },
-  "nativeIsPremultiplied(J)Z": (h: bigint) => (bmp(h).premultiplied ? 1 : 0),
-  "nativeSetPremultiplied(JZ)V": (h: bigint, v: number) => { bmp(h).premultiplied = !!v; },
-  "nativeIsImmutable(J)Z": (h: bigint) => (bmp(h).immutable ? 1 : 0),
-  "nativeSetImmutable(J)V": (h: bigint) => { bmp(h).immutable = true; },
-  "nativeHasMipMap(J)Z": (h: bigint) => (bmp(h).mipmap ? 1 : 0),
-  "nativeSetHasMipMap(JZ)V": (h: bigint, v: number) => { bmp(h).mipmap = !!v; },
-
-  // one colour space, and it is sRGB: there is no colour management behind a 2D context
-  "nativeIsSRGB(J)Z": () => 1,
-  // a device's shared-memory and HDR allocators, and the gainmap that rides on one: absent
-  // here, and a caller discovers that the way it would on a device without them
-  "nativeGetAshmemFD(J)I": () => -1,
-  ...noops("nativePrepareToDraw(J)V", "nativeSetColorSpace(JJ)V", "nativeSetGainmap(JJ)V"),
-  ...stubs(0, "nativeIsSRGBLinear(J)Z", "nativeIsBackedByAshmem(J)Z", "nativeHasGainmap(J)Z"),
-  ...stubs(null, "nativeComputeColorSpace(J)Landroid/graphics/ColorSpace;",
-    "nativeExtractGainmap(J)Landroid/graphics/Gainmap;", "nativeGetHardwareBuffer(J)Landroid/hardware/HardwareBuffer;",
-    "nativeWrapHardwareBufferBitmap(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;"),
-});

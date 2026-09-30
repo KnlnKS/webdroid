@@ -1,7 +1,7 @@
 // android.renderscript, as far as apps use it on API 33: ScriptIntrinsicBlur over bitmap
 // allocations (image-blur libraries, androidx.mediarouter's art backdrop).
 import { JObj, rt, noops } from "../jvm/runtime";
-import { JBitmap } from "./graphics";
+import { bitmapOf } from "./bitmap";
 import { clampedBlur, type BlurCache } from "./rendereffect";
 import { defineException, mkEnumSet } from "../jvm/natives/jlang";
 
@@ -16,9 +16,9 @@ class JBlur extends JBaseObj implements BlurCache {
   padded: OffscreenCanvas | null = null; blurred: OffscreenCanvas | null = null;
 }
 
-function fromBitmap(_rs: unknown, bmp: JBitmap): JAllocation {
-  const a = new JAllocation(bmp.w, bmp.h);
-  a.raster().getContext("2d")!.drawImage(bmp.canvas, 0, 0);
+function fromBitmap(_rs: unknown, bitmap: object): JAllocation {
+  const bmp = bitmapOf(bitmap), a = new JAllocation(bmp.w, bmp.h);
+  a.raster().getContext("2d")!.drawImage(bmp.image, 0, 0);
   return a;
 }
 rt.register({
@@ -53,12 +53,12 @@ rt.register({
     "static createFromBitmap(Landroid/renderscript/RenderScript;Landroid/graphics/Bitmap;Landroid/renderscript/Allocation$MipmapControl;I)Landroid/renderscript/Allocation;": fromBitmap,
     "static createTyped(Landroid/renderscript/RenderScript;Landroid/renderscript/Type;)Landroid/renderscript/Allocation;": (_rs: unknown, t: JType) => new JAllocation(t.w, t.h),
     "getType()Landroid/renderscript/Type;": function (this: JAllocation) { return new JType(this.w, this.h); },
-    "copyFrom(Landroid/graphics/Bitmap;)V": function (this: JAllocation, bmp: JBitmap) {
+    "copyFrom(Landroid/graphics/Bitmap;)V": function (this: JAllocation, bitmap: object) {
       const ctx = this.raster().getContext("2d")!;
-      ctx.clearRect(0, 0, this.w, this.h); ctx.drawImage(bmp.canvas, 0, 0);
+      ctx.clearRect(0, 0, this.w, this.h); ctx.drawImage(bitmapOf(bitmap).image, 0, 0);
     },
-    "copyTo(Landroid/graphics/Bitmap;)V": function (this: JAllocation, bmp: JBitmap) {
-      const ctx = bmp.ctx;
+    "copyTo(Landroid/graphics/Bitmap;)V": function (this: JAllocation, bitmap: object) {
+      const bmp = bitmapOf(bitmap), ctx = bmp.ctx;
       ctx.clearRect(0, 0, bmp.w, bmp.h); ctx.drawImage(this.raster(), 0, 0);
     },
   },

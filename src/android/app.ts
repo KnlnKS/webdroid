@@ -25,7 +25,6 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
-import type { JBitmap } from "./graphics";
 import { getPM } from "./pm";
 import { hostStub, transactionCaller } from "./binder";
 import { packages } from "./packages";
@@ -38,10 +37,10 @@ rt.markers("android/bluetooth/BluetoothProfile$ServiceListener");
 
 class JTaskDescription extends JObj {
   label: string | null = null;
-  icon: JBitmap | null = null;
+  icon: object | null = null;
   iconResource = 0;
   primaryColor = 0;
-  init(label: string | null, icon: JBitmap | number | null, color: number): void {
+  init(label: string | null, icon: object | number | null, color: number): void {
     if (color !== 0 && (color >>> 24) !== 255) throw rt.mkThrowable("java/lang/IllegalArgumentException", "primary color must be opaque");
     this.label = label; this.primaryColor = color;
     this.icon = typeof icon === "number" ? null : icon;
@@ -52,7 +51,7 @@ rt.register({
   name: "android/app/ActivityManager$TaskDescription", ctor: JTaskDescription, ifaces: ["android/os/Parcelable"],
   methods: {
     "<init>(Ljava/lang/String;II)V": function (this: JTaskDescription, label: string | null, icon: number, color: number) { this.init(label, icon, color); },
-    "<init>(Ljava/lang/String;Landroid/graphics/Bitmap;I)V": function (this: JTaskDescription, label: string | null, icon: JBitmap | null, color: number) { this.init(label, icon, color); },
+    "<init>(Ljava/lang/String;Landroid/graphics/Bitmap;I)V": function (this: JTaskDescription, label: string | null, icon: object | null, color: number) { this.init(label, icon, color); },
     ...fieldGetters({ "getLabel()Ljava/lang/String;": "label", "getIcon()Landroid/graphics/Bitmap;": "icon",
       "getIconResource()I": "iconResource", "getPrimaryColor()I": "primaryColor" }),
   },

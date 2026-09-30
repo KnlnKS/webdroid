@@ -81,6 +81,16 @@ export async function newObj(cls: string, desc: string | null = "()V", ...args: 
   return o;
 }
 
+/** `new cls(args)` from TS, synchronous unless class initialization or the constructor suspends */
+export function construct(cls: string, desc: string, ...args: unknown[]): JObj | Promise<JObj> {
+  const thread = curThread, info = rt.link(cls), init = rt.initClass(info);
+  const make = () => {
+    const o = new info.ctor() as JObj;
+    return after(vcallOn(thread, o, "<init>", desc, ...args), () => o);
+  };
+  return init ? init.then(make) : make();
+}
+
 let hashCounter = 1;
 const hashes = new WeakMap<object, number>();
 export function idHash(o: unknown): number {

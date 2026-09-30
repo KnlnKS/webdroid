@@ -461,6 +461,12 @@ delegate("android/content/res/AssetManager", {
 });
 
 interface Cursor { source: FileSource; pos: number }
+/** what an open asset has left, consumed: the stream BitmapFactory and ImageDecoder decode an asset through */
+export function assetBytes(a: bigint): Promise<Uint8Array> {
+  const c = deref<Cursor>(a), from = c.pos;
+  c.pos = c.source.size;
+  return readFully(c.source, from);
+}
 function openAsset(res: Resources, path: string, cookie = 0): bigint {
   const hit = findEntry(res, path, cookie);
   if (!hit) return 0n;

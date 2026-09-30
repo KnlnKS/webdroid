@@ -6,7 +6,7 @@ import { vfs } from "../shell/vfs";
 import { isBuffer, remainingBytes } from "../jvm/natives/jnio";
 import { javaFdSource } from "../native/stdio";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
-import { JBitmap } from "./graphics";
+import { NativeBitmap, javaBitmap } from "./bitmap";
 import { MediaExtractor } from "./media-extractor";
 import { inspectMp3 } from "./media-mp3";
 
@@ -61,7 +61,7 @@ class JMediaMetadataRetriever extends JObj {
       this.metadata.set(32, String(video.samples.length));
     }
   }
-  async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<JBitmap | null> {
+  async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<object | null> {
     if (option < 0 || option > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid frame option");
     const extractor = this.extractor, source = this.source;
     if (!source) throw rt.mkThrowable("java/lang/IllegalStateException", "No media source");
@@ -99,9 +99,9 @@ class JMediaMetadataRetriever extends JObj {
       if (failure || !frames[0]) return null;
       const decoded = frames[0];
       const width = targetWidth ?? decoded.displayWidth, height = targetHeight ?? decoded.displayHeight;
-      const bitmap = JBitmap.create(width, height);
+      const bitmap = new NativeBitmap(width, height);
       bitmap.ctx.drawImage(decoded, 0, 0, width, height);
-      return bitmap;
+      return await javaBitmap(bitmap);
     } catch { return null; }
     finally { frames[0]?.close(); if (decoder.state !== "closed") decoder.close(); }
   }

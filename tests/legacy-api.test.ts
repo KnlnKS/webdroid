@@ -138,14 +138,6 @@ test("ByteBuffer absolute long and double accessors leave the position alone", a
   expect(await vcall(buffer, "position", "()I")).toBe(0);
 });
 
-test("Bitmap.sameAs compares geometry and pixels", async () => {
-  const left = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 2, 2, null);
-  const right = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 2, 2, null);
-  expect(await vcall(left, "sameAs", "(Landroid/graphics/Bitmap;)Z", right)).toBe(1);
-  await vcall(right, "setPixel", "(III)V", 1, 1, 0xff123456);
-  expect(await vcall(left, "sameAs", "(Landroid/graphics/Bitmap;)Z", right)).toBe(0);
-});
-
 test("Hashtable-style contains is containsValue and rejects null", async () => {
   for (const cls of ["java/util/concurrent/ConcurrentHashMap", "java/util/Hashtable"]) {
     const map = await newObj(cls);

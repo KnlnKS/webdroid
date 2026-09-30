@@ -7,7 +7,7 @@ import {
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
-import { restoreCanvasToCount, saveCanvas, modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JBitmap, type JCanvas } from "./graphics";
+import { restoreCanvasToCount, saveCanvas, modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JCanvas } from "./graphics";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
@@ -105,7 +105,7 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
     requestLayout(this);
     yield invalidateV(this);
   }),
-  "setImageBitmap(Landroid/graphics/Bitmap;)V": function (this: JImageView, b: JBitmap | null) {
+  "setImageBitmap(Landroid/graphics/Bitmap;)V": function (this: JImageView, b: object | null) {
     const d = b ? Object.assign(new JBitmapDrawable(), { bmp: b }) : null;
     return vcallOn(curThread, this, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
   },

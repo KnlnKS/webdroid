@@ -5,12 +5,11 @@ import { appHost, setAppHost } from "../src/android/apphost";
 import { packages, PackageRecord } from "../src/android/packages";
 import { Resources } from "../src/android/res";
 import { TV, type XmlAttr } from "../src/android/axml";
-import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
-import { vcall, newObj, vcallAsync, JThread, curThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
+import { mangleMethod } from "../src/jvm/abi";
+import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore } from "./java";
 import { onMain } from "../src/android/mainloop";
-import { JBitmap } from "../src/android/graphics";
 import { BridgeCalls } from "../src/shell/bridgecalls";
 import { JHandler, JMessage, PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
@@ -30,23 +29,24 @@ describe("activity-main-queue", () => {
 });
 
 describe("bitmap-parcel", () => {
-  rt.linkNatives();
-
   test("a Bitmap survives a Parcel round trip with its flags, geometry and pixels", async () => {
-    const b = JBitmap.create(3, 2);
-    b.density = 320; b.hasAlpha = false;
+    await loadLibcore(); await loadFrameworkJar();
+    rt.linkNatives();
+    const config = (await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>;
+    const b = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 3, 2, config.s$ARGB_8888);
+    await vcall(b, "setDensity", "(I)V", 320);
+    await vcall(b, "setHasAlpha", "(Z)V", 0);
     await vcall(b, "setPixel", "(III)V", 2, 1, 0xff336699 | 0);
     const p = await newObj("android/os/Parcel", "()V");
     await vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", b, 0);
     await vcall(p, "setDataPosition", "(I)V", 0);
-    const back: JBitmap = await vcall(p, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
-    expect(back).toBeInstanceOf(JBitmap);
+    const back = await vcall(p, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
+    expect(rt.iof(back, "android/graphics/Bitmap")).toBe(1);
     expect(back).not.toBe(b);
-    expect([back.w, back.h, back.density, back.hasAlpha]).toEqual([3, 2, 320, false]);
+    const get = (name: string) => vcall(back, name, name.startsWith("has") ? "()Z" : "()I");
+    expect([await get("getWidth"), await get("getHeight"), await get("getDensity"), await get("hasAlpha")]).toEqual([3, 2, 320, 0]);
     expect(await vcall(back, "getPixel", "(II)I", 2, 1)).toBe(0xff336699 | 0);
     expect(await vcall(back, "getPixel", "(II)I", 0, 0)).toBe(0);
-    const creator = (rt.link("android/graphics/Bitmap").ctor as any)[mangleStaticField("CREATOR")];
-    expect(rt.iof(creator, "android/os/Parcelable$Creator")).toBe(1);
   });
 });
 

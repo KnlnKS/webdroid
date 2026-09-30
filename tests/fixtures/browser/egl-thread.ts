@@ -1,6 +1,7 @@
 import "../../../src/natives";
 import { frame, present, setScreenCanvas } from "../../../src/shell/device";
-import { JBitmap, JRect } from "../../../src/android/graphics";
+import { JRect } from "../../../src/android/graphics";
+import { NativeBitmap, javaBitmap } from "../../../src/android/bitmap";
 import { dispatchAttached, dispatchDetached } from "../../../src/android/view";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
@@ -17,7 +18,8 @@ import { gles3Init, pixelStore } from "../../../src/native/gles3";
 import { nativeWindowFor, ndkInit } from "../../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../../src/native/host";
 import { allocateDirectNow, bufferBytes, directReady, nativeOrder } from "../../../src/jvm/natives/jnio";
-import { loadCoreOj } from "./libcore";
+import { loadPlatformDex } from "../../../src/android/framework";
+import { mountPlatformData } from "../../../src/shell/apex";
 
 function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
   let i = 0;
@@ -215,7 +217,8 @@ function externalTexture() {
 }
 
 async function probe() {
-  await loadCoreOj();
+  await loadPlatformDex();
+  mountPlatformData();
   rt.linkNatives();
   await directReady();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
@@ -324,7 +327,7 @@ async function windowCopy() {
   const screen = document.createElement("canvas"); screen.width = screen.height = 4;
   setScreenCanvas(screen);
   const copy = async () => {
-    const bitmap = new JBitmap(); bitmap.w = bitmap.h = 4;
+    const native = new NativeBitmap(4, 4), bitmap = await javaBitmap(native);
     const rect = new JRect(); rect.right = rect.bottom = 4;
     const listener = rt.make("java/lang/Object");
     let finish = (_code: number) => {};
@@ -332,7 +335,7 @@ async function windowCopy() {
     Object.assign(listener, { [mangleMethod("onPixelCopyFinished", "(I)V")]: finish });
     const cls = rt.link("android/view/PixelCopy").ctor;
     Reflect.apply(Reflect.get(cls, mangleMethod("request", "(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V")), cls, [null, rect, bitmap, listener, null]);
-    return { code: await done, pixel: [...bitmap.ctx.getImageData(0, 0, 1, 1).data] };
+    return { code: await done, pixel: [...native.ctx.getImageData(0, 0, 1, 1).data] };
   };
   frame.fillStyle = "lime"; frame.fillRect(0, 0, 4, 4); present();
   frame.fillStyle = "red"; frame.fillRect(0, 0, 4, 4);

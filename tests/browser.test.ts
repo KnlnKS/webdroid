@@ -63,7 +63,7 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   for (const result of probeResult.extracted) {
     const border = result.style === "INNER" ? 0 : borders.get(result.radius)!;
     expect(result).toMatchObject({ width: 20 + 2 * border, height: 20 + 2 * border, offsets: [0 - border, 0 - border],
-      config: 1, density: 480, rowBytes: 20 + 2 * border, distinct: true, rgb: 0 });
+      config: 1, density: 480, rowBytes: (20 + 2 * border + 3) & ~3, distinct: true, rgb: 0 });
     if (result.radius === 0) expect(result.alpha).toBe(128);
   }
   expect(probeResult).toMatchObject({ shaded: [0, 255, 0, 64], position: 400, copiedAlpha: 127, originalAlpha: 0,

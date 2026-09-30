@@ -11,7 +11,6 @@ import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
 import { PARCELABLE, type JBundle } from "./os";
 import { type JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
-import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";
 import { preferenceStore } from "./sharedprefs";
 import { appHost } from "./apphost";
@@ -27,7 +26,7 @@ const self = (ms: Record<string, Impl>, sigs: string[], ret: string) => {
 // ── android.graphics.drawable.Icon: a lazy reference to an image, not an image.
 class JIcon extends JObj {
   type = 0; resPkg: string | null = null; resId = 0;
-  bmp: JBitmap | null = null; uri: unknown = null; data: Int8Array | null = null;
+  bmp: object | null = null; uri: unknown = null; data: Int8Array | null = null;
 }
 const TYPE_BITMAP = 1, TYPE_RESOURCE = 2, TYPE_DATA = 3, TYPE_URI = 4, TYPE_ADAPTIVE = 5, TYPE_URI_ADAPTIVE = 6;
 const mkIcon = (type: number, init: (i: JIcon) => void) => { const i = new JIcon(); i.type = type; init(i); return i; };
@@ -37,9 +36,9 @@ const iconMethods: Record<string, Impl> = {
   "static createWithResource(Landroid/content/Context;I)Landroid/graphics/drawable/Icon;":
     (_c: unknown, id: number) => mkIcon(TYPE_RESOURCE, (i) => { i.resId = id; }),
   "static createWithBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/drawable/Icon;":
-    (b: JBitmap) => mkIcon(TYPE_BITMAP, (i) => { i.bmp = b; }),
+    (b: object) => mkIcon(TYPE_BITMAP, (i) => { i.bmp = b; }),
   "static createWithAdaptiveBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/drawable/Icon;":
-    (b: JBitmap) => mkIcon(TYPE_ADAPTIVE, (i) => { i.bmp = b; }),
+    (b: object) => mkIcon(TYPE_ADAPTIVE, (i) => { i.bmp = b; }),
   "static createWithContentUri(Ljava/lang/String;)Landroid/graphics/drawable/Icon;":
     (u: string) => mkIcon(TYPE_URI, (i) => { i.uri = mkUri(u); }),
   "static createWithContentUri(Landroid/net/Uri;)Landroid/graphics/drawable/Icon;":

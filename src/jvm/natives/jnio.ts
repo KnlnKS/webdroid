@@ -4,7 +4,7 @@
 // read-only mapping, jmemory.ts), else a heap buffer's array from its offset.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
-import { after, vcallOn, curThread, scall } from "./jlang";
+import { after, scall, construct, vcallOn, curThread } from "./jlang";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
@@ -79,15 +79,6 @@ export function directAddress(b: JBuffer): number | bigint | Promise<number | bi
   return address <= 0xffffffffn ? Number(address) : address;
 }
 
-/** `new cls(args)` from TS, synchronous unless class initialization or the constructor suspends */
-function construct(cls: string, desc: string, ...args: unknown[]): JObj | Promise<JObj> {
-  const thread = curThread, info = rt.link(cls), init = rt.initClass(info);
-  const make = () => {
-    const o = new info.ctor() as JObj;
-    return after(vcallOn(thread, o, "<init>", desc, ...args), () => o);
-  };
-  return init ? init.then(make) : make();
-}
 /** ByteBuffer.allocateDirect(n): guest memory, owned by the buffer */
 export const allocateDirect = (n: number): JBuffer | Promise<JBuffer> => scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", n);
 /** ByteBuffer.wrap: a heap buffer over the bytes themselves */

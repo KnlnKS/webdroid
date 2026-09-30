@@ -18,13 +18,3 @@ export async function decodeHeif(bytes: Uint8Array): Promise<ImageBitmap> {
     if (decoder.decoder) module.heif_context_free(decoder.decoder);
   }
 }
-
-export function isHeif(bytes: Uint8Array): boolean {
-  if (bytes.length < 16 || bytes[4] !== 102 || bytes[5] !== 116 || bytes[6] !== 121 || bytes[7] !== 112) return false;
-  const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
-  if (size < 16 || size > bytes.length) return false;
-  for (let i = 8; i + 4 <= size; i += i === 8 ? 8 : 4) {
-    if (["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(String.fromCharCode(...bytes.subarray(i, i + 4)))) return true;
-  }
-  return false;
-}

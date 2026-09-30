@@ -7,7 +7,8 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, JThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JBitmap, JRect, matrixOf, javaMatrix, identity } from "./graphics";
+import { JRect, matrixOf, javaMatrix, identity } from "./graphics";
+import { bitmapOf } from "./bitmap";
 import { gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler, vsync } from "./os";
 import { perf } from "../perf";
@@ -109,14 +110,15 @@ let pixelCopyFrame: OffscreenCanvas | HTMLCanvasElement | null = null;
 export function setPixelCopyFrame(frame: OffscreenCanvas | HTMLCanvasElement): void { pixelCopyFrame = frame; }
 // PixelCopy: the surface's last presented frame into a Bitmap, the listener told on its handler's looper
 rt.markers("android/view/PixelCopy$OnPixelCopyFinishedListener");
-const pixelCopy = async (s: GlSurface | null, bmp: JBitmap, listener: unknown): Promise<void> => {
+const pixelCopy = async (s: GlSurface | null, bitmap: object, listener: unknown): Promise<void> => {
+  const bmp = bitmapOf(bitmap);
   let result = 1;                                                              // ERROR_UNKNOWN
   if (s?.present) { bmp.ctx.drawImage(s.present, 0, 0, bmp.w, bmp.h); result = 0; }
   else if (!s) result = 2;                                                     // ERROR_TIMEOUT: nothing is there to copy
   await onMain(() => vcall(listener, "onPixelCopyFinished", "(I)V", result));
 };
-const windowPixelCopy = async (rect: JRect | null, bmp: JBitmap, listener: unknown): Promise<void> => {
-  const left = rect?.left ?? 0, top = rect?.top ?? 0;
+const windowPixelCopy = async (rect: JRect | null, bitmap: object, listener: unknown): Promise<void> => {
+  const bmp = bitmapOf(bitmap), left = rect?.left ?? 0, top = rect?.top ?? 0;
   const width = rect ? rect.right - left : device.width;
   const height = rect ? rect.bottom - top : device.height;
   let result = 0;
@@ -131,13 +133,13 @@ rt.register({
   statics: { SUCCESS: 0, ERROR_UNKNOWN: 1, ERROR_TIMEOUT: 2, ERROR_SOURCE_NO_DATA: 3, ERROR_SOURCE_INVALID: 4, ERROR_DESTINATION_INVALID: 5 },
   methods: {
     "static request(Landroid/view/SurfaceView;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
-      (v: JView, bmp: JBitmap, l: unknown) => { void pixelCopy(getHolder(v).surface, bmp, l); },
+      (v: JView, bmp: object, l: unknown) => { void pixelCopy(getHolder(v).surface, bmp, l); },
     "static request(Landroid/view/Surface;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
-      (s: JSurface, bmp: JBitmap, l: unknown) => { void pixelCopy(s.surf, bmp, l); },
+      (s: JSurface, bmp: object, l: unknown) => { void pixelCopy(s.surf, bmp, l); },
     "static request(Landroid/view/Window;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
-      (_window: unknown, bmp: JBitmap, listener: unknown) => { void windowPixelCopy(null, bmp, listener); },
+      (_window: unknown, bmp: object, listener: unknown) => { void windowPixelCopy(null, bmp, listener); },
     "static request(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
-      (_window: unknown, rect: JRect | null, bmp: JBitmap, listener: unknown) => { void windowPixelCopy(rect, bmp, listener); },
+      (_window: unknown, rect: JRect | null, bmp: object, listener: unknown) => { void windowPixelCopy(rect, bmp, listener); },
   },
 });
 class JEGLContext extends JObj { egl!: EglContext; }

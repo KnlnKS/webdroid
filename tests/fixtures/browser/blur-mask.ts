@@ -1,11 +1,14 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall, linkInit } from "../../../src/jvm/natives/jlang";
-import { JBitmap, JCanvas, JPaint, tintedBmp } from "../../../src/android/graphics";
-import { loadCoreOj } from "./libcore";
+import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jlang";
+import { JCanvas, JPaint, tintedBmp } from "../../../src/android/graphics";
+import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap";
+import { loadPlatformDex } from "../../../src/android/framework";
+import { mountPlatformData } from "../../../src/shell/apex";
 
 async function probe() {
-  await loadCoreOj();
+  await loadPlatformDex();
+  mountPlatformData();
   rt.linkNatives();
   const results = [];
   const enums = (await linkInit("android/graphics/BlurMaskFilter$Blur")).ctor;
@@ -35,9 +38,10 @@ async function probe() {
       restored: m.a === 2 && m.d === 2 && m.e === 8 && m.f === 4 && ctx.filter === "none" && ctx.globalCompositeOperation === "source-over",
       repeated: first.every((v, i) => v === second[i]) });
   }
-  const source = JBitmap.create(20, 20);
-  source.density = 480;
-  source.ctx.fillStyle = "#ff000080"; source.ctx.fillRect(5, 5, 10, 10);
+  const argb = ((await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>).s$ARGB_8888;
+  const source = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 20, 20, argb);
+  await vcall(source, "setDensity", "(I)V", 480);
+  bitmapOf(source).ctx.fillStyle = "#ff000080"; bitmapOf(source).ctx.fillRect(5, 5, 10, 10);
   const paint = new JPaint(); paint.color = 0x4000ff00;
   const extracted = [];
   for (const radius of [0, 1, 2, 3, 5, 10]) for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
@@ -46,10 +50,11 @@ async function probe() {
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const offsets = new Int32Array([99, 99]);
     const alpha = await vcall(source, "extractAlpha", "(Landroid/graphics/Paint;[I)Landroid/graphics/Bitmap;", paint, offsets);
-    if (!(alpha instanceof JBitmap)) throw new Error("Invalid alpha bitmap");
+    if (!rt.iof(alpha, "android/graphics/Bitmap")) throw new Error("Invalid alpha bitmap");
+    const native = bitmapOf(alpha);
     const pixel = await vcall(alpha, "getPixel", "(II)I", 10 - offsets[0], 10 - offsets[1]);
-    extracted.push({ radius, style, width: alpha.w, height: alpha.h, offsets: Array.from(offsets), alpha: pixel >>> 24, rgb: pixel & 0xffffff,
-      config: alpha.config, density: alpha.density, rowBytes: await vcall(alpha, "getRowBytes", "()I"), distinct: alpha !== source });
+    extracted.push({ radius, style, width: native.w, height: native.h, offsets: Array.from(offsets), alpha: pixel >>> 24, rgb: pixel & 0xffffff,
+      config: native.config, density: await vcall(alpha, "getDensity", "()I"), rowBytes: await vcall(alpha, "getRowBytes", "()I"), distinct: alpha !== source });
   }
   const alpha = await vcall(source, "extractAlpha", "()Landroid/graphics/Bitmap;");
   const ctx = new OffscreenCanvas(40, 40).getContext("2d")!;
@@ -69,10 +74,10 @@ async function probe() {
   const before = ctx.getTransform().toString();
   await vcall(JCanvas.wrap(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
   const plane = { inside: Array.from(ctx.getImageData(20, 20, 1, 1).data), outside: Array.from(ctx.getImageData(0, 0, 1, 1).data), restored: ctx.getTransform().toString() === before };
-  const bitmap = JBitmap.create(1, 1);
+  const bitmap = new NativeBitmap(1, 1);
   bitmap.ctx.fillStyle = "#80402080"; bitmap.ctx.fillRect(0, 0, 1, 1);
-  const pixel = (mode: string, color: number) => Array.from(tintedBmp(bitmap, color, null, mode).getContext("2d")!.getImageData(0, 0, 1, 1).data);
-  const tints = { identity: tintedBmp(bitmap, 0, null, "PLUS") === bitmap.canvas,
+  const pixel = (mode: string, color: number) => Array.from((tintedBmp(bitmap, color, null, mode) as OffscreenCanvas).getContext("2d")!.getImageData(0, 0, 1, 1).data);
+  const tints = { identity: tintedBmp(bitmap, 0, null, "PLUS") === bitmap.image,
     clear: pixel("SRC_IN", 0), add: pixel("PLUS", 0x40102040), multiply: pixel("MODULATE", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
   bitmap.ctx.fillStyle = "#fff"; bitmap.ctx.fillRect(0, 0, 1, 1);
   const changed = pixel("SRC_IN", 0x80ff0000);

@@ -2,7 +2,8 @@ import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, vcallOn, curThread, after } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { resident, remainingBytes, type JBuffer } from "../jvm/natives/jnio";
-import { decodeBytes } from "./graphics";
+import { readHeader, decodePixels, INCOMPLETE } from "./decode";
+import { NativeBitmap, javaBitmap, ARGB_8888, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { drawableFromBitmap } from "./drawable";
 import { device } from "../shell/config";
 
@@ -27,28 +28,23 @@ async function sourceBytes(source: JImageSource): Promise<Uint8Array> {
   try { return await readStreamFully(stream); }
   finally { await vcall(stream, "close", "()V"); }
 }
-async function decode(source: JImageSource, listener: unknown) {
+async function decode(source: JImageSource, listener: unknown, density = -1) {
   // the listener runs on the decoding thread, whichever thread the awaits below resume on
   const thread = curThread;
   const decoder = rt.make("android/graphics/ImageDecoder") as JImageDecoder;
-  try {
-    const bitmap = await decodeBytes(await sourceBytes(source), null, async (width, height) => {
-      decoder.width = width; decoder.height = height;
-      const info = rt.make("android/graphics/ImageDecoder$ImageInfo") as JImageInfo;
-      info.size = await newObj("android/util/Size", "(II)V", width, height);
-      if (listener) await vcallOn(thread, listener, "onHeaderDecoded",
-        "(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;Landroid/graphics/ImageDecoder$Source;)V", decoder, info, source);
-      return [decoder.width, decoder.height];
-    });
-    if (!bitmap) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
-    rt.link("android/graphics/Bitmap");
-    bitmap.premultiplied = !decoder.unpremultiplied;
-    bitmap.immutable = true;
-    return bitmap;
-  } catch (error) {
-    if (error instanceof DOMException) throw rt.mkThrowable("java/io/IOException", error.message);
-    throw error;
-  }
+  const bytes = await sourceBytes(source), h = readHeader(bytes);
+  if (!h || h === INCOMPLETE) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
+  decoder.width = h.width; decoder.height = h.height;
+  const info = rt.make("android/graphics/ImageDecoder$ImageInfo") as JImageInfo;
+  info.size = await newObj("android/util/Size", "(II)V", h.width, h.height);
+  if (listener) await vcallOn(thread, listener, "onHeaderDecoded",
+    "(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;Landroid/graphics/ImageDecoder$Source;)V", decoder, info, source);
+  const img = await decodePixels(bytes, h, decoder.width, decoder.height, null, true);
+  if (!img) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
+  const b = new NativeBitmap(decoder.width, decoder.height, ARGB_8888, h.opaque ? OPAQUE : decoder.unpremultiplied ? UNPREMUL : PREMUL);
+  b.setImage(img);
+  b.immutable = true;
+  return javaBitmap(b, density, h.patch);
 }
 rt.register({ name: "android/graphics/ImageDecoder$Source", ctor: JImageSource });
 rt.register({ name: "android/graphics/ImageDecoder$ImageInfo", ctor: JImageInfo, methods: {
@@ -76,10 +72,8 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
   "static decodeDrawable(Landroid/graphics/ImageDecoder$Source;Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/drawable/Drawable;":
     driven(function* (source: JImageSource, listener: unknown): Gen {
       if (!listener) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener cannot be null! Use decodeDrawable(Source) to not have a listener");
-      const bitmap = yield decode(source, listener);
       const density: number = yield vcall(source, "getDensity", "()I");
-      if (density) bitmap.density = density;
-      return drawableFromBitmap(bitmap, device.densityDpi);
+      return drawableFromBitmap(yield decode(source, listener, density || -1), device.densityDpi);
     }),
   "setTargetSize(II)V": function (this: JImageDecoder, width: number, height: number) {
     if (width <= 0 || height <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Target size must be positive");
