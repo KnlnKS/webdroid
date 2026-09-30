@@ -128,9 +128,6 @@ const SERVICE_CLASS: Record<string, string> = {
   captioning: "android/view/accessibility/CaptioningManager",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
-  fingerprint: "android/hardware/fingerprint/FingerprintManager",
-  biometric: "android/hardware/biometrics/BiometricManager",
-  usb: "android/hardware/usb/UsbManager",
   display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
   appwidget: "android/appwidget/AppWidgetManager",
@@ -187,6 +184,12 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     newObj("android/content/RestrictionsManager", "(Landroid/content/Context;Landroid/content/IRestrictionsManager;)V", ctx, await hostedService("restrictions"))],
   accessibility: ["android/view/accessibility/AccessibilityManager", async (ctx) => scall("android/view/accessibility/AccessibilityManager",
     "getInstance", "(Landroid/content/Context;)Landroid/view/accessibility/AccessibilityManager;", ctx)],
+  fingerprint: ["android/hardware/fingerprint/FingerprintManager", async (ctx) =>
+    newObj("android/hardware/fingerprint/FingerprintManager", "(Landroid/content/Context;Landroid/hardware/fingerprint/IFingerprintService;)V", ctx, null)],
+  biometric: ["android/hardware/biometrics/BiometricManager", async (ctx) =>
+    newObj("android/hardware/biometrics/BiometricManager", "(Landroid/content/Context;Landroid/hardware/biometrics/IAuthService;)V", ctx, await hostedService("auth"))],
+  usb: ["android/hardware/usb/UsbManager", async (ctx) =>
+    newObj("android/hardware/usb/UsbManager", "(Landroid/content/Context;Landroid/hardware/usb/IUsbManager;)V", ctx, await hostedService("usb"))],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
@@ -315,6 +318,7 @@ const contextMethods: NativeSpec["methods"] = {
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
   "getMainLooper()Landroid/os/Looper;": () => mainLooper,
   "getMainExecutor()Ljava/util/concurrent/Executor;": mainExecutor,
+  "getMainThreadHandler()Landroid/os/Handler;": mainHandler,
   // API 34: the context stays on the default device, so its device id never changes
   "getDeviceId()I": () => 0,
   "registerDeviceIdChangeListener(Ljava/util/concurrent/Executor;Ljava/util/function/IntConsumer;)V": () => {},

@@ -1,9 +1,10 @@
 // android.hardware: Sensor value classes and the listener interface apps implement.
 // SensorManager itself is a Context system service and lives with the others in app.ts.
 
-import { rt, JObj, stubs, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
+import { hostStub } from "./binder";
 
 rt.markers("android/hardware/SensorEventListener");
 rt.markers("android/hardware/TriggerEventListener");
@@ -24,23 +25,22 @@ rt.register({
 });
 rt.register({ name: "android/hardware/SensorEventListener2", ctor: class extends JObj {}, ifaces: ["android/hardware/SensorEventListener"] });
 rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
-rt.register({ name: "android/hardware/fingerprint/FingerprintManager", ctor: class extends JObj {}, methods: {
-  "isHardwareDetected()Z": () => 0,
-  "hasEnrolledFingerprints()Z": () => 0,
+// No biometric sensor and no USB host or accessory: FingerprintManager has no service, as
+// SystemServiceRegistry builds it without FEATURE_FINGERPRINT; IAuthService and IUsbManager answer
+// as their system services do with no hardware behind them.
+const BIOMETRIC_ERROR_NO_HARDWARE = 12;
+rt.register({ name: "webdroid/AuthService", ctor: class extends JObj {}, sup: "android/hardware/biometrics/IAuthService$Stub", methods: {
+  "canAuthenticate(Ljava/lang/String;II)I": () => BIOMETRIC_ERROR_NO_HARDWARE,
+  "hasEnrolledBiometrics(ILjava/lang/String;)Z": () => 0,
+  "getSensorProperties(Ljava/lang/String;)Ljava/util/List;": () => newArrayList(),
+  "getAuthenticatorIds(I)[J": () => new BigInt64Array(0),
 } });
-rt.register({ name: "android/hardware/biometrics/BiometricManager", ctor: class extends JObj {},
-  statics: { BIOMETRIC_SUCCESS: 0, BIOMETRIC_ERROR_HW_UNAVAILABLE: 1, BIOMETRIC_ERROR_NONE_ENROLLED: 11,
-    BIOMETRIC_ERROR_NO_HARDWARE: 12, BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED: 15 },
-  methods: {
-    "canAuthenticate()I": () => 12,
-    "canAuthenticate(I)I": () => 12,
-  },
-});
-rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
-  "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
-  // AOSP answers null, not an empty array, when no accessory is attached
-  "getAccessoryList()[Landroid/hardware/usb/UsbAccessory;": () => null,
+rt.register({ name: "webdroid/UsbService", ctor: class extends JObj {}, sup: "android/hardware/usb/IUsbManager$Stub", methods: {
+  ...noops("getDeviceList(Landroid/os/Bundle;)V"),
+  "getCurrentAccessory()Landroid/hardware/usb/UsbAccessory;": () => null,
 } });
+hostStub("auth", "webdroid/AuthService");
+hostStub("usb", "webdroid/UsbService");
 
 class JSensor extends JObj { type = 0; sname = ""; vendor = ""; maxRange = 0; resolution = 0; minDelay = 0; }
 rt.register({

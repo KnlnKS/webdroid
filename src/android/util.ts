@@ -41,6 +41,8 @@ rt.register({
     "static isLoggable(Ljava/lang/String;I)Z": (_tag: string, level: number) => level >= 4 ? 1 : 0,
     "static getStackTraceString(Ljava/lang/Throwable;)Ljava/lang/String;": (t: unknown) => String((t as any)?.msg ?? t ?? ""),
     "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logAt(p)(tag, msg),
+    // Slog and the other buffers write through this; there is one log here
+    "static println_native(IILjava/lang/String;Ljava/lang/String;)I": (_buffer: number, p: number, tag: string, msg: string) => logAt(p)(tag, msg),
   },
 });
 class JLogPrinter extends JObj { priority = 3; tag = ""; }
