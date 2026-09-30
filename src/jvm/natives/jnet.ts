@@ -16,7 +16,7 @@ import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
 import { abandonConnection } from "../../native/net";
 
-rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
+rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/KeyManager",
   "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi");
 
 /** a connected TLS socket; rt.make skips <init> */
