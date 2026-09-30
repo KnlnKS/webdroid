@@ -197,6 +197,14 @@ export class RuntimeShaderBuilder {
     if (!c) invalid("unable to find shader named " + name);
     if (c.shader !== shader) { c.shader = shader; this.last = null; }
   }
+  /** a shader of the current state with child `name` bound to `child`, the builder's own binding kept */
+  withChild(name: string, child: NativeShader): NativeShader {
+    const c = this.children.get(name);
+    if (!c) invalid("unable to find shader named " + name);
+    const own = c.shader;
+    this.setChild(name, child);
+    try { return this.shader(null); } finally { this.setChild(name, own); }
+  }
   set(name: string, values: ArrayLike<number>, color = false, integer = false): void {
     const u = this.uniforms.get(name);
     if (!u || u.values.length !== values.length || u.color !== color || u.format.integer !== integer) invalid("Invalid uniform: " + name);

@@ -1,8 +1,11 @@
-import { rt, JObj } from "../jvm/runtime";
-import { weakHandle } from "./handles";
-import { type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
+// RenderEffect's native half: hwui's SkImageFilter graph (jni/RenderEffect.cpp), evaluated over a
+// node's rasterised content. An input of 0 is that content.
+import { rt } from "../jvm/runtime";
+import { handle, deref, FINALIZER } from "./handles";
+import { COMPOSITE, BLEND_MODES, NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics";
+import type { NativeBitmap } from "./bitmap";
+import type { RuntimeShaderBuilder } from "./runtime-shader";
 
-type Effect = { kind: "offset"; x: number; y: number } | { kind: "blur"; x: number; y: number; tile: number };
 /** the rasters a blur reuses from one run to the next */
 export type BlurCache = { padded: OffscreenCanvas | null; blurred: OffscreenCanvas | null };
 function sized(c: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
@@ -45,65 +48,173 @@ function gaussian(cache: BlurCache, padded: OffscreenCanvas, sigma: number): Off
 export function clampedBlur(src: OffscreenCanvas, sigma: number, cache: BlurCache): OffscreenCanvas {
   return gaussian(cache, padded(cache, src, src.width, src.height, Math.ceil(3 * sigma), 0), sigma);
 }
-export class JRenderEffect extends JObj implements BlurCache {
-  effect: Effect = { kind: "offset", x: 0, y: 0 };
+/** an effect's output: an image placed at (x, y) and drawn at w x h in node coordinates */
+type Filtered = { img: OffscreenCanvas; x: number; y: number; w: number; h: number };
+const whole = (img: OffscreenCanvas): Filtered => ({ img, x: 0, y: 0, w: img.width, h: img.height });
+/** a raster the size of `f`'s placement with `f` drawn into it, for effects that work in pixels */
+function flatten(target: OffscreenCanvas | null, f: Filtered): OffscreenCanvas {
+  const w = Math.max(1, Math.ceil(f.w)), h = Math.max(1, Math.ceil(f.h)), c = sized(target, w, h), g = c.getContext("2d")!;
+  g.reset(); g.drawImage(f.img, 0, 0, f.w, f.h);
+  return c;
+}
+/** Blur::convertRadiusToSigma */
+const sigmaOf = (radius: number) => (radius > 0 ? Math.fround(Math.fround(0.57735 * radius) + 0.5) : 0);
+
+export abstract class NativeRenderEffect {
+  protected out: OffscreenCanvas | null = null;
+  constructor(protected readonly input: NativeRenderEffect | null) {}
+  /** SkImageFilter::filterImage over `source`, the node's content or an outer chain's input */
+  filter(source: Filtered): Filtered { return this.apply(this.input ? this.input.filter(source) : source); }
+  protected abstract apply(f: Filtered): Filtered;
+  /** the node's content `source` filtered and drawn into ctx */
+  draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, source: OffscreenCanvas) {
+    const f = this.filter(whole(source));
+    ctx.drawImage(f.img, f.x, f.y, f.w, f.h);
+  }
+}
+class Offset extends NativeRenderEffect {
+  constructor(private readonly dx: number, private readonly dy: number, input: NativeRenderEffect | null) { super(input); }
+  protected apply(f: Filtered): Filtered { return { ...f, x: f.x + this.dx, y: f.y + this.dy }; }
+}
+class Blur extends NativeRenderEffect implements BlurCache {
   padded: OffscreenCanvas | null = null;
   blurred: OffscreenCanvas | null = null;
   private work = new Float32Array(0);
   private scratch = new Float32Array(0);
-  draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, source: OffscreenCanvas) {
-    const e = this.effect;
-    if (e.kind === "offset") { ctx.drawImage(source, e.x, e.y); return; }
-    if (!e.x && !e.y) { ctx.drawImage(source, 0, 0); return; }
-    // Normalize unequal radii by shrinking the more blurred axis before the filter.
-    const radius = Math.min(e.x || e.y, e.y || e.x), sx = e.x ? radius / e.x : 1, sy = e.y ? radius / e.y : 1;
-    const w = Math.max(1, Math.ceil(source.width * sx)), h = Math.max(1, Math.ceil(source.height * sy));
-    const pad = Math.ceil(radius * 3), width = w + pad * 2, height = h + pad * 2;
-    const surface = padded(this, source, w, h, pad, e.tile);
-    if (e.x && e.y) {
-      ctx.drawImage(gaussian(this, surface, radius), -pad / sx, -pad / sy, width / sx, height / sy);
-    } else {
-      const target = surface.getContext("2d")!, pixels = target.getImageData(0, 0, width, height), data = pixels.data;
-      if (this.work.length !== data.length) { this.work = new Float32Array(data.length); this.scratch = new Float32Array(data.length); }
-      let input = this.work, output = this.scratch;
-      for (let i = 0; i < data.length; i += 4) {
-        const alpha = data[i + 3]; input[i + 3] = alpha;
-        for (let c = 0; c < 3; c++) input[i + c] = data[i + c] * alpha / 255;
-      }
-      // Three box passes approximate the Gaussian in linear time for a single blurred axis.
-      const ideal = Math.sqrt(4 * radius * radius + 1), lower = Math.floor(ideal) | 1;
-      const small = lower > ideal ? lower - 2 : lower;
-      const count = Math.round((12 * radius * radius - 3 * small * small - 12 * small - 9) / (-4 * small - 4));
-      const length = e.x ? width : height, lines = e.x ? height : width, stride = e.x ? 4 : width * 4;
-      for (let pass = 0; pass < 3; pass++) {
-        const box = pass < count ? small : small + 2, half = (box - 1) / 2;
-        for (let line = 0; line < lines; line++) for (let c = 0; c < 4; c++) {
-          const start = (e.x ? line * width : line) * 4 + c;
-          let sum = 0;
-          for (let i = 0; i <= Math.min(half, length - 1); i++) sum += input[start + i * stride];
-          for (let i = 0; i < length; i++) {
-            output[start + i * stride] = sum / box;
-            if (i >= half) sum -= input[start + (i - half) * stride];
-            if (i + half + 1 < length) sum += input[start + (i + half + 1) * stride];
-          }
-        }
-        [input, output] = [output, input];
-      }
-      for (let i = 0; i < data.length; i += 4) {
-        const alpha = input[i + 3]; data[i + 3] = alpha;
-        for (let c = 0; c < 3; c++) data[i + c] = alpha ? input[i + c] * 255 / alpha : 0;
-      }
-      target.putImageData(pixels, 0, 0); ctx.drawImage(surface, -pad, -pad);
+  private readonly sx: number; private readonly sy: number;
+  constructor(rx: number, ry: number, private readonly tile: number, input: NativeRenderEffect | null) {
+    super(input);
+    this.sx = sigmaOf(rx); this.sy = sigmaOf(ry);
+  }
+  protected apply(f: Filtered): Filtered {
+    if (!this.sx && !this.sy) return f;
+    const source = flatten(this.out, f);
+    this.out = source;
+    // Unequal sigmas: shrink the more blurred axis, blur uniformly, and stretch back.
+    const sigma = Math.min(this.sx || this.sy, this.sy || this.sx), kx = this.sx ? sigma / this.sx : 1, ky = this.sy ? sigma / this.sy : 1;
+    const w = Math.max(1, Math.ceil(source.width * kx)), h = Math.max(1, Math.ceil(source.height * ky));
+    const pad = Math.ceil(sigma * 3), width = w + pad * 2, height = h + pad * 2;
+    const surface = padded(this, source, w, h, pad, this.tile);
+    const scaleX = f.w / source.width, scaleY = f.h / source.height;
+    if (this.sx && this.sy) {
+      return { img: gaussian(this, surface, sigma), x: f.x - pad / kx * scaleX, y: f.y - pad / ky * scaleY, w: width / kx * scaleX, h: height / ky * scaleY };
     }
+    this.boxBlur(surface, width, height, sigma, !!this.sx);
+    return { img: surface, x: f.x - pad * scaleX, y: f.y - pad * scaleY, w: width * scaleX, h: height * scaleY };
+  }
+  /** three box passes along one axis, which approximate its Gaussian in linear time */
+  private boxBlur(surface: OffscreenCanvas, width: number, height: number, sigma: number, horizontal: boolean) {
+    const target = surface.getContext("2d")!, pixels = target.getImageData(0, 0, width, height), data = pixels.data;
+    if (this.work.length !== data.length) { this.work = new Float32Array(data.length); this.scratch = new Float32Array(data.length); }
+    let input = this.work, output = this.scratch;
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3]; input[i + 3] = alpha;
+      for (let c = 0; c < 3; c++) input[i + c] = data[i + c] * alpha / 255;
+    }
+    const ideal = Math.sqrt(4 * sigma * sigma + 1), lower = Math.floor(ideal) | 1;
+    const small = lower > ideal ? lower - 2 : lower;
+    const count = Math.round((12 * sigma * sigma - 3 * small * small - 12 * small - 9) / (-4 * small - 4));
+    const length = horizontal ? width : height, lines = horizontal ? height : width, stride = horizontal ? 4 : width * 4;
+    for (let pass = 0; pass < 3; pass++) {
+      const box = pass < count ? small : small + 2, half = (box - 1) / 2;
+      for (let line = 0; line < lines; line++) for (let c = 0; c < 4; c++) {
+        const start = (horizontal ? line * width : line) * 4 + c;
+        let sum = 0;
+        for (let i = 0; i <= Math.min(half, length - 1); i++) sum += input[start + i * stride];
+        for (let i = 0; i < length; i++) {
+          output[start + i * stride] = sum / box;
+          if (i >= half) sum -= input[start + (i - half) * stride];
+          if (i + half + 1 < length) sum += input[start + (i + half + 1) * stride];
+        }
+      }
+      [input, output] = [output, input];
+    }
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = input[i + 3]; data[i + 3] = alpha;
+      for (let c = 0; c < 3; c++) data[i + c] = alpha ? input[i + c] * 255 / alpha : 0;
+    }
+    target.putImageData(pixels, 0, 0);
   }
 }
-function effect(value: Effect) { const e = new JRenderEffect(); e.effect = value; return e; }
-rt.register({ name: "android/graphics/RenderEffect", ctor: JRenderEffect, methods: {
-  // what RenderNode.setRenderEffect hands its native half
-  "getNativeInstance()J": function (this: JRenderEffect) { return weakHandle(this); },
-  "static createOffsetEffect(FF)Landroid/graphics/RenderEffect;": (x: number, y: number) => effect({ kind: "offset", x, y }),
-  "static createBlurEffect(FFLandroid/graphics/Shader$TileMode;)Landroid/graphics/RenderEffect;": (x: number, y: number, tile: JSimpleEnum) => {
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid blur radius");
-    return effect({ kind: "blur", x, y, tile: enumOrdinal(tile) });
-  },
-} });
+/** SkImageFilters::Image: the bitmap's src rect drawn into dst, whatever the input */
+class BitmapEffect extends NativeRenderEffect {
+  constructor(private readonly bitmap: NativeBitmap, private readonly src: number[], private readonly dst: number[]) { super(null); }
+  protected apply(): Filtered {
+    const [sl, st, sr, sb] = this.src, [dl, dt, dr, db] = this.dst, w = Math.max(1, Math.ceil(dr - dl)), h = Math.max(1, Math.ceil(db - dt));
+    const c = this.out = sized(this.out, w, h), g = c.getContext("2d")!;
+    g.reset(); g.drawImage(this.bitmap.image, sl, st, sr - sl, sb - st, 0, 0, dr - dl, db - dt);
+    return { img: c, x: dl, y: dt, w: dr - dl, h: db - dt };
+  }
+}
+class ColorFilterEffect extends NativeRenderEffect {
+  constructor(private readonly cf: NativeColorFilter, input: NativeRenderEffect | null) { super(input); }
+  protected apply(f: Filtered): Filtered {
+    const c = this.out = flatten(this.out, f), cf = this.cf;
+    recolor(c.getContext("2d")!, c.width, c.height, cf.matrix ? null : cf.color, cf.matrix, cf.mode);
+    return { img: c, x: f.x, y: f.y, w: f.w, h: f.h };
+  }
+}
+/** SkImageFilters::Blend: src over dst by the mode, over the union of their placements */
+class BlendEffect extends NativeRenderEffect {
+  constructor(private readonly dst: NativeRenderEffect | null, private readonly src: NativeRenderEffect | null, private readonly mode: GlobalCompositeOperation) { super(null); }
+  override filter(source: Filtered): Filtered {
+    const d = this.dst ? this.dst.filter(source) : source, s = this.src ? this.src.filter(source) : source;
+    const x = Math.min(d.x, s.x), y = Math.min(d.y, s.y), w = Math.max(d.x + d.w, s.x + s.w) - x, h = Math.max(d.y + d.h, s.y + s.h) - y;
+    const c = this.out = sized(this.out, Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))), g = c.getContext("2d")!;
+    g.reset();
+    g.drawImage(d.img, d.x - x, d.y - y, d.w, d.h);
+    g.globalCompositeOperation = this.mode;
+    g.drawImage(s.img, s.x - x, s.y - y, s.w, s.h);
+    return { img: c, x, y, w, h };
+  }
+  protected apply(f: Filtered): Filtered { return f; }
+}
+class Chain extends NativeRenderEffect {
+  constructor(private readonly outer: NativeRenderEffect, private readonly inner: NativeRenderEffect) { super(null); }
+  override filter(source: Filtered): Filtered { return this.outer.filter(this.inner.filter(source)); }
+  protected apply(f: Filtered): Filtered { return f; }
+}
+/** SkImageFilters::Shader: the shader over the content's bounds, whatever the input */
+class ShaderEffect extends NativeRenderEffect {
+  constructor(private readonly shader: NativeShader) { super(null); }
+  override filter(source: Filtered): Filtered {
+    const c = this.out = sized(this.out, Math.max(1, Math.ceil(source.w)), Math.max(1, Math.ceil(source.h))), g = c.getContext("2d")!;
+    g.reset(); g.translate(-source.x, -source.y);
+    fillWithShader(g, this.shader);
+    return { img: c, x: source.x, y: source.y, w: source.w, h: source.h };
+  }
+  protected apply(f: Filtered): Filtered { return f; }
+}
+/** the input image as a shader in node coordinates, what a runtime shader's child samples */
+class ImageShader extends NativeShader {
+  constructor(private readonly f: Filtered) { super(null); }
+  override pattern(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern | null {
+    const p = ctx?.createPattern(this.f.img, "no-repeat") ?? null;
+    p?.setTransform(new DOMMatrix([this.f.w / this.f.img.width, 0, 0, this.f.h / this.f.img.height, this.f.x, this.f.y]));
+    return p;
+  }
+}
+/** SkImageFilters::RuntimeShader: the builder's shader with its child `name` bound to the input. The
+ *  uniforms are the builder's at draw time, where hwui copies them when the effect is made. */
+class RuntimeShaderEffect extends NativeRenderEffect {
+  constructor(private readonly builder: RuntimeShaderBuilder, private readonly name: string) { super(null); }
+  override filter(source: Filtered): Filtered {
+    return new ShaderEffect(this.builder.withChild(this.name, new ImageShader(source))).filter(source);
+  }
+  protected apply(f: Filtered): Filtered { return f; }
+}
+
+const effectAt = (h: bigint) => (h ? deref<NativeRenderEffect>(h) : null);
+rt.registerJnis("android/graphics/RenderEffect", {
+  "nativeCreateOffsetEffect(FFJ)J": (x: number, y: number, input: bigint) => handle(new Offset(x, y, effectAt(input))),
+  "nativeCreateBlurEffect(FFJI)J": (rx: number, ry: number, input: bigint, tile: number) => handle(new Blur(rx, ry, tile, effectAt(input))),
+  "nativeCreateBitmapEffect(JFFFFFFFF)J": (b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number) =>
+    handle(new BitmapEffect(deref<NativeBitmap>(b), [sl, st, sr, sb], [dl, dt, dr, db])),
+  "nativeCreateColorFilterEffect(JJ)J": (cf: bigint, input: bigint) => handle(new ColorFilterEffect(deref<NativeColorFilter>(cf), effectAt(input))),
+  "nativeCreateBlendModeEffect(JJI)J": (dst: bigint, src: bigint, mode: number) =>
+    handle(new BlendEffect(effectAt(dst), effectAt(src), COMPOSITE[BLEND_MODES[mode]] ?? "source-over")),
+  "nativeCreateChainEffect(JJ)J": (outer: bigint, inner: bigint) => handle(new Chain(effectAt(outer)!, effectAt(inner)!)),
+  "nativeCreateShaderEffect(J)J": (s: bigint) => handle(new ShaderEffect(deref<NativeShader>(s))),
+  "nativeCreateRuntimeShaderEffect(JLjava/lang/String;)J": (b: bigint, name: string) => handle(new RuntimeShaderEffect(deref<RuntimeShaderBuilder>(b), name)),
+  "nativeGetFinalizer()J": () => FINALIZER,
+});

@@ -11,7 +11,7 @@ import { rt } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
 import { perf } from "../perf";
-import { type JRenderEffect } from "./rendereffect";
+import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { Camera3D, type Mat, type NativeColorFilter, COMPOSITE, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./graphics";
 import { NativeCanvas, drawInLayer, drawCircle, drawRoundRect, clipRoundRect } from "./canvas";
@@ -51,7 +51,7 @@ export class NativeRenderNode {
   ambientColor = 0xff000000 | 0; spotColor = 0xff000000 | 0;
   /** LayerProperties: LayerType (0 none, 1 software, 2 render layer) and what setFromPaint takes */
   layerType = 0; layerAlpha = 255; layerBlend: string | null = null; layerFilter: NativeColorFilter | null = null;
-  effect: JRenderEffect | null = null; backdrop: JRenderEffect | null = null;
+  effect: NativeRenderEffect | null = null; backdrop: NativeRenderEffect | null = null;
   projectBackwards = false; projectionReceiver = false; forceDark = true; usageHint = 0;
   stretch: { x: number; y: number; maxX: number; maxY: number } | null = null;
   positionListener: object | null = null;
@@ -256,9 +256,9 @@ rt.registerJnis("android/graphics/RenderNode", {
   },
   "nGetLayerType(J)I": get("layerType"),
   "nSetLayerPaint(JJ)Z": (h: bigint, p: bigint) => nodeAt(h).setLayerPaint(p ? paintAt(p) : null),
-  "nSetRenderEffect(JJ)Z": (h: bigint, e: bigint) => set("effect")(h, e ? deref<JRenderEffect>(e) : null),
+  "nSetRenderEffect(JJ)Z": (h: bigint, e: bigint) => set("effect")(h, e ? deref<NativeRenderEffect>(e) : null),
   // a backdrop effect filters what is drawn behind the node, which needs the compositor's surface
-  "nSetBackdropRenderEffect(JJ)Z": (h: bigint, e: bigint) => set("backdrop")(h, e ? deref<JRenderEffect>(e) : null),
+  "nSetBackdropRenderEffect(JJ)Z": (h: bigint, e: bigint) => set("backdrop")(h, e ? deref<NativeRenderEffect>(e) : null),
   "nSetHasOverlappingRendering(JZ)Z": setBool("overlapping"),
   "nHasOverlappingRendering(J)Z": bool("overlapping"),
   "nSetAllowForceDark(JZ)Z": setBool("forceDark"),

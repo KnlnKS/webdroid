@@ -157,6 +157,15 @@ test.concurrent("ImageView reports and draws scale-type matrices and copies cust
   expect(reset).toEqual([1, 0, 0, 1, 0, 0]);
 }, PAGE_TIMEOUT);
 
+// hwui blurs by Blur::convertRadiusToSigma: sigma = 0.57735 * radius + 0.5, 6.27 for a radius of 10
+test.concurrent("render effects blur by hwui's sigma, offset a chained input and color-filter the content", async () => {
+  const { blurred, shifted, inverted } = await probe("renderEffect");
+  const phi = (z: number) => 0.5 * (1 + Math.tanh(0.7978845608 * (z + 0.044715 * z ** 3)));
+  for (const x of [22, 26, 30, 34, 38]) expect(Math.abs(blurred[x] - 255 * phi((x + 0.5 - 30) / 6.27))).toBeLessThanOrEqual(8);
+  for (const x of [27, 31, 35, 39]) expect(Math.abs(shifted[x] - blurred[x - 5])).toBeLessThanOrEqual(2);
+  expect([inverted[10], inverted[50]]).toEqual([255, 0]);
+}, PAGE_TIMEOUT);
+
 test.concurrent("runtime shaders preserve recorded uniforms, premultiplied alpha and canvas coordinates", async () => {
   expect(await probe("runtimeShader")).toEqual({
     recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, text: [14, 39], rippleCenter: [255, 0, 0, 128],
