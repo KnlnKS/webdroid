@@ -7,12 +7,11 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { mimeFromFilename } from "../../mime";
+import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jutil";
 import { newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, dotName, u8, mangleMethod } from "../abi";
+import { jarray, strArray, u8, mangleMethod } from "../abi";
 import { baosBytes } from "./jio";
 import { Relay } from "../../shell/relay";
 
@@ -373,8 +372,8 @@ const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/Str
 class JHttpHandler extends JObj {}
 const openHttp = (cls: string) => function (url: unknown, proxy?: unknown) {
   if (url === null || proxy === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "url == null || proxy == null");
-  const c = rt.make(cls) as JURLConnection;
-  c.url = url;
+  const c = new (rt.link(cls).ctor)() as JHttpURLConnection;
+  initConnection(c, url);
   if (c instanceof JHttpsURLConnection) { c.sslFactory = defaultHttpsFactory; c.hostnameVerifier = defaultHostnameVerifier; }
   return c;
 };
@@ -464,14 +463,29 @@ function cookieURI(target: string): Promise<unknown> {
   const text = u.href.slice(0, u.href.length - tail.length) + tail.replace(/[[\]{}|\\^`"<> ]|%(?![\dA-Fa-f]{2})/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
   return newObj("java/net/URI", "(Ljava/lang/String;)V", text);
 }
-let followRedirects = 1, defaultUseCaches = 1;
-class JURLConnection extends JObj {
-  url: unknown = null;
-  method = "GET"; follow = followRedirects; doOut = 0; doIn = 1; useCaches = defaultUseCaches;
-  allowUserInteraction = 0;
-  /** the protected field a subclass implementing its own transport maintains; ours reads res */
-  connected = 0;
-  cto = 0; rto = 0; ifMod = 0n;
+let followRedirects = 1;
+// URLConnection is libcore's; its fields are what this transport reads
+const UC = "java/net/URLConnection";
+let ucFields: Record<"url" | "doInput" | "doOutput" | "connected" | "connectTimeout" | "readTimeout" | "ifModifiedSince", string> | null = null;
+const uc = () => ucFields ??= Object.fromEntries(["url", "doInput", "doOutput", "connected", "connectTimeout", "readTimeout", "ifModifiedSince"]
+  .map((n) => [n, declaredField(UC, n)])) as NonNullable<typeof ucFields>;
+/** URLConnection(URL), the constructor HttpURLConnection(URL) runs */
+function initConnection(c: JObj, url: unknown): void {
+  (rt.link(UC).ctor.prototype as Record<string, (u: unknown) => void>)[mangleMethod("<init>", "(Ljava/net/URL;)V")].call(c, url);
+}
+type Fields = Record<string, unknown>;
+class JHttpURLConnection extends JObj {
+  get url(): unknown { return (this as unknown as Fields)[uc().url]; }
+  set url(u: unknown) { (this as unknown as Fields)[uc().url] = u; }
+  get doIn(): number { return (this as unknown as Fields)[uc().doInput] as number; }
+  get doOut(): number { return (this as unknown as Fields)[uc().doOutput] as number; }
+  get connected(): number { return (this as unknown as Fields)[uc().connected] as number; }
+  set connected(v: number) { (this as unknown as Fields)[uc().connected] = v; }
+  get cto(): number { return (this as unknown as Fields)[uc().connectTimeout] as number; }
+  get rto(): number { return (this as unknown as Fields)[uc().readTimeout] as number; }
+  get ifMod(): bigint { return (this as unknown as Fields)[uc().ifModifiedSince] as bigint; }
+  method = "GET"; follow = followRedirects;
+  responseCode = -1; responseMessage: string | null = null; chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n;
   req: [string, string][] = [];
   out: JObj | null = null;
   ac: AbortController | null = null;
@@ -566,99 +580,54 @@ class JURLConnection extends JObj {
   stream(): JHttpInputStream { return this.res!.stream; }
 }
 /** an accessor that needs the response: connect first */
-function withRes<A extends unknown[], C extends JURLConnection = JURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
+function withRes<A extends unknown[], C extends JHttpURLConnection = JHttpURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
   return async function (this: C, ...a: A) { return f.call(this, await this.connect(), ...a); };
 }
-const header = (c: JURLConnection, name: string): string | null | Promise<string | null> =>
-  vcall(c, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", name);
-const asLong = (v: string | null, d: bigint) => v && /^\s*-?\d+\s*$/.test(v) ? BigInt(v.trim()) : d;
-rt.register({
-  name: "java/net/URLConnection", ctor: JURLConnection,
-  fields: { connected: "connected", url: "url", doInput: "doIn", doOutput: "doOut", useCaches: "useCaches" },
-  // the platform getFileNameMap/setFileNameMap keep the map here
-  statics: { fileNameMap: null },
-  methods: {
-    "static guessContentTypeFromName(Ljava/lang/String;)Ljava/lang/String;": (name: string | null) => mimeFromFilename(name ?? rt.npe()),
-    "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: unknown) { this.url = u; },
-    "connect()V": driven(function* (this: JURLConnection): Gen {
-      this.connected = 1;
-      // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
-      if (!this.doOut) yield this.connect();
-    }),
-    "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
-    "getInputStream()Ljava/io/InputStream;": withRes(async function (r) {
-      if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
-      if (r.status >= 400) {
-        const spec = await urlText(this.url);
-        throw r.status === 404 || r.status === 410
-          ? rt.mkThrowable("java/io/FileNotFoundException", spec)
-          : rt.mkThrowable("java/io/IOException", `Server returned HTTP response code: ${r.status} for URL: ${spec}`);
-      }
-      return this.stream();
-    }),
-    "getOutputStream()Ljava/io/OutputStream;": async function (this: JURLConnection) {
-      if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
-      if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
-      if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
-      this.connected = 1;
-      return this.out ??= await newObj("java/io/ByteArrayOutputStream");
-    },
-    "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
-      if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
-      if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
-      this.req = this.req.filter(([n]) => n.toLowerCase() !== k.toLowerCase());
-      this.req.push([k, v]);
-    },
-    "addRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
-      if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
-      if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
-      this.req.push([k, v]);
-    },
-    "getRequestProperty(Ljava/lang/String;)Ljava/lang/String;": function (this: JURLConnection, k: string | null) {
-      let v: string | null = null;
-      for (const [n, x] of this.req) if (n.toLowerCase() === k?.toLowerCase()) v = x;
-      return v;
-    },
-    "getRequestProperties()Ljava/util/Map;": function (this: JURLConnection) { return headerMap(group(this.req)); },
-    "setDoOutput(Z)V": function (this: JURLConnection, b: number) { this.doOut = b; },
-    "getDoOutput()Z": function (this: JURLConnection) { return this.doOut; },
-    "setDoInput(Z)V": function (this: JURLConnection, b: number) { this.doIn = b; },
-    "getDoInput()Z": function (this: JURLConnection) { return this.doIn; },
-    "setUseCaches(Z)V": function (this: JURLConnection, b: number) { this.useCaches = b; },
-    "getUseCaches()Z": function (this: JURLConnection) { return this.useCaches; },
-    "setDefaultUseCaches(Z)V": (b: number) => { defaultUseCaches = b; },
-    "getDefaultUseCaches()Z": () => defaultUseCaches,
-    "setAllowUserInteraction(Z)V": function (this: JURLConnection, b: number) { this.allowUserInteraction = b ? 1 : 0; },
-    "getAllowUserInteraction()Z": function (this: JURLConnection) { return this.allowUserInteraction; },
-    "setConnectTimeout(I)V": function (this: JURLConnection, ms: number) { this.cto = ms; },
-    "getConnectTimeout()I": function (this: JURLConnection) { return this.cto; },
-    "setReadTimeout(I)V": function (this: JURLConnection, ms: number) { this.rto = ms; },
-    "getReadTimeout()I": function (this: JURLConnection) { return this.rto; },
-    "setIfModifiedSince(J)V": function (this: JURLConnection, t: bigint) { this.ifMod = t; },
-    "getIfModifiedSince()J": function (this: JURLConnection) { return this.ifMod; },
-    "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": withRes(function (_r, k: string | null) { return this.hdr(k); }),
-    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[1] ?? null),
-    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[0] ?? null),
-    "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
-    // the typed accessors read through getHeaderField(String), which a subclass's transport overrides
-    "getHeaderFieldInt(Ljava/lang/String;I)I": function (this: JURLConnection, k: string, d: number) {
-      return after(header(this, k), (v) => { const n = parseInt(v ?? "", 10); return Number.isNaN(n) ? d : n; });
-    },
-    "getHeaderFieldLong(Ljava/lang/String;J)J": function (this: JURLConnection, k: string, d: bigint) { return after(header(this, k), (v) => asLong(v, d)); },
-    "getHeaderFieldDate(Ljava/lang/String;J)J": function (this: JURLConnection, k: string, d: bigint) {
-      return after(header(this, k), (v) => { const t = Date.parse(v ?? ""); return Number.isNaN(t) ? d : BigInt(t); });
-    },
-    "getContentType()Ljava/lang/String;": function (this: JURLConnection) { return header(this, "content-type"); },
-    "getContentEncoding()Ljava/lang/String;": function (this: JURLConnection) { return header(this, "content-encoding"); },
-    "getContentLength()I": function (this: JURLConnection) {
-      return after(vcall(this, "getContentLengthLong", "()J") as bigint | Promise<bigint>, (n) => (n > 0x7fffffffn ? -1 : Number(n)));
-    },
-    "getContentLengthLong()J": function (this: JURLConnection) { return vcall(this, "getHeaderFieldLong", "(Ljava/lang/String;J)J", "content-length", -1n); },
-    "toString()Ljava/lang/String;": function (this: JURLConnection) {
-      return after(urlText(this.url), (spec) => dotName((this.constructor as typeof JObj).$i.name) + ":" + spec);
-    },
+const connectionMethods: NativeSpec["methods"] = {
+  "connect()V": driven(function* (this: JHttpURLConnection): Gen {
+    this.connected = 1;
+    // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
+    if (!this.doOut) yield this.connect();
+  }),
+  "getInputStream()Ljava/io/InputStream;": withRes(async function (r) {
+    if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
+    if (r.status >= 400) {
+      const spec = await urlText(this.url);
+      throw r.status === 404 || r.status === 410
+        ? rt.mkThrowable("java/io/FileNotFoundException", spec)
+        : rt.mkThrowable("java/io/IOException", `Server returned HTTP response code: ${r.status} for URL: ${spec}`);
+    }
+    return this.stream();
+  }),
+  "getOutputStream()Ljava/io/OutputStream;": async function (this: JHttpURLConnection) {
+    if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
+    if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
+    if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
+    this.connected = 1;
+    return this.out ??= await newObj("java/io/ByteArrayOutputStream");
   },
-});
+  "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JHttpURLConnection, k: string | null, v: string) {
+    if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
+    if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+    this.req = this.req.filter(([n]) => n.toLowerCase() !== k.toLowerCase());
+    this.req.push([k, v]);
+  },
+  "addRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JHttpURLConnection, k: string | null, v: string) {
+    if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
+    if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+    this.req.push([k, v]);
+  },
+  "getRequestProperty(Ljava/lang/String;)Ljava/lang/String;": function (this: JHttpURLConnection, k: string | null) {
+    let v: string | null = null;
+    for (const [n, x] of this.req) if (n.toLowerCase() === k?.toLowerCase()) v = x;
+    return v;
+  },
+  "getRequestProperties()Ljava/util/Map;": function (this: JHttpURLConnection) { return headerMap(group(this.req)); },
+  "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": withRes(function (_r, k: string | null) { return this.hdr(k); }),
+  "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[1] ?? null),
+  "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[0] ?? null),
+  "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
+};
 const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE", "PATCH"]);
 const GET_INPUT = mangleMethod("getInputStream", "()Ljava/io/InputStream;");
 const HEADER_AT = mangleMethod("getHeaderField", "(I)Ljava/lang/String;");
@@ -678,7 +647,6 @@ const statusFromHeader = driven(function* (this: JHttpURLConnection): Gen {
   const code = line.slice(codeAt + 1, phraseAt);
   return /^[+-]?\d+$/.test(code) ? this.responseCode = parseInt(code, 10) : -1;
 });
-class JHttpURLConnection extends JURLConnection { responseCode = -1; responseMessage: string | null = null; chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n; }
 rt.register({
   name: "java/net/HttpURLConnection", ctor: JHttpURLConnection, sup: "java/net/URLConnection",
   fields: { responseCode: "responseCode", responseMessage: "responseMessage", method: "method", instanceFollowRedirects: "follow", chunkLength: "chunkLength", fixedContentLength: "fixedContentLength", fixedContentLengthLong: "fixedContentLengthLong" },
@@ -693,6 +661,8 @@ rt.register({
     HTTP_GATEWAY_TIMEOUT: 504, HTTP_VERSION: 505,
   },
   methods: {
+    ...connectionMethods,
+    "<init>(Ljava/net/URL;)V": function (this: JHttpURLConnection, url: unknown) { initConnection(this, url); },
     "setRequestMethod(Ljava/lang/String;)V": function (this: JHttpURLConnection, m: string) {
       if (this.connected) throw rt.mkThrowable("java/net/ProtocolException", "Can't reset method: already connected");
       if (!HTTP_METHODS.has(m)) throw rt.mkThrowable("java/net/ProtocolException", "Invalid HTTP method: " + m);
@@ -708,7 +678,7 @@ rt.register({
     "setFixedLengthStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.fixedContentLength = n; this.fixedContentLengthLong = BigInt(n); },
     "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
     "getResponseCode()I": function (this: JHttpURLConnection) {
-      if ((this as any)[GET_INPUT] !== (JURLConnection.prototype as any)[GET_INPUT] || (this as any)[HEADER_AT] !== (JURLConnection.prototype as any)[HEADER_AT]) return statusFromHeader.call(this);
+      if ((this as any)[GET_INPUT] !== (JHttpURLConnection.prototype as any)[GET_INPUT] || (this as any)[HEADER_AT] !== (JHttpURLConnection.prototype as any)[HEADER_AT]) return statusFromHeader.call(this);
       return after(this.connect(), (r) => { this.responseMessage = r.msg || null; return this.responseCode = r.status; });
     },
     "getResponseMessage()Ljava/lang/String;": function (this: JHttpURLConnection) {
@@ -745,7 +715,7 @@ rt.register({
   name: "javax/net/ssl/HttpsURLConnection", ctor: JHttpsURLConnection, sup: "java/net/HttpURLConnection",
   methods: {
     "<init>(Ljava/net/URL;)V": function (this: JHttpsURLConnection, url: unknown) {
-      this.url = url; this.sslFactory = defaultHttpsFactory; this.hostnameVerifier = defaultHostnameVerifier;
+      initConnection(this, url); this.sslFactory = defaultHttpsFactory; this.hostnameVerifier = defaultHostnameVerifier;
     },
     "setHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": function (this: JHttpsURLConnection, verifier: unknown) {
       if (verifier === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "null HostnameVerifier");
