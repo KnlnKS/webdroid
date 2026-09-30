@@ -1,7 +1,8 @@
 // Java workloads timed in V8 (Bun's JSC times Java code differently): Bench.java compiles to a dex,
 // runner.ts is bundled for node, and each workload runs in its own process.
 //   bun run jbench [workload ...] [--reps n] [--cut <prefixes>]
-// A cut (WEBDROID_BYTECODE) A/Bs the same tree; to compare trees, run it from each worktree.
+// A cut (WEBDROID_BYTECODE) A/Bs the same tree; to compare trees, run it from each worktree with
+// its own JBENCH_OUT, since conform-cache is shared between checkouts.
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { androidPlatform, androidTool } from "../android-sdk";
 import { consume } from "../args";
@@ -9,7 +10,7 @@ import { consume } from "../args";
 const args = process.argv.slice(2);
 const { option } = consume(args);
 const reps = option("--reps") ?? "100", cut = option("--cut");
-const out = "conform-cache/jbench", dex = `${out}/classes.dex`, src = `${import.meta.dir}/Bench.java`;
+const out = process.env.JBENCH_OUT ?? "conform-cache/jbench", dex = `${out}/classes.dex`, src = `${import.meta.dir}/Bench.java`;
 const JAVA_HOME = process.env.JAVA_HOME ?? "/opt/homebrew/opt/openjdk@21";
 const run = (cmd: string[], env: Record<string, string> = {}) => {
   const p = Bun.spawnSync(cmd, { env: { ...process.env, JAVA_HOME, PATH: `${JAVA_HOME}/bin:${process.env.PATH}`, ...env }, stderr: "pipe" });
