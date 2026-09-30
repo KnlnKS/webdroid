@@ -170,7 +170,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
     if (!act.window.translucent) {
       for (const covered of booted.stack.slice(0, -1)) if (covered.started) yield stopActivity(covered);
     }
-    void buildOptionsMenu(act);
+    requestOptionsMenu(act);
     invalidateWindow();
   } catch (e) {
     reportUncaught(e);
@@ -246,7 +246,7 @@ const resumeTop = driven(function* resumeTop(top: JActivity): Gen {
   for (const act of visibleActivities()) if (act !== top) yield startActivity(act);
   yield resumeActivity(top);
   yield windowFocus(top, true);
-  void buildOptionsMenu(top);
+  requestOptionsMenu(top);
 });
 /** ViewRootImpl reports window focus once the resumed activity's window is up and takes it
  *  away when another window covers it; only a change is delivered. */
@@ -334,6 +334,14 @@ export async function activityVisibility0(phase: "pause" | "stop" | "resume" | "
   }
 }
 
+const menuRebuilds = new WeakSet<JActivity>();
+/** PhoneWindow's invalidatePanelMenu: one rebuild however often it is asked, as a later main-thread
+ *  job; menu inflation loads drawables, which must not interleave with another load on the thread */
+function requestOptionsMenu(a: JActivity): void {
+  if (menuRebuilds.has(a)) return;
+  menuRebuilds.add(a);
+  void onMain(() => { menuRebuilds.delete(a); return buildOptionsMenu(a); });
+}
 const buildOptionsMenu = driven(function* buildOptionsMenu(act: JActivity): Gen {
   if (!act.window.actionBarView) return;
   const menu = new JMenu();
@@ -367,5 +375,5 @@ export const activityHost: Pick<AppHost, "launch" | "finishActivity" | "roundTri
     if (activityTransport.finishAffinity) activityTransport.finishAffinity(a);
     else void finishActivities(() => localAffinityGroup(a), true, false);
   },
-  invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
+  invalidateOptionsMenu: requestOptionsMenu,
 };

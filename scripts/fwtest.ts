@@ -1377,6 +1377,10 @@ await exercise("ImageDecoder post-processing", async () => {
   same("invalid format", await thrown(() => decode(-2)), "java.lang.IllegalArgumentException: invalid return from postProcess: -2");
 }, true);
 
+// PathParser and VectorDrawable against VectorDrawableProbe's output (scripts/vector-probe.ts)
+const vectorDevice = (await Bun.file("tests/fixtures/vector-drawable.txt").text()).trim().split("\n");
+const deviceLines = (tag: string) => vectorDevice.filter((l) => l.startsWith(tag + " ")).map((l) => l.slice(tag.length + 1));
+
 // The resource natives, under AOSP's own Resources: the framework and an app installed as the
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read
 // through Resources, Theme, TypedArray and XmlBlock as an app reads them.
@@ -1446,6 +1450,52 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
     const csl = await vcall(res, "getColorStateList", `(I${T})Landroid/content/res/ColorStateList;`, await id("primary_text_dark", "color", "android"), theme);
     expect("default", await vcall(csl, "getDefaultColor", "()I"), -1);
   });
+  await exercise("VectorDrawable: inflated tree, node properties, mutate, AnimatedVectorDrawable run (device values)", async () => {
+    const d = await vcall(res, "getDrawable", `(I${T})Landroid/graphics/drawable/Drawable;`, await id("btn_checkbox_checked_mtrl", "drawable", "android"), theme);
+    expect("opacity", await vcall(d, "getOpacity", "()I"), -3);
+    const targets = new Map(vectorDevice.filter((l) => l.startsWith("target ")).map((l) => { const [, name, ...v] = l.split(" "); return [name, v.map(Number)]; }));
+    const read = async (v: unknown) => {
+      const group = rt.iof(v, "android/graphics/drawable/VectorDrawable$VGroup");
+      const getters = group ? ["Rotation", "PivotX", "PivotY", "ScaleX", "ScaleY", "TranslateX", "TranslateY"]
+        : ["StrokeWidth", "StrokeColor", "StrokeAlpha", "FillColor", "FillAlpha", "TrimPathStart", "TrimPathEnd", "TrimPathOffset"];
+      return Promise.all(getters.map((g) => vcall(v, "get" + g, g.endsWith("Color") ? "()I" : "()F")));
+    };
+    for (const [name, want] of targets) {
+      const got = (await read(await vcall(d, "getTargetByName", "(Ljava/lang/String;)Ljava/lang/Object;", name))).map((x: number) => Number.isInteger(x) ? x : +x.toPrecision(6));
+      expect(`target ${name}`, got.join(" "), want.join(" "));
+    }
+    // a mutated copy is a tree of its own: its changes stay out of the original
+    const copy = await vcall(await vcall(d, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;"), "newDrawable", "()Landroid/graphics/drawable/Drawable;");
+    await vcall(copy, "mutate", "()Landroid/graphics/drawable/Drawable;");
+    const path = await vcall(copy, "getTargetByName", "(Ljava/lang/String;)Ljava/lang/Object;", "check_path_merged");
+    await vcall(path, "setTrimPathEnd", "(F)V", 0.5);
+    expect("copy trim", await vcall(path, "getTrimPathEnd", "()F"), 0.5);
+    expect("original trim", await vcall(await vcall(d, "getTargetByName", "(Ljava/lang/String;)Ljava/lang/Object;", "check_path_merged"), "getTrimPathEnd", "()F"), 1);
+    // checked to unchecked on the render thread's animators, stepped as frames would step them:
+    // the check fades out as the box's inner square fades in
+    const avd = await vcall(res, "getDrawable", `(I${T})Landroid/graphics/drawable/Drawable;`, await id("btn_checkbox_checked_to_unchecked_mtrl_animation", "drawable", "android"), theme);
+    const { animateRenderThread, windowRoot } = await import("../src/android/rtanimator");
+    const field = (o: unknown, cls: string, name: string) => (o as Record<string, any>)[declaredField(cls, name)];
+    const A = "android/graphics/drawable/AnimatedVectorDrawable";
+    const vector = field(field(avd, A, "mAnimatedVectorState"), `${A}$AnimatedVectorDrawableState`, "mVectorDrawable");
+    const target = (name: string) => vcall(vector, "getTargetByName", "(Ljava/lang/String;)Ljava/lang/Object;", name);
+    await vcall(avd, "start", "()V");
+    // what a draw on an attached window's RecordingCanvas would record, which starts the animation
+    const canvas = rt.make("android/graphics/RecordingCanvas");
+    (canvas as Record<string, unknown>)[declaredField("android/graphics/RecordingCanvas", "mNode")] = windowRoot();
+    await vcall(field(avd, A, "mAnimatorSet"), "onDraw", "(Landroid/graphics/Canvas;)V", canvas);
+    expect("running", await vcall(avd, "isRunning", "()Z"), 1);
+    animateRenderThread(1000);
+    expect("check alpha at start", await vcall(await target("check_path_merged"), "getFillAlpha", "()F"), 1);
+    animateRenderThread(1166);
+    const scale = await vcall(await target("icon_null"), "getScaleX", "()F");
+    if (!(scale < 0.2 && scale > 0.18)) throw new Error(`icon scale at 166 ms: ${scale}`);
+    animateRenderThread(1600);
+    expect("check alpha at end", await vcall(await target("check_path_merged"), "getFillAlpha", "()F"), 0);
+    expect("box alpha at end", await vcall(await target("box_inner_merged"), "getFillAlpha", "()F"), 1);
+    expect("icon scale at end", Math.fround(await vcall(await target("icon_null"), "getScaleX", "()F")), Math.fround(0.2));
+    expect("stepping on", animateRenderThread(1616), false);
+  });
   await exercise("AssetManager.list (the framework's assets under the app's)", async () => {
     const am = await vcall(res, "getAssets", "()Landroid/content/res/AssetManager;");
     const names: string[] = [...await vcall(am, "list", `(${S})[${S}`, "")];
@@ -1453,6 +1503,33 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
     expect("images/", [...await vcall(am, "list", `(${S})[${S}`, "images")].join(","), "android-logo-mask.png,android-logo-shine.png,clock_font.png,progress_font.png");
   });
 }
+
+await exercise("PathParser: parsing, errors, SkPath resolution (device values)", async () => {
+  const P = "android/util/PathParser", S = "Ljava/lang/String;";
+  const paths = deviceLines("path"), errors = deviceLines("error");
+  const cases = ["M1,2 l3-4 h5 v6 c1 2 3 4 5 6 s1 2 3 4 q1 2 3 4 t5 6 a5 5 0 0 1 10 10 z",
+    "M10 10 L20 10 L20 20 Z m5 5 l1-1.5.5e1 2 H2 V8 C0 0 1 1 2 2 S3 3 4 4 Q5 5 6 6 T7 7 A 3 4 30 1 0 12 14"];
+  for (const [i, data] of cases.entries()) {
+    const got: number[] = [...await vcall(await scall(P, "createPathFromPathData", `(${S})Landroid/graphics/Path;`, data), "approximate", "(F)[F", 0.5)];
+    const want = paths[i].split(" ").map(Number);
+    if (got.length !== want.length || got.some((g, k) => Math.abs(g - want[k]) > 1e-3 * Math.max(1, Math.abs(want[k]))))
+      throw new Error(`path ${i}: [${got.slice(0, 12)}...] (${got.length}), not [${want.slice(0, 12)}...] (${want.length})`);
+  }
+  const bad = ["M1 2 x3 4", "   ", "M1 2 L3 4e99", "M1 2 L3"];
+  for (const [i, data] of bad.entries()) {
+    const got = await scall(P, "createPathFromPathData", `(${S})Landroid/graphics/Path;`, data).then(() => "parsed", async (e) => String(await vcall(e, "toString", "()Ljava/lang/String;")));
+    if (got !== errors[i]) throw new Error(`${JSON.stringify(data)}: ${got}, not ${errors[i]}`);
+  }
+  const data = (s: string) => newObj("android/util/PathParser$PathData", `(${S})V`, s);
+  const [a, b, c] = [await data("M0 0 L10 10"), await data("M4 4 L20 0"), await data("M0 0 C1 1 2 2 3 3")];
+  if (!await scall(P, "canMorph", "(Landroid/util/PathParser$PathData;Landroid/util/PathParser$PathData;)Z", a, b)) throw new Error("canMorph(same verbs)");
+  if (await scall(P, "canMorph", "(Landroid/util/PathParser$PathData;Landroid/util/PathParser$PathData;)Z", a, c)) throw new Error("canMorph(other verbs)");
+  const out = await newObj("android/util/PathParser$PathData", "()V"), path = await newObj("android/graphics/Path", "()V");
+  await scall(P, "interpolatePathData", "(Landroid/util/PathParser$PathData;Landroid/util/PathParser$PathData;Landroid/util/PathParser$PathData;F)Z", out, a, b, 0.25);
+  await scall(P, "createPathFromPathData", "(Landroid/graphics/Path;Landroid/util/PathParser$PathData;)V", path, out);
+  const mid = [...await vcall(path, "approximate", "(F)[F", 0.5)].join(",");
+  if (mid !== "0,1,1,1,12.5,7.5") throw new Error(`interpolated: ${mid}`);
+});
 
 if (gaps.length) {
   console.log(`\n${gaps.length} declared natives with no delegate, first 30:`);

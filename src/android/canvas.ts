@@ -14,6 +14,7 @@ import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
 import { drawGlyphs } from "./shaping";
 import { NativePaint, BlurMask, copyPaint, defaultPaint, beginPaintShadow, measureText, strokeRec, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
+import { windowRoot } from "./rtanimator";
 import {
   type JRect, type Affine, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, type Mat,
   cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
@@ -531,7 +532,7 @@ function deviceBounds(m: DOMMatrix, l: number, t: number, r: number, b: number):
 }
 
 // ── the Java side: one bridge, and the peers TS makes ──
-let wrapperField = "", widthField = "", heightField = "";
+let wrapperField = "", widthField = "", heightField = "", nodeField = "";
 const wrapper = () => wrapperField ||= declaredField("android/graphics/Canvas", "mNativeCanvasWrapper");
 /** the native state behind a Java canvas */
 export const canvasOf = (c: object): NativeCanvas => deref<NativeCanvas>((c as Record<string, bigint>)[wrapper()]);
@@ -571,6 +572,8 @@ export function windowCanvas(ctx: Ctx2D, w: number, h: number): JavaCanvas {
   nc.semanticOwner = nc.semanticBase = null;
   const p = peer as Record<string, unknown>;
   p[widthField] = w; p[heightField] = h;
+  // what RenderNodeAnimator and AnimatedVectorDrawable run on and check is attached
+  p[nodeField ||= declaredField("android/graphics/RecordingCanvas", "mNode")] = windowRoot();
   return peer;
 }
 /** View's constructor tells Canvas the target SDK: what restore underflow, setBitmap and clip ops
@@ -580,6 +583,8 @@ export async function setCanvasTargetSdk(target: number): Promise<void> {
   statics[info.staticFieldTable.get("sCompatibilityRestore:Z")!] = +(target < 23);
   statics[info.staticFieldTable.get("sCompatibilitySetBitmap:Z")!] = +(target < 26);
   statics[info.staticFieldTable.get("sCompatibilityVersion:I")!] = target;
+  // the window's peer is made without a constructor: its class's statics (MAX_BITMAP_SIZE) must be set
+  await linkInit("android/graphics/RecordingCanvas");
 }
 
 let outlineFields: { mode: string; rect: string; radius: string; path: string } | null = null;

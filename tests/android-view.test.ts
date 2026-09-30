@@ -6,13 +6,16 @@ import { canvasOver, canvasOf, type JavaCanvas } from "../src/android/canvas";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { JView, JViewGroup, makeSpec, MS_EXACTLY, measureView, layoutView, MS_AT_MOST, resolveSize, drawView, attachView, detachView, addUnattachedView, dispatchAttached, dispatchDetached, layoutRoot, replayLayoutRequests, requestLayout, JLayoutParams, setViewTargetSdk } from "../src/android/view";
-import { JDrawable } from "../src/android/drawable";
+import { drawableBounds } from "../src/android/drawable";
 import { recordingContext, replay, type DisplayList } from "../src/android/recording";
 import { Resources, JTheme } from "../src/android/res";
 import { JImageView } from "../src/android/imageview";
 import { JWindowInsets } from "../src/android/windowinsets";
 import { JWebView } from "../src/android/webkit";
-import { scall, loadLibcore, loadFrameworkJar } from "./java";
+import { scall, loadLibcore, loadFrameworkJar, preloadTextPaint } from "./java";
+
+// framework drawables construct Paints, which take the device's languages
+beforeAll(preloadTextPaint);
 
 describe("android-surface-state", () => {
   rt.linkNatives();
@@ -537,17 +540,18 @@ describe("view-draw-state", () => {
     let completed = false;
     let started!: () => void;
     const entered = new Promise<void>(resolve => { started = resolve; });
-    class SuspendedDrawable extends JDrawable {
-      [mangleMethod("getIntrinsicWidth", "()I")]() { return 20; }
-      [mangleMethod("getIntrinsicHeight", "()I")]() { return 20; }
-      async [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]() {
+    const suspended = await newObj("android/graphics/drawable/ColorDrawable", "()V");
+    Object.assign(suspended, {
+      [mangleMethod("getIntrinsicWidth", "()I")]: () => 20,
+      [mangleMethod("getIntrinsicHeight", "()I")]: () => 20,
+      [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async () => {
         started();
         await gate;
         completed = true;
-      }
-    }
+      },
+    });
     const view = new JImageView();
-    await view.setDrawable(new SuspendedDrawable());
+    await view.setDrawable(suspended);
     view.scaleType = scaleType;
     view.right = view.bottom = 100;
 
@@ -567,8 +571,9 @@ describe("view-draw-state", () => {
 describe("view-foreground", () => {
   rt.linkNatives();
   test("foreground drawing awaits bounds, retains its thread and resolves gravity", async () => {
-    const view = rt.make("android/view/View"), drawable = rt.make("android/graphics/drawable/Drawable");
-    if (!(view instanceof JView) || !(drawable instanceof JDrawable)) throw new Error("Invalid delegates");
+    const view = rt.make("android/view/View"), drawable = await newObj("android/graphics/drawable/ColorDrawable", "()V");
+    if (!(view instanceof JView)) throw new Error("Invalid delegates");
+    const callback = () => vcall(drawable, "getCallback", "()Landroid/graphics/drawable/Drawable$Callback;");
     view.right = 80; view.bottom = 60;
     const seen: JThread[] = [], events: string[] = [];
     Object.assign(drawable, {
@@ -578,20 +583,20 @@ describe("view-foreground", () => {
       [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: () => { seen.push(curThread); events.push("draw"); },
     });
     await vcall(view, "setForeground", "(Landroid/graphics/drawable/Drawable;)V", drawable);
-    expect(drawable.callback).toBe(view);
+    expect(await callback()).toBe(view);
     const thread = new JThread();
     await vcallOn(thread, view, "onDrawForeground", "(Landroid/graphics/Canvas;)V", null);
-    expect(drawable.bounds).toMatchObject({ left: 0, top: 0, right: 80, bottom: 60 });
+    expect(drawableBounds(drawable)).toMatchObject({ left: 0, top: 0, right: 80, bottom: 60 });
     expect(events).toEqual(["bounds", "draw"]);
     await vcall(view, "setForegroundGravity", "(I)V", 17);
     await vcallOn(thread, view, "onDrawForeground", "(Landroid/graphics/Canvas;)V", null);
-    expect(drawable.bounds).toMatchObject({ left: 30, top: 25, right: 50, bottom: 35 });
+    expect(drawableBounds(drawable)).toMatchObject({ left: 30, top: 25, right: 50, bottom: 35 });
     events.length = 0;
     await vcallOn(thread, view, "onDrawForeground", "(Landroid/graphics/Canvas;)V", null);
     expect(events).toEqual(["draw"]);
     expect(seen.every(t => t === thread)).toBe(true);
     await vcall(view, "setForeground", "(Landroid/graphics/drawable/Drawable;)V", null);
-    expect(drawable.callback).toBeNull();
+    expect(await callback()).toBeNull();
   });
 });
 
@@ -725,7 +730,7 @@ describe("view-outline", () => {
     };
     await fill(provider);
     expect([...await shape(), await vcall(outline, "getAlpha", "()F")]).toEqual([0, 0, 40, 30, 0, 0]);
-    const background = rt.make("android/graphics/drawable/Drawable");
+    const background = await newObj("android/graphics/drawable/ColorDrawable", "()V");
     Object.assign(background, {
       [mangleMethod("getOutline", "(Landroid/graphics/Outline;)V")]: async (o: object) => {
         await Promise.resolve();

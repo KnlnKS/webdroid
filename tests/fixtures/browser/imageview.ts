@@ -5,6 +5,7 @@ import { enumOrdinal, newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JImageView } from "../../../src/android/imageview";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
+import { initDeviceLocales } from "../../../src/android/resnative";
 
 /** a Matrix as a 2D context's affine [a, b, c, d, e, f] */
 async function affine(m: unknown) {
@@ -16,11 +17,13 @@ async function affine(m: unknown) {
 async function probe() {
   await loadPlatformDex();
   rt.linkNatives();
+  // a Paint (every framework drawable has one) takes the device's languages
+  await initDeviceLocales();
   const view = rt.make("android/widget/ImageView");
   if (!(view instanceof JImageView)) throw new Error("Invalid ImageView");
   view.right = 100; view.bottom = 80;
   view.padL = 2; view.padT = 3; view.padR = 4; view.padB = 5;
-  const drawable = rt.make("android/graphics/drawable/Drawable");
+  const drawable = await newObj("android/graphics/drawable/ColorDrawable", "()V");
   let transform: number[] = [];
   Object.assign(drawable, {
     [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JavaCanvas) => {

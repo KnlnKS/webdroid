@@ -2,9 +2,8 @@ import { AID, resString } from "./res";
 import { guestNow } from "../guest-clock";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
-  type JColorStateList, mkCsl, type JDrawable, rvCsl, loadDrawableRV, cslColor, loadDrawable,
-  drawChild, drawableSize,
-  cslBoundary,
+  type JColorStateList, type Colors, colorFor, colorList, rvColors, type JDrawable, loadDrawableRV, loadDrawable,
+  drawChild, drawableSize, drawableBounds, setDrawableCallback,
 } from "./drawable";
 import { type NativePaint, newPaint, paintOf, paintTypeface, setPaintTypeface, fontDescent, fontAscent, fontTop, fontBottom } from "./paint";
 import { csText, csLength } from "../jvm/natives/jchars";
@@ -52,9 +51,9 @@ export class JTextView extends JView {
   /** mTextPaint, a Java TextPaint */
   paintT = newPaint("android/text/TextPaint");
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
-  colors: JColorStateList = mkCsl(-16777216);
-  hintColors: JColorStateList | null = mkCsl(1627389952);
-  linkColors: JColorStateList | null = null;
+  colors: Colors = -16777216;
+  hintColors: Colors | null = 1627389952;
+  linkColors: Colors | null = null;
   gravityT = 48 | G.START;
   maxLinesV = Infinity;
   minLinesV = 1;
@@ -72,6 +71,7 @@ export class JTextView extends JView {
   drawableR: JDrawable | null = null;
   drawableB: JDrawable | null = null;
   drawablePad = 0;
+  override drawables(): (JDrawable | null)[] { return [...super.drawables(), this.drawableL, this.drawableT, this.drawableR, this.drawableB]; }
   /** AOSP mListeners */
   watchers: unknown[] = [];
   /** an EditText: its text is always an Editable */
@@ -100,10 +100,11 @@ export class JTextView extends JView {
   }
   /** the text paint's native state, which layout and measurement read */
   get tp(): NativePaint { return paintOf(this.paintT); }
-  updateLinkColor() {
-    if (!this.linkColors) return;
-    const color = cslColor(this.linkColors, this.drawableState());
-    if (linkColor(this.paintT) !== color) { textPaintField(this.paintT)[linkColorKey] = color; invalidate(this); }
+  updateLinkColor(): unknown {
+    if (this.linkColors === null) return;
+    return after(colorFor(this.linkColors, this.drawableState()), (color) => {
+      if (linkColor(this.paintT) !== color) { textPaintField(this.paintT)[linkColorKey] = color; invalidate(this); }
+    });
   }
   horizontalGravity(text: string, alignment: number, layoutDirection: number): number {
     if (alignment === 4) return 1;
@@ -220,10 +221,10 @@ const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, 
   const ts = look("textSize");
   if (ts) tv.tp.textSize = rvDimen(res, ts, tv.tp.textSize);
   const tc = look("textColor");
-  if (tc) tv.colors = yield rvCsl(res, tc, tv.theme, -16777216);
+  if (tc) tv.colors = yield rvColors(res, tc, tv.theme, -16777216);
   const link = look("textColorLink");
   if (link) {
-    tv.linkColors = yield rvCsl(res, link, tv.theme, linkColor(tv.paintT));
+    tv.linkColors = yield rvColors(res, link, tv.theme, linkColor(tv.paintT));
     tv.updateLinkColor();
   }
   const st = look("textStyle");
@@ -277,7 +278,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   const taRef = g(4);
   if (taRef && taRef.t === TV.REFERENCE) yield applyTextAppearance(tv, res, taRef.d);
   if (g(1)) tv.tp.textSize = rvDimen(res, g(1), tv.tp.textSize);
-  if (g(2)) tv.colors = yield rvCsl(res, g(2)!, tv.theme, -16777216);
+  if (g(2)) tv.colors = yield rvColors(res, g(2)!, tv.theme, -16777216);
   if (g(3)) tv.styleBits = rvInt(res, g(3), tv.styleBits);
   const maxLength = g(37) ? rvInt(res, g(37), -1) : -1;
   if (maxLength >= 0) tv.filters = [yield newObj("android/text/InputFilter$LengthFilter", "(I)V", maxLength)];
@@ -307,7 +308,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(14)) tv.drawablePad = Math.round(rvDimen(res, g(14), 0));
   yield applyFontFamily(tv, res, g(15));
   if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
-  if (g(17)) tv.hintColors = yield rvCsl(res, g(17)!, tv.theme, 1627389952);
+  if (g(17)) tv.hintColors = yield rvColors(res, g(17)!, tv.theme, 1627389952);
   if (g(18)) tv.inputTypeV = rvInt(res, g(18), 1);
   if (isPasswordType(tv.inputTypeV) || rvInt(res, g(36), 0)) yield setTransformation(tv, yield passwordMethod());
   if (g(19)) tv.lineSpacingExtra = rvDimen(res, g(19), 0);
@@ -318,7 +319,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(30) || g(31) || g(32) || g(33)) yield setTextShadow.call(tv, rvFloat(res, g(33), tv.shadowRadius), rvFloat(res, g(31), tv.shadowDx), rvFloat(res, g(32), tv.shadowDy), rvColor(res, g(30), tv.shadowColor));
   const link = g(34);
   if (link) {
-    tv.linkColors = yield rvCsl(res, link, tv.theme, linkColor(tv.paintT));
+    tv.linkColors = yield rvColors(res, link, tv.theme, linkColor(tv.paintT));
     tv.updateLinkColor();
   }
   const cursor = g(35);
@@ -347,10 +348,26 @@ const setTextShadow = driven(function* setTextShadow(this: JTextView, radius: nu
 function setTextAppearance(this: JTextView, id: number) {
   return this.jres ? applyTextAppearance(this, this.jres, id) : undefined;
 }
-function setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null) {
+/** AOSP: the old drawables let go, the new ones called back to this view, given its state and tint */
+const setCompoundDrawables = driven(function* setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
+  const next = [l, t, r, b];
+  for (const d of [this.drawableL, this.drawableT, this.drawableR, this.drawableB]) if (d && !next.includes(d)) yield setDrawableCallback(d, null);
   this.drawableL = l; this.drawableT = t; this.drawableR = r; this.drawableB = b;
-  return after(syncCompoundStates(this), () => relayout(this));
-}
+  for (const d of next) if (d) yield setDrawableCallback(d, this);
+  if (this.drawableTint) yield applyCompoundTint(this);
+  yield syncCompoundStates(this);
+  yield relayout(this);
+});
+/** AOSP applyCompoundDrawableTint: each compound drawable mutated and given the tint list */
+const applyCompoundTint = driven(function* applyCompoundTint(tv: JTextView): Gen {
+  const thread = curThread;
+  for (const d of [tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB]) if (d) {
+    yield vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;");
+    yield vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tv.drawableTint);
+  }
+  yield syncCompoundStates(tv);
+  invalidate(tv);
+});
 /** AOSP hands the compound drawables the view's state when they arrive and on every change:
  *  a single-choice row's radio is a drawableStart that shows state_checked. On a state change
  *  it invalidates each drawable the new state changed. */
@@ -375,8 +392,8 @@ const setIntrinsicDrawables = driven(function* setIntrinsicDrawables(this: JText
 });
 const loadCompound = (tv: JTextView, ids: number[]) => Promise.all(ids.map((id) => (id ? loadDrawable(tv.jres!, id, tv.theme) : null)));
 const DRAWABLES4 = "(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V";
-const compoundWidth = (d: JDrawable | null) => d ? Math.max(0, d.bounds.right - d.bounds.left) : 0;
-const compoundHeight = (d: JDrawable | null) => d ? Math.max(0, d.bounds.bottom - d.bounds.top) : 0;
+const compoundWidth = (d: JDrawable | null) => { if (!d) return 0; const b = drawableBounds(d); return Math.max(0, b.right - b.left); };
+const compoundHeight = (d: JDrawable | null) => { if (!d) return 0; const b = drawableBounds(d); return Math.max(0, b.bottom - b.top); };
 /** a TextView subclass's constructors: attach to the context, apply the widget's default style (or
  *  the caller's), then `then` reads what the subclass adds under the same style */
 export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T, set: JAttrSet | null, dsa: number, dsr: number) => unknown): NativeSpec["methods"] {
@@ -443,7 +460,7 @@ function compoundPadRelative(view: JTextView, start: boolean) {
   return after(vcallOn(thread, view, "getLayoutDirection", "()I"), direction =>
     vcallOn(thread, view, start !== (direction === 1) ? "getCompoundPaddingLeft" : "getCompoundPaddingRight", "()I"));
 }
-export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
+export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
   // Material's Chip hands the text to its ChipDrawable there and nowhere else, and without it
@@ -517,19 +534,19 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     setRawTextSize(this, unit === 1 || unit === 2 ? v * device.density : v); // COMPLEX_UNIT_DIP / SP
   },
   "getTextSize()F": function (this: JTextView) { return this.tp.textSize; },
-  "setTextColor(I)V": function (this: JTextView, c: number) { this.colors = mkCsl(c); invalidate(); },
+  "setTextColor(I)V": function (this: JTextView, c: number) { this.colors = c; invalidate(); },
   "setTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList) {
     if (c) this.colors = c;
     invalidate();
   },
-  "setLinkTextColor(I)V": function (this: JTextView, color: number) { this.linkColors = mkCsl(color); this.updateLinkColor(); },
-  "setLinkTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, colors: JColorStateList | null) { this.linkColors = colors; this.updateLinkColor(); },
-  "getLinkTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.linkColors; },
-  "drawableStateChanged()V": function (this: JTextView) { this.updateLinkColor(); return syncCompoundStates(this, true); },
-  "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
-  "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
+  "setLinkTextColor(I)V": function (this: JTextView, color: number) { this.linkColors = color; return this.updateLinkColor(); },
+  "setLinkTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, colors: JColorStateList | null) { this.linkColors = colors; return this.updateLinkColor(); },
+  "getLinkTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return colorList(this.linkColors); },
+  "drawableStateChanged()V": function (this: JTextView) { return after(this.updateLinkColor(), () => syncCompoundStates(this, true)); },
+  "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return colorList(this.colors); },
+  "getCurrentTextColor()I": function (this: JTextView) { return colorFor(this.colors, this.drawableState()); },
   "setHintTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList | null) { this.hintColors = c; invalidate(this); },
-  "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); invalidate(this); },
+  "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = c; invalidate(this); },
   "setGravity(I)V": function (this: JTextView, g: number) {
     if (this.gravityT === g) return;
     this.gravityT = g;
@@ -676,11 +693,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   }),
   "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
     this.drawableTint = csl;
-    for (const d of [this.drawableL, this.drawableT, this.drawableR, this.drawableB]) if (d) d.tint = csl ? cslColor(csl, d.stateSet) : null;
-    invalidate();
+    return applyCompoundTint(this);
   },
   "getCompoundDrawableTintList()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.drawableTint; },
-  "getHintTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.hintColors; },
+  "getHintTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return colorList(this.hintColors); },
   "getLineSpacingExtra()F": function (this: JTextView) { return this.lineSpacingExtra; },
   "getLineSpacingMultiplier()F": function (this: JTextView) { return this.lineSpacingMult; },
   "getMinLines()I": function (this: JTextView) { return this.minLinesV; },
@@ -895,7 +911,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     // TextView.getVerticalOffset
     const vg = gravityV(this.gravityT);
     const y = vg === 16 ? (contentB - contentT - layout.height) / 2 + contentT : vg === 80 ? contentB - layout.height : contentT;
-    yield vcall(this.paintT, "setColor", "(I)V", cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
+    yield vcall(this.paintT, "setColor", "(I)V", yield colorFor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, this.width(), this.height()); ctx.clip();
     ctx.translate(contentL, y);
@@ -918,7 +934,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
       yield draw(cursor, contentL + left, cy - this.ascent() - padding.top);
     }
   }),
-});
+};
 
 rt.register({
   name: "android/widget/TextView", ctor: JTextView, sup: "android/view/View",

@@ -1,32 +1,43 @@
 import "../../../src/natives";
-import { loadPlatformDex } from "../../../src/android/framework";
+import { loadFramework, loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
-import { vcall, newObj } from "../../../src/jvm/natives/jlang";
-import { zipTree } from "../../../src/jvm/natives/jzip";
-import { Arsc } from "../../../src/android/arsc";
-import { Resources, JTheme, setFramework } from "../../../src/android/res";
-import { loadDrawable, JLayerDrawable, ST } from "../../../src/android/drawable";
+import { vcall, newObj, scall } from "../../../src/jvm/natives/jlang";
+import { ST } from "../../../src/android/drawable";
 import { canvasOver } from "../../../src/android/canvas";
+import { mountPlatformData } from "../../../src/shell/apex";
+import { initDeviceLocales } from "../../../src/android/resnative";
+import { applyDeviceConfiguration } from "../../../src/android/resources";
 
+const D = "Landroid/graphics/drawable/Drawable;", THEME = "Landroid/content/res/Resources$Theme;", S = "Ljava/lang/String;";
+
+/** framework drawables through the system Resources under Theme.Material, drawn as the view stack draws them */
 async function probe() {
-  await loadPlatformDex();
-  const zip = zipTree(new Uint8Array(await (await fetch("/framework.apk")).arrayBuffer()));
-  const arsc = new Arsc(zip["resources.arsc"], path => zip[path] ?? null);
-  setFramework(arsc); rt.linkNatives();
-  const res = new Resources(null, {}), theme = new JTheme();
-  theme.res = res; theme.apply(arsc.findId("style", "Theme.Material"));
-  const track = await loadDrawable(res, arsc.findId("drawable", "seekbar_track_material"), theme);
-  if (!(track instanceof JLayerDrawable)) throw new Error("Invalid track");
+  mountPlatformData();
+  await Promise.all([loadFramework(), loadPlatformDex()]);
+  rt.linkNatives();
+  // the system Resources as the zygote leaves them: the device's languages and configuration
+  await initDeviceLocales();
+  await applyDeviceConfiguration();
+  const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id = (name: string, type: string): Promise<number> => vcall(res, "getIdentifier", `(${S}${S}${S})I`, name, type, "android");
+  const theme = await vcall(res, "newTheme", `()${THEME}`);
+  await vcall(theme, "applyStyle", "(IZ)V", await id("Theme.Material", "style"), 1);
+  const drawable = async (name: string) => vcall(res, "getDrawable", `(I${THEME})${D}`, await id(name, "drawable"), theme);
+  const track = await drawable("seekbar_track_material");
   await vcall(track, "setState", "([I)Z", Int32Array.of(ST.enabled));
   await vcall(track, "setBounds", "(IIII)V", 0, 0, 300, 54);
-  const progress = await vcall(track, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", 0x0102000d);
+  const progress = await vcall(track, "findDrawableByLayerId", `(I)${D}`, 0x0102000d);
   await vcall(progress, "setLevel", "(I)Z", 5000);
   const ctx = new OffscreenCanvas(300, 54).getContext("2d")!;
   await vcall(track, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
-  const heights = track.layers.flatMap(x => x.d ? [x.d.bounds.bottom - x.d.bounds.top] : []);
+  const heights: number[] = [];
+  for (let i = 0, n = await vcall(track, "getNumberOfLayers", "()I"); i < n; i++) {
+    const b = await vcall(await vcall(track, "getDrawable", `(I)${D}`, i), "getBounds", "()Landroid/graphics/Rect;");
+    heights.push(b.bottom - b.top);
+  }
   const pixel = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data];
   const before = pixel(50, 27), after = pixel(250, 27), above = pixel(50, 15);
-  const thumb = await loadDrawable(res, arsc.findId("drawable", "seekbar_thumb_material_anim"), theme);
+  const thumb = await drawable("seekbar_thumb_material_anim");
   await vcall(thumb, "setBounds", "(IIII)V", 0, 0, 54, 54);
   ctx.clearRect(0, 0, 300, 54); ctx.globalAlpha = 0.5;
   await vcall(thumb, "setState", "([I)Z", Int32Array.of(ST.enabled));
@@ -35,7 +46,7 @@ async function probe() {
   ctx.globalAlpha = 1; ctx.clearRect(0, 0, 300, 54);
   const rotate = await newObj("android/graphics/drawable/RotateDrawable", "()V");
   const fill = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xffff0000);
-  await vcall(rotate, "setDrawable", "(Landroid/graphics/drawable/Drawable;)V", fill);
+  await vcall(rotate, "setDrawable", `(${D})V`, fill);
   await vcall(rotate, "setBounds", "(IIII)V", 10, 20, 50, 40);
   await vcall(rotate, "setToDegrees", "(F)V", 180);
   await vcall(rotate, "setLevel", "(I)Z", 5000);
@@ -48,9 +59,31 @@ async function probe() {
   await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const absolute = [pixel(0, 30), pixel(30, 30)], restored = ctx.getTransform().isIdentity;
   ctx.clearRect(0, 0, 300, 54);
-  const inset = await newObj("android/graphics/drawable/InsetDrawable", "(Landroid/graphics/drawable/Drawable;I)V", fill, 4);
+  const inset = await newObj("android/graphics/drawable/InsetDrawable", `(${D}I)V`, fill, 4);
   const dialog = Object.assign(rt.make("webdroid/DialogRoot"), { cardBg: inset, right: 300, bottom: 54 });
   await vcall(dialog, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
-  return { heights, before, after, above, center, outside, rotated, absolute, restored, dialogCenter: pixel(150, 27) };
+  // VectorDrawableProbe's cases on the device: framework vectors drawn into ARGB bitmaps
+  const light = await vcall(res, "newTheme", `()${THEME}`);
+  await vcall(light, "applyStyle", "(IZ)V", await id("Theme.Material.Light", "style"), 1);
+  const vector = async (name: string) => vcall(res, "getDrawable", `(I${THEME})${D}`, await id(name, "drawable"), light);
+  const pixels = async (d: unknown, w: number, h: number) => {
+    const config = (await scall("android/graphics/Bitmap$Config", "valueOf", `(${S})Landroid/graphics/Bitmap$Config;`, "ARGB_8888"));
+    const bitmap = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", w, h, config);
+    await vcall(d, "setBounds", "(IIII)V", 0, 0, w, h);
+    await vcall(d, "draw", "(Landroid/graphics/Canvas;)V", await newObj("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", bitmap));
+    const out = new Int32Array(w * h);
+    await vcall(bitmap, "getPixels", "([IIIIIII)V", out, 0, w, 0, 0, w, h);
+    return [...out];
+  };
+  const box = await vector("btn_checkbox_checked_mtrl"), arrow = await vector("ic_ab_back_material");
+  const vectors: Record<string, number[]> = {
+    checkbox: await pixels(box, 24, 24), "checkbox-wide": await pixels(box, 36, 30),
+  };
+  await vcall(box, "setAlpha", "(I)V", 128);
+  vectors["checkbox-alpha"] = await pixels(box, 24, 24);
+  vectors.back = await pixels(arrow, 24, 24);
+  await vcall(arrow, "setLayoutDirection", "(I)Z", 1);
+  vectors["back-rtl"] = await pixels(arrow, 24, 24);
+  return { heights, before, after, above, center, outside, rotated, absolute, restored, dialogCenter: pixel(150, 27), vectors };
 }
 export default probe;

@@ -104,7 +104,7 @@ test.concurrent("AOSP's Canvas reports the reference device's clips, saves, laye
   [12, 25, 55, 39].forEach((v, i) => expect(Math.abs((textOnPath as number[])[i] - v)).toBeLessThanOrEqual(1));
 }, PAGE_TIMEOUT);
 
-test.concurrent("framework seek resources resolve dimensions, tint, enabled states and vector group transforms", async () => {
+test.concurrent("framework drawables resolve dimensions, tint, enabled states and group transforms; vectors match the device", async () => {
   const result = await probe("drawableResources");
   expect(result).toMatchObject({ heights: [6, 6, 6], above: [0, 0, 0, 0], outside: [0, 0, 0, 0], restored: true,
     rotated: [[255, 0, 0, 255], [0, 0, 0, 0]], absolute: [[255, 0, 0, 255], [0, 0, 0, 0]], dialogCenter: [255, 0, 0, 255] });
@@ -112,6 +112,13 @@ test.concurrent("framework seek resources resolve dimensions, tint, enabled stat
   expect(result.after[3]).toBeGreaterThan(0);
   expect(result.after[3]).toBeLessThan(255);
   expect(result.center[3]).toBe(128);
+  // VectorDrawableProbe's pixels on the reference device (scripts/vector-probe.ts): within 3 per channel
+  const device = (await Bun.file(`${import.meta.dir}/fixtures/vector-drawable.txt`).text()).split("\n").filter((l) => l.startsWith("px "));
+  for (const line of device) {
+    const [, name, , , ...hex] = line.split(" "), got = result.vectors[name];
+    const worst = Math.max(...hex.map((h, i) => Math.max(...[24, 16, 8, 0].map((s) => Math.abs(((parseInt(h, 16) >>> s) & 255) - ((got[i] >>> s) & 255))))));
+    expect([name, worst <= 3]).toEqual([name, true]);
+  }
 }, PAGE_TIMEOUT);
 
 test.concurrent("drawable spans align suspended virtual drawing and text shadows preserve state", async () => {
@@ -153,6 +160,7 @@ test.concurrent("ImageView reports and draws scale-type matrices and copies cust
 test.concurrent("runtime shaders preserve recorded uniforms, premultiplied alpha and canvas coordinates", async () => {
   expect(await probe("runtimeShader")).toEqual({
     recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, text: [14, 39], rippleCenter: [255, 0, 0, 128],
+    rippleDiff: 0, rippleInked: true,
   });
 }, PAGE_TIMEOUT);
 

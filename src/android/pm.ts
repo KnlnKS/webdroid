@@ -744,7 +744,9 @@ rt.register({
     }),
     "getDrawable(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {
       const res: Resources | undefined = yield packageResources(pkg, info);
-      return res?.tbl(id)?.entry(id) ? loadDrawable(res, id, null) : null;
+      if (!res?.tbl(id)?.entry(id)) return null;
+      yield javaResources(res, info?.sourceDir ?? "");
+      return loadDrawable(res, id, null);
     }),
     "getDefaultActivityIcon()Landroid/graphics/drawable/Drawable;": () => {
       const res = appHost?.res, id = res?.idFor("drawable", "sym_def_app_icon", "android");

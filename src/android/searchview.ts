@@ -1,12 +1,12 @@
 import { JLinearLayout, linearMethods } from "./layouts";
 import { JEditText, textViewMethods, textViewCtors } from "./textview";
-import { type JView, findById, initViewFromCtx, requestLayout } from "./view";
+import { type JView, findById, initViewFromCtx, requestLayout, setViewBackground } from "./view";
 import { AID, type JAttrSet, obtainStyled, rvInt, rvString } from "./res";
 import { inflateLayout } from "./inflate";
 import { JImageView } from "./imageview";
 import { loadDrawableRV } from "./drawable";
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, after } from "../jvm/natives/jlang";
+import { vcall, after, curThread, callOn } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
 
 // ── SearchView. AOSP inflates layout/search_view.xml and toggles the parts of it that a
@@ -34,6 +34,8 @@ const SEARCH_EXPANDED = ["search_edit_frame", "search_plate", "search_mag_icon",
 const SEARCH_ON_QUERY = ["search_badge", "search_close_btn", "submit_area", "search_go_btn", "search_voice_btn"];
 
 async function buildSearchView(sv: JSearchView, set: JAttrSet | null) {
+  // the drawables load on the building thread, whichever thread the awaits resume on
+  const thread = curThread;
   const res = sv.jres;
   if (!res) return;
   const names = ["layout", "iconifiedByDefault", "queryHint", "searchIcon", "closeIcon", "goIcon",
@@ -50,11 +52,11 @@ async function buildSearchView(sv: JSearchView, set: JAttrSet | null) {
 
   for (const [part, attr] of SEARCH_ICONS) {
     const v = byName(part), d = val(attr);
-    if (v instanceof JImageView && d) await v.setDrawable(await loadDrawableRV(res, d, sv.theme));
+    if (v instanceof JImageView && d) await callOn(thread, () => after(loadDrawableRV(res, d, sv.theme), (dr) => v.setDrawable(dr)));
   }
   for (const [part, attr] of SEARCH_BACKGROUNDS) {
     const v = byName(part), d = val(attr);
-    if (v && d) v.background = await loadDrawableRV(res, d, sv.theme);
+    if (v && d) await callOn(thread, () => after(loadDrawableRV(res, d, sv.theme), (dr) => setViewBackground(v, dr)));
   }
   for (const part of [...SEARCH_EXPANDED, "search_button"]) {
     const v = byName(part);

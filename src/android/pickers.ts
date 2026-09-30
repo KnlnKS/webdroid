@@ -49,8 +49,8 @@ function refreshPicker(tp: JTimePicker) {
   if (tp.amText && tp.pmText) {
     const pm = tp.hourVal >= 12;
     const accent = themeAccent(tp);
-    tp.amText.colors.defColor = pm ? -6710887 : accent;
-    tp.pmText.colors.defColor = pm ? accent : -6710887;
+    tp.amText.colors = pm ? -6710887 : accent;
+    tp.pmText.colors = pm ? accent : -6710887;
   }
   invalidate();
 }
@@ -79,7 +79,7 @@ function mkArrow(tp: JView, glyph: string, fn: () => void): JTextView {
   inheritContext(t, tp);
   t.text = glyph;
   t.tp.textSize = 32;
-  t.colors.defColor = themeAccent(tp);
+  t.colors = themeAccent(tp);
   t.padL = 24; t.padR = 24; t.padT = 12; t.padB = 12;
   t.gravityT = G.CENTER;
   t.lp = stepperLP();
@@ -92,7 +92,7 @@ function mkValueText(tp: JView): JTextView {
   inheritContext(t, tp);
   t.tp.textSize = 64;
   setPaintTypeface(t.paintT, tfMedium);
-  t.colors.defColor = -13421773;
+  t.colors = -13421773;
   t.gravityT = G.CENTER;
   t.padT = 8; t.padB = 8; t.padL = 16; t.padR = 16;
   t.lp = stepperLP();
@@ -117,7 +117,7 @@ function mkSep(tp: JTimePicker): JTextView {
   inheritContext(t, tp);
   t.text = ":";
   t.tp.textSize = 56;
-  t.colors.defColor = -13421773;
+  t.colors = -13421773;
   t.gravityT = G.CENTER;
   t.padL = 8; t.padR = 8;
   t.lp = stepperLP();

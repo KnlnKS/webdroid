@@ -10,7 +10,7 @@ import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { reportUncaught, uptimeMillis } from "./os";
-import { currentResources, rvDimen, rvFloat, rvInt, namedAttrRV, type Resources } from "./res";
+import { currentResources, rvDimen, rvFloat, rvInt, namedAttrRV, themeOf, type Resources, type JTheme } from "./res";
 import { parseAXML, attr, TV, type XmlNode } from "./axml";
 import { complexToFraction } from "./util";
 import { accelDecel, loadInterpolator, interpolatorAttr } from "./interpolator";
@@ -360,7 +360,10 @@ const animMethods: NativeSpec["methods"] = {
   "setStartTime(J)V": function (this: JAnimation, t: bigint) { this.startTime = Number(t); this.started = this.ended = false; },
   "getStartTime()J": function (this: JAnimation) { return BigInt(this.startTime); },
   "setInterpolator(Landroid/view/animation/Interpolator;)V": function (this: JAnimation, i: unknown) { this.interp = i; },
-  "setInterpolator(Landroid/content/Context;I)V": function (this: JAnimation, context: JContext | null, id: number) { this.interp = loadInterpolator(animationXml(context, id).res, id); },
+  "setInterpolator(Landroid/content/Context;I)V": function (this: JAnimation, context: JContext | null, id: number) {
+    const { res, theme } = animationXml(context, id);
+    return after(loadInterpolator(res, theme, id), (i) => { this.interp = i; });
+  },
   "getInterpolator()Landroid/view/animation/Interpolator;": function (this: JAnimation) { return this.interp; },
   "setFillAfter(Z)V": function (this: JAnimation, b: number) { this.fillAfter = !!b; },
   "setFillBefore(Z)V": function (this: JAnimation, b: number) { this.fillBefore = !!b; },
@@ -495,7 +498,7 @@ function animationDescription(res: Resources, node: XmlNode, name: string, fallb
   return value?.t === TV.FRACTION ? [complexToFraction(value.d, 1, 1), 1 + (value.d & 0xf)]
     : [rvFloat(res, value, fallback), ABSOLUTE];
 }
-function animationFromXml(res: Resources, node: XmlNode): JAnimation {
+const animationFromXml = driven(function* animationFromXml(res: Resources, theme: JTheme | null, node: XmlNode): Gen<JAnimation> {
   const kinds: Record<string, string> = { set: "AnimationSet", alpha: "AlphaAnimation", scale: "ScaleAnimation",
     translate: "TranslateAnimation", rotate: "RotateAnimation" };
   const kind = kinds[node.name];
@@ -506,9 +509,10 @@ function animationFromXml(res: Resources, node: XmlNode): JAnimation {
   a.fillAfter = !!rvInt(res, namedAttrRV(res, node, "fillAfter"), 0);
   a.repeatCount = rvInt(res, namedAttrRV(res, node, "repeatCount"), 0);
   a.repeatMode = rvInt(res, namedAttrRV(res, node, "repeatMode"), 1);
-  a.interp = interpolatorAttr(res, node);
+  a.interp = yield interpolatorAttr(res, theme, node);
   if (kind === "AnimationSet") {
-    a.kids = node.children.map((child) => animationFromXml(res, child));
+    a.kids = [];
+    for (const child of node.children) a.kids.push(yield animationFromXml(res, theme, child));
     if (!a.duration) a.duration = Math.max(0, ...a.kids.map((child) => child.duration + child.startOffset));
   } else if (kind === "AlphaAnimation") {
     a.p = [animationNumber(res, node, "fromAlpha", 1), animationNumber(res, node, "toAlpha", 1)];
@@ -525,13 +529,13 @@ function animationFromXml(res: Resources, node: XmlNode): JAnimation {
     a.pt = desc.map(([, type]) => type);
   }
   return a;
-}
-function animationXml(context: JContext | null, id: number): { res: Resources; root: XmlNode } {
+});
+function animationXml(context: JContext | null, id: number): { res: Resources; theme: JTheme | null; root: XmlNode } {
   if (!context) rt.npe();
-  const res = context!.$host.res;
+  const res = context!.$host.res, theme = themeOf(context);
   const file = res.fileOf(id);
   if (!file?.path.endsWith(".xml")) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", `Animation resource ID #0x${id.toString(16)}`);
-  return { res, root: parseAXML(file.bytes) };
+  return { res, theme, root: parseAXML(file.bytes) };
 }
 class JLayoutAnimationController extends JObj {
   animation: JAnimation | null = null;
@@ -566,20 +570,19 @@ rt.register({
   name: "android/view/animation/AnimationUtils", ctor: class extends JObj {},
   methods: {
     "static loadAnimation(Landroid/content/Context;I)Landroid/view/animation/Animation;": (context: JContext | null, id: number) => {
-      const { res, root } = animationXml(context, id);
-      return animationFromXml(res, root);
+      const { res, theme, root } = animationXml(context, id);
+      return animationFromXml(res, theme, root);
     },
-    "static loadLayoutAnimation(Landroid/content/Context;I)Landroid/view/animation/LayoutAnimationController;": (context: JContext | null, id: number) => {
-      const { res, root } = animationXml(context, id);
+    "static loadLayoutAnimation(Landroid/content/Context;I)Landroid/view/animation/LayoutAnimationController;": driven(function* (context: JContext | null, id: number): Gen {
+      const { res, theme, root } = animationXml(context, id);
       if (root.name !== "layoutAnimation") throw rt.mkThrowable("java/lang/RuntimeException", "Unknown layout animation name: " + root.name);
       const animationId = attr(root, "animation")?.data ?? 0;
       const controller = new JLayoutAnimationController();
-      if (animationId) controller.animation = animationFromXml(res, animationXml(context, animationId).root);
+      if (animationId) controller.animation = yield animationFromXml(res, theme, animationXml(context, animationId).root);
       controller.delay = animationNumber(res, root, "delay", 0.5);
       controller.order = rvInt(res, namedAttrRV(res, root, "animationOrder"), 0);
       return controller;
-    },
-    "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": (context: JContext | null, id: number) => loadInterpolator(animationXml(context, id).res, id),
+    }),
     "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
   },
 });

@@ -1,9 +1,9 @@
-import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
+import { JViewGroup, specSize, JView, invalidate, requestLayout, setViewBackground } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium, typefaceOf } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, curThread, after } from "../jvm/natives/jlang";
+import { vcall, curThread, after, vcallOn } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
 import { reportUncaught } from "./os";
@@ -62,15 +62,12 @@ export class JActionBarView extends JViewGroup {
       ctx.fillText("×", x, h / 2);
       x += 72;
     } else if (this.showUp && this.upDrawable) {
-      const d = this.upDrawable;
-      d.bounds.left = 2; d.bounds.top = h / 2 - 24;
-      d.bounds.right = 50; d.bounds.bottom = h / 2 + 24;
-      const pending = drawChild(d, cv, thread); if (pending instanceof Promise) yield pending;
+      yield vcallOn(thread, this.upDrawable, "setBounds", "(IIII)V", 2, h / 2 - 24, 50, h / 2 + 24);
+      yield drawChild(this.upDrawable, cv, thread);
     }
     if (this.icon) {
-      this.icon.bounds.left = x; this.icon.bounds.top = h / 2 - 30;
-      this.icon.bounds.right = x + 60; this.icon.bounds.bottom = h / 2 + 30;
-      const pending = drawChild(this.icon, cv, thread); if (pending instanceof Promise) yield pending;
+      yield vcallOn(thread, this.icon, "setBounds", "(IIII)V", x, h / 2 - 30, x + 60, h / 2 + 30);
+      yield drawChild(this.icon, cv, thread);
       x += 72;
     }
     const { action: shown, overflow, slots } = this.layoutMenu();
@@ -112,10 +109,10 @@ export class JActionBarView extends JViewGroup {
       const item = shown[i];
       const cx = this.slotX(i, slots);
       if (item.icon) {
-        item.icon.tint = -1;
-        item.icon.bounds.left = cx - 24; item.icon.bounds.top = h / 2 - 24;
-        item.icon.bounds.right = cx + 24; item.icon.bounds.bottom = h / 2 + 24;
-        const pending = drawChild(item.icon, cv, thread); if (pending instanceof Promise) yield pending;
+        // the bar's icons draw white, on a copy of the drawable's state
+        yield vcallOn(thread, yield vcallOn(thread, item.icon, "mutate", "()Landroid/graphics/drawable/Drawable;"), "setTint", "(I)V", -1);
+        yield vcallOn(thread, item.icon, "setBounds", "(IIII)V", cx - 24, h / 2 - 24, cx + 24, h / 2 + 24);
+        yield drawChild(item.icon, cv, thread);
       } else {
         ctx.font = "26px Roboto";
         ctx.textAlign = "center";
@@ -384,25 +381,25 @@ rt.register({
       if (!f) { rt.noteMissing("menu 0x" + id.toString(16)); return; }
       const root = parseAXML(f.bytes);
       const A_id = 0x010100d0, A_title = AID("title"), A_icon = AID("icon"), A_showAsAction = AID("showAsAction");
-      const walk = async (node: typeof root, target: JMenu) => {
+      const walk = driven(function* walk(node: typeof root, target: JMenu): Gen {
         for (const c of node.children) {
-          if (c.name !== "item") { if (c.name === "group") await walk(c, target); continue; }
+          if (c.name !== "item") { if (c.name === "group") yield walk(c, target); continue; }
           const item = mkMenuItem(0, "");
           for (const a of c.attrs) {
             if (a.resId === A_id) item.id = a.data;
             else if (a.resId === A_title) {
               item.title = a.type === TV.STRING ? a.str ?? "" : rvString(host.res, host.res.resolveRefs({ t: a.type, d: a.data })) ?? "";
             } else if (a.resId === A_icon && a.data) {
-              item.icon = await loadDrawableRV(host.res, { t: a.type, d: a.data }, host.theme);
+              item.icon = yield loadDrawableRV(host.res, { t: a.type, d: a.data }, host.theme);
             } else if (a.resId === A_showAsAction) item.showAsAction = a.data;
           }
           if (c.children.length && c.children[0]?.name === "menu") {
             item.sub = new JMenu();
-            await walk(c.children[0], item.sub);
+            yield walk(c.children[0], item.sub);
           }
           target.items.push(item);
         }
-      };
+      });
       yield walk(root, menu);
       pushMenuToBar(menu);
     }),
@@ -453,7 +450,8 @@ rt.register({
     "getTitle()Ljava/lang/CharSequence;": function (this: JActionBar) { return this.act?.window.actionBarView?.titleStr ?? ""; },
     "setDisplayHomeAsUpEnabled(Z)V": function (this: JActionBar, v: number) { this.bar((b) => { b.showUp = !!v; }); },
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JActionBar, d: JDrawable | null) {
-      this.bar((b) => { b.background = d; });
+      const b = this.act?.window.actionBarView;
+      return b ? setViewBackground(b, d) : undefined;
     },
     "hide()V": function (this: JActionBar) { this.bar((b) => { b.visibility = 8; }, requestLayout); },
     "show()V": function (this: JActionBar) { this.bar((b) => { b.visibility = 0; }, requestLayout); },

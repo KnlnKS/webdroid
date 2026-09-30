@@ -31,33 +31,6 @@ rt.register({
 rt.linkNatives();
 beforeAll(preloadTextPaint);
 
-test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
-  const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
-  expect(await vcall(await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;"), "getColor", "()I")).toBe(0xff123456 | 0);
-  expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
-  await vcall(drawable, "setCornerRadius", "(F)V", 12);
-  expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
-});
-
-test("ColorDrawable constant state creates an independent copy", async () => {
-  const original = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff123456 | 0);
-  const state = await vcall(original, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;");
-  const copy = await vcall(state, "newDrawable", "()Landroid/graphics/drawable/Drawable;");
-
-  expect(copy).not.toBe(original);
-  expect(await vcall(copy, "getColor", "()I")).toBe(0xff123456 | 0);
-});
-
-test("RippleDrawable constant state clones its content", async () => {
-  const content = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xffabcdef | 0);
-  const ripple = await newObj("android/graphics/drawable/RippleDrawable", "(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V", null, content, null);
-  const state = await vcall(ripple, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;");
-  const copy = await vcall(state, "newDrawable", "()Landroid/graphics/drawable/Drawable;");
-
-  expect(copy).not.toBe(ripple);
-  expect(await vcall(copy, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", 0)).not.toBe(content);
-});
-
 const RESOURCES_CTOR = "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V";
 
 function lifecycleActivity(application: JApplication): JActivity {

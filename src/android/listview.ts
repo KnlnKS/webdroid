@@ -3,8 +3,8 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, callSelf, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { newObj, vcall, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
+import { newObj, vcall, vcallOn, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom, setViewBackground } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources, attrSet } from "./res";
 import { attr } from "./axml";
@@ -540,10 +540,7 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (!d || this.divH <= 0) return;
     const vs = this.allViews();
     for (let i = 0; i < vs.length - 1; i++) {
-      d.bounds.left = this.padL;
-      d.bounds.top = vs[i].bottom;
-      d.bounds.right = this.width() - this.padR;
-      d.bounds.bottom = vs[i].bottom + this.divH;
+      yield vcallOn(thread, d, "setBounds", "(IIII)V", this.padL, vs[i].bottom, this.width() - this.padR, vs[i].bottom + this.divH);
       const pending = drawChild(d, cv, thread);
       if (pending instanceof Promise) yield pending;
     }
@@ -902,7 +899,7 @@ const showSpinnerPopup = driven(function* showSpinnerPopup(sp: JSpinner): Gen {
   const list = new JSpinnerPopup();
   inheritContext(list, sp);
   yield themeDivider(list);
-  list.background = sp.popupBg;
+  yield setViewBackground(list, sp.popupBg);
   const fwd = (n: string, d: string) => (...args: unknown[]) => vcall(a, n, d, ...args);
   yield vcall(list, "setAdapter", "(Landroid/widget/ListAdapter;)V", {
     [mangleMethod("getCount", "()I")]: fwd("getCount", "()I"),
@@ -1022,7 +1019,7 @@ rt.register({
       // appcompat's Spinner passes its OWN spinnerStyle: resolving the framework one instead
       // gives a widget the app never styled (a Holo underline under a Material app's title)
       const ta = obtainStyled(this.jres, this.theme, set, [AID("background"), AID("popupBackground")], dsa || AID("spinnerStyle"), 0);
-      if (ta.vals[0]) this.background = yield loadDrawableRV(this.jres, ta.vals[0], this.theme);
+      if (ta.vals[0]) yield setViewBackground(this, yield loadDrawableRV(this.jres, ta.vals[0], this.theme));
       if (ta.vals[1]) this.popupBg = yield loadDrawableRV(this.jres, ta.vals[1], this.theme);
     }),
     "getAdapter()Landroid/widget/SpinnerAdapter;": function (this: JSpinner) { return this.adapter; },

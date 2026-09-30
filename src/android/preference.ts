@@ -331,7 +331,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
     t.text = row.pref.titleStr;
     t.tp.textSize = device.dp(13);
     setPaintTypeface(t.paintT, tfMedium);
-    t.colors.defColor = themeAccent(t);
+    t.colors = themeAccent(t);
     t.padL = t.padR = t.padT = device.dp(16); t.padB = device.dp(6);
     t.lp = lpFill();
     return t;
@@ -356,7 +356,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   const title = mkText(jctx, theme, jres);
   title.text = pref.titleStr;
   title.tp.textSize = device.dp(16);
-  title.colors.defColor = pref.enabled ? -13421773 : -6710887;
+  title.colors = pref.enabled ? -13421773 : -6710887;
   title.lp = lpFill();
   addUnattachedView(col, title);
 
@@ -364,7 +364,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
     const sum = mkText(jctx, theme, jres);
     sum.text = pref.summaryStr;
     sum.tp.textSize = device.dp(13);
-    sum.colors.defColor = pref.enabled ? -8355712 : -6710887;
+    sum.colors = pref.enabled ? -8355712 : -6710887;
     sum.padT = device.dp(2);
     sum.lp = lpFill();
     addUnattachedView(col, sum);

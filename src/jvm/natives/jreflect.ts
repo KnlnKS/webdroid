@@ -468,6 +468,9 @@ rt.register({
     "setTargetSdkVersion(I)V": setTargetSdkVersion,
     // ro.build.version.sdk
     "static getSdkVersionNative(I)I": () => device.sdk,
+    // ART counts native bytes to pace its collections; the JS engine paces its own
+    "registerNativeAllocation(J)V": () => {},
+    "registerNativeFree(J)V": () => {},
     // no hidden-API policy is enforced here, so every exemption already holds
     "setHiddenApiExemptions([Ljava/lang/String;)V": () => {},
     // what System.<clinit> reads of the runtime: the zygote's class paths, ART's version, and the

@@ -41,12 +41,12 @@ export async function initDialog(this: JDialog, ctx: unknown, themeId = 0) {
   this.jctx = await newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;I)V", ctx, themeId);
 }
 
-async function loadCardBg(root: DialogRoot): Promise<void> {
+const loadCardBg = driven(function* loadCardBg(root: DialogRoot): Gen {
   if (root.cardBg || !root.theme || !root.jres) return;
   const rv = root.theme.lookup(AID("windowBackground"));
-  if (rv) root.cardBg = await loadDrawableRV(root.jres, rv, root.theme);
+  if (rv) root.cardBg = yield loadDrawableRV(root.jres, rv, root.theme);
   root.cardRadius = rvDimen(root.jres, root.theme.lookup(AID("dialogCornerRadius")), 0);
-}
+});
 
 /** The dialog's decor; the shell owns its placement and dimming behind the window. */
 class DialogRoot extends JFrameLayout {
@@ -389,7 +389,7 @@ async function buildAlertContent(d: JAlertDialog) {
     t.text = d.titleStr;
     t.tp.textSize = device.dp(20);
     setPaintTypeface(t.paintT, tfMedium);
-    t.colors.defColor = -13421773;
+    t.colors = -13421773;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(22); t.padB = device.dp(4);
     t.lp = lpFill();
     addUnattachedView(col, t);
@@ -398,7 +398,7 @@ async function buildAlertContent(d: JAlertDialog) {
     const t = inherit(new JTextView());
     t.text = d.message;
     t.tp.textSize = device.dp(16);
-    t.colors.defColor = -10066330;
+    t.colors = -10066330;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(d.titleStr ? 8 : 22); t.padB = device.dp(10);
     t.lp = lpFill(1);
     addUnattachedView(col, t);
@@ -412,7 +412,7 @@ async function buildAlertContent(d: JAlertDialog) {
       const t = inherit(new JTextView());
       t.text = d.items[i];
       t.tp.textSize = device.dp(16);
-      t.colors.defColor = -13421773;
+      t.colors = -13421773;
       t.padL = t.padR = device.dp(24); t.padT = t.padB = device.dp(14);
       t.clickable = true;
       t.lp = lpFill();
@@ -431,7 +431,7 @@ async function buildAlertContent(d: JAlertDialog) {
       b.text = text.toUpperCase();
       b.tp.textSize = device.dp(15);
       setPaintTypeface(b.paintT, tfMedium);
-      b.colors.defColor = accent;
+      b.colors = accent;
       b.padL = b.padR = device.dp(16); b.padT = b.padB = device.dp(12);
       b.clickable = true;
       const lp = new JLinearLP();

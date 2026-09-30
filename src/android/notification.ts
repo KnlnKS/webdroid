@@ -7,11 +7,9 @@
 
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { rt, JObj, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
-import { mkUri } from "./net";
+import { vcall, scall, after } from "../jvm/natives/jlang";
 import { PARCELABLE, type JBundle } from "./os";
 import { type JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
-import { JBitmapDrawable } from "./drawable";
 import { preferenceStore } from "./sharedprefs";
 import { appHost } from "./apphost";
 import { csText } from "../jvm/natives/jchars";
@@ -22,56 +20,6 @@ const mkBundle = () => new (rt.link("android/os/Bundle").ctor as new () => JBund
 const self = (ms: Record<string, Impl>, sigs: string[], ret: string) => {
   for (const s of sigs) ms[s + ret] = function (this: object) { return this; };
 };
-
-// ── android.graphics.drawable.Icon: a lazy reference to an image, not an image.
-class JIcon extends JObj {
-  type = 0; resPkg: string | null = null; resId = 0;
-  bmp: object | null = null; uri: unknown = null; data: Int8Array | null = null;
-}
-const TYPE_BITMAP = 1, TYPE_RESOURCE = 2, TYPE_DATA = 3, TYPE_URI = 4, TYPE_ADAPTIVE = 5, TYPE_URI_ADAPTIVE = 6;
-const mkIcon = (type: number, init: (i: JIcon) => void) => { const i = new JIcon(); i.type = type; init(i); return i; };
-const iconMethods: Record<string, Impl> = {
-  "static createWithResource(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;":
-    (pkg: string, id: number) => mkIcon(TYPE_RESOURCE, (i) => { i.resPkg = pkg; i.resId = id; }),
-  "static createWithResource(Landroid/content/Context;I)Landroid/graphics/drawable/Icon;":
-    (_c: unknown, id: number) => mkIcon(TYPE_RESOURCE, (i) => { i.resId = id; }),
-  "static createWithBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/drawable/Icon;":
-    (b: object) => mkIcon(TYPE_BITMAP, (i) => { i.bmp = b; }),
-  "static createWithAdaptiveBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/drawable/Icon;":
-    (b: object) => mkIcon(TYPE_ADAPTIVE, (i) => { i.bmp = b; }),
-  "static createWithContentUri(Ljava/lang/String;)Landroid/graphics/drawable/Icon;":
-    (u: string) => mkIcon(TYPE_URI, (i) => { i.uri = mkUri(u); }),
-  "static createWithContentUri(Landroid/net/Uri;)Landroid/graphics/drawable/Icon;":
-    (u: unknown) => mkIcon(TYPE_URI, (i) => { i.uri = u; }),
-  "static createWithAdaptiveBitmapContentUri(Landroid/net/Uri;)Landroid/graphics/drawable/Icon;":
-    (u: unknown) => mkIcon(TYPE_URI_ADAPTIVE, (i) => { i.uri = u; }),
-  "static createWithAdaptiveBitmapContentUri(Ljava/lang/String;)Landroid/graphics/drawable/Icon;":
-    (u: string) => mkIcon(TYPE_URI_ADAPTIVE, (i) => { i.uri = mkUri(u); }),
-  "static createWithData([BII)Landroid/graphics/drawable/Icon;":
-    (b: Int8Array, off: number, len: number) => mkIcon(TYPE_DATA, (i) => { i.data = b?.slice(off, off + len) ?? null; }),
-  "getUri()Landroid/net/Uri;": function (this: JIcon) { return this.uri ?? null; },
-  ...fieldGetters({ "getType()I": "type", "getResId()I": "resId", "getResPackage()Ljava/lang/String;": "resPkg",
-    "getBitmap()Landroid/graphics/Bitmap;": "bmp" }),
-  ...PARCELABLE,
-  "loadDrawable(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;":
-    driven(function* (this: JIcon, ctx: unknown): Gen {
-      if (this.type === TYPE_RESOURCE && ctx) {
-        return yield vcall(ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", this.resId);
-      }
-      if (!this.bmp) return null;
-      const d = new JBitmapDrawable();
-      d.bmp = this.bmp;
-      return d;
-    }),
-};
-self(iconMethods, ["setTint(I)", "setTintList(Landroid/content/res/ColorStateList;)",
-  "setTintBlendMode(Landroid/graphics/BlendMode;)", "setTintMode(Landroid/graphics/PorterDuff$Mode;)"],
-  "Landroid/graphics/drawable/Icon;");
-rt.register({
-  name: "android/graphics/drawable/Icon", ctor: JIcon, ifaces: ["android/os/Parcelable"],
-  statics: { TYPE_BITMAP, TYPE_RESOURCE, TYPE_DATA, TYPE_URI, TYPE_ADAPTIVE_BITMAP: TYPE_ADAPTIVE, TYPE_URI_ADAPTIVE_BITMAP: TYPE_URI_ADAPTIVE },
-  methods: iconMethods,
-});
 
 // ── android.widget.RemoteViews: describes a view hierarchy for a process we don't have.
 // Recording the calls is the whole implementation; nothing ever inflates them.
@@ -440,7 +388,7 @@ rt.register({ name: "android/app/Notification$DecoratedCustomViewStyle", ctor: c
 // ── Notification.Action (+ its Builder)
 class JNAction extends JObj {
   icon = 0; title: unknown = null; actionIntent: unknown = null;
-  ico: JIcon | null = null; extras = mkBundle(); semantic = 0; contextual = 0;
+  ico: JObj | null = null; extras = mkBundle(); semantic = 0; contextual = 0;
 }
 const mkActionArray = () => Object.assign([] as unknown[], { $t: "Landroid/app/Notification$Action;" });
 rt.register({
@@ -451,7 +399,9 @@ rt.register({
       this.icon = i; this.title = t; this.actionIntent = pi;
     },
     "getIcon()Landroid/graphics/drawable/Icon;": function (this: JNAction) {
-      return this.ico ??= this.icon ? mkIcon(TYPE_RESOURCE, (x) => { x.resId = this.icon; }) : null;
+      if (this.ico || !this.icon) return this.ico;
+      return after(scall("android/graphics/drawable/Icon", "createWithResource", "(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;", "", this.icon),
+        (ico: JObj) => this.ico = ico);
     },
     "getRemoteInputs()[Landroid/app/RemoteInput;": () => null,
     "getDataOnlyRemoteInputs()[Landroid/app/RemoteInput;": () => null,
@@ -469,9 +419,11 @@ const abMethods: Record<string, Impl> = {
     this.a.icon = i; this.a.title = t; this.a.actionIntent = pi;
   },
   "<init>(Landroid/graphics/drawable/Icon;Ljava/lang/CharSequence;Landroid/app/PendingIntent;)V":
-    function (this: JNActionBuilder, ic: JIcon, t: unknown, pi: unknown) {
-      this.a.ico = ic; this.a.icon = ic?.resId ?? 0; this.a.title = t; this.a.actionIntent = pi;
-    },
+    driven(function* (this: JNActionBuilder, ic: JObj | null, t: unknown, pi: unknown): Gen {
+      // Action's constructor keeps a resource icon's id as its legacy int icon
+      const resource = ic && (yield vcall(ic, "getType", "()I")) === 2;
+      this.a.ico = ic; this.a.icon = resource ? yield vcall(ic, "getResId", "()I") : 0; this.a.title = t; this.a.actionIntent = pi;
+    }),
   "<init>(Landroid/app/Notification$Action;)V": function (this: JNActionBuilder, a: JNAction) { if (a) this.a = Object.assign(new JNAction(), a); },
   "build()Landroid/app/Notification$Action;": function (this: JNActionBuilder) { return this.a; },
   ["addExtras(Landroid/os/Bundle;)" + AB]: function (this: JNActionBuilder, b: JBundle) {
@@ -489,7 +441,7 @@ rt.register({ name: "android/app/Notification$Action$Builder", ctor: JNActionBui
 // ── android.app.Person: only ever handed straight back to Notification.Builder.
 class JPerson extends JObj {
   [k: string]: unknown;
-  name: unknown = null; key: string | null = null; uri: string | null = null; ico: JIcon | null = null;
+  name: unknown = null; key: string | null = null; uri: string | null = null; ico: JObj | null = null;
 }
 rt.register({
   name: "android/app/Person", ctor: JPerson, ifaces: ["android/os/Parcelable"],

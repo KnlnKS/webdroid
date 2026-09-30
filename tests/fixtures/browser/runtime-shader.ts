@@ -1,6 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall } from "../../../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../../../src/jvm/natives/jlang";
 import { newPaint } from "../../../src/android/paint";
 import { locateDrawnText, canvasOver, canvasOf } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
@@ -63,6 +63,26 @@ async function probe() {
   const rippleCtx = new OffscreenCanvas(100, 100).getContext("2d")!;
   await vcall(canvasOver(rippleCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 50, 50, 40, ripplePaint);
   const rippleCenter = Array.from(rippleCtx.getImageData(50, 50, 1, 1).data);
-  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)], rippleCenter };
+  // RecordingCanvas.drawRipple rasterizes only under the circle, here partly off the canvas: it
+  // paints what the whole-canvas raster of the same uniforms paints
+  const P = "android/graphics/CanvasProperty", prop = (v: number) => scall(P, "createFloat", `(F)L${P};`, v);
+  const rippleNode = await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", "ripple");
+  await vcall(rippleNode, "setPosition", "(IIII)Z", 0, 0, 100, 100);
+  const rec = await vcall(rippleNode, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", 100, 100);
+  await vcall(rec, "drawRipple", `(L${P};L${P};L${P};L${P};L${P};L${P};ILandroid/graphics/RuntimeShader;)V`,
+    await prop(30), await prop(20), await prop(40), await scall(P, "createPaint", `(Landroid/graphics/Paint;)L${P};`, ripplePaint),
+    await prop(0.3), await prop(10), 0x80ff0000 | 0, ripple);
+  await vcall(rippleNode, "endRecording", "()V");
+  const regionCtx = new OffscreenCanvas(100, 100).getContext("2d")!, wholeCtx = new OffscreenCanvas(100, 100).getContext("2d")!;
+  for (const c of [regionCtx, wholeCtx]) { c.translate(-10, 5); c.scale(1.5, 1.5); }
+  await vcall(canvasOver(regionCtx, 100, 100, true), "drawRenderNode", "(Landroid/graphics/RenderNode;)V", rippleNode);
+  await vcall(ripple, "setOrigin", "(FF)V", 30, 20);
+  await vcall(ripplePaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", ripple);
+  await vcall(canvasOver(wholeCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 30, 20, 40, ripplePaint);
+  const a = regionCtx.getImageData(0, 0, 100, 100).data, b = wholeCtx.getImageData(0, 0, 100, 100).data;
+  let rippleDiff = 0, rippleInk = 0;
+  for (let i = 0; i < a.length; i++) { rippleDiff = Math.max(rippleDiff, Math.abs(a[i] - b[i])); if (i % 4 === 3 && a[i]) rippleInk++; }
+  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)], rippleCenter,
+    rippleDiff, rippleInked: rippleInk > 1000 };
 }
 export default probe;

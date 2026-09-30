@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
 import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -36,7 +36,7 @@ import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
 import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
 import { JActivity } from "../src/android/app";
-import { scall, loadLibcore, appResources } from "./java";
+import { scall, loadLibcore, appResources, preloadTextPaint } from "./java";
 
 describe("adservices", () => {
   rt.linkNatives();
@@ -706,6 +706,7 @@ describe("settings-location", () => {
 });
 
 describe("window-context", () => {
+  beforeAll(preloadTextPaint);
   rt.linkNatives();
 
   test("finding an activity content view installs its decor before setContentView", async () => {

@@ -3,7 +3,8 @@
 // bytecode. A node's display list is a deferred command list (recording.ts) that drawing the
 // node replays against the real target, with the node's properties applied as
 // RenderNodeDrawable applies them. There is no RenderThread: elevation shadows, Z reordering,
-// projection, stretch, animators and position callbacks are properties kept, not drawn or run.
+// projection, stretch and position callbacks are properties kept, not drawn or run; animators run
+// from the frame loop (rtanimator.ts).
 
 import { displayListLength, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, retarget, type Ctx2D, type DisplayList } from "./recording";
 import { rt } from "../jvm/runtime";
@@ -14,6 +15,8 @@ import { type JRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { Camera3D, type Mat, type NativeColorFilter, COMPOSITE, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./graphics";
 import { NativeCanvas, drawInLayer, drawCircle, drawRoundRect, clipRoundRect } from "./canvas";
+import { addAnimator, endAnimators } from "./rtanimator";
+import { type RuntimeShaderBuilder } from "./runtime-shader";
 
 let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
@@ -213,10 +216,10 @@ rt.registerJnis("android/graphics/RenderNode", {
   // sizeof(RenderNode) on the reference device, and what the display list's slots take
   "nGetUsageSize(J)I": (h: bigint) => 1288 + (nodeAt(h).ops?.length ?? 0) * 8,
   "nGetAllocatedSize(J)I": (h: bigint) => { const n = nodeAt(h).ops?.length ?? 0; return 1288 + (n ? Math.ceil(n * 8 / 4096) * 4096 : 0); },
-  // RenderNodeAnimators run on the RenderThread, which there is none of; an animator can only
-  // be added through a node an attached view's AnimationHost owns
-  "nAddAnimator(JJ)V": unsupported("RenderNodeAnimator: no RenderThread"),
-  "nEndAllAnimators(J)V": () => {}, "nForceEndAnimators(J)V": () => {},
+  // RenderNodeAnimators run from the frame loop (rtanimator.ts)
+  "nAddAnimator(JJ)V": (h: bigint, a: bigint) => addAnimator(nodeAt(h), a),
+  "nEndAllAnimators(J)V": (h: bigint) => endAnimators(nodeAt(h)),
+  "nForceEndAnimators(J)V": (h: bigint) => endAnimators(nodeAt(h)),
   // the RenderThread reports a drawn node's position per frame; the listener is kept, not called
   "nRequestPositionUpdates(JLjava/lang/ref/WeakReference;)V": (h: bigint, l: object | null) => { nodeAt(h).positionListener = l; },
   "nDiscardDisplayList(J)V": (h: bigint) => { nodeAt(h).ops = null; },
@@ -376,6 +379,37 @@ function beginRecording(nc: NativeCanvas, w: number, h: number) {
   nc.semanticOwner = nc.semanticBase = null;
 }
 const nat = (h: bigint) => deref<NativeCanvas>(h);
+/** AnimatedRippleDrawable: the ripple's circle through its RuntimeShader, with the uniforms the
+ *  animated properties drive set as drawn (the turbulence as RippleShader.setNoisePhase sets it) */
+const RIPPLE_SCALE = 1.5, PI = Math.PI, PI_ROTATE_RIGHT = PI * 0.0078125, PI_ROTATE_LEFT = -PI_ROTATE_RIGHT;
+function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: NativePaint, progress: number, phase: number, color: number, b: RuntimeShaderBuilder) {
+  const circle = (name: string, offset: number, scale: number, angle: number) =>
+    b.trySet(name, [offset + phase * scale * Math.cos(angle), offset + phase * scale * Math.sin(angle)]);
+  const rotation = (name: string, angle: number) => b.trySet(name, [Math.cos(angle), Math.sin(angle)]);
+  b.trySet("in_origin", [x, y]);
+  b.trySet("in_maxRadius", [radius]);
+  b.trySet("in_progress", [progress]);
+  b.trySet("in_turbulencePhase", [phase]);
+  b.trySet("in_noisePhase", [phase * 0.001]);
+  b.trySet("in_color", [(color >>> 16 & 255) / 255, (color >>> 8 & 255) / 255, (color & 255) / 255, (color >>> 24) / 255], true);
+  circle("in_tCircle1", RIPPLE_SCALE * 0.5, 0.01, RIPPLE_SCALE * 0.55);
+  circle("in_tCircle2", RIPPLE_SCALE * 0.2, -0.0066, RIPPLE_SCALE * 0.45);
+  circle("in_tCircle3", RIPPLE_SCALE, -0.0066, RIPPLE_SCALE * 0.35);
+  rotation("in_tRotation1", phase * PI_ROTATE_RIGHT + 1.7 * PI);
+  rotation("in_tRotation2", phase * PI_ROTATE_LEFT + 2 * PI);
+  rotation("in_tRotation3", phase * PI_ROTATE_RIGHT + 2.75 * PI);
+  // the shader is rasterized only under the circle (RippleDrawable fills it), not the whole window
+  const m = ctx.getTransform(), W = ctx.canvas.width, H = ctx.canvas.height;
+  const ex = Math.hypot(m.a, m.c) * radius + 1, ey = Math.hypot(m.b, m.d) * radius + 1;
+  const cx = m.a * x + m.c * y + m.e, cy = m.b * x + m.d * y + m.f;
+  const x0 = Math.max(0, Math.floor(cx - ex)), y0 = Math.max(0, Math.floor(cy - ey));
+  const x1 = Math.min(W, Math.ceil(cx + ex)), y1 = Math.min(H, Math.ceil(cy + ey));
+  if (x1 <= x0 || y1 <= y0) return;
+  const shaded = new NativePaint();
+  copyPaint(paint, shaded);
+  shaded.shader = b.shader(null, [x0, y0, x1 - x0, y1 - y0]);
+  drawCircle(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), x, y, radius, shaded);
+}
 /** CanvasProperty's containers: a float, or a paint an animator changes, read when replayed */
 type Property<T> = { value: T };
 const prop = <T>(h: bigint) => deref<Property<T>>(h).value;
@@ -414,7 +448,9 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
       prop<number>(rx), prop<number>(ry), prop<NativePaint>(p))),
   // the ripple is a RuntimeShader animated on the RenderThread; texture layers and WebView
   // functors are the compositor's
-  "nDrawRipple(JJJJJJJIJ)V": unsupported("RecordingCanvas.drawRipple"),
+  "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) =>
+    recordOrRun(nat(h).ctx, (ctx) => drawRipple(ctx, prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p),
+      prop<number>(progress), prop<number>(phase), color, deref<RuntimeShaderBuilder>(builder))),
   "nDrawTextureLayer(JJ)V": unsupported("RecordingCanvas.drawTextureLayer"),
   "nDrawWebViewFunctor(JI)V": unsupported("RecordingCanvas.drawWebViewFunctor"),
 });

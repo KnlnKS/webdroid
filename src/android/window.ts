@@ -4,7 +4,7 @@ import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
 import { type JDrawable, loadDrawable } from "./drawable";
-import { requestLayout, findById, invalidate, dispatchAttached, dispatchDetached, uiState, JLayoutParams, type JView } from "./view";
+import { requestLayout, findById, invalidate, dispatchAttached, dispatchDetached, uiState, JLayoutParams, type JView, setViewBackground } from "./view";
 import { JActivity, activityMethods } from "./app";
 import { ensureDecor } from "./decor";
 import { newObj, vcall } from "../jvm/natives/jlang";
@@ -167,8 +167,8 @@ rt.register({
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JWindow, d: JDrawable | null) {
       this.bg = d; this.bgSet = true;
-      if (this.activity && this.decor) this.decor.background = d;
       invalidate();
+      if (this.activity && this.decor) return setViewBackground(this.decor, d);
     },
     "setBackgroundDrawableResource(I)V": driven(function* (this: JWindow, id: number): Gen {
       if (!appHost) return;

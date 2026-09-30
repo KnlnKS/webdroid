@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGe
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught, uptimeMillis } from "./os";
-import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST, MATCH_PARENT, WRAP_CONTENT } from "./view";
+import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST, MATCH_PARENT, WRAP_CONTENT, setViewBackground } from "./view";
 import { JMotionEvent } from "./motionevent";
 import { KEYCODE_BACK, type JKeyEvent } from "./keyevent";
 import { JFrameLayout } from "./layouts";
@@ -340,12 +340,16 @@ class JPopupWindow extends JObj {
       (this.touchModal ? 0 : FLAG_NOT_TOUCH_MODAL) | (this.outsideTouchable ? FLAG_WATCH_OUTSIDE_TOUCH : 0);
   }
   /** background padding (AOSP mTempRect after getPadding) */
-  bgPad(): [number, number, number, number] {
-    const p = (this.bg as any)?.padding as JRect | undefined;
-    return p ? [p.left, p.top, p.right, p.bottom] : [0, 0, 0, 0];
-  }
+  /** the background's padding (Drawable.getPadding), read when it is set */
+  pad: [number, number, number, number] = [0, 0, 0, 0];
+  bgPad(): [number, number, number, number] { return this.pad; }
 }
 
+const setPopupBackground = driven(function* setPopupBackground(pw: JPopupWindow, d: JDrawable | null): Gen {
+  pw.bg = d;
+  const r = new JRect();
+  pw.pad = d && (yield vcall(d, "getPadding", "(Landroid/graphics/Rect;)Z", r)) ? [r.left, r.top, r.right, r.bottom] : [0, 0, 0, 0];
+});
 const PW_ATTRS = ["popupBackground", "popupElevation", "popupAnimationStyle", "overlapAnchor"] as const;
 const pwInit = driven(function* pwInit(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number): Gen {
   this.jctx = c;
@@ -354,7 +358,7 @@ const pwInit = driven(function* pwInit(this: JPopupWindow, c: any, set: JAttrSet
   const res: Resources = host.res, theme: JTheme = themeOf(c) ?? host.theme;
   const ids = PW_ATTRS.map(AID);
   const ta = obtainStyled(res, theme, set, ids, defStyleAttr || AID("popupWindowStyle"), defStyleRes);
-  if (ta.vals[0]) this.bg = yield loadDrawableRV(res, ta.vals[0], theme);
+  if (ta.vals[0]) yield setPopupBackground(this, yield loadDrawableRV(res, ta.vals[0], theme));
   if (ta.vals[1]) this.elevation = rvDimen(res, ta.vals[1], 0);
   if (ta.vals[2]) { const v = ta.vals[2]!; this.animStyle = v.t === TV.REFERENCE ? v.d : -1; }
   if (ta.vals[3]) this.overlapAnchor = !!rvInt(res, ta.vals[3], 0);
@@ -382,7 +386,7 @@ const pwShow = driven(function* pwShow(this: JPopupWindow): Gen {
   d.ctx = this.jctx;
   const host = this.jctx?.$host;
   if (host) { d.jres = host.res; d.theme = themeOf(this.jctx) ?? host.theme; }
-  d.background = this.bg;
+  yield setViewBackground(d, this.bg);
   [d.padL, d.padT, d.padR, d.padB] = this.bgPad();
   const lp = new JFrameLP();
   lp.width = MATCH_PARENT;
@@ -494,10 +498,14 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(1, "isAttachedInDecor()Z", "isSplitTouchEnabled()Z"),
   ...stubs(null, "getEnterTransition()Landroid/transition/Transition;",
     "getExitTransition()Landroid/transition/Transition;"),
-  "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JPopupWindow, d: JDrawable | null) {
-    this.bg = d;
-    if (this.decor) { this.decor.background = d; [this.decor.padL, this.decor.padT, this.decor.padR, this.decor.padB] = this.bgPad(); requestLayout(this.decor); }
-  },
+  "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JPopupWindow, d: JDrawable | null): Gen {
+    yield setPopupBackground(this, d);
+    if (this.decor) {
+      yield setViewBackground(this.decor, d);
+      [this.decor.padL, this.decor.padT, this.decor.padR, this.decor.padB] = this.bgPad();
+      requestLayout(this.decor);
+    }
+  }),
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JPopupWindow) { return this.bg; },
   "setOnDismissListener(Landroid/widget/PopupWindow$OnDismissListener;)V": function (this: JPopupWindow, l: unknown) { this.dismissL = l; },
   "setTouchInterceptor(Landroid/view/View$OnTouchListener;)V": function (this: JPopupWindow, l: unknown) { this.touchInterceptor = l; },

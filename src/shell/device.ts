@@ -40,6 +40,7 @@ import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, mea
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { windowCanvas, setCanvasTargetSdk } from "../android/canvas";
+import { animateRenderThread } from "../android/rtanimator";
 import { overlays, drawToasts, FLAG_NOT_FOCUSABLE, FLAG_NOT_TOUCHABLE, FLAG_NOT_TOUCH_MODAL, FLAG_WATCH_OUTSIDE_TOUCH, type Overlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
@@ -400,6 +401,7 @@ const tick0 = driven(function* tick0(): Gen {
     if (uiState.animHooks.size) {
       for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
     }
+    if (animateRenderThread(Number(uiState.frameTimeNanos / 1000000n))) uiState.needsDraw = true;
     const activities = visibleActivities();
     const act = activities.at(-1);
     const decor = act?.window.decor;

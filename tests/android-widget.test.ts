@@ -6,7 +6,7 @@ import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { JEditText, editorAction } from "../src/android/textview";
 import { JView, JViewGroup, makeSpec, MS_EXACTLY, measureView, layoutView, MS_AT_MOST, JLinearLP, JMarginLP, obtainEvent, MS_UNSPEC } from "../src/android/view";
-import { JDrawable, ST } from "../src/android/drawable";
+import { ST, drawableBounds } from "../src/android/drawable";
 import { JLinearLayout } from "../src/android/layouts";
 import { classCtors } from "../src/jvm/natives/jreflect";
 import { glSurfaces } from "../src/native/egl-current";
@@ -127,17 +127,16 @@ describe("gridlayout", () => {
 });
 
 describe("linear-dividers", () => {
-  class Divider extends JDrawable {
-    drawn: number[][] = [];
-    size() { return 2; }
-    paint() { const b = this.bounds; this.drawn.push([b.left, b.top, b.right, b.bottom]); }
-  }
-  rt.register({ name: "test/LinearDivider", ctor: Divider, sup: "android/graphics/drawable/Drawable" });
   rt.linkNatives();
   test("linear dividers reserve space around visible children and draw within padding", async () => {
     const parent = rt.make("android/widget/LinearLayout") as JLinearLayout;
     parent.orientation = 1; parent.padT = 3; parent.padB = 4;
-    const divider = rt.make("test/LinearDivider") as Divider;
+    const divider = await newObj("android/graphics/drawable/ColorDrawable", "()V"), drawn: number[][] = [];
+    Object.assign(divider, {
+      [mangleMethod("getIntrinsicWidth", "()I")]: () => 2,
+      [mangleMethod("getIntrinsicHeight", "()I")]: () => 2,
+      [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: () => { const b = drawableBounds(divider); drawn.push([b.left, b.top, b.right, b.bottom]); },
+    });
     await vcall(parent, "setDividerDrawable", "(Landroid/graphics/drawable/Drawable;)V", divider);
     await vcall(parent, "setShowDividers", "(I)V", 7);
     await vcall(parent, "setDividerPadding", "(I)V", 1);
@@ -154,7 +153,7 @@ describe("linear-dividers", () => {
     expect(parent.measuredH).toBe(43);
     expect(children.slice(1).map(c => [c.top, c.bottom])).toEqual([[5, 15], [17, 37]]);
     await vcall(parent, "onDraw", "(Landroid/graphics/Canvas;)V", null);
-    expect(divider.drawn).toEqual([[1, 3, 19, 5], [1, 15, 19, 17], [1, 37, 19, 39]]);
+    expect(drawn).toEqual([[1, 3, 19, 5], [1, 15, 19, 17], [1, 37, 19, 39]]);
     expect(await vcall(parent, "getShowDividers", "()I")).toBe(7);
     expect(await vcall(parent, "getDividerDrawable", "()Landroid/graphics/drawable/Drawable;")).toBe(divider);
     const weighted = children[1].lp as JLinearLP;
@@ -228,7 +227,7 @@ describe("platform-construction", () => {
     const colors = await scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", 0xff123456 | 0);
     await vcall(button, "setButtonTintList", "(Landroid/content/res/ColorStateList;)V", colors);
     expect(await vcall(button, "getButtonTintList", "()Landroid/content/res/ColorStateList;")).toBe(colors);
-    const indicator = rt.make("android/graphics/drawable/StateListDrawable");
+    const indicator = await newObj("android/graphics/drawable/StateListDrawable", "()V");
     await vcall(button, "setButtonDrawable", "(Landroid/graphics/drawable/Drawable;)V", indicator);
     expect([...await vcall(indicator, "getState", "()[I")]).toContain(ST.checked);
     await vcall(button, "setChecked", "(Z)V", 0);

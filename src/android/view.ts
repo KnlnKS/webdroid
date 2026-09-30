@@ -9,7 +9,7 @@ import { setInvalidateHook } from "./rendernode";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, callOn, after, newObj, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize, cslBoundary } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
@@ -220,16 +220,40 @@ const performClick = driven(function* performClick(this: JView): Gen {
   return 1;
 });
 /** AOSP setBackgroundDrawable; a background appearing or going away re-measures the view */
-function setBackground(this: JView, d: JDrawable | null) {
+const setBackground = driven(function* setBackground(this: JView, d: JDrawable | null): Gen {
+  if (d === this.background) return;
   const relayout = !this.background !== !d;
-  if (this.background) this.background.callback = null;
+  if (this.background) yield setDrawableCallback(this.background, null);
   this.background = d;
   this.outlineDirty = true;
   // AOSP hands a fresh background the view's current state; without it a stateful drawable
   // paints its "no state at all" entry until something else happens to the view
-  if (d) { d.callback = this; void this.refreshDrawableState(); }
+  if (d) {
+    yield setDrawableCallback(d, this);
+    if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
+    yield applyBackgroundTint(this);
+  }
   if (relayout) requestLayoutVirtual(this);
-  void invalidateVirtual(this);
+  yield invalidateVirtual(this);
+});
+/** AOSP dispatchVisibilityAggregated: a subtree's visibility, as each view sees it */
+const dispatchVisibilityAggregated = driven(function* dispatchVisibilityAggregated(v: JView, visible: boolean): Gen {
+  yield vcall(v, "onVisibilityAggregated", "(Z)V", +visible);
+  if (v instanceof JViewGroup) for (const c of [...v.children]) yield dispatchVisibilityAggregated(c, visible && c.visibility === 0);
+});
+export const setViewBackground = (v: JView, d: JDrawable | null): unknown => setBackground.call(v, d);
+/** AOSP applyBackgroundTint: a tint list set on the view goes to (a mutated) background */
+const applyBackgroundTint = driven(function* applyBackgroundTint(v: JView): Gen {
+  if (!v.background || !v.bgTint) return;
+  const d = v.background = yield vcall(v.background, "mutate", "()Landroid/graphics/drawable/Drawable;");
+  yield vcall(d, "setTintList", "(Landroid/content/res/ColorStateList;)V", v.bgTint);
+  if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
+  invalidate(v);
+});
+/** it and every ancestor are VISIBLE */
+export function isShown(v: JView): boolean {
+  for (let p: JView | null = v; p; p = p.parent) if (p.visibility !== 0) return false;
+  return true;
 }
 /** this view's origin in window coordinates */
 function windowOffset(view: JView): [number, number] {
@@ -513,6 +537,8 @@ export class JView extends JObj {
   }
   /** AOSP's cached mDrawableState — what onCreateDrawableState last produced, app states included */
   stateCache: number[] | null = null;
+  /** the drawables the view owns, which its visibility and jumpDrawablesToCurrentState reach */
+  drawables(): (JDrawable | null)[] { return [this.background, this.foreground]; }
   drawableState(): number[] { return this.stateCache ?? this.baseState(); }
   refreshDrawableState(): unknown { return rt.drive(this.refreshDrawableState$()); }
   *refreshDrawableState$(): Gen {
@@ -645,9 +671,7 @@ const applyViewAttrs = driven(function* applyViewAttrs(v: JView, set: JAttrSet |
   const idv = g(0);
   if (idv) v.idNum = idv.t === TV.REFERENCE || idv.t === TV.ATTRIBUTE ? idv.d : idv.r ?? idv.d;
   const bgv = g(1);
-  if (bgv) {
-    v.background = yield loadDrawableRV(res, bgv, v.theme);
-  }
+  if (bgv) yield setBackground.call(v, yield loadDrawableRV(res, bgv, v.theme));
   const pad = g(2) ? rvDimen(res, g(2), 0) : null;
   if (pad !== null) { v.padL = v.padT = v.padR = v.padB = Math.round(pad); }
   if (g(3)) v.padL = Math.round(rvDimen(res, g(3), v.padL));
@@ -1026,7 +1050,7 @@ function setInherited(field: "selected" | "activated", setter: string) {
     if (this instanceof JViewGroup) for (const c of [...this.children]) yield vcall(c, setter, "(Z)V", on);
   });
 }
-const viewMethods: NativeSpec["methods"] = cslBoundary({
+const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
   ...rareMethods,
   "getContext()Landroid/content/Context;": function (this: JView) { return this.ctx; },
@@ -1072,22 +1096,22 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
   },
   "getVisibility()I": function (this: JView) { return this.visibility; },
   "setVisibility(I)V": function (this: JView, v: number) {
-    if (this.visibility !== v) { this.visibility = v; requestLayout(this); invalidate(this); }
+    if (this.visibility === v) return;
+    const was = this.visibility === 0;
+    this.visibility = v; requestLayout(this); invalidate(this);
+    if (this.attached && was !== (v === 0) && (!this.parent || isShown(this.parent))) return dispatchVisibilityAggregated(this, v === 0);
   },
-  "isShown()Z": function (this: JView) {
-    let v: JView | null = this;
-    while (v) { if (v.visibility !== 0) return 0; v = v.parent; }
-    return 1;
-  },
+  "isShown()Z": function (this: JView) { return +isShown(this); },
   "setBackground(Landroid/graphics/drawable/Drawable;)V": function (this: JView, d: JDrawable | null) {
     return vcall(this, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
   },
   "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": setBackground,
-  "setBackgroundColor(I)V": function (this: JView, c: number) {
-    const d = new JColorDrawable();
-    d.color = c;
-    return vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", d);
-  },
+  // AOSP recolours a ColorDrawable background in place
+  "setBackgroundColor(I)V": driven(function* (this: JView, c: number): Gen {
+    if (this.background && rt.iof(this.background, "android/graphics/drawable/ColorDrawable")) {
+      yield vcall(yield vcall(this.background, "mutate", "()Landroid/graphics/drawable/Drawable;"), "setColor", "(I)V", c);
+    } else yield vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", yield newObj("android/graphics/drawable/ColorDrawable", "(I)V", c));
+  }),
   "setBackgroundResource(I)V": driven(function* (this: JView, id: number): Gen {
     const d = id ? yield loadDrawable(this.jres!, id, this.theme) : null;
     return yield vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", d);
@@ -1095,9 +1119,9 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.background; },
   "setForeground(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JView, d: JDrawable | null): Gen {
     if (this.foreground === d) return;
-    if (this.foreground) this.foreground.callback = null;
+    if (this.foreground) yield setDrawableCallback(this.foreground, null);
     this.foreground = d; this.foregroundW = -1;
-    if (d) { yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); d.callback = this; }
+    if (d) { yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); yield setDrawableCallback(d, this); }
     requestLayoutVirtual(this); yield invalidateVirtual(this);
   }),
   "onDrawForeground(Landroid/graphics/Canvas;)V": drawForeground,
@@ -1399,6 +1423,7 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
     if (!this.clickable && !this.longClickable) return 0;
     switch (ev.action & 0xff) {
       case 0: // DOWN
+        yield vcall(this, "drawableHotspotChanged", "(FF)V", ev.x, ev.y);
         this.pressed = true;
         this.longPressAction = null;
         void this.refreshDrawableState();
@@ -1413,6 +1438,7 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
         }
         return 1;
       case 2: { // MOVE
+        if (this.clickable) yield vcall(this, "drawableHotspotChanged", "(FF)V", ev.x, ev.y);
         const slop = device.dp(10);
         if (ev.x < -slop || ev.y < -slop || ev.x > this.width() + slop || ev.y > this.height() + slop) {
           this.pressed = false;
@@ -1579,7 +1605,7 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
   }),
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "getDrawingTime()J": () => BigInt(Math.floor(uptimeMillis())),
-  "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
+  "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return +(d === this.background || d === this.foreground); },
   "onCreateDrawableState(I)[I": viewCreateDrawableState,
   "static mergeDrawableStates([I[I)[I": mergeDrawableStates,
   "getFitsSystemWindows()Z": function (this: JView) { return this.fitsSys ? 1 : 0; },
@@ -1650,8 +1676,7 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
   "getBackgroundTintList()Landroid/content/res/ColorStateList;": function (this: JView) { return this.bgTint; },
   "setBackgroundTintList(Landroid/content/res/ColorStateList;)V": function (this: JView, csl: JColorStateList | null) {
     this.bgTint = csl;
-    if (this.background) this.background.tint = csl ? cslColor(csl, this.drawableState()) : null;
-    invalidate();
+    return applyBackgroundTint(this);
   },
   "getDrawingRect(Landroid/graphics/Rect;)V": drawingRect,
   "getFocusedRect(Landroid/graphics/Rect;)V": drawingRect,
@@ -1720,6 +1745,20 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
     if (!gain && this.pressed) return vcall(this, "setPressed", "(Z)V", 0);
   },
   "onAttachedToWindow()V": function (this: JView) { return vcall(this, "jumpDrawablesToCurrentState", "()V"); },
+  // AOSP: animations the drawables are running end where they would have ended
+  "jumpDrawablesToCurrentState()V": driven(function* (this: JView): Gen {
+    for (const d of this.drawables()) if (d) yield vcall(d, "jumpToCurrentState", "()V");
+  }),
+  // a press starts the background's ripple (and any hotspot-aware drawable) where it lands
+  "drawableHotspotChanged(FF)V": driven(function* (this: JView, x: number, y: number): Gen {
+    for (const d of [this.background, this.foreground]) if (d) yield vcall(d, "setHotspot", "(FF)V", x, y);
+  }),
+  // the drawables run (animations, ripples) only while the view can be seen
+  "onVisibilityAggregated(Z)V": driven(function* (this: JView, visible: number): Gen {
+    for (const d of this.drawables()) {
+      if (d && !!visible !== !!(yield vcall(d, "isVisible", "()Z"))) yield vcall(d, "setVisible", "(ZZ)Z", visible, 0);
+    }
+  }),
   "setLayoutDirection(I)V": function (this: JView, d: number) {
     if ((this.rare?.layoutDirection ?? 2) === d) return;
     rare(this).layoutDirection = d;
@@ -1738,7 +1777,7 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
   ...stubs(1, "isInTouchMode()Z", "performHapticFeedback(I)Z", "isHardwareAccelerated()Z",
     "getTransitionAlpha()F", "hasOverlappingRendering()Z", "isLayoutDirectionResolved()Z"),
   ...noops("playSoundEffect(I)V", "onLayout(ZIIII)V", "onSizeChanged(IIII)V", "onDraw(Landroid/graphics/Canvas;)V",
-    "dispatchDraw(Landroid/graphics/Canvas;)V", "drawableStateChanged()V", "jumpDrawablesToCurrentState()V",
+    "dispatchDraw(Landroid/graphics/Canvas;)V", "drawableStateChanged()V",
     "onDetachedFromWindow()V", "onConfigurationChanged(Landroid/content/res/Configuration;)V",
     "onFinishInflate()V", "setOnCreateContextMenuListener(Landroid/view/View$OnCreateContextMenuListener;)V",
     "setSaveEnabled(Z)V", "setSaveFromParentEnabled(Z)V", "setWillNotDraw(Z)V", "setHapticFeedbackEnabled(Z)V",
@@ -1764,9 +1803,8 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
     "setVerticalFadingEdgeEnabled(Z)V", "setHorizontalFadingEdgeEnabled(Z)V",
     "setScrollbarFadingEnabled(Z)V", "setScrollIndicators(II)V", "setFrameContentVelocity(F)V",
     "setAnimationMatrix(Landroid/graphics/Matrix;)V",
-    "onVisibilityChanged(Landroid/view/View;I)V", "onVisibilityAggregated(Z)V", "onWindowVisibilityChanged(I)V",
-    "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
-    "drawableHotspotChanged(FF)V"),
+    "onVisibilityChanged(Landroid/view/View;I)V", "onWindowVisibilityChanged(I)V",
+    "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V"),
   ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I",
     "willNotDraw()Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",
@@ -1795,7 +1833,7 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
     const { inflateLayout } = yield import("./inflate");
     return inflateLayout(ctx, id, root, !!root);
   }),
-});
+};
 
 function setPadding(this: JView, l: number, t: number, r: number, b: number) {
   if (this.padL === l && this.padT === t && this.padR === r && this.padB === b) return;
@@ -1959,6 +1997,7 @@ const attachTree = driven(function* attachTree$(v: JView, thread: typeof curThre
   v.attached = true;
   mergeVTO(v);
   try { yield vcallOn(thread, v, "onAttachedToWindow", "()V"); } catch (e) { reportUncaught(e); }
+  if (isShown(v)) yield vcallOn(thread, v, "onVisibilityAggregated", "(Z)V", 1);
   // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
   for (const l of [...v.attachLs]) {
     try { yield vcallOn(thread, l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
@@ -1983,6 +2022,7 @@ export const dispatchConfigurationChanged = driven(function* dispatchConfigurati
 export const dispatchDetached = driven(function* dispatchDetached$(v: JView, thread: JThread = curThread): Gen {
   if (!v.attached) return;
   if (v instanceof JViewGroup) for (const c of [...v.children]) yield dispatchDetached(c, thread);
+  if (isShown(v)) yield vcallOn(thread, v, "onVisibilityAggregated", "(Z)V", 0);
   yield vcallOn(thread, v, "onDetachedFromWindow", "()V");
   for (const l of [...v.attachLs]) yield vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
   v.attached = false;

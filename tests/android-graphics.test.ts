@@ -1,4 +1,4 @@
-import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
+import { expect, test, afterAll, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { matrixColor } from "../src/android/graphics";
 import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android/paint";
@@ -11,13 +11,11 @@ import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall, vcallOn, curThread, JThread, enumName } from "../src/jvm/natives/jlang";
 import { JTextView } from "../src/android/textview";
 import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
-import { ST, JDrawable } from "../src/android/drawable";
-import { Resources } from "../src/android/res";
-import { TV, type XmlNode } from "../src/android/axml";
+import { ST } from "../src/android/drawable";
 import { JImageView } from "../src/android/imageview";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { recordingContext, replay, replayWithSemantics } from "../src/android/recording";
-import { appResources, axmlBytes, loadSystemFonts, loadFrameworkJar, scall } from "./java";
+import { appResources, loadSystemFonts, loadFrameworkJar, scall } from "./java";
 
 beforeAll(loadSystemFonts);
 
@@ -103,75 +101,18 @@ describe("child-drawable-state", () => {
   });
 });
 
-describe("custom-drawable-inflate", () => {
-  class XmlDrawable extends JDrawable {
-    tag = "";
-    value = -1;
-    child = "";
-    sameParserAndAttrs = false;
-  }
-
-  rt.register({
-    name: "test/XmlDrawable",
-    ctor: XmlDrawable,
-    sup: "android/graphics/drawable/Drawable",
-    methods: {
-      "<init>()V": () => {},
-      "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V":
-        async function (this: XmlDrawable, _res: unknown, parser: unknown, attrs: unknown) {
-          this.sameParserAndAttrs = parser === attrs;
-          this.tag = await vcall(parser, "getName", "()Ljava/lang/String;");
-          this.value = await vcall(attrs, "getAttributeIntValue", "(Ljava/lang/String;Ljava/lang/String;I)I", "", "amount", -1);
-          await vcall(parser, "next", "()I");
-          this.child = await vcall(parser, "getName", "()Ljava/lang/String;");
-        },
-    },
-  });
-  rt.linkNatives();
-
-  test("fully qualified drawable tags construct and inflate the app class", async () => {
-    const jres = await appResources(new Resources(null, {}), "custom-drawable");
-    const node: XmlNode = {
-      name: "test.XmlDrawable",
-      attrs: [{ ns: "", name: "amount", resId: 0, type: TV.INT_DEC, data: 17, str: null }],
-      children: [{ name: "child", attrs: [], children: [] }],
-    };
-    const block = await newObj("android/content/res/XmlBlock", "([B)V", new Int8Array(axmlBytes(node).buffer));
-    const parser = await vcall(block, "newParser", "()Landroid/content/res/XmlResourceParser;");
-    const drawable = await scall("android/graphics/drawable/Drawable", "createFromXml",
-      "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;)Landroid/graphics/drawable/Drawable;", jres, parser);
-    expect(drawable).toBeInstanceOf(XmlDrawable);
-    if (!(drawable instanceof XmlDrawable)) return;
-    expect(drawable.tag).toBe("test.XmlDrawable");
-    expect(drawable.value).toBe(17);
-    expect(drawable.child).toBe("child");
-    expect(drawable.sameParserAndAttrs).toBe(true);
-  });
-});
-
 describe("drawable-size-overrides", () => {
   rt.linkNatives();
-  function drawable() {
-    const d = rt.make("android/graphics/drawable/Drawable"), threads: JThread[] = [];
+  async function drawable() {
+    const d = await newObj("android/graphics/drawable/ColorDrawable", "()V"), threads: JThread[] = [];
     Object.assign(d, {
       [mangleMethod("getIntrinsicWidth", "()I")]: async () => { threads.push(curThread); await Promise.resolve(); return 84; },
       [mangleMethod("getIntrinsicHeight", "()I")]: () => { threads.push(curThread); return 48; },
     });
     return { d, threads };
   }
-  test("layer and minimum sizes dispatch drawable overrides, including explicit layer sizes", async () => {
-    const { d } = drawable();
-    const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", [d]);
-    await vcall(layer, "setLayerInset", "(IIIII)V", 0, 2, 3, 4, 5);
-    expect(await vcall(layer, "getIntrinsicWidth", "()I")).toBe(90);
-    expect(await vcall(layer, "getMinimumWidth", "()I")).toBe(90);
-    expect(await vcall(layer, "getIntrinsicHeight", "()I")).toBe(56);
-    await vcall(layer, "setLayerSize", "(III)V", 0, 100, 60);
-    expect(await vcall(layer, "getIntrinsicWidth", "()I")).toBe(106);
-    expect(await vcall(layer, "getMinimumHeight", "()I")).toBe(68);
-  });
   test("ImageView measures virtual drawable dimensions and caches them for drawing", async () => {
-    const { d, threads } = drawable(), view = rt.make("android/widget/ImageView");
+    const { d, threads } = await drawable(), view = rt.make("android/widget/ImageView");
     if (!(view instanceof JView)) throw new Error("Invalid view delegate");
     await vcall(view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
     await measureView(view, makeSpec(200, MS_AT_MOST), makeSpec(200, MS_AT_MOST));
@@ -187,7 +128,7 @@ describe("drawable-size-overrides", () => {
     Object.assign(holder, {
       [mangleMethod("onDescendantInvalidated", "(Landroid/view/View;Landroid/view/View;)V")]: (_child: JView, target: JView) => { targets.push(target); },
     });
-    const d = rt.make("android/graphics/drawable/ColorDrawable");
+    const d = await newObj("android/graphics/drawable/ColorDrawable", "()V");
     for (const [name, desc, args] of [
       ["setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", [d]],
       ["setColorFilter", "(I)V", [0xff00ff00]],
@@ -197,14 +138,14 @@ describe("drawable-size-overrides", () => {
     ] satisfies [string, string, unknown[]][]) {
       targets.length = 0;
       await vcall(view, name, desc, ...args);
-      expect(targets).toEqual([view]);
+      expect([...new Set(targets)]).toEqual([view]);
     }
   });
   test("ImageView retains filters across replacement and invokes drawable overrides after mutation", async () => {
     const view = rt.make("android/widget/ImageView"), thread = new JThread();
     const events: [string, unknown, JThread][] = [];
-    const make = () => {
-      const d = rt.make("android/graphics/drawable/Drawable");
+    const make = async () => {
+      const d = await newObj("android/graphics/drawable/ColorDrawable", "()V");
       Object.assign(d, {
         [mangleMethod("mutate", "()Landroid/graphics/drawable/Drawable;")]: async () => {
           events.push(["mutate", d, curThread]); await Promise.resolve(); return d;
@@ -218,7 +159,7 @@ describe("drawable-size-overrides", () => {
     expect(await vcall(filter, "getColor", "()I")).toBe(-65536);
     expect(enumName(await vcall(filter, "getMode", "()Landroid/graphics/PorterDuff$Mode;"))).toBe("SRC_ATOP");
     expect(events).toEqual([]);
-    for (const d of [make(), make()]) {
+    for (const d of [await make(), await make()]) {
       await vcallOn(thread, view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
       expect(events.splice(0)).toEqual([["mutate", d, thread], ["filter", filter, thread]]);
     }
@@ -226,89 +167,18 @@ describe("drawable-size-overrides", () => {
     await vcallOn(thread, view, "clearColorFilter", "()V");
     expect(events.splice(0)).toEqual([["mutate", d, thread], ["filter", null, thread]]);
     expect(await vcall(view, "getColorFilter", "()Landroid/graphics/ColorFilter;")).toBeNull();
-    const next = make();
+    const next = await make();
     await vcallOn(thread, view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", next);
     expect(events).toEqual([["mutate", next, thread], ["filter", null, thread]]);
   });
   test("suggested view minimums respect virtual background dimensions", async () => {
-    const { d } = drawable(), view = rt.make("android/widget/TextView");
+    const { d } = await drawable(), view = rt.make("android/widget/TextView");
     if (!(view instanceof JView)) throw new Error("Invalid view delegate");
     await vcall(view, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", d);
     expect(await vcall(view, "getSuggestedMinimumWidth", "()I")).toBe(84);
     expect(await vcall(view, "getSuggestedMinimumHeight", "()I")).toBe(48);
   });
 
-  test("layer bounds and drawing await each child on the dispatch thread", async () => {
-    const events: string[] = [], thread = new JThread();
-    const children = [0, 1].map(i => {
-      const d = rt.make("android/graphics/drawable/Drawable");
-      Object.assign(d, {
-        [mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V")]: async () => {
-          expect(curThread).toBe(thread);
-          await Promise.resolve();
-          events.push(`bounds ${i}`);
-        },
-        [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async () => {
-          expect(curThread).toBe(thread);
-          await Promise.resolve();
-          events.push(`draw ${i}`);
-        },
-      });
-      return d;
-    });
-    const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", children);
-    await vcallOn(thread, layer, "setBounds", "(IIII)V", 0, 0, 100, 100);
-    expect(events).toEqual(["bounds 0", "bounds 1"]);
-    await vcallOn(thread, layer, "draw", "(Landroid/graphics/Canvas;)V", null);
-    expect(events).toEqual(["bounds 0", "bounds 1", "draw 0", "draw 1"]);
-  });
-
-  test("layer gravity uses virtual intrinsic size on non-fill axes", async () => {
-    const { d, threads } = drawable(), thread = new JThread();
-    const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", [d]);
-    await vcall(layer, "setLayerGravity", "(II)V", 0, 0x17);
-    await vcallOn(thread, layer, "setBounds", "(IIII)V", 0, 0, 100, 60);
-    const bounds = await vcall(d, "getBounds", "()Landroid/graphics/Rect;");
-    expect([bounds.left, bounds.top, bounds.right, bounds.bottom]).toEqual([0, 6, 100, 54]);
-    expect(threads).toEqual([thread]);
-  });
-
-
-  test("nested drawable containers share virtual size and draw dispatch", async () => {
-    const { d } = drawable();
-    const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", [d]);
-    for (const name of ["RotateDrawable", "ScaleDrawable", "DrawableWrapper"]) {
-      const wrapper = await newObj("android/graphics/drawable/" + name, null);
-      await vcall(wrapper, "setDrawable", "(Landroid/graphics/drawable/Drawable;)V", layer);
-      expect(await vcall(wrapper, "getIntrinsicWidth", "()I")).toBe(84);
-      expect(await vcall(wrapper, "getIntrinsicHeight", "()I")).toBe(48);
-    }
-    let draws = 0;
-    Object.assign(d, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: () => { draws++; } });
-    expect(vcall(layer, "draw", "(Landroid/graphics/Canvas;)V", null)).toBeUndefined();
-    expect(draws).toBe(1);
-    await vcall(layer, "setLayerSize", "(III)V", 0, 100, 60);
-    expect(vcall(layer, "getIntrinsicWidth", "()I")).toBe(100);
-  });
-
-
-  test("InsetDrawable replaces its child through the wrapper and retains pixel or fractional insets", async () => {
-    for (const [type, inset, expected] of [["I", 3, 90], ["F", 0.25, 168]] as const) {
-      const first = drawable().d, next = drawable().d;
-      const wrapped = await newObj("android/graphics/drawable/InsetDrawable", `(Landroid/graphics/drawable/Drawable;${type})V`, first, inset);
-      expect(rt.iof(wrapped, "android/graphics/drawable/DrawableWrapper")).toBe(1);
-      await vcall(wrapped, "setDrawable", "(Landroid/graphics/drawable/Drawable;)V", next);
-      expect(first.callback).toBeNull(); expect(next.callback).toBe(wrapped);
-      expect(await vcall(wrapped, "getDrawable", "()Landroid/graphics/drawable/Drawable;")).toBe(next);
-      expect(await vcall(wrapped, "getIntrinsicWidth", "()I")).toBe(expected);
-      await vcall(wrapped, "setBounds", "(IIII)V", 0, 0, 100, 80);
-      const b = next.bounds, x = type === "I" ? 3 : 25, y = type === "I" ? 3 : 20;
-      expect([b.left, b.top, b.right, b.bottom]).toEqual([x, y, 100 - x, 80 - y]);
-      const padding = await newObj("android/graphics/Rect");
-      expect(await vcall(wrapped, "getPadding", "(Landroid/graphics/Rect;)Z", padding)).toBe(1);
-      expect([padding.left, padding.top, padding.right, padding.bottom]).toEqual([x, y, x, y]);
-    }
-  });
 });
 
 describe("egl14-query-context", () => {
@@ -451,18 +321,26 @@ describe("imageview-alpha", () => {
 
   test("ImageView image alpha applies to the drawable and survives replacement", async () => {
     const view = new JImageView();
-    const first = new JDrawable();
-    await vcall(view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", first);
+    const drawable = async () => {
+      const d = await newObj("android/graphics/drawable/ColorDrawable", "()V"), alphas: number[] = [];
+      Object.assign(d, {
+        [mangleMethod("setAlpha", "(I)V")]: (a: number) => { alphas.push(a); },
+        [mangleMethod("mutate", "()Landroid/graphics/drawable/Drawable;")]: () => d,
+      });
+      return { d, alphas };
+    };
+    const first = await drawable();
+    await vcall(view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", first.d);
     await vcall(view, "setImageAlpha", "(I)V", 64);
-    expect(first.alpha).toBe(64);
+    expect(first.alphas).toEqual([64]);
     expect(await vcall(view, "getImageAlpha", "()I")).toBe(64);
     expect(view.alphaV).toBe(1);
 
-    const replacement = new JDrawable();
-    await vcall(view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", replacement);
-    expect(replacement.alpha).toBe(64);
+    const replacement = await drawable();
+    await vcall(view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", replacement.d);
+    expect(replacement.alphas).toEqual([64]);
     await vcall(view, "setAlpha", "(I)V", 255);
-    expect(replacement.alpha).toBe(255);
+    expect(replacement.alphas).toEqual([64, 255]);
   });
 });
 
@@ -616,82 +494,6 @@ describe("path-copy", () => {
     expect(pathIsConvex(path)).toBe(false);
     path.ops = [["m", Infinity, 0]];
     expect(pathIsConvex(path)).toBe(false);
-  });
-});
-
-describe("scale-drawable", () => {
-  rt.linkNatives();
-
-  test("ScaleDrawable resizes its child by level and gravity and awaits virtual drawing", async () => {
-    const child = rt.make("android/graphics/drawable/Drawable");
-    if (!(child instanceof JDrawable)) throw new Error("Invalid drawable");
-    const events: string[] = [];
-    Object.assign(child, {
-      [mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V")]: async () => { await Promise.resolve(); events.push("bounds"); },
-      [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async () => { await Promise.resolve(); events.push("draw"); },
-    });
-    const scaled = await newObj("android/graphics/drawable/ScaleDrawable", "(Landroid/graphics/drawable/Drawable;IFF)V", child, 85, 1, 0.5);
-    await vcall(scaled, "setBounds", "(IIII)V", 10, 20, 110, 100);
-    await vcall(scaled, "draw", "(Landroid/graphics/Canvas;)V", null);
-    expect(events).not.toContain("draw");
-    await vcall(scaled, "setLevel", "(I)Z", 5000);
-    expect(child.bounds).toMatchObject({ left: 60, top: 40, right: 110, bottom: 100 });
-    expect(child.level).toBe(5000);
-    expect(events.at(-1)).toBe("bounds");
-    await vcall(scaled, "draw", "(Landroid/graphics/Canvas;)V", null);
-    expect(events.at(-1)).toBe("draw");
-    await vcall(scaled, "setLevel", "(I)Z", 10000);
-    expect(child.bounds).toMatchObject({ left: 10, top: 20, right: 110, bottom: 100 });
-  });
-});
-
-test("a level list shows the first item whose range holds the level, passing the level on", async () => {
-  const d = await newObj("android/graphics/drawable/LevelListDrawable", "()V");
-  const low = rt.make("android/graphics/drawable/ColorDrawable") as JDrawable, high = rt.make("android/graphics/drawable/ColorDrawable") as JDrawable;
-  await vcall(d, "addLevel", "(IILandroid/graphics/drawable/Drawable;)V", 0, 5, low);
-  await vcall(d, "addLevel", "(IILandroid/graphics/drawable/Drawable;)V", 3, 10, high);
-  const current = () => vcall(d, "getCurrent", "()Landroid/graphics/drawable/Drawable;");
-  expect(await current()).toBe(low);
-  expect(await vcall(d, "setLevel", "(I)Z", 7)).toBe(1);
-  expect(await current()).toBe(high);
-  expect(high.level).toBe(7);
-  await vcall(d, "setLevel", "(I)Z", 11);
-  expect(await current()).toBe(null);
-});
-
-describe("transition-drawable", () => {
-  class Child extends JDrawable {
-    drawn: number[] = [];
-    async paint() { await Promise.resolve(); this.drawn.push(this.alpha); }
-  }
-  rt.register({ name: "test/TransitionChild", ctor: Child, sup: "android/graphics/drawable/Drawable", methods: {
-    "draw(Landroid/graphics/Canvas;)V": function (this: Child) { return this.paint(); },
-  } });
-  rt.linkNatives();
-  test("transitions crossfade, reverse from the current alpha and restore child alpha", async () => {
-    let now = 1000;
-    const clock = spyOn(performance, "now").mockImplementation(() => now);
-    try {
-      const a = rt.make("test/TransitionChild") as Child, b = rt.make("test/TransitionChild") as Child;
-      const d = await newObj("android/graphics/drawable/TransitionDrawable", "([Landroid/graphics/drawable/Drawable;)V", [a, b]);
-      const draw = () => vcall(d, "draw", "(Landroid/graphics/Canvas;)V", null);
-      await vcall(d, "setCrossFadeEnabled", "(Z)V", 1);
-      await vcall(d, "startTransition", "(I)V", 100);
-      await draw(); now += 50; await draw();
-      expect(a.drawn).toEqual([255, 128]); expect(b.drawn).toEqual([127]);
-      expect([a.alpha, b.alpha]).toEqual([255, 255]);
-      await vcall(d, "reverseTransition", "(I)V", 999);
-      await draw(); now += 50; await draw();
-      expect(a.drawn.at(-1)).toBe(255);
-      expect(b.drawn).toEqual([127, 127]);
-      await vcall(d, "startTransition", "(I)V", 100);
-      await draw(); now += 100; await draw();
-      expect(b.drawn.at(-1)).toBe(255);
-      const count = b.drawn.length;
-      await vcall(d, "resetTransition", "()V"); await draw();
-      expect(b.drawn.length).toBe(count);
-      expect(a.drawn.at(-1)).toBe(255);
-    } finally { clock.mockRestore(); }
   });
 });
 

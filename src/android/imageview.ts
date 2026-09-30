@@ -1,31 +1,37 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates } from "./view";
-import {
-  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize,
-  cslBoundary,
-} from "./drawable";
+import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates, isShown } from "./view";
+import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback, rvCsl } from "./drawable";
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
-import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
+import { type JAttrSet, obtainStyled, rvInt } from "./res";
 import { modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat } from "./graphics";
 import { canvasOf, type JavaCanvas } from "./canvas";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
   get drawable(): JDrawable | null { return this.dr; }
-  /** a caller that goes on to call the view's invalidate() itself passes `invalidateView` false */
-  setDrawable(d: JDrawable | null, invalidateView = true) {
-    const thread = curThread;
-    if (this.dr) this.dr.callback = null;
+  /** AOSP updateDrawable: the old drawable let go, the new one given the view as its callback, its
+   *  state, visibility and level; a caller that goes on to call the view's invalidate() itself
+   *  passes `invalidateView` false */
+  setDrawable(d: JDrawable | null, invalidateView = true): unknown { return rt.drive(this.setDrawable$(d, invalidateView)); }
+  private *setDrawable$(d: JDrawable | null, invalidateView: boolean): Gen {
+    const thread = curThread, old = this.dr, same = old === d;
+    if (old) yield callOn(thread, () => setDrawableCallback(old, null));
     this.dr = d;
-    if (d) d.callback = this;
     if (invalidateView) invalidate(this);
-    return after(d ? vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())) : 0, () =>
-      after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
-      this.drawableW = w; this.drawableH = h;
-      return callOn(thread, () => after(this.applyTint(), () => after(this.applyColorFilter(), () => this.applyImageAlpha())));
-    })));
+    if (!d) { this.drawableW = this.drawableH = -1; return; }
+    yield callOn(thread, () => setDrawableCallback(d, this));
+    if (yield vcallOn(thread, d, "isStateful", "()Z")) yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
+    if (!same) yield vcallOn(thread, d, "setVisible", "(ZZ)Z", +(this.attached && isShown(this)), 1);
+    yield vcallOn(thread, d, "setLevel", "(I)Z", this.level);
+    this.drawableW = yield drawableSize(d, false, thread);
+    this.drawableH = yield drawableSize(d, true, thread);
+    yield callOn(thread, () => this.applyTint());
+    yield callOn(thread, () => this.applyColorFilter());
+    yield callOn(thread, () => this.applyImageAlpha());
   }
+  level = 0;
+  override drawables(): (JDrawable | null)[] { return [...super.drawables(), this.dr]; }
   /** setImageState: extra drawable states, replacing the view's own unless merged */
   imageState: Int32Array | null = null; mergeImageState = false;
   drawableW = -1; drawableH = -1;
@@ -84,14 +90,16 @@ const initImageView = driven(function* initImageView(view: JImageView, c: unknow
   if (ta.vals[1]) view.scaleType = rvInt(view.jres, ta.vals[1], 3);
   if (ta.vals[2]) view.adjustBounds = !!rvInt(view.jres, ta.vals[2], 0);
   if (ta.vals[4]) view.cropToPadding = !!rvInt(view.jres, ta.vals[4], 0);
+  // android:tint: a tint list over SRC_ATOP, the colour filter it was before Lollipop
   if (ta.vals[3]) {
-    const tint = rvColor(view.jres, ta.vals[3], 0);
-    if (view.drawable && tint) view.drawable.tint = tint;
+    view.tintCsl = yield rvCsl(view.jres, ta.vals[3], view.theme);
+    view.tintMode = yield modeConstant("android/graphics/PorterDuff$Mode", "SRC_ATOP");
+    yield view.applyTint();
   }
 });
 /** this.invalidate(), which an app's view may override */
 const invalidateV = (v: JView): unknown => vcallOn(curThread, v, "invalidate", "()V");
-const imageViewMethods: NativeSpec["methods"] = cslBoundary({
+const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": function (this: JImageView, c: unknown) { return initImageView(this, c, null, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JImageView, c: unknown, set: JAttrSet | null) { return initImageView(this, c, set, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number) { return initImageView(this, c, set, style); },
@@ -107,8 +115,9 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
     yield invalidateV(this);
   }),
   "setImageBitmap(Landroid/graphics/Bitmap;)V": function (this: JImageView, b: object | null) {
-    const d = b ? Object.assign(new JBitmapDrawable(), { bmp: b }) : null;
-    return vcallOn(curThread, this, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+    const thread = curThread;
+    return after(b ? newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", this.jres?.jobj ?? null, b) : null,
+      (d) => vcallOn(thread, this, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d));
   },
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
   "getImageAlpha()I": function (this: JImageView) { return this.imageAlpha; },
@@ -167,7 +176,10 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
     invalidate(this);
     if (this.drawable) return vcallOn(curThread, this.drawable, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
   },
-  "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
+  "setImageLevel(I)V": function (this: JImageView, l: number) {
+    this.level = l;
+    if (this.drawable) return vcallOn(curThread, this.drawable, "setLevel", "(I)Z", l);
+  },
   "setImageState([IZ)V": function (this: JImageView, state: Int32Array | null, merge: number) {
     this.imageState = state; this.mergeImageState = !!merge;
     if (this.drawable) { const pending = this.refreshDrawableState(); requestLayout(this); return pending; }
@@ -242,7 +254,7 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
       if (draw instanceof Promise) yield draw;
     } finally { nc.restoreToCount(saveCount); }
   }),
-});
+};
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });
 rt.register({
   name: "android/widget/ImageButton", ctor: class extends JImageView {

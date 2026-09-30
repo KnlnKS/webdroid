@@ -6,10 +6,13 @@ import { newObj, vcall, vcallOn, curThread, JThread } from "../../../src/jvm/nat
 import { canvasOver } from "../../../src/android/canvas";
 import { JView } from "../../../src/android/view";
 import { JMotionEvent } from "../../../src/android/motionevent";
+import { initDeviceLocales } from "../../../src/android/resnative";
 
 async function probe() {
   await loadPlatformDex();
   rt.linkNatives();
+  // a Paint (every framework drawable has one) takes the device's languages
+  await initDeviceLocales();
   const view = rt.make("android/widget/SeekBar");
   if (!(view instanceof JView)) throw new Error("Invalid SeekBar");
   view.right = 100; view.bottom = 40;
