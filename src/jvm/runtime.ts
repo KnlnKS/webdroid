@@ -635,7 +635,7 @@ export class Runtime {
       fieldsInit += `this.${mangled}=${defaultVal(dex.type(fr.type))};`;
     }
     info.ctor = info.isInterface ? class {}
-      : new Function("S", `return class extends S {constructor(){super();${fieldsInit}}}`)(info.superInfo?.ctor ?? JObj);
+      : new Function("S", fieldsInit ? `return class extends S {constructor(){super();${fieldsInit}}}` : "return class extends S {}")(info.superInfo?.ctor ?? JObj);
     info.ctor.$i = info;
     if (this.platformClasses.has(name) && def.virtualMethods.some((m) => m.codeOff && dex.method(m.methodIdx).name === "finalize" && dex.methodDesc(m.methodIdx) === "()V"))
       this.claimOnStore(info, def, dex);
