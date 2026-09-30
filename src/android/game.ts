@@ -1,44 +1,21 @@
-import { JObj, rt, fieldGetters } from "../jvm/runtime";
+// IGameManagerService, under AOSP's GameManager and GameState: a game (its category, or the legacy
+// isGame flag) runs in the standard mode; anything else does not support game modes. The states a
+// game reports feed only the power HAL, which is not modelled.
+import { JObj, rt, noops } from "../jvm/runtime";
 import { appHost } from "./apphost";
+import { hostStub } from "./binder";
 import { FLAG_IS_GAME, getAppInfo } from "./pm";
-import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 
-class JGameState extends JObj {
-  loading = 0;
-  mode = 0;
-  label = -1;
-  quality = -1;
+const GAME_MODE_UNSUPPORTED = 0, GAME_MODE_STANDARD = 1;
+function isGame(pkg: string | null): boolean {
+  if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("java/lang/SecurityException", "Access denied, requires android.permission.MANAGE_GAME_MODE");
+  const info = getAppInfo(appHost);
+  return info.category === 0 || !!(info.flags & FLAG_IS_GAME);
 }
-rt.register({ name: "android/app/GameState", ctor: JGameState, ifaces: ["android/os/Parcelable"],
-  statics: {
-    MODE_UNKNOWN: 0, MODE_NONE: 1, MODE_GAMEPLAY_INTERRUPTIBLE: 2, MODE_GAMEPLAY_UNINTERRUPTIBLE: 3, MODE_CONTENT: 4,
-    get CREATOR() { return parcelCreator("android/app/GameState", async (p) => {
-      const state = new JGameState();
-      state.loading = readInt(p); state.mode = readInt(p); state.label = readInt(p); state.quality = readInt(p);
-      return state;
-    }); },
-  },
-  methods: {
-    "<init>(ZI)V": function (this: JGameState, loading: number, mode: number) { this.loading = loading; this.mode = mode; },
-    "<init>(ZIII)V": function (this: JGameState, loading: number, mode: number, label: number, quality: number) {
-      this.loading = loading; this.mode = mode; this.label = label; this.quality = quality;
-    },
-    "isLoading()Z": function (this: JGameState) { return this.loading; },
-    ...fieldGetters({ "getMode()I": "mode", "getLabel()I": "label", "getQuality()I": "quality" }),
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JGameState, p: JParcel) {
-      writeInt(p, this.loading); writeInt(p, this.mode); writeInt(p, this.label); writeInt(p, this.quality);
-    },
-  },
-});
-
-class JGameManager extends JObj {}
-rt.register({ name: "android/app/GameManager", ctor: JGameManager, methods: {
-  "getGameMode()I": () => {
-    const info = appHost ? getAppInfo(appHost) : null;
-    return info && (info.category === 0 || info.flags & FLAG_IS_GAME) ? 1 : 0;
-  },
-  "setGameState(Landroid/app/GameState;)V": (state: JGameState | null) => {
-    if (state == null) throw rt.mkThrowable("java/lang/NullPointerException", "gameState");
-  },
+rt.register({ name: "webdroid/GameManagerService", ctor: class extends JObj {}, sup: "android/app/IGameManagerService$Stub", methods: {
+  "getGameMode(Ljava/lang/String;I)I": (pkg: string | null) => isGame(pkg) ? GAME_MODE_STANDARD : GAME_MODE_UNSUPPORTED,
+  "setGameState(Ljava/lang/String;Landroid/app/GameState;I)V": (pkg: string | null) => { isGame(pkg); },
+  ...noops("notifyGraphicsEnvironmentSetup(Ljava/lang/String;I)V"),
+  "isAngleEnabled(Ljava/lang/String;I)Z": () => 0,
 } });
+hostStub("game", "webdroid/GameManagerService");

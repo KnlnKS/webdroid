@@ -117,7 +117,6 @@ const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
   input_method: "android/view/inputmethod/InputMethodManager",
   device_policy: "android/app/admin/DevicePolicyManager",
-  game: "android/app/GameManager",
   performance_hint: "android/os/PerformanceHintManager",
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
@@ -184,6 +183,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     newObj("android/app/LocaleManager", "(Landroid/content/Context;Landroid/app/ILocaleManager;)V", ctx, await hostedService("locale"))],
   textservices: ["android/view/textservice/TextServicesManager", async (ctx) => scall("android/view/textservice/TextServicesManager",
     "createInstance", "(Landroid/content/Context;)Landroid/view/textservice/TextServicesManager;", ctx)],
+  game: ["android/app/GameManager", (ctx) => newObj("android/app/GameManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
