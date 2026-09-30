@@ -145,6 +145,8 @@ function siteCache(c: unknown[], k: number, fn: Cells): unknown {
   return (c[k] = fn);
 }
 
+/** the app heap's limit, as Runtime.maxMemory reports it */
+export const HEAP_LIMIT = 512 * 1024 * 1024;
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
 const STRICT_FIELDS = process.env.NODE_ENV !== "production";
 /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
@@ -1019,12 +1021,19 @@ export class Runtime {
     }
     if (e instanceof RangeError) {
       if (/call stack/i.test(e.message)) return this.mkThrowable("java/lang/StackOverflowError", null);
+      // a typed array too long for the engine, or one it cannot back, is too big for the heap
+      const length = /Invalid typed array length: (\d+)/.exec(e.message);
+      if (length || /Array buffer allocation failed/.test(e.message)) return this.oom(length ? Number(length[1]) : NaN);
       if (/array length|Invalid typed array/i.test(e.message)) {
         return this.mkThrowable("java/lang/NegativeArraySizeException", e.message);
       }
     }
     if (e instanceof Error) return this.mkThrowable("java/lang/InternalError", e.message + "\n" + e.stack);
     return this.mkThrowable("java/lang/InternalError", String(e));
+  }
+
+  oom(bytes: number): unknown {
+    return this.mkThrowable("java/lang/OutOfMemoryError", `Failed to allocate a ${bytes} byte allocation with ${HEAP_LIMIT} free bytes`);
   }
 
   /** instance-of: 1/0 */
@@ -1096,9 +1105,10 @@ export class Runtime {
     if (v <= -9223372036854775808) return -9223372036854775808n;
     return BigInt(Math.trunc(v));
   }
-  /** object array with element-type tag */
+  /** object array with element-type tag; like ART's, one past the heap limit is an OutOfMemoryError */
   oa(len: number, t: string): unknown[] {
     if (len < 0) throw this.mkThrowable("java/lang/NegativeArraySizeException", String(len));
+    if (len * 4 > HEAP_LIMIT) throw this.oom(len * 4);
     const a = new Array(len).fill(null);
     (a as any).$t = t;
     return a;

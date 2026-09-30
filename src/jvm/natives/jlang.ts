@@ -1,7 +1,7 @@
 // java.lang.* natives. Convention: Java booleans are 0/1 numbers, longs are BigInt,
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
-import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
+import { rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
@@ -1849,7 +1849,7 @@ rt.register({
     "addShutdownHook(Ljava/lang/Thread;)V": (t: unknown) => { shutdownHooks.add(t); },
     "removeShutdownHook(Ljava/lang/Thread;)Z": (t: unknown) => (shutdownHooks.delete(t) ? 1 : 0),
     "availableProcessors()I": () => device.cpu.cores,
-    "maxMemory()J": () => 536870912n,
+    "maxMemory()J": () => BigInt(HEAP_LIMIT),
     "totalMemory()J": () => 268435456n,
     "freeMemory()J": () => 134217728n,
     "gc()V": () => {},
