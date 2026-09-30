@@ -648,6 +648,9 @@ export class Runtime {
       const fr = dex.field(f.fieldIdx);
       const desc = dex.type(fr.type), prop = mangleStaticField(fr.name, staticNames.get(fr.name)! > 1 ? desc : undefined);
       info.staticFieldTable.set(fr.name + ":" + desc, prop);
+      // a float or double static starts as a double: V8 turns a function whose own property changes
+      // from a small integer to a double into a dictionary, and its static calls stop inlining
+      if (desc === "D" || desc === "F") info.ctor[prop] = 0.5;
       info.ctor[prop] = defaultValue(desc);
     }
     return info;
