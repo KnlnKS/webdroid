@@ -11,7 +11,6 @@ import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
 import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/stdio";
 
-rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
