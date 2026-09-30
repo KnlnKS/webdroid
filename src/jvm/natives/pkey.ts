@@ -39,18 +39,53 @@ export const curveByName = (name: string) => CURVES.find((c) => c.name === name)
 export const curveByOid = (o: string) => CURVES.find((c) => c.oid === o);
 export const bitLength = (v: bigint) => v === 0n ? 0 : v.toString(2).length;
 
-// Jacobian points [X, Y, Z]; Z = 0 is the point at infinity
+// Jacobian points [X, Y, Z], each coordinate in [0, p); Z = 0 is the point at infinity. Scalar
+// multiplication runs wNAF digits over tables of affine odd multiples, so each addition is a mixed
+// one (madd-2007-bl); doubling takes dbl-2001-b's 3M+5S on the curves with a = -3.
 type Jac = [bigint, bigint, bigint];
 export type Point = [bigint, bigint] | null;
 const md = (v: bigint, p: bigint) => { const r = v % p; return r < 0n ? r + p : r; };
-function dbl(c: Curve, [X, Y, Z]: Jac): Jac {
+const INF: Jac = [1n, 1n, 0n];
+const aIsMinus3 = new WeakMap<Curve, boolean>();
+function dbl(c: Curve, P: Jac): Jac {
+  const p = c.p, X = P[0], Y = P[1], Z = P[2];
+  if (Z === 0n || Y === 0n) return INF;
+  let minus3 = aIsMinus3.get(c);
+  if (minus3 === undefined) aIsMinus3.set(c, minus3 = c.a === c.p - 3n);
+  if (!minus3) {
+    const XX = X * X % p, YY = Y * Y % p, YYYY = YY * YY % p, ZZ = Z * Z % p;
+    const S = md(2n * ((X + YY) ** 2n - XX - YYYY), p);
+    const M = md(3n * XX + c.a * (ZZ * ZZ % p), p);
+    const T = md(M * M - 2n * S, p);
+    return [T, md(M * (S - T) - 8n * YYYY, p), md((Y + Z) ** 2n - YY - ZZ, p)];
+  }
+  const delta = Z * Z % p, gamma = Y * Y % p, beta = X * gamma % p;
+  let t = X - delta;
+  if (t < 0n) t += p;
+  const alpha = 3n * t * (X + delta) % p;
+  let X3 = (alpha * alpha - 8n * beta) % p;
+  if (X3 < 0n) X3 += p;
+  let Y3 = (alpha * (4n * beta - X3) - 8n * (gamma * gamma % p)) % p;
+  if (Y3 < 0n) Y3 += p;
+  return [X3, Y3, 2n * Y * Z % p];
+}
+/** P + (x, y), the affine point negated when `negate` */
+function madd(c: Curve, P: Jac, x: bigint, y: bigint, negate: boolean): Jac {
   const p = c.p;
-  if (Z === 0n || Y === 0n) return [1n, 1n, 0n];
-  const XX = X * X % p, YY = Y * Y % p, YYYY = YY * YY % p, ZZ = Z * Z % p;
-  const S = md(2n * ((X + YY) ** 2n - XX - YYYY), p);
-  const M = md(3n * XX + c.a * (ZZ * ZZ % p), p);
-  const T = md(M * M - 2n * S, p);
-  return [T, md(M * (S - T) - 8n * YYYY, p), md((Y + Z) ** 2n - YY - ZZ, p)];
+  if (negate && y !== 0n) y = p - y;
+  if (P[2] === 0n) return [x, y, 1n];
+  const X1 = P[0], Y1 = P[1], Z1 = P[2], Z1Z1 = Z1 * Z1 % p;
+  let H = x * Z1Z1 % p - X1, r = y * Z1 % p * Z1Z1 % p - Y1;
+  if (H < 0n) H += p;
+  if (r < 0n) r += p;
+  if (H === 0n) return r === 0n ? dbl(c, P) : INF;
+  r *= 2n;
+  const HH = H * H % p, I = 4n * HH, J = H * I % p, V = X1 * I % p;
+  let X3 = (r * r - J - 2n * V) % p;
+  if (X3 < 0n) X3 += p;
+  let Y3 = (r * (V - X3) - 2n * Y1 * J) % p;
+  if (Y3 < 0n) Y3 += p;
+  return [X3, Y3, 2n * Z1 * H % p];
 }
 function add(c: Curve, P: Jac, Q: Jac): Jac {
   if (P[2] === 0n) return Q;
@@ -59,43 +94,77 @@ function add(c: Curve, P: Jac, Q: Jac): Jac {
   const Z1Z1 = Z1 * Z1 % p, Z2Z2 = Z2 * Z2 % p;
   const U1 = X1 * Z2Z2 % p, U2 = X2 * Z1Z1 % p, S1 = Y1 * Z2 % p * Z2Z2 % p, S2 = Y2 * Z1 % p * Z1Z1 % p;
   const H = md(U2 - U1, p), r = md(2n * (S2 - S1), p);
-  if (H === 0n) return r === 0n ? dbl(c, P) : [1n, 1n, 0n];
+  if (H === 0n) return r === 0n ? dbl(c, P) : INF;
   const I = 4n * H * H % p, J = H * I % p, V = U1 * I % p;
   const X3 = md(r * r - J - 2n * V, p);
   return [X3, md(r * (V - X3) - 2n * S1 * J, p), md(((Z1 + Z2) ** 2n - Z1Z1 - Z2Z2) * H, p)];
 }
-const neg = (c: Curve, [X, Y, Z]: Jac): Jac => [X, Y === 0n ? 0n : c.p - Y, Z];
 export function toAffine(c: Curve, P: Jac): Point {
   if (P[2] === 0n) return null;
   const zi = modInverse(P[2], c.p), zi2 = zi * zi % c.p;
   return [P[0] * zi2 % c.p, P[1] * zi2 % c.p * zi % c.p];
 }
-/** width-4 NAF digits of k, least significant first */
-function naf(k: bigint): number[] {
-  const out: number[] = [];
-  while (k > 0n) {
-    let d = 0;
-    if (k & 1n) { d = Number(k & 15n); if (d > 8) d -= 16; k -= BigInt(d); }
-    out.push(d); k >>= 1n;
+/** P, 3P, 5P, … (2^(w-2) of them) in affine form, one inversion for all; null for a multiple at infinity */
+function oddMultiples(c: Curve, P: [bigint, bigint], w: number): Point[] {
+  const p = c.p, base: Jac = [md(P[0], p), md(P[1], p), 1n], twice = dbl(c, base), jac: Jac[] = [base];
+  for (let i = 1; i < 1 << (w - 2); i++) jac.push(add(c, jac[i - 1], twice));
+  // Montgomery's trick: prefix products of the Zs, one inverse, then back down
+  const prefix: bigint[] = [];
+  let acc = 1n;
+  for (const q of jac) { prefix.push(acc); if (q[2] !== 0n) acc = acc * q[2] % p; }
+  let inv = modInverse(acc, p);
+  const out: Point[] = new Array(jac.length);
+  for (let i = jac.length - 1; i >= 0; i--) {
+    const q = jac[i];
+    if (q[2] === 0n) { out[i] = null; continue; }
+    const zi = inv * prefix[i] % p, zi2 = zi * zi % p;
+    inv = inv * q[2] % p;
+    out[i] = [q[0] * zi2 % p, q[1] * zi2 % p * zi % p];
   }
   return out;
 }
+/** width-w NAF digits of k ≥ 0, least significant first: odd digits in (-2^(w-1), 2^(w-1)), each
+ *  followed by at least w-1 zeros */
+function wnaf(k: bigint, w: number): Int8Array {
+  const s = k.toString(2), n = s.length, out = new Int8Array(n + 1), half = 1 << (w - 1);
+  const bit = (i: number) => i < n ? s.charCodeAt(n - 1 - i) - 48 : 0;
+  for (let i = 0, carry = 0; i <= n; ) {
+    if (bit(i) === carry) { i++; continue; }
+    let word = carry;
+    for (let j = 0; j < w; j++) word += bit(i + j) << j;
+    if (word > half) { word -= half << 1; carry = 1; } else carry = 0;
+    out[i] = word;
+    i += w;
+  }
+  return out;
+}
+/** each curve's generator table, wider than a one-off point's */
+const generatorTables = new WeakMap<Curve, Point[]>();
+const G_WINDOW = 7, P_WINDOW = 5;
 /** Σ kᵢ·Pᵢ, the scalars' NAFs sharing one doubling chain (Shamir's trick) */
 export function mulAdd(c: Curve, terms: [bigint, Point][]): Point {
-  const tables = terms.map(([, P]) => {
-    const base: Jac = [P![0], P![1], 1n], twice = dbl(c, base), t: Jac[] = [base];
-    for (let i = 1; i < 4; i++) t.push(add(c, t[i - 1], twice)); // P, 3P, 5P, 7P
-    return t;
-  });
-  const nafs = terms.map(([k]) => naf(md(k, c.n)));
-  let R: Jac = [1n, 1n, 0n];
-  for (let i = Math.max(...nafs.map((d) => d.length)) - 1; i >= 0; i--) {
+  const tables: Point[][] = [], digits: Int8Array[] = [];
+  let len = 0;
+  for (const [k, P] of terms) {
+    const isG = P![0] === c.gx && P![1] === c.gy;
+    let table = isG ? generatorTables.get(c) : undefined;
+    if (!table) {
+      table = oddMultiples(c, P!, isG ? G_WINDOW : P_WINDOW);
+      if (isG) generatorTables.set(c, table);
+    }
+    const d = wnaf(md(k, c.n), isG ? G_WINDOW : P_WINDOW);
+    tables.push(table); digits.push(d);
+    len = Math.max(len, d.length);
+  }
+  let R: Jac = INF;
+  for (let i = len - 1; i >= 0; i--) {
     R = dbl(c, R);
-    nafs.forEach((d, j) => {
-      const v = d[i] ?? 0;
-      if (v > 0) R = add(c, R, tables[j][(v - 1) >> 1]);
-      else if (v < 0) R = add(c, R, neg(c, tables[j][(-v - 1) >> 1]));
-    });
+    for (let j = 0; j < digits.length; j++) {
+      const v = digits[j][i];
+      if (!v) continue;
+      const q = tables[j][(v < 0 ? -v : v) >> 1];
+      if (q) R = madd(c, R, q[0], q[1], v < 0);
+    }
   }
   return toAffine(c, R);
 }

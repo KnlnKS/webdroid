@@ -50,6 +50,97 @@ describe("conscrypt-natives", () => {
     await vcall(cert, "verify", "(Ljava/security/PublicKey;)V", await vcall(cert, "getPublicKey", "()Ljava/security/PublicKey;"));
   }, 30_000);
 
+  test("the TS primitives match node:crypto's BoringSSL across sizes, modes and curves", async () => {
+    const nc = await import("node:crypto");
+    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers");
+    const { DIGESTS } = await import("../src/jvm/natives/digest");
+    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey");
+    const { modPow } = await import("../src/jvm/natives/jmath");
+    const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der");
+    const rnd = (n: number) => new Uint8Array(nc.randomBytes(n));
+    const same = (a: Uint8Array, b: Uint8Array | Buffer) => expect(Buffer.from(a).toString("hex")).toBe(Buffer.from(b).toString("hex"));
+    for (const keyLen of [16, 24, 32]) {
+      const key = rnd(keyLen), iv = rnd(16), bits = keyLen * 8, bc = aes(key);
+      for (const n of [0, 16, 48, 1024]) {
+        const data = rnd(n), ecb = data.slice(), cbc = data.slice(), chain = iv.slice();
+        for (let off = 0; off < n; off += 16) bc.encrypt(ecb, off);
+        same(ecb, nc.createCipheriv(`aes-${bits}-ecb`, key, null).setAutoPadding(false).update(data));
+        bc.cbc!(cbc, chain, true);
+        same(cbc, nc.createCipheriv(`aes-${bits}-cbc`, key, iv).setAutoPadding(false).update(data));
+        if (n) same(chain, cbc.subarray(n - 16));
+        const back = cbc.slice();
+        bc.cbc!(back, iv.slice(), false);
+        same(back, data);
+        for (let off = 0; off < n; off += 16) bc.decrypt(ecb, off);
+        same(ecb, data);
+      }
+      for (const n of [1, 15, 17, 100]) {
+        const data = rnd(n), out = data.slice(), counter = Uint8Array.from(iv);
+        counter.fill(0xff, 8); // the whole-block increment carries past the low word
+        const start = counter.slice();
+        ctr(bc, counter, out, new Uint8Array(16), 16);
+        same(out, nc.createCipheriv(`aes-${bits}-ctr`, key, start).update(data));
+      }
+      if (keyLen === 24) continue;
+      for (const [n, nonceLen, tagLen, aadLen] of [[0, 12, 16, 0], [1, 12, 16, 3], [100, 12, 12, 20], [1024, 16, 16, 0], [33, 8, 16, 17]]) {
+        const nonce = rnd(nonceLen), data = rnd(n), aad = rnd(aadLen);
+        const c = nc.createCipheriv(`aes-${bits}-gcm` as import("node:crypto").CipherGCMTypes, key, nonce, { authTagLength: tagLen }).setAAD(aad);
+        const expected = Buffer.concat([c.update(data), c.final(), c.getAuthTag()]);
+        const sealed = new AesGcm(key).seal(nonce, data, aad, tagLen);
+        same(sealed, expected);
+        same(new AesGcm(key).open(nonce, sealed, aad, tagLen)!, data);
+        sealed[sealed.length - 1] ^= 1;
+        expect(new AesGcm(key).open(nonce, sealed, aad, tagLen)).toBeNull();
+      }
+    }
+    // node:crypto here lacks ChaCha20-Poly1305: RFC 8439's AEAD vector (§2.8.2) and Poly1305's (§2.5.2)
+    const sunscreen = new TextEncoder().encode("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+    const cp = new ChaCha20Poly1305(Uint8Array.from({ length: 32 }, (_, i) => 0x80 + i)), cpNonce = Buffer.from("070000004041424344454647", "hex"), cpAad = Buffer.from("50515253c0c1c2c3c4c5c6c7", "hex");
+    const sealed = cp.seal(cpNonce, sunscreen, cpAad, 16);
+    expect(Buffer.from(sealed.subarray(0, 16)).toString("hex")).toBe("d31a8d34648e60db7b86afbc53ef7ec2");
+    expect(Buffer.from(sealed.subarray(-16)).toString("hex")).toBe("1ae10b594f09e26a7e902ecbd0600691");
+    same(cp.open(cpNonce, sealed, cpAad, 16)!, sunscreen);
+    sealed[3] ^= 1;
+    expect(cp.open(cpNonce, sealed, cpAad, 16)).toBeNull();
+    const mac = new Poly1305(Buffer.from("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b", "hex"));
+    mac.update(new TextEncoder().encode("Cryptographic Forum Research Group"));
+    expect(Buffer.from(mac.digest()).toString("hex")).toBe("a8061dc1305136c6c22b8baf0c0127a9");
+    // RFC 8439 A.3 #5 and #6: the accumulator ends at or above p
+    for (const [key, msg] of [["02" + "00".repeat(31), "ff".repeat(16)], ["02" + "00".repeat(15) + "ff".repeat(16), "02" + "00".repeat(15)]]) {
+      const m = new Poly1305(Buffer.from(key, "hex"));
+      m.update(Buffer.from(msg, "hex"));
+      expect(Buffer.from(m.digest()).toString("hex")).toBe("03" + "00".repeat(15));
+    }
+    for (const name of ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"])
+      for (const n of [0, 55, 56, 64, 111, 112, 129, 5000]) {
+        const data = rnd(n), h = DIGESTS[name]();
+        h.update(data.subarray(0, n >> 1)); h.update(data.subarray(n >> 1));
+        same(h.digest(), nc.createHash(name).update(data).digest());
+      }
+    for (const [ours, theirs] of [["prime256v1", "prime256v1"], ["secp384r1", "secp384r1"], ["secp521r1", "secp521r1"], ["secp224r1", "secp224r1"]]) {
+      const c = curveByName(ours)!, { privateKey, publicKey } = nc.generateKeyPairSync("ec", { namedCurve: theirs });
+      const Q = decodePoint(c, new Uint8Array(publicKey.export({ format: "der", type: "spki" })).subarray(-(1 + 2 * c.bytes)));
+      // SEC 1 ECPrivateKey: SEQUENCE { version, OCTET STRING privateKey, ... }
+      const d = bytesToBig(children(parseOne(new Uint8Array(privateKey.export({ format: "der", type: "sec1" }))).body)[1].body);
+      expect(mul(c, d, G(c))).toEqual(Q);
+      for (let i = 0; i < 3; i++) {
+        const msg = rnd(40), digest = new Uint8Array(nc.createHash("sha256").update(msg).digest());
+        const sig = new Uint8Array(nc.sign("sha256", msg, privateKey));
+        expect(ecdsaVerify(c, Q, digest, sig)).toBe(true);
+        digest[0] ^= 1;
+        expect(ecdsaVerify(c, Q, digest, sig)).toBe(false);
+        digest[0] ^= 1;
+        expect(nc.verify("sha256", msg, publicKey, Buffer.from(ecdsaSign(c, d, digest)))).toBe(true);
+      }
+    }
+    const binaryPow = (b: bigint, e: bigint, m: bigint) => { let r = 1n % m; for (b %= m; e > 0n; e >>= 1n, b = b * b % m) if (e & 1n) r = r * b % m; return r; };
+    for (const bits of [8, 63, 64, 65, 200, 1024]) {
+      const m = BigInt("0x" + nc.randomBytes(bits >> 3 || 1).toString("hex")) | 1n, e = BigInt("0x" + nc.randomBytes(bits >> 3 || 1).toString("hex"));
+      const b = BigInt("0x" + nc.randomBytes(40).toString("hex"));
+      expect(modPow(b, e, m)).toBe(binaryPow(b, e, m));
+    }
+  }, 60_000);
+
   test("ECDH agrees on one secret from either side", async () => {
     const gen = await getInstance("java/security/KeyPairGenerator", "EC");
     await vcall(gen, "initialize", "(I)V", 256);

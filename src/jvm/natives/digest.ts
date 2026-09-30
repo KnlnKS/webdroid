@@ -108,13 +108,12 @@ class SHA1 extends MD {
     const w = this.w, h = this.h;
     for (let i = 0; i < 16; i++) w[i] = be32(b, off + 4 * i);
     for (let i = 16; i < 80; i++) { const x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]; w[i] = (x << 1) | (x >>> 31); }
-    let a = h[0], bb = h[1], c = h[2], d = h[3], e = h[4];
-    for (let i = 0; i < 80; i++) {
-      const f = i < 20 ? ((bb & c) | (~bb & d)) + 0x5a827999 : i < 40 ? (bb ^ c ^ d) + 0x6ed9eba1
-        : i < 60 ? ((bb & c) | (bb & d) | (c & d)) + 0x8f1bbcdc : (bb ^ c ^ d) + 0xca62c1d6;
-      const t = (((a << 5) | (a >>> 27)) + f + e + w[i]) | 0;
-      e = d; d = c; c = (bb << 30) | (bb >>> 2); bb = a; a = t;
-    }
+    // a loop per round function: choosing it per step doubled the time
+    let a = h[0], bb = h[1], c = h[2], d = h[3], e = h[4], i = 0;
+    for (; i < 20; i++) { const t = (((a << 5) | (a >>> 27)) + (d ^ (bb & (c ^ d))) + 0x5a827999 + e + w[i]) | 0; e = d; d = c; c = (bb << 30) | (bb >>> 2); bb = a; a = t; }
+    for (; i < 40; i++) { const t = (((a << 5) | (a >>> 27)) + (bb ^ c ^ d) + 0x6ed9eba1 + e + w[i]) | 0; e = d; d = c; c = (bb << 30) | (bb >>> 2); bb = a; a = t; }
+    for (; i < 60; i++) { const t = (((a << 5) | (a >>> 27)) + ((bb & c) | (d & (bb | c))) + 0x8f1bbcdc + e + w[i]) | 0; e = d; d = c; c = (bb << 30) | (bb >>> 2); bb = a; a = t; }
+    for (; i < 80; i++) { const t = (((a << 5) | (a >>> 27)) + (bb ^ c ^ d) + 0xca62c1d6 + e + w[i]) | 0; e = d; d = c; c = (bb << 30) | (bb >>> 2); bb = a; a = t; }
     h[0] = (h[0] + a) | 0; h[1] = (h[1] + bb) | 0; h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0; h[4] = (h[4] + e) | 0;
   }
   protected out(dst: DataView) { for (let i = 0; i < 5; i++) dst.setInt32(4 * i, this.h[i]); }

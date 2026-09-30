@@ -211,6 +211,7 @@ function transform(c: CipherCtx, data: Uint8Array) {
   const bc = c.bc!;
   if (d.mode === "ctr") { c.used = ctr(bc, c.iv, data, c.stream, c.used); return; }
   const n = d.block, iv = c.iv;
+  if (d.mode === "cbc" && bc.cbc) { bc.cbc(data, iv, c.encrypting); return; }
   for (let off = 0; off < data.length; off += n) {
     if (d.mode === "ecb") { c.encrypting ? bc.encrypt(data, off) : bc.decrypt(data, off); continue; }
     if (c.encrypting) {
