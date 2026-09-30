@@ -509,6 +509,23 @@ const sunMethods: NativeSpec["methods"] = {
   },
   "freeMemory(J)V": (address: bigint) => mem.free(rawAddress(address)),
   "putByte(JB)V": (address: bigint, value: number) => mem.st8(rawAddress(address), value),
+  "setMemory(JJB)V": (address: bigint, bytes: bigint, value: number) => mem.memset(rawAddress(address), value, Number(bytes)),
+  // NativeObject's struct accessors (sun.nio.ch's iovecs), with pointers as wide as the guest's
+  "addressSize()I": () => 4,
+  "pageSize()I": () => 4096,
+  "getByte(J)B": (a: bigint) => mem.ld8s(rawAddress(a)),
+  "getShort(J)S": (a: bigint) => mem.ld16s(rawAddress(a)),
+  "getChar(J)C": (a: bigint) => mem.ld16u(rawAddress(a)),
+  "getInt(J)I": (a: bigint) => mem.ld32(rawAddress(a)),
+  "getLong(J)J": (a: bigint) => mem.ld64(rawAddress(a)),
+  "getFloat(J)F": (a: bigint) => mem.ldf32(rawAddress(a)),
+  "getDouble(J)D": (a: bigint) => mem.ldf64(rawAddress(a)),
+  "putShort(JS)V": (a: bigint, v: number) => mem.st16(rawAddress(a), v),
+  "putChar(JC)V": (a: bigint, v: number) => mem.st16(rawAddress(a), v),
+  "putInt(JI)V": (a: bigint, v: number) => mem.st32(rawAddress(a), v),
+  "putLong(JJ)V": (a: bigint, v: bigint) => mem.st64(rawAddress(a), v),
+  "putFloat(JF)V": (a: bigint, v: number) => mem.stf32(rawAddress(a), v),
+  "putDouble(JD)V": (a: bigint, v: number) => mem.stf64(rawAddress(a), v),
   "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
     const info = cls.ci!;
     const p = rt.initClass(info); if (p) yield p;

@@ -1,15 +1,15 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, type NativeSpec, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
-import { mangleField, charsToString, utf8, concat, i8, u8 } from "../abi";
-import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, defineException, type JSimpleEnum, checkFromIndexSize } from "./jlang";
+import { mangleField, charsToString, utf8, concat, i8 } from "../abi";
+import { vcall, vcallOn, curThread, after, newObj, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { mappedBuffer, readOnlyMapping, wrapBytes, remainingBytes, resident, limit, setLimit, setPosition, position as bufferPosition, type JBuffer } from "./jnio";
+import { isExternal, mapExternal, memoryAt, unmapExternal } from "./jmemory";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
-import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile } from "../../native/stdio";
+import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
@@ -92,12 +92,13 @@ let descriptorProp: string | undefined;
 const descriptor = () => descriptorProp ??= declaredField(FILE_DESCRIPTOR, "descriptor");
 export const fdInt = (d: JObj | null): number => d ? (d as unknown as Record<string, number>)[descriptor()] : -1;
 export function setFdInt(d: JObj, fd: number): void { (d as unknown as Record<string, number>)[descriptor()] = fd; }
-/** jniCreateFileDescriptor: a `new FileDescriptor()` holding `fd` */
+/** jniCreateFileDescriptor: a `new FileDescriptor()` given `fd` through setInt$, which also
+ *  records whether it appends */
 export function mkFd(fd: number): JObj | Promise<JObj> {
   const thread = curThread, info = rt.link(FILE_DESCRIPTOR), init = rt.initClass(info);
   const make = () => {
     const d = new info.ctor() as JObj;
-    return after(vcallOn(thread, d, "<init>", "()V"), () => { setFdInt(d, fd); return d; });
+    return after(vcallOn(thread, d, "<init>", "()V"), () => after(vcallOn(thread, d, "setInt$", "(I)V", fd), () => d));
   };
   return init ? init.then(make) : make();
 }
@@ -330,170 +331,124 @@ rt.register({
   },
 });
 
-// sun.nio.ch.FileChannelImpl over its stream's descriptor. libcore's needs NIO internals the TS
-// FileChannel lacks (AbstractInterruptibleChannel state, NativeThreadSet, address-based
-// dispatcher natives). Locks are advisory.
-const fileLock = () => rt.make("java/nio/channels/FileLock");
-class JFileChannel extends JObj {
-  fd: JObj | null = null;
-  parent: JObj | null = null;
-  readable = false;
-  writable = false;
-  open = true;
-  opened(): number {
-    if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-    return fdInt(this.fd);
-  }
-  reading(): number {
-    const fd = this.opened();
-    if (!this.readable) throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
-    return fd;
-  }
-  writing(): number {
-    const fd = this.opened();
-    if (!this.writable) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
-    return fd;
-  }
+// ── sun.nio.ch's file natives (FileDispatcherImpl.c, FileChannelImpl.c, FileKey.c, IOUtil.c,
+// NativeThread.c) under libcore's FileChannelImpl. The socket side of sun.nio.ch is not here.
+const IOS_EOF = -1, IOS_UNAVAILABLE = -2, IOS_INTERRUPTED = -3, IOS_UNSUPPORTED = -4;
+/** convertReturnVal: a count, EOF on a zero-byte read, or an IOException with the errno's text */
+function ioStatus(n: number, reading: boolean): number {
+  if (n > 0) return n;
+  if (n === 0) return reading ? IOS_EOF : 0;
+  if (n === -E.AGAIN) return IOS_UNAVAILABLE;
+  if (n === -E.INTR) return IOS_INTERRUPTED;
+  return lastError(n, reading ? "Read failed" : "Write failed");
 }
-const fdSize = (fd: number): number => javaFdStat(fd)?.size ?? lastError(-E.BADF, null);
-function channelRead(channel: JFileChannel, dst: JBuffer, position = -1): number | Promise<number> {
-  const fd = channel.reading(), len = limit(dst) - bufferPosition(dst);
-  if (len === 0) return 0;
-  if (vcall(dst, "isReadOnly", "()Z")) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
-  // the bytes land once the read completes: guest memory may have moved meanwhile
+const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
+/** a read into native memory: the bytes land once it completes, since guest memory may move meanwhile */
+function readInto(address: bigint, len: number, read: (target: Uint8Array) => number | Promise<number>): number | Promise<number> {
   const scratch = new Uint8Array(len);
-  return after(position < 0 ? javaReadFd(fd, scratch) : javaPreadFd(fd, scratch, position), (n) => {
-    if (!lastError(n, null)) return -1;
-    remainingBytes(dst).set(scratch.subarray(0, n));
-    setPosition(dst, bufferPosition(dst) + n);
-    return n;
-  });
+  return after(read(scratch), (n) => { if (n > 0) mem.write(physical(address), scratch.subarray(0, n)); return ioStatus(n, true); });
 }
-function channelWrite(channel: JFileChannel, src: JBuffer, position = -1): number | Promise<number> {
-  if (!src) throw rt.mkThrowable("java/lang/NullPointerException", "src");
-  const fd = channel.writing();
-  if (limit(src) === bufferPosition(src)) return 0;
-  return after(resident(src), () => {
-    const bytes = remainingBytes(src);
-    const n = lastError(position < 0 ? javaWriteFd(fd, bytes) : javaPwriteFd(fd, bytes, position), null);
-    setPosition(src, bufferPosition(src) + n);
-    return n;
-  });
+/** a pread/pwrite offset: past what a file here can reach, EINVAL as the kernel reports an off_t overflow */
+function offset(position: bigint, len: number): number {
+  if (position + BigInt(len) > BigInt(Number.MAX_SAFE_INTEGER)) lastError(-E.INVAL, null);
+  return Number(position);
 }
-rt.register({ name: "java/nio/channels/FileChannel", ctor: class extends JObj {} });
-rt.register({
-  name: "sun/nio/ch/FileChannelImpl", ctor: JFileChannel, sup: "java/nio/channels/FileChannel",
-  methods: {
-    "static open(Ljava/io/FileDescriptor;Ljava/lang/String;ZZLjava/lang/Object;)Ljava/nio/channels/FileChannel;":
-      (fd: JObj, _path: string | null, readable: number, writable: number, parent: JObj | null) =>
-        Object.assign(rt.make("sun/nio/ch/FileChannelImpl") as JFileChannel, { fd, parent, readable: !!readable, writable: !!writable }),
-    // AbstractInterruptibleChannel.close: closed first, so the parent stream's close finds it so
-    "close()V": function (this: JFileChannel) {
-      if (!this.open) return;
-      this.open = false;
-      if (this.parent) return vcall(this.parent, "close", "()V");
-      const fd = fdInt(this.fd);
-      if (fd >= 0) { setFdInt(this.fd!, -1); javaCloseFd(fd); }
-    },
-    "isOpen()Z": function (this: JFileChannel) { return +this.open; },
-    "size()J": function (this: JFileChannel) { return BigInt(fdSize(this.opened())); },
-    "truncate(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, size: bigint) {
-      const fd = this.opened();
-      if (size < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative size");
-      if (!this.writable) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
-      if (size < BigInt(fdSize(fd))) lastError(javaTruncateFd(fd, Number(size)), null);
-      if (BigInt(lastError(javaSeekFd(fd, 0, 1), null)) > size) lastError(javaSeekFd(fd, Number(size), 0), null);
-      return this;
-    },
-    // an appending channel's position is the file's end
-    "position()J": function (this: JFileChannel) {
-      const fd = this.opened();
-      return BigInt(javaFcntlFd(fd, 3 /* F_GETFL */, 0) & O_APPEND ? fdSize(fd) : lastError(javaSeekFd(fd, 0, 1), null));
-    },
-    "position(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, position: bigint) {
-      const fd = this.opened();
-      if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position");
-      lastError(javaSeekFd(fd, Number(position), 0), null);
-      return this;
-    },
-    "map(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;": function (this: JFileChannel, mode: JSimpleEnum | null, position: bigint, size: bigint) {
-      const fd = this.opened();
-      if (!mode) return rt.npe();
-      if (position < 0n || size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/size");
-      if (mode.ename !== "READ_ONLY" && !this.writable) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
-      if (!this.readable) throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
-      const start = Number(position), length = Number(size), file = fdFile(fd), source = javaFdSource(fd);
-      if (!source) return lastError(-E.INVAL, null);
-      if (mode.ename === "READ_ONLY") {
-        if (start + length > source.size) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
-        // an immutable file's mapping pages from the file's own source, which outlives the descriptor
-        if (file?.source && !writable(file.source)) return readOnlyMapping(file.source, start, length, this.fd);
-      } else {
-        if (!file) return lastError(-E.INVAL, null);
-        // a writable mapping past the end extends the file first (FileChannelImpl.map truncates it up to position + size)
-        if (start + length > file.len) vfs.resize(file, start + length);
-      }
-      // guest memory holding the file's bytes: a shared mapping is kept coherent with the file
-      // (mappings.ts), as a native MAP_SHARED one is
-      return after(readFully(source, start, length), (bytes) => {
-        const va = length ? mem.mapVa(length, false) : 0;
-        if (length && !va) throw rt.mkThrowable("java/io/IOException", "Map failed");
-        if (length) mem.write(mem.txVa(BigInt(va)), bytes);
-        if (file && length && mode.ename !== "PRIVATE") trackSharedMap(BigInt(va), length, start, file, mode.ename === "READ_WRITE");
-        return mappedBuffer(va, length, this.fd, mode.ename === "READ_ONLY", () => {
-          if (!length) return;
-          syncShared(BigInt(va), length, true);
-          mem.unmapVa(BigInt(va), length);
-        });
-      });
-    },
-    "read(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, dst: JBuffer) { return channelRead(this, dst); },
-    "read(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, dst: JBuffer, position: bigint) {
-      if (position < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative position");
-      return channelRead(this, dst, Number(position));
-    },
-    "write(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, src: JBuffer) { return channelWrite(this, src); },
-    "write(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, src: JBuffer, position: bigint) {
-      if (position < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative position");
-      return channelWrite(this, src, Number(position));
-    },
-    "transferTo(JJLjava/nio/channels/WritableByteChannel;)J": driven(function* (this: JFileChannel, position: bigint, count: bigint, target: JObj | null): Gen {
-      const fd = this.reading(), thread = curThread;
-      if (!target) return rt.npe();
-      if (position < 0n || count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/count");
-      if (!(yield vcallOn(thread, target, "isOpen", "()Z"))) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-      if (target instanceof JFileChannel) target.writing();
-      const available = BigInt(fdSize(fd)) - position;
-      const length = Number(count < available ? count : available);
-      if (length <= 0) return 0n;
-      const chunk = new Int8Array(Math.min(length, 65536)), bytes = u8(chunk), buffer: JBuffer = yield wrapBytes(chunk);
-      let transferred = 0;
-      while (transferred < length) {
-        const n = lastError(yield javaPreadFd(this.reading(), bytes.subarray(0, Math.min(length - transferred, bytes.length)), Number(position) + transferred), null);
-        if (!n) break;
-        setLimit(buffer, n); setPosition(buffer, 0);
-        const written = Number(yield vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer));
-        transferred += written;
-        if (written < n) break;
-      }
-      return BigInt(transferred);
-    }),
-    "force(Z)V": function (this: JFileChannel) { this.opened(); },
-    "tryLock()Ljava/nio/channels/FileLock;": fileLock,
-    "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
-    "lock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
-    "lock()Ljava/nio/channels/FileLock;": fileLock,
+/** the descriptor a FileDescriptor holds, or EBADF's IOException */
+function openFd(d: JObj | null): number {
+  const fd = fdInt(d);
+  if (fd < 0) lastError(-E.BADF, null);
+  return fd;
+}
+rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
+  "read0(Ljava/io/FileDescriptor;JI)I": (d: JObj, address: bigint, len: number) => readInto(address, len, (t) => javaReadFd(openFd(d), t)),
+  "pread0(Ljava/io/FileDescriptor;JIJ)I": (d: JObj, address: bigint, len: number, position: bigint) =>
+    readInto(address, len, (t) => javaPreadFd(openFd(d), t, offset(position, len))),
+  "write0(Ljava/io/FileDescriptor;JI)I": (d: JObj, address: bigint, len: number) =>
+    after(memoryAt(address, len), (bytes) => ioStatus(javaWriteFd(openFd(d), bytes), false)),
+  "pwrite0(Ljava/io/FileDescriptor;JIJ)I": (d: JObj, address: bigint, len: number, position: bigint) =>
+    after(memoryAt(address, len), (bytes) => ioStatus(javaPwriteFd(openFd(d), bytes, offset(position, len)), false)),
+  // readv/writev over IOVecWrapper's iovecs: {base, len}, each as wide as Unsafe.addressSize (4)
+  "readv0(Ljava/io/FileDescriptor;JI)J": driven(function* (d: JObj, iov: bigint, count: number): Gen {
+    let total = 0;
+    for (let i = 0; i < count; i++) {
+      const at = physical(iov) + i * 8, base = mem.ld32(at) >>> 0, len = mem.ld32(at + 4) >>> 0, scratch = new Uint8Array(len);
+      const n: number = yield javaReadFd(openFd(d), scratch);
+      if (n < 0) { if (total) break; return BigInt(ioStatus(n, true)); }
+      mem.write(base, scratch.subarray(0, n));
+      total += n;
+      if (n < len) break;
+    }
+    return BigInt(total || IOS_EOF);
+  }),
+  "writev0(Ljava/io/FileDescriptor;JI)J": (d: JObj, iov: bigint, count: number) => {
+    let total = 0;
+    for (let i = 0; i < count; i++) {
+      const at = physical(iov) + i * 8, base = mem.ld32(at) >>> 0, len = mem.ld32(at + 4) >>> 0;
+      const n = javaWriteFd(openFd(d), mem.bytes(base, len));
+      if (n < 0) { if (total) break; return BigInt(ioStatus(n, false)); }
+      total += n;
+      if (n < len) break;
+    }
+    return BigInt(total);
+  },
+  "force0(Ljava/io/FileDescriptor;Z)I": (d: JObj) => {
+    lastError(javaSyncFd(openFd(d)), "Force failed");
+    return after(vfs.flush(), () => 0);
+  },
+  "truncate0(Ljava/io/FileDescriptor;J)I": (d: JObj, size: bigint) => { lastError(javaTruncateFd(openFd(d), Number(size)), "Truncation failed"); return 0; },
+  "size0(Ljava/io/FileDescriptor;)J": (d: JObj) => {
+    const st = javaFdStat(openFd(d));
+    return BigInt(st ? st.size : lastError(-E.BADF, "Size failed"));
+  },
+  // one process holds every lock of a file here, which FileLockTable already arbitrates
+  "lock0(Ljava/io/FileDescriptor;ZJJZ)I": (d: JObj) => { openFd(d); return 0 /* LOCKED */; },
+  "release0(Ljava/io/FileDescriptor;JJ)V": (d: JObj) => { openFd(d); },
+  "preClose0(Ljava/io/FileDescriptor;)V": () => {},
+  "close0(Ljava/io/FileDescriptor;)V": (d: JObj) => { const fd = fdInt(d); if (fd >= 0) lastError(javaCloseFd(fd), "Close failed"); },
+  "closeIntFD(I)V": (fd: number) => { lastError(javaCloseFd(fd), "Close failed"); },
+});
+const MAP_RO = 0, MAP_PV = 2;
+let channelFd: string | undefined;
+rt.registerJnis("sun/nio/ch/FileChannelImpl", {
+  "initIDs()J": () => 4096n,
+  "position0(Ljava/io/FileDescriptor;J)J": (d: JObj, offset: bigint) =>
+    BigInt(lastError(offset < 0n ? javaSeekFd(openFd(d), 0, 1) : javaSeekFd(openFd(d), Number(offset), 0), "Position failed")),
+  // sendfile is not offered: FileChannelImpl copies through buffers instead
+  "transferTo0(Ljava/io/FileDescriptor;JJLjava/io/FileDescriptor;)J": () => BigInt(IOS_UNSUPPORTED),
+  // An immutable file maps read-only outside guest memory, paged in as read; any other mapping is
+  // guest memory holding the file's bytes, a shared one kept coherent with the file (mappings.ts)
+  "map0(IJJ)J": function (this: JObj, prot: number, position: bigint, length: bigint) {
+    const fd = openFd((this as unknown as Record<string, JObj>)[channelFd ??= declaredField("sun/nio/ch/FileChannelImpl", "fd")]);
+    const file = fdFile(fd), source = file?.source ?? javaFdSource(fd), start = Number(position), n = Number(length);
+    if (!source) return BigInt(lastError(-E.INVAL, "Map failed"));
+    if (prot === MAP_RO && file?.source && !writable(file.source)) return mapExternal(file.source, start, n);
+    return after(readFully(source, start, n), (bytes) => {
+      const va = mem.mapVa(n, false);
+      if (!va) throw rt.mkThrowable("java/lang/OutOfMemoryError", "Map failed");
+      mem.write(mem.txVa(BigInt(va)), bytes);
+      if (file && prot !== MAP_PV) trackSharedMap(BigInt(va), n, start, file, prot !== MAP_RO);
+      return BigInt(va);
+    });
+  },
+  "unmap0(JJ)I": (address: bigint, length: bigint) => {
+    if (isExternal(address)) unmapExternal(address);
+    else { syncShared(address, Number(length), true); mem.unmapVa(address, Number(length)); }
+    return 0;
   },
 });
-rt.register({
-  name: "java/nio/channels/FileLock", ctor: class extends JObj {},
-  methods: { "release()V": () => {}, "close()V": function (this: JObj) { return vcall(this, "release", "()V"); }, "isValid()Z": () => 1 },
+rt.registerJni("sun/nio/ch/FileKey", "init(Ljava/io/FileDescriptor;)V", function (this: JObj, d: JObj) {
+  const st = javaFdStat(openFd(d)), o = this as unknown as Record<string, bigint>;
+  o[declaredField("sun/nio/ch/FileKey", "st_dev")] = 1n;
+  o[declaredField("sun/nio/ch/FileKey", "st_ino")] = BigInt(st?.path ? inoOf(st.path) : openFd(d));
 });
-
-mkEnumSet("java/nio/channels/FileChannel$MapMode", ["READ_ONLY", "READ_WRITE", "PRIVATE"]);
-defineException("java/nio/channels/ClosedChannelException", "java/io/IOException");
-defineException("java/nio/channels/NonReadableChannelException", "java/lang/IllegalStateException");
-defineException("java/nio/channels/NonWritableChannelException", "java/lang/IllegalStateException");
+rt.registerJnis("sun/nio/ch/IOUtil", {
+  "fdVal(Ljava/io/FileDescriptor;)I": (d: JObj) => fdInt(d),
+  "setfdVal(Ljava/io/FileDescriptor;I)V": (d: JObj, fd: number) => setFdInt(d, fd),
+  "iovMax()I": () => 1024,
+  "fdLimit()I": () => 32768,
+});
+// no thread here blocks in the kernel, so there is none to signal out of a blocking call
+rt.registerJnis("sun/nio/ch/NativeThread", { "current()J": () => 0n, "signal(J)V": () => {} });
 
 // a file's bytes, decoded as UTF-8
 const fileText = driven(function* fileText(p: string): Gen<string> {

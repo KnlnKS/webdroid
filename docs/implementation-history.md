@@ -973,6 +973,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   ZipInputStream over FitNotes' 4.7 MB 28 → 13; a first open costs about 40 ms of class
   initialization and compilation. CRC32C is libcore's Java (Unsafe word reads), 1.9 → 8.5 ms per
   MB. luni-io 1,337 → 1,362, luni-net 537 → 540.
+- 2026-10-01, FileChannelImpl and FileLock from libcore (B.7 cut 5, file side). libcore's
+  FileChannelImpl, FileLockImpl/FileLockTable and IOUtil's buffer staging run over the file
+  natives of FileDispatcherImpl, FileChannelImpl, FileKey, IOUtil and NativeThread (jio.ts; the
+  socket side of sun.nio.ch is not there). `map0` maps an immutable file read-only outside guest
+  memory (the ICU data file still pages in: a first date format, collator, break iterator and
+  normalizer cost 413-442 ms against 405-435) and anything else into guest memory kept coherent
+  with the file; `force` syncs it. Locks are granted, since one process holds them all and
+  FileLockTable arbitrates overlaps. sendfile is not offered (transferTo copies through buffers).
+  Findings: jniCreateFileDescriptor must go through `FileDescriptor.setInt$`, which records
+  whether the descriptor appends (an append stream's channel reported position 0); an off_t
+  overflow in pread/pwrite is EINVAL; sun.misc.Unsafe gained its raw-address accessors
+  (IOVecWrapper's iovecs for scatter/gather). luni-nio 2,616 → 2,685, luni-io 1,362 → 1,364.
 
 ## Java, storage and framework semantics
 

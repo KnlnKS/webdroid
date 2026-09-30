@@ -851,7 +851,7 @@ Run all of these before committing a flip:
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file|luni-nio`. Baselines are 40,085,
-  2,544, 27,514, 1,362, 540, 173 and 2,616 (luni-nio: buffers, charsets, file channels); jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+  2,544, 27,514, 1,364, 540, 173 and 2,685 (luni-nio: buffers, charsets, file channels); jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -897,8 +897,8 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   `pathOf` and makes one with `newFile` (`jio.ts`).
 - **java.io file streams (B.7 cut 3).** libcore's FileDescriptor, FileInputStream,
   FileOutputStream and RandomAccessFile over the Linux read/write/pread/pwrite/fstat natives. TS
-  reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel stays TS, as
-  `sun/nio/ch/FileChannelImpl` over the stream's descriptor. luni-io went from 974 to 1,012.
+  reads a descriptor with `fdInt` and makes one with `mkFd` (`jio.ts`). FileChannel is libcore's
+  since cut 5 (sun.nio.ch file natives in `jio.ts`). luni-io went from 974 to 1,012.
 - **java.io streams (B.7 cut 4).** Writer and Reader and their subclasses, and InputStream,
   OutputStream and every stream class but the ObjectStreams, with java.util.zip's Checked streams and
   InflaterInputStream and java.security's Digest streams; BufferedReader stays TS. System.out/err/in
@@ -917,8 +917,8 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   (secure) directory streams, UnixChannelFactory and UnixCopyFile over `sun.nio.fs`'s
   UnixNativeDispatcher, LinuxNativeDispatcher and UnixCopyFile natives (`src/android/os.ts`); paths
   cross in native memory through `Unsafe.allocateMemory`/`putByte`. The VFS has no links,
-  permission bits or extended attributes, and there is no `/proc/mounts`. FileChannelImpl stays TS
-  and takes UnixChannelFactory's descriptor. The new `luni-nio-file` suite (libcore's
+  permission bits or extended attributes, and there is no `/proc/mounts`. FileChannelImpl (libcore's
+  since cut 5) takes UnixChannelFactory's descriptor. The new `luni-nio-file` suite (libcore's
   java.nio.file tests without mockito and junitparams) went from 109 to 173 of 195.
 - **android.text.Html.** AOSP's HtmlToSpannedConverter over TagSoup from ext.jar, so a TagHandler
   gets the real XMLReader. It needed getSpans to report zero-length marks at query edges. About

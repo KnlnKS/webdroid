@@ -278,7 +278,7 @@ describe("nio", () => {
     await vcall(input, "close", "()V");
     const at = (i: number) => bytes[i + 3], int = (i: number) => (at(i) << 24 | at(i + 1) << 16 | at(i + 2) << 8 | at(i + 3));
     expect(reads).toEqual([]);
-    expect(await vcall(map, "getInt", "(I)I", 65534)).toBe(int(65534));      // across the first page boundary
+    expect(await vcall(map, "getInt", "(I)I", 65531)).toBe(int(65531));      // across the file's first page boundary
     expect(reads.length).toBe(2);
     expect(await vcall(map, "get", "()B")).toBe((at(0) << 24) >> 24);
     await vcall(map, "position", "(I)Ljava/nio/ByteBuffer;", 131000);

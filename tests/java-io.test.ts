@@ -163,7 +163,8 @@ describe("file-input-descriptor", () => {
       const channel = await vcall(owner, "getChannel", "()Ljava/nio/channels/FileChannel;");
       expect(await vcall(channel, "position", "()J")).toBe(2n);
       expect(await vcall(channel, "size", "()J")).toBe(4n);
-      const mode = rt.link("java/nio/channels/FileChannel$MapMode").ctor.s$READ_ONLY;
+      const modes = rt.link("java/nio/channels/FileChannel$MapMode"); await rt.initClass(modes);
+      const mode = modes.ctor.s$READ_ONLY;
       const mapped = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 1n, 2n);
       expect(await vcall(mapped, "get", "(I)B", 1)).toBe(3);
       expect(await vcall(channel, "position", "()J")).toBe(2n);
