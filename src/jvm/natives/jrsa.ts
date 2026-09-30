@@ -3,7 +3,6 @@ import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, sameBytes, charsToString } from "../abi";
 import { vcall } from "./jlang";
 import { mkBI } from "./jmath";
-import { JKeyGenSpec } from "../../android/security";
 
 export const forge = () => import("../../forge").then((m) => m.default);
 export const binary = (b: Uint8Array) => charsToString(b, 0, b.length);
@@ -80,7 +79,8 @@ rt.register({
   },
 });
 
-export async function generateRsa(bits: number, spec: JKeyGenSpec | null): Promise<JRsaKeyPair> {
+/** an RSA key pair; with the KeyGenParameterSpec of an AndroidKeyStore key, also its self-signed certificate */
+export async function generateRsa(bits: number, spec: JObj | null): Promise<JRsaKeyPair> {
   const keys = await crypto.subtle.generateKey({ name: "RSA-OAEP", modulusLength: bits, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["encrypt", "decrypt"]);
   for (const name of ["webdroid/RsaPublicKey", "webdroid/RsaPrivateKey", "webdroid/RsaCertificate", "java/security/KeyPair"]) rt.link(name);
   const pair = new JRsaKeyPair();
@@ -90,18 +90,19 @@ export async function generateRsa(bits: number, spec: JKeyGenSpec | null): Promi
   if (spec) {
     const f = await forge(), cert = f.pki.createCertificate();
     cert.publicKey = await pair.publicKey.key();
-    const subject = spec.certificateSubject == null ? "CN=fake" : await vcall(spec.certificateSubject, "getName", "()Ljava/lang/String;");
+    const subject = await vcall(await vcall(spec, "getCertificateSubject", "()Ljavax/security/auth/x500/X500Principal;"), "getName", "()Ljava/lang/String;");
     const attrs = String(subject).split(/(?<!\\),/).map((part) => {
       const at = part.indexOf("=");
       if (at < 1) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Invalid certificate subject");
       return { shortName: part.slice(0, at).trim(), value: part.slice(at + 1).trim().replace(/\\(.)/g, "$1") };
     });
     cert.setSubject(attrs); cert.setIssuer(attrs);
-    let serial = spec.certificateSerial == null ? "1" : String(await vcall(spec.certificateSerial, "toString", "(I)Ljava/lang/String;", 16));
+    let serial = String(await vcall(await vcall(spec, "getCertificateSerialNumber", "()Ljava/math/BigInteger;"), "toString", "(I)Ljava/lang/String;", 16));
     if (serial.length % 2) serial = "0" + serial;
     cert.serialNumber = serial;
-    cert.validity.notBefore = new Date(spec.certificateNotBefore == null ? 0 : Number(await vcall(spec.certificateNotBefore, "getTime", "()J")));
-    cert.validity.notAfter = new Date(spec.certificateNotAfter == null ? 2461449600000 : Number(await vcall(spec.certificateNotAfter, "getTime", "()J")));
+    const date = async (getter: string) => new Date(Number(await vcall(await vcall(spec, getter, "()Ljava/util/Date;"), "getTime", "()J")));
+    cert.validity.notBefore = await date("getCertificateNotBefore");
+    cert.validity.notAfter = await date("getCertificateNotAfter");
     cert.sign(await pair.privateKey.key(), f.md.sha256.create());
     const certificate = new JRsaCertificate(); certificate.publicKey = pair.publicKey;
     certificate.encoded = array(f.asn1.toDer(f.pki.certificateToAsn1(cert)).getBytes());

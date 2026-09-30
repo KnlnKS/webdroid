@@ -5,7 +5,6 @@ import { rt, JObj, driven, type Gen } from "../runtime";
 import { vcall, after, newObj, defineException, checkFromIndexSize } from "./jlang";
 import { mkIter } from "./jutil";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
-import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array, type RsaScheme } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams, invalidKey } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
@@ -571,12 +570,15 @@ function keyGen(algo: string, provider: string | null): JKeyGenerator {
   const g = new JKeyGenerator(); g.algo = algo; g.provider = provider; g.bits = bits;
   return g;
 }
-function keyGenInit(this: JKeyGenerator, spec: any) {
+const KEY_GEN_SPEC = "android/security/keystore/KeyGenParameterSpec";
+const keyGenInit = driven(function* (this: JKeyGenerator, spec: unknown): Gen {
   if (this.provider !== "AndroidKeyStore") throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Unsupported parameter spec");
-  if (!spec || typeof spec.alias !== "string") throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Cannot initialize without a KeyGenParameterSpec parameter");
-  this.alias = spec.alias;
-  if (spec.keySize > 0) this.bits = spec.keySize;
-}
+  if (!rt.iof(spec, KEY_GEN_SPEC)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Cannot initialize without a KeyGenParameterSpec parameter");
+  const alias: string = yield vcall(spec, "getKeystoreAlias", "()Ljava/lang/String;");
+  const size: number = yield vcall(spec, "getKeySize", "()I");
+  this.alias = alias;
+  if (size > 0) this.bits = size;
+});
 function keyGenBits(this: JKeyGenerator, bits: number) { this.bits = bits; }
 rt.register({
   name: "javax/crypto/KeyGenerator", ctor: JKeyGenerator,
@@ -610,7 +612,7 @@ rt.register({
 let secureRandom: unknown = null;
 /** JCAUtil.getSecureRandom: one generator for the defaults */
 const sharedRandom = (): unknown => secureRandom ?? after(newObj("java/security/SecureRandom"), (random: unknown) => (secureRandom = random));
-class JKeyPairGenerator extends JObj { bits = 2048; store = false; spec: JKeyGenSpec | null = null; curve: string | null = null; }
+class JKeyPairGenerator extends JObj { bits = 2048; store = false; spec: JObj | null = null; alias = ""; curve: string | null = null; }
 function keyPairGenerator(algorithm: string, provider: string | null = null) {
   const algo = algorithm?.toUpperCase();
   if (algo !== "RSA" && algo !== "EC") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algorithm);
@@ -619,7 +621,8 @@ function keyPairGenerator(algorithm: string, provider: string | null = null) {
   if (algo === "EC") generator.curve = "P-256";
   return generator;
 }
-function initializeKeyPair(generator: JKeyPairGenerator, spec: JKeyGenSpec) {
+const initializeKeyPair = driven(function* (this: JKeyPairGenerator, spec: JObj): Gen {
+  const generator = this;
   if (generator.curve && !generator.store) {
     if (rt.iof(spec, "java/security/spec/ECGenParameterSpec")) generator.curve = (spec as unknown as { name: string }).name;
     else if (rt.iof(spec, "java/security/spec/ECParameterSpec")) generator.curve = curveOfParams(spec).names[0];
@@ -627,16 +630,20 @@ function initializeKeyPair(generator: JKeyPairGenerator, spec: JKeyGenSpec) {
     if (!isEcCurve(generator.curve)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "unsupported curve " + generator.curve);
     return;
   }
-  if (!(spec instanceof JKeyGenSpec) || !generator.store) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Keystore parameters required");
-  if (spec.strongBox || spec.userAuth || spec.attestation != null || spec.unlockedDeviceRequired) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Hardware-backed keys and user authentication are unavailable");
-  if (spec.keySize !== -1 && (spec.keySize < 512 || spec.keySize > 8192 || spec.keySize % 8)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Invalid RSA key size");
-  generator.spec = spec; generator.bits = spec.keySize === -1 ? 2048 : spec.keySize;
-}
+  if (!rt.iof(spec, KEY_GEN_SPEC) || !generator.store) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Keystore parameters required");
+  let hardware = (yield vcall(spec, "getAttestationChallenge", "()[B")) != null;
+  for (const flag of ["isStrongBoxBacked", "isUserAuthenticationRequired", "isUnlockedDeviceRequired"]) hardware ||= !!(yield vcall(spec, flag, "()Z"));
+  if (hardware) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Hardware-backed keys and user authentication are unavailable");
+  const size: number = yield vcall(spec, "getKeySize", "()I");
+  if (size !== -1 && (size < 512 || size > 8192 || size % 8)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Invalid RSA key size");
+  generator.alias = yield vcall(spec, "getKeystoreAlias", "()Ljava/lang/String;");
+  generator.spec = spec; generator.bits = size === -1 ? 2048 : size;
+});
 async function generateKeyPair(this: JKeyPairGenerator) {
   if (this.curve && !this.store) return generateEc(this.curve);
   if (this.store && !this.spec) throw rt.mkThrowable("java/lang/IllegalStateException", "Not initialized");
   const pair = await generateRsa(this.bits, this.spec);
-  if (this.spec) { const store = storeFor("AndroidKeyStore"); store.entries.set(this.spec.alias, pair.privateKey); store.persist(); }
+  if (this.spec) { const store = storeFor("AndroidKeyStore"); store.entries.set(this.alias, pair.privateKey); store.persist(); }
   return pair;
 }
 rt.register({
@@ -654,10 +661,10 @@ rt.register({
       if (this.store || bits < 512 || bits > 8192 || bits % 8) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid RSA key size");
       this.bits = bits;
     },
-    "initialize(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) {
+    "initialize(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JKeyPairGenerator, spec: JObj) {
       return after(sharedRandom(), (random) => vcall(this, "initialize", "(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V", spec, random));
     },
-    "initialize(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) { initializeKeyPair(this, spec); },
+    "initialize(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": initializeKeyPair,
     "generateKeyPair()Ljava/security/KeyPair;": generateKeyPair,
     "genKeyPair()Ljava/security/KeyPair;": function (this: JKeyPairGenerator) { return vcall(this, "generateKeyPair", "()Ljava/security/KeyPair;"); },
   },

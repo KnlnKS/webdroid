@@ -105,7 +105,6 @@ import "./android/camera2";
 import "./android/netstats";
 import "./android/storagestats";
 import "./android/popup";
-import "./android/security";
 import "./android/transition";
 import "./android/sqlite";
 import "./android/compat";
