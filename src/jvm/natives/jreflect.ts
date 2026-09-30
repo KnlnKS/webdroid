@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
+import { vcall, packageNamed, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import { unsafeFallthrough } from "../compiler";
 import { device } from "../../shell/config";
@@ -449,19 +449,6 @@ rt.register({
   },
 });
 
-// libcore's shared empty arrays. Framework code returns these instead of allocating, so an
-// absent class is a NoClassDefFoundError on a path that was trying to allocate nothing.
-rt.register({
-  name: "libcore/util/EmptyArray", ctor: class extends JObj {},
-  statics: {
-    BOOLEAN: new Uint8Array(0), BYTE: new Int8Array(0), CHAR: new Uint16Array(0),
-    DOUBLE: new Float64Array(0), FLOAT: new Float32Array(0), INT: new Int32Array(0),
-    LONG: new BigInt64Array(0), SHORT: new Int16Array(0),
-    OBJECT: jarray([], "Ljava/lang/Object;"), STRING: jarray([], "Ljava/lang/String;"),
-    CLASS: jarray([], "Ljava/lang/Class;"),
-  },
-});
-
 // ── dalvik.system.VMRuntime: the allocator libcore and the framework grow arrays through.
 // ArrayUtils.newUnpaddedObjectArray and every growable collection in android.util reach it, so
 // it is the first thing framework bytecode wants that has nothing to do with the framework.
@@ -847,7 +834,7 @@ rt.register({
   },
 });
 // Method.invoke and Constructor.newInstance report what the target threw inside this wrapper
-defineException("java/lang/reflect/InvocationTargetException", "java/lang/ReflectiveOperationException", [], {
+defineException("java/lang/reflect/InvocationTargetException", "java/lang/ReflectiveOperationException", {
   "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, target: JThrowable | null) { this.cause = target; fillInStackTrace(this); },
   "<init>(Ljava/lang/Throwable;Ljava/lang/String;)V": function (this: JThrowable, target: JThrowable | null, msg: string | null) {
     this.cause = target; this.msg = msg; fillInStackTrace(this);
@@ -1062,7 +1049,7 @@ function elementDesc(info: ClassInfo, name: string): string {
       if (mr.name === name) return info.dex.methodDesc(m.methodIdx);
     }
   } else {
-    // native annotation type (Target, Retention, dalvik/annotation/Signature, ...): its
+    // native annotation type (dalvik/annotation/Signature): its
     // element methods aren't in any dex, but its NativeSpec still names the real descriptor.
     const spec = rt.natives.get(info.name);
     for (const key of Object.keys(spec?.methods ?? {})) {
@@ -1096,47 +1083,10 @@ function resolveEncVal(v: EncVal, dex: DexFile, runtime: Runtime, type?: string)
 // against them succeeds. Markers only — each concrete class supplies its own method bodies;
 // these must be REGISTERED (not probed with rt.link first) because rt.link() on an unknown
 // name auto-stubs it and files it as missing — there is nothing to "find" here, only to define.
-for (const i of ["java/lang/annotation/Annotation", "java/lang/reflect/AnnotatedElement",
+for (const i of ["java/lang/reflect/AnnotatedElement",
   "java/lang/reflect/Member", "java/lang/reflect/Type", "java/lang/reflect/GenericDeclaration"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
-
-// ── ElementType / RetentionPolicy: real enums — app code references RetentionPolicy.RUNTIME
-// etc directly, and a switch/compareTo needs real ordinals.
-mkEnumSet("java/lang/annotation/ElementType", ["TYPE", "FIELD", "METHOD", "PARAMETER", "CONSTRUCTOR", "LOCAL_VARIABLE",
-  "ANNOTATION_TYPE", "PACKAGE", "TYPE_PARAMETER", "TYPE_USE"]);
-const retentionVals = mkEnumSet("java/lang/annotation/RetentionPolicy", ["SOURCE", "CLASS", "RUNTIME"]);
-
-// ── meta-annotations (Target/Retention/Documented) and marker annotations (Deprecated/
-// Override). Annotation INSTANCES are always built generically by mkAnnotation() from
-// parsed DEX annotation data (never `new`-ed here) — these registrations exist so:
-// (1) the type itself links instead of auto-stubbing, (2) it implements Annotation for
-// instanceof, and (3) elementDesc's native fallback can find each element's real return
-// descriptor when mkAnnotation installs the accessor.
-rt.register({
-  name: "java/lang/annotation/Target", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
-  methods: {
-    "value()[Ljava/lang/annotation/ElementType;": () => jarray([], "Ljava/lang/annotation/ElementType;"),
-  },
-});
-rt.register({
-  name: "java/lang/annotation/Retention", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
-  methods: { "value()Ljava/lang/annotation/RetentionPolicy;": () => retentionVals[2] },
-});
-rt.register({
-  name: "java/beans/Transient", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
-  methods: { "value()Z": () => 1 },
-});
-rt.register({
-  name: "java/beans/ConstructorProperties", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
-  methods: { "value()[Ljava/lang/String;": () => jarray([], "Ljava/lang/String;") },
-});
-rt.register({ name: "java/lang/annotation/Documented", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"] });
-rt.register({
-  name: "java/lang/Deprecated", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
-  methods: { "since()Ljava/lang/String;": () => "", "forRemoval()Z": () => 0 },
-});
-rt.register({ name: "java/lang/Override", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"] });
 
 // ── dalvik.annotation.Signature: the compiler-generated generic-signature carrier.
 // Pure data holder — value() is String[] fragments, which resolveEncVal already handles
@@ -1148,9 +1098,6 @@ rt.register({
   },
 });
 
-// ── java.lang.Void: the boxed-void reference class. TYPE mirrors the Integer.TYPE /
-// Boolean.TYPE pattern (jlang.ts) — a Class object for the primitive, not this class itself.
-rt.register({ name: "java/lang/Void", ctor: class extends JObj {}, statics: { get TYPE() { return rt.classFor("void"); } } });
 
 // Class.forName (and ClassLoader.loadClass, which delegates to it) is a by-NAME lookup,
 // not a fixed dependency: the JVM contract is that the class may legitimately be absent
@@ -1188,9 +1135,8 @@ function installForName(classCtor: unknown) {
 
 // Class's reflective members, generic types and annotations, over real Method/Field/Constructor objects
 function installClassReflection() {
-  const info = rt.link("java/lang/Class");
-  const proto = info.ctor.prototype as Record<string, unknown>;
-  installForName(info.ctor);
+  const proto = JClass.prototype as unknown as Record<string, unknown>;
+  installForName(JClass);
   const M: Record<string, unknown> = {};
   M["getMethods()[Ljava/lang/reflect/Method;"] = function (this: JClass) {
     return jarray(this.ci ? classMethods(this.ci, false) : [], "Ljava/lang/reflect/Method;");

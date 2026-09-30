@@ -341,7 +341,12 @@ export class Runtime {
     this.intrinsics.set(cls, methods);
   }
   markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
-  make(cls: string): any { return new (this.link(cls).ctor)(); }
+  /** an instance of `cls`, its constructor not run: the class linked and its methods defined */
+  make(cls: string): any {
+    const info = this.link(cls);
+    this.ensureCompiled(info);
+    return new info.ctor();
+  }
   /** Link every native spec, yielding to the event loop every `sliceMs` when one is given: a
    *  process realm's boot shares the page's main thread with the presented app. */
   linkNatives(onError?: (name: string, e: unknown) => void): void;

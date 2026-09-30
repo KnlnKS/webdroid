@@ -66,7 +66,7 @@ async function certificateMatches(certificates: Uint8Array[], expected: Int8Arra
 }
 rt.register({
   name: "android/content/pm/PackageManager$NameNotFoundException",
-  ctor: (() => { const p = rt.link("java/lang/Exception").ctor; return class extends p {}; })(),
+  ctor: class extends JObj {},
   sup: "java/lang/Exception",
 });
 class JPackageItemInfo extends JObj {

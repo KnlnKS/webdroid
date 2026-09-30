@@ -4,7 +4,7 @@ import initSqlJs, { type Database, type Statement } from "sql.js";
 import { i8, u8, mangleField } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj, defineException } from "../jvm/natives/jlang";
 import { arrayMapEntries, newArrayList } from "../jvm/natives/jcoll";
 import { pathOf } from "../jvm/natives/jio";
 import { JAbstractCursor } from "./abstractcursor";
@@ -600,20 +600,10 @@ rt.register({
 rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatabase, ifaces: ["java/io/Closeable"],
   statics: { OPEN_READONLY: 1, OPEN_READWRITE: 0, CREATE_IF_NECESSARY: 0x10000000, ENABLE_WRITE_AHEAD_LOGGING: 0x20000000, NO_LOCALIZED_COLLATORS: 0x10, CONFLICT_NONE: 0, CONFLICT_ROLLBACK: 1, CONFLICT_ABORT: 2, CONFLICT_FAIL: 3, CONFLICT_IGNORE: 4, CONFLICT_REPLACE: 5 },
   methods: dbMethods });
-{
-  const p = rt.link("java/lang/RuntimeException").ctor;
-  rt.register({ name: "android/database/SQLException", ctor: class extends p {}, sup: "java/lang/RuntimeException" });
-}
-{
-  const p = rt.link("android/database/SQLException").ctor;
-  rt.register({ name: "android/database/sqlite/SQLiteException", ctor: class extends p {}, sup: "android/database/SQLException" });
-}
-{
-  const p = rt.link("android/database/sqlite/SQLiteException").ctor;
-  for (const n of ["SQLiteConstraintException", "SQLiteDatabaseLockedException", "SQLiteFullException", "SQLiteAbortException", "SQLiteCantOpenDatabaseException", "SQLiteReadOnlyDatabaseException"]) {
-    rt.register({ name: "android/database/sqlite/" + n, ctor: class extends p {}, sup: "android/database/sqlite/SQLiteException" });
-  }
-}
+defineException("android/database/SQLException", "java/lang/RuntimeException");
+defineException("android/database/sqlite/SQLiteException", "android/database/SQLException");
+for (const n of ["SQLiteConstraintException", "SQLiteDatabaseLockedException", "SQLiteFullException", "SQLiteAbortException", "SQLiteCantOpenDatabaseException", "SQLiteReadOnlyDatabaseException"])
+  defineException("android/database/sqlite/" + n, "android/database/sqlite/SQLiteException");
 rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
 // DatabaseUtils.getSqlStatementType: AOSP classifies by the first three letters
 const STATEMENT_TYPES: Record<string, number> = {

@@ -9,7 +9,7 @@ import { JBundle } from "./os";
 
 const S = "Ljava/lang/String;", URI = "Landroid/net/Uri;", CR = "Landroid/content/ContentResolver;";
 const OBSERVER = "Landroid/database/ContentObserver;";
-defineException("android/database/CursorIndexOutOfBoundsException", "java/lang/IndexOutOfBoundsException", [], {
+defineException("android/database/CursorIndexOutOfBoundsException", "java/lang/IndexOutOfBoundsException", {
   "<init>(II)V": function (this: JObj, index: number, size: number) {
     return vcall(this, "<init>", `(${S})V`, `Index ${index} requested, with a size of ${size}`);
   },

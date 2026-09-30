@@ -1,8 +1,8 @@
 import { defineException } from "../jvm/natives/jlang";
 import { JObj, noops, rt } from "../jvm/runtime";
 
-defineException("android/media/MediaDrmException", "java/lang/Exception", ["(Ljava/lang/String;)V"]);
-defineException("android/media/UnsupportedSchemeException", "android/media/MediaDrmException", ["(Ljava/lang/String;)V"]);
+defineException("android/media/MediaDrmException", "java/lang/Exception");
+defineException("android/media/UnsupportedSchemeException", "android/media/MediaDrmException");
 defineException("android/media/MediaDrm$MediaDrmStateException", "java/lang/IllegalStateException");
 
 rt.register({

@@ -5,7 +5,7 @@ import { rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, dr
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
-import { mangleMethod, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
@@ -284,7 +284,6 @@ rt.register({
     "getCanonicalName()Ljava/lang/String;": function (this: JClass) {
       return jclassName(this).replace(/\$/g, ".");
     },
-    "isMemberClass()Z": function (this: JClass) { return this.ci?.name.includes("$") && !/\$\d/.test(this.ci.name) ? 1 : 0; },
     "isAnonymousClass()Z": function (this: JClass) { return /\$\d+$/.test(this.ci?.name ?? "") ? 1 : 0; },
     "isLocalClass()Z": () => 0,
     "isSynthetic()Z": () => 0,
@@ -513,10 +512,19 @@ function javaFrames(js: string | undefined, cold: readonly ColdMethod[]): [strin
  * failure into a fatal one.
  */
 function stackTrace(frames: [string, string][]): unknown[] {
-  const out = frames.map(([cls, method]) => Object.assign(new JStackTraceElement(), { declaring: dotName(cls), method }));
-  if (!out.length) out.push(new JStackTraceElement());
+  const ste = rt.link("java/lang/StackTraceElement");
+  rt.ensureCompiled(ste);
+  const element = (cls: string, method: string) => {
+    const e = new ste.ctor();
+    e[STE_CLASS] = cls; e[STE_METHOD] = method; e[STE_LINE] = -1;
+    return e;
+  };
+  const out = frames.map(([cls, method]) => element(dotName(cls), method));
+  if (!out.length) out.push(element("", ""));
   return jarray(out, "Ljava/lang/StackTraceElement;");
 }
+const STE_CLASS = mangleField("java/lang/StackTraceElement", "declaringClass"), STE_METHOD = mangleField("java/lang/StackTraceElement", "methodName"),
+  STE_LINE = mangleField("java/lang/StackTraceElement", "lineNumber");
 /** ART starts a throwable's trace below the frames of its own class hierarchy (its constructors) */
 function throwableTrace(t: JThrowable): unknown[] {
   const frames = javaFrames(t.jsStack, t.coldFrames), own = new Set<string>();
@@ -549,12 +557,16 @@ const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen
 });
 /** JVM-shaped stack trace text: header from the (overridable) toString, then the trace's frames. */
 export async function stackTraceText(t: JThrowable): Promise<string> {
-  const frames = (c: JThrowable) => ((c.trace ??= throwableTrace(c)) as JStackTraceElement[]).map((e) => "\n\tat " + elementText(e)).join("");
-  let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + frames(t);
+  const frames = async (c: JThrowable) => {
+    let text = "";
+    for (const e of c.trace ??= throwableTrace(c)) text += "\n\tat " + await vcall(e, "toString", "()Ljava/lang/String;");
+    return text;
+  };
+  let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + await frames(t);
   const seen = new Set<JThrowable>([t]);
   for (let c = t.cause; c && !seen.has(c); c = c.cause) {
     seen.add(c);
-    out += "\nCaused by: " + String(await vcall(c, "toString", "()Ljava/lang/String;")) + frames(c);
+    out += "\nCaused by: " + String(await vcall(c, "toString", "()Ljava/lang/String;")) + await frames(c);
   }
   return out;
 }
@@ -622,79 +634,29 @@ export function checkFromIndexSize(off: number, len: number, length: number, cls
   if (off < 0 || len < 0 || off > length - len) throw rt.mkThrowable(cls, null);
 }
 
-const excCtors = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
-/** Register a throwable class under an already-registered parent (native here or elsewhere). */
-export function defineException(name: string, sup: string, constructors: string[] = [], extra: NativeSpec["methods"] = {}) {
-  const parent = excCtors.get(sup) ?? (rt.link(sup).ctor as new () => JThrowable);
-  const c = class extends parent {};
-  excCtors.set(name, c);
-  const methods = Object.fromEntries(constructors.map((desc) => ["<init>" + desc, throwableConstructors["<init>" + desc]]));
-  rt.register({ name, sup, ctor: c, methods: { ...methods, ...extra } });
-}
-const lang = (n: string) => (n.includes("/") ? n : "java/lang/" + n);
-for (const [sup, names] of [
-  ["Throwable", "Error Exception"],
-  ["Exception", "RuntimeException InterruptedException CloneNotSupportedException ReflectiveOperationException org/xmlpull/v1/XmlPullParserException"],
-  ["RuntimeException", "NullPointerException ClassCastException ArithmeticException " +
-    "IndexOutOfBoundsException IllegalArgumentException IllegalStateException UnsupportedOperationException " +
-    "NegativeArraySizeException ArrayStoreException SecurityException IllegalMonitorStateException java/util/NoSuchElementException " +
-    "java/util/ConcurrentModificationException"],
-  ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
-  ["IndexOutOfBoundsException", "ArrayIndexOutOfBoundsException StringIndexOutOfBoundsException"],
-  ["IllegalArgumentException", "IllegalThreadStateException NumberFormatException"],
-  ["Error", "StackOverflowError OutOfMemoryError LinkageError InternalError"],
-  ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
-  ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException " +
-    "java/io/InterruptedIOException java/io/CharConversionException"],
-]) {
-  if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
-  for (const n of names.split(" ")) defineException(lang(n), lang(sup));
+const tsThrowables = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
+/** Register a TS throwable class. Under a libcore parent it is re-parented when it links, so
+ *  registering links nothing before the platform class path is there. */
+export function defineException(name: string, sup: string, methods: NativeSpec["methods"] = {}) {
+  if (!tsThrowables.has(sup) && rt.natives.has(sup)) throw new Error(`defineException ${name}: define ${sup} with defineException first`);
+  const c = class extends (tsThrowables.get(sup) ?? JObj as unknown as new () => JThrowable) {};
+  tsThrowables.set(name, c);
+  rt.register({ name, sup, ctor: c, methods });
 }
 
-
-class JAssertionError extends JThrowable {}
-rt.register({ name: "java/lang/AssertionError", ctor: JAssertionError, sup: "java/lang/Error", methods: {
-  "<init>(Ljava/lang/Object;)V": driven(function* (this: JAssertionError, detail: unknown): Gen {
-    this.msg = detail === null ? "null" : typeof detail === "string" ? detail : yield vcall(detail, "toString", "()Ljava/lang/String;");
-    if (detail instanceof JThrowable) this.cause = detail;
-  }),
-  ...Object.fromEntries(["Z", "C", "I", "J", "F", "D"].map(type => ["<init>(" + type + ")V", async function (this: JAssertionError, detail: unknown) {
-    this.msg = await vcall(rt.link("java/lang/String").ctor, "valueOf", "(" + type + ")Ljava/lang/String;", detail);
-  }])),
-} });
-
+/** a throwable made without running its constructors: `cls` linked, its message set, its trace
+ *  taken here (a class that is not a throwable, or cannot link, makes a plain Throwable) */
 rt.mkThrowable = (cls: string, msg: string | null) => {
-  let ctor = excCtors.get(cls);
+  let ctor: new () => JThrowable = JThrowable;
   try {
     const info = rt.link(cls);
-    if (info.ctor && (info.ctor === JThrowable || info.ctor.prototype instanceof JThrowable)) ctor = info.ctor;
+    if (info.ctor.prototype instanceof JThrowable) { rt.ensureCompiled(info); ctor = info.ctor; }
   } catch { /* fall through */ }
-  const e = new (ctor ?? excCtors.get("java/lang/RuntimeException")!)();
+  const e = new ctor();
   e.msg = msg;
   captureStack(e);
   return e;
 };
-
-rt.register({
-  name: "java/lang/Iterable", ctor: class extends JObj {}, typeVars: "T",
-  methods: {
-    "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JObj, c: unknown): Gen {
-      const it = yield vcall(this, "iterator", "()Ljava/util/Iterator;");
-      while (yield vcall(it, "hasNext", "()Z")) yield vcall(c, "accept", "(Ljava/lang/Object;)V", yield vcall(it, "next", "()Ljava/lang/Object;"));
-    }),
-  },
-});
-// marker interfaces (registered early so link of String/implementors works + iof)
-// Closeable extends AutoCloseable, and that inheritance is load-bearing: R8 merges every
-// close-this-thing helper into one method that tests `instanceof AutoCloseable` first, so a
-// Closeable that is not one falls off the end of the chain into its throw.
-for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java/lang/CharSequence"],
-  ["java/lang/Cloneable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
-  ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"],
-  ["java/io/DataInput"], ["java/io/DataOutput"],
-  ["java/io/ObjectInput", "java/io/DataInput"], ["java/io/ObjectOutput", "java/io/DataOutput"]] as const) {
-  rt.register({ name: i, ctor: class extends JObj {}, ifaces: ext ? [ext] : undefined });
-}
 
 // ── arrays: Object-typed call sites (Kotlin generics) dispatch mangled Object
 // methods directly on JS arrays — give every array prototype the basics
@@ -881,7 +843,6 @@ const valueOfObject = (v: unknown): string | null | Promise<string | null> =>
   v === null ? "null" : typeof v === "string" ? v : vcall(boxObject(v), "toString", "()Ljava/lang/String;");
 /** the text string concatenation appends for a value */
 export const stringOf = (v: unknown): string | Promise<string> => after(valueOfObject(v), String);
-class JStringStatics extends JObj {}
 export function javaFormat(fmt: string, args: unknown[]): string {
   let ai = 0;
   return fmt.replace(/%(\d+\$)?([-+ 0#,]*)(\d+)?(?:\.(\d+))?([sdfxXeobnch%])/g,
@@ -955,7 +916,7 @@ rt.register({
 });
 rt.register({
   name: "java/lang/String",
-  ctor: JStringStatics, // statics holder; instances are JS primitives
+  ctor: String, // instances are JS primitives
   ifaces: ["java/lang/CharSequence", "java/lang/Comparable", "java/io/Serializable"],
   // strings travel as TC_STRING; their class descriptor (a Class<String> written on its own) has no fields
   serialization: { uid: -6849794470754667710n, fields: [] },
@@ -990,21 +951,6 @@ const caseInsensitive = (a: unknown, b: unknown) => {
   const x = String(a).toUpperCase().toLowerCase(), y = String(b).toUpperCase().toLowerCase();
   return x < y ? -1 : x > y ? 1 : 0;
 };
-// make String's ClassInfo know its real JS type
-{
-  const info = rt.link("java/lang/String");
-  info.ctor = String;
-  (String as any).$i = info;
-  // copy statics from holder — a lazy one stays lazy across the hop, since reading it here
-  // would resolve it before the class it names has registered (see setupNativeMembers)
-  for (const k of Object.getOwnPropertyNames(JStringStatics)) {
-    if (!k.startsWith("m$") && !k.startsWith("s$")) continue;
-    if (Object.getOwnPropertyDescriptor(JStringStatics, k)!.get) {
-      Object.defineProperty(String, k, { configurable: true, get: () => (JStringStatics as any)[k] });
-    } else (String as any)[k] = (JStringStatics as any)[k];
-  }
-}
-
 // Java Double.toString: shortest round-tripping digits (JS agrees), laid out plain with at least
 // one fraction digit inside [1e-3, 1e7) and as "d.dddE±n" outside (BigDecimal.valueOf(double)
 // is specified in terms of this string, so the layout is load-bearing, not cosmetic).
@@ -1153,7 +1099,6 @@ function sbSpec(name: string): NativeSpec {
 rt.register(sbSpec("java/lang/StringBuilder"));
 rt.register(sbSpec("java/lang/StringBuffer"));
 
-rt.register({ name: "java/lang/Record", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 class JNumber extends JObj {}
 rt.register({
   name: "java/lang/Number", ctor: JNumber, ifaces: ["java/io/Serializable"],
@@ -2292,22 +2237,4 @@ rt.register({
   statics: { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 16, SYNCHRONIZED: 32, VOLATILE: 64, TRANSIENT: 128, NATIVE: 256, INTERFACE: 512, ABSTRACT: 1024, STRICT: 2048 },
   methods: Object.fromEntries([["Public", 1], ["Private", 2], ["Protected", 4], ["Static", 8], ["Final", 16], ["Synchronized", 32], ["Volatile", 64],
     ["Transient", 128], ["Native", 256], ["Interface", 512], ["Abstract", 1024], ["Strict", 2048]].map(([n, bit]) => [`static is${n}(I)Z`, (m: number) => (m & (bit as number) ? 1 : 0)])),
-});
-
-class JStackTraceElement extends JObj { declaring = ""; method = ""; file: string | null = null; line = -1; }
-const elementText = (e: JStackTraceElement) => `${e.declaring}.${e.method}(${e.line === -2 ? "Native Method"
-  : e.file === null ? "Unknown Source" : e.line >= 0 ? `${e.file}:${e.line}` : e.file})`;
-rt.register({
-  name: "java/lang/StackTraceElement", ctor: JStackTraceElement, ifaces: ["java/io/Serializable"],
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V": function (this: JStackTraceElement, c: string, m: string, f: string | null, l: number) {
-      this.declaring = c; this.method = m; this.file = f; this.line = l;
-    },
-    "getClassName()Ljava/lang/String;": function (this: JStackTraceElement) { return this.declaring; },
-    "getMethodName()Ljava/lang/String;": function (this: JStackTraceElement) { return this.method; },
-    "getFileName()Ljava/lang/String;": function (this: JStackTraceElement) { return this.file; },
-    "getLineNumber()I": function (this: JStackTraceElement) { return this.line; },
-    "isNativeMethod()Z": function (this: JStackTraceElement) { return this.line === -2 ? 1 : 0; },
-    "toString()Ljava/lang/String;": function (this: JStackTraceElement) { return elementText(this); },
-  },
 });

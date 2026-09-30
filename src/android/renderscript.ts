@@ -64,8 +64,8 @@ rt.register({
   },
 });
 mkEnumSet("android/renderscript/Allocation$MipmapControl", ["MIPMAP_NONE", "MIPMAP_FULL", "MIPMAP_ON_SYNC_TO_TEXTURE"]);
-defineException("android/renderscript/RSRuntimeException", "java/lang/RuntimeException", ["(Ljava/lang/String;)V"]);
-defineException("android/renderscript/RSIllegalArgumentException", "android/renderscript/RSRuntimeException", ["(Ljava/lang/String;)V"]);
+defineException("android/renderscript/RSRuntimeException", "java/lang/RuntimeException");
+defineException("android/renderscript/RSIllegalArgumentException", "android/renderscript/RSRuntimeException");
 rt.register({
   name: "android/renderscript/ScriptIntrinsicBlur", ctor: JBlur, sup: "android/renderscript/BaseObj",
   methods: {
