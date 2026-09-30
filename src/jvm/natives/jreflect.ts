@@ -171,16 +171,28 @@ export function classFields(info: ClassInfo, name?: string): JField[] {
       }
     }
   } else if (info.native) {
+    // a native class's fields have the platform class's types and modifiers, or the types its
+    // serialized fields declare; the rest are references
+    const declared = new Map<string, { desc: string; flags: number }>(), platform = rt.classDefOf(info.name);
+    if (platform) for (const ef of [...platform.def.instanceFields, ...platform.def.staticFields]) {
+      const fr = platform.dex.field(ef.fieldIdx);
+      declared.set(fr.name, { desc: platform.dex.type(fr.type), flags: ef.flags });
+    }
+    for (const f of rt.natives.get(info.name)?.serialization?.fields ?? []) if (!declared.has(f.name)) declared.set(f.name, { desc: f.desc, flags: 0x2 });
+    const field = (jname: string, isStatic: boolean, prop: string) => {
+      const d = declared.get(jname);
+      push(jname, d?.desc ?? "Ljava/lang/Object;", isStatic, prop, d?.flags);
+    };
     for (const [jname, prop] of info.fieldTable) {
       if (name !== undefined && jname !== name) continue;
-      push(jname, "Ljava/lang/Object;", false, prop);
+      field(jname, false, prop);
       if (name !== undefined) return out;
     }
     for (const k of Object.getOwnPropertyNames(info.ctor)) {
       if (!k.startsWith("s$")) continue;
       const jname = k.slice(2);
       if (name !== undefined && jname !== name) continue;
-      push(jname, "Ljava/lang/Object;", true, k);
+      field(jname, true, k);
       if (name !== undefined) return out;
     }
   }
