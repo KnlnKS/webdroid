@@ -16,7 +16,7 @@
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } from "./handles";
 import {
-  JPaint, measureText,
+  JPaint,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
@@ -30,8 +30,6 @@ import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
 import { recordingContext, replay, replayWithSemantics, type DisplayList } from "./recording";
-import type { JTextPaint, TLine } from "./text";
-import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
 import { type JBuffer, resident, mappedReadOnlyBuffer } from "../jvm/natives/jnio";
 import {
@@ -470,21 +468,16 @@ delegate("android/graphics/Paint", {
   ...noops("nSetStrokeMiter(JF)V"), ...stubs(4, "nGetStrokeMiter(J)F"),
 
   // flags: nSetFlags sets the lot, and AOSP also spells one entry point per flag
-  "nSetFlags(JI)V": (h: bigint, f: number) => {
-    const p = paint(h);
-    p.antiAlias = (f & 1) !== 0; p.underline = (f & 8) !== 0;
-    p.strikeThru = (f & 0x10) !== 0; p.fakeBold = (f & 0x20) !== 0;
-  },
-  "nGetFlags(J)I": (h: bigint) => {
-    const p = paint(h);
-    return (p.antiAlias ? 1 : 0) | (p.underline ? 8 : 0) | (p.strikeThru ? 0x10 : 0) | (p.fakeBold ? 0x20 : 0);
-  },
+  "nSetFlags(JI)V": (h: bigint, f: number) => { paint(h).flags = f; },
+  "nGetFlags(J)I": (h: bigint) => paint(h).flags,
   "nSetAntiAlias(JZ)V": flag((p, v) => { p.antiAlias = v; }),
   "nSetUnderlineText(JZ)V": flag((p, v) => { p.underline = v; }),
   "nSetStrikeThruText(JZ)V": flag((p, v) => { p.strikeThru = v; }),
   "nSetFakeBoldText(JZ)V": flag((p, v) => { p.fakeBold = v; }),
-  // Canvas2D has no dither, no bitmap filter toggle, no hinting and no linear/subpixel text
-  ...noops("nSetDither(JZ)V", "nSetFilterBitmap(JZ)V", "nSetLinearText(JZ)V", "nSetSubpixelText(JZ)V", "nSetHinting(JI)V"),
+  "nSetLinearText(JZ)V": flag((p, v) => { p.linearText = v; }),
+  "nSetSubpixelText(JZ)V": flag((p, v) => { p.subpixelText = v; }),
+  // Canvas2D has no dither, no bitmap filter toggle and no hinting
+  ...noops("nSetDither(JZ)V", "nSetFilterBitmap(JZ)V", "nSetHinting(JI)V"),
   ...stubs(1, "nGetHinting(J)I"),
 
   // effects: each returns the native handle it was given, which is what Paint stores back
@@ -513,33 +506,6 @@ delegate("android/graphics/Paint", {
   "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _c: Uint16Array, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
   "nGetFontMetricsIntForText(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _s: string, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
 
-  "nGetTextAdvances(J[CIIIII[FI)F": (h: bigint, c: Uint16Array, i: number, n: number, _ci: number, _cc: number, _f: number, adv: Float32Array | null, ai: number) =>
-    advanceRun(paint(h), charsToString(c, i, n), adv, ai),
-  "nGetTextAdvances(JLjava/lang/String;IIIII[FI)F": (h: bigint, s: string, a: number, b: number, _ci: number, _cc: number, _f: number, adv: Float32Array | null, ai: number) =>
-    advanceRun(paint(h), s.slice(a, b), adv, ai),
-  "nGetRunAdvance(J[CIIIIZI)F": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number) =>
-    measureText(paint(h), charsToString(c, start, Math.max(0, Math.min(offset, end) - start))),
-  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;)F": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, adv: Float32Array | null, ai: number) =>
-    runCharacterAdvance(paint(h), c, start, end, offset, adv, ai),
-  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, adv: Float32Array | null, ai: number) =>
-    runCharacterAdvance(paint(h), c, start, end, offset, adv, ai),
-  "nGetOffsetForAdvance(J[CIIIIZF)I": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, advance: number) => {
-    const p = paint(h);
-    let w = 0;
-    for (let i = start; i < end; i++) {
-      const cw = measureText(p, charsToString(c, i, 1));
-      if (w + cw / 2 > advance) return i;
-      w += cw;
-    }
-    return end;
-  },
-  // cursor movement is by character: there is no grapheme clustering in the Canvas2D backend
-  "nGetTextRunCursor(J[CIIIII)I": (_h: bigint, _c: Uint16Array, _ci: number, _cc: number, _d: number, offset: number, opt: number) => cursor(offset, opt),
-  "nGetTextRunCursor(JLjava/lang/String;IIIII)I": (_h: bigint, _s: string, _ci: number, _cc: number, _d: number, offset: number, opt: number) => cursor(offset, opt),
-  "nBreakText(JLjava/lang/String;ZFI[F)I": (h: bigint, s: string, forwards: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
-    breakText(paint(h), s, !!forwards, maxWidth, measured),
-  "nBreakText(J[CIIFI[F)I": (h: bigint, c: Uint16Array, i: number, n: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
-    breakText(paint(h), charsToString(c, i, Math.abs(n)), n >= 0, maxWidth, measured),
   "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, _bidi: number, r: Rect) =>
     textBounds(paint(h), charsToString(c, i, n), r),
   "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, _bidi: number, r: Rect) =>
@@ -563,45 +529,11 @@ delegate("android/graphics/Paint", {
 });
 
 interface Metrics { top: number; ascent: number; descent: number; bottom: number; leading: number }
-const cursor = (offset: number, opt: number) =>
-  opt === 0 || opt === 2 ? Math.max(0, offset - 1) : opt === 1 || opt === 3 ? offset + 1 : offset;
-
-function runCharacterAdvance(p: JPaint, c: Uint16Array, start: number, end: number, offset: number, adv: Float32Array | null, ai: number): number {
-  let total = 0;
-  for (let i = start; i < end; i++) {
-    const w = measureText(p, charsToString(c, i, 1));
-    if (adv) adv[ai + i - start] = w;
-    if (i < offset) total += w;
-  }
-  return total;
-}
-
-function advanceRun(p: JPaint, run: string, advances: Float32Array | null, at: number): number {
-  let total = 0;
-  for (let i = 0; i < run.length; i++) {
-    const w = measureText(p, run[i]);
-    if (advances) advances[at + i] = w;
-    total += w;
-  }
-  return total;
-}
-/** AOSP returns how many characters fit and, through `measured`, how wide they were */
-function breakText(p: JPaint, s: string, forwards: boolean, maxWidth: number, measured: Float32Array | null): number {
-  let w = 0, n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = forwards ? s[i] : s[s.length - 1 - i];
-    const cw = measureText(p, c);
-    if (w + cw > maxWidth) break;
-    w += cw; n++;
-  }
-  if (measured) measured[0] = w;
-  return n;
-}
+/** the glyph bounds the browser reports, rounded out */
 function textBounds(p: JPaint, s: string, r: Rect) {
-  r.left = 0;
-  r.top = Math.round(fontAscent(p));
-  r.right = Math.round(measureText(p, s));
-  r.bottom = Math.round(fontDescent(p));
+  const m = measureCtx(p.font(), p.language).measureText(s);
+  r.left = Math.floor(-m.actualBoundingBoxLeft); r.right = Math.ceil(m.actualBoundingBoxRight);
+  r.top = -Math.ceil(m.actualBoundingBoxAscent); r.bottom = Math.ceil(m.actualBoundingBoxDescent);
 }
 
 // ── android.graphics.Path, PathMeasure and PathIterator ────────────────────────────────
@@ -1150,83 +1082,6 @@ function rect(l: number, t: number, r: number, b: number): JRect {
   o.left = l; o.top = t; o.right = r; o.bottom = b;
   return o;
 }
-
-// ── android.graphics.text: MeasuredText and LineBreaker ────────────────────────────────
-// StaticLayout and Layout declare ZERO natives, so real AOSP line breaking is what these two
-// buy: everything above them is pure Java that already runs. The parameter meanings are not
-// guessable from the descriptors — nAddStyleRun is (builder, paint, lineBreakStyle,
-// lineBreakWordStyle, hyphenation, start, end, isRtl) — so they came out of appendStyleRun's
-// and computeLineBreaks' own bytecode, off the register moves into each range invoke.
-//
-// The breaking itself is linebreak.ts's breakLines, the body JLayout uses, so AOSP's Layout and
-// ours agree by construction rather than by two implementations happening to match. Only the
-// greedy strategy exists; AOSP's balanced and optimal ones are not implemented.
-interface Run { start: number; end: number; paint: JTextPaint }
-interface Meas { text: string; runs: Run[] }
-interface Breaks { lines: TLine[]; asc: number; desc: number }
-
-const meas = (h: bigint) => deref<Meas>(h);
-/** the paint covering `at`, or the paragraph's first — one paint per paragraph is the common
- *  case, and a run-aware breaker is what AOSP's own is, not what breakLines is */
-const runPaint = (m: Meas, at = 0) => (m.runs.find((r) => at >= r.start && at < r.end) ?? m.runs[0])?.paint;
-const measWidth = (m: Meas, start: number, end: number) => {
-  const p = runPaint(m, start);
-  return p ? measureText(p, m.text.slice(start, end)) : 0;
-};
-
-delegate("android/graphics/text/MeasuredText$Builder", {
-  "nInitBuilder()J": () => handle({ text: "", runs: [] } as Meas),
-  "nFreeBuilder(J)V": release,
-  "nAddStyleRun(JJIIZIIZ)V": (h: bigint, pt: bigint, _lbStyle: number, _lbWordStyle: number, _hyphen: number, start: number, end: number) => {
-    meas(h).runs.push({ start, end, paint: paint(pt) as JTextPaint });
-  },
-  // a replacement span (an inline image) occupies its width and no text: nothing to measure
-  "nAddReplacementRun(JJIIF)V": () => {},
-  "nBuildMeasuredText(JJ[CZZZZ)J": (h: bigint, _hint: bigint, chars: Uint16Array) => {
-    const m = meas(h);
-    return handle({ text: charsToString(chars, 0, chars.length), runs: m.runs } as Meas);
-  },
-});
-
-delegate("android/graphics/text/MeasuredText", {
-  "nGetReleaseFunc()J": () => FINALIZER,
-  "nGetMemoryUsage(J)I": (h: bigint) => meas(h).text.length * 2,
-  "nGetWidth(JII)F": (h: bigint, start: number, end: number) => measWidth(meas(h), start, end),
-  "nGetCharWidthAt(JI)F": (h: bigint, i: number) => measWidth(meas(h), i, i + 1),
-  "nGetBounds(J[CIILandroid/graphics/Rect;)V": (h: bigint, _c: Uint16Array, start: number, end: number, r: JRect) => {
-    const m = meas(h), p = runPaint(m, start);
-    r.left = 0; r.right = Math.ceil(measWidth(m, start, end));
-    r.top = p ? Math.floor(fontAscent(p)) : 0;
-    r.bottom = p ? Math.ceil(fontDescent(p)) : 0;
-  },
-});
-
-delegate("android/graphics/text/LineBreaker", {
-  "nInit(IIZ[IZ)J": () => handle({ lines: [], asc: 0, desc: 0 } as Breaks),
-  "nGetReleaseFunc()J": () => FINALIZER,
-  "nGetReleaseResultFunc()J": () => FINALIZER,
-  "nComputeLineBreaks(J[CJIFIF[FFI)J": (_h: bigint, chars: Uint16Array, mt: bigint, len: number, firstWidth: number, firstCount: number, restWidth: number) => {
-    const m = meas(mt);
-    const p = runPaint(m);
-    // AOSP has already split the text into paragraphs and hands us ONE, with its terminating
-    // newline included. breakLines splits on "\n" itself (JLayout gives it whole text), so
-    // the newline has to come off first or every paragraph gains an empty line after it — and
-    // the last break offset still has to cover it, because that is where the next paragraph
-    // starts and minikin reports the same.
-    const full = charsToString(chars, 0, len);
-    const body = full.endsWith("\n") ? full.slice(0, -1) : full;
-    const lines = p ? breakLines(body, p, { width: restWidth, firstWidth, firstCount }) : [];
-    if (lines.length && body.length !== full.length) lines[lines.length - 1].end = full.length;
-    return handle({ lines, asc: p ? fontAscent(p) : 0, desc: p ? fontDescent(p) : 0 } as Breaks);
-  },
-  "nGetLineCount(J)I": (h: bigint) => deref<Breaks>(h).lines.length,
-  "nGetLineBreakOffset(JI)I": (h: bigint, i: number) => deref<Breaks>(h).lines[i]?.end ?? 0,
-  "nGetLineWidth(JI)F": (h: bigint, i: number) => deref<Breaks>(h).lines[i]?.width ?? 0,
-  "nGetLineAscent(JI)F": (h: bigint) => deref<Breaks>(h).asc,
-  "nGetLineDescent(JI)F": (h: bigint) => deref<Breaks>(h).desc,
-  // no hyphenation and no tabs, which is what the flags carry
-  "nGetLineFlag(JI)I": () => 0,
-});
 
 // ── android.os.SystemProperties ────────────────────────────────────────────────────────
 // A property is ABSENT unless the device profile (src/shell/config.ts) answers it, so other reads

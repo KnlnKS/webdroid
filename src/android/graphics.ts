@@ -9,7 +9,6 @@ import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/
 import { device } from "../shell/config";
 import { handle, deref, replace, weakHandle } from "./handles";
 import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, after } from "../jvm/natives/jlang";
-import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
 import { readStreamFully, fdInt } from "../jvm/natives/jio";
@@ -127,7 +126,19 @@ export class JPaint extends JObj {
   fontVariationSettings: string | null = null;
   locales: JLocaleList | null = null;
   language = device.locale;
-  underline = false; strikeThru = false; fakeBold = false;
+  underline = false; strikeThru = false; fakeBold = false; linearText = false; subpixelText = false;
+  /** flag bits nothing here acts on, kept so getFlags() round-trips */
+  otherFlags = 0;
+  get flags(): number {
+    return +this.antiAlias | (this.underline ? 8 : 0) | (this.strikeThru ? 0x10 : 0) | (this.fakeBold ? 0x20 : 0)
+      | (this.linearText ? 0x40 : 0) | (this.subpixelText ? 0x80 : 0) | this.otherFlags;
+  }
+  set flags(f: number) {
+    this.antiAlias = !!(f & 1); this.underline = !!(f & 8); this.strikeThru = !!(f & 0x10); this.fakeBold = !!(f & 0x20);
+    this.linearText = !!(f & 0x40); this.subpixelText = !!(f & 0x80); this.otherFlags = f & ~0xf9;
+  }
+  bidiFlags = 2; hasCompatScaling = 0; compatScaling = 1; invCompatScaling = 1;
+  get nativePaint(): bigint { return handle(this); }
 
   // font() is called per text op and per measure; the result is a pure function of
   // (typeface identity, textSize, fakeBold), so cache it and rebuild only when one changes.
@@ -173,15 +184,6 @@ const paintMethods: NativeSpec["methods"] = {
   // The hyphen a line break may add or remove at either end. There is no hyphenator here, so
   // there is never an edit; AOSP's MeasuredText reads these back per run whatever the answer.
   "getStartHyphenEdit()I": () => 0, "getEndHyphenEdit()I": () => 0,
-  // The advance up to `offset`, filling `advances` with one per character. The per-character
-  // widths are PREFIX DIFFERENCES rather than each character measured alone: their sum then
-  // equals measureText of the whole run, which is what actually gets drawn, and a set of
-  // context-free single-character widths would not (Canvas2D kerns). That costs one measure
-  // per character, so it is only worth doing when a caller asked for the array.
-  "getRunCharacterAdvance([CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F":
-    function (this: JPaint, chars: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, advances: Float32Array | null, advIdx: number) {
-      return runAdvances(this, charsToString(chars, 0, chars.length), start, end, offset, advances, advIdx);
-    },
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
   "reset()V": function (this: JPaint) { copyPaint(defaultPaint, this); },
   "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
@@ -278,37 +280,18 @@ const paintMethods: NativeSpec["methods"] = {
   "setTextSkewX(F)V": function (this: JPaint, v: number) { this.textSkewX = v; },
   "getTextSkewX()F": function (this: JPaint) { return this.textSkewX; },
 
-  ...noops("<init>()V", "<init>(I)V", "setHinting(I)V", "setSubpixelText(Z)V", "setLinearText(Z)V",
+  "<init>(I)V": function (this: JPaint, f: number) { this.flags = f; },
+  "setFlags(I)V": function (this: JPaint, f: number) { this.flags = f; },
+  "getFlags()I": function (this: JPaint) { return this.flags; },
+  "setSubpixelText(Z)V": function (this: JPaint, v: number) { this.subpixelText = !!v; },
+  "isSubpixelText()Z": function (this: JPaint) { return +this.subpixelText; },
+  "setLinearText(Z)V": function (this: JPaint, v: number) { this.linearText = !!v; },
+  "isLinearText()Z": function (this: JPaint) { return +this.linearText; },
+  ...noops("<init>()V", "setHinting(I)V",
     "setElegantTextHeight(Z)V", "setStartHyphenEdit(I)V",
-    "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
-    "setFlags(I)V"),
-  ...stubs(1, "isFilterBitmap()Z", "getHinting()I",
-    "getFlags()I"),
+    "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V"),
+  ...stubs(1, "isFilterBitmap()Z", "getHinting()I"),
   ...stubs(0, "getWordSpacing()F", "isDither()Z"),
-  "measureText(Ljava/lang/String;)F": function (this: JPaint, s: string) { return measureText(this, s ?? ""); },
-  "measureText(Ljava/lang/CharSequence;II)F": function (this: JPaint, s: unknown, a: number, b: number) {
-    return after(csText(s), (text) => measureText(this, text.slice(a, b)));
-  },
-  "measureText(Ljava/lang/String;II)F": function (this: JPaint, s: string, a: number, b: number) {
-    return measureText(this, s.slice(a, b));
-  },
-  "measureText([CII)F": function (this: JPaint, c: Uint16Array, off: number, n: number) {
-    return measureText(this, charsToString(c, off, n));
-  },
-  "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
-    return after(csText(cs), (str) => vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r));
-  },
-  "getTextBounds([CIILandroid/graphics/Rect;)V": function (this: JPaint, chars: Uint16Array, offset: number, count: number, rect: JRect) {
-    return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", charsToString(chars, offset, count), 0, count, rect);
-  },
-  "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
-    const ctx = measureCtx(this.font(), this.language);
-    const m = ctx.measureText(s.slice(a, b));
-    r.left = Math.floor(-(m.actualBoundingBoxLeft ?? 0));
-    r.right = Math.ceil(m.actualBoundingBoxRight ?? m.width);
-    r.top = -Math.ceil(m.actualBoundingBoxAscent ?? this.textSize * 0.75);
-    r.bottom = Math.ceil(m.actualBoundingBoxDescent ?? this.textSize * 0.25);
-  },
   "getFontMetrics()Landroid/graphics/Paint$FontMetrics;": function (this: JPaint) {
     const fm = new JFontMetrics();
     fillFontMetrics(this, fm, false);
@@ -328,22 +311,6 @@ const paintMethods: NativeSpec["methods"] = {
   "getFontSpacing()F": function (this: JPaint) { return fontDescent(this) - fontAscent(this); },
   "ascent()F": function (this: JPaint) { return fontAscent(this); },
   "descent()F": function (this: JPaint) { return fontDescent(this); },
-  "getTextWidths(Ljava/lang/String;[F)I": function (this: JPaint, s: string, w: Float32Array) {
-    const ctx = measureCtx(this.font(), this.language);
-    for (let i = 0; i < s.length; i++) w[i] = ctx.measureText(s[i]).width;
-    return s.length;
-  },
-  "breakText(Ljava/lang/String;ZF[F)I": function (this: JPaint, s: string, fwd: number, max: number, out: Float32Array | null) {
-    const ctx = measureCtx(this.font(), this.language);
-    let acc = 0, i = 0;
-    for (; i < s.length; i++) {
-      const w = ctx.measureText(s[i]).width;
-      if (acc + w > max) break;
-      acc += w;
-    }
-    if (out) out[0] = acc;
-    return i;
-  },
 };
 /** a Paint as constructed; read-only, the source for reset() and the null bitmap paint */
 const defaultPaint = new JPaint();
@@ -371,11 +338,11 @@ export function castShadow(ctx: JCanvas["ctx"], trace: () => void, color: string
 }
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
-  dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
+  dst.textSize = src.textSize; dst.tf = src.tf;
   dst.textAlignN = src.textAlignN; dst.shaderObj = src.shaderObj; dst.shader = src.shader; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
   dst.colorFilter = src.colorFilter; dst.filterObj = src.filterObj;
-  dst.underline = src.underline; dst.strikeThru = src.strikeThru; dst.fakeBold = src.fakeBold;
+  dst.flags = src.flags;
   dst.letterSpacingEm = src.letterSpacingEm; dst.textScaleX = src.textScaleX; dst.textSkewX = src.textSkewX;
   dst.fontFeatureSettings = src.fontFeatureSettings;
   dst.fontVariationSettings = src.fontVariationSettings;
@@ -416,7 +383,8 @@ let lastFont = "";
 function setFont(ctx: { font: string }, f: string): void {
   if (f !== lastFont) { ctx.font = f; lastFont = f; }
 }
-function rawWidth(f: string, s: string, language: string): number {
+/** the advance of `s` in CSS font `f`, before letter spacing */
+export function rawWidth(f: string, s: string, language: string): number {
   const key = language === "en-US" ? f : f + "\0" + language;
   let byFont = widthCache.get(key);
   if (byFont === undefined) widthCache.set(key, byFont = new Map());
@@ -428,21 +396,6 @@ function rawWidth(f: string, s: string, language: string): number {
   byFont.set(s, w);
   return w;
 }
-/** the advance up to `offset` within [start,end), and per-character advances when asked for.
- *  Exported for the CharSequence overload, which lives on TextPaint because flattening a
- *  Spanned is text.ts's job and text.ts imports this file. */
-export function runAdvances(p: JPaint, text: string, start: number, end: number, offset: number, advances: Float32Array | null, advIdx: number): number {
-  if (advances) {
-    let prev = 0;
-    for (let i = start; i < end; i++) {
-      const w = measureText(p, text.slice(start, i + 1));
-      advances[advIdx + i - start] = w - prev;
-      prev = w;
-    }
-  }
-  return measureText(p, text.slice(start, Math.max(start, offset)));
-}
-
 export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
   return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
@@ -2199,7 +2152,11 @@ canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this
 };
 rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas",
   methods: without(canvasMethods, ["<init>()V", "<init>(Landroid/graphics/Bitmap;)V", "<init>(J)V"]) });
-rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
+// AOSP's text measuring bodies run on this object: they read these fields and call minikin.ts' natives
+rt.register({
+  name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods,
+  fields: { mNativePaint: "nativePaint", mBidiFlags: "bidiFlags", mHasCompatScaling: "hasCompatScaling", mCompatScaling: "compatScaling", mInvCompatScaling: "invCompatScaling" },
+});
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);
 export class JBFOptions extends JObj {
   inJustDecodeBounds = 0; inSampleSize = 1; outWidth = 0; outHeight = 0;

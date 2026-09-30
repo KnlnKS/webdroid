@@ -3,7 +3,7 @@ import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreat
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, stringOf, type JSimpleEnum } from "../jvm/natives/jlang";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics } from "./graphics";
 import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -42,19 +42,13 @@ rt.register({
   fields: ["linkColor", "bgColor", "baselineShift", "drawableState", "density", "underlineColor", "underlineThickness"],
   methods: {
     "<init>()V": function () {},
-    "<init>(I)V": function () {},
+    "<init>(I)V": function (this: JTextPaint, f: number) { this.flags = f; },
     "<init>(Landroid/graphics/Paint;)V": function (this: JTextPaint, p: JPaint) {
       if (p) copyPaint(p, this);
     },
     "set(Landroid/text/TextPaint;)V": function (this: JTextPaint, p: JTextPaint) {
       if (p) copyTextPaint(p, this);
     },
-    // the CharSequence half of Paint.getRunCharacterAdvance: same body, but flattening a
-    // Spanned belongs here. AOSP's StaticLayout reads per-character advances through it.
-    "getRunCharacterAdvance(Ljava/lang/CharSequence;IIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F":
-      function (this: JTextPaint, cs: unknown, start: number, end: number, _cs2: number, _ce: number, _rtl: number, offset: number, adv: Float32Array | null, advIdx: number) {
-        return runAdvances(this, spannedString(cs), start, end, offset, adv, advIdx);
-      },
   },
 });
 

@@ -148,5 +148,6 @@ import "./android/base64";
 // last of the android modules: the delegates read the classes the ones above define, and
 // they register JNI implementations rather than native classes, so nothing shadows anything
 import "./android/delegates";
+import "./android/minikin";
 import "./android/assetmanager";
 import "./native/loader";

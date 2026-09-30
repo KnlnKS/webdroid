@@ -448,3 +448,37 @@ describe("length-filter", () => {
     expect(field.text).toBe("cdxy");
   });
 });
+
+describe("minikin", () => {
+  test("line breaking over the reference device's advances breaks where the device does", async () => {
+    await loadLibcore();
+    const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin");
+    const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
+    const cases = rows.filter((r) => r.startsWith("case ")).map((r) => {
+      const [, text, width, size] = r.split("\t");
+      return { text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), width: +width, size: +size };
+    });
+    const advances = new Map(rows.filter((r) => r.startsWith("advances ")).map((r) => {
+      const [, i, spacing, ...a] = r.split(" ");
+      return [`${i} ${spacing}`, Float32Array.from(a, Number)];
+    }));
+    const mismatches: string[] = [];
+    for (const row of rows.filter((r) => /^\d/.test(r))) {
+      const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
+      const style = { font: "", lang: "en-US", size, hinted: true, letterSpacing: +spacing * Math.fround(0.05) * size, ascent: 0, descent: 0 };
+      const breaks: number[] = [];
+      // StaticLayout breaks each paragraph, its newline included, on its own
+      for (let start = 0; start < text.length;) {
+        const end = text.indexOf("\n", start) + 1 || text.length, para = text.slice(start, end);
+        const m = { text: para, widths: adv.slice(start, end), runs: [{ start: 0, end: para.length, style, width: 0, lang: "en-US", lbStyle: 0, lbWordStyle: 0 }] };
+        const b = { strategy: +strategy, frequency: 0, justified: false, indents: new Float32Array(0), useBounds: false };
+        const result = await computeBreaks(b, m, para.length, new LineWidth(width, 1, width, b.indents, 0), new TabStops(null, 20));
+        breaks.push(...result.breaks.map((o) => o + start));
+        start = end;
+      }
+      const want = lines.map((l) => +l.split(":")[0]);
+      if (breaks.join() !== want.join()) mismatches.push(`${i} ${strategy} ${spacing}: ${breaks} device ${want}`);
+    }
+    expect(mismatches).toEqual([]);
+  });
+});
