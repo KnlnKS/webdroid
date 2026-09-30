@@ -374,6 +374,9 @@ function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
+const killProcess = (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); };
+// System.exit and Runtime.halt end the process as killProcess does
+rt.registerJni("java/lang/Runtime", "nativeExit(I)V", () => killProcess(PROCESS_PID));
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
@@ -381,7 +384,7 @@ rt.register({
     "static myPid()I": () => PROCESS_PID,
     "static myProcessName()Ljava/lang/String;": () => PROCESS_NAME,
     "static is64Bit()Z": () => is64BitProcess() ? 1 : 0,
-    "static killProcess(I)V": (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); },
+    "static killProcess(I)V": killProcess,
     // androidx's startup tracing asks how long ago this process began; there is no earlier
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,
@@ -1310,6 +1313,10 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return processEnv[key] ?? null;
     },
     "getpid()I": () => PROCESS_PID,
+    "getuid()I": () => PROCESS_UID,
+    // bionic's passwd entry: every id has one, named as appUserName names it
+    "getpwuid(I)Landroid/system/StructPasswd;": (uid: number) =>
+      newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh"),
     "uname()Landroid/system/StructUtsname;": () => {
       const info = new JStructUtsname();
       info.machine = is64BitProcess() ? "aarch64" : "armv7l";
@@ -1370,6 +1377,8 @@ export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: n
   });
 }
 rt.registerJnis("libcore/io/Linux", linux);
+// System.getenv(): the environment as alternating name and value bytes
+rt.registerJni("java/lang/ProcessEnvironment", "environ()[[B", () => jarray(Object.entries(processEnv).flat().map(bytesOf), "[B"));
 // Android interrupts threads blocked on the descriptor; a reader parked on a pipe here stays parked
 rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD})V`, () => {});
 

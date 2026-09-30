@@ -10,6 +10,7 @@ import { device } from "../../shell/config";
 import { mem } from "../../native/mem";
 import { handle } from "../../android/handles";
 import { nonMovableBytes } from "./jnio";
+import { BOOT_JAR_PATHS } from "../bootclasspath";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -477,6 +478,12 @@ rt.register({
     "static getSdkVersionNative(I)I": () => device.sdk,
     // no hidden-API policy is enforced here, so every exemption already holds
     "setHiddenApiExemptions([Ljava/lang/String;)V": () => {},
+    // what System.<clinit> reads of the runtime: the zygote's class paths, ART's version, and the
+    // -D options AndroidRuntime starts it with (the locale from persist.sys.locale)
+    "bootClassPath()Ljava/lang/String;": () => BOOT_JAR_PATHS.join(":"),
+    "classPath()Ljava/lang/String;": () => ".",
+    "vmVersion()Ljava/lang/String;": () => "2.1.0",
+    "properties()[Ljava/lang/String;": () => jarray([`user.locale=${device.locale}`], "Ljava/lang/String;"),
   },
 });
 

@@ -9,7 +9,7 @@
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
-import { newObj, vcall, scall, after, sysProps, checkFromIndexSize } from "./jlang";
+import { newObj, vcall, scall, after, checkFromIndexSize } from "./jlang";
 import { strArray, u8, mangleMethod } from "../abi";
 import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";
@@ -465,7 +465,8 @@ class JHttpURLConnection extends JObj {
     const base = new Headers();
     for (const [k, v] of this.req) base.append("x-wd-" + k, v);
     // Android's engine adds http.agent to requests that set no User-Agent
-    if (!base.has("x-wd-user-agent") && sysProps["http.agent"]) base.set("x-wd-user-agent", sysProps["http.agent"]);
+    const agent: string | null = await scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent");
+    if (!base.has("x-wd-user-agent") && agent) base.set("x-wd-user-agent", agent);
     if (this.ifMod) base.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
     const spec = await urlText(this.url);
     // OkHttp's HttpUrl.getChecked

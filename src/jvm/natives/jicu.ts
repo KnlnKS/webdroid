@@ -5,6 +5,9 @@
 import { rt, driven, type Gen } from "../runtime";
 import { vcall, newObj, after } from "./jlang";
 import { jarray, mangleMethod, mangleStaticField } from "../abi";
+import { PLATFORM_DATA } from "../bootclasspath";
+import { vfs } from "../../shell/vfs";
+import { readFully } from "../../shell/lazyfile";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
 
@@ -20,15 +23,56 @@ const icuStaticField = (cls: string, field: string) => after(icuClass(cls), (cto
 const ulocale = (name: string) => newObj("android/icu/util/ULocale", `(${STRING})V`, name ?? rt.npe());
 
 /** u_versionToString: dotted, without trailing zero fields beyond the minor */
-const versionText = driven(function* (version: unknown): Gen<string> {
-  const parts: number[] = [];
-  for (const part of ["getMajor", "getMinor", "getMilli", "getMicro"]) parts.push(yield vcall(version, part, "()I"));
+function versionString(parts: number[]): string {
   while (parts.length > 2 && parts[parts.length - 1] === 0) parts.pop();
   return parts.join(".");
-});
-const icuVersion = () => after(icuStaticField("android/icu/util/VersionInfo", "ICU_VERSION"), versionText);
-const unicodeVersion = () => after(icuStatic("android/icu/lang/UCharacter", "getUnicodeVersion", "()Landroid/icu/util/VersionInfo;"), versionText);
-const cldrVersion = () => after(icuStatic("android/icu/util/LocaleData", "getCLDRVersion", "()Landroid/icu/util/VersionInfo;"), versionText);
+}
+const icuVersion = () => after(icuStaticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
+  const parts: number[] = [];
+  for (const part of ["getMajor", "getMinor", "getMilli", "getMicro"]) parts.push(yield vcall(version, part, "()I"));
+  return versionString(parts);
+}));
+
+// The Unicode and CLDR versions are read from the ICU data as ICU4C reads them: System.<clinit> asks
+// before its properties exist, and ICU4J's data loader reads System properties.
+const ICU_DATA = Object.keys(PLATFORM_DATA).find((path) => path.endsWith(".dat"))!;
+const icuRead = async (at: number, length: number) => {
+  const bytes = await readFully(vfs.source(ICU_DATA)!, at, length);
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+};
+const cString = (view: DataView, at: number) => { let s = ""; for (let c; (c = view.getUint8(at)); at++) s += String.fromCharCode(c); return s; };
+/** udata_open: an item of the common data, found in its table of contents, as its header's offset */
+async function icuItem(name: string): Promise<number> {
+  const header = (await icuRead(0, 2)).getUint16(0, true), first = await icuRead(header, 12), count = first.getUint32(0, true);
+  const toc = await icuRead(0, header + first.getUint32(8, true)), path = `${ICU_DATA.slice(ICU_DATA.lastIndexOf("/") + 1, -4)}/${name}`;
+  for (let i = 0; i < count; i++)
+    if (cString(toc, header + toc.getUint32(header + 4 + 8 * i, true)) === path) return header + toc.getUint32(header + 8 + 8 * i, true);
+  throw new Error(`no ${path} in ${ICU_DATA}`);
+}
+/** ures_getStringByKey on a bundle's root table (a URES_TABLE of URES_STRING_V2 values) */
+async function icuRootString(item: string, key: string): Promise<string> {
+  const at = await icuItem(item), base = at + (await icuRead(at, 2)).getUint16(0, true), indexes = await icuRead(base, 12);
+  const root = indexes.getUint32(0, true), keysTop = indexes.getUint32(8, true) * 4, keys = await icuRead(base, keysTop);
+  const table = base + (root & 0xfffffff) * 4, count = (await icuRead(table, 2)).getUint16(0, true), entries = await icuRead(table, 4 + 8 * count);
+  for (let i = 0; i < count && root >>> 28 === 2; i++) {
+    if (cString(keys, entries.getUint16(2 + 2 * i, true)) !== key) continue;
+    const value = entries.getUint32(2 + 2 * (count + (~count & 1)) + 4 * i, true);
+    if (value >>> 28 !== 6) break;
+    // a short string's units run to a NUL; a longer one's start with a length unit (>= 0xdc00)
+    const units = await icuRead(base + keysTop + (value & 0xfffffff) * 2, 64);
+    let s = "";
+    for (let k = 0, c; k < 32 && (c = units.getUint16(2 * k, true)) && c < 0xdc00; k++) s += String.fromCharCode(c);
+    return s;
+  }
+  throw new Error(`no string ${key} in ${item}`);
+}
+/** uprops.icu's UDataInfo.dataVersion is the Unicode version */
+const unicodeVersion = async () => {
+  const info = await icuRead(await icuItem("uprops.icu") + 20, 4);
+  return versionString([0, 1, 2, 3].map((k) => info.getUint8(k)));
+};
+/** ulocdata_getCLDRVersion: supplementalData's cldrVersion */
+const cldrVersion = async () => versionString(Object.assign([0, 0, 0, 0], (await icuRootString("supplementalData.res", "cldrVersion")).split(".").map(Number)));
 const names = (cls: string, name: string) => after(icuStatic(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING));
 const ofLocale = (method: string) => (name: string) => after(ulocale(name), (l) => vcall(l, method, `()${STRING}`));
 const displayOf = (method: string) => driven(function* (target: string, display: string): Gen {

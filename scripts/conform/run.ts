@@ -84,7 +84,7 @@ if (one) {
   const { dexesIn } = await import("../../src/jvm/dex");
   const { loadPlatformJar } = await import("../../src/android/framework");
   const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
-  const { vcallAsync, stackTraceText } = await import("../../src/jvm/natives/jlang");
+  const { vcallAsync, stackTraceText, scall } = await import("../../src/jvm/natives/jlang");
   (await import("../../src/shell/apex")).mountPlatformData((path, size) => ({
     size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp${path}`).slice(at, at + length).arrayBuffer()),
   }));
@@ -92,6 +92,8 @@ if (one) {
     for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
   for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), i);
   rt.linkNatives();
+  // vogar's -Djava.io.tmpdir: the tests' scratch files go under the device's temporary directory
+  await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "java.io.tmpdir", "/data/local/tmp");
   // the suite's resource roots answer Class.getResource* as the test's class path would
   const roots = (suite.source?.resources ?? []).map((r) => `${CACHE}/src/${suiteName}/${suite.source!.root}/${r}`);
   const resource = (name: string) => roots.map((r) => `${r}/${name}`).find((p) => existsSync(p) && !p.endsWith(".java"));

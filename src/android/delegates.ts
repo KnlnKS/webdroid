@@ -25,6 +25,7 @@ import {
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
+import { PROCESS_PID, PROCESS_UID, setProcessIdentity } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
 import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
@@ -1119,14 +1120,21 @@ delegate("android/os/SystemProperties", {
 
 /** What the zygote sets up in a forked process before app code runs: System.out and System.err
  *  reach logcat, the default time zone follows persist.sys.timezone, java.util.logging reaches
- *  logcat, the JCA providers are installed and warmed, and the system font map is loaded. */
+ *  logcat with the default HTTP user agent set, the JCA providers are installed and warmed, and the
+ *  system font map is loaded. */
 export async function zygoteInit(): Promise<void> {
+  // the zygote runs as root: System.<clinit> reads user.name from its passwd entry before any app forks
+  const uid = PROCESS_UID;
+  setProcessIdentity(PROCESS_PID, 0);
+  try { await rt.initClass(rt.link("java/lang/System")); } finally { setProcessIdentity(PROCESS_PID, uid); }
   await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
   await rt.initClass(hooks);
   await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", deviceProperties["persist.sys.timezone"]));
   await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
   await newObj("com/android/internal/logging/AndroidConfig", "()V");
+  await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http.agent",
+    await scall("com/android/internal/os/RuntimeInit", "getDefaultUserAgent", "()Ljava/lang/String;"));
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
   await scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
   await loadSystemFontMap();

@@ -7,9 +7,8 @@ import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
-import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
-import { appUserName, procIdentity } from "../../shell/procfs";
+import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
 import { boxObject } from "./jbox";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
@@ -1046,7 +1045,6 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
 }
 
 
-class JSystem extends JObj {}
 function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
   if (src === null || dst === null) rt.npe();
   if (sp < 0 || dp < 0 || len < 0 || sp > src.length - len || dp > dst.length - len) {
@@ -1061,7 +1059,7 @@ function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
     for (let i = 0; i < len; i++) dst[dp + i] = src[sp + i];
   }
 }
-const loadedLibs = new Map<string, { owner: Runtime; thread: JThread; pending: Promise<void> }>();
+const loadedLibs = new Map<string, { owner: Runtime; thread: JThread; pending: Promise<string | null> }>();
 /** what a device this shape carries, most-preferred first. Which of them we can EXECUTE is the
  *  native tier's answer (rt.nativeAbis), and a library we can run beats one we cannot. */
 const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
@@ -1079,159 +1077,89 @@ export function appNativeAbi(owner: Runtime = rt): string | null {
   appAbis.set(owner, abi);
   return abi;
 }
-const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
-async function dlopen(owner: Runtime, lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null>): Promise<void> {
-  if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return;
+const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7a", 0x3e: "x86_64", 0x03: "x86" };
+/** Runtime.nativeLoad: `file` is a path (ClassLoader.findLibrary's, System.load's) or a bare name
+ *  from the loader's class path; null once the library is loaded, else the linker's error */
+function nativeLoad(file: string, loader: JClassLoader | null): string | null | Promise<string | null> {
+  const owner = loader?.runtime ?? rt, lib = file.slice(file.lastIndexOf("/") + 1);
+  if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return null;
   const have = loadedLibs.get(lib);
-  if (have) {
-    if (have.owner !== owner) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `Library ${lib} already loaded by another ClassLoader`);
-    if (have.thread === curThread) return;
-    return have.pending;
-  }
+  if (have) return have.owner !== owner ? `Library ${lib} already loaded by another ClassLoader` : have.thread === curThread ? null : have.pending;
   const thread = curThread;
-  const pending = (async () => {
-    const a = abi(), b = a && owner.loadNativeLib ? await bytes(a) : null;
-    if (a && b && owner.loadNativeLib) {
-      try { return await owner.loadNativeLib(lib, b, a, owner, thread); }
-      catch (e) { rt.noteNativeRequired(lib, a); throw e; }
+  const pending = (async (): Promise<string | null> => {
+    let abi: string | null, bytes: Uint8Array | null;
+    if (file.startsWith("/")) {
+      bytes = await vfs.readFile(file);
+      abi = bytes && (E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown");
+    } else {
+      abi = pickAbi((a) => owner.hasClasspath(`lib/${a}/${lib}`));
+      bytes = abi ? await owner.readClasspath(`lib/${abi}/${lib}`) : null;
     }
-    if (a) rt.noteNativeRequired(lib, a);
-    throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
+    if (abi && bytes && owner.loadNativeLib) {
+      try { await owner.loadNativeLib(lib, bytes, abi, owner, thread); return null; }
+      catch (e) {
+        rt.noteNativeRequired(lib, abi);
+        if (e instanceof rt.link("java/lang/UnsatisfiedLinkError").ctor) return (e as JThrowable).msg;
+        throw e;
+      }
+    }
+    if (abi) rt.noteNativeRequired(lib, abi);
+    return `dlopen failed: library "${lib}" ${abi ? "is " + abi + " machine code" : "not found"}`;
   })();
   loadedLibs.set(lib, { owner, thread, pending });
-  try { await pending; }
-  catch (error) { loadedLibs.delete(lib); throw error; }
+  const forget = () => { loadedLibs.delete(lib); };
+  pending.then((error) => { if (error !== null) forget(); }, forget);
+  return pending;
 }
-const loadLibrary = async (n: string, owner: Runtime = rt) => dlopen(owner, `lib${n}.so`, () => pickAbi((a) => owner.hasClasspath(`lib/${a}/lib${n}.so`)),
-  (a) => owner.readClasspath(`lib/${a}/lib${n}.so`));
-const ownProps: Record<string, string> = {
-  // The loader indexes every DEX before application initialization, as ART 2.1 does.
-  "java.vm.version": "2.1.0",
-  "java.io.tmpdir": "/data/local/tmp", "user.dir": "/", "os.name": "Linux",
-  // System.initUnchangeableSystemProperties: $JAVA_HOME, unset on a device
-  "java.home": "/system",
-  // libcore reads these from uname and the app's passwd entry
-  "os.arch": "aarch64", "os.version": "3.10.0", "user.home": "/data",
-  // RuntimeInit's default user agent from Build.VERSION.RELEASE, MODEL and ID
-  "http.agent": `Dalvik/2.1.0 (Linux; U; Android ${device.release}; webdroid Build/WD1A)`,
-  get "user.name"() { return appUserName(procIdentity.uid); },
-  // AndroidRuntime passes persist.sys.locale to libcore, whose Locale.getDefault() starts from it
-  get "user.locale"() { return device.locale; },
-};
-let artProps: Record<string, string> | null = null;
-/** ART's fixed properties (java.class.version, java.specification.*, file.encoding...), read
- *  from libcore's own table once the platform class path is there */
-function hardcodedProps(): Record<string, string> {
-  if (artProps) return artProps;
-  const info = rt.link("java/lang/AndroidHardcodedSystemProperties");
-  if (info.stub || rt.initClass(info)) return {};
-  artProps = {};
-  for (const pair of (info.ctor as Record<string, (string | null)[][]>)[mangleStaticField("STATIC_PROPERTIES")] ?? [])
-    if (pair[0] && pair[1] !== null) artProps[pair[0]] = pair[1];
-  return artProps;
-}
-/** System properties: webdroid's own, over ART's */
-export const sysProps: Record<string, string> = new Proxy(ownProps, {
-  get: (own, k: string) => k in own ? Reflect.get(own, k) : hardcodedProps()[k],
-  has: (own, k: string) => k in own || k in hardcodedProps(),
-  ownKeys: (own) => [...new Set([...Object.keys(hardcodedProps()), ...Reflect.ownKeys(own) as string[]])],
-  getOwnPropertyDescriptor: (own, k: string) => Reflect.getOwnPropertyDescriptor(own, k)
-    ?? (k in hardcodedProps() ? { value: hardcodedProps()[k], enumerable: true, configurable: true, writable: true } : undefined),
-});
-const sysEnv: Record<string, string> = {
-  PATH: "/system/bin:/system/xbin:/vendor/bin",
-  ANDROID_ROOT: "/system", ANDROID_DATA: "/data", ANDROID_ART_ROOT: "/apex/com.android.art",
-  ANDROID_I18N_ROOT: "/apex/com.android.i18n", ANDROID_TZDATA_ROOT: "/apex/com.android.tzdata", EXTERNAL_STORAGE: "/sdcard",
-  TMPDIR: "/data/local/tmp",
-};
 rt.register({
-  name: "java/lang/System", ctor: JSystem,
+  name: "java/lang/System", ctor: class extends JObj {}, platformClinit: true,
+  statics: { LOCK: null, cons: null, unchangeableProps: null, props: null, lineSeparator: null, in: null, out: null, err: null, runGC: 0, justRanFinalization: 0 },
+  // Reflection.getCallerClass names a frame's class, not its defining loader: compiled callers pass their Runtime
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
-  statics: { out: null, err: null, "in": null },
-  // System.<clinit>'s standard streams over descriptors 0 to 2; zygoteInit redirects out and err to logcat
-  clinit: async () => {
-    const system = rt.link("java/lang/System").ctor, fd = (await linkInit("java/io/FileDescriptor")).ctor;
-    const std = (cls: string, name: string) => newObj(cls, "(Ljava/io/FileDescriptor;)V", fd[mangleStaticField(name)]);
-    system[mangleStaticField("in")] = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;I)V", await std("java/io/FileInputStream", "in"), 128);
-    for (const name of ["out", "err"]) {
-      system[mangleStaticField(name)] = await vcall(system, "newPrintStream", "(Ljava/io/FileOutputStream;Ljava/lang/String;)Ljava/io/PrintStream;",
-        await std("java/io/FileOutputStream", name), sysProps[`sun.std${name}.encoding`] ?? null);
-    }
-  },
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
     "static currentTimeMillis()J": () => BigInt(Date.now()),
     "static nanoTime()J": () => BigInt(Math.floor(guestNow() * 1e6)),
+    // libcore's Object.identityHashCode reads the lock word
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
-    "static getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => sysProps[k] ?? null,
-    "static getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, d: string) => sysProps[k] ?? d,
-    "static getProperties()Ljava/util/Properties;": driven(function* (): Gen {
-      const p = yield newObj("java/util/Properties");
-      for (const [k, v] of Object.entries(sysProps)) yield vcall(p, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", k, v);
-      return p;
+    // System.c: the zygote's working directory, and the linker's default search path
+    "static specialProperties()[Ljava/lang/String;": () =>
+      jarray(["user.dir=/", `java.library.path=${processEnv.LD_LIBRARY_PATH ?? "/system/lib64:/system_ext/lib64"}`], "Ljava/lang/String;"),
+    "static mapLibraryName(Ljava/lang/String;)Ljava/lang/String;": (name: string) => { if (name === null) rt.npe(); return `lib${name}.so`; },
+    "static loadLibrary(Ljava/lang/String;)V": driven(function* (name: string, owner: Runtime = rt): Gen {
+      yield vcall(yield scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;"), "loadLibrary0", "(Ljava/lang/ClassLoader;Ljava/lang/String;)V", owner.classLoader ?? null, name);
     }),
-    // deleting first replaces a getter-only property (user.name) rather than assigning through it
-    "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; delete sysProps[k]; sysProps[k] = v; return o; },
-    "static clearProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => {
-      if (k === null) rt.npe();
-      if (k === "") throw rt.mkThrowable("java/lang/IllegalArgumentException", "key can't be empty");
-      const o = sysProps[k] ?? null; delete sysProps[k]; return o;
-    },
-    "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string | null) => {
-      if (key === null) rt.npe();
-      return sysEnv[key!] ?? null;
-    },
-    "static getenv()Ljava/util/Map;": driven(function* (): Gen {
-      const map = yield newObj("java/util/HashMap");
-      for (const [key, value] of Object.entries(sysEnv)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
-      return map;
-    }),
-    // Android has never installed one; code that asks is deciding whether it may reflect
-    "static getSecurityManager()Ljava/lang/SecurityManager;": () => null,
-    "static gc()V": () => {},
-    "static exit(I)V": (c: number) => { console.warn("System.exit", c); },
-    "static loadLibrary(Ljava/lang/String;)V": loadLibrary,
+    // Runtime.load0
     "static load(Ljava/lang/String;)V": driven(function* (path: string, owner: Runtime = rt): Gen {
-      const b: Uint8Array | null = yield vfs.readFile(path);
-      yield dlopen(owner, path.slice(path.lastIndexOf("/") + 1), () => b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null, () => b);
+      if (path === null) rt.npe();
+      if (!path.startsWith("/")) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", "Expecting an absolute path of the library: " + path);
+      const error: string | null = yield nativeLoad(path, (owner.classLoader ?? null) as JClassLoader | null);
+      if (error !== null) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", error);
     }),
-    "static mapLibraryName(Ljava/lang/String;)Ljava/lang/String;": (n: string) => `lib${n}.so`,
-    "static lineSeparator()Ljava/lang/String;": () => "\n",
   },
 });
-// Clock.systemUTC's wall time: nanoseconds past `offset` seconds, or -1 beyond ±2^32 s as libcore expects
 for (const [name, desc] of [["In", "Ljava/io/InputStream;"], ["Out", "Ljava/io/PrintStream;"], ["Err", "Ljava/io/PrintStream;"]]) {
   rt.registerJni("java/lang/System", `set${name}0(${desc})V`, (stream: unknown) => { rt.link("java/lang/System").ctor[mangleStaticField(name.toLowerCase())] = stream; });
 }
+// Clock.systemUTC's wall time: nanoseconds past `offset` seconds, or -1 beyond ±2^32 s as libcore expects
 rt.registerJni("jdk/internal/misc/VM", "getNanoTimeAdjustment(J)J", (offset: bigint) => {
   const adjustment = BigInt(Date.now()) * 1_000_000n - offset * 1_000_000_000n;
   return adjustment > MAX_NANO_ADJUSTMENT || adjustment < -MAX_NANO_ADJUSTMENT ? -1n : adjustment;
 });
 const MAX_NANO_ADJUSTMENT = (1n << 32n) * 1_000_000_000n;
 
-class JRuntimeCls extends JObj {}
-const theRuntime = new JRuntimeCls();
-const shutdownHooks = new Set<unknown>();
 // there is no process to fork: exec fails as for a program that is not there, and ProcessBuilder
 // names the program
 rt.registerJnis("java/lang/UNIXProcess", {
   "initIDs()V": () => {},
   "forkAndExec([B[BI[BI[B[IZ)I": () => { throw rt.mkThrowable("java/io/IOException", "error=2, No such file or directory"); },
 });
-rt.register({
-  name: "java/lang/Runtime", ctor: JRuntimeCls,
-  methods: {
-    "static getRuntime()Ljava/lang/Runtime;": () => theRuntime,
-    // the page never shuts the runtime down the way a JVM does; hooks are kept so removal works
-    "addShutdownHook(Ljava/lang/Thread;)V": (t: unknown) => { shutdownHooks.add(t); },
-    "removeShutdownHook(Ljava/lang/Thread;)Z": (t: unknown) => (shutdownHooks.delete(t) ? 1 : 0),
-    "availableProcessors()I": () => device.cpu.cores,
-    "maxMemory()J": () => BigInt(HEAP_LIMIT),
-    "totalMemory()J": () => 268435456n,
-    "freeMemory()J": () => 134217728n,
-    "gc()V": () => {},
-    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": function (c: JClass | null, n: string) { return loadLibrary(n, c?.ci?.owner ?? rt); },
-  },
+rt.registerJnis("java/lang/Runtime", {
+  "nativeLoad(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/String;": nativeLoad,
+  "nativeGc()V": () => {},
+  "maxMemory()J": () => BigInt(HEAP_LIMIT),
+  "totalMemory()J": () => 268435456n,
+  "freeMemory()J": () => 134217728n,
 });
 
 /** the native tier releases a finished thread's Cpu and stack through this */
@@ -1250,10 +1178,11 @@ export class JThread extends JObj {
   get tid(): bigint { return BigInt(idHash(this)); }
   daemon = 0;
   private live = 0;
-  started = false;
+  /** Thread.started, which Runtime.addShutdownHook reads */
+  started = 0;
   parked = 0;
   get alive() { return this.live; }
-  set alive(value: number) { this.live = value; if (value) { this.started = true; liveThreads.add(this); } else liveThreads.delete(this); }
+  set alive(value: number) { this.live = value; if (value) { this.started = 1; liveThreads.add(this); } else liveThreads.delete(this); }
   prio = 5;
   target: unknown = null;   // Runnable
   ueh: unknown = null;      // Thread.UncaughtExceptionHandler
@@ -1392,7 +1321,7 @@ rt.register({
   name: "java/lang/Thread", ctor: JThread,
   ifaces: ["java/lang/Runnable"],
   fields: ["threadLocalRandomSeed", "threadLocalRandomProbe", "threadLocalRandomSecondarySeed", "threadLocals", "inheritableThreadLocals",
-    "inheritedAccessControlContext", "parkBlocker", "tid"],
+    "inheritedAccessControlContext", "parkBlocker", "tid", "started"],
   methods: {
     "<init>()V": inheriting(function () { this.jname = nextThreadName(); }),
     "<init>(Ljava/lang/Runnable;)V": inheriting(function (r: unknown) { this.target = r; this.jname = nextThreadName(); }),

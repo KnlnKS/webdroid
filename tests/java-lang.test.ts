@@ -559,3 +559,19 @@ describe("lazy-native-static", () => {
     expect((Base as unknown as Record<string, unknown>)[key]).toBe(token);
   });
 });
+
+describe("system-properties", () => {
+  test("System.<clinit> builds its properties from the runtime, the environment and the ICU data", async () => {
+    const property = (key: string) => scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", key);
+    expect(await property("user.locale")).toBe("en-US");
+    expect([await property("user.language"), await property("user.region")]).toEqual(["en", "US"]);
+    expect(await property("java.home")).toBe("/apex/com.android.art");
+    expect(await property("java.vm.version")).toBe("2.1.0");
+    expect([await property("android.icu.unicode.version"), await property("android.icu.cldr.version")]).toEqual(["15.1", "45.0"]);
+  });
+  test("loadLibrary reports a library the class path lacks as the linker does", async () => {
+    let error: unknown;
+    try { await vcallAsync(rt.link("java/lang/System").ctor, "loadLibrary", "(Ljava/lang/String;)V", "absent"); } catch (e) { error = e; }
+    expect((error as { msg?: string })?.msg).toBe('dlopen failed: library "libabsent.so" not found');
+  });
+});

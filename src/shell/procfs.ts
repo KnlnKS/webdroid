@@ -1,10 +1,10 @@
 import { device } from "./config";
 
 export const procIdentity = { pid: 1000, uid: 10001, name: "" };
-/** bionic's passwd name for a uid: u<user>_a<app> for application ids, else the number. */
+/** bionic's passwd name for a uid: u<user>_a<app> for application ids, root and system by name, else the number. */
 export function appUserName(uid: number): string {
   const appId = uid % 100000;
-  return appId >= 10000 && appId < 20000 ? `u${Math.floor(uid / 100000)}_a${appId - 10000}` : String(uid);
+  return appId >= 10000 && appId < 20000 ? `u${Math.floor(uid / 100000)}_a${appId - 10000}` : uid === 0 ? "root" : uid === 1000 ? "system" : String(uid);
 }
 const threadOffsets = new WeakMap<object, number>();
 let nextThreadOffset = 0;

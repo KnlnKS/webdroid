@@ -7,6 +7,7 @@ import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
 import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText, scall, after } from "../jvm/natives/jlang";
+import { processEnv } from "./environment";
 import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
@@ -228,6 +229,10 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   return onMain(async () => {
     onStatus("Starting app…");
     const baseCtx = newContextImpl(host);
+    // ActivityThread.setupGraphicsSupport: temporary files go to the app's cache directory
+    const tmpdir: string = await vcall(await vcall(baseCtx, "getCacheDir", "()Ljava/io/File;"), "getAbsolutePath", "()Ljava/lang/String;");
+    await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "java.io.tmpdir", tmpdir);
+    processEnv.TMPDIR = tmpdir;
     // handleBindApplication installs the app's network security config (AndroidNSSP, and the
     // cleartext policy) before any of its code runs
     await callOn(mainThread, () => scall("android/security/net/config/NetworkSecurityConfigProvider", "install", "(Landroid/content/Context;)V", baseCtx));
