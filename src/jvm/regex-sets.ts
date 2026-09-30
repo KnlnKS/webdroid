@@ -13,6 +13,8 @@ export function javaClassSets(source: string): string {
         const next = source[i++];
         const escaped = inClass ? "()[]{}\\/|-^$.*+?&!#%,:;<=>@`~" : "^$\\.*+?()[]{}|/";
         text = /[A-Za-z0-9]/.test(next) || escaped.includes(next) ? ch + next : next;
+        // a property or code point escape keeps its braces
+        if (/[pPux]/.test(next) && source[i] === "{") { const close = source.indexOf("}", i); text += source.slice(i, close + 1); i = close + 1; }
       } else if (ch === "[") text = scan(true);
       else if (inClass && ch === "]") {
         return `[${negative}${parts.length === 1 ? parts[0] : parts.map((part) => `[${part}]`).join("&&")}]`;

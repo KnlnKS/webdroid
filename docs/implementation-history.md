@@ -985,6 +985,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   whether the descriptor appends (an append stream's channel reported position 0); an off_t
   overflow in pread/pwrite is EINVAL; sun.misc.Unsafe gained its raw-address accessors
   (IOVecWrapper's iovecs for scatter/gather). luni-nio 2,616 → 2,685, luni-io 1,362 → 1,364.
+- 2026-10-01, BufferedReader and Scanner from libcore. The TS BufferedReader was kept because
+  bytecode readLine had measured 2.3x its time; remeasured in V8 it is 1.2x (readLine over 100 KB
+  2.27 → 2.78 ms, through an InputStreamReader 0.96 → 1.17, read() 2.09 → 2.27). The TS Scanner
+  read its whole source up front and lacked most of the API (hasNextDouble fell through to a
+  platform body over missing fields). libcore's needed two regex translation fixes: a property
+  escape inside a class set (`[\p{javaDigit}&&[^0]]`, Scanner's integer pattern) lost its braces
+  when rewritten for the `v` flag, and Java's `\x{h}` is JS's `\u{h}`; a device probe of
+  hasNextInt/hasNextDouble/nextLine/useDelimiter now matches. Scanner is 60-80x slower than the TS
+  copy (4,000 lines 0.35 → 21 ms, 20,000 mixed tokens 6 → 470 ms, first use about 400 ms): its
+  Matcher works over a 1,024-char CharBuffer that `resetForInput` turns into a String on every
+  usePattern/region/reset (30% of the time in charsToString, 12% GC), and each usePattern makes a
+  MatcherNative. No gated app uses Scanner on a tap path; a §4.7 intrinsic would be the fix.
 
 ## Java, storage and framework semantics
 

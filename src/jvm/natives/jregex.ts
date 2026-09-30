@@ -316,6 +316,8 @@ function javaToJs(src: string): [string, string] {
     return "";
   });
   out = out.replace(/([*+?]|\{\d+(?:,\d*)?\})\+/g, "$1");
+  // Java's \x{h...} is JS's \u{h...}
+  out = out.replace(/(?<!\\)((?:\\\\)*)\\x\{([0-9a-fA-F]+)\}/g, "$1\\u{$2}");
   out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
     const cls = POSIX[name];
     return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
