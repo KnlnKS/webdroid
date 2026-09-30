@@ -12,6 +12,7 @@ import { mkPfd } from "./os";
 import { type JParcel, readString, writeString } from "./parcel";
 import { parcelCreator } from "./parcelable";
 import { appHost } from "./apphost";
+import { hostStub } from "./binder";
 
 /** a raw resource's bytes; NotFoundException when the table has no file for it */
 export function rawResourceBytes(res: Resources, id: number): Uint8Array {
@@ -67,22 +68,26 @@ export const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", 
 // API 33 per-app languages: the app's own list, empty to follow the system's. The host persists
 // it and delivers the configuration change; adopting it is applyApplicationLocales below.
 let appLocales = emptyLocaleList;
-rt.register({
-  name: "android/app/LocaleManager", ctor: class extends JObj {},
-  methods: {
-    "getApplicationLocales()Landroid/os/LocaleList;": () => appLocales,
-    "getApplicationLocales(Ljava/lang/String;)Landroid/os/LocaleList;": (pkg: string) => {
-      if (pkg !== appHost?.pkg) throw rt.mkThrowable("java/lang/SecurityException", "Reading another app's locales requires READ_APP_SPECIFIC_LOCALES");
-      return appLocales;
-    },
-    "setApplicationLocales(Landroid/os/LocaleList;)V": (list: JLocaleList | null) => {
-      if (!list) rt.npe();
-      appHost?.setApplicationLocales(list!);
-    },
-    "getSystemLocales()Landroid/os/LocaleList;": () => localeList,
-    "getOverrideLocaleConfig()Landroid/app/LocaleConfig;": () => null,
+// ILocaleManager, under AOSP's LocaleManager: an app reads and sets its own languages; another
+// app's need READ_APP_SPECIFIC_LOCALES or CHANGE_CONFIGURATION, which no app holds here
+const ownLocales = (pkg: string | null, permission: string) => {
+  if (pkg !== appHost?.pkg) throw rt.mkThrowable("java/lang/SecurityException", `Caller must be ${pkg} or hold ${permission}`);
+};
+rt.register({ name: "webdroid/LocaleManagerService", ctor: class extends JObj {}, sup: "android/app/ILocaleManager$Stub", methods: {
+  "getApplicationLocales(Ljava/lang/String;I)Landroid/os/LocaleList;": (pkg: string | null) => {
+    ownLocales(pkg, "android.permission.READ_APP_SPECIFIC_LOCALES");
+    return appLocales;
   },
-});
+  "setApplicationLocales(Ljava/lang/String;ILandroid/os/LocaleList;Z)V": (pkg: string | null, _user: number, list: JLocaleList | null) => {
+    ownLocales(pkg, "android.permission.CHANGE_CONFIGURATION");
+    if (!list) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
+    appHost?.setApplicationLocales(list);
+  },
+  "getSystemLocales()Landroid/os/LocaleList;": () => localeList,
+  // no app has an override of its LocaleConfig
+  "getOverrideLocaleConfig(Ljava/lang/String;I)Landroid/app/LocaleConfig;": () => null,
+} });
+hostStub("locale", "webdroid/LocaleManagerService");
 rt.register({
   name: "android/os/LocaleList", ctor: JLocaleList, ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/os/LocaleList", readLocaleList); } },

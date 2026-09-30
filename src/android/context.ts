@@ -140,7 +140,6 @@ const SERVICE_CLASS: Record<string, string> = {
   appwidget: "android/appwidget/AppWidgetManager",
   systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
-  locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
   netstats: "android/app/usage/NetworkStatsManager",
@@ -182,6 +181,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     newObj("android/accounts/AccountManager", "(Landroid/content/Context;Landroid/accounts/IAccountManager;)V", ctx, await hostedService("account"))],
   permission_enforcer: ["android/os/PermissionEnforcer", (ctx) => newObj("android/os/PermissionEnforcer", "(Landroid/content/Context;)V", ctx)],
   shortcut: ["android/content/pm/ShortcutManager", (ctx) => newObj("android/content/pm/ShortcutManager", "(Landroid/content/Context;)V", ctx)],
+  locale: ["android/app/LocaleManager", async (ctx) =>
+    newObj("android/app/LocaleManager", "(Landroid/content/Context;Landroid/app/ILocaleManager;)V", ctx, await hostedService("locale"))],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
