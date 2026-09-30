@@ -437,18 +437,10 @@ function newMultiArray(cls: JClass | null, dims: Int32Array, i: number): unknown
   for (let k = 0; k < a.length; k++) a[k] = newMultiArray(cls, dims, i + 1);
   return a;
 }
-rt.register({
-  name: "java/lang/reflect/Array", ctor: class extends JObj {},
-  methods: {
-    "static newInstance(Ljava/lang/Class;[I)Ljava/lang/Object;": (cls: JClass | null, dims: Int32Array) => {
-      if (!dims.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Dimensions cannot be empty");
-      return newMultiArray(cls, dims, 0);
-    },
-    "static newInstance(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
-    "static getLength(Ljava/lang/Object;)I": (a: ArrayLike<unknown> | null) => a?.length ?? 0,
-    "static get(Ljava/lang/Object;I)Ljava/lang/Object;": (a: ArrayLike<unknown>, i: number) => a[i],
-    "static set(Ljava/lang/Object;ILjava/lang/Object;)V": (a: unknown[], i: number, v: unknown) => { a[i] = v; },
-  },
+// libcore's Array boxes, unboxes and checks in Java; ART allocates its arrays
+rt.registerJnis("java/lang/reflect/Array", {
+  "createObjectArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
+  "createMultiArray(Ljava/lang/Class;[I)Ljava/lang/Object;": (cls: JClass | null, dims: Int32Array) => newMultiArray(cls, dims, 0),
 });
 
 // ── dalvik.system.VMRuntime: the allocator libcore and the framework grow arrays through.
