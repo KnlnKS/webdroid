@@ -782,6 +782,44 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   about 60 ms cold in a realm that had not loaded it (Calculator M boot 425 -> 510 ms; FitNotes and
   Mihon load it anyway, FitNotes +15 ms); the rest is 15 ms cold, 3 ms warm. Headless realms have no
   DOMParser for Xml.newPullParser, so tests parse fonts.xml with a minimal one (tests/java.ts).
+- 2026-09-30, ChatGPT's "LifecycleOwner ... already garbage collected". It came from androidx's
+  ServiceLifecycleDispatcher in the com.android.vending process: Service.onDestroy posts ON_STOP and
+  ON_DESTROY runnables whose LifecycleRegistry holds the service weakly, and webdroid dropped its
+  last reference to the service as onDestroy returned. ActivityThread.handleStopService keeps it
+  reachable through ContextImpl.scheduleFinalCleanup's CLEAN_UP_CONTEXT message, queued behind what
+  onDestroy posted; a main-queue job holding the instance now does the same. GC timing, not the
+  Typeface cut: 3 of 6 live runs threw at 6e60ef3e, 0 of 8 with the fix.
+- 2026-09-30, minikin and android.text's layouts from AOSP (Stage C.3). `src/android/minikin.ts` ports
+  minikin at android-15.0.0_r1 with the reference build's text flags (letter_spacing_justification,
+  phrase_strict_fallback, word_style_auto are enabled there; `aflags list` as root). Findings that
+  decided the port, each checked against the device:
+  - Advances come per LayoutSplitter piece (a word and its trailing space) with each cluster's
+    advance on its first code unit; C0 controls advance 0 (the browser measures `\n` as a space);
+    letter spacing is per non-control cluster, none for joining scripts, and half of it comes off a
+    run's line edges, which TextLine marks with the hidden paint flags 0x2000/0x4000.
+  - A paint without SUBPIXEL_TEXT or LINEAR_TEXT (TextView's, Paint()'s) measures whole-pixel glyph
+    advances with fractional kerning, as Skia's hinted metrics do. Measuring subpixel widths put
+    FitNotes-sized lines 1-2 px off and broke 13 of 72 device layouts; rounding fixed all but one.
+  - Line breaks are ICU's line iterator (ICU4J bytecode over the reference ICU data) filtered as
+    WordBreaker does: no break after a hyphen or soft hyphen (with hyphenation off, "well-known"
+    does not break at its hyphen), none inside emoji ZWJ/modifier sequences, and URLs and email
+    addresses broken by the Chicago Manual of Style rules.
+  - The optimal breaker must compute in float: in doubles, desperate-break scores near 1e10 lose the
+    ties minikin resolves, which changed 8 of 72 layouts.
+  `bun run textcmp --record` runs scripts/TextLayoutProbe.java on the AVD (app_process needs
+  ActivityThread.systemMain for LineBreakConfig's target-SDK check and
+  Typeface.loadPreinstalledSystemFontMap). Fed the device's own advances headlessly the breakers
+  reproduce 72/72 device layouts; in a page 71/72, widths within 1.03 px, the miss being the
+  page's CJK fallback font. The TS Paint now carries its real flags and exposes mNativePaint and the
+  compat-scaling fields, so AOSP's measureText (which rounds up), getTextWidths, breakText and
+  getRunAdvance bodies run on it. Layout, StaticLayout, BoringLayout, DynamicLayout, TextUtils,
+  LineBreakConfig, BidiFormatter, the text direction heuristics and android.text.method then moved to
+  bytecode (text.ts 1,143 -> 452 lines; linebreak.ts and bidiformatter.ts deleted). The TS TextView
+  builds its StaticLayout as makeSingleLayout does and draws with Layout.draw; touches reach its
+  movement method, so links fire (they never did). Cost: Mihon's theme taps 10-15 ms slower once
+  Compose's text runs AOSP's StaticLayout (warm light 75 -> 90 ms); every gated tap stays under
+  150 ms. Hyphenation (no patterns on the page), glyph bounds (no overhang) and TextRunShaper/
+  PositionedGlyphs remain unimplemented.
 
 ## Java, storage and framework semantics
 

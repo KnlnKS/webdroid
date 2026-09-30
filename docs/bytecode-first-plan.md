@@ -582,37 +582,33 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-30 (evening). The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
+Last updated 2026-09-30 (night). The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
 read "Handoff state" first. Each
 commit message states what it measured. The implementation history (the 2026-09-27 to
 2026-09-30 Stage A/B/C entries) records failure mechanisms.
 
-### Handoff state (2026-09-30, evening): start here
+### Handoff state (2026-09-30, night): start here
 
-- **Branch `knlnks/bytecode`, tip `6e60ef3e`, working tree clean, not pushed** (the user asked for
-  commits, not pushes). No servers are running; start one with `PORT=4217 bun run server.ts`.
-  `/Users/kunalan/Projects/webdroid-gate` is a detached worktree (at 1068d491) for conform runs and
-  A/B servers: `git -C ../webdroid-gate checkout --detach <commit>`, serve it with
-  `PORT=4219 bun run server.ts` from there. Its `vendor/{aosp,microg}`, `apks` and `conform-cache`
-  are symlinks.
-- **Last full gate:** 19534e7c (live set, conform on 5eb441da at every baseline, `lat` cold and warm).
-  Since then, each merge passed typecheck, `bun run test` (1,385), FitNotes smoke, fast e2e 7/7 and
-  textcmp 6/6: the fonts cut, the Typeface cut (merge after 1068d491) and 6e60ef3e (zygoteInit and the
-  system font map moved into the zygote phase). On 6e60ef3e also: `lat` cold/warm interleaved
-  against 1068d491 (cold Calculator 1,391 against 1,489 ms, FitNotes 1,345 against 1,445, Mihon 2,063
-  against 2,095; warm level or faster, gate passed) and the live set (TikTok wedged at steps 04-07
-  once, then 2/2 alone). **Not yet run on 6e60ef3e: conform** (the Typeface cut and zygote move touch
-  what libcore's suites reach only through Character/ICU; run all six to be sure).
-- **First task: an open regression to diagnose.** ChatGPT's live flow logs
-  `IllegalStateException: LifecycleOwner of this LifecycleRegistry is already garbage collected`
-  (uncaught, in a process realm, pid 1003) in 2 of 9 runs at 6e60ef3e and 0 of 3 at 1068d491
-  (`WEBDROID_URL=... bun run e2e --live --test chatgpt`, then look for "garbage collect" in
-  `tests/e2e/actual-fast/summary.json` gaps). androidx's LifecycleRegistry holds its owner in a
-  WeakReference, so something collected an owner Java still reaches. Suspects, in order: the
-  Typeface cut (it changed what process realms load and when); `weakHandle` (Picture's cut made a
-  TS Canvas's native wrapper a weak handle); the owned-handle setter on long fields (fb3e6a2f);
-  and plain JS GC timing exposing a real missing strong reference. Bisect with the gate worktree
-  (e.g. fb3e6a2f, 1068d491 + the Typeface merge) before changing code.
+- **Branch `knlnks/bytecode`, working tree clean, not pushed** (the user asked for commits, not
+  pushes). A dev server may be running on 4217 (`lsof -ti tcp:4217`); start one with
+  `PORT=4217 bun run server.ts`. `/Users/kunalan/Projects/webdroid-gate` is a detached worktree (at
+  6e60ef3e) for conform runs and A/B servers: `git -C ../webdroid-gate checkout --detach <commit>`,
+  serve it with `PORT=4219 bun run server.ts` from there. Its `vendor/{aosp,microg}`, `apks` and
+  `conform-cache` are symlinks. The reference AVD may still be booted (`adb devices`).
+- **Last gates:** conform on 6e60ef3e at every baseline (TestTextParserWithLocale ran short under
+  load and passes 21/21 alone). On the text commits (0284a2c9 to ce88626d): typecheck, `bun run test`,
+  browser tests, FitNotes smoke, fast e2e 7/7, live set 6/6 (TikTok's 04-07 wedge under parallel load,
+  then alone), `lat` cold twice and warm, textcmp 71/72 against the device. Conform was not rerun:
+  the text commits touch no libcore suite's classes.
+- **Done this session** (history: the two 2026-09-30 entries after the Typeface one):
+  - The ChatGPT LifecycleRegistry regression: a destroyed service stays reachable until its
+    context cleanup runs (343e6b8e).
+  - Stage C.3's core: minikin's natives (`src/android/minikin.ts`: MeasuredText, the greedy and
+    optimal LineBreakers, GraphemeBreak, Paint's text measurement) verified against the reference
+    AVD (`bun run textcmp`, `--record` to refresh); Layout, StaticLayout, BoringLayout,
+    DynamicLayout, TextUtils, LineBreakConfig, BidiFormatter, TextDirectionHeuristics and
+    android.text.method now run from bytecode; the TS TextView lays out and draws through AOSP's
+    StaticLayout, and links fire through LinkMovementMethod.
 - **Done 2026-09-30** (details in the history, latest entries of "JVM, DEX and process ownership"):
   - `android/content/res/` from AOSP (131efb48), and its cold-launch cost gone.
   - Platform overrides of Object's toString/equals/hashCode run on spec classes (a61f89c4).
@@ -635,17 +631,21 @@ commit message states what it measured. The implementation history (the 2026-09-
     table is served (`scripts/link-table.ts`, `/link-table.json`, fingerprinted); a tab's realms
     share CanvasKit, the platform jars and framework-res (`src/shell/pageshared.ts`).
 - **Next, in plan order:**
-  1. The ChatGPT regression above, then conform on the tip.
-  2. Stage C.3's core: Layout/StaticLayout/BoringLayout/TextPaint/SpannableString(Builder) with the
-     minikin natives (LineBreaker, MeasuredText, TextRunShaper). `bun run audit apks/FitNotes.apk
-     --framework --cut android/text/` lists what is left (TextPaint 57, Layout 53, SpannableString
-     38, BidiFormatter 16 references); textcmp and the text goldens are the gate.
-  3. Stage C.2's remainder: Paint, Canvas and Bitmap (and Drawable, 222 references), which the TS
-     view stack draws through; they go with Stage D (the view stack) per §3.
-  4. Fidelity: the page has no serif or monospace faces, so those families now resolve to Roboto
-     (as `Typeface.create` does when a family has no font); pull the device's
-     `/system/fonts` serif/mono files through gen-framework and list them in `SYSTEM_FAMILIES`.
-- **Known limits added today:** Font.getGlyphBounds throws and nGetBufferAddress is missing (the
+  1. The rest of android.text: TextPaint (the TS TextView and widget.ts construct `JTextPaint` and
+     read its fields), then the span model (SpannableString, SpannedString, SpannableStringBuilder,
+     Selection, the Editable behind EditText; `JSpanned.text/.spans` are read in textview.ts,
+     textview-layout.ts's `mapChars`, ime.ts and `spannedString` callers). `bun run audit
+     apks/FitNotes.apk --framework --cut android/text/` lists what is left.
+  2. Text performance: Compose's text now runs AOSP's StaticLayout and Mihon's theme taps lost
+     10-15 ms (warm light 75 -> 90 ms). Profile a warm Mihon `light` tap (`bun run lat mihon
+     --warm --cpuprofile`) before optimizing; per-paragraph ICU boundary and advance caches exist.
+  3. Stage C.2's remainder: Paint, Canvas and Bitmap (and Drawable), with Stage D (the view stack).
+  4. Fidelity: serif/monospace and CJK faces are missing from the page (CJK layouts break 1 in 12
+     test cases differently from the device); hyphenation needs the device's .hyb patterns.
+- **Known limits (2026-09-30):** text hyphenation is unsupported (no patterns); glyph bounds are the
+  advance box, so no run overhangs (useBoundsForWidth changes nothing); TextRunShaper and
+  PositionedGlyphs are unimplemented; grapheme breaks use the browser's UAX #29 segmenter with
+  minikin's tailorings around it. Font.getGlyphBounds throws and nGetBufferAddress is missing (the
   browser shapes text, so glyph ids are not addressable); variable-font axes do nothing (the page's
   Roboto files are static); Picture streams (createFromStream/writeToStream) are unimplemented;
   RuntimeShader.nativeUpdateShader (child shaders) is missing; Canvas2D gradients only clamp (tile
@@ -740,7 +740,7 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,385 pass);
+- `bun run test` (1,378 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file`. Baselines are 40,085,
