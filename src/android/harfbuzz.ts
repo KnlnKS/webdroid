@@ -22,17 +22,18 @@ interface Exports {
   hb_buffer_set_direction(b: Ptr, d: number): void; hb_buffer_set_language(b: Ptr, l: Ptr): void; hb_buffer_guess_segment_properties(b: Ptr): void;
   hb_buffer_get_length(b: Ptr): number; hb_buffer_get_glyph_infos(b: Ptr, n: Ptr): Ptr; hb_buffer_get_glyph_positions(b: Ptr, n: Ptr): Ptr;
   hb_language_from_string(s: Ptr, n: number): Ptr; hb_feature_from_string(s: Ptr, n: number, out: Ptr): number; hb_shape(f: Ptr, b: Ptr, features: Ptr, n: number): void;
+  hb_ot_color_has_paint(face: Ptr): number; hb_ot_color_has_layers(face: Ptr): number; hb_ot_color_has_png(face: Ptr): number;
 }
 
 const HB_MEMORY_MODE_READONLY = 1;
 export const HB_DIRECTION_LTR = 4, HB_DIRECTION_RTL = 5;
 
 /** one face of a font file in wasm memory, and its fonts by variation settings */
-export interface Face { readonly face: Ptr; readonly upem: number; readonly fonts: Map<string, Font> }
-/** an hb_font at the face's upem, so positions come in font units */
-export interface Font { readonly font: Ptr; readonly face: Face }
+export interface Face { readonly face: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
+/** an hb_font at the face's upem, so positions come in font units; glyph outlines are cached */
+export interface Font { readonly font: Ptr; readonly face: Face; readonly outlines: Map<number, Path2D | null> }
 
-/** what an outline is drawn into */
+/** what an outline is drawn into: a Path2D, or a control box */
 type Sink = Pick<Path2D, "moveTo" | "lineTo" | "quadraticCurveTo" | "bezierCurveTo" | "closePath">;
 /** the box around an outline's points under (x, y) -> (a x + c y, d y), as FreeType's
  *  FT_Outline_Get_CBox bounds a transformed outline */
@@ -108,7 +109,7 @@ export class HarfBuzz {
       this.u8.set(bytes, data);
       const blob = x.hb_blob_create(data, bytes.length, HB_MEMORY_MODE_READONLY, 0, 0), face = x.hb_face_create(blob, ttcIndex);
       x.hb_blob_destroy(blob);
-      f = { face, upem: x.hb_face_get_upem(face), fonts: new Map() };
+      f = { face, upem: x.hb_face_get_upem(face), color: !!(x.hb_ot_color_has_paint(face) || x.hb_ot_color_has_layers(face) || x.hb_ot_color_has_png(face)), fonts: new Map() };
       (f as Face & { data: Ptr }).data = data;
       byFile.set(key, f);
     }
@@ -135,7 +136,7 @@ export class HarfBuzz {
         this.x.hb_font_set_variations(font, at, axes.length);
         this.x.free(at);
       }
-      face.fonts.set(key, f = { font, face });
+      face.fonts.set(key, f = { font, face, outlines: new Map() });
     }
     return f;
   }
@@ -153,6 +154,17 @@ export class HarfBuzz {
     this.views();
     const i = this.scratch >> 2, xb = this.i32[i], yb = this.i32[i + 1], w = this.i32[i + 2], h = this.i32[i + 3];
     return [xb, yb + h, xb + w, yb];
+  }
+  /** the glyph's outline in font units, y up; null when it has none */
+  outline(font: Font, glyph: number): Path2D | null {
+    let p = font.outlines.get(glyph);
+    if (p === undefined) {
+      const path = new Path2D();
+      this.draw(font, glyph, path);
+      p = this.extents(font, glyph) ? path : null;
+      font.outlines.set(glyph, p);
+    }
+    return p;
   }
   private readonly box = new ControlBox();
   /** [left, top, right, bottom] of the glyph's control points in font units under

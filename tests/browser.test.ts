@@ -20,6 +20,7 @@ beforeAll(async () => {
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
+    if (path === "/harfbuzz.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/harfbuzzjs/dist/harfbuzz.wasm`));
     if (path.startsWith("/vendor/aosp/") || path.startsWith("/vendor/fonts/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
@@ -147,4 +148,11 @@ test.concurrent("TextView measures and paints replacement spans with cached layo
   expect(result.combined.width).toBeLessThanOrEqual(80);
   expect(result.combined.ellipsis).toBeGreaterThan(0);
   expect(result.selection.length).toBeGreaterThan(0);
+}, PAGE_TIMEOUT);
+
+test.concurrent("drawGlyphs draws HarfBuzz outlines where the browser draws the same font's text, and color glyphs in color", async () => {
+  const { drawn, reference, differing, inked, emoji } = await probe("glyphs");
+  drawn.forEach((edge, i) => expect(Math.abs(edge - reference[i])).toBeLessThanOrEqual(1));
+  expect(differing).toBeLessThan(inked * 0.05);
+  expect(emoji).toBeGreaterThan(200);
 }, PAGE_TIMEOUT);

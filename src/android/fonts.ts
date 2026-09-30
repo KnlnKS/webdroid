@@ -209,6 +209,10 @@ export async function systemFonts(): Promise<NativeFont[]> {
   return out;
 }
 
+const familyCss = new WeakMap<NativeFont, string>();
+/** the CSS family the page draws `font` from */
+export const cssFamily = (font: NativeFont): string | undefined => SYSTEM_FACES.get(font.path)?.family.css ?? familyCss.get(font);
+
 /** minikin's FontFamily: its fonts, registered under one CSS family */
 export class NativeFamily {
   private axisTags?: readonly number[];
@@ -262,7 +266,7 @@ export async function mkFamily(fonts: readonly NativeFont[], langTags = "", vari
   const page = pageFamily(fonts);
   if (page) return new NativeFamily(fonts, page, langTags, variant);
   const fam = new NativeFamily(fonts, "wd-font-" + (++familySeq), langTags, variant);
-  for (const f of fonts) await registerFace(f, fam.css);
+  for (const f of fonts) { familyCss.set(f, fam.css); await registerFace(f, fam.css); }
   return fam;
 }
 

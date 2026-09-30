@@ -1,6 +1,6 @@
 // minikin's glyph-level layout over HarfBuzz and the page's font files: TextRunShaper and
-// PositionedGlyphs, and Font's glyph bounds. It follows minikin at android-15.0.0_r1 as the
-// reference device shows it (values recorded in fwtest):
+// PositionedGlyphs, Font's glyph bounds, and the glyph runs Canvas.drawGlyphs draws. It follows
+// minikin at android-15.0.0_r1 as the reference device shows it (values recorded in fwtest):
 //   - the run is split into LayoutSplitter pieces (a word, or one space), each piece into font
 //     runs over the typeface's families, each font run shaped on its own, in visual order;
 //   - a glyph's advance is Skia's: whole pixels while hinting applies (no linear metrics, no skew),
@@ -12,9 +12,10 @@ import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { after } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeFont, type NativeFamily, typefaceOf, fakery, FAKE_BOLD, FAKE_ITALIC, wrapFont } from "./fonts";
+import { type NativeFont, type NativeFamily, typefaceOf, fakery, FAKE_BOLD, FAKE_ITALIC, fontOf, wrapFont, cssFamily } from "./fonts";
 import { pieceEnd, JOINING } from "./minikin";
 import { type HarfBuzz, type Font, harfBuzz, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
+import type { Ctx2D } from "./recording";
 
 const f32 = Math.fround;
 
@@ -112,6 +113,10 @@ export class Layout {
   constructor(readonly ids: Uint32Array, readonly x: Float32Array, readonly y: Float32Array, readonly fonts: readonly FakedFont[],
     readonly advance: number, readonly ascent: number, readonly descent: number) {}
 }
+/** glyph ids of color fonts, by the text they were shaped from: a color glyph has no outline to
+ *  draw, so drawGlyphs draws its text in the font instead */
+const colorText = new WeakMap<Font, Map<number, string>>();
+
 /** Layout for text[start, start + count) in one direction, context around it (TextShaper's
  *  shapeTextRun) */
 export function shapeTextRun(text: string, start: number, count: number, ctxStart: number, ctxCount: number, rtl: boolean, p: ShapePaint): Layout | Promise<Layout> {
@@ -139,6 +144,7 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
       const ls = p.letterSpacingEm && !JOINING.test(text.slice(a, b)) ? f32(f32(p.letterSpacingEm * size) * scaleX) : 0;
       const n = hb.shape(font, a - ctxStart, b - a, rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR, p.language, features);
       const w = hb.words(), info = hb.infos(), pos = hb.positions();
+      const texts = font.face.color ? colorText.get(font) ?? colorText.set(font, new Map()).get(font)! : null;
       for (let i = 0; i < n; i++) {
         const glyph = w[info + i * 5], cluster = w[info + i * 5 + 2], o = pos + i * 5;
         if (ls && (i === 0 || w[info + (i - 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
@@ -147,6 +153,7 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
         const nominal = hb.advance(font, glyph);
         x = f32(x + f32((hinted ? Math.round(nominal * sx) : nominal * sx) + (w[o] - nominal) * sx));
         if (ls && (i === n - 1 || w[info + (i + 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
+        if (texts && !texts.has(glyph)) texts.set(glyph, clusterText(text, ctxStart, w, info, i, n, b));
       }
       if (n && !seen.has(faked.font)) {
         seen.add(faked.font);
@@ -157,6 +164,14 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
   }
   return new Layout(Uint32Array.from(ids), Float32Array.from(xs), Float32Array.from(ys), fonts, f32(x), ascent, descent);
 }
+/** the text of glyph i's cluster: from its cluster to the next cluster in logical order */
+function clusterText(text: string, ctxStart: number, w: Int32Array, info: number, i: number, n: number, runEnd: number): string {
+  const c = w[info + i * 5 + 2];
+  let e = runEnd - ctxStart;
+  for (let j = 0; j < n; j++) { const d = w[info + j * 5 + 2]; if (d > c && d < e) e = d; }
+  return text.slice(ctxStart + c, ctxStart + e);
+}
+
 // ── Font's glyph queries
 /** Font_getGlyphBounds: SkFont::getWidths of one glyph at the paint's size, scale and skew. The
  *  bounds are the transformed outline's control box rounded out to pixels, as FreeType's are for an
@@ -172,6 +187,44 @@ export function glyphBounds(font: NativeFont, glyph: number, p: ShapePaint, rect
     }
     const advance = hb.advance(f, glyph) * sx;
     return f32(hints(p, font) ? Math.round(advance) : advance);
+  });
+}
+
+// ── Canvas.drawGlyphs
+let glyphMatrix: DOMMatrix | null = null;
+/** Canvas::drawGlyphs: `count` glyphs of the Java Font `fontHandle` at their positions, drawn at the
+ *  paint's size, scale and skew. `draw` fills or strokes with the paint as the canvas draws any
+ *  shape; outlines become one Path2D, and color glyphs (which have none) draw the text they were
+ *  shaped from in the font. */
+export function drawGlyphs(draw: (fill: (c: Ctx2D) => void, stroke: (c: Ctx2D) => void) => void, ids: Int32Array, idOffset: number,
+  positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: ShapePaint): void | Promise<void> {
+  if (count <= 0) return;
+  const font = fontOf(fontHandle);
+  return after(harfBuzz(), (hb) => {
+    const f = hbFont(hb, font), s = p.textSize / f.face.upem, texts = colorText.get(f), path = new Path2D();
+    const m = glyphMatrix ??= new DOMMatrix();
+    m.a = s * p.textScaleX; m.b = 0; m.c = -p.textSkewX * s; m.d = -s;
+    let color: [string, number, number][] | null = null;
+    for (let i = 0; i < count; i++) {
+      const glyph = ids[idOffset + i], x = positions[positionOffset + i * 2], y = positions[positionOffset + i * 2 + 1];
+      const text = f.face.color ? texts?.get(glyph) : undefined;
+      if (text) { (color ??= []).push([text, x, y]); continue; }
+      const outline = hb.outline(f, glyph);
+      if (!outline) continue;
+      m.e = x; m.f = y;
+      path.addPath(outline, m);
+    }
+    const css = color && `${p.textSize}px "${cssFamily(font) ?? "sans-serif"}"`;
+    draw((c) => {
+      c.fill(path);
+      if (color) for (const [text, x, y] of color) {
+        c.save();
+        c.transform(p.textScaleX, 0, p.textSkewX, 1, x, y);
+        c.font = css!; c.textAlign = "left"; c.textBaseline = "alphabetic";
+        c.fillText(text, 0, 0);
+        c.restore();
+      }
+    }, (c) => c.stroke(path));
   });
 }
 
