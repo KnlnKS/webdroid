@@ -1144,6 +1144,66 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   times per theme switch. After this pass the slow mode measures 128-148 ms and the gate passed
   5 of 5 cold runs and warm.
 
+- 2026-10-01, Stage C completed on branch `knlnks/bytecode-stage-c` (parallel units merged by
+  cherry-pick; each commit message records its gates). Every class under `android/graphics/` and
+  `android/text/` now runs from AOSP bytecode except the layout-only geometry specs (Rect, RectF,
+  Point, PointF, Insets: bytecode fields are mangled per class, so TS reads `r.left` only through a
+  spec's layout; every method is AOSP's). Units and their measured findings:
+  - Canvas, RecordingCanvas, RenderNode (`canvas.ts`, `rendernode.ts`; bridge `canvasOf`). The TS
+    view stack passes Java canvases; the window canvas is one cached RecordingCanvas per target
+    context. RenderNode properties match the reference AVD (setter change flags, matrices incl.
+    rotationX/Y and camera). hwui's promotion of a fading overlapping node to a layer was dropped:
+    it doubled Compose draw time (58 ms of layer compositing); alpha multiplies each draw instead,
+    which differs only where a fading node's children overlap. Weak handle slots are transparent
+    to `deref`, so every Java draw asking a paint for its handle no longer pins the paint.
+  - Bitmap, BitmapFactory, BitmapRegionDecoder, ImageDecoder, AnimatedImageDrawable (`bitmap.ts`,
+    `decode.ts`, `animatedimage.ts`; bridge `bitmapOf`). PNG pixels equal the device's, JPEG within
+    2 per channel; bounds-only decode of a 3000x2000 JPEG 22 -> 0 ms. HARDWARE bitmaps are served
+    by the raster (the device's ImageDecoder defaults to HARDWARE, and a null from BitmapFactory
+    would break Coil/Glide); ashmem is absent. Compose's vector cache draws ALPHA_8 bitmaps, which
+    the old mask path drew as nothing.
+  - Paint, TextPaint, PathEffects, MaskFilters (`paint.ts`; bridge `paintOf`, `newPaint`). The
+    TS copy ignored shadow layers, text scale/skew, xfermodes, path effects other than dash and
+    mask filters other than blur. Device probe: SUBPIXEL_TEXT does not change measureText or
+    getTextWidths, LINEAR_TEXT does, so measurement is hinted unless LINEAR_TEXT is set (it was
+    unhinted under SUBPIXEL). Paint's constructor reads LocaleList.getAdjustedDefault, so
+    zygoteInit sets the device locales before preloading a Paint.
+  - android.text's span model, Editable, Selection, Linkify, android.util.Patterns,
+    AndroidCharacter. The TS TextView/EditText drive AOSP's SpannableStringBuilder through Java
+    and a ChangeWatcher; listeners get real ranges. In V8 SSB appends/edits cost 2.5-3.3x the
+    TS copy (0.12 -> 0.34 ms per 500) and one typed character 0.66 -> 3.96 us: microseconds, no
+    intrinsic.
+  - TextRunShaper, PositionedGlyphs, Font glyph bounds, Canvas.drawGlyphs over HarfBuzz
+    (harfbuzzjs 434 KB wasm, lazy, shared per tab; `harfbuzz.ts`, `shaping.ts`). Glyph ids,
+    positions and bounds match the device to one ulp where the fonts agree; androidx's
+    TypefaceCompat.guessPrimaryFont (Mihon, NewPipe, YouTube, ...) now resolves. The page's
+    Roboto is static where the device's is variable (ligature ids differ by 3).
+  - Drawables, VectorDrawable, AnimatedVectorDrawable, NativeInterpolatorFactory,
+    RenderNodeAnimator, CanvasProperty, the framework's RippleShader, PathParser, and
+    android.animation (Stage D's list, flipped because AOSP's drawables need AnimatorInflater's
+    theme form and keyframe data). Vectors match device pixels within 3 per channel. Cost, e2e
+    `--jobs 1` summed draw ms: calculatorm 1210 -> 1729, mihon-app 2780 -> 3635, mihon-onboarding
+    860 -> 1446, komikku 10002 -> 11507: the real patterned ripple and full-duration state
+    animations replace a flat circle. In headless SwiftShader a ripple frame rasterizes in 1.8 ms
+    (GPU 0.4) but its program compiles in about 270 ms (GPU 13) on first use per realm, which
+    blocks the main thread; the e2e harness can then settle on still pixels mid-transition, and
+    Komikku's fast flow failed at populated-library in 4 of 8 parallel runs against 0 of 3
+    at 51f45b5a (it passes alone). CPU over a Komikku tap window: 205 against 167 ms.
+  - RenderEffect over hwui's image filter graph: blur sigma is Blur::convertRadiusToSigma
+    (0.57735 r + 0.5); the TS copy blurred by the radius (1.6x at r = 10).
+  - SurfaceTexture over GLConsumer's latch/attach semantics; its transform after a latch is the
+    device's vertical flip (the TS copy returned identity).
+  - Found while gating: a generator named like its `driven()` wrapper yields an unrun Generator
+    (Runtime.drive returns it as a value) — XML `<set>` children, menu `<group>` items and child
+    visibility never ran; inner generators take a `$` suffix. The TS Handler lacked the
+    asynchronous constructors bytecode now calls.
+  Limits: text hyphenation (no patterns), single bidi direction per drawn run, CJK/Arabic/serif/
+  monospace fonts absent from the page, glyph fake-bold not outlined, color management (sRGB
+  only), 565/4444/F16 not quantized until read back, vertices/meshes/clipShader and texture-layer
+  and WebView-functor draws throw UnsupportedOperationException, elevation shadows and Z order
+  not drawn, getFillPath needs the page's CanvasKit, resolution logging, ObbScanner, ResourceTimer
+  and fd-backed ApkAssets unimplemented.
+
 ## Java, storage and framework semantics
 
 - Collection views remain live. Copying `subList` or map views broke Compose

@@ -582,13 +582,56 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-01 (evening). The branch is `knlnks/bytecode` in
-`/Users/kunalan/Projects/webdroid` (not pushed); read "Latest handoff" first. The older handoffs
-below it are history. Each commit message states what it
-measured; the implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process
-ownership" record each unit's findings.
+Last updated 2026-10-01 (night). The branch is `knlnks/bytecode-stage-c` in
+`/Users/kunalan/Projects/webdroid-stage-c`, rebased onto `knlnks/bytecode` (not pushed); read
+"Latest handoff" first. The older handoffs below it are history: where they list next steps for
+Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
+implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
+each unit's findings.
 
-### Latest handoff (2026-10-01, evening): Stage B is complete, start here
+### Latest handoff (2026-10-01, night): Stage C is complete, start here
+
+Stage C ran in parallel with the Stage B completion pass on its own branch
+(`knlnks/bytecode-stage-c`, worktree `../webdroid-stage-c`), since rebased onto `knlnks/bytecode`
+at 970219a0, so it fast-forwards that branch. The implementation history's 2026-10-01 "Stage C
+completed" entry records each unit's measurements; each commit message records its gates.
+
+**Done.** Every class under `android/graphics/` (drawables, animation interpolators, RenderEffect,
+SurfaceTexture included) and `android/text/` runs from AOSP bytecode over native halves with
+hwui/Skia/minikin/libandroid_runtime semantics, most checked against reference-AVD values in
+fwtest and the browser probes. Only Rect, RectF, Point, PointF and Insets keep a TS spec, holding
+just their field layout (the TS view stack reads `r.left`; every method is AOSP's). New modules:
+`canvas.ts` (`canvasOf`), `rendernode.ts`, `paint.ts` (`paintOf`, `newPaint`), `bitmap.ts`
+(`bitmapOf`, `javaBitmap`), `decode.ts`, `animatedimage.ts`, `shaping.ts`/`harfbuzz.ts`
+(TextRunShaper, PositionedGlyphs, drawGlyphs), `vectordrawable.ts`, `pathparser.ts`,
+`rtanimator.ts`, `animation.ts`, `rendereffect.ts`. `android.animation` also moved to bytecode
+(a Stage D prefix): AOSP's drawables need its AnimatorInflater and keyframe semantics.
+
+**Gates on the branch tip, rerun after the rebase:** typecheck; `bun run test` 1,285 (the six
+browser probes among them can fail together under `--parallel`); browser tests 13/13 (run
+`bun test tests/browser.test.ts` alone: under `--parallel` its bundle intermittently fails to
+parse); FitNotes smoke 0 method failures; fwtest 100% of declared natives for the flipped
+prefixes; `textcmp` 71/72 (the CJK case, as before); `bun run lat` and `--warm` pass (worst tap
+129 ms, Mihon's theme switch); live harmonic, lichess, reddit, youtube, tiktok and chatgpt pass (YouTube's video steps alone); fast e2e 7/7 except Komikku
+(below). Conform was not rerun: no libcore class changed. `bun install` is needed (harfbuzzjs).
+
+**Open, in order:**
+1. **Komikku's fast flow under parallel load** fails at `populated-library` in 4 of 8 runs
+   (0 of 3 at 51f45b5a; it passes alone). Mechanism: the framework's RippleShader now runs; its
+   WebGL program compiles in about 270 ms on headless SwiftShader (13 ms on a GPU) on first use
+   per realm, blocking the main thread, and the harness settles on still pixels mid-transition.
+   Candidates: compile AGSL programs with `KHR_parallel_shader_compile` where validation allows,
+   or prepare the framework's ripple program in idle time (§4.5).
+2. **Draw cost from real ripples and full-length animations** (e2e summed draw ms: calculatorm
+   +43%, mihon-onboarding +68%, komikku +15%); CPU per tap window is +20%. Profile a ripple frame
+   in the browser with a GPU before optimizing; the 2D copy of the WebGL raster per frame is the
+   first suspect.
+3. **Unsupported, reported honestly:** vertices, meshes, clipShader, texture layers, WebView
+   functors (UnsupportedOperationException); elevation shadows and Z order not drawn; hyphenation;
+   CJK/Arabic/serif/monospace faces absent; sRGB only; getFillPath needs the page's CanvasKit;
+   C.1's ObbScanner, ResourceTimer, resolution logging and fd-backed ApkAssets.
+
+### Previous handoff (2026-10-01, evening): Stage B is complete
 
 **State.** `knlnks/bytecode` (not pushed) and `main` are the only local branches; every agent
 worktree this pass used was merged by cherry-pick and removed. `../webdroid-gate` is a detached
@@ -1158,9 +1201,7 @@ android/content/res/`):
   (StringBlock styles).
 - **Done (step 1): natives.** 94 of 97 have libandroidfw semantics over one AssetManager2
   (`res.ts` `Resources`, `JTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
-  stack uses too. Left: ObbScanner and ResourceTimer (unreached), resolution logging (answers ""),
-  `nativeList` of the framework apk's assets (its archive is not listed) and fd-backed ApkAssets
-  (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
+  stack uses too. Left: ObbScanner and ResourceTimer (unreached), resolution logging (answers "") and fd-backed ApkAssets (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
   runs AOSP's Resources end to end headless. Measurements are in the history entry.
 - **Done (steps 2-5), the default since 131efb48:** apps boot through AOSP's ApkAssets, AssetManager and Resources
   (`src/android/resources.ts`), Contexts hold the Java Resources and Theme, and the system Resources
@@ -1179,7 +1220,7 @@ android/content/res/`):
     never completed, and Flutter's sound plugin blocks Dart init on it. The visible symptom was Cronet
     never loading (4d5b9ac2). Lesson: diff the page's logcat between paths (headless Chrome console)
     to find where init diverges; a blank Flutter surface says nothing on its own.
-- **Left:** ObbScanner, ResourceTimer, resolution logging, `nativeList` of the framework apk and fd-backed ApkAssets.
+- **Left:** ObbScanner, ResourceTimer, resolution logging and fd-backed ApkAssets (no corpus path reaches them). `nativeList` sees framework-res's own assets since 5abf4295.
 
 ### Tools and pitfalls learned
 
