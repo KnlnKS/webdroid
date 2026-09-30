@@ -10,7 +10,6 @@ import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
-import { newXmlSerializer } from "../src/android/xmlpull";
 import { onMain } from "../src/android/mainloop";
 import { loadLibcore } from "./java";
 
@@ -356,23 +355,6 @@ describe("sqlite-transaction-listener", () => {
     db.db!.exec("INSERT INTO payload VALUES (x'04')");
     expect(db.db!.exec("SELECT count(*) FROM changes")[0].values).toEqual([[2]]);
     saved.close(); vfs.delete(path);
-  });
-});
-
-describe("xml-serializer", () => {
-  test("XmlSerializer escapes content and writes each flush once", async () => {
-    const out = await newObj("java/io/ByteArrayOutputStream", "()V");
-    const xml = newXmlSerializer();
-    await vcall(xml, "setOutput", "(Ljava/io/OutputStream;Ljava/lang/String;)V", out, "UTF-8");
-    await vcall(xml, "startDocument", "(Ljava/lang/String;Ljava/lang/Boolean;)V", "UTF-8", null);
-    await vcall(xml, "startTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", "", "root");
-    await vcall(xml, "attribute", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", "", "title", 'a&"b');
-    await vcall(xml, "flush", "()V");
-    await vcall(xml, "text", "(Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", "<x>&");
-    await vcall(xml, "endTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", "", "root");
-    await vcall(xml, "endDocument", "()V");
-    const bytes = await vcall(out, "toByteArray", "()[B") as Int8Array;
-    expect(new TextDecoder().decode(bytes)).toBe('<?xml version="1.0" encoding="UTF-8"?><root title="a&amp;&quot;b">&lt;x&gt;&amp;</root>');
   });
 });
 

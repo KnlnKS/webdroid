@@ -3,7 +3,6 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { newXmlPullParser, newXmlSerializer } from "./xmlpull";
 import { type Resources, setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
 import { vcall, after, scall, newObj } from "../jvm/natives/jlang";
@@ -162,15 +161,4 @@ export function setDeviceNight(night: boolean): boolean {
   return true;
 }
 
-rt.register({
-  name: "android/util/AttributeSet", ctor: class extends JObj {},
-});
-rt.register({
-  name: "android/util/Xml", ctor: class extends JObj {},
-  methods: {
-    // XmlBlock's parser already implements AttributeSet
-    "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
-    "static newPullParser()Lorg/xmlpull/v1/XmlPullParser;": () => newXmlPullParser(),
-    "static newSerializer()Lorg/xmlpull/v1/XmlSerializer;": () => newXmlSerializer(),
-  },
-});
+
