@@ -1,0 +1,49 @@
+import java.util.*;
+
+public class Bench {
+  static String[] KEYS = new String[1000];
+  static { for (int i = 0; i < KEYS.length; i++) KEYS[i] = "key_" + i + "_" + (i * 31); }
+
+  static String JSON;
+  static String json() {
+    if (JSON != null) return JSON;
+    StringBuilder sb = new StringBuilder("{\"items\":[");
+    for (int i = 0; i < 1500; i++) {
+      if (i > 0) sb.append(',');
+      sb.append("{\"id\":").append(i).append(",\"name\":\"Item number ").append(i).append("\",\"price\":").append(i * 1.25)
+        .append(",\"tags\":[\"a\",\"b\",\"c\"],\"active\":").append(i % 2 == 0).append(",\"meta\":{\"x\":").append(i * 7).append(",\"y\":null}}");
+    }
+    return JSON = sb.append("]}").toString();
+  }
+  public static int run(String w) {
+    switch (w) {
+      case "listAddGet": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; for (int r = 0; r < 5; r++) for (int i = 0; i < l.size(); i++) s += l.get(i); return s; }
+      case "listIter": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; for (int r = 0; r < 5; r++) for (Integer x : l) s += x; return s; }
+      case "listRemove": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; while (l.size() > 1000) s += l.remove(0); for (int i = 0; i < 500; i++) l.remove(Integer.valueOf(1000 + i * 2)); return s + l.size(); }
+      case "mapStr": { HashMap<String, Integer> m = new HashMap<>(); for (int i = 0; i < KEYS.length; i++) m.put(KEYS[i], i); int s = 0; for (int r = 0; r < 5; r++) for (String k : KEYS) s += m.get(k); return s; }
+      case "mapInt": { HashMap<Integer, Integer> m = new HashMap<>(); for (int i = 0; i < 1000; i++) m.put(i, i); int s = 0; for (int r = 0; r < 5; r++) for (int i = 0; i < 1000; i++) s += m.get(i); return s; }
+      case "mapWalk": { HashMap<String, Integer> m = new HashMap<>(); for (int i = 0; i < KEYS.length; i++) m.put(KEYS[i], i); int s = 0; for (int r = 0; r < 5; r++) { for (Map.Entry<String, Integer> e : m.entrySet()) s += e.getValue(); for (String k : m.keySet()) s += k.length(); } return s; }
+      case "linkedMap": { LinkedHashMap<String, Integer> m = new LinkedHashMap<>(); for (int i = 0; i < KEYS.length; i++) m.put(KEYS[i], i); int s = 0; for (int r = 0; r < 3; r++) { for (String k : KEYS) s += m.get(k); for (Integer v : m.values()) s += v; } return s; }
+      case "hashSet": { HashSet<String> h = new HashSet<>(); for (String k : KEYS) h.add(k); int s = 0; for (int r = 0; r < 5; r++) for (String k : KEYS) if (h.contains(k)) s++; return s; }
+      case "smallAlloc": { int s = 0; for (int i = 0; i < 500; i++) { ArrayList<String> l = new ArrayList<>(); l.add("a"); l.add("b"); HashMap<String, String> m = new HashMap<>(); m.put("x", "1"); m.put("y", "2"); s += l.size() + m.size(); } return s; }
+      case "deque": { ArrayDeque<Integer> d = new ArrayDeque<>(); int s = 0; for (int r = 0; r < 5; r++) { for (int i = 0; i < 1000; i++) d.offer(i); while (!d.isEmpty()) s += d.poll(); } return s; }
+      case "treeMap": { TreeMap<String, Integer> t = new TreeMap<>(); for (int i = 0; i < KEYS.length; i++) t.put(KEYS[i], i); int s = 0; for (String k : KEYS) s += t.get(k); for (String k : t.keySet()) s += k.length(); return s; }
+      case "sort": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add((i * 7919) % 2003); Collections.sort(l); ArrayList<String> sl = new ArrayList<>(Arrays.asList(KEYS)); Collections.sort(sl, Collections.reverseOrder()); return l.get(0) + sl.get(0).length(); }
+      case "mix": { HashMap<String, List<Integer>> m = new HashMap<>(); int s = 0; for (int i = 0; i < 20000; i++) { String k = KEYS[i % 997]; List<Integer> l = m.get(k); if (l == null) { l = new ArrayList<>(); m.put(k, l); } l.add(i); if ((i & 7) == 0) s += l.size(); } for (List<Integer> l : m.values()) s += l.get(l.size() - 1); return s; }
+      case "linkedList": { LinkedList<Integer> l = new LinkedList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; for (Integer x : l) s += x; while (!l.isEmpty()) s += l.removeFirst(); return s; }
+      case "b64java": { byte[] b = new byte[100000]; for (int i = 0; i < b.length; i++) b[i] = (byte) (i * 31); String e = java.util.Base64.getEncoder().encodeToString(b); return java.util.Base64.getDecoder().decode(e).length + e.length(); }
+      case "b64android": { byte[] b = new byte[100000]; for (int i = 0; i < b.length; i++) b[i] = (byte) (i * 31); String e = android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP); return android.util.Base64.decode(e, 0).length + e.length(); }
+      case "jsonParse": { try { org.json.JSONObject o = new org.json.JSONObject(json()); org.json.JSONArray a = o.getJSONArray("items"); int s = 0; for (int i = 0; i < a.length(); i++) { org.json.JSONObject it = a.getJSONObject(i); s += it.getInt("id") + it.getString("name").length() + it.getJSONArray("tags").length(); } return s; } catch (org.json.JSONException e) { throw new RuntimeException(e); } }
+      case "jsonWrite": { try { org.json.JSONObject o = new org.json.JSONObject(json()); return o.toString().length(); } catch (org.json.JSONException e) { throw new RuntimeException(e); } }
+      case "scanTokens": { StringBuilder sb = new StringBuilder(); for (int i = 0; i < 2000; i++) sb.append(i).append(' '); Scanner sc = new Scanner(sb.toString()); int s = 0; while (sc.hasNextInt()) s += sc.nextInt(); return s; }
+      case "scanLines": { StringBuilder sb = new StringBuilder(); for (int i = 0; i < 2000; i++) sb.append("line ").append(i).append('\n'); Scanner sc = new Scanner(sb.toString()); int s = 0; while (sc.hasNextLine()) s += sc.nextLine().length(); return s; }
+      case "fbLoop": { java.nio.FloatBuffer fb = java.nio.ByteBuffer.allocateDirect(4 * 4096).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer(); int s = 0; for (int r = 0; r < 5; r++) { fb.clear(); for (int i = 0; i < 4096; i++) fb.put(i * 0.5f); fb.flip(); s += fb.remaining(); } return s; }
+      case "fbBulk": { java.nio.FloatBuffer fb = java.nio.ByteBuffer.allocateDirect(4 * 4096).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer(); float[] a = new float[4096]; int s = 0; for (int r = 0; r < 50; r++) { fb.clear(); fb.put(a); fb.flip(); s += fb.get(r); } return s; }
+      case "bbInts": { java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(4 * 4096); int s = 0; for (int r = 0; r < 5; r++) { bb.clear(); for (int i = 0; i < 4096; i++) bb.putInt(i); bb.flip(); while (bb.hasRemaining()) s += bb.getInt(); } return s; }
+      case "dbInts": { java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocateDirect(4 * 4096); int s = 0; for (int r = 0; r < 5; r++) { bb.clear(); for (int i = 0; i < 4096; i++) bb.putInt(i); bb.flip(); while (bb.hasRemaining()) s += bb.getInt(); } return s; }
+      case "random": { Random r = new Random(42); int s = 0; for (int i = 0; i < 20000; i++) s += r.nextInt(1000); double d = 0; for (int i = 0; i < 5000; i++) d += r.nextDouble(); return s + (int) d; }
+      case "strConcat": { StringBuilder sb = new StringBuilder(); for (int i = 0; i < 2000; i++) { sb.append("item").append(i).append(','); } return sb.toString().length(); }
+    }
+    throw new IllegalArgumentException(w);
+  }
+}
