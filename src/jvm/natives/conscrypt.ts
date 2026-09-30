@@ -6,7 +6,7 @@
 
 import { rt, declaredField, type JObj } from "../runtime";
 import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles";
-import { DIGESTS, Hmac, type Hash } from "./digest";
+import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers";
 import { type JBuffer, remainingBytes, resident, addressOf, limit, position, directAddress } from "./jnio";
 import { mem } from "../../native/mem";
@@ -88,16 +88,16 @@ nc("EVP_get_digestbyname(Ljava/lang/String;)J", (name: string) => {
   return handle(md);
 });
 nc("EVP_MD_size(J)I", (h: bigint) => mdOf(h).size);
-type MdCtx = { md: MdDesc | null; hash: Hash | null };
+type MdCtx = { md: MdDesc | null; hash: Deferred | null };
 nc("EVP_MD_CTX_create()J", () => ownedHandle({ md: null, hash: null } satisfies MdCtx));
 nc("EVP_MD_CTX_destroy(J)V", (h: bigint) => release(h));
 nc("EVP_MD_CTX_cleanup(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)V", (ref: JObj) => { const c = ptr<MdCtx>(ref); c.md = null; c.hash = null; });
 nc("EVP_DigestInit_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;J)I", (ref: JObj, md: bigint) => {
   const c = ptr<MdCtx>(ref), d = mdOf(md);
-  c.md = d; c.hash = d.make();
+  c.md = d; c.hash = deferred(d.name);
   return 1;
 });
-const liveHash = (ref: JObj): Hash => {
+const liveHash = (ref: JObj): Deferred => {
   const c = ptr<MdCtx>(ref);
   if (!c.hash) throw runtimeError("EVP_MD_CTX not initialized");
   return c.hash;
@@ -106,10 +106,9 @@ nc("EVP_DigestUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V", (r
   liveHash(ref).update(region(b, off, len));
 });
 nc("EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I", (ref: JObj, out: Int8Array, off: number) => {
-  const c = ptr<MdCtx>(ref), d = liveHash(ref).digest();
-  region(out, off, d.length).set(d);
+  const c = ptr<MdCtx>(ref), h = liveHash(ref), dst = region(out, off, h.size);
   c.hash = null; c.md = null;
-  return d.length;
+  return after(h.final(), (d) => { dst.set(d); return d.length; });
 });
 nc("EVP_MD_CTX_copy_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)I", (dst: JObj, src: JObj) => {
   const d = ptr<MdCtx>(dst), s = ptr<MdCtx>(src);
@@ -506,7 +505,7 @@ function digestSignInit(signing: boolean) {
   return (ref: JObj, md: bigint, keyRef: JObj) => {
     const c = ptr<SignCtx>(ref), d = mdOf(md), key = keyOf(keyRef);
     if (key.type === EVP_PKEY_X25519) throw sslError("java/security/InvalidKeyException", EVP, 125, "OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE");
-    c.md = d; c.hash = d.make();
+    c.md = d; c.hash = deferred(d.name);
     const p = pkeyCtx(key, false);
     c.sign = { key, params: p, signing, pctx: weakHandle(p) };
     return c.sign.pctx;
@@ -525,7 +524,7 @@ nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", (r
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s?.signing) throw runtimeError("EVP_DigestSignFinal: not initialized for signing");
   const digest = liveHash(ref).digest(), key = s.key, p = s.params;
-  c.hash = c.md!.make();
+  c.hash = deferred(c.md!.name);
   if (key.type === EVP_PKEY_EC) {
     if ("wrapper" in key) return scall(UPCALLS, "ecSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;[B)[B", key.wrapper, i8(digest));
     const ec = key.ec;
@@ -545,7 +544,7 @@ nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s || s.signing) throw runtimeError("EVP_DigestVerifyFinal: not initialized for verifying");
   const digest = liveHash(ref).digest(), key = s.key, p = s.params, sg = region(sig, off, len);
-  c.hash = c.md!.make();
+  c.hash = deferred(c.md!.name);
   if (key.type === EVP_PKEY_EC) { const e = "wrapper" in key ? { curve: key.curve! } as EcKey : key.ec; return +(e.pub !== undefined && ecdsaVerify(e.curve, e.pub, digest, sg)); }
   const r = "wrapper" in key ? key.rsa! : (key as { rsa: Rsa }).rsa, n = rsaBytes(r);
   if (sg.length !== n) return 0;

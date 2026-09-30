@@ -53,7 +53,7 @@ describe("conscrypt-natives", () => {
   test("the TS primitives match node:crypto's BoringSSL across sizes, modes and curves", async () => {
     const nc = await import("node:crypto");
     const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers");
-    const { DIGESTS } = await import("../src/jvm/natives/digest");
+    const { DIGESTS, deferred } = await import("../src/jvm/natives/digest");
     const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey");
     const { modPow } = await import("../src/jvm/natives/jmath");
     const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der");
@@ -117,6 +117,17 @@ describe("conscrypt-natives", () => {
         h.update(data.subarray(0, n >> 1)); h.update(data.subarray(n >> 1));
         same(h.digest(), nc.createHash(name).update(data).digest());
       }
+    // held messages: the browser's digest past 64 KB, JS below it, after a clone and past the 64 MB hold
+    for (const [name, n] of [["sha256", 70000], ["sha512", 100], ["sha224", 70000], ["sha1", (1 << 26) + 5]] as const) {
+      const data = rnd(n), want = nc.createHash(name).update(data).digest(), h = deferred(name), c = deferred(name);
+      h.update(data.subarray(0, 7)); h.update(data.subarray(7));
+      same(await h.final(), want);
+      c.update(data.subarray(0, n >> 1));
+      const d = c.clone();
+      c.update(data.subarray(n >> 1)); d.update(data.subarray(n >> 1));
+      same(await c.final(), want);
+      same(d.digest(), want);
+    }
     for (const [ours, theirs] of [["prime256v1", "prime256v1"], ["secp384r1", "secp384r1"], ["secp521r1", "secp521r1"], ["secp224r1", "secp224r1"]]) {
       const c = curveByName(ours)!, { privateKey, publicKey } = nc.generateKeyPairSync("ec", { namedCurve: theirs });
       const Q = decodePoint(c, new Uint8Array(publicKey.export({ format: "der", type: "spki" })).subarray(-(1 + 2 * c.bytes)));
