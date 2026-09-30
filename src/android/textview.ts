@@ -1,28 +1,28 @@
 import { AID, resString } from "./res";
 import { guestNow } from "../guest-clock";
-import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
+import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, rvCsl, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize,
   cslBoundary,
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, csText, textSelection, setTextSelection, passwordTransformation, applyInputFilters } from "./text";
+import { JTextPaint, JEditable, JSpanned, spannedString, csText, textSelection, setTextSelection, passwordTransformation, applyInputFilters } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
 import {
-  fontDescent, fontAscent, fontTop, fontBottom, measureText, JRect, type JCanvas,
+  fontDescent, fontAscent, fontTop, fontBottom, JRect, type JCanvas,
 } from "./graphics";
-import { vcall, vcallOn, callOn, curThread, after, mkEnumSet, newObj, scall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, scall } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
 } from "./res";
 import { TV } from "./axml";
 import { tfMedium, typefaceOf } from "./fonts";
-import { type NativeSpec, callSelf, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { type NativeSpec, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod, jmethod } from "../jvm/abi";
-import { TextViewLayouts, drawTextViewLayout } from "./textview-layout";
+import { TextViewLayouts, Align, type TextViewLayout } from "./textview-layout";
 
 export class JTextView extends JView {
   fallbackLineSpacing = true;
@@ -33,7 +33,7 @@ export class JTextView extends JView {
   keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
   insertionActionMode: unknown = null;
   drawableTint: JColorStateList | null = null;
-  imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
+  imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 1; hyphenation = 0; autoSizeType = 0;
   showSoftInputOnFocus = true;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
@@ -71,7 +71,9 @@ export class JTextView extends JView {
   cursorDrawableRes = 0;
   /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
   blinkStart = 0;
-  layout: JLayout | null = null;
+  layout: TextViewLayout | null = null;
+  /** the alignment the view last drew with, which layouts for measuring are built with too */
+  align = Align.LEFT;
   textLayouts: TextViewLayouts | null = null; hintLayouts: TextViewLayouts | null = null;
   layoutWidthFor = -1;
   inputTypeV = 1;
@@ -152,8 +154,9 @@ export class JTextView extends JView {
     this.editObj.filters = this.filters;
     return this.editObj;
   }
-  measuredLines(avail: number): JLayout | Promise<JLayout> {
-    return (this.textLayouts ??= new TextViewLayouts()).get(this, this.transformed ?? (this.rawText instanceof JSpanned ? this.rawText : this.text), avail);
+  shownText(): string | JSpanned { return this.transformed ?? (this.rawText instanceof JSpanned ? this.rawText : this.text); }
+  measuredLines(avail: number, align = this.align): TextViewLayout | Promise<TextViewLayout> {
+    return (this.textLayouts ??= new TextViewLayouts()).get(this, this.shownText(), avail, align);
   }
 
 }
@@ -667,16 +670,21 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   // AOSP: an unbounded maximum reads back as Integer.MAX_VALUE, and callers Math.min() with it
   "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   // AOSP: null until the first measure; afterwards the Layout over the measured text width
+  // AOSP: null until the first measure; afterwards the Layout over the measured text width
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
-    return this.layoutWidthFor < 0 ? null : this.layout;
+    return this.layoutWidthFor < 0 ? null : this.layout?.java ?? null;
   },
-  "getLineBounds(ILandroid/graphics/Rect;)I": function (this: JTextView, i: number, r: JRect) {
-    return after(vcall(this, "getCompoundPaddingLeft", "()I"), (left: number) => {
-      const lh = this.lineHeight(), w = this.layoutWidthFor >= 0 ? this.layoutWidthFor : this.width();
-      r.left = left; r.right = Math.max(left, w - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
+  "getLineBounds(ILandroid/graphics/Rect;)I": driven(function* (this: JTextView, i: number, r: JRect): Gen {
+    const left: number = yield vcall(this, "getCompoundPaddingLeft", "()I");
+    if (!this.layout) {
+      const lh = this.lineHeight();
+      r.left = left; r.right = Math.max(left, this.width() - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
       return r.top + this.ascent();
-    });
-  },
+    }
+    const baseline: number = yield vcall(this.layout.java, "getLineBounds", "(ILandroid/graphics/Rect;)I", i, r);
+    r.left += left; r.right += left; r.top += this.padT; r.bottom += this.padT;
+    return baseline + this.padT;
+  }),
   "setShadowLayer(FFFI)V": setTextShadow,
   "getShadowRadius()F": function (this: JTextView) { return this.shadowRadius; },
   "getShadowDx()F": function (this: JTextView) { return this.shadowDx; },
@@ -730,46 +738,36 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     return (this.paintT.strikeThru ? 16 : 0) | (this.paintT.underline ? 8 : 0) | 1;
   },
   "getLineHeight()I": function (this: JTextView) { return this.lineHeight(); },
-  "getLineCount()I": function (this: JTextView) { return this.layout?.lines.length ?? 0; },
-  "getBaseline()I": function (this: JTextView) { return this.padT + this.ascent(); },
+  "getLineCount()I": function (this: JTextView) { return this.layout?.lines ?? 0; },
+  "getBaseline()I": function (this: JTextView) {
+    return this.layout ? after(vcall(this.layout.java, "getLineBaseline", "(I)I", 0), (b: number) => this.padT + b) : this.padT + this.ascent();
+  },
   "getEditableText()Landroid/text/Editable;": function (this: JTextView) { return this.getEditable(); },
   "setEnabled(Z)V": function (this: JTextView, e: number) { this.enabled = !!e; void this.refreshDrawableState(); },
+  // TextView.onMeasure: a wrapping width is the text's desired width, the layout is built at the
+  // width the view gets, and its height is that layout's, at least minLines tall
   "onMeasure(II)V": driven(function* (this: JTextView, wSpec: number, hSpec: number): Gen {
     const thread = curThread;
     const wMode = specMode(wSpec), wSize = specSize(wSpec);
     const pads = compoundPads(this);
     const [padL, padT, padR, padB] = pads instanceof Promise ? yield pads : pads;
     const hPad = padL + padR, vPad = padT + padB;
-    const availText = Math.min(wMode === MS_UNSPEC ? 100000 : wSize, this.maxW) - hPad;
     let w: number;
-    const display = this.displayText() || "";
-    if (wMode === MS_EXACTLY) {
-      w = wSize;
-      const measured = this.measuredLines(w - hPad);
-      this.layout = measured instanceof Promise ? yield measured : measured;
-    } else {
-      const measured = this.measuredLines(availText);
-      let lay = measured instanceof Promise ? yield measured : measured;
-      let tw = 0;
-      for (const line of lay.lines) tw = Math.max(tw, (line.indent ?? 0) + line.width);
-      if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
-      w = Math.max(Math.ceil(tw), compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + hPad;
+    if (wMode === MS_EXACTLY) w = wSize;
+    else {
+      const layouts = this.textLayouts ??= new TextViewLayouts();
+      let desired: number = yield layouts.desiredWidth(this, this.shownText());
+      if (!this.displayText() && this.hint) desired = Math.max(desired, yield (this.hintLayouts ??= new TextViewLayouts()).desiredWidth(this, this.hint));
+      w = Math.max(desired, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + hPad;
       const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
       w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? yield min : min));
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
-      // AOSP rebuilds the layout at the width the view actually got. Without this the lines
-      // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
-      // and the draw (a line wider than the view, silently clipped) wrong.
-      const finalAvail = w - hPad;
-      if (finalAvail !== availText) {
-        const measured = this.measuredLines(finalAvail);
-        lay = measured instanceof Promise ? yield measured : measured;
-      }
-      this.layout = lay;
     }
-    const lineCount = Math.max(this.layout?.lines.length ?? 0, display || this.hint ? 1 : 0, this.minLinesV);
-    let h = this.textHeight(lineCount) + vPad;
-    if (this.layout) h = Math.max(h, this.layout.height() + vPad);
+    const measured = this.measuredLines(w - hPad);
+    this.layout = measured instanceof Promise ? yield measured : measured;
+    const layout = this.layout!;
+    let h = layout.height + vPad;
+    if (layout.lines < this.minLinesV) h += this.lineHeight() * (this.minLinesV - layout.lines);
     h = Math.min(h, this.maxH);
     const sidePad = this.padT + this.padB;
     h = Math.max(h, this.minH, compoundHeight(this.drawableL) + sidePad, compoundHeight(this.drawableR) + sidePad);
@@ -794,13 +792,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     const pads = compoundPads(this);
     const [contentL, padT, padR, padB] = pads instanceof Promise ? yield pads : pads;
     const avail = this.width() - padR - contentL, contentT = padT, contentB = this.height() - padB;
-    if (this.layoutWidthFor !== this.width()) {
-      const measured = this.measuredLines(avail);
-      if (measured instanceof Promise) return measured.then(lay => {
-        this.layout = lay; this.layoutWidthFor = this.width();
-        return callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
-      });
-      this.layout = measured; this.layoutWidthFor = this.width();
+    this.align = hg as Align;
+    if (this.layoutWidthFor !== this.width() || this.layout?.align !== hg) {
+      this.layout = yield this.measuredLines(avail);
+      this.layoutWidthFor = this.width();
     }
     const draw = async (d: JDrawable | null, x: number, y: number) => {
       if (!d) return;
@@ -812,28 +807,24 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     if (this.drawableR) yield draw(this.drawableR, this.width() - this.padR - compoundWidth(this.drawableR), contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
     if (this.drawableT) yield draw(this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
     if (this.drawableB) yield draw(this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
-    const pending = showHint ? (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail) : this.layout;
-    const layout = pending instanceof Promise ? yield pending : pending;
+    const layout: TextViewLayout | null = showHint ? yield (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail, hg) : this.layout;
     if (!layout) return;
-    const vg = gravityV(this.gravityT), height = Math.max(layout.height(), this.textHeight(1));
-    const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
+    // TextView.getVerticalOffset
+    const vg = gravityV(this.gravityT);
+    const y = vg === 16 ? (contentB - contentT - layout.height) / 2 + contentT : vg === 80 ? contentB - layout.height : contentT;
     this.paintT.setColorValue(cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, this.width(), this.height()); ctx.clip();
     ctx.translate(contentL, y);
-    try {
-      const drawn = callOn(thread, () => drawTextViewLayout(layout, cv, hg));
-      if (drawn instanceof Promise) yield drawn;
-    } finally { ctx.restore(); }
-    if (this.editable && this.focused && this.cursorVisible && Math.floor((guestNow() - this.blinkStart) / 500) % 2 === 0) {
-      const caretLayout = this.layout;
-      if (!caretLayout) return;
-      const caretGravity = this.horizontalGravity(display, alignment, layoutDirection);
-      const cw = caretLayout.lines.at(-1)?.width ?? 0;
-      const cx = caretGravity === 1 ? (avail + cw) / 2 : caretGravity === 5 ? avail : cw;
-      const caretHeight = Math.max(caretLayout.height(), this.textHeight(1));
-      const caretY = vg === 16 ? (contentB - contentT - caretHeight) / 2 + contentT : vg === 80 ? contentB - caretHeight : contentT;
-      const cy = caretY + caretLayout.baseline(Math.max(0, caretLayout.lines.length - 1));
+    try { yield vcallOn(thread, layout.java, "draw", "(Landroid/graphics/Canvas;)V", cv); }
+    finally { ctx.restore(); }
+    // Editor places the caret by the text's own layout (mLayout), even while the hint shows
+    const caret = this.layout;
+    if (caret && this.editable && this.focused && this.cursorVisible && Math.floor((guestNow() - this.blinkStart) / 500) % 2 === 0) {
+      const end = this.text.length, line: number = yield vcallOn(thread, caret.java, "getLineForOffset", "(I)I", end);
+      const cx: number = yield vcallOn(thread, caret.java, "getPrimaryHorizontal", "(I)F", end);
+      const top = vg === 16 ? (contentB - contentT - caret.height) / 2 + contentT : vg === 80 ? contentB - caret.height : contentT;
+      const cy = top + (yield vcallOn(thread, caret.java, "getLineBaseline", "(I)I", line));
       const cursor = yield textCursorDrawable(this);
       if (!cursor) return;
       const padding = new JRect();
@@ -880,6 +871,7 @@ export class JEditText extends JTextView {
   constructor() {
     super();
     this.editable = true;
+    this.breakStrategy = 0;
     this.clickable = true;
     this.focusable = true;
     this.gravityT = 16 | G.START;

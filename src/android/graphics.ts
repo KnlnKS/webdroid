@@ -8,6 +8,7 @@ import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle, deref, replace, weakHandle } from "./handles";
+import { csText } from "../jvm/natives/jchars";
 import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, after } from "../jvm/natives/jlang";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
@@ -1808,6 +1809,16 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawText([CIIFFLandroid/graphics/Paint;)V": function (this: JCanvas, c: Uint16Array, off: number, n: number, x: number, y: number, p: JPaint) {
     drawTextImpl(this, charsToString(c, off, n), x, y, p);
   },
+  // a run is shaped in its context and drawn from start to end; one direction and one font here
+  "drawTextRun([CIIIIFFZLandroid/graphics/Paint;)V": function (this: JCanvas, c: Uint16Array, i: number, n: number, _ci: number, _cn: number, x: number, y: number, _rtl: number, p: JPaint) {
+    drawTextImpl(this, charsToString(c, i, n), x, y, p);
+  },
+  "drawTextRun(Ljava/lang/CharSequence;IIIIFFZLandroid/graphics/Paint;)V": function (this: JCanvas, s: unknown, a: number, b: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, p: JPaint) {
+    return after(csText(s), (text) => drawTextImpl(this, text.slice(a, b), x, y, p));
+  },
+  "drawTextRun(Landroid/graphics/text/MeasuredText;IIIIFFZLandroid/graphics/Paint;)V": function (this: JCanvas, m: object, a: number, b: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, p: JPaint) {
+    return after(vcall(m, "getChars", "()[C"), (c: Uint16Array) => drawTextImpl(this, charsToString(c, a, b - a), x, y, p));
+  },
   "drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V": function (this: JCanvas, b: JBitmap, x: number, y: number, p: JPaint | null) {
     drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, x, y));
   },
@@ -1847,7 +1858,7 @@ export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
 const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
-export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, p: JPaint, subpixel = false): boolean {
+export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, p: JPaint): boolean {
   return !!(cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
@@ -1856,7 +1867,7 @@ export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, 
     p.face()?.path === SKIA_TEXT_FACE && !p.faked() &&
     drawSkiaText(cv.ctx, s, x, y, p.textSize,
       p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
-      p.style === 1 ? "hairline" : "fill", subpixel));
+      p.style === 1 ? "hairline" : "fill", p.subpixelText || p.linearText));
 }
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   cv.recordText(s, x, y, p.textSize, p.textAlignN);

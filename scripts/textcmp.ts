@@ -8,7 +8,6 @@ import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 import { androidPlatform, androidTool } from "./android-sdk";
 
-const CUT = "android/text/Layout,android/text/StaticLayout,android/graphics/text/";
 const FIXTURE = "tests/fixtures/textlayout-device.txt";
 const PARAGRAPHS: [string, number, number][] = [        // text, width px, text size px
   ["The quick brown fox jumps over the lazy dog", 200, 24],
@@ -48,7 +47,7 @@ if (process.argv.includes("--record")) {
 const apk = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "FitNotes.apk";
 const browser = await launchBrowser();
 const page = await browser.newPage(CONTEXT_OPTS);
-const resp = await page.goto(`${BASE_URL}/?bytecode=${encodeURIComponent(CUT)}`, { waitUntil: "domcontentloaded" });
+const resp = await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL}`);
 await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
 await page.evaluate(() => document.fonts.ready);

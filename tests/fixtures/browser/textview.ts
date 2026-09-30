@@ -2,17 +2,26 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
-import { JLayout, JTextPaint, prepareSpans, drawLayout } from "../../../src/android/text";
 import { JTextView } from "../../../src/android/textview";
 import { JCanvas, measureText, type JPaint } from "../../../src/android/graphics";
 import { systemFonts } from "./fonts";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
 import { nativePathOf } from "../../../src/android/path";
 import { loadPlatformDex } from "../../../src/android/framework";
+import { JApplication } from "../../../src/android/app";
+import { setAppHost } from "../../../src/android/apphost";
+
+/** an application for the layout path: LineBreakConfig resolves its style by the app's target SDK */
+function installApplication() {
+  const app = new JApplication(), info = rt.make("android/content/pm/ApplicationInfo");
+  Object.assign(app, { [mangleMethod("getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;")]: () => info });
+  setAppHost({ pkg: "test.textview", application: app } as never);
+}
 
 async function probe() {
   await loadPlatformDex();
   rt.linkNatives();
+  installApplication();
   await systemFonts();
   const view = rt.make("android/widget/TextView");
   if (!(view instanceof JTextView)) throw new Error("Invalid TextView");
@@ -23,7 +32,7 @@ async function probe() {
     [mangleMethod("getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I")]:
       async (_p: JPaint, _cs: unknown, _a: number, _b: number, fm: { top: number; ascent: number; descent: number; bottom: number }) => {
         measures++; await Promise.resolve();
-        fm.top = fm.ascent = -32; fm.descent = fm.bottom = 0;
+        if (fm) { fm.top = fm.ascent = -32; fm.descent = fm.bottom = 0; }
         return 24;
       },
     [mangleMethod("draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V")]:
@@ -36,13 +45,16 @@ async function probe() {
   await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", span, 0, 11, 33);
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", text);
   await vcall(view, "setGravity", "(I)V", 17);
-  for (let i = 0; i < 2; i++) await vcall(view, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(100, MS_AT_MOST));
+  await vcall(view, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(100, MS_AT_MOST));
+  const measured = measures;
+  await vcall(view, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(100, MS_AT_MOST));
+  const remeasured = measures - measured;
   view.right = 100; view.bottom = view.measuredH;
   const canvas = new OffscreenCanvas(100, view.measuredH), ctx = canvas.getContext("2d")!;
   await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, view.measuredH));
-  const result = { measures, draws, width: view.layout?.lines[0].width, height: view.measuredH,
+  const result = { remeasured, draws, width: await vcall(view.layout!.java, "getLineWidth", "(I)F", 0), height: view.measuredH,
     center: [...ctx.getImageData(50, 16, 1, 1).data], outside: [...ctx.getImageData(10, 16, 1, 1).data],
-    layout: await vcall(view, "getLayout", "()Landroid/text/Layout;") === view.layout };
+    layout: await vcall(view, "getLayout", "()Landroid/text/Layout;") === view.layout!.java };
   const heightLimits: number[] = [];
   for (const [method, value] of [["setHeight", 20], ["setMaxHeight", 25], ["setLines", 1]] as const) {
     await vcall(view, method, "(I)V", value);
@@ -52,6 +64,9 @@ async function probe() {
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
   const width = measureText(view.paintT, "A long title…"), wrapped = await view.measuredLines(width);
+  const ellipsized = await vcall(wrapped.java, "getEllipsisCount", "(I)I", 0) > 0;
+  const desired = await vcall(rt.link("android/text/Layout").ctor, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", view.text, view.paintT);
+  const fitting = (await view.measuredLines(Math.ceil(desired))).java;
   const styleInk: number[] = [];
   for (const style of [0, 1, 2]) {
     const actual = new OffscreenCanvas(100, 60).getContext("2d")!;
@@ -120,10 +135,9 @@ async function probe() {
   await vcall(mixed, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(mixedCanvas, 80, 60));
   await vcall(mixedLayout, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(directCanvas, 80, 60));
   const directPixels = directCanvas.getImageData(0, 0, 80, 60).data;
-  const combined = { line: mixedLayout.lines[0].text, width: await vcall(mixedLayout, "getLineWidth", "(I)F", 0),
-    ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0),
-    span: [mixedLayout.spans.replacements[0].start, mixedLayout.spans.replacements[0].end], original: mixedText.text,
-    same: mixedLayout === mixed.layout, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
+  const combined = { width: await vcall(mixedLayout, "getLineWidth", "(I)F", 0),
+    ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0), original: mixedText.text,
+    same: mixedLayout === mixed.layout!.java, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
   const selectionView = rt.make("android/widget/TextView");
   await vcall(selectionView, "setText", "(Ljava/lang/CharSequence;)V", "ab\ncd");
   await vcall(selectionView, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(100, MS_EXACTLY));
@@ -158,36 +172,8 @@ async function probe() {
   const cursorPixels = [...caretCanvas.getImageData(2, 20, 1, 1).data];
   await vcall(input, "setTextCursorDrawable", "(I)V", 0);
   const cursorCleared = await vcall(input, "getTextCursorDrawable", "()Landroid/graphics/drawable/Drawable;") === null;
-  const balancedText = "aaaaa bb cccc\nz";
-  const balancedPaint = await newObj("android/text/TextPaint"); balancedPaint.tf = await vcall(rt.link("android/graphics/Typeface").ctor, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "monospace", 0); balancedPaint.textSize = 20;
-  const builder = await vcall(rt.link("android/text/StaticLayout$Builder").ctor, "obtain", "(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;",
-    balancedText, 0, balancedText.length, balancedPaint, Math.ceil(measureText(balancedPaint, "aaaaa bb") + 1));
-  await vcall(builder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);
-  const balancedLayout = await vcall(builder, "build", "()Landroid/text/StaticLayout;");
-  const balancedSpan = rt.make("android/text/style/ReplacementSpan");
-  Object.assign(balancedSpan, { [mangleMethod("getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I")]:
-    () => Math.round(measureText(balancedPaint, "aaaaa")) });
-  const spanned = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", balancedText);
-  await vcall(spanned, "setSpan", "(Ljava/lang/Object;III)V", balancedSpan, 0, 5, 33);
-  const spanBuilder = await vcall(rt.link("android/text/StaticLayout$Builder").ctor, "obtain", "(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;",
-    spanned, 0, balancedText.length, balancedPaint, balancedLayout.width);
-  await vcall(spanBuilder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);
-  const balancedSpanned = (await vcall(spanBuilder, "build", "()Landroid/text/StaticLayout;")).lines.map((line: { text: string }) => line.text);
-  const balanced = balancedLayout.lines.map((l: {text: string; start: number; end: number}) => [l.text, l.start, l.end]);
-  const spaceReplacements = [];
-  const spaceText = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "aaa b ");
-  await vcall(spaceText, "setSpan", "(Ljava/lang/Object;III)V", span, 5, 6, 33);
-  for (const strategy of [0, 2]) {
-    const layout = new JLayout(); layout.paint = new JTextPaint(); layout.paint.textSize = 16;
-    layout.text = "aaa b "; layout.src = spaceText; layout.width = 60; layout.breakStrategy = strategy;
-    layout.spans = await prepareSpans(spaceText, layout.paint);
-    await layout.lineUp(() => layout.wrap());
-    const before = draws;
-    await drawLayout.call(layout, JCanvas.wrap(new OffscreenCanvas(60, 100).getContext("2d")!, 60, 100));
-    spaceReplacements.push({ draws: draws - before, visible: layout.lines.some(line => line.start <= 5 && line.start + line.text.length >= 6) });
-  }
-  return { ...result, cursorIdentity, cursorPixels, cursorCleared, spaceReplacements, balancedSpanned, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
-    fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).spans.replacements.length === 0,
+  return { ...result, cursorIdentity, cursorPixels, cursorCleared, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined,
+    ellipsized, cached: wrapped === await view.measuredLines(width), fitting: [await vcall(fitting, "getLineCount", "()I"), await vcall(fitting, "getEllipsisCount", "(I)I", 0)],
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
 export default probe;
