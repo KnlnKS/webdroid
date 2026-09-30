@@ -1,5 +1,5 @@
 // node runner.js <workload> <reps>: the first call's time and the steady median of Bench.run(workload)
-import { readFileSync } from "node:fs";
+import { openSync, readFileSync, readSync } from "node:fs";
 import { rt } from "../../src/jvm/runtime";
 import "../../src/natives";
 import { dexesIn } from "../../src/jvm/dex";
@@ -9,7 +9,10 @@ import { vcallAsync } from "../../src/jvm/natives/jlang";
 import { mountPlatformData } from "../../src/shell/apex";
 
 const keep = setInterval(() => {}, 1 << 30); // the yield channel is unref'd
-mountPlatformData((path, size) => ({ size, read: async (at, length) => new Uint8Array(readFileSync(`vendor/aosp${path}`).subarray(at, at + length)) }));
+mountPlatformData((path, size) => {
+  const fd = openSync(`vendor/aosp${path}`, "r");
+  return { size, read: async (at, length) => { const b = new Uint8Array(length); readSync(fd, b, 0, length, at); return b; } };
+});
 for (const d of dexesIn(new Uint8Array(readFileSync(process.env.JBENCH_DEX!)), "jbench.dex")) rt.loadDex(d);
 for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(readFileSync(`vendor/aosp/${jar}`)), i);
 rt.linkNatives();

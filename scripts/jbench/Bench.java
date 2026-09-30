@@ -15,8 +15,45 @@ public class Bench {
     }
     return JSON = sb.append("]}").toString();
   }
+
+  static final String PEM =
+    "-----BEGIN CERTIFICATE-----\n" +
+    "MIICWTCCAd+gAwIBAgIQZvI9r4fei7FK6gxXMQHC7DAKBggqhkjOPQQDAzBlMQsw\n" +
+    "CQYDVQQGEwJVUzEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMTYwNAYD\n" +
+    "VQQDEy1NaWNyb3NvZnQgRUNDIFJvb3QgQ2VydGlmaWNhdGUgQXV0aG9yaXR5IDIw\n" +
+    "MTcwHhcNMTkxMjE4MjMwNjQ1WhcNNDIwNzE4MjMxNjA0WjBlMQswCQYDVQQGEwJV\n" +
+    "UzEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMTYwNAYDVQQDEy1NaWNy\n" +
+    "b3NvZnQgRUNDIFJvb3QgQ2VydGlmaWNhdGUgQXV0aG9yaXR5IDIwMTcwdjAQBgcq\n" +
+    "hkjOPQIBBgUrgQQAIgNiAATUvD0CQnVBEyPNgASGAlEvaqiBYgtlzPbKnR5vSmZR\n" +
+    "ogPZnZH6thaxjG7efM3beaYvzrvOcS/lpaso7GMEZpn4+vKTEAXhgShC48Zo9OYb\n" +
+    "hGBKia/teQ87zvH2RPUBeMCjVDBSMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8E\n" +
+    "BTADAQH/MB0GA1UdDgQWBBTIy5lycFIM+Oa+sgRXKSrPQhDtNTAQBgkrBgEEAYI3\n" +
+    "FQEEAwIBADAKBggqhkjOPQQDAwNoADBlAjBY8k3qDPlfXu5gKcs68tvWMoQZP3zV\n" +
+    "L8KxzJOuULsJMsbG7X7JNpQS5GiFBqIb0C8CMQCZ6Ra0DvpWSNSkMBaReNtUjGUB\n" +
+    "iudQZsIxtzm6uBoiB078a1QWIP8rtedMDE2mT3M=\n" +
+    "-----END CERTIFICATE-----\n";
+  static byte[] MB;
+  static java.security.KeyPair EC;
+  static byte[] SIG;
+  static void ecdsa() throws Exception {
+    if (EC != null) return;
+    java.security.KeyPairGenerator g = java.security.KeyPairGenerator.getInstance("EC");
+    g.initialize(256);
+    EC = g.generateKeyPair();
+    java.security.Signature s = java.security.Signature.getInstance("SHA256withECDSA");
+    s.initSign(EC.getPrivate());
+    s.update(KEYS[0].getBytes());
+    SIG = s.sign();
+  }
+  static int crypto(String w) throws Exception {
+    if (w.equals("sha256")) { if (MB == null) { MB = new byte[1 << 20]; for (int i = 0; i < MB.length; i++) MB[i] = (byte) (i * 31); } return java.security.MessageDigest.getInstance("SHA-256").digest(MB)[0]; }
+    if (w.equals("ecdsaVerify")) { ecdsa(); java.security.Signature s = java.security.Signature.getInstance("SHA256withECDSA"); s.initVerify(EC.getPublic()); s.update(KEYS[0].getBytes()); return s.verify(SIG) ? 1 : 0; }
+    java.security.cert.X509Certificate c = (java.security.cert.X509Certificate) java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(new java.io.ByteArrayInputStream(PEM.getBytes()));
+    return c.getSubjectX500Principal().getName().length() + c.getEncoded().length;
+  }
   public static int run(String w) {
     switch (w) {
+      case "sha256": case "ecdsaVerify": case "certParse": try { return crypto(w); } catch (Exception e) { throw new RuntimeException(e); }
       case "listAddGet": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; for (int r = 0; r < 5; r++) for (int i = 0; i < l.size(); i++) s += l.get(i); return s; }
       case "listIter": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; for (int r = 0; r < 5; r++) for (Integer x : l) s += x; return s; }
       case "listRemove": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; while (l.size() > 1000) s += l.remove(0); for (int i = 0; i < 500; i++) l.remove(Integer.valueOf(1000 + i * 2)); return s + l.size(); }
