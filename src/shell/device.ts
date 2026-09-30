@@ -11,6 +11,7 @@ import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
+import { fetchSystemFonts, mountSystemFonts } from "../android/fonts";
 import { loadCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
@@ -117,6 +118,9 @@ export function startZygote(): Promise<void> {
     await Promise.all([loadFramework(), loadPlatformDex()]);
     useLinkTable(await table, rt.linkFingerprint());
     await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+    // the runtime's own setup and the system font map need no app: a device's zygote runs them
+    mountSystemFonts(await fetchSystemFonts());
+    await zygoteInit();
   })();
 }
 
@@ -153,9 +157,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await code;
   const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);
   if (profile) compileProfile(rt, Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]), profile);
-  // after linking, and after the app's persisted code is in: the time zone setup runs Java that
-  // reaches TS-built objects
-  await zygoteInit();
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();
   await vfs.prepare(pkg);
