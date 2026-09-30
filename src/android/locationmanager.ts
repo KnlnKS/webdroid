@@ -193,6 +193,7 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
   "getGnssCapabilities()Landroid/location/GnssCapabilities;": async () =>
     vcall(await newObj("android/location/GnssCapabilities$Builder"), "build", "()Landroid/location/GnssCapabilities;"),
   "getGnssYearOfHardware()I": () => 0,
-  ...stubs(null, "getGnssHardwareModelName()Ljava/lang/String;"),
+  // no GNSS time either: SystemClock.currentGnssTimeClock reports it unavailable
+  ...stubs(null, "getGnssHardwareModelName()Ljava/lang/String;", "getGnssTimeMillis()Landroid/location/LocationTime;"),
 } });
 hostStub("location", "webdroid/LocationManagerService");

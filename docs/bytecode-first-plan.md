@@ -1007,7 +1007,6 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
    a previous launch touched (each first touch is a round trip), and libcore's tzdata, which
    `Os.mmap` still reads whole into guest memory.
 5. **Known limits.**
-   - `SystemClock.currentGnssTimeClock` reads fail with an NPE (no location service hosted).
    - TS `eraseThreadLocals` does not clear the TS locals.
    - Regex: `\G` is unsupported, possessive quantifiers are greedy, `\b` uses JS's ASCII word
      set, DOTALL `.` does not take CRLF as one character, and anchoring bounds are ignored.
