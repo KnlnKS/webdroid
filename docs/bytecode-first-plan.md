@@ -582,12 +582,135 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-30 (late night). The branch is `knlnks/bytecode` in
-`/Users/kunalan/Projects/webdroid`; read "Latest handoff" first, then the older handoff below it.
-Each commit message states what it measured. The implementation history records failure
-mechanisms (the D.3 entry is "system services behind binder", in "JVM, DEX and process ownership").
+Last updated 2026-10-01. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`
+(not pushed); read "Latest handoff" first. The older handoffs below it are history: where they
+list next steps for Stage B, this one supersedes them. Each commit message states what it
+measured; the implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process
+ownership" record each unit's findings.
 
-### Latest handoff (2026-09-30, late night): start here
+### Latest handoff (2026-10-01): Stage B completion pass, start here
+
+**Branches and machine state.** `knlnks/bytecode` and `main` are the only local branches; every
+worktree this pass used is merged and removed (subagent commits were cherry-picked, so their
+hashes differ from the agents' reports). One stash, `WIP on fuzz/api-audit`, predates this pass
+and is not ours to drop. `../webdroid-gate` (a detached worktree used for A/B servers and conform
+snapshots) was removed; recreate it with `git worktree add --detach ../webdroid-gate <commit>`
+and symlink `vendor/aosp`, `vendor/microg`, `apks`, `conform-cache` and `node_modules` into it.
+Run `bun install` after pulling (pako is a new dependency). A dev server may be on 4217.
+
+**Stage B status.** At the start of this pass 277 TS specs implemented classes in libcore's
+namespaces; 84 remain, and all but the items under "Left" are VM built-ins or declared boundaries.
+Now from AOSP bytecode (each with its natives, intrinsics and tests):
+- java.util's collections, Collections/Arrays/Objects, streams, Optional, Properties,
+  ResourceBundle, ServiceLoader, BitSet, Timer, Base64 (and android.util's), UUID, StringJoiner,
+  Random, Formatter, Scanner; java.io's ObjectStreams, BufferedReader, Externalizable;
+  org.json; org.xmlpull through kXML (android.util.Xml included); android.util.ArrayMap,
+  ContentValues, WorkSource, SearchRecentSuggestions, the android.database Observables and
+  dalvik/android CloseGuard (these were TS copies built on the TS collections).
+- java.util.concurrent entirely (atomics, executors, FutureTask, TimeUnit, CHM, COW, queues).
+- java.net except the fetch-backed HttpURLConnection/okhttp handlers and TLS (SSLSocket and
+  friends at the relay): addresses, sockets, datagrams, URLConnection's base.
+- java.nio buffers, charsets (over NativeConverter/CharsetUtils natives), file channels;
+  java.util.zip (over pako at the z_stream level) and ZipFile.
+- java.math; java.security, javax.crypto, certificates and x500 over conscrypt's NativeCrypto
+  natives and bouncycastle; AndroidKeyStore over a hosted keystore2 with a software KeyMint;
+  network security config applied as handleBindApplication does.
+- java.lang: exceptions, marker interfaces, annotations, StackTraceElement, the boxes, Number,
+  Character (and UnicodeBlock/Script), Math, StrictMath (fdlibm port), Enum, ThreadLocal,
+  ThreadGroup, UncaughtExceptionHandler; UNIXProcess fails exec as for a missing program.
+
+Kept in TS on purpose: Object, Class, String, Thread, Throwable, ClassLoader, VMStack, VMRuntime,
+java.lang.reflect/invoke, java.lang.ref, the Unsafes, dalvik's DexFile and class loaders,
+NativeAllocationRegistry (VM built-ins); HttpURLConnection/okhttp handlers, javax.net.ssl and
+conscrypt's SSLParametersImpl (TLS at the relay), javax.microedition.khronos (GL HLE)
+(boundaries); StringBuilder and StringBuffer (§4.7: libcore's are 8-15x slower on appends; a
+generated-operations test holds the TS ones to libcore's results).
+
+**§4.7 intrinsics.** `rt.intrinsic(cls, { sig: (base) => fn })` (runtime.ts) installs a TS body
+over a bytecode class's own fields in place of one method; `base` is the AOSP body, which the
+intrinsic calls for every case it does not cover. Write them compiled with literal field names
+(`compile` in jcoll.ts; a keyed load of a module binding stays megamorphic because the bundler
+makes module consts mutable) and add a differential test to tests/intrinsics.test.ts (same
+results, exceptions and receiver state as the AOSP body over generated inputs). They cover
+ArrayList, its iterator, HashMap lookups, Arrays.copyOf, CHM bins, Random.next, the boxes, Math,
+Enum, ThreadLocal, BigInteger, ByteBuffer and its views, and Matcher.usePattern.
+
+**Gates on the final tree:** typecheck clean; `bun run test` 1,312 pass;
+FitNotes smoke 0 method failures; fast e2e 7/7; conform (0 regressions; see Gates for the numbers).
+Live flows were run by the security agent (harmonic, reddit, chatgpt, lichess, tiktok, resy,
+youtube: no TLS/cleartext errors; Resy 2 and YouTube 1 timeouts, fewer than before) but not
+after the java.lang flip. `bun run lat --warm` passes; **cold `bun run lat` fails on Mihon
+`light`**: it is bimodal on this tree, 23-24 ms or 166-188 ms, failing 5 of 8 runs on a quiet host
+(the previous handoff had it near 150 ms failing about 2 in 7). The interleaved A/B against
+8c8796fb (before the java.lang commits) did not complete: that commit's server hung at startup in
+the gate worktree. Earlier the same day, under agent load, the java.util flip's tree passed where
+its parent failed twice (FitNotes' first tap 52-72 against 263-274 ms).
+
+**Left for Stage B, in order:**
+1. **Cold Mihon `light` latency.** A/B it against 8c8796fb (and a39d019c, before the security
+   follow-up) under matching conditions (`bun run lat mihon`, interleaved, quiet host), then
+   `bun run lat mihon --cpuprofile <file>` and `scripts/lat/profsum.ts <file> 40 until=<ms>` on a
+   slow run. Suspects: first use of libcore's Formatter (40-90 ms cold in the harness), boxes or
+   Math classes compiling on the tap, ZygoteInit.warmUpJcaProviders' classes, the class-constructor
+   dictionary fix. The gate must pass before more flips land.
+2. **System and Runtime from libcore** (unfinished; the java.lang agent was stopped mid-way and its
+   uncommitted work discarded). Its approach: System's spec becomes `platformClinit` over libcore's
+   class (its <clinit> builds the standard streams over descriptors 0-2; zygoteInit's
+   redirectLogStreams stays), keep System's natives (arraycopy, time, identityHashCode, log,
+   setIn0/Out0/Err0, properties through AndroidHardcodedSystemProperties and
+   initUnchangeableSystemProperties: $JAVA_HOME unset, the default user agent from
+   Build.VERSION.RELEASE/MODEL/ID, user.locale from persist.sys.locale); loadLibrary/load go
+   through libcore's Runtime.nativeLoad with the calling class's loader (`dlopen` in jlang.ts takes
+   a possibly async ABI chooser). Runtime's TS spec keeps only natives (maxMemory from HEAP_LIMIT,
+   availableProcessors, nativeLoad, gc...).
+3. **libcore/io/ClassPathURLStreamHandler** (jlang.ts): its TS constructor opens the JarFile
+   unverified; ZipFile and ByteArrayInputStream are libcore's now, so libcore's constructor with
+   JarVerifier can run. Check TikTok's v1-signed APK (2.2 MB MANIFEST.MF) for cost.
+4. **Small remainders:** java.lang.reflect.Modifier (pure Java), the TS exception definitions
+   InvocationTargetException/WrongMethodTypeException and the javax.net.ssl exceptions (defined
+   with `defineException` in jlang.ts), the SSL interfaces in jnet.ts (HostnameVerifier,
+   KeyManager, SSLSession, SSLContextSpi) where the TLS boundary does not need its own copy, and
+   dalvik/annotation/Signature.
+5. **The §2 allowlist.** Add to provenance.ts the libcore-namespace prefixes a TS spec may still
+   implement, each tagged vm/boundary/intrinsic with its reason (the list above), and a test that
+   fails when a registered spec in java/, javax/, jdk/, sun/, libcore/, dalvik/, org/json,
+   org/xml, org/w3c, org/xmlpull, com/android/okhttp, com/android/org or android/icu is not on it
+   (collect names by wrapping `rt.register` before importing src/natives.ts). org/apache/http is not
+   boot class path and stays out of the check.
+6. **Performance debts from the flips** (V8, `bun run jbench`, TS -> now): Scanner 2,000 ints 0.37
+   -> 11 ms and its first use ~260 ms; ZipFile open+lookups ~2.5x; SHA-256 1 MB 0.61 -> 3.2 ms and
+   ECDSA P-256 verify 78 -> 458 us (the TS copies used async WebCrypto; the JCA is synchronous);
+   first certificate parse ~200 ms (class loading, per-byte PEM reads, throw capture); TreeMap
+   0.26 -> 0.82 ms; org.json parse 2.0 -> 4.5 ms per 150 KB; String.format 0.83 -> 4.4 us;
+   Double.toString 2.4x (FloatingDecimal, now device-exact); InetAddress.getByName of a cached host
+   0.4 -> 7 us and every numeric-parse failure path (§4.6 throw cost: 64-frame capture per
+   throwable). First use of libcore classes costs 10-50 ms per family cold; persisted code removes
+   it on warm launches, a build-time platform image (§4.1) would remove it on first launches.
+7. **Docs:** fold this handoff into "Done in Stage B" and delete the superseded Stage B items in
+   "Next steps, in plan order" once 1-5 land, and refresh PLAN.md's first bullet.
+
+**Known limits found this pass:** Java strings are JS strings, so `new String(s)` has no identity
+of its own (IdentityHashMap2Test's equals case); a TS object created with `new` before its
+bytecode superclass is compiled lacks inherited methods (use `rt.make`/`newObj`/`scall`); bun's
+test runner spends tens of seconds formatting a failed expectation over a Java object (catch it and
+print `rt.jx(e).msg`); multibyte legacy charsets are unsupported; keystore attestation answers
+ATTESTATION_KEYS_NOT_PROVISIONED; CRL, HPKE, CMAC, scrypt and the TLS natives of conscrypt are not
+implemented; sun.nio.ch socket channels are not implemented; loopback writes never block.
+
+**How this pass worked (repeat it).** One coordinator plus parallel agents in `isolation:
+"worktree"` worktrees, one package family each. Each agent read AGENTS.md, this plan and model
+commits, reset its worktree onto `knlnks/bytecode`, symlinked the gitignored inputs (`vendor/aosp`,
+`vendor/microg`, `apks`, `conform-cache`, `node_modules`; copied `vendor/sql.js/dist` and
+`src/native/{core.wasm.ts,core.safe.wasm.ts,native-core.wasm}`), used its own server port, gated
+each flip (typecheck, test, smoke, fast e2e, its conform suites) and never ran `lat` (the gate needs
+a quiet host). The coordinator cherry-picked their commits, resolved conflicts (tests/intrinsics.test.ts
+and the docs collide; keep both sides), re-gated, ran conform from a detached snapshot, and ran
+`lat` only with agents idle. Rules the agents needed: never `pkill -f server.ts` or `bun test`
+(it kills other worktrees' runs); `conform-cache` is shared, so never delete another suite's cache
+(a suite whose test list changed needs its `conform-cache/<suite>` rebuilt once); never run `e2e
+--live` without naming flows (it includes Genshin, which the user forbids).
+
+### Previous handoff (2026-09-30, late night)
 
 - **Branches.** `knlnks/bytecode` (working tree clean, not pushed) and `main` are the only local
   branches; the subagent worktrees this session used were merged by cherry-pick and removed.
@@ -847,15 +970,19 @@ mechanisms (the D.3 entry is "system services behind binder", in "JVM, DEX and p
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,378 pass);
+- `bun run test` (1,312 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
-- the live set above;
-- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file|luni-nio`. Baselines are 40,085,
-  2,544, 27,514, 1,364, 540, 173 and 2,685 (luni-nio: buffers, charsets, file channels); jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
-  luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
-  mirror; luni-net is its java.net tests without those that open sockets or servers;
+- the live set above, naming its flows;
+- `bun run conform <suite>` for guava, jsr166, ojluni-time, luni-io, luni-net, luni-nio-file,
+  luni-nio, luni-util and luni-security. Baselines (tests/conformance/*.json): 366,001, 3,135,
+  30,603, 1,417, 780, 173, 2,712, 2,320 and 715. guava takes about 90 s, luni-util 2 min,
+  ojluni-time 2 min, the rest under a minute. luni-io, luni-net, luni-nio, luni-util and
+  luni-security are libcore's harmony and luni tests from LineageOS's Android 14 mirror (java.io
+  and java.util.zip; java.net; java.nio buffers, charsets and file channels; java.util;
+  java.security, javax.crypto and javax.security with bouncycastle's test jars);
 - `bun run lat` cold and `--warm`;
-- `bun run smoke apks/FitNotes.apk` (0 method failures).
+- `bun run smoke apks/FitNotes.apk` (0 method failures);
+- for a performance-sensitive flip, `bun run jbench [workload ...]` (V8) against the parent tree.
 
 To A/B a flip without deleting code, set `WEBDROID_BYTECODE=<prefixes>` (`Class$` for one class and its inner classes) for e2e and conform
 (`--bytecode`), and `--query bytecode=<prefixes>` for lat.
@@ -870,8 +997,10 @@ Known flakes, which are not regressions:
 - `TCKInstant` has one test whose name embeds `Instant.now()`.
 - Under five suites at once, ojluni-time's TestZoneTextPrinterParser (86 s alone) exceeds the 240 s
   class timeout; rerun it alone.
-- Cold Mihon `light` in `lat` sits around 150 ms and fails the 150 ms gate about 2 times in 7;
-  warm passes. See the latency section below.
+- Cold Mihon `light` in `lat` is bimodal (about 24 or 166-188 ms) and failed 5 of 8 runs on the
+  final tree of the 2026-10-01 pass; this is item 1 of the latest handoff, not an accepted flake.
+- ojluni-time's TestTextParserWithLocale and TestZoneTextPrinterParser report "passing tests no
+  longer ran" when test names embed the date; they pass alone.
 
 ### Done in Stage B
 

@@ -997,6 +997,67 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Matcher works over a 1,024-char CharBuffer that `resetForInput` turns into a String on every
   usePattern/region/reset (30% of the time in charsToString, 12% GC), and each usePattern makes a
   MatcherNative. No gated app uses Scanner on a tap path; a §4.7 intrinsic would be the fix.
+- 2026-10-01, the rest of java.util.concurrent from libcore (B.5). Atomics and field updaters,
+  TimeUnit, the executors, FutureTask and their interfaces; worker threads stay TS Threads.
+  Findings: every wake after a park waited on a clamped `setTimeout(0)` (1-4 ms each), probably the
+  cause of the earlier 191 ms cold Mihon tap; wakes now go through the yield channel. VarHandle
+  accessors are generated per field and Unsafe's read-modify-writes are single operations
+  (AtomicInteger.incrementAndGet 6.2 -> 2.4 ns, TS 1.0). getConstructors returned non-public
+  constructors, so ForkJoinTask copied exceptions a device hands back (fixed in reflect). jsr166
+  2,544 -> 3,132. ConcurrentHashMap's tabAt/casTabAt/setTabAt are intrinsics (their long offset
+  math was ~25 ns of BigInt a call).
+- 2026-10-01, the rest of java.net from libcore (B.7 cuts 7-8). InetAddress, NetworkInterface,
+  Datagram/Multicast sockets, URLConnection's base, Socket, ServerSocket, SocketImpl and the
+  factories run over libcore.io.Linux socket natives (`src/android/socket.ts`) on the same socket
+  model as native code (`src/native/net.ts`): IPv6, listen/accept, in-process loopback, Linux
+  option defaults, one-sided shutdown (server.ts and worker/tcp.ts accept a "shutdown" message).
+  HttpURLConnection over fetch and SSLSocket at the relay stay TS boundaries. luni-net 537 -> 779
+  with socket tests enabled. Costs: getByName of a cached host 0.41 -> 7.2 us and connect+round
+  trip 6 -> 33 us, both from libcore parsing the host as a numeric address first and catching the
+  exception (the §4.6 throw cost); byte reads got faster.
+- 2026-10-01, java.math and the JCA from libcore (B.7 security). BigInteger/BigDecimal are libcore's;
+  java.security, javax.crypto, certificates and x500 run from libcore over conscrypt's
+  NativeCrypto natives (`src/android/conscrypt*.ts`, digests, HMAC, AES/ChaCha/GCM, RSA, EC,
+  X25519, X.509) and bouncycastle, providers installed from security.properties and
+  ZygoteInit.warmUpJcaProviders (50 ms per realm cold). AndroidKeyStore is framework code over a
+  keystore2 service behind binder with a software KeyMint (`src/android/keystore.ts`; keys the TS
+  store saved are not migrated). TLS still ends at the relay: each realm mounts a relay CA and
+  presents a leaf per host, so hostname checks pass and pinning fails, as with an intercepting
+  proxy; the old keyless placeholder crashed ChatGPT. NetworkSecurityConfigProvider installs as
+  handleBindApplication does (AndroidNSSP first; cleartext policy, anchors and pins apply). New
+  suite luni-security 715/722. Measured in V8 (TS -> now): BigInteger add/multiply 17-27 -> 37-46 ns
+  through bigint intrinsics (libcore alone 224-1,350 ns), AES-GCM 16 KB 21 -> 90 us, AES-CBC 28 -> 65
+  us, SHA-256 1 MB 0.61 -> 3.2 ms and ECDSA P-256 verify 78 -> 458 us (the TS copies used async
+  WebCrypto, which a synchronous JCA cannot). V8 turned a class constructor into a dictionary
+  once <clinit> stored its statics; constructors return to fast properties after initialization
+  (BigInteger construction 38 -> 7 ns; applies to every class).
+- 2026-10-01, java.lang's non-VM classes from libcore. Exceptions, marker interfaces, annotations,
+  StackTraceElement, EmptyArray; the boxes, Number, Character (TS reads and makes boxes through
+  `jbox.ts` over each class's `value`); Math and StrictMath (StrictMath's natives are an fdlibm port,
+  `fdlibm.ts`, bit-exact with the AVD on 435 probes); Enum, Thread.State, UnicodeScript;
+  java.util.Formatter under String.format; ThreadLocal/InheritableThreadLocal; ThreadGroup and
+  UncaughtExceptionHandler. Kept as §4.7 intrinsics: StringBuilder and StringBuffer (libcore's are
+  8-15x slower on appends; a generated-operations test holds the TS ones to libcore's results).
+  Intrinsics, all differentially tested: box valueOf/getters/equals/hashCode/toString/parse,
+  Math's abs/min/max/round/signum/floorDiv/floorMod, Enum compareTo/valueOf, ThreadLocal get/set.
+  VM fixes: a fieldless class gets V8's elided default constructor (boxing 0.34 -> 0.25 ms per
+  20,000), a float/double static starts as a double (an int-to-double static change turned Math's
+  and Double's constructors into dictionaries), a platform native's resolved implementation is kept
+  in its stub. Divergences found: the TS Integer cache covered -128..255, Long cached nothing,
+  compareToIgnoreCase returned -1/0/1, UnicodeScript knew 49 scripts, javaFormat ignored locale and
+  %g/%a/%t, float text used JS's shortest digits (1,860 of 40,000 values print differently from
+  FloatingDecimal). Costs: String.format 0.83 -> 4.4 us, Double.toString 2.4x, Long.parseLong 0.2x.
+- 2026-10-01, buffer, regex and charset intrinsics after the nio flip. The buffer flip made GL-style
+  loops 2-8x slower (a direct FloatBuffer put loop 0.37 -> 2.3 ms). ByteBuffer, the typed views and
+  their bulk copies are now intrinsics that read a direct buffer's address once per call (0.30 ms);
+  a Matcher keeps one MatcherNative per pattern, long char runs decode with a fatal TextDecoder, and
+  charset names are memoized by spelling. Still slower than TS: Scanner (2,000 ints 0.37 -> 11 ms;
+  libcore rebuilds its 1 KB buffer's string on every Matcher reset) and ZipFile lookups (~2.5x).
+- 2026-10-01, java.util.Random from libcore with its next(int) an intrinsic over three 16-bit limbs
+  of the seed (25,000 draws: TS 0.40, libcore 1.08, intrinsic 0.63 ms). A new suite, luni-util
+  (libcore's own java.util tests), passes 2,237 of 2,586 against 1,663 before the java.util flip;
+  an array larger than the 512 MiB heap limit now throws OutOfMemoryError as on ART instead of
+  hanging in `new Array(n).fill(null)`.
 
 ## Java, storage and framework semantics
 
