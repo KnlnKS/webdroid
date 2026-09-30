@@ -582,12 +582,99 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-30 (night). The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
-read "Handoff state" first. Each
-commit message states what it measured. The implementation history (the 2026-09-27 to
-2026-09-30 Stage A/B/C entries) records failure mechanisms.
+Last updated 2026-09-30 (late night). The branch is `knlnks/bytecode` in
+`/Users/kunalan/Projects/webdroid`; read "Latest handoff" first, then the older handoff below it.
+Each commit message states what it measured. The implementation history records failure
+mechanisms (the D.3 entry is "system services behind binder", in "JVM, DEX and process ownership").
 
-### Handoff state (2026-09-30, night): start here
+### Latest handoff (2026-09-30, late night): start here
+
+- **Branches.** `knlnks/bytecode` (working tree clean, not pushed) and `main` are the only local
+  branches; the subagent worktrees this session used were merged by cherry-pick and removed.
+  `../webdroid-gate` is still a detached worktree for A/B servers and conform. A dev server may be
+  running on 4217 (`lsof -ti tcp:4217 | xargs kill` stops only it). The reference AVD
+  `webdroid_api35_ref` may be booted (`adb devices`; `adb root` was used).
+- **Gates on the final tree:** `npx tsc --noEmit -p tsconfig.json` clean; `bun run test` 1367
+  pass (tests that only exercised TS copies of AOSP classes were removed); FitNotes smoke 0 method
+  failures; fast e2e 7/7; live set 5/6 with TikTok's known main-loop wedge (alone it passed 5 of 7
+  runs today, wedging at 05-09; compare against 1dbb93dd or earlier under matching load before
+  treating it as a regression). Conform, `lat` and `textcmp` were not rerun this session: no
+  libcore suite class and no text code changed, but the util/os/database flips (below) touch code
+  apps run on taps, so run `bun run lat` and `lat --warm` first thing.
+- **This session, in commit order** (details in the history entry and each commit):
+  - D.3 services, each a TS subclass of its AIDL Stub hosted with `hostStub` (now in binder.ts) and
+    AOSP's manager built in `AOSP_MANAGERS` (context.ts): battery (+ sticky BATTERY_CHANGED via
+    `stickyBroadcasts` in broadcast.ts), appops (+ AttributionSource from bytecode), keyguard/trust
+    (+ an empty INotificationManager Stub), usagestats, jobscheduler (JobService/JobServiceEngine/
+    JobParameters/JobWorkItem from bytecode; job.ts is now IJobScheduler + IJobCallback), location
+    (Location/LocationRequest/transports from bytecode; locationmanager.ts is ILocationManager),
+    account (AccountManager, futures, AbstractAccountAuthenticator from bytecode; accounts.ts is
+    IAccountManager with AMS-style authenticator sessions; the broker's authenticator protocol and
+    authenticator.ts/accountfuture.ts/accountrequest.ts are gone), shortcut, locale,
+    textservices, game (+ GameState), dropbox, restrictions, accessibility, auth/usb (+
+    fingerprint built without a service).
+  - Cross-cutting fixes the services exposed: `Parcel.obtain(IBinder)` (every generated Proxy
+    calls it; remote AIDL calls were impossible before), `asSystem` in binder.ts (a hosted
+    service's outgoing binder calls carry uid 1000, as @EnforcePermission checks expect),
+    `ActivityThread.getSystemContext`, the `permission_enforcer` manager, `Binder(String)`,
+    `Context.getMainThreadHandler`, `Log.println_native`, `bindAsSystem(..., action)`.
+  - Pure framework classes whose TS copies had drifted now run from AOSP: UrlQuerySanitizer,
+    JsonReader/JsonWriter, Pair/Range/Rational/Size/SizeF/LruCache/LogPrinter/FloatMath,
+    AtomicFile/Base64OutputStream, ConditionVariable/CountDownTimer/ParcelUuid/StatFs/
+    HandlerExecutor, PrintAttributes family/PrintJobInfo, BackupManager and helpers,
+    Checksum/ApkChecksum/InstallSourceInfo/SessionParams, KeyGenParameterSpec/KeyProperties/
+    NetworkSecurityPolicy (security.ts deleted), AudioAttributes/AudioFocusRequest (over the
+    AVD's product strategies), CursorWrapper/SQLiteQueryBuilder/SQLiteOpenHelper/OpenParams/
+    CharArrayBuffer/DataSetObserver. Platform fixes they needed: `String.format` %s prints a box's
+    own toString; `FileDescriptor.sync` flushes the VFS; SQLiteDatabase gained openDatabase(File,
+    OpenParams), createInMemory, deleteDatabase, reopenReadWrite, findEditTable, validateSql, and
+    closes a helper's connection for real. LruCache from bytecode measured 4-13x faster than the TS
+    copy headless.
+- **Next, in order:**
+  1. Verify tap latency (`bun run lat`, `--warm`) and rerun conform (`bun run conform guava`,
+     `jsr166`, `ojluni-time`, ...) on this tree; then the TikTok A/B above if it keeps wedging.
+  2. Continue the pure-class sweep. A scan of TS specs whose AOSP class has no natives (script
+     idea: for each `rt.register({ name: "android/..." })`, look the class up in framework.jar with
+     `scripts/lib.ts` `openDexes`, count native methods, and grep other TS for the class name) lists
+     about 180 more. Left from this session's families: `UriMatcher`, `ContentUris`
+     (net.ts), `SearchRecentSuggestions` (AOSP trims history with `cr.delete`; its test uses a
+     fake resolver without delete), `UriPermission` (contentresolver.ts builds `JUriPermission`
+     directly; re-home first), provider contract classes; media: `AudioFormat` (+ Builder; move
+     `AudioTrack$Builder.build` onto Java getters), `PlaybackParams` (a fresh one's getSpeed throws
+     on a device), `MediaMetadata`/`MediaDescription`/`PlaybackState` (+ builders), `QueueItem`,
+     `RemoteUserInfo`, `AudioEffect$Descriptor`, `AudioTimestamp`, `EncoderProfiles`,
+     `CryptoInfo$Pattern`, the empty callback bases. Leave view/widget/drawable/animation classes to
+     Stage D, and keep measured hot paths (SparseArray, MeasureSpec, opengl Matrix) unless measured.
+     Method that worked: headless probe before and after the deletion (`rt.linkNatives(); await
+     loadLibcore(); await loadFrameworkJar();` from tests/java.ts, then newObj/vcall), every
+     difference explained (nearly always the TS copy was wrong), tests of TS copies removed.
+     Subagents in `isolation: "worktree"` worktrees start from `main`: tell them to reset onto
+     `knlnks/bytecode` and to symlink `vendor/aosp`, `apks`, `node_modules` and copy
+     `vendor/sql.js/dist` and `src/native/{core.wasm.ts,core.safe.wasm.ts,native-core.wasm}`; merge
+     their commits by cherry-pick and delete their branches.
+  3. D.3 remainder: wifi (framework-wifi.jar WifiManager over IWifiManager; ScanResult/WifiInfo/
+     DhcpInfo/WifiLock in net.ts), nsd (jarjar'd connector classes and ConnectivityThread), and the
+     device-model decisions: this device declares neither FEATURE_TELEPHONY nor
+     FEATURE_DEVICE_ADMIN while framework-res is the AVD's (a voice-capable phone), so
+     TelephonyManager and DevicePolicyManager from bytecode would answer from a mixed model; decide
+     the features (and config_voice_capable) first. notification, display, input and window stay
+     for Stage D.
+  4. The older "Next, in plan order" list below (android.text's TextPaint/span model, text tap
+     performance, B.7 cut 7 InetAddress/sockets, B.4 collections) still applies. Notes from this
+     session: libcore Java has no socket or getaddrinfo natives yet (only `src/native/net.ts` for
+     native code), so cut 7/8 is one large unit; persisted code for Mihon's first launch is 35.7 MB,
+     19% of it suspension checks (`$t instanceof Promise){$r=N;break $d}`), and hot entries are
+     already structured, so the plan's older "single-block bodies carry the dispatch loop" note is
+     stale.
+- **Tools this session:** `scratch-pageeval.ts` (repo root, excluded via `.git/info/exclude`;
+  `APK=`, `INIT=` for an init script, `CONSOLE=1` for page errors) evaluates a JS body in a booted
+  page against `WEBDROID_URL`. Device probes: javac from `/opt/homebrew/opt/openjdk@21`, d8 from
+  `scripts/android-sdk.ts` `androidTool("d8")`, `adb push` then `CLASSPATH=... app_process / Main`
+  (call `ActivityThread.systemMain()` first; `su 2000` for shell-uid answers). The AVD's
+  services.jar (`adb pull /system/framework/services.jar`) disassembles with `scripts/dis.ts` and
+  shows system-service failure paths.
+
+### Handoff state (2026-09-30, night)
 
 - **Branch `knlnks/bytecode`, working tree clean, not pushed** (the user asked for commits, not
   pushes). A dev server may be running on 4217 (`lsof -ti tcp:4217`); start one with
