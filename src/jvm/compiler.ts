@@ -12,6 +12,7 @@ import { jvmProfiler } from "./profile";
 import { coverageProbeSource, jvmCoverage } from "./coverage";
 import { codeKey, persistedBody, recordBody, recordLater, type Factory } from "./codecache";
 import { type Flow, Go, structure } from "./structure";
+import { discardedTypes, holdsNoThrowable, transparentCall } from "./discard";
 import {
   coldInstructions,
   endsBlock,
@@ -405,6 +406,10 @@ class MethodEmitter {
 
   private resumes = 0;
   private resuming = false;
+  private prepared: PreparedMethod | null = null;
+  /** per try item, the classes its handlers discard unread (discard.ts), computed on first use */
+  private discarded: (string | null)[] | null = null;
+  private quietCalls = 0;
   private ics = 0;
   /** Two slots in the method's type-check cache: the last receiver class and its result. */
   private icSlot(): number { const k = this.ics; this.ics += 2; return k; }
@@ -466,6 +471,7 @@ class MethodEmitter {
    */
   compile(prepared: PreparedMethod, count: boolean, form: HotForm): string {
     this.resuming = form === "resumable";
+    this.prepared = prepared;
     this.sync = prepared.sync;
     this.nullable = prepared.nullable;
     const started = jvmProfiler.enabled ? performance.now() : 0;
@@ -518,7 +524,7 @@ class MethodEmitter {
       : `var ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "pc=$F.next", "$r=$F.r"].join(",")};` +
         `const $th=$F.$th,$s=$F.$s;R.st($th);`;
 
-    const catchBody = this.hasTries ? "$e=R.jx($e);\n" + this.emitCatch() : this.leave() + "throw R.jx($e);";
+    const catchBody = this.hasTries ? (this.quietCalls ? "R.quiet.types=null;" : "") + "$e=R.jx($e);\n" + this.emitCatch() : this.leave() + "throw R.jx($e);";
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const profileStart = jvmProfiler.enabled
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.resuming ? "" : "P.entry($pn);"}try{`
@@ -579,8 +585,21 @@ ${profileEnd}
 
   /** A call or class initialization: its value, or a suspension when it is a Promise. A body
    *  holding any of these instructions never compiles as a leaf. */
-  private guard(expr: string, out: string[], assignTo = this.t) {
-    out.push(`${assignTo}=${expr};${this.suspend(assignTo)}`);
+  private guard(expr: string, out: string[], assignTo = this.t, quiet?: string) {
+    out.push(quiet ? `R.quiet.types=${JSON.stringify(quiet)};${assignTo}=${expr};R.quiet.types=null;${this.suspend(assignTo)}` : `${assignTo}=${expr};${this.suspend(assignTo)}`);
+  }
+
+  /** The classes a hot call's throwables skip their stack capture for (discard.ts): its try item's
+   *  handlers discard them, and the call returns nothing that could be one. */
+  private quietTypes(i: Ins): string | undefined {
+    if (this.cold || !this.hasTries || !this.prepared) return undefined;
+    const k = this.code.tries.findIndex((t) => i.pc >= t.start && i.pc < t.end);
+    if (k < 0) return undefined;
+    const types = (this.discarded ??= discardedTypes(this.R, this.dex, this.code, this.prepared.instructions))[k];
+    const ret = this.dex.type(this.dex.proto(this.dex.method(i.b).proto).ret);
+    if (!types || !transparentCall(this.R, this.dex, i.b, i.op) || !holdsNoThrowable(this.R, ret)) return undefined;
+    this.quietCalls++;
+    return types;
   }
 
   private suspend(value: string): string {
@@ -813,6 +832,7 @@ ${profileEnd}
     const recv = isInstance ? (i.nullRecv ? this.ref(i.regs[0]) : this.reg(i.regs[0])) : "";
     if (kind === "invoke-polymorphic") return this.emitPolymorphic(i, clsName, mref.name, recv, out);
     const argStr = this.args(i, dex.protoParamTypes(mref.proto), isInstance ? 1 : 0).join(",");
+    const quiet = kind === "invoke-super" ? undefined : this.quietTypes(i);
 
     if (clsName[0] === "[") {
       // methods on array types (clone/getClass/…)
@@ -822,10 +842,10 @@ ${profileEnd}
     switch (kind) {
       case "invoke-virtual": case "invoke-interface": {
         const call = `${recv}${this.prop(mangled)}(${argStr})`;
-        if (!i.signOnly) { this.guard(call, out); break; }
+        if (!i.signOnly) { this.guard(call, out, this.t, quiet); break; }
         // a String's order is its UTF-16 units', as JS compares strings
         const [r, o] = i.regs.map((x) => this.reg(x));
-        this.guard(`typeof ${r}==="string"&&typeof ${o}==="string"?${r}===${o}?0:${r}<${o}?-1:1:${call}`, out);
+        this.guard(`typeof ${r}==="string"&&typeof ${o}==="string"?${r}===${o}?0:${r}<${o}?-1:1:${call}`, out, this.t, quiet);
         break;
       }
       case "invoke-super": {
@@ -848,7 +868,7 @@ ${profileEnd}
         if (this.cold || this.info.native || clsName === "java/lang/String") {
           if (own) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
           else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
-          this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out);
+          this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out, this.t, quiet);
           break;
         }
         // resolution installs the target under its direct name, reached as a method call (a call
@@ -856,7 +876,7 @@ ${profileEnd}
         const k = this.ics++;
         if (own) out.push(`$ic[${k}]??D.rdc0($ic,${k},${i.b});`);
         else this.guard(`$ic[${k}]??D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
-        this.guard(`${recv}.${directName(clsName, mangled)}(${argStr})`, out);
+        this.guard(`${recv}.${directName(clsName, mangled)}(${argStr})`, out, this.t, quiet);
         break;
       }
       case "invoke-static": {
@@ -864,7 +884,7 @@ ${profileEnd}
         if (own && this.cold) out.push(`${this.u}=D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)});`);
         else if (!own) this.guard(`D.ic[${this.literal(mref.cls)}]??D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
         const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
-        this.guard(`${own && !this.cold ? "C" : this.u}${this.prop(mangled)}(${args})`, out);
+        this.guard(`${own && !this.cold ? "C" : this.u}${this.prop(mangled)}(${args})`, out, this.t, quiet);
         break;
       }
       default: out.push(this.unsupported(`${kind} ${clsName}.${mref.name}${desc}`));

@@ -452,9 +452,15 @@ function jsStackHere(): Error {
 }
 function captureStack(t: JThrowable): void {
   if (rt.throwables && rt.throwables.length < 500) rt.throwables.push(t);
+  const quiet = rt.quiet.types;
+  t.trace = null;
+  if (quiet !== null && quiet.split("|").some((n) => (t.constructor as { $i?: ClassInfo }).$i?.types.has(n))) {
+    t.jsErr = null;
+    t.coldFrames = [];
+    return;
+  }
   t.jsErr = jsStackHere();
   t.coldFrames = coldStack.slice(-STACK_DEPTH);
-  t.trace = null;
 }
 /** The Java frames of a captured JS stack, innermost first. Compiled code's source names its
  *  class and method ("wd/pkg/Class.method.js"; neither name can contain '.'), a class's own source

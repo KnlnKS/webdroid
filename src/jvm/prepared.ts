@@ -103,7 +103,7 @@ function decode(insns: Uint16Array, pc: number): MutableInstruction {
   return ins;
 }
 
-function decodeInstructions(insns: Uint16Array): MutableInstruction[] {
+export function decodeInstructions(insns: Uint16Array): MutableInstruction[] {
   const instructions: MutableInstruction[] = [];
   for (let pc = 0; pc < insns.length;) {
     const first = insns[pc];
@@ -119,7 +119,7 @@ export function endsBlock(op: number): boolean {
   return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
 }
 
-function writesRegister(op: number): boolean {
+export function writesRegister(op: number): boolean {
   if (op === 0 || (op >= 0x0e && op <= 0x11) || (op >= 0x1d && op <= 0x1f) ||
       (op >= 0x26 && op <= 0x2c) || (op >= 0x32 && op <= 0x3d) ||
       (op >= 0x4b && op <= 0x51) || (op >= 0x59 && op <= 0x5f) ||

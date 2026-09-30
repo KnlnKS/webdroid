@@ -271,6 +271,9 @@ export class Runtime {
     });
   }
   fuel = 4096;
+  /** the classes whose throwables skip their stack capture while a call their handlers discard
+   *  runs (discard.ts); one object, which forked realms share */
+  quiet = { types: null as string | null };
   private clinitDepth = 0;
 
   hotSourceBytes = 0;
@@ -917,6 +920,7 @@ export class Runtime {
 
   /** the class's own initialization: constant statics, then <clinit> or the native clinit hook */
   private runClinit(info: ClassInfo): Promise<void> | null {
+    this.quiet.types = null;
     for (const i of info.interfaces) this.ensureCompiled(i);   // defaults copy down
     this.ensureCompiled(info);
     let r: unknown;
