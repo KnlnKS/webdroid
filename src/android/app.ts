@@ -1,4 +1,4 @@
-import { JContextWrapper, JContextThemeWrapper, JAttributionSource, systemService, wrapperMethods, themeWrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
+import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, launchIntent, mkComponentName,
@@ -595,7 +595,6 @@ rt.register({
     "getId()Ljava/lang/String;": function (this: JAccessibilityServiceInfo) { return this.id; },
   },
 });
-const activeOpWatchers = new WeakMap<JObj, Map<unknown, { ops: string[]; executor: unknown }>>();
 class JHealthStats extends JObj {}
 const uidHealthSnapshot = () => new JHealthStats();
 rt.register({
@@ -745,35 +744,6 @@ for (const [name, methods, statics] of [
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
-  ["android/app/AppOpsManager", {
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
-      return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    },
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
-      return vcall(this, "noteOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    },
-    "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": (_op: string, uid: number, pkg: string) => packages.get(pkg)?.uid === uid ? 0 : 2,
-    "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
-      return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    },
-    "startWatchingActive([Ljava/lang/String;Ljava/util/concurrent/Executor;Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V":
-      function (this: JObj, ops: string[] | null, executor: unknown, listener: unknown) {
-        if (ops === null || executor === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-        let watchers = activeOpWatchers.get(this);
-        if (!watchers) activeOpWatchers.set(this, watchers = new Map());
-        watchers.set(listener, { ops: [...ops], executor });
-      },
-    "stopWatchingActive(Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V": function (this: JObj, listener: unknown) {
-      activeOpWatchers.get(this)?.delete(listener);
-    },
-    ...stubs(null, "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;"),
-    ...stubs(0, "noteOp(Ljava/lang/String;ILjava/lang/String;)I", "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I",
-      "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I", "checkOp(Ljava/lang/String;ILjava/lang/String;)I",
-      "unsafeCheckOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I"),
-    ...noops("finishOp(Ljava/lang/String;ILjava/lang/String;)V", "checkPackage(ILjava/lang/String;)V",
-      "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V",
-      "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V"),
-  }, { MODE_ALLOWED: 0, MODE_IGNORED: 1, MODE_ERRORED: 2, MODE_DEFAULT: 3 }],
   ["android/os/health/SystemHealthManager", {
     "takeMyUidSnapshot()Landroid/os/health/HealthStats;": uidHealthSnapshot,
     "takeUidSnapshot(I)Landroid/os/health/HealthStats;": (uid: number) => {
@@ -870,7 +840,7 @@ rt.register({
   },
 });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
-rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener", "android/app/AppOpsManager$OnOpActiveChangedListener");
+rt.markers("android/hardware/display/DisplayManager$DisplayListener");
 class JAccessibilityManager extends JObj {
   stateListeners = new Set<unknown>();
   touchListeners = new Set<unknown>();
@@ -935,9 +905,7 @@ rt.register({
     "getCallingPackage()Ljava/lang/String;": () => callingPackage(),
     "getCallingAttributionSource()Landroid/content/AttributionSource;": () => {
       const caller = transactionCaller();
-      if (!caller) return null;
-      rt.link("android/content/AttributionSource");
-      return Object.assign(new JAttributionSource(), { uid: caller.uid, pid: caller.pid, pkg: callingPackage() });
+      return caller && attributionSource(caller.uid, caller.pid, callingPackage());
     },
     "<init>()V": function () {},
     "onCreate()Z": () => 1,

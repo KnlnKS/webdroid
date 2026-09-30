@@ -28,7 +28,7 @@ export class JContext extends JObj {
   declare $host: AppHost;
   packageLoader: JClassLoader | null = null;
   attributionTag: string | null = null;
-  attributionSource: Promise<JAttributionSource> | null = null;
+  attributionSource: Promise<JObj> | null = null;
 }
 /** AOSP's base context of the application, activities and created contexts; SDKs reflect on its
  *  fields (Phrase replaces mResources), so getResources answers from the field */
@@ -103,10 +103,10 @@ export class PermissionStore {
 let permissionStore = new PermissionStore();
 export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
 // granted by the app's own request, or to a system package by the default grant policy
-const permissionState = (name: string) => {
-  const pkg = appHost?.pkg ?? "";
-  return RUNTIME_PERMISSIONS.has(name) && !permissionStore.get(pkg).has(name) && !packages.get(pkg)?.grants.has(name) ? -1 : 0;
-};
+export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
+export const permissionGranted = (pkg: string, name: string): boolean =>
+  !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!packages.get(pkg)?.grants.has(name);
+const permissionState = (name: string) => permissionGranted(appHost?.pkg ?? "", name) ? 0 : -1;
 export function grantPermissions(names: string[]): Int32Array {
   permissionStore.grant(appHost?.pkg ?? "", names);
   return new Int32Array(names.length);
@@ -144,7 +144,6 @@ const SERVICE_CLASS: Record<string, string> = {
   restrictions: "android/content/RestrictionsManager",
   appwidget: "android/appwidget/AppWidgetManager",
   shortcut: "android/content/pm/ShortcutManager",
-  appops: "android/app/AppOpsManager",
   systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
@@ -178,6 +177,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   clipboard: ["android/content/ClipboardManager", (ctx) => newObj("android/content/ClipboardManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   vibrator_manager: ["android/os/VibratorManager", (ctx) => newObj("android/os/SystemVibratorManager", "(Landroid/content/Context;)V", ctx)],
   vibrator: ["android/os/Vibrator", (ctx) => newObj("android/os/SystemVibrator", "(Landroid/content/Context;)V", ctx)],
+  appops: ["android/app/AppOpsManager", async (ctx) =>
+    newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
     "(Landroid/content/Context;Lcom/android/internal/app/IBatteryStats;Landroid/os/IBatteryPropertiesRegistrar;)V",
     ctx, await hostedService("batterystats"), await hostedService("batteryproperties"))],
@@ -206,27 +207,13 @@ export function systemService(jctx: JContext | null, name: string): unknown {
   return s;
 }
 
-// API 31: a context's own AttributionSource is this process; a provider's caller may be another
-let attribution: Promise<JAttributionSource> | null = null;
-export class JAttributionSource extends JObj { uid = PROCESS_UID; pid = PROCESS_PID; pkg: string | null = null; tag: string | null = null; }
-function contextAttributionSource(this: JContext): Promise<JAttributionSource> {
-  if (this.attributionTag === null) return attribution ??= newObj("android/content/AttributionSource", null);
-  return this.attributionSource ??= newObj("android/content/AttributionSource", null).then((source: JAttributionSource) => {
-    source.tag = this.attributionTag;
-    return source;
-  });
+// API 31: a context's own AttributionSource is this process, as ContextImpl builds it
+const ATTRIBUTION = "(IILjava/lang/String;Ljava/lang/String;)V";
+function contextAttributionSource(this: JContext): Promise<JObj> {
+  return this.attributionSource ??= newObj("android/content/AttributionSource", ATTRIBUTION, PROCESS_UID, PROCESS_PID, this.$host?.pkg ?? appHost?.pkg ?? null, this.attributionTag);
 }
-rt.register({
-  name: "android/content/AttributionSource", ctor: JAttributionSource, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "getUid()I": function (this: JAttributionSource) { return this.uid; },
-    "getPid()I": function (this: JAttributionSource) { return this.pid; },
-    "getPackageName()Ljava/lang/String;": function (this: JAttributionSource) { return this.pkg ?? appHost!.pkg; },
-    "getAttributionTag()Ljava/lang/String;": function (this: JAttributionSource) { return this.tag; },
-    ...stubs(null, "getNext()Landroid/content/AttributionSource;"),
-    ...stubs(1, "isTrusted(Landroid/content/Context;)Z"),
-  },
-});
+export const attributionSource = (uid: number, pid: number, pkg: string | null): Promise<JObj> =>
+  newObj("android/content/AttributionSource", ATTRIBUTION, uid, pid, pkg, null);
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
 function contextRegisterReceiver(this: JContext, receiver: JObj | null, filter: JIntentFilter) { return registerReceiver(this, receiver, filter); }

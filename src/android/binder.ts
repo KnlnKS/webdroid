@@ -119,6 +119,7 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) { this.owner = owner; this.descriptor = descriptor; },
   "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) { return this.descriptor === descriptor ? this.owner : null; },
   "getInterfaceDescriptor()Ljava/lang/String;": function (this: JBinder) { return this.descriptor; },
+  "<init>(Ljava/lang/String;)V": function (this: JBinder, descriptor: string | null) { this.descriptor = descriptor; },
   ...noops("<init>()V", "static flushPendingCommands()V", "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V"),
   ...stubs(1, "pingBinder()Z", "isBinderAlive()Z", "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z"),
   "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {

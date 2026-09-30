@@ -13,12 +13,13 @@ import { type JComponentName, mkComponentName } from "./intent";
 import type { JActivity } from "./app";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
-import { JConfigurationInfo } from "./pm";
+import { JConfigurationInfo, getPM } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { hostService } from "./binder";
 import { registerSystemActivity } from "./intent";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
+import { isRuntimePermission, permissionGranted } from "./context";
 import { stickyBroadcasts } from "./broadcast";
 import type { JIntent } from "./intent";
 import { bundleBox } from "./os";
@@ -323,6 +324,74 @@ rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}
   "isPowerSaveWhitelistApp(Ljava/lang/String;)Z": exempt,
   "isPowerSaveWhitelistExceptIdleApp(Ljava/lang/String;)Z": exempt,
 } });
+
+// IAppOpsService, under AppOpsManager: an op's mode as AppOpsService derives it for this app. A
+// runtime permission's op follows its grant (IGNORED until granted; the app in front evaluates a
+// foreground grant as ALLOWED); any other op has its default mode, MODE_DEFAULT for special access
+// (SYSTEM_ALERT_WINDOW, GET_USAGE_STATS) that callers then decide by the permission. A package the
+// uid does not own reads as the op's default when checked and MODE_ERRORED when noted or started,
+// as the reference AVD's services.jar answers. Mode changes are not reported to watchers.
+const AOM = "android/app/AppOpsManager", MODE_ALLOWED = 0, MODE_IGNORED = 1, MODE_ERRORED = 2;
+const owns = (uid: number, pkg: string | null) => pkg !== null && packages.get(pkg)?.uid === uid;
+const defaultMode = (code: number): Promise<number> => scall(AOM, "opToDefaultMode", "(I)I", code);
+async function opMode(code: number, pkg: string): Promise<number> {
+  const op: number = await scall(AOM, "opToSwitch", "(I)I", code);
+  const permission: string | null = await scall(AOM, "opToPermission", "(I)Ljava/lang/String;", op);
+  if (permission !== null && isRuntimePermission(permission)) return permissionGranted(pkg, permission) ? MODE_ALLOWED : MODE_IGNORED;
+  return defaultMode(op);
+}
+const checkOp = (code: number, uid: number, pkg: string | null) => owns(uid, pkg) ? opMode(code, pkg!) : defaultMode(code);
+const noteOp = async (code: number, uid: number, pkg: string | null, tag: string | null) => newObj("android/app/SyncNotedAppOp",
+  "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? await opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
+const sourceField = (state: JObj, name: string) => (state as unknown as Record<string, unknown>)[declaredField("android/content/AttributionSourceState", name)];
+const noteFor = (code: number, state: JObj) =>
+  noteOp(code, sourceField(state, "uid") as number, sourceField(state, "packageName") as string | null, sourceField(state, "attributionTag") as string | null);
+/** a proxied op is noted for the proxy (an app is never a trusted proxy) and then the app it serves */
+async function noteProxyOp(code: number, state: JObj) {
+  const proxy: JObj = await noteFor(code, state), next = sourceField(state, "next") as JObj[] | null;
+  return next?.length && await vcall(proxy, "getOpMode", "()I") === MODE_ALLOWED ? noteFor(code, next[0]) : proxy;
+}
+rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IAppOpsService$Stub", methods: {
+  "checkOperation(IILjava/lang/String;)I": checkOp,
+  "checkOperationForDevice(IILjava/lang/String;I)I": checkOp,
+  "checkOperationRaw(IILjava/lang/String;Ljava/lang/String;)I": checkOp,
+  "checkOperationRawForDevice(IILjava/lang/String;Ljava/lang/String;I)I": checkOp,
+  "checkAudioOperation(IIILjava/lang/String;)I": (code: number, _usage: number, uid: number, pkg: string | null) => checkOp(code, uid, pkg),
+  "checkPackage(ILjava/lang/String;)I": (uid: number, pkg: string | null) => owns(uid, pkg) ? MODE_ALLOWED : MODE_ERRORED,
+  "noteOperation(IILjava/lang/String;Ljava/lang/String;ZLjava/lang/String;Z)Landroid/app/SyncNotedAppOp;": noteOp,
+  "noteOperationForDevice(IILjava/lang/String;Ljava/lang/String;IZLjava/lang/String;Z)Landroid/app/SyncNotedAppOp;": noteOp,
+  "startOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;ZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;":
+    (_token: unknown, code: number, uid: number, pkg: string | null, tag: string | null) => noteOp(code, uid, pkg, tag),
+  "startOperationForDevice(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;IZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;":
+    (_token: unknown, code: number, uid: number, pkg: string | null, tag: string | null) => noteOp(code, uid, pkg, tag),
+  "noteProxyOperationWithState(ILandroid/content/AttributionSourceState;ZLjava/lang/String;ZZ)Landroid/app/SyncNotedAppOp;": noteProxyOp,
+  "startProxyOperationWithState(Landroid/os/IBinder;ILandroid/content/AttributionSourceState;ZZLjava/lang/String;ZZIII)Landroid/app/SyncNotedAppOp;":
+    (_token: unknown, code: number, state: JObj) => noteProxyOp(code, state),
+  "isOperationActive(IILjava/lang/String;)Z": () => 0,
+  // an app's own notes are collected for ops a dangerous or appop permission guards
+  "shouldCollectNotes(I)Z": async (code: number) => {
+    if (await scall(AOM, "shouldForceCollectNoteForOp", "(I)Z", code)) return 1;
+    const permission: string | null = await scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
+    if (permission === null) return 0;
+    const info = await vcall(getPM(), "getPermissionInfo", "(Ljava/lang/String;I)Landroid/content/pm/PermissionInfo;", permission, 0);
+    return +(await vcall(info, "getProtection", "()I") === 1 || (await vcall(info, "getProtectionFlags", "()I") & 0x40) !== 0);
+  },
+  ...noops("finishOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;)V",
+    "finishOperationForDevice(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;I)V",
+    "finishProxyOperationWithState(Landroid/os/IBinder;ILandroid/content/AttributionSourceState;Z)V",
+    "startWatchingModeWithFlags(ILjava/lang/String;ILcom/android/internal/app/IAppOpsCallback;)V",
+    "stopWatchingMode(Lcom/android/internal/app/IAppOpsCallback;)V",
+    "startWatchingActive([ILcom/android/internal/app/IAppOpsActiveCallback;)V",
+    "stopWatchingActive(Lcom/android/internal/app/IAppOpsActiveCallback;)V",
+    "startWatchingStarted([ILcom/android/internal/app/IAppOpsStartedCallback;)V",
+    "stopWatchingStarted(Lcom/android/internal/app/IAppOpsStartedCallback;)V",
+    "startWatchingNoted([ILcom/android/internal/app/IAppOpsNotedCallback;)V",
+    "stopWatchingNoted(Lcom/android/internal/app/IAppOpsNotedCallback;)V",
+    "startWatchingAsyncNoted(Ljava/lang/String;Lcom/android/internal/app/IAppOpsAsyncNotedCallback;)V",
+    "stopWatchingAsyncNoted(Ljava/lang/String;Lcom/android/internal/app/IAppOpsAsyncNotedCallback;)V"),
+  "extractAsyncOps(Ljava/lang/String;)Ljava/util/List;": () => newArrayList(),
+} });
+hostStub("appops", "webdroid/AppOpsService");
 
 // IBatteryStats and IBatteryPropertiesRegistrar, under BatteryManager: the configured battery's
 // capacity and status; any other property is NAME_NOT_FOUND, as healthd answers one its HAL lacks
