@@ -475,6 +475,20 @@ describe("java-math-boundary", () => {
   });
 });
 
+describe("invocation-target", () => {
+  test("Method.invoke wraps what the target threw, and a stack trace prints it as the cause", async () => {
+    const { stackTraceText } = await import("../src/jvm/natives/jlang");
+    const method = await vcallAsync(rt.classFor("java/lang/Integer"), "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+      "parseInt", jarray([rt.classFor("java/lang/String")], "Ljava/lang/Class;"));
+    const e = await vcallAsync(method, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", null, jarray(["x"], "Ljava/lang/Object;")).then(() => null, (x) => x);
+    expect(rt.iof(e, "java/lang/reflect/InvocationTargetException")).toBe(1);
+    const target = await vcallAsync(e, "getTargetException", "()Ljava/lang/Throwable;");
+    expect(rt.iof(target, "java/lang/NumberFormatException")).toBe(1);
+    expect(await vcallAsync(e, "getCause", "()Ljava/lang/Throwable;") === target).toBe(true);
+    expect(await stackTraceText(e)).toContain("\nCaused by: java.lang.NumberFormatException: For input string: \"x\"");
+  });
+});
+
 describe("thread-group", () => {
   test("threads live in libcore's main group, under system, while they run", async () => {
     const group = await vcall(await newObj("java/lang/Thread"), "getThreadGroup", "()Ljava/lang/ThreadGroup;");

@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, packageNamed, stringHash, idHash, JClass, classpathStream, after, enclosingClass, defineException, fillInStackTrace, type JThrowable } from "./jlang";
+import { vcall, packageNamed, stringHash, idHash, JClass, classpathStream, after, enclosingClass, newObj } from "./jlang";
 import { box, boxObject, unbox, type BoxDesc } from "./jbox";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import { unsafeFallthrough } from "../compiler";
@@ -816,7 +816,7 @@ rt.register({
       try {
         const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
         val = r instanceof Promise ? yield r : r;
-      } catch (e) { throw invocationTarget(e); }
+      } catch (e) { throw yield invocationTarget(e); }
       return boxReturn(parseMethodDesc(this.desc).ret, val);
     }),
     ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
@@ -835,19 +835,8 @@ rt.register({
     "hashCode()I": function (this: JMethod) { return stringHash(this.name + this.desc); },
   },
 });
-// Method.invoke and Constructor.newInstance report what the target threw inside this wrapper
-defineException("java/lang/reflect/InvocationTargetException", "java/lang/ReflectiveOperationException", {
-  "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, target: JThrowable | null) { this.cause = target; fillInStackTrace(this); },
-  "<init>(Ljava/lang/Throwable;Ljava/lang/String;)V": function (this: JThrowable, target: JThrowable | null, msg: string | null) {
-    this.cause = target; this.msg = msg; fillInStackTrace(this);
-  },
-  "getTargetException()Ljava/lang/Throwable;": function (this: JThrowable) { return this.cause; },
-});
-function invocationTarget(e: unknown): JThrowable {
-  const wrapper = rt.mkThrowable("java/lang/reflect/InvocationTargetException", null) as JThrowable;
-  wrapper.cause = rt.jx(e);
-  return wrapper;
-}
+/** Method.invoke and Constructor.newInstance report what the target threw inside this wrapper */
+const invocationTarget = (e: unknown) => newObj("java/lang/reflect/InvocationTargetException", "(Ljava/lang/Throwable;)V", rt.jx(e));
 // ── reflect Constructor. <init> mangles to i$<hash(desc)> with NO class component, so a
 // ctor must always be invoked through the prototype of the class that DECLARES it.
 export class JCtor extends JExecutable {
@@ -915,7 +904,7 @@ rt.register({
       try {
         const r = fn.apply(o, a);
         if (r instanceof Promise) yield r;
-      } catch (e) { throw invocationTarget(e); }
+      } catch (e) { throw yield invocationTarget(e); }
       return o;
     }),
     "toString()Ljava/lang/String;": function (this: JCtor) { return this.owner.name + ".<init>" + this.desc; },
@@ -1042,14 +1031,11 @@ function buildAnnoProto(type: string, info: ClassInfo): object {
 function elementDesc(info: ClassInfo, name: string): string {
   if (info.def && info.dex) {
     for (const m of [...info.def.directMethods, ...info.def.virtualMethods]) {
-      const mr = info.dex.method(m.methodIdx);
-      if (mr.name === name) return info.dex.methodDesc(m.methodIdx);
+      if (info.dex.method(m.methodIdx).name === name) return info.dex.methodDesc(m.methodIdx);
     }
   } else {
-    // native annotation type (dalvik/annotation/Signature): its
-    // element methods aren't in any dex, but its NativeSpec still names the real descriptor.
-    const spec = rt.natives.get(info.name);
-    for (const key of Object.keys(spec?.methods ?? {})) {
+    // a TS annotation type's spec names its elements' descriptors
+    for (const key of Object.keys(rt.natives.get(info.name)?.methods ?? {})) {
       const paren = key.indexOf("(");
       if (key.slice(0, paren) === name) return key.slice(paren);
     }
@@ -1084,17 +1070,6 @@ for (const i of ["java/lang/reflect/AnnotatedElement",
   "java/lang/reflect/Member", "java/lang/reflect/Type", "java/lang/reflect/GenericDeclaration"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
-
-// ── dalvik.annotation.Signature: the compiler-generated generic-signature carrier.
-// Pure data holder — value() is String[] fragments, which resolveEncVal already handles
-// generically (array of strings), so no special-casing is needed beyond registering the type.
-rt.register({
-  name: "dalvik/annotation/Signature", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
-  methods: {
-    "value()[Ljava/lang/String;": () => jarray([], "Ljava/lang/String;"),
-  },
-});
-
 
 // Class.forName (and ClassLoader.loadClass, which delegates to it) is a by-NAME lookup,
 // not a fixed dependency: the JVM contract is that the class may legitimately be absent

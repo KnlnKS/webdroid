@@ -9,15 +9,12 @@
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
-import { newObj, vcall, scall, after, defineException, sysProps, checkFromIndexSize } from "./jlang";
+import { newObj, vcall, scall, after, sysProps, checkFromIndexSize } from "./jlang";
 import { strArray, u8, mangleMethod } from "../abi";
 import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
 import { abandonConnection } from "../../native/net";
-
-rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/KeyManager",
-  "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi");
 
 /** a connected TLS socket; rt.make skips <init> */
 async function dial(host: string, port: number): Promise<JSSLSocket> {
@@ -327,11 +324,6 @@ rt.register({
 // ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
 // raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
-defineException("javax/net/ssl/SSLException", "java/io/IOException");
-defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLException");
-defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
-defineException("javax/net/ssl/SSLProtocolException", "javax/net/ssl/SSLException");
-defineException("javax/net/ssl/SSLKeyException", "javax/net/ssl/SSLException");
 /** a URL's external form, through its Java API */
 const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/String;") as string | Promise<string>;
 // URL.createBuiltinHandler instantiates these by name for http and https, as OkHttp's are on a

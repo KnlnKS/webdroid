@@ -543,12 +543,15 @@ export async function stackTraceText(t: JThrowable): Promise<string> {
   };
   let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + await frames(t);
   const seen = new Set<JThrowable>([t]);
-  for (let c = t.cause; c && !seen.has(c); c = c.cause) {
+  for (let c = await causeOf(t); c && !seen.has(c); c = await causeOf(c)) {
     seen.add(c);
     out += "\nCaused by: " + String(await vcall(c, "toString", "()Ljava/lang/String;")) + await frames(c);
   }
   return out;
 }
+/** Throwable.getCause, which libcore's InvocationTargetException, UndeclaredThrowableException and
+ *  PrivilegedActionException answer from their own fields */
+const causeOf = (t: JThrowable): JThrowable | null | Promise<JThrowable | null> => vcall(t, "getCause", "()Ljava/lang/Throwable;");
 const M_fillInStackTrace = mangleMethod("fillInStackTrace", "()Ljava/lang/Throwable;");
 /** Throwable's constructors fill the trace through the virtual method: subclasses that override
  *  it to skip the capture (coroutine and Compose cancellations) never pay for a JS stack. */
@@ -600,7 +603,8 @@ export function reportUncaught(e: unknown) {
   const je = rt.jx(e);
   // the cause chain travels with the throwable and is usually where the real failure is named
   let causes = "";
-  for (let c = je?.cause, depth = 0; c && depth < 8; c = c.cause, depth++) {
+  const next = (t: JThrowable) => { const c = causeOf(t); return c instanceof Promise ? null : c; };
+  for (let c = je && next(je), depth = 0; c && depth < 8; c = next(c), depth++) {
     causes += `\n  caused by ${(c.constructor as any)?.$i?.name ?? "?"}: ${c.msg ?? ""}`;
   }
   const jframes = (je as { jframes?: string[] } | null)?.jframes;
@@ -1592,10 +1596,3 @@ rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: JRefQueue, methods: {
   "remove()Ljava/lang/ref/Reference;": removeReference,
   "remove(J)Ljava/lang/ref/Reference;": removeReference,
 } });
-
-rt.register({
-  name: "java/lang/reflect/Modifier", ctor: class extends JObj {},
-  statics: { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 16, SYNCHRONIZED: 32, VOLATILE: 64, TRANSIENT: 128, NATIVE: 256, INTERFACE: 512, ABSTRACT: 1024, STRICT: 2048 },
-  methods: Object.fromEntries([["Public", 1], ["Private", 2], ["Protected", 4], ["Static", 8], ["Final", 16], ["Synchronized", 32], ["Volatile", 64],
-    ["Transient", 128], ["Native", 256], ["Interface", 512], ["Abstract", 1024], ["Strict", 2048]].map(([n, bit]) => [`static is${n}(I)Z`, (m: number) => (m & (bit as number) ? 1 : 0)])),
-});
