@@ -11,9 +11,19 @@ import { mkUri, uriParts } from "./net";
 type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
 export const broadcastTransport: { send: ((intent: JIntent, permission: string | null, ordered: boolean) => Promise<void>) | null } = { send: null };
 const receivers = new Map<JObj, { context: JContext; filter: JIntentFilter; handler: unknown }>();
-export function registerReceiver(context: JContext, receiver: JObj | null, filter: JIntentFilter, handler: unknown = null): null {
+/** broadcasts the system keeps current (BatteryService's BATTERY_CHANGED), by action. As in
+ *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */
+export const stickyBroadcasts = new Map<string, () => JIntent>();
+export function registerReceiver(context: JContext, receiver: JObj | null, filter: JIntentFilter, handler: unknown = null): JIntent | null {
   if (receiver) receivers.set(receiver, { context, filter, handler });
-  return null;
+  let first: JIntent | null = null;
+  for (const [action, make] of stickyBroadcasts) {
+    if (filter.match(action, null, null, null, []) < 0) continue;
+    const sticky = make();
+    first ??= sticky;
+    if (receiver) void deliver(receiver, context, sticky, handler, false, { code: 0, data: null, extras: null, aborted: false }).catch(reportUncaught);
+  }
+  return first;
 }
 export function unregisterReceiver(receiver: JObj): void { receivers.delete(receiver); }
 /** a registered receiver is found through its filter's actions, so an intent without one reaches none */

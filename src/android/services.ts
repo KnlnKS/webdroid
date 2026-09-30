@@ -19,6 +19,9 @@ import { hostService } from "./binder";
 import { registerSystemActivity } from "./intent";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
+import { stickyBroadcasts } from "./broadcast";
+import type { JIntent } from "./intent";
+import { bundleBox } from "./os";
 
 const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
 /** Host a Stub subclass as a system service. A Stub whose methods declare @EnforcePermission takes
@@ -321,7 +324,40 @@ rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}
   "isPowerSaveWhitelistExceptIdleApp(Ljava/lang/String;)Z": exempt,
 } });
 
+// IBatteryStats and IBatteryPropertiesRegistrar, under BatteryManager: the configured battery's
+// capacity and status; any other property is NAME_NOT_FOUND, as healthd answers one its HAL lacks
+const BATTERY_CAPACITY = 4, BATTERY_STATUS = 6, NAME_NOT_FOUND = -2;
+/** BATTERY_STATUS_CHARGING or FULL, which the reference AVD reports as plugged into AC */
+const pluggedIn = () => device.battery.status === 2 || device.battery.status === 5;
+/** BatteryService's low level: unplugged at or under config_lowBatteryWarningLevel (20) */
+export const batteryLow = (): boolean => !pluggedIn() && device.battery.level <= 20;
+// the extras BatteryService puts on BATTERY_CHANGED that the battery model determines
+stickyBroadcasts.set("android.intent.action.BATTERY_CHANGED", () => {
+  const intent: JIntent = rt.make("android/content/Intent");
+  intent.action = "android.intent.action.BATTERY_CHANGED";
+  intent.flags = 0x60000010;   // as recorded on the reference AVD: REGISTERED_ONLY, REPLACE_PENDING, EXCLUDE_STOPPED_PACKAGES
+  for (const [key, value] of Object.entries({
+    status: device.battery.status, health: 2, present: bundleBox(1, "Z"), level: device.battery.level, scale: 100,
+    plugged: pluggedIn() ? 1 : 0, battery_low: bundleBox(+batteryLow(), "Z"),
+  })) intent.extras.map.set(key, value);
+  return intent;
+});
+rt.register({ name: "webdroid/BatteryStatsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IBatteryStats$Stub", methods: {
+  "isCharging()Z": () => +pluggedIn(),
+  "computeChargeTimeRemaining()J": () => -1n,
+} });
+rt.register({ name: "webdroid/BatteryPropertiesRegistrar", ctor: class extends JObj {}, sup: "android/os/IBatteryPropertiesRegistrar$Stub", methods: {
+  "getProperty(ILandroid/os/BatteryProperty;)I": async (id: number, prop: JObj) => {
+    const value = id === BATTERY_CAPACITY ? device.battery.level : id === BATTERY_STATUS ? device.battery.status : null;
+    if (value === null) return NAME_NOT_FOUND;
+    await vcall(prop, "setLong", "(J)V", BigInt(value));
+    return 0;
+  },
+} });
+
 hostStub("power", "webdroid/PowerManagerService");
+hostStub("batterystats", "webdroid/BatteryStatsService");
+hostStub("batteryproperties", "webdroid/BatteryPropertiesRegistrar");
 hostStub("thermalservice", "webdroid/ThermalService");
 hostStub("deviceidle", "webdroid/DeviceIdleController");
 

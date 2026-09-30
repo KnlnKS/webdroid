@@ -138,7 +138,6 @@ const SERVICE_CLASS: Record<string, string> = {
   biometric: "android/hardware/biometrics/BiometricManager",
   usb: "android/hardware/usb/UsbManager",
   location: "android/location/LocationManager",
-  batterymanager: "android/os/BatteryManager",
   display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
   textservices: "android/view/textservice/TextServicesManager",
@@ -179,6 +178,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   clipboard: ["android/content/ClipboardManager", (ctx) => newObj("android/content/ClipboardManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   vibrator_manager: ["android/os/VibratorManager", (ctx) => newObj("android/os/SystemVibratorManager", "(Landroid/content/Context;)V", ctx)],
   vibrator: ["android/os/Vibrator", (ctx) => newObj("android/os/SystemVibrator", "(Landroid/content/Context;)V", ctx)],
+  batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
+    "(Landroid/content/Context;Lcom/android/internal/app/IBatteryStats;Landroid/os/IBatteryPropertiesRegistrar;)V",
+    ctx, await hostedService("batterystats"), await hostedService("batteryproperties"))],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };
