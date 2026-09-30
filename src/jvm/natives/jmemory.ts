@@ -149,7 +149,8 @@ const peekArray = (address: bigint, array: Elements | null, offset: number, coun
 const pokeArray = (address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
   if (isExternal(address)) throw readOnly(address);
   const source = region(array, offset, count);
-  if (count) mem.write(physical(address), swap ? swapped(source, array!.BYTES_PER_ELEMENT) : source.slice());
+  // a set within one buffer copies as memmove does, so a guest-memory array needs no copy first
+  if (count) mem.write(physical(address), swap ? swapped(source, array!.BYTES_PER_ELEMENT) : source);
 };
 /** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
 let bufferAddress: ((buffer: object) => bigint) | null = null;

@@ -2,7 +2,8 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { boxInt, newObj, vcall } from "../src/jvm/natives/jlang";
+import { boxInt, newObj, scall, vcall } from "../src/jvm/natives/jlang";
+import { bufferBytes, limit, position } from "../src/jvm/natives/jnio";
 import { jarray, mangleField, mangleMethod, splitSig } from "../src/jvm/abi";
 import { loadLibcore } from "./java";
 
@@ -101,4 +102,128 @@ test("ConcurrentHashMap's bin accessors match their Unsafe bodies", async () => 
   }
   set(tabs[0], 3, other); setBase(tabs[1], 3, other);
   for (let i = 0; i < 4; i++) expect(tabAt(tabs[0], i)).toBe(tabAtBase(tabs[1], i));
+});
+
+// java.nio: twin buffers take the same random steps, one through each intrinsic and one through
+// its AOSP body, over direct and heap memory, both byte orders, slices at odd offsets, read-only
+// and inaccessible buffers, and indices on and past each bound
+const ELEMENTS = [["", "B", Int8Array], ["Short", "S", Int16Array], ["Char", "C", Uint16Array], ["Int", "I", Int32Array],
+  ["Long", "J", BigInt64Array], ["Float", "F", Float32Array], ["Double", "D", Float64Array]] as const;
+const word = () => (random(65536) << 16) | random(65536);
+function value(d: string): unknown {
+  switch (d) {
+    case "B": return random(256) - 128;
+    case "S": return random(65536) - 32768;
+    case "C": return random(65536);
+    case "I": return word();
+    case "J": return BigInt.asIntN(64, (BigInt(word()) << 32n) | BigInt(word() >>> 0));
+    case "F": return [0, -0, 1.5, -2.25, Infinity, NaN, Math.fround(word() / 7)][random(7)];
+    default: return [0, -0, 1e300, -Infinity, NaN, word() / 3][random(6)];
+  }
+}
+interface Variant { direct: boolean; little: boolean; slice: boolean; readOnly: boolean; inaccessible: boolean }
+const VARIANTS: Variant[] = [];
+for (const direct of [true, false]) for (const little of [false, true]) for (const slice of [false, true]) for (const readOnly of [false, true])
+  VARIANTS.push({ direct, little, slice, readOnly, inaccessible: false });
+VARIANTS.push({ direct: true, little: true, slice: false, readOnly: false, inaccessible: true });
+async function byteBuffer(v: Variant): Promise<unknown> {
+  let b = await scall("java/nio/ByteBuffer", v.direct ? "allocateDirect" : "allocate", "(I)Ljava/nio/ByteBuffer;", 48);
+  for (let i = 0; i < 48; i++) await vcall(b, "put", "(IB)Ljava/nio/ByteBuffer;", i, ((i * 37) & 0xff) << 24 >> 24);
+  if (v.slice) { await vcall(b, "position", "(I)Ljava/nio/Buffer;", 3); b = await vcall(b, "slice", "()Ljava/nio/ByteBuffer;"); }
+  if (v.readOnly) b = await vcall(b, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;");
+  if (v.little) b = await vcall(b, "order", "(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;", await scall("java/nio/ByteOrder", "nativeOrder", "()Ljava/nio/ByteOrder;"));
+  if (v.inaccessible) await vcall(b, "setAccessible", "(Z)V", 0);
+  return b;
+}
+/** a call's outcome, with the receiver itself as "this" */
+async function step(fn: Function, self: unknown, args: unknown[]): Promise<unknown> {
+  const o = await outcome(fn, self, args) as { value?: unknown };
+  return o.value === self ? { value: "this" } : o;
+}
+const state = (b: unknown) => [position(b as never), limit(b as never), [...bufferBytes(b as never)]];
+interface Case { sig: string; args: (cap: number) => unknown[] }
+/** random steps through each case's (intrinsic, AOSP body) pair on twin buffers, their arguments
+ *  drawn alike for both, and now and then a new position for both */
+async function differential(twins: unknown[], cases: Case[], cls: string, steps: number, arrays: unknown[] = []) {
+  const pairs = await Promise.all(cases.map((c) => pair(cls, c.sig)));
+  const cap = await vcall(twins[0], "capacity", "()I") as number;
+  for (let s = 0; s < steps; s++) {
+    if (random(6) === 0) {
+      const p = random(cap + 2);
+      for (const b of twins) await outcome(() => vcall(b, "position", "(I)Ljava/nio/Buffer;", p), null, []);
+    }
+    const k = random(cases.length), from = seed, results: unknown[] = [];
+    for (const t of [0, 1]) {
+      seed = from;
+      // each twin copies with its own array
+      const args = cases[k].args(cap).map((a) => (a === arrays[0] ? arrays[t] : a));
+      results.push([cases[k].sig, await step(pairs[k][t], twins[t], args)]);
+    }
+    expect(results[0]).toEqual(results[1]);
+    expect(state(twins[0])).toEqual(state(twins[1]));
+    for (const a of arrays.slice(1)) expect([...a as Int8Array]).toEqual([...arrays[0] as Int8Array]);
+  }
+}
+const index = (cap: number) => random(cap + 4) - 2;
+/** two equal arrays of six random elements */
+function twinArrays(Elements: (typeof ELEMENTS)[number][2], d: string): unknown[] {
+  const a = new Elements(6) as unknown as unknown[];
+  for (let i = 0; i < a.length; i++) a[i] = value(d);
+  return [a, (a as unknown as Int8Array).slice()];
+}
+
+test("ByteBuffer element intrinsics match their AOSP bodies", async () => {
+  for (const [cls, direct] of [["java/nio/DirectByteBuffer", true], ["java/nio/HeapByteBuffer", false]] as const) {
+    const cases: Case[] = ELEMENTS.flatMap(([name, d, array]) => {
+      const n = array.BYTES_PER_ELEMENT;
+      // an unchecked index past a direct buffer's end reads memory the twins do not share
+      const unchecked = (cap: number) => (direct ? random(cap - n + 1) : index(cap));
+      return [
+        ...(direct && d === "C" ? [] : [
+          { sig: `get${name}()${d}`, args: () => [] },
+          { sig: `get${name}(I)${d}`, args: (cap: number) => [index(cap)] },
+          { sig: `put${name}(${d})Ljava/nio/ByteBuffer;`, args: () => [value(d)] },
+          { sig: `put${name}(I${d})Ljava/nio/ByteBuffer;`, args: (cap: number) => [index(cap), value(d)] },
+        ]),
+        ...(d === "B" ? [] : [
+          { sig: `get${name}Unchecked(I)${d}`, args: (cap: number) => [unchecked(cap)] },
+          { sig: `put${name}Unchecked(I${d})V`, args: (cap: number) => [unchecked(cap), value(d)] },
+        ]),
+      ];
+    });
+    for (const v of VARIANTS.filter((v) => v.direct === direct)) await differential([await byteBuffer(v), await byteBuffer(v)], cases, cls, 200);
+  }
+});
+
+test("a direct buffer's bulk array copies match their AOSP bodies", async () => {
+  for (const [, d, Elements] of ELEMENTS.slice(1)) {
+    const arrays = twinArrays(Elements, d);
+    // the copy stays within the buffer, whose neighbours the twins do not share
+    const args = (cap: number) => {
+      const length = random(8) - 1, offset = random(8) - 1;
+      return [random(Math.max(1, cap - Math.max(length, 0) * Elements.BYTES_PER_ELEMENT + 1)), random(20) ? arrays[0] : null, offset, length];
+    };
+    const cases = [{ sig: `putUnchecked(I[${d}II)V`, args }, { sig: `getUnchecked(I[${d}II)V`, args }];
+    for (const v of VARIANTS.filter((v) => v.direct && !v.readOnly))
+      await differential([await byteBuffer(v), await byteBuffer(v)], cases, "java/nio/DirectByteBuffer", 40, arrays);
+  }
+});
+
+test("typed views' element and bulk intrinsics match their AOSP bodies", async () => {
+  for (const [name, d, Elements] of ELEMENTS.slice(1)) {
+    const ret = `Ljava/nio/${name}Buffer;`, arrays = twinArrays(Elements, d);
+    const bulk = () => [random(20) ? arrays[0] : null, random(8) - 1, random(8) - 1];
+    const cases: Case[] = [
+      { sig: `get()${d}`, args: () => [] },
+      { sig: `get(I)${d}`, args: (cap) => [index(cap)] },
+      { sig: `put(${d})${ret}`, args: () => [value(d)] },
+      { sig: `put(I${d})${ret}`, args: (cap) => [index(cap), value(d)] },
+      { sig: `get([${d}II)${ret}`, args: bulk },
+      { sig: `put([${d}II)${ret}`, args: bulk },
+    ];
+    for (const v of VARIANTS) {
+      const twins = await Promise.all([0, 1].map(async () => vcall(await byteBuffer(v), `as${name}Buffer`, `()${ret}`)));
+      await differential(twins, cases, `java/nio/ByteBufferAs${name}Buffer`, 120, arrays);
+    }
+  }
 });
