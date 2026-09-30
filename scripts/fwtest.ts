@@ -700,21 +700,12 @@ await exercise("Bitmap.createBitmap + pixels", async () => {
 // through Resources, Theme, TypedArray and XmlBlock as an app reads them.
 if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk")) {
   const { Arsc } = await import("../src/android/arsc");
-  const { Resources, setFramework } = await import("../src/android/res");
+  const { Resources } = await import("../src/android/res");
   const { PackageRecord, packages } = await import("../src/android/packages");
-  const { centralDir, entryBytes } = await import("../src/jvm/natives/jzip");
   const { parseAXML } = await import("../src/android/axml");
   const { openInstall } = await import("../src/shell/install");
-  const { mountPlatformData } = await import("../src/shell/apex");
   const read = async (p: string) => new Uint8Array(await Bun.file(p).arrayBuffer());
-  // plurals select through ICU's PluralRules, which reads the apex ICU data
-  mountPlatformData((path: string, size: number) => ({ size, read: async (at: number, length: number) => (await read(`vendor/aosp${path}`)).subarray(at, at + length) }));
-  const fwApk = await read("vendor/aosp/framework-res.apk"), dir = centralDir(fwApk);
-  const fwFiles = (path: string) => { const e = dir.get(path); return e ? entryBytes(fwApk, e) : null; };
-  const fw = new Arsc(fwFiles("resources.arsc")!, fwFiles);
-  setFramework(fw);
-  packages.set("android", new PackageRecord(parseAXML(fwFiles("AndroidManifest.xml")!), new Resources(fw, {}, undefined, true),
-    "/system/framework/framework-res.apk", 1000, async () => []));
+  (await import("../src/android/framework")).installFramework(await read("vendor/aosp/framework-res.apk"));
   const app = openInstall(await read("apks/FitNotes.apk"));
   const appTable = new Arsc(app.zip["resources.arsc"], (path: string) => app.zip[path] ?? null);
   const manifest = parseAXML(app.zip["AndroidManifest.xml"]);
@@ -772,6 +763,12 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
   await exercise("Resources.getColorStateList (inflated from XML by ColorStateList)", async () => {
     const csl = await vcall(res, "getColorStateList", `(I${T})Landroid/content/res/ColorStateList;`, await id("primary_text_dark", "color", "android"), theme);
     expect("default", await vcall(csl, "getDefaultColor", "()I"), -1);
+  });
+  await exercise("AssetManager.list (the framework's assets under the app's)", async () => {
+    const am = await vcall(res, "getAssets", "()Landroid/content/res/AssetManager;");
+    const names: string[] = [...await vcall(am, "list", `(${S})[${S}`, "")];
+    for (const dir of ["geoid_map", "images", "webkit"]) if (!names.includes(dir)) throw new Error(`list("") lacks ${dir}: ${names}`);
+    expect("images/", [...await vcall(am, "list", `(${S})[${S}`, "images")].join(","), "android-logo-mask.png,android-logo-shine.png,clock_font.png,progress_font.png");
   });
 }
 

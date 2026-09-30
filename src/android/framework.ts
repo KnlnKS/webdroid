@@ -17,7 +17,7 @@ import { PLATFORM_JARS } from "../jvm/provenance";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
 import { pageShared } from "../shell/pageshared";
-import { BytesFile } from "../shell/lazyfile";
+import { BytesFile, type FileSource } from "../shell/lazyfile";
 import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
@@ -72,46 +72,53 @@ export function loadFramework(): Promise<Arsc> {
       if (!res.ok) throw new Error(`no framework package (${res.status}) — run: bun run gen-framework`);
       return new Uint8Array(await res.arrayBuffer());
     });
-    const apk = new Uint8Array(page.buffer, page.byteOffset, page.byteLength);
-    const dir = centralDir(apk);
-    const inflated = new Map<string, Uint8Array | null>();
-    const files = (path: string): Uint8Array | null => {
-      let b = inflated.get(path);
-      if (b === undefined) {
-        const e = dir.get(path);
-        inflated.set(path, b = e ? entryBytes(apk, e) : null);
-      }
-      return b;
-    };
-    const arsc = new Arsc(files("resources.arsc")!, files);
-    const manifest = files("AndroidManifest.xml");
-    if (manifest) {
-      const signingZip: Record<string, Uint8Array> = {};
-      for (const name of dir.keys()) if (/^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name)) {
-        const bytes = files(name);
-        if (bytes) signingZip[name] = bytes;
-      }
-      let pendingCertificates: Promise<Uint8Array[]> | null = null;
-      const platform = new PackageRecord(parseAXML(manifest), new Resources(arsc, {}, undefined, true),
-        "/system/framework/framework-res.apk", 1000, () => pendingCertificates ??= (async () => {
-          const certificates = await apkCertificates(apk, signingZip);
-          if (certificates.length) return certificates;
-          const response = await fetch("/vendor/platform.x509.pem");
-          if (!response.ok) throw new Error("Platform certificate unavailable");
-          const encoded = (await response.text()).replace(/-----[^-]+-----|\s/g, "");
-          return [Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))];
-        })());
-      platform.system = true;
-      packages.set(platform.pkg, platform);
-    }
-
-    // the reference device's overlays (SystemUI's Monet palette) replace these defaults
-    const colors = arsc.names("color");
-    for (const [name, argb] of Object.entries(DEVICE_COLORS)) {
-      const id = colors.get(name);
-      if (id !== undefined) arsc.overlay(id, { type: TYPE_INT_COLOR_ARGB8, data: argb | 0 });
-    }
-    setFramework(arsc);
-    return arsc;
+    return installFramework(new Uint8Array(page.buffer, page.byteOffset, page.byteLength));
   })();
+}
+
+/** framework-res.apk's table as the platform package, with the device's color overlays */
+export function installFramework(apk: Uint8Array): Arsc {
+  const dir = centralDir(apk);
+  const inflated = new Map<string, Uint8Array | null>();
+  const files = (path: string): Uint8Array | null => {
+    let b = inflated.get(path);
+    if (b === undefined) {
+      const e = dir.get(path);
+      inflated.set(path, b = e ? entryBytes(apk, e) : null);
+    }
+    return b;
+  };
+  const arsc = new Arsc(files("resources.arsc")!, files);
+  const manifest = files("AndroidManifest.xml");
+  if (manifest) {
+    const signingZip: Record<string, Uint8Array> = {};
+    for (const name of dir.keys()) if (/^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name)) {
+      const bytes = files(name);
+      if (bytes) signingZip[name] = bytes;
+    }
+    let pendingCertificates: Promise<Uint8Array[]> | null = null;
+    // every entry, inflated on its first read: asset lists and opens see the whole archive
+    const entries = new Map<string, FileSource>();
+    for (const [name, e] of dir) entries.set(name, { size: e.size, read: (at, n) => files(name)!.subarray(at, at + n) });
+    const platform = new PackageRecord(parseAXML(manifest), new Resources(arsc, {}, entries, true),
+      "/system/framework/framework-res.apk", 1000, () => pendingCertificates ??= (async () => {
+        const certificates = await apkCertificates(apk, signingZip);
+        if (certificates.length) return certificates;
+        const response = await fetch("/vendor/platform.x509.pem");
+        if (!response.ok) throw new Error("Platform certificate unavailable");
+        const encoded = (await response.text()).replace(/-----[^-]+-----|\s/g, "");
+        return [Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))];
+      })());
+    platform.system = true;
+    packages.set(platform.pkg, platform);
+  }
+
+  // the reference device's overlays (SystemUI's Monet palette) replace these defaults
+  const colors = arsc.names("color");
+  for (const [name, argb] of Object.entries(DEVICE_COLORS)) {
+    const id = colors.get(name);
+    if (id !== undefined) arsc.overlay(id, { type: TYPE_INT_COLOR_ARGB8, data: argb | 0 });
+  }
+  setFramework(arsc);
+  return arsc;
 }
