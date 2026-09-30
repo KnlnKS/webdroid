@@ -26,7 +26,7 @@ import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSour
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer, resident } from "../jvm/natives/jnio";
-import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
+import { clearGuestTimeout, guestNow, guestSleep, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
 
@@ -213,22 +213,11 @@ export function mainHandler(): JHandler {
   return _mainHandler;
 }
 
-class JHandlerExecutor extends JObj { handler = mainHandler(); }
-let _mainExecutor: JHandlerExecutor | null = null;
-export function mainExecutor(): JHandlerExecutor { return _mainExecutor ??= new JHandlerExecutor(); }
-rt.register({
-  name: "android/os/HandlerExecutor", ctor: JHandlerExecutor, ifaces: ["java/util/concurrent/Executor"],
-  methods: {
-    "<init>(Landroid/os/Handler;)V": function (this: JHandlerExecutor, handler: JHandler) {
-      if (!handler) throw rt.mkThrowable("java/lang/NullPointerException", "handler");
-      this.handler = handler;
-    },
-    "execute(Ljava/lang/Runnable;)V": function (this: JHandlerExecutor, task: unknown) {
-      if (!task) throw rt.mkThrowable("java/lang/NullPointerException", "task");
-      if (!this.handler.post(task, 0)) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "Handler is shutting down");
-    },
-  },
-});
+/** Context.getMainExecutor: AOSP's HandlerExecutor over the main handler */
+let _mainExecutor: Promise<unknown> | null = null;
+export function mainExecutor(): Promise<unknown> {
+  return _mainExecutor ??= newObj("android/os/HandlerExecutor", "(Landroid/os/Handler;)V", mainHandler());
+}
 
 rt.register({
   name: "android/os/Handler", ctor: JHandler,
@@ -326,30 +315,6 @@ rt.register({
       return after(rt.initClass(clock), () => vcall(clock.ctor, "systemUTC", "()Ljava/time/Clock;"));
     },
     "static sleep(J)V": (ms: bigint) => guestSleep(Number(ms)),
-  },
-});
-class JConditionVariable extends JObj {
-  opened = false;
-  waiters = new Set<() => void>();
-  block(ms = 0): number | Promise<number> {
-    if (this.opened) return 1;
-    if (ms < 0) return 0;
-    return new Promise((resolve) => {
-      const done = () => { clearGuestTimeout(timer); this.waiters.delete(done); resolve(this.opened ? 1 : 0); };
-      const timer = ms === 0 ? undefined : setGuestTimeout(done, ms);
-      this.waiters.add(done);
-    });
-  }
-}
-rt.register({
-  name: "android/os/ConditionVariable", ctor: JConditionVariable,
-  methods: {
-    "<init>()V": function (this: JConditionVariable) { this.opened = false; },
-    "<init>(Z)V": function (this: JConditionVariable, state: number) { this.opened = !!state; },
-    "open()V": function (this: JConditionVariable) { this.opened = true; for (const wake of this.waiters) wake(); },
-    "close()V": function (this: JConditionVariable) { this.opened = false; },
-    "block()V": function (this: JConditionVariable) { return this.block(); },
-    "block(J)Z": function (this: JConditionVariable, ms: bigint) { return this.block(Number(ms)); },
   },
 });
 class JBuild extends JObj {}
@@ -679,26 +644,6 @@ export const PARCELABLE = {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
 } as const;
-// ParcelUuid is a Parcelable box around java.util.UUID and nothing else; it carries device and
-// session identifiers across intents, so a class that is merely absent poisons the caller.
-class JParcelUuid extends JObj { uuid: unknown = null; }
-rt.register({
-  name: "android/os/ParcelUuid", ctor: JParcelUuid, ifaces: ["android/os/Parcelable"],
-  methods: {
-    ...PARCELABLE,
-    "<init>(Ljava/util/UUID;)V": function (this: JParcelUuid, u: unknown) { this.uuid = u; },
-    "static fromString(Ljava/lang/String;)Landroid/os/ParcelUuid;": (s: string) => {
-      rt.link("java/util/UUID");
-      return Object.assign(new JParcelUuid(), { uuid: uuidFromString(s) });
-    },
-    "getUuid()Ljava/util/UUID;": function (this: JParcelUuid) { return this.uuid; },
-    "toString()Ljava/lang/String;": function (this: JParcelUuid) { return vcall(this.uuid, "toString", "()Ljava/lang/String;"); },
-    "equals(Ljava/lang/Object;)Z": function (this: JParcelUuid, o: unknown) {
-      return o instanceof JParcelUuid ? vcall(this.uuid, "equals", "(Ljava/lang/Object;)Z", o.uuid) : 0;
-    },
-    "hashCode()I": function (this: JParcelUuid) { return vcall(this.uuid, "hashCode", "()I"); },
-  },
-});
 rt.markers("android/os/Parcelable");
 rt.markers("android/os/OutcomeReceiver");
 const sharedMappings = new WeakSet<JBuffer["backing"]>();
@@ -974,16 +919,8 @@ for (const n of ["android/util/CloseGuard", "dalvik/system/CloseGuard"]) {
   });
 }
 
-// ── android.os.StatFs: the browser's storage estimate for whichever path is asked about (one
+// statvfs answers the browser's storage estimate for whichever path is asked about (one
 // filesystem backs everything here), in 4K blocks.
-class JStatFs extends JObj { path = ""; total = 0; free = 0; }
-const statFs = driven(function* statFs(this: JStatFs, p: string): Gen {
-  this.path = p;
-  try {
-    const e = yield navigator.storage?.estimate?.();
-    this.total = e?.quota ?? 0; this.free = Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0));
-  } catch { /* no estimate available: report an empty filesystem */ }
-});
 const BLK = 4096n;
 const statVfsFields = ["f_bsize", "f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree", "f_favail", "f_fsid", "f_flag", "f_namemax"] as const;
 class JStructStatVfs extends JObj {
@@ -999,9 +936,10 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
 export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
-  const s = new JStatFs();
-  yield statFs.call(s, "/data");
-  return s;
+  try {
+    const e = yield navigator.storage?.estimate?.();
+    return { total: e?.quota ?? 0, free: Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0)) };
+  } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
 });
 // the emulated primary volume that is shared storage: it has no UUID of its own, and its
 // storage UUID is the internal one it lives on
@@ -1041,21 +979,6 @@ rt.register({
     ...stubs(1, "isPrimary()Z", "isEmulated()Z"),
     ...stubs(0, "isRemovable()Z", "describeContents()I"),
     "createOpenDocumentTreeIntent()Landroid/content/Intent;": () => newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.OPEN_DOCUMENT_TREE"),
-  },
-});
-rt.register({
-  name: "android/os/StatFs", ctor: JStatFs,
-  methods: {
-    "<init>(Ljava/lang/String;)V": statFs,
-    "restat(Ljava/lang/String;)V": statFs,
-    "getBlockSizeLong()J": () => BLK,
-    "getBlockSize()I": () => Number(BLK),
-    ...Object.fromEntries(([["BlockCount", "total"], ["AvailableBlocks", "free"], ["FreeBlocks", "free"]] as const).flatMap(([n, f]) => [
-      [`get${n}Long()J`, function (this: JStatFs) { return BigInt(Math.floor(this[f] / 4096)); }],
-      [`get${n}()I`, function (this: JStatFs) { return Math.floor(this[f] / 4096) | 0; }]])),
-    "getAvailableBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.free)); },
-    "getFreeBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.free)); },
-    "getTotalBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.total)); },
   },
 });
 
@@ -1752,42 +1675,6 @@ rt.register({
       return this.result;
     }),
     "static execute(Ljava/lang/Runnable;)V": (r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r),
-  },
-});
-
-class JCountDownTimer extends JObj {
-  totalMs = 0n;
-  intervalMs = 1000n;
-  timer: GuestTimer | null = null;
-  endAt = 0;
-}
-rt.register({
-  name: "android/os/CountDownTimer", ctor: JCountDownTimer,
-  methods: {
-    "<init>(JJ)V": function (this: JCountDownTimer, total: bigint, interval: bigint) {
-      this.totalMs = total;
-      this.intervalMs = interval;
-    },
-    "start()Landroid/os/CountDownTimer;": function (this: JCountDownTimer) {
-      this.endAt = guestNow() + Number(this.totalMs);
-      if (this.timer) clearGuestInterval(this.timer);
-      this.timer = setGuestInterval(() => {
-        const left = this.endAt - guestNow();
-        if (left <= 0) {
-          clearGuestInterval(this.timer!);
-          this.timer = null;
-          void vcallUncaught(this, "onFinish", "()V");
-        } else {
-          void vcallUncaught(this, "onTick", "(J)V", BigInt(Math.round(left)));
-        }
-      }, Math.max(50, Number(this.intervalMs)));
-      return this;
-    },
-    "cancel()V": function (this: JCountDownTimer) {
-      if (this.timer) { clearGuestInterval(this.timer); this.timer = null; }
-    },
-    "onTick(J)V": function () {},
-    "onFinish()V": function () {},
   },
 });
 
