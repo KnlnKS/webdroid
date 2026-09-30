@@ -337,10 +337,6 @@ test("optional device services report their unavailable state", async () => {
   expect(scall("android/os/VibrationEffect", "createPredefined", "(I)Landroid/os/VibrationEffect;", 0)).not.toBeNull();
   expect(await newObj("android/media/session/MediaController$Callback")).not.toBeNull();
   expect(await newObj("android/media/MediaRoute2ProviderService")).not.toBeNull();
-
-  const range = await newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", "b", "d");
-  expect(await vcall(range, "contains", "(Ljava/lang/Comparable;)Z", "c")).toBe(1);
-  expect(await vcall(range, "clamp", "(Ljava/lang/Comparable;)Ljava/lang/Comparable;", "z")).toBe("d");
 });
 
 test("sets retain their intersection and a non-HDR display reports no modes", async () => {

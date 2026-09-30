@@ -1,12 +1,9 @@
-// android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics, LruCache,
-// TypedValue, Size and FloatMath.
+// android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics and TypedValue.
 
-import { rt, JObj, type NativeSpec, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, after, stringHash, linkInit, newObj, stringOf } from "../jvm/natives/jlang";
-import { jeq } from "../jvm/natives/jutil";
-import { jclsNameOf } from "./apphost";
+import { vcall, linkInit } from "../jvm/natives/jlang";
 import { PATTERNS } from "./pattern-data";
 
 rt.register({
@@ -45,16 +42,6 @@ rt.register({
     "static println_native(IILjava/lang/String;Ljava/lang/String;)I": (_buffer: number, p: number, tag: string, msg: string) => logAt(p)(tag, msg),
   },
 });
-class JLogPrinter extends JObj { priority = 3; tag = ""; }
-const initLogPrinter = function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; };
-rt.register({ name: "android/util/LogPrinter", ctor: JLogPrinter, ifaces: ["android/util/Printer"], methods: {
-  "<init>(ILjava/lang/String;)V": initLogPrinter,
-  "<init>(ILjava/lang/String;I)V": initLogPrinter,
-  "println(Ljava/lang/String;)V": function (this: JLogPrinter, message: string) {
-    logAt(this.priority)(this.tag, message);
-  },
-} });
-
 class JSparseArray extends JObj {
   m = new Map<number | bigint, unknown>();
   sorted: (number | bigint)[] | null = null;
@@ -129,83 +116,6 @@ rt.register({
   },
 });
 
-class JPair extends JObj { first: unknown = null; second: unknown = null; }
-function pairHash(value: unknown): number | Promise<number> {
-  if (value == null) return 0;
-  return typeof value === "string" ? stringHash(value) : vcall(value, "hashCode", "()I");
-}
-class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
-async function initRange(this: JRange, lower: unknown, upper: unknown) {
-  if (lower === null || upper === null) return rt.npe();
-  if (await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", upper) > 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "lower must be less than or equal to upper");
-  this.lower = lower; this.upper = upper;
-}
-async function createRange(lower: unknown, upper: unknown): Promise<JRange> {
-  const range = new JRange(); await initRange.call(range, lower, upper); return range;
-}
-async function combineRange(this: JRange, lower: unknown, upper: unknown, extend: boolean, other?: JRange) {
-  if (lower === null || upper === null) return rt.npe();
-  const lo = await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", this.lower);
-  const hi = await vcall(upper, "compareTo", "(Ljava/lang/Object;)I", this.upper);
-  if (lo <= 0 && hi >= 0) return extend ? other ?? createRange(lower, upper) : this;
-  if (lo >= 0 && hi <= 0) return extend ? this : other ?? createRange(lower, upper);
-  return createRange((extend ? lo >= 0 : lo <= 0) ? this.lower : lower, (extend ? hi <= 0 : hi >= 0) ? this.upper : upper);
-}
-rt.register({ name: "android/util/Range", ctor: JRange, typeVars: "T", methods: {
-  "<init>(Ljava/lang/Comparable;Ljava/lang/Comparable;)V": initRange,
-  "static create(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;": createRange,
-  "getLower()Ljava/lang/Comparable;": function (this: JRange) { return this.lower; },
-  "getUpper()Ljava/lang/Comparable;": function (this: JRange) { return this.upper; },
-  "contains(Ljava/lang/Comparable;)Z": driven(function* (this: JRange, value: unknown): Gen {
-    if (value === null) return rt.npe();
-    return +((yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower)) >= 0 && (yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper)) <= 0);
-  }),
-  "contains(Landroid/util/Range;)Z": driven(function* (this: JRange, range: JRange | null): Gen {
-    if (!range) return rt.npe();
-    return +((yield vcall(range.lower, "compareTo", "(Ljava/lang/Object;)I", this.lower)) >= 0 && (yield vcall(range.upper, "compareTo", "(Ljava/lang/Object;)I", this.upper)) <= 0);
-  }),
-  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": driven(function* (this: JRange, value: unknown): Gen {
-    if (value === null) return rt.npe();
-    if ((yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower)) < 0) return this.lower;
-    return (yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper)) > 0 ? this.upper : value;
-  }),
-  ...Object.fromEntries(["intersect", "extend"].flatMap(name => [
-    [`${name}(Landroid/util/Range;)Landroid/util/Range;`, function (this: JRange, range: JRange | null) {
-      if (!range) return rt.npe();
-      return combineRange.call(this, range.lower, range.upper, name === "extend", range);
-    }],
-    [`${name}(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;`, function (this: JRange, lower: unknown, upper: unknown) { return combineRange.call(this, lower, upper, name === "extend"); }],
-  ])),
-  "extend(Ljava/lang/Comparable;)Landroid/util/Range;": function (this: JRange, value: unknown) { return combineRange.call(this, value, value, true); },
-  "equals(Ljava/lang/Object;)Z": driven(function* (this: JRange, other: unknown): Gen {
-    return +(other instanceof JRange && (this === other || (yield vcall(this.lower, "equals", "(Ljava/lang/Object;)Z", other.lower)) && (yield vcall(this.upper, "equals", "(Ljava/lang/Object;)Z", other.upper))));
-  }),
-  "hashCode()I": driven(function* (this: JRange): Gen { return (Math.imul(31, 31 + (yield vcall(this.lower, "hashCode", "()I"))) + (yield vcall(this.upper, "hashCode", "()I"))) | 0; }),
-  "toString()Ljava/lang/String;": driven(function* (this: JRange): Gen { return `[${yield vcall(this.lower, "toString", "()Ljava/lang/String;")}, ${yield vcall(this.upper, "toString", "()Ljava/lang/String;")}]`; }),
-} });
-rt.register({
-  name: "android/util/Pair", ctor: JPair,
-  fields: ["first", "second"],
-  methods: {
-    "<init>(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JPair, a: unknown, b: unknown) { this.first = a; this.second = b; },
-    "static create(Ljava/lang/Object;Ljava/lang/Object;)Landroid/util/Pair;": (a: unknown, b: unknown) => {
-      const p = new JPair(); p.first = a; p.second = b; return p;
-    },
-    "equals(Ljava/lang/Object;)Z": function (this: JPair, other: unknown) {
-      if (!(other instanceof JPair)) return 0;
-      return after(jeq(this.first, other.first), (first) => first ? jeq(this.second, other.second) : 0);
-    },
-    "hashCode()I": function (this: JPair) {
-      return after(pairHash(this.first), (first) => after(pairHash(this.second), (second) => (first ^ second) | 0));
-    },
-    "toString()Ljava/lang/String;": driven(function* (this: JPair): Gen {
-      const first = this.first == null ? "null" : yield vcall(this.first, "toString", "()Ljava/lang/String;");
-      const second = this.second == null ? "null" : yield vcall(this.second, "toString", "()Ljava/lang/String;");
-      return `Pair{${first} ${second}}`;
-    }),
-  },
-});
-
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
 export class JProperty extends JObj { type: unknown = null; name = ""; }
@@ -251,109 +161,6 @@ rt.register({
   fields: ["density", "densityDpi", "scaledDensity", "widthPixels", "heightPixels", "xdpi", "ydpi", "noncompatWidthPixels",
     "noncompatHeightPixels", "noncompatDensity", "noncompatDensityDpi", "noncompatScaledDensity", "noncompatXdpi", "noncompatYdpi", "fontScaleConverter"],
   methods: { "<init>()V": function () {} },
-});
-
-// android.util.LruCache, as AOSP writes it: keys compare by equals() in an access-ordered
-// LinkedHashMap, and size, eviction and replacement go through the overridable sizeOf() and
-// entryRemoved(). SQLiteConnection finalizes its cached statements in entryRemoved, so a cache
-// that drops entries silently leaves the database unclosable.
-const O = "Ljava/lang/Object;";
-class JLruCache extends JObj {
-  map: unknown = null; max = 0; size = 0;
-  hits = 0; misses = 0; puts = 0; creates = 0; evictions = 0;
-}
-const safeSizeOf = driven(function* safeSizeOf(c: JLruCache, k: unknown, v: unknown): Gen<number> {
-  const n: number = yield vcall(c, "sizeOf", `(${O}${O})I`, k, v);
-  if (n < 0) throw rt.mkThrowable("java/lang/IllegalStateException", `Negative size: ${yield stringOf(k)}=${yield stringOf(v)}`);
-  return n;
-});
-const entryRemoved = (c: JLruCache, evicted: boolean, k: unknown, old: unknown, next: unknown) =>
-  vcall(c, "entryRemoved", `(Z${O}${O}${O})V`, +evicted, k, old, next);
-const trimToSize = driven(function* trimToSize(c: JLruCache, max: number): Gen<void> {
-  for (;;) {
-    const empty: number = yield vcall(c.map, "isEmpty", "()Z");
-    if (c.size < 0 || (empty && c.size !== 0))
-      throw rt.mkThrowable("java/lang/IllegalStateException", `${jclsNameOf(c)}.sizeOf() is reporting inconsistent results!`);
-    if (c.size <= max || empty) return;
-    const eldest = yield vcall(yield vcall(yield vcall(c.map, "entrySet", "()Ljava/util/Set;"), "iterator", "()Ljava/util/Iterator;"), "next", `()${O}`);
-    const k = yield vcall(eldest, "getKey", `()${O}`), v = yield vcall(eldest, "getValue", `()${O}`);
-    yield vcall(c.map, "remove", `(${O})${O}`, k);
-    c.size -= yield safeSizeOf(c, k, v);
-    c.evictions++;
-    yield entryRemoved(c, true, k, v, null);
-  }
-});
-rt.register({
-  name: "android/util/LruCache", ctor: JLruCache,
-  methods: {
-    "<init>(I)V": async function (this: JLruCache, n: number) {
-      if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
-      this.max = n;
-      this.map = await newObj("java/util/LinkedHashMap", "(IFZ)V", 0, 0.75, 1);
-    },
-    "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown): Gen {
-      if (k == null) throw rt.mkThrowable("java/lang/NullPointerException", "key == null");
-      let mapValue = yield vcall(this.map, "get", `(${O})${O}`, k);
-      if (mapValue != null) { this.hits++; return mapValue; }
-      this.misses++;
-      const created = yield vcall(this, "create", `(${O})${O}`, k);
-      if (created == null) return null;
-      this.creates++;
-      mapValue = yield vcall(this.map, "put", `(${O}${O})${O}`, k, created);
-      // a value put while create() ran wins
-      if (mapValue != null) {
-        yield vcall(this.map, "put", `(${O}${O})${O}`, k, mapValue);
-        yield entryRemoved(this, false, k, created, mapValue);
-        return mapValue;
-      }
-      this.size += yield safeSizeOf(this, k, created);
-      yield trimToSize(this, this.max);
-      return created;
-    }),
-    "create(Ljava/lang/Object;)Ljava/lang/Object;": () => null,
-    "sizeOf(Ljava/lang/Object;Ljava/lang/Object;)I": () => 1,
-    "entryRemoved(ZLjava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V": () => {},
-    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown, v: unknown): Gen {
-      if (k == null || v == null) throw rt.mkThrowable("java/lang/NullPointerException", "key == null || value == null");
-      this.puts++;
-      this.size += yield safeSizeOf(this, k, v);
-      const previous = yield vcall(this.map, "put", `(${O}${O})${O}`, k, v);
-      if (previous != null) {
-        this.size -= yield safeSizeOf(this, k, previous);
-        yield entryRemoved(this, false, k, previous, v);
-      }
-      yield trimToSize(this, this.max);
-      return previous;
-    }),
-    "remove(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown): Gen {
-      if (k == null) throw rt.mkThrowable("java/lang/NullPointerException", "key == null");
-      const previous = yield vcall(this.map, "remove", `(${O})${O}`, k);
-      if (previous != null) {
-        this.size -= yield safeSizeOf(this, k, previous);
-        yield entryRemoved(this, false, k, previous, null);
-      }
-      return previous;
-    }),
-    "trimToSize(I)V": function (this: JLruCache, n: number) { return trimToSize(this, n); },
-    "evictAll()V": function (this: JLruCache) { return trimToSize(this, -1); },
-    "resize(I)V": function (this: JLruCache, n: number) {
-      if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
-      this.max = n;
-      return trimToSize(this, n);
-    },
-    "snapshot()Ljava/util/Map;": function (this: JLruCache) { return newObj("java/util/LinkedHashMap", "(Ljava/util/Map;)V", this.map); },
-    "size()I": function (this: JLruCache) { return this.size; },
-    "maxSize()I": function (this: JLruCache) { return this.max; },
-    "hitCount()I": function (this: JLruCache) { return this.hits; },
-    "missCount()I": function (this: JLruCache) { return this.misses; },
-    "putCount()I": function (this: JLruCache) { return this.puts; },
-    "createCount()I": function (this: JLruCache) { return this.creates; },
-    "evictionCount()I": function (this: JLruCache) { return this.evictions; },
-    "toString()Ljava/lang/String;": function (this: JLruCache) {
-      const accesses = this.hits + this.misses;
-      return `LruCache[maxSize=${this.max},hits=${this.hits},misses=${this.misses},hitRate=${accesses ? Math.trunc(100 * this.hits / accesses) : 0}%]`;
-    },
-  },
 });
 
 // android.util.TypedValue: the complex-unit math is here
@@ -422,105 +229,3 @@ export function complexToPx(data: number, dm: { density: number; scaledDensity: 
     default: return v;
   }
 }
-
-// ── android.util.Size / SizeF — immutable value types (Bundle.putSize/getSize reference them)
-for (const [n, num] of [["Size", (v: number) => v | 0], ["SizeF", (v: number) => v]] as const) {
-  class JSize extends JObj { w = 0; h = 0; }
-  const desc = n === "Size" ? "II" : "FF";
-  rt.register({
-    name: "android/util/" + n, ctor: JSize, ifaces: ["java/io/Serializable"],
-    methods: {
-      [`<init>(${desc})V`]: function (this: JSize, w: number, h: number) { this.w = num(w); this.h = num(h); },
-      [`getWidth()${desc[0]}`]: function (this: JSize) { return this.w; },
-      [`getHeight()${desc[0]}`]: function (this: JSize) { return this.h; },
-      "toString()Ljava/lang/String;": function (this: JSize) { return `${this.w}x${this.h}`; },
-      "equals(Ljava/lang/Object;)Z": function (this: JSize, o: JSize) {
-        return o instanceof JSize && o.w === this.w && o.h === this.h ? 1 : 0;
-      },
-      "hashCode()I": function (this: JSize) { return (this.w * 31 + this.h) | 0; },
-      [`static parse${n}(Ljava/lang/String;)Landroid/util/${n};`]: (s: string) => {
-        const m = /^(-?[\d.]+)\s*[*x]\s*(-?[\d.]+)$/.exec(s ?? "");
-        if (!m) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid " + n + ": " + s);
-        const o = rt.make("android/util/" + n) as JSize;
-        o.w = num(parseFloat(m[1])); o.h = num(parseFloat(m[2]));
-        return o;
-      },
-    },
-  });
-}
-
-class JRational extends JObj {
-  n = 0; d = 1;
-  constructor(n = 0, d = 1) { super(); this.init(n, d); }
-  init(n: number, d: number) {
-    if (d < 0) { n = -n | 0; d = -d | 0; }
-    if (!d) { this.n = Math.sign(n); this.d = 0; }
-    else if (!n) { this.n = 0; this.d = 1; }
-    else { const g = rationalGcd(n, d); this.n = n / g | 0; this.d = d / g | 0; }
-  }
-  intValue() { return this.d ? this.n / this.d | 0 : this.n > 0 ? 0x7fffffff : this.n < 0 ? -0x80000000 : 0; }
-}
-function rationalGcd(a: number, b: number): number {
-  while (b) [a, b] = [b, a % b];
-  return Math.abs(a) | 0;
-}
-function rationalCompare(this: JRational, other: JRational): number {
-  if (other == null) rt.npe();
-  if (!(other instanceof JRational)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected Rational");
-  if (this.n === other.n && this.d === other.d) return 0;
-  if (!this.d && !this.n) return 1;
-  if (!other.d && !other.n) return -1;
-  if (!this.d && this.n > 0 || !other.d && other.n < 0) return 1;
-  if (!this.d && this.n < 0 || !other.d && other.n > 0) return -1;
-  const a = this.n * other.d, b = other.n * this.d;
-  if (Number.isSafeInteger(a) && Number.isSafeInteger(b)) return a < b ? -1 : a > b ? 1 : 0;
-  const aa = BigInt(this.n) * BigInt(other.d), bb = BigInt(other.n) * BigInt(this.d);
-  return aa < bb ? -1 : aa > bb ? 1 : 0;
-}
-const rationalNaN = new JRational(0, 0), rationalInf = new JRational(1, 0), rationalNegInf = new JRational(-1, 0);
-rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Number", ifaces: ["java/lang/Comparable"],
-  statics: { NaN: rationalNaN, POSITIVE_INFINITY: rationalInf, NEGATIVE_INFINITY: rationalNegInf, ZERO: new JRational() },
-  methods: {
-    "<init>(II)V": JRational.prototype.init,
-    "getNumerator()I": function (this: JRational) { return this.n; },
-    "getDenominator()I": function (this: JRational) { return this.d; },
-    "isNaN()Z": function (this: JRational) { return !this.n && !this.d ? 1 : 0; },
-    "isInfinite()Z": function (this: JRational) { return this.n && !this.d ? 1 : 0; },
-    "isFinite()Z": function (this: JRational) { return this.d ? 1 : 0; },
-    "isZero()Z": function (this: JRational) { return !this.n && this.d ? 1 : 0; },
-    "doubleValue()D": function (this: JRational) { return this.n / this.d; },
-    "floatValue()F": function (this: JRational) { return Math.fround(Math.fround(this.n) / Math.fround(this.d)); },
-    "intValue()I": JRational.prototype.intValue,
-    "longValue()J": function (this: JRational) { return this.d || !this.n ? BigInt(this.intValue()) : this.n > 0 ? 0x7fffffffffffffffn : -0x8000000000000000n; },
-    "shortValue()S": function (this: JRational) { return this.intValue() << 16 >> 16; },
-    "byteValue()B": function (this: JRational) { return this.intValue() << 24 >> 24; },
-    "equals(Ljava/lang/Object;)Z": function (this: JRational, other: unknown) { return other instanceof JRational && this.n === other.n && this.d === other.d ? 1 : 0; },
-    "hashCode()I": function (this: JRational) { return this.d ^ (this.n << 16 | this.n >>> 16); },
-    "toString()Ljava/lang/String;": function (this: JRational) { return this.d ? `${this.n}/${this.d}` : this.n > 0 ? "Infinity" : this.n < 0 ? "-Infinity" : "NaN"; },
-    "compareTo(Landroid/util/Rational;)I": rationalCompare,
-    "compareTo(Ljava/lang/Object;)I": rationalCompare,
-    "static gcd(II)I": rationalGcd,
-    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": driven(function* (s: string): Gen {
-      if (s == null) rt.npe();
-      if (s === "NaN") return rationalNaN;
-      if (s === "Infinity") return rationalInf;
-      if (s === "-Infinity") return rationalNegInf;
-      const sep = s.includes(":") ? s.indexOf(":") : s.indexOf("/");
-      if (sep < 0) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid Rational: " + s);
-      const cls = rt.link("java/lang/Integer").ctor;
-      return new JRational(yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep)), yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1)));
-    }),
-  },
-});
-
-// ── android.util.FloatMath — deprecated, but older game loops still link it
-const fm1 = (fn: (x: number) => number) => (x: number) => Math.fround(fn(x));
-const fm2 = (fn: (a: number, b: number) => number) => (a: number, b: number) => Math.fround(fn(a, b));
-rt.register({
-  name: "android/util/FloatMath", ctor: class extends JObj {},
-  methods: {
-    "static sin(F)F": fm1(Math.sin), "static cos(F)F": fm1(Math.cos), "static sqrt(F)F": fm1(Math.sqrt),
-    "static floor(F)F": fm1(Math.floor), "static ceil(F)F": fm1(Math.ceil), "static exp(F)F": fm1(Math.exp),
-    "static pow(FF)F": fm2(Math.pow), "static hypot(FF)F": fm2(Math.hypot),
-  },
-});

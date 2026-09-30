@@ -85,20 +85,6 @@ describe("abstract-sequential-list", () => {
   });
 });
 
-describe("android-pair", () => {
-  test("Android Pair compares nested values and hashes equal pairs equally", async () => {
-    const pair = (a: unknown, b: unknown) => newObj("android/util/Pair", "(Ljava/lang/Object;Ljava/lang/Object;)V", a, b);
-    const first = await pair("outer", await pair("left", "right"));
-    const same = await pair("outer", await pair("left", "right"));
-    const different = await pair("outer", await pair("left", "other"));
-
-    expect(await vcall(first, "equals", "(Ljava/lang/Object;)Z", same)).toBe(1);
-    expect(await vcall(first, "equals", "(Ljava/lang/Object;)Z", different)).toBe(0);
-    expect(await vcall(first, "hashCode", "()I")).toBe(await vcall(same, "hashCode", "()I"));
-    expect(await vcall(first, "toString", "()Ljava/lang/String;")).toBe("Pair{outer Pair{left right}}");
-  });
-});
-
 describe("array-binary-search", () => {
   test("Arrays.binarySearch awaits a comparator and reports insertion points", async () => {
     const comparator = {
@@ -350,23 +336,8 @@ describe("enumset", () => {
   });
 });
 
-describe("lru-cache", () => {
+describe("access-ordered-map", () => {
   const O = "Ljava/lang/Object;";
-
-  test("LruCache resize evicts least-recent entries and snapshot is independent", async () => {
-    const cache = await newObj("android/util/LruCache", "(I)V", 3);
-    for (const key of ["a", "b", "c"]) await vcall(cache, "put", `(${O}${O})${O}`, key, key);
-    await vcall(cache, "get", `(${O})${O}`, "a");
-    await vcall(cache, "resize", "(I)V", 2);
-    expect(await vcall(cache, "get", `(${O})${O}`, "b")).toBe(null);
-    expect(await vcall(cache, "hitCount", "()I")).toBe(1);
-    expect(await vcall(cache, "missCount", "()I")).toBe(1);
-    expect(await vcall(cache, "evictionCount", "()I")).toBe(1);
-    const snapshot = await vcall(cache, "snapshot", "()Ljava/util/Map;");
-    await vcall(cache, "remove", `(${O})${O}`, "a");
-    expect(await vcall(snapshot, "get", `(${O})${O}`, "a")).toBe("a");
-    await expect(vcallAsync(cache, "resize", "(I)V", 0)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
-  });
 
   test("access order moves entries on put and get, custom-equals keys included", async () => {
     class Key extends JObj {}
@@ -383,11 +354,6 @@ describe("lru-cache", () => {
     expect(await keys()).toEqual([key, "a", "b"]);
     await vcall(map, "get", `(${O})${O}`, key);
     expect(await keys()).toEqual(["a", "b", key]);
-
-    const cache = await newObj("android/util/LruCache", "(I)V", 2);
-    for (const k of ["a", "b", "a", "c"]) await vcall(cache, "put", `(${O}${O})${O}`, k, k);
-    expect(await vcall(cache, "get", `(${O})${O}`, "b")).toBe(null);
-    expect(await vcall(cache, "get", `(${O})${O}`, "a")).toBe("a");
   });
 });
 
@@ -555,48 +521,6 @@ describe("map-interfaces", () => {
       expect(rt.iof(map, "java/util/concurrent/ConcurrentMap")).toBe(name.endsWith("/ConcurrentHashMap") ? 1 : 0);
     }
     expect(rt.iof(rt.make("java/util/TreeMap"), "java/util/SortedMap")).toBe(1);
-  });
-});
-
-describe("range", () => {
-  const range = (lo: string, hi: string) => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", lo, hi);
-  test("ranges intersect, extend and clamp while preserving contained range identity", async () => {
-    const outer = await range("a", "z"), inner = await range("c", "f");
-    expect(await vcall(outer, "intersect", "(Landroid/util/Range;)Landroid/util/Range;", inner)).toBe(inner);
-    expect(await vcall(inner, "extend", "(Landroid/util/Range;)Landroid/util/Range;", outer)).toBe(outer);
-    expect(await vcall(inner, "clamp", "(Ljava/lang/Comparable;)Ljava/lang/Comparable;", "z")).toBe("f");
-    expect(await vcall(inner, "contains", "(Ljava/lang/Comparable;)Z", "c")).toBe(1);
-    expect(await vcall(inner, "contains", "(Landroid/util/Range;)Z", outer)).toBe(0);
-    const overlap = await vcall(inner, "intersect", "(Landroid/util/Range;)Landroid/util/Range;", await range("e", "h"));
-    expect(await vcall(overlap, "toString", "()Ljava/lang/String;")).toBe("[e, f]");
-    expect(await vcall(overlap, "equals", "(Ljava/lang/Object;)Z", await range("e", "f"))).toBe(1);
-    let error: unknown;
-    try { await vcall(inner, "intersect", "(Landroid/util/Range;)Landroid/util/Range;", await range("k", "m")); } catch (e) { error = e; }
-    expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBe(1);
-  });
-});
-
-describe("rational", () => {
-  const rational = (n: number, d: number) => newObj("android/util/Rational", "(II)V", n, d);
-
-  test("Rational reduces values and preserves exact order near integer limits", async () => {
-    const a = await rational(6, -8), b = await rational(-3, 4);
-    expect(await vcall(a, "toString", "()Ljava/lang/String;")).toBe("-3/4");
-    expect(await vcall(a, "equals", "(Ljava/lang/Object;)Z", b)).toBe(1);
-    expect(await vcall(a, "hashCode", "()I")).toBe(await vcall(b, "hashCode", "()I"));
-    expect(await vcall(await rational(2147483646, 2147483647), "compareTo", "(Landroid/util/Rational;)I", await rational(2147483645, 2147483646))).toBe(1);
-    const parsed = await vcall(rt.link("android/util/Rational").ctor, "parseRational", "(Ljava/lang/String;)Landroid/util/Rational;", "3:+6");
-    expect(await vcall(parsed, "doubleValue", "()D")).toBe(0.5);
-  });
-
-  test("Rational orders NaN and saturates infinite conversions", async () => {
-    const nan = await rational(0, 0), inf = await rational(5, 0), neg = await rational(-2, 0);
-    expect(await vcall(nan, "equals", "(Ljava/lang/Object;)Z", await rational(0, 0))).toBe(1);
-    expect(await vcall(nan, "compareTo", "(Landroid/util/Rational;)I", inf)).toBe(1);
-    expect(await vcall(neg, "compareTo", "(Landroid/util/Rational;)I", await rational(-500, 1))).toBe(-1);
-    expect(await vcall(inf, "intValue", "()I")).toBe(2147483647);
-    expect(await vcall(neg, "longValue", "()J")).toBe(-9223372036854775808n);
-    expect(await vcall(nan, "intValue", "()I")).toBe(0);
   });
 });
 

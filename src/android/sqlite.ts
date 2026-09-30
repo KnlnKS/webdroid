@@ -4,7 +4,7 @@ import initSqlJs, { type Database, type Statement } from "sql.js";
 import { i8, u8 } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool, newObj } from "../jvm/natives/jlang";
 import { JMap, newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { csText } from "../jvm/natives/jchars";
 import { JAbstractCursor } from "./abstractcursor";
@@ -524,10 +524,8 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     this.scheduleSave();
   },
   "getPath()Ljava/lang/String;": function (this: JSQLiteDatabase) { return this.path; },
-  "getAttachedDbs()Ljava/util/List;": function (this: JSQLiteDatabase) {
-    const p = rt.make("android/util/Pair");
-    p.first = "main"; p.second = this.path;
-    return newArrayList([p]);
+  "getAttachedDbs()Ljava/util/List;": async function (this: JSQLiteDatabase) {
+    return newArrayList([await newObj("android/util/Pair", "(Ljava/lang/Object;Ljava/lang/Object;)V", "main", this.path)]);
   },
   "isReadOnly()Z": function (this: JSQLiteDatabase) { return this.readOnly ? 1 : 0; },
   "setForeignKeyConstraintsEnabled(Z)V": function (this: JSQLiteDatabase, on: number) {
