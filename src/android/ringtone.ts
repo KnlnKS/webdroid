@@ -2,10 +2,10 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { vcall, javaFormat } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, javaFormat } from "../jvm/natives/jlang";
 import { mkUri, uriParts, type JUri } from "./net";
 import { currentResources, frameworkString } from "./res";
-import { type JAudioAttributes, type JMediaPlayer, setLegacyStreamType, mpLoad, mpReset, mpStart } from "./media";
+import { type JMediaPlayer, mpLoad, mpReset, mpStart } from "./media";
 
 // A default URI names a Settings.System entry, and a device with none set has nothing to play for
 // it; any other URI that cannot be opened plays the framework's fallback ring, as AOSP's Ringtone does.
@@ -49,8 +49,17 @@ const ringtoneTitle = driven(function* (context: unknown, uri: JUri | null, foll
 });
 class JRingtone extends JObj {
   context: unknown = null; uri: JUri | null = null; player: JMediaPlayer | null = null;
-  streamType = 2; attributes: JAudioAttributes | null = null; looping = false; volume = 1;
+  attributes: unknown = null; looping = false; volume = 1;
 }
+const AAB = "Landroid/media/AudioAttributes$Builder;";
+/** a Ringtone plays notification-ringtone sonification until given other attributes, as AOSP's does */
+const ringtoneAttributes = driven(function* (r: JRingtone): Gen {
+  if (r.attributes) return r.attributes;
+  const builder = yield newObj("android/media/AudioAttributes$Builder");
+  yield vcall(builder, "setUsage", "(I)" + AAB, 6);
+  yield vcall(builder, "setContentType", "(I)" + AAB, 4);
+  return r.attributes = yield vcall(builder, "build", "()Landroid/media/AudioAttributes;");
+});
 const setRingtoneUri = driven(function* (this: JRingtone, uri: JUri | null): Gen {
   if (this.player) mpReset(this.player);
   this.uri = uri; this.player = null;
@@ -94,19 +103,20 @@ rt.register({ name: "android/media/Ringtone", ctor: JRingtone,
       if (this.player?.media) this.player.media.volume = this.volume;
     },
     "getVolume()F": function (this: JRingtone) { return this.volume; },
-    "setStreamType(I)V": function (this: JRingtone, type: number) {
-      const attrs: JAudioAttributes = rt.make("android/media/AudioAttributes");
-      setLegacyStreamType(attrs, type);
-      this.streamType = type; this.attributes = attrs;
-    },
-    "getStreamType()I": function (this: JRingtone) { return this.streamType; },
-    "setAudioAttributes(Landroid/media/AudioAttributes;)V": function (this: JRingtone, attributes: JAudioAttributes | null) {
+    "setStreamType(I)V": driven(function* (this: JRingtone, type: number): Gen {
+      yield scall("android/media/PlayerBase", "deprecateStreamTypeForPlayback", "(ILjava/lang/String;Ljava/lang/String;)V", type, "Ringtone", "setStreamType()");
+      const builder = yield newObj("android/media/AudioAttributes$Builder");
+      yield vcall(builder, "setInternalLegacyStreamType", "(I)" + AAB, type);
+      this.attributes = yield vcall(builder, "build", "()Landroid/media/AudioAttributes;");
+    }),
+    "getStreamType()I": driven(function* (this: JRingtone): Gen {
+      return scall("android/media/AudioAttributes", "toLegacyStreamType", "(Landroid/media/AudioAttributes;)I", yield ringtoneAttributes(this));
+    }),
+    "setAudioAttributes(Landroid/media/AudioAttributes;)V": function (this: JRingtone, attributes: unknown) {
       if (!attributes) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid null AudioAttributes for Ringtone");
       this.attributes = attributes;
     },
-    "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JRingtone) {
-      return this.attributes ??= Object.assign(rt.make("android/media/AudioAttributes") as JAudioAttributes, { usage: 6, contentType: 4 });
-    },
+    "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JRingtone) { return ringtoneAttributes(this); },
   },
 });
 rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {},

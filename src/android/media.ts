@@ -1,7 +1,8 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, stringHash, vcallUncaught } from "../jvm/natives/jlang";
+import { jarray } from "../jvm/abi";
+import { vcall, scall, newObj, stringHash, vcallUncaught } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
@@ -223,111 +224,55 @@ rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataB
   "putRating(Ljava/lang/String;Landroid/media/Rating;)Landroid/media/MediaMetadata$Builder;": putMetadata,
   "build()Landroid/media/MediaMetadata;": function (this: JMediaMetadataBuilder) { const value = new JMediaMetadata(); value.values = new Map(this.value.values); return value; },
 } });
-export class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
-rt.register({
-  name: "android/media/AudioAttributes", ctor: JAudioAttributes, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "getUsage()I": function (this: JAudioAttributes) { return this.usage; },
-    "getContentType()I": function (this: JAudioAttributes) { return this.contentType; },
-    "getFlags()I": function (this: JAudioAttributes) { return this.flags & 0x111; },
-    "getAllFlags()I": function (this: JAudioAttributes) { return this.flags & 0x1f7ff; },
-    "getAllowedCapturePolicy()I": function (this: JAudioAttributes) { return this.flags & 0x1000 ? 3 : this.flags & 0x400 ? 2 : 1; },
-    "areHapticChannelsMuted()Z": function (this: JAudioAttributes) { return this.flags & 0x800 ? 1 : 0; },
-    "isContentSpatialized()Z": function (this: JAudioAttributes) { return this.flags & 0x4000 ? 1 : 0; },
-    "getSpatializationBehavior()I": function (this: JAudioAttributes) { return this.flags & 0x8000 ? 1 : 0; },
-    "equals(Ljava/lang/Object;)Z": function (this: JAudioAttributes, other: unknown) {
-      return other instanceof JAudioAttributes && this.usage === other.usage && this.contentType === other.contentType && this.flags === other.flags ? 1 : 0;
-    },
-    "hashCode()I": function (this: JAudioAttributes) { return ((this.contentType * 31 + this.usage) * 31 + this.flags) | 0; },
-  },
-});
-class JAudioAttributesBuilder extends JObj { attrs = new JAudioAttributes(); }
-/** the usage and content type AudioAttributes.Builder.setLegacyStreamType maps a stream type to */
-export function setLegacyStreamType(attrs: JAudioAttributes, stream: number): void {
-  switch (stream) {
-    case 0: case 6: attrs.contentType = 1; attrs.usage = 2; break;
-    case 1: attrs.contentType = 4; attrs.usage = 13; break;
-    case 2: attrs.contentType = 4; attrs.usage = 6; break;
-    case 3: attrs.contentType = 2; attrs.usage = 1; break;
-    case 4: attrs.contentType = 4; attrs.usage = 4; break;
-    case 5: attrs.contentType = 4; attrs.usage = 5; break;
-    case 7: attrs.contentType = 4; attrs.usage = 13; attrs.flags |= 1; break;
-    case 8: attrs.contentType = 4; attrs.usage = 3; break;
-    case 9: attrs.contentType = 1; attrs.usage = 11; break;
-    default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid stream type " + stream);
-  }
-}
-rt.register({
-  name: "android/media/AudioAttributes$Builder", ctor: JAudioAttributesBuilder,
-  methods: {
-    "<init>()V": function () {},
-    "setFlags(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, flags: number) { this.attrs.flags |= flags & 0x1d1; return this; },
-    "setLegacyStreamType(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, stream: number) { setLegacyStreamType(this.attrs, stream); return this; },
-    "setAllowedCapturePolicy(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, policy: number) {
-      if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid capture policy " + policy);
-      this.attrs.flags = (this.attrs.flags & ~0x1400) | (policy === 3 ? 0x1400 : policy === 2 ? 0x400 : 0); return this;
-    },
-    "setHapticChannelsMuted(Z)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, muted: number) { this.attrs.flags = (this.attrs.flags & ~0x800) | (muted ? 0x800 : 0); return this; },
-    "setIsContentSpatialized(Z)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, spatialized: number) { this.attrs.flags = (this.attrs.flags & ~0x4000) | (spatialized ? 0x4000 : 0); return this; },
-    "setSpatializationBehavior(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, behavior: number) {
-      if (behavior !== 0 && behavior !== 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid spatialization behavior " + behavior);
-      this.attrs.flags = (this.attrs.flags & ~0x8000) | (behavior ? 0x8000 : 0); return this;
-    },
-    "setUsage(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, usage: number) {
-      if (usage < 0 || usage > 16) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid usage " + usage);
-      this.attrs.usage = usage; return this;
-    },
-    "setContentType(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, type: number) {
-      if (type < 0 || type > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid content type " + type);
-      this.attrs.contentType = type; return this;
-    },
-    "build()Landroid/media/AudioAttributes;": function (this: JAudioAttributesBuilder) {
-      const attrs = Object.assign(new JAudioAttributes(), this.attrs);
-      if (attrs.usage >= 7 && attrs.usage <= 9) attrs.usage = 5;
-      return attrs;
-    },
-  },
-});
 
-class JAudioFocusRequest extends JObj {
-  gain = 0;
-  attrs = Object.assign(new JAudioAttributes(), { usage: 1 });
-  listener: unknown = null;
-  handler: unknown = null;
-  acceptsDelayed = false;
-  pausesOnDuck = false;
-}
-class JAudioFocusRequestBuilder extends JObj { request = new JAudioFocusRequest(); }
-function setFocusGain(request: JAudioFocusRequest, gain: number) {
-  if (gain < 1 || gain > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal audio focus gain type " + gain);
-  request.gain = gain;
-}
-rt.register({ name: "android/media/AudioFocusRequest", ctor: JAudioFocusRequest, methods: {
-  "getFocusGain()I": function (this: JAudioFocusRequest) { return this.gain; },
-  "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JAudioFocusRequest) { return this.attrs; },
-  "willPauseWhenDucked()Z": function (this: JAudioFocusRequest) { return +this.pausesOnDuck; },
-  "acceptsDelayedFocusGain()Z": function (this: JAudioFocusRequest) { return +this.acceptsDelayed; },
-  "getOnAudioFocusChangeListener()Landroid/media/AudioManager$OnAudioFocusChangeListener;": function (this: JAudioFocusRequest) { return this.listener; },
-} });
-rt.register({ name: "android/media/AudioFocusRequest$Builder", ctor: JAudioFocusRequestBuilder, methods: {
-  "<init>(I)V": function (this: JAudioFocusRequestBuilder, gain: number) { setFocusGain(this.request, gain); },
-  "setFocusGain(I)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, gain: number) { setFocusGain(this.request, gain); return this; },
-  "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, attrs: JAudioAttributes | null) {
-    if (!attrs) throw rt.mkThrowable("java/lang/NullPointerException", "Illegal null AudioAttributes");
-    this.request.attrs = attrs; return this;
+// The audio policy's product strategies, as the reference AVD's engine configuration lists them:
+// [name, id, [volume group, legacy stream, [usage, content type, flags, tag][]][]]. AudioAttributes
+// maps legacy stream types and volume streams through them.
+const PRODUCT_STRATEGIES: [string, number, [number, number, [number, number, number, string?][]][]][] = [
+  ["STRATEGY_PHONE", 15, [[14, 0, [[2, 0, 0]]], [4, 6, [[0, 0, 4]]]]],
+  ["STRATEGY_SONIFICATION", 16, [[11, 2, [[6, 0, 0]]], [2, 4, [[4, 0, 0]]]]],
+  ["STRATEGY_ENFORCED_AUDIBLE", 17, [[6, 7, [[0, 0, 1]]]]],
+  ["STRATEGY_ACCESSIBILITY", 18, [[1, 10, [[11, 0, 0]]]]],
+  ["STRATEGY_SONIFICATION_RESPECTFUL", 19, [[8, 5, [[5, 0, 0], [10, 0, 0]]]]],
+  ["STRATEGY_MEDIA", 20, [[3, 11, [[16, 1, 0]]], [7, 3, [[1, 0, 0], [14, 0, 0], [16, 0, 0], [12, 0, 0], [0, 0, 0]]], [12, 1, [[13, 0, 0]]]]],
+  ["STRATEGY_DTMF", 21, [[5, 8, [[3, 0, 0]]]]],
+  ["STRATEGY_CALL_ASSISTANT", 22, [[23, 14, [[17, 0, 0]]]]],
+  ["STRATEGY_TRANSMITTED_THROUGH_SPEAKER", 24, [[13, 9, [[0, 0, 8], [0, 1997, 0]]]]],
+  ["STRATEGY_REROUTING", 25, [[10, 12, [[15, 0, 0, "reserved_internal_strategy"]]]]],
+  ["STRATEGY_PATCH", 26, [[9, 13, [[0, 0, 0, "reserved_internal_strategy"]]]]],
+];
+const AAB = "Landroid/media/AudioAttributes$Builder;";
+// the audio framework's channel and sample rate limits, as the reference AVD reports them
+rt.registerJnis("android/media/AudioSystem", {
+  "native_getMaxChannelCount()I": () => 12,
+  "native_getMaxSampleRate()I": () => 192000,
+  "native_getMinSampleRate()I": () => 4000,
+});
+rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
+  "native_list_audio_product_strategies(Ljava/util/ArrayList;)I": async (list: unknown) => {
+    for (const [name, id, groups] of PRODUCT_STRATEGIES) {
+      const built = [];
+      for (const [volumeGroup, stream, attributes] of groups) {
+        const all = [];
+        for (const [usage, content, flags, tag] of attributes) {
+          const builder = await newObj("android/media/AudioAttributes$Builder");
+          const system = await scall("android/media/AudioAttributes", "isSystemUsage", "(I)Z", usage);
+          await vcall(builder, system ? "setSystemUsage" : "setUsage", "(I)" + AAB, usage);
+          await vcall(builder, "setInternalContentType", "(I)" + AAB, content);
+          await vcall(builder, "replaceFlags", "(I)" + AAB, flags);
+          if (tag) await vcall(builder, "addTag", "(Ljava/lang/String;)" + AAB, tag);
+          all.push(await vcall(builder, "build", "()Landroid/media/AudioAttributes;"));
+        }
+        built.push(await newObj("android/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup", "(II[Landroid/media/AudioAttributes;)V",
+          volumeGroup, stream, jarray(all, "Landroid/media/AudioAttributes;")));
+      }
+      await vcall(list, "add", "(Ljava/lang/Object;)Z", await newObj("android/media/audiopolicy/AudioProductStrategy",
+        "(Ljava/lang/String;I[Landroid/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup;)V", name, id,
+        jarray(built, "Landroid/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup;")));
+    }
+    return 0;
   },
-  "setOnAudioFocusChangeListener(Landroid/media/AudioManager$OnAudioFocusChangeListener;)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, listener: unknown) {
-    if (!listener) throw rt.mkThrowable("java/lang/NullPointerException", "Illegal null focus listener");
-    this.request.listener = listener; this.request.handler = null; return this;
-  },
-  "setOnAudioFocusChangeListener(Landroid/media/AudioManager$OnAudioFocusChangeListener;Landroid/os/Handler;)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, listener: unknown, handler: unknown) {
-    if (!listener || !handler) throw rt.mkThrowable("java/lang/NullPointerException", "Illegal null focus listener or handler");
-    this.request.listener = listener; this.request.handler = handler; return this;
-  },
-  "setAcceptsDelayedFocusGain(Z)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, value: number) { this.request.acceptsDelayed = !!value; return this; },
-  "setWillPauseWhenDucked(Z)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, value: number) { this.request.pausesOnDuck = !!value; return this; },
-  "build()Landroid/media/AudioFocusRequest;": function (this: JAudioFocusRequestBuilder) { return Object.assign(new JAudioFocusRequest(), this.request); },
-} });
+});
 
 const players = new Set<JMediaPlayer>();
 const pools = new Set<JSoundPool>();
@@ -342,7 +287,7 @@ export function isMusicActive(): number {
  *  video frame the element shows is presented to that surface. */
 export class JMediaPlayer extends JObj {
   media: HTMLMediaElement | null = null;
-  attributes: JAudioAttributes | null = null;
+  attributes: unknown = null;
   looping = false;
   prepared = false;
   preparedL: unknown = null;
@@ -481,7 +426,7 @@ rt.register({
       this.looping = !!l;
       if (this.media) this.media.loop = !!l;
     },
-    "setAudioAttributes(Landroid/media/AudioAttributes;)V": function (this: JMediaPlayer, attributes: JAudioAttributes | null) {
+    "setAudioAttributes(Landroid/media/AudioAttributes;)V": function (this: JMediaPlayer, attributes: unknown) {
       if (attributes === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "AudioAttributes must not be null");
       this.attributes = attributes;
     },
@@ -526,7 +471,7 @@ let actx: AudioContext | null = null;
 type Stream = { src: AudioBufferSourceNode; gain: GainNode; prio: number; rate: number };
 class JSoundPool extends JObj {
   maxStreams = 1;
-  audioAttributes = new JAudioAttributes();
+  audioAttributes: unknown = null;
   sounds = new Map<number, AudioBuffer | null>();
   streams = new Map<number, Stream>();
   nextId = 1;
@@ -610,19 +555,19 @@ rt.register({
     "setOnLoadCompleteListener(Landroid/media/SoundPool$OnLoadCompleteListener;)V": function (this: JSoundPool, l: unknown) { this.loadL = l; },
   },
 });
-class JSoundPoolBuilder extends JObj { max = 1; attrs: JAudioAttributes | null = null; }
+class JSoundPoolBuilder extends JObj { max = 1; attrs: unknown = null; }
 rt.register({
   name: "android/media/SoundPool$Builder", ctor: JSoundPoolBuilder,
   methods: {
     "<init>()V": function () {},
     "setMaxStreams(I)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, n: number) { this.max = n; return this; },
-    "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, attrs: JAudioAttributes | null) {
+    "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, attrs: unknown) {
       if (!attrs) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid null AudioAttributes");
       this.attrs = attrs; return this;
     },
     "build()Landroid/media/SoundPool;": function (this: JSoundPoolBuilder) {
       const p = new JSoundPool(); p.maxStreams = this.max;
-      if (this.attrs) p.audioAttributes = this.attrs; else p.audioAttributes.usage = 1;
+      p.audioAttributes = this.attrs;
       pools.add(p); return p;
     },
   },

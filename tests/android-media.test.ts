@@ -16,7 +16,9 @@ describe("audio-attributes", () => {
     expect(await vcall(builder, "setLegacyStreamType", "(I)Landroid/media/AudioAttributes$Builder;", 3)).toBe(builder);
     const attrs = await vcall(builder, "build", "()Landroid/media/AudioAttributes;");
     expect(await vcall(attrs, "getUsage", "()I")).toBe(1);
-    expect(await vcall(attrs, "getContentType", "()I")).toBe(2);
+    // the reference AVD's media strategy carries no content type for STREAM_MUSIC
+    expect(await vcall(attrs, "getContentType", "()I")).toBe(0);
+    expect(await vcall(attrs, "getVolumeControlStream", "()I")).toBe(3);
   });
 
   test("AudioAttributes rejects the accessibility legacy stream", async () => {
