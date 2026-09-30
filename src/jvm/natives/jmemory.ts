@@ -120,6 +120,10 @@ export function guestAddress(address: bigint): number | bigint | Promise<number 
 }
 
 const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
+/** n bytes at a native address, as a zlib or checksum native reads or writes them (an external
+ *  mapping's once resident, read only) */
+export const memoryAt = (address: bigint, n: number): Uint8Array | Promise<Uint8Array> =>
+  isExternal(address) ? after(pagesIn(address, n), () => externalBytes(address, n)) : mem.bytes(physical(address), n);
 
 /** the bytes of `count` elements of `array` from `offset`, bounds-checked as JNI's Get/SetArrayRegion */
 function region(array: Elements | null, offset: number, count: number): Uint8Array {
@@ -153,8 +157,7 @@ export function setBufferAddress(read: (buffer: object) => bigint): void { buffe
 function objectBytes(o: Elements | object | null, at: number, n: number): Uint8Array | Promise<Uint8Array> {
   if (o === null) return rt.npe();
   if (ArrayBuffer.isView(o)) return new Uint8Array(o.buffer, o.byteOffset + at, n);
-  const address = bufferAddress!(o) + BigInt(at);
-  return isExternal(address) ? after(pagesIn(address, n), () => externalBytes(address, n)) : mem.bytes(physical(address), n);
+  return memoryAt(bufferAddress!(o) + BigInt(at), n);
 }
 const external = <T>(address: bigint, width: number, get: (view: DataView) => T): T | Promise<T> => {
   const [region, at] = regionAt(address);

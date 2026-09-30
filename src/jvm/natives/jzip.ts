@@ -1,258 +1,181 @@
-// java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
-// central-directory index, GZIPInputStream over a drained source.
-import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
-import { rt, JObj, driven, type Gen } from "../runtime";
+// java.util.zip's natives, and the zip reader the shell loads apks and resources with.
+// Inflater and Deflater run zlib itself (pako is a line-for-line port), since callers depend on
+// exactly how much input a call consumed: okio's InflaterSource and GZIP trailers read the rest
+// back through getRemaining. The Java classes above them are libcore's.
+import { Zip, ZipDeflate, ZipPassThrough, inflateSync, type DeflateOptions } from "fflate";
+import * as zInflate from "pako/lib/zlib/inflate.js";
+import * as zDeflate from "pako/lib/zlib/deflate.js";
+import ZStream from "pako/lib/zlib/zstream.js";
+import { rt, JObj, driven, declaredField, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
-import { vcall, newObj, after, defineException, checkFromIndexSize } from "./jlang";
+import { vcall, newObj, after, checkFromIndexSize } from "./jlang";
 import { pathOf, readStreamFully, heldByteReads, filterOut, setFilterOut } from "./jio";
 import { vfs } from "../../shell/vfs";
-import { type JBuffer, limit, remainingBytes, resident, setPosition } from "./jnio";
 import { mkEnumeration, newArrayList } from "./jcoll";
 import { readFully, type FileSource } from "../../shell/lazyfile";
+import { handle, deref, release } from "../../android/handles";
+import { memoryAt } from "./jmemory";
 
-type Codec = Inflate | Unzlib | Deflate | Zlib | Gzip;
-const collect = (z: { out: Uint8Array[]; done: boolean }) => (d: Uint8Array, final: boolean) => { if (d.length) z.out.push(d); if (final) z.done = true; };
-class JInflater extends JObj {
-  raw = false;
-  st: Codec | null = null;
-  out: Uint8Array[] = [];
-  done = false;
-  fed = 0;
-  written = 0;
-  /** input bytes not consumed: what sits past the final block (a gzip trailer) */
-  rem = 0;
-  ensure() {
-    if (!this.st) {
-      this.st = this.raw ? new Inflate() : new Unzlib();
-      this.st.ondata = collect(this);
+const Z_OK = 0, Z_STREAM_END = 1, Z_NEED_DICT = 2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5, Z_PARTIAL_FLUSH = 1, Z_BLOCK = 5;
+type Stream = InstanceType<typeof ZStream> & { state: any; msg: string; adler: number };
+const EMPTY = new Uint8Array(0);
+const stream = (h: bigint) => deref<Stream>(h);
+const view = (a: Int8Array, off: number, len: number) => { checkFromIndexSize(off, len, a.length, "java/lang/ArrayIndexOutOfBoundsException"); return u8(a, off, len); };
+/** one zlib call over [input, output): the counts it consumed and produced */
+function run(s: Stream, input: Uint8Array, output: Uint8Array, call: (s: Stream) => number): [number, number, number] {
+  s.input = input; s.next_in = 0; s.avail_in = input.length;
+  s.output = output; s.next_out = 0; s.avail_out = output.length;
+  const code = call(s);
+  s.input = EMPTY; s.output = EMPTY;
+  return [code, input.length - s.avail_in, output.length - s.avail_out];
+}
+const pack = (read: number, written: number, a: boolean, b: boolean) =>
+  BigInt(read) | BigInt(written) << 31n | (a ? 1n << 62n : 0n) | (b ? 1n << 63n : 0n);
+
+// ── Inflater (Inflater.c): Z_PARTIAL_FLUSH, input and output counts packed with finished and needDict
+let consumedFields: [string, string] | undefined;
+function inflateBytes(this: JObj, h: bigint, input: Uint8Array, output: Uint8Array): bigint {
+  const [code, read, written] = run(stream(h), input, output, (s) => zInflate.inflate(s, Z_PARTIAL_FLUSH));
+  switch (code) {
+    case Z_STREAM_END: case Z_OK: case Z_NEED_DICT: return pack(read, written, code === Z_STREAM_END, code === Z_NEED_DICT);
+    case Z_BUF_ERROR: return 0n;
+    case Z_DATA_ERROR: {
+      const [inField, outField] = consumedFields ??= [declaredField("java/util/zip/Inflater", "inputConsumed"), declaredField("java/util/zip/Inflater", "outputConsumed")];
+      (this as unknown as Record<string, number>)[inField] = read; (this as unknown as Record<string, number>)[outField] = written;
+      throw rt.mkThrowable("java/util/zip/DataFormatException", stream(h).msg || null);
     }
-    return this.st;
-  }
-  // Java keeps input handed over after the end of stream (okio reads the trailer back through
-  // getRemaining); fflate would throw on it. It parks the unconsumed tail in `p` and only ever
-  // tests "last block decoded" as `s.f && !s.l` internally, so that test is repeated here.
-  //
-  // getRemaining() must only ever count bytes past the END of the deflate stream. Mid-stream
-  // fflate also parks a partial tail in `p` — but it keeps those bytes and decodes them once
-  // more input arrives, so reporting them as unconsumed makes a caller that computes
-  // "consumed = given - getRemaining()" (okio's InflaterSource.releaseBytesAfterInflate) hand
-  // the very same bytes back on the next refill. That both wedges the reader into a one-byte-
-  // per-refill loop and feeds the codec duplicate input, which surfaces far away as
-  // "invalid distance" / "invalid block type" out of a gzipped HTTP response.
-  feed(b: Uint8Array) {
-    if (this.done) { this.rem = b.length; return; }
-    const st = this.ensure() as any;
-    st.push(b);
-    if (st.s.f && !st.s.l) this.done = true;
-    // fflate trims `p` to the byte the bit cursor sits in and keeps the leftover bit offset in
-    // `s.p`. A stream that ended mid-byte has therefore consumed p[0] as far as the container
-    // is concerned, and counting it as remaining puts the caller one byte early into the gzip
-    // trailer — which reads as a CRC that is the real one shifted left by eight bits.
-    this.rem = this.done ? Math.max(0, (st.p?.length ?? 0) - ((st.s.p & 7) ? 1 : 0)) : 0;
-    this.fed += b.length - this.rem;
-  }
-  inflate(b: Int8Array, off: number, len: number) {
-    const n = drain(this, b, off, len);
-    this.written += n;
-    return n;
+    default: throw rt.mkThrowable("java/lang/InternalError", stream(h).msg || null);
   }
 }
-function drain(z: { out: Uint8Array[] }, b: Int8Array, off: number, len: number): number {
-  let n = 0;
-  while (n < len && z.out.length) {
-    const c = z.out[0];
-    const take = Math.min(len - n, c.length);
-    u8(b, off + n, take).set(c.subarray(0, take));
-    n += take;
-    if (take === c.length) z.out.shift(); else z.out[0] = c.subarray(take);
-  }
-  return n;
+const buffer = (address: bigint, n: number) => memoryAt(address, n);
+function setDictionary(h: bigint, dictionary: Uint8Array, set: (s: Stream, d: Uint8Array) => number): void {
+  const s = stream(h), code = set(s, dictionary);
+  if (code === Z_OK) return;
+  throw rt.mkThrowable(code === Z_DATA_ERROR || code === -2 ? "java/lang/IllegalArgumentException" : "java/lang/InternalError", s.msg || null);
 }
-rt.register({
-  name: "java/util/zip/Inflater", ctor: JInflater,
-  methods: {
-    "<init>()V": function (this: JInflater) { this.raw = false; },
-    "<init>(Z)V": function (this: JInflater, nowrap: number) { this.raw = !!nowrap; },
-    "setInput([BII)V": function (this: JInflater, b: Int8Array, off: number, len: number) {
-      this.feed(u8(b, off, len).slice());
-    },
-    "setInput([B)V": function (this: JInflater, b: Int8Array) {
-      this.feed(u8(b).slice());
-    },
-    "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return this.inflate(b, off, len); },
-    "inflate([B)I": function (this: JInflater, b: Int8Array) { return this.inflate(b, 0, b.length); },
-    // The input is consumed eagerly, so "the input buffer is empty" is only true once the
-    // output it produced has been drained too. Unconsumed input past the stream (a gzip
-    // trailer) also counts: okio's refill treats needsInput as a promise that getRemaining is 0.
-    "needsInput()Z": function (this: JInflater) { return this.out.length || this.rem ? 0 : 1; },
-    "needsDictionary()Z": () => 0,
-    // end of stream = the BFINAL block has been fully decoded (fflate only flags `final` when
-    // the caller says so, which a chunked Java feeder never does) — Inflater.finished() is what
-    // streaming readers loop on
-    "finished()Z": function (this: JInflater) {
-      const s = (this.st as unknown as { s?: { f?: number; l?: unknown } } | null)?.s;
-      return (this.done || (s?.f && !s.l)) && !this.out.length ? 1 : 0;
-    },
-    "getRemaining()I": function (this: JInflater) { return this.rem; },
-    "getBytesRead()J": function (this: JInflater) { return BigInt(this.fed); },
-    "getBytesWritten()J": function (this: JInflater) { return BigInt(this.written); },
-    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; this.written = 0; this.rem = 0; },
-    "end()V": function (this: JInflater) { this.st = null; this.out = []; },
+rt.registerJnis("java/util/zip/Inflater", {
+  "init(Z)J": (nowrap: number) => {
+    const s = new ZStream() as Stream;
+    if (zInflate.inflateInit2(s, nowrap ? -15 : 15) !== Z_OK) throw rt.mkThrowable("java/lang/InternalError", s.msg || null);
+    return handle(s);
   },
+  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, view(b, off, len), zInflate.inflateSetDictionary),
+  "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(buffer(address, len), (d) => setDictionary(h, d, zInflate.inflateSetDictionary)),
+  "inflateBytesBytes(J[BII[BII)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number) {
+    return inflateBytes.call(this, h, view(i, io, il), view(o, oo, ol));
+  },
+  "inflateBytesBuffer(J[BIIJI)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number) {
+    return after(buffer(out, ol), (o) => inflateBytes.call(this, h, view(i, io, il), o));
+  },
+  "inflateBufferBytes(JJI[BII)J": function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
+    return after(buffer(input, il), (i) => inflateBytes.call(this, h, i, view(o, oo, ol)));
+  },
+  "inflateBufferBuffer(JJIJI)J": function (this: JObj, h: bigint, input: bigint, il: number, out: bigint, ol: number) {
+    return after(buffer(input, il), (i) => after(buffer(out, ol), (o) => inflateBytes.call(this, h, i, o)));
+  },
+  "getAdler(J)I": (h: bigint) => stream(h).adler | 0,
+  // pako's updatewindow, unlike zlib's, does not size a kept window again after a reset zeroed
+  // wsize, so the next stream would lose every back-reference: size it here
+  "reset(J)V": (h: bigint) => {
+    const s = stream(h);
+    zInflate.inflateReset(s);
+    if (s.state.window) s.state.wsize = 1 << s.state.wbits;
+  },
+  "end(J)V": (h: bigint) => { zInflate.inflateEnd(stream(h)); release(h); },
 });
 
-class JDeflater extends JObj {
-  raw = false;
-  options: DeflateOptions = {};
-  st: Codec | null = null;
-  out: Uint8Array[] = [];
-  done = false;
-  fed = 0;
-  pending: Uint8Array | null = null;
-  ensure() {
-    if (!this.st) {
-      this.st = this.raw ? new Deflate(this.options) : new Zlib(this.options);
-      this.st.ondata = collect(this);
+// ── Deflater (Deflater.c): `params` & 1 asks for deflateParams(level = params >> 3, strategy)
+const CONFIG = [[0, 0, 0, 0], [4, 4, 8, 4], [4, 5, 16, 8], [4, 6, 32, 32], [4, 4, 16, 16], [8, 16, 32, 32],
+  [8, 16, 128, 128], [8, 32, 128, 256], [32, 128, 258, 1024], [32, 258, 258, 4096]]; // good, lazy, nice, chain
+const group = (level: number) => level === 0 ? 0 : level <= 3 ? 1 : 2;
+/** zlib 1.2.12's deflateParams, which pako does not port, over pako's deflate state */
+function deflateParams(strm: Stream, level: number, strategy: number): number {
+  const s = strm.state;
+  if (level === -1) level = 6;
+  if (level < 0 || level > 9 || strategy < 0 || strategy > 4) return -2;
+  if ((strategy !== s.strategy || group(s.level) !== group(level)) && s.last_flush !== -2) {
+    const code = zDeflate.deflate(strm, Z_BLOCK);
+    if (code === -2) return code;
+    if (strm.avail_in || s.strstart - s.block_start + s.lookahead) return Z_BUF_ERROR;
+  }
+  if (s.level !== level) {
+    if (s.level === 0 && s.matches !== 0) {
+      if (s.matches === 1) slideHash(s); else s.head.fill(0);
+      s.matches = 0;
     }
-    return this.st;
+    s.level = level;
+    [s.good_match, s.max_lazy_match, s.nice_match, s.max_chain_length] = CONFIG[level];
   }
-  feed(bytes: Uint8Array, final = false) {
-    this.ensure().push(bytes, final); this.fed += bytes.length;
-  }
-  level(value: number): void {
-    if (value !== -1 && (value < 0 || value > 9 || !Number.isInteger(value))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression level");
-    this.options.level = value === -1 ? undefined : value as DeflateOptions["level"];
-  }
+  s.strategy = strategy;
+  return Z_OK;
 }
-rt.register({
-  name: "java/util/zip/Deflater", ctor: JDeflater,
-  methods: {
-    "<init>()V": function () {},
-    "<init>(I)V": function (this: JDeflater, level: number) { this.level(level); },
-    "<init>(IZ)V": function (this: JDeflater, level: number, nowrap: number) { this.level(level); this.raw = !!nowrap; },
-    "setLevel(I)V": function (this: JDeflater, level: number) { this.level(level); },
-    "setInput([BII)V": function (this: JDeflater, b: Int8Array, off: number, len: number) {
-      this.pending = u8(b, off, len).slice();
-    },
-    "finish()V": function (this: JDeflater) {
-      this.feed(this.pending ?? new Uint8Array(0), true);
-      this.pending = null;
-    },
-    "deflate([BII)I": function (this: JDeflater, b: Int8Array, off: number, len: number) {
-      if (this.pending) { this.feed(this.pending); this.pending = null; }
-      return drain(this, b, off, len);
-    },
-    "finished()Z": function (this: JDeflater) { return this.done && !this.out.length ? 1 : 0; },
-    "needsInput()Z": function (this: JDeflater) { return this.pending ? 0 : 1; },
-    "getBytesRead()J": function (this: JDeflater) { return BigInt(this.fed); },
-    "end()V": function (this: JDeflater) { this.st = null; this.out = []; },
-    "reset()V": function (this: JDeflater) { this.st = null; this.out = []; this.done = false; this.pending = null; this.fed = 0; },
+function slideHash(s: { w_size: number; head: Uint16Array; prev: Uint16Array }): void {
+  for (const table of [s.head, s.prev]) for (let i = 0; i < table.length; i++) table[i] = table[i] >= s.w_size ? table[i] - s.w_size : 0;
+}
+function deflateBytes(h: bigint, input: Uint8Array, output: Uint8Array, flush: number, params: number): bigint {
+  const setParams = params & 1;
+  const [code, read, written] = run(stream(h), input, output, setParams ? (s) => deflateParams(s, params >> 3, params >> 1 & 3) : (s) => zDeflate.deflate(s, flush));
+  if (setParams) {
+    if (code === Z_OK || code === Z_BUF_ERROR) return pack(read, written, false, code !== Z_OK);
+    throw rt.mkThrowable("java/lang/InternalError", "deflateParams failed");
+  }
+  if (code === Z_STREAM_END || code === Z_OK) return pack(read, written, code === Z_STREAM_END, false);
+  if (code === Z_BUF_ERROR) return 0n;
+  throw rt.mkThrowable("java/lang/InternalError", stream(h).msg || null);
+}
+rt.registerJnis("java/util/zip/Deflater", {
+  "init(IIZ)J": (level: number, strategy: number, nowrap: number) => {
+    const s = new ZStream() as Stream;
+    const code = zDeflate.deflateInit2(s, level, 8, nowrap ? -15 : 15, 8, strategy);
+    if (code !== Z_OK) throw rt.mkThrowable(code === -2 ? "java/lang/IllegalArgumentException" : "java/lang/InternalError", s.msg || null);
+    return handle(s);
   },
+  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, view(b, off, len), zDeflate.deflateSetDictionary),
+  "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(buffer(address, len), (d) => setDictionary(h, d, zDeflate.deflateSetDictionary)),
+  "deflateBytesBytes(J[BII[BIIII)J": (h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
+    deflateBytes(h, view(i, io, il), view(o, oo, ol), flush, params),
+  "deflateBytesBuffer(J[BIIJIII)J": (h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
+    after(buffer(out, ol), (o) => deflateBytes(h, view(i, io, il), o, flush, params)),
+  "deflateBufferBytes(JJI[BIIII)J": (h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
+    after(buffer(input, il), (i) => deflateBytes(h, i, view(o, oo, ol), flush, params)),
+  "deflateBufferBuffer(JJIJIII)J": (h: bigint, input: bigint, il: number, out: bigint, ol: number, flush: number, params: number) =>
+    after(buffer(input, il), (i) => after(buffer(out, ol), (o) => deflateBytes(h, i, o, flush, params))),
+  "getAdler(J)I": (h: bigint) => stream(h).adler | 0,
+  "reset(J)V": (h: bigint) => { zDeflate.deflateReset(stream(h)); },
+  "end(J)V": (h: bigint) => { zDeflate.deflateEnd(stream(h)); release(h); },
 });
 
-// DeflaterOutputStream: feeds its Deflater and forwards whatever it produces to the wrapped
-// stream; close() finishes the deflate stream first (the zlib trailer), as the JDK does.
-class JDeflaterOut extends JObj { def = new JDeflater(); closed = false; }
-async function pump(s: JDeflaterOut) {
-  for (const c of s.def.out) await vcall(filterOut(s), "write", "([BII)V", i8(c), 0, c.length);
-  s.def.out = [];
+// ── CRC32 (zlib's, slicing by 8) and Adler32
+const CRC = Array.from({ length: 8 }, () => new Int32Array(256));
+for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ c >>> 1 : c >>> 1; CRC[0][n] = c; }
+for (let n = 0; n < 256; n++) for (let t = 1; t < 8; t++) CRC[t][n] = CRC[t - 1][n] >>> 8 ^ CRC[0][CRC[t - 1][n] & 255];
+export function crc32(crc: number, b: Uint8Array): number {
+  const [t0, t1, t2, t3, t4, t5, t6, t7] = CRC;
+  let c = ~crc, i = 0;
+  for (const end = b.length & ~7; i < end; i += 8) {
+    const lo = c ^ (b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24);
+    c = t7[lo & 255] ^ t6[lo >>> 8 & 255] ^ t5[lo >>> 16 & 255] ^ t4[lo >>> 24] ^ t3[b[i + 4]] ^ t2[b[i + 5]] ^ t1[b[i + 6]] ^ t0[b[i + 7]];
+  }
+  for (; i < b.length; i++) c = t0[(c ^ b[i]) & 255] ^ c >>> 8;
+  return ~c;
 }
-function dosInit(this: JDeflaterOut, o: unknown, def?: JDeflater | null) { setFilterOut(this, o); if (def) this.def = def; }
-rt.register({
-  name: "java/util/zip/DeflaterOutputStream", ctor: JDeflaterOut, sup: "java/io/FilterOutputStream",
-  fields: { def: "def" },
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": dosInit,
-    "<init>(Ljava/io/OutputStream;Z)V": dosInit,
-    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;)V": dosInit,
-    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;I)V": dosInit,
-    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;Z)V": dosInit,
-    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;IZ)V": dosInit,
-    "write(I)V": function (this: JDeflaterOut, b: number) { return vcall(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
-    "write([BII)V": driven(function* (this: JDeflaterOut, b: Int8Array, off: number, len: number): Gen {
-      if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
-      if (len > 0) { this.def.feed(u8(b, off, len).slice()); yield pump(this); }
-    }),
-    "finish()V": driven(function* (this: JDeflaterOut): Gen {
-      if (!this.def.done) { this.def.feed(new Uint8Array(0), true); yield pump(this); }
-    }),
-    "flush()V": function (this: JDeflaterOut) { return vcall(filterOut(this), "flush", "()V"); },
-    "close()V": driven(function* (this: JDeflaterOut): Gen {
-      if (this.closed) return;
-      this.closed = true;
-      yield vcall(this, "finish", "()V");
-      yield vcall(filterOut(this), "close", "()V");
-    }),
-  },
-});
-class JGzipDeflater extends JDeflater { ensure() { return this.st ??= Object.assign(new Gzip(), { ondata: collect(this) }); } }
-rt.register({
-  name: "java/util/zip/GZIPOutputStream", ctor: class extends JDeflaterOut { def = new JGzipDeflater(); }, sup: "java/util/zip/DeflaterOutputStream",
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": dosInit, "<init>(Ljava/io/OutputStream;I)V": dosInit,
-    "<init>(Ljava/io/OutputStream;Z)V": dosInit, "<init>(Ljava/io/OutputStream;IZ)V": dosInit,
-  },
-});
-
-// ── Checksum: CRC32, CRC32C and Adler32 share every update overload
-const crcTable = (poly: number) => Uint32Array.from({ length: 256 }, (_, i) => {
-  let c = i;
-  for (let k = 0; k < 8; k++) c = c & 1 ? poly ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-interface ChecksumAlgo { init: number; step(state: number, b: Uint8Array, off: number, len: number): number; value(state: number): number }
-const crc = (table: Uint32Array): ChecksumAlgo => ({
-  init: 0xffffffff,
-  step(c, b, off, len) { for (let i = off; i < off + len; i++) c = table[(c ^ b[i]) & 0xff] ^ (c >>> 8); return c >>> 0; },
-  value: (c) => (c ^ 0xffffffff) >>> 0,
-});
-const adler32: ChecksumAlgo = {
-  init: 1,
-  step(state, buf, off, len) {
-    let a = state & 0xffff, b = state >>> 16;
-    for (let i = off; i < off + len; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
-    return ((b << 16) | a) >>> 0;
-  },
-  value: (state) => state,
-};
-class JChecksum extends JObj { state = 0; declare algo: ChecksumAlgo; }
-const CHECKSUMS: [string, ChecksumAlgo][] = [["CRC32", crc(crcTable(0xedb88320))], ["CRC32C", crc(crcTable(0x82f63b78))], ["Adler32", adler32]];
-const updateBytes = function (this: JChecksum, b: Int8Array, off: number, len: number) {
-  if (!b) rt.npe();
-  checkFromIndexSize(off, len, b.length, "java/lang/ArrayIndexOutOfBoundsException");
-  this.state = this.algo.step(this.state, u8(b), off, len);
-};
-/** update a Checksum, ours directly and an app's own through its update([BII)V */
-const feed = (c: unknown, b: Int8Array, off: number, len: number) =>
-  c instanceof JChecksum ? updateBytes.call(c, b, off, len) : vcall(c, "update", "([BII)V", b, off, len);
-// Checksum's defaults, which an app's own implementation inherits too
-const checksumMethods = {
-  "update([B)V": function (this: unknown, b: Int8Array) { if (!b) rt.npe(); return feed(this, b, 0, b.length); },
-  "update([BII)V": updateBytes,
-  "update(Ljava/nio/ByteBuffer;)V": function (this: unknown, bb: JBuffer) {
-    return after(resident(bb), () => {
-      const bytes = remainingBytes(bb), n = bytes.length;
-      setPosition(bb, limit(bb));
-      if (this instanceof JChecksum) this.state = this.algo.step(this.state, bytes, 0, n);
-      else return vcall(this, "update", "([BII)V", new Int8Array(bytes), 0, n);
-    });
-  },
-};
-rt.register({ name: "java/util/zip/Checksum", ctor: class extends JObj {}, methods: checksumMethods });
-for (const [name, algo] of CHECKSUMS) {
-  rt.register({
-    name: "java/util/zip/" + name, ctor: class extends JChecksum { algo = algo; state = algo.init; }, ifaces: ["java/util/zip/Checksum"],
-    methods: {
-      ...checksumMethods,
-      "<init>()V": function () {},
-      "update(I)V": function (this: JChecksum, v: number) { this.state = this.algo.step(this.state, Uint8Array.of(v), 0, 1); },
-      "getValue()J": function (this: JChecksum) { return BigInt(this.algo.value(this.state)); },
-      "reset()V": function (this: JChecksum) { this.state = this.algo.init; },
-    },
-  });
+function adler32(adler: number, b: Uint8Array): number {
+  let a = adler & 0xffff, s = adler >>> 16;
+  for (let i = 0; i < b.length;) {
+    // 5552 bytes keep the sums below 2^32 between reductions, as zlib's NMAX
+    for (const end = Math.min(b.length, i + 5552); i < end; i++) { a += b[i]; s += a; }
+    a %= 65521; s %= 65521;
+  }
+  return (s << 16 | a) | 0;
 }
-defineException("java/util/zip/ZipException", "java/io/IOException");
-
+const checksum = (step: (sum: number, b: Uint8Array) => number) => ({
+  "update(II)I": (sum: number, b: number) => step(sum, Uint8Array.of(b)),
+  "updateBytes(I[BII)I": (sum: number, b: Int8Array, off: number, len: number) => step(sum, u8(b, off, len)),
+  "updateByteBuffer(IJII)I": (sum: number, address: bigint, off: number, len: number) => after(buffer(address + BigInt(off), len), (b) => step(sum, b)),
+});
+const crc = checksum(crc32);
+rt.registerJnis("java/util/zip/CRC32", { "update(II)I": crc["update(II)I"], "updateBytes0(I[BII)I": crc["updateBytes(I[BII)I"], "updateByteBuffer0(IJII)I": crc["updateByteBuffer(IJII)I"] });
+rt.registerJnis("java/util/zip/Adler32", checksum(adler32));
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
 export interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
 const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
@@ -405,7 +328,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
   },
 });
-class JZipOutputStream extends JDeflaterOut {
+class JZipOutputStream extends JObj {
   archive: Zip | null = null;
   entry: ZipDeflate | ZipPassThrough | null = null;
   pendingChunks: Uint8Array[] = [];
@@ -583,18 +506,3 @@ rt.register({
   },
 });
 
-// ── GZIPInputStream: the whole source is gunzipped up front and served like any buffer-backed stream
-class JGzipIn extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; }
-async function gunzip(this: JGzipIn, src: unknown) {
-  const z = await readStreamFully(src);
-  try { this.buf = gunzipSync(z); }
-  catch (e) { throw rt.mkThrowable("java/util/zip/ZipException", (e as Error).message); }
-}
-rt.register({
-  name: "java/util/zip/GZIPInputStream", ctor: JGzipIn, sup: "java/io/InputStream",
-  methods: {
-    ...heldByteReads,
-    "<init>(Ljava/io/InputStream;)V": gunzip,
-    "<init>(Ljava/io/InputStream;I)V": gunzip,
-  },
-});

@@ -44,6 +44,7 @@
     "libheif-js": "1.23.2",
     "mp4box": "2.3.0",
     "node-forge": "^1.4.0",
+    "pako": "^2.1.0",
     "sql.js": "workspace:*",
     "tough-cookie": "^6.0.2",
     "typescript": "^5.9.2"

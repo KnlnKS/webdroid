@@ -948,6 +948,17 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Limits: the multi-byte legacy charsets (Shift_JIS, GBK, EUC-*, ISO-2022-*, UTF-7, CESU-8,
     SCSU, BOCU-1) and the x-UTF-16LE-BOM/x-UnicodeBig variants are unsupported, as before, and ICU
     aliases outside aliases() (`unicode-1-1-utf-8`) do not resolve.
+- 2026-10-01, java.util.zip's codecs from libcore (B.7 cut 1). Inflater, Deflater, CRC32, CRC32C,
+  Adler32, Checksum and the Deflater/GZIP streams run from bytecode over the 26 natives. The
+  blocker was consumed input: libcore's natives return packed read/written counts, and okio's
+  InflaterSource and GZIP trailers read the unconsumed rest back through getRemaining, which
+  fflate's push API cannot tell. The natives run pako's zlib port at the z_stream level
+  (avail_in/avail_out, Z_PARTIAL_FLUSH, dictionaries, raw streams), with zlib 1.2.12's
+  deflateParams written over pako's state since pako leaves it out. The TS GZIPInputStream had
+  drained its whole source before returning a byte. CRC32 is zlib's slicing-by-8. V8 medians,
+  HEAD → this: CRC32 over 4 MB 7.6 → 2.7 ms, Adler32 10.2 → 2.1, GZIP round trip of 1 MB 9.8 → 9.0,
+  InflaterInputStream over 1 MB 2.3 → 1.6. luni-io 1,279 → 1,337 (the harmony codec tests that
+  still fail want resource files the suite does not package).
 
 ## Java, storage and framework semantics
 
