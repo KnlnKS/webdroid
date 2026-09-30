@@ -59,6 +59,16 @@ export interface NativeSpec {
 export type Gen<T = any> = Generator<unknown, T, any>;
 export type Intrinsic = (base: (this: any, ...args: any[]) => any) => (this: any, ...args: any[]) => any;
 
+/** A class constructor holds the class's statics and static methods. V8 turns one into a dictionary
+ *  as <clinit> first stores to them, after which `new C()` and static loads take a slow path (4x for
+ *  BigInteger's constructor). An object made a prototype, as every superclass already is, gets
+ *  fast properties back. */
+function fastStatics(C: object) {
+  function Holder() {}
+  Holder.prototype = C;
+  return new (Holder as unknown as new () => object)();
+}
+
 const placeholderMethods = new WeakSet<Function>();
 
 export function stubs(value: unknown, ...sigs: string[]): Record<string, () => unknown> {
@@ -858,7 +868,7 @@ export class Runtime {
       finally { this.clinitDepth--; if (outer) perf.clinitMs += performance.now() - started; }
     };
 
-    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; };
+    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; fastStatics(info.ctor); };
     /** JLS 12.4.2: the class becomes erroneous; an Exception reaches the caller wrapped in an
      *  ExceptionInInitializerError, and every later initialization fails with NoClassDefFoundError */
     const failed = (e: unknown) => {
