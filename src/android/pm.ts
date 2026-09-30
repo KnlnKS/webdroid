@@ -2,7 +2,7 @@ import { JObj, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
-import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -641,44 +641,9 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
   return result;
 }
 
-class JInstallSourceInfo extends JObj {}
-rt.register({
-  name: "android/content/pm/InstallSourceInfo", ctor: JInstallSourceInfo, ifaces: ["android/os/Parcelable"],
-  // APK loading has no Android installer of record or installer-supplied source metadata.
-  methods: {
-    ...stubs(null, "getInitiatingPackageName()Ljava/lang/String;",
-      "getInitiatingPackageSigningInfo()Landroid/content/pm/SigningInfo;",
-      "getOriginatingPackageName()Ljava/lang/String;", "getInstallingPackageName()Ljava/lang/String;",
-      "getUpdateOwnerPackageName()Ljava/lang/String;"),
-    ...stubs(0, "getPackageSource()I", "describeContents()I"),
-  },
-});
-class JApkChecksum extends JObj {
-  splitName: string | null = null;
-  type = 0;
-  value = new Int8Array(0);
-  installerPackageName: string | null = null;
-}
-rt.register({
-  name: "android/content/pm/Checksum", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
-  statics: {
-    TYPE_WHOLE_MERKLE_ROOT_4K_SHA256: 1, TYPE_WHOLE_MD5: 2, TYPE_WHOLE_SHA1: 4, TYPE_WHOLE_SHA256: 8,
-    TYPE_WHOLE_SHA512: 16, TYPE_PARTIAL_MERKLE_ROOT_1M_SHA256: 32, TYPE_PARTIAL_MERKLE_ROOT_1M_SHA512: 64,
-  },
-});
-rt.register({
-  name: "android/content/pm/ApkChecksum", ctor: JApkChecksum, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "getSplitName()Ljava/lang/String;": function (this: JApkChecksum) { return this.splitName; },
-    "getType()I": function (this: JApkChecksum) { return this.type; },
-    "getValue()[B": function (this: JApkChecksum) { return this.value; },
-    "getInstallerPackageName()Ljava/lang/String;": function (this: JApkChecksum) { return this.installerPackageName; },
-    "getInstallerCertificate()Ljava/security/cert/Certificate;": () => null,
-    "describeContents()I": () => 0,
-  },
-});
 rt.markers("android/content/pm/PackageManager$OnChecksumsReadyListener");
 
+const APK_CHECKSUM = "android/content/pm/ApkChecksum";
 const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"]];
 async function apkChecksums(pkg: string, includeSplits: boolean, required: number): Promise<JList> {
   if (!packages.has(pkg)) await installedPackage(pkg);
@@ -693,11 +658,11 @@ async function apkChecksums(pkg: string, includeSplits: boolean, required: numbe
     for (const [type, algorithm] of wholeChecksumAlgorithms) {
       if (!(required & type)) continue;
       const value = await digestBytes(algorithm, bytes);
-      if (value) result.a.push(Object.assign(new JApkChecksum(), { splitName, type, value: new Int8Array(value) }));
+      if (value) result.a.push(await newObj(APK_CHECKSUM, "(Ljava/lang/String;I[B)V", splitName, type, new Int8Array(value)));
     }
     if (required & 16) {
       const value = new Uint8Array(await crypto.subtle.digest("SHA-512", bytes.slice()));
-      result.a.push(Object.assign(new JApkChecksum(), { splitName, type: 16, value: new Int8Array(value) }));
+      result.a.push(await newObj(APK_CHECKSUM, "(Ljava/lang/String;I[B)V", splitName, 16, new Int8Array(value)));
     }
   }
   return result;
@@ -876,7 +841,9 @@ rt.register({
     }),
     "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {
       if (!appHost || pkg !== appHost.pkg) throw nameNotFound(pkg);
-      return new JInstallSourceInfo();
+      // APK loading has no Android installer of record or installer-supplied source metadata
+      return newObj("android/content/pm/InstallSourceInfo", "(Ljava/lang/String;Landroid/content/pm/SigningInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V",
+        null, null, null, null, null, 0);
     },
     "getPackageInstaller()Landroid/content/pm/PackageInstaller;": getPackageInstaller,
     ...stubs(null, "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;"),

@@ -1,4 +1,4 @@
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, driven, declaredField, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { jarray, u8 } from "../jvm/abi";
 import { installPackageArchive } from "./pm";
@@ -8,10 +8,12 @@ import { sendIntent } from "./pendingintent";
 import { appHost } from "./apphost";
 import { reportUncaught } from "./os";
 
-class JSessionParams extends JObj { mode = 1; size = -1n; packageName: string | null = null; requireUserAction = 0; }
+const SESSION_PARAMS = "android/content/pm/PackageInstaller$SessionParams";
 class JSession extends JObj {
   id = 0;
-  params = new JSessionParams();
+  // what the session keeps of its SessionParams, read when it is created
+  mode = 1;
+  packageName: string | null = null;
   entries = new Map<string, JObj>();
   sealed = false;
 }
@@ -22,15 +24,6 @@ function session(id: number): JSession {
   if (!value) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unknown install session ${id}`);
   return value;
 }
-rt.register({ name: "android/content/pm/PackageInstaller$SessionParams", ctor: JSessionParams,
-  statics: { MODE_FULL_INSTALL: 1, MODE_INHERIT_EXISTING: 2, USER_ACTION_UNSPECIFIED: 0, USER_ACTION_REQUIRED: 1, USER_ACTION_NOT_REQUIRED: 2 },
-  methods: {
-    "<init>(I)V": function (this: JSessionParams, mode: number) { this.mode = mode; },
-    "setSize(J)V": function (this: JSessionParams, size: bigint) { this.size = size; },
-    "setAppPackageName(Ljava/lang/String;)V": function (this: JSessionParams, name: string) { this.packageName = name; },
-    "setRequireUserAction(I)V": function (this: JSessionParams, action: number) { this.requireUserAction = action; },
-  },
-});
 rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSession, ifaces: ["java/io/Closeable"],
   methods: {
     "openWrite(Ljava/lang/String;JJ)Ljava/io/OutputStream;": driven(function* (this: JSession, name: string, offset: bigint, _length: bigint): Gen {
@@ -50,10 +43,10 @@ rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSessio
       const finish = async () => {
         const result = new JIntent(); result.extras.map.set("android.content.pm.extra.SESSION_ID", this.id);
         try {
-          if (this.params.mode !== 1 || this.entries.size !== 1) throw new Error("Install requires one base APK");
+          if (this.mode !== 1 || this.entries.size !== 1) throw new Error("Install requires one base APK");
           const stream = this.entries.values().next().value;
           const data: Int8Array = await vcall(stream, "toByteArray", "()[B");
-          const pkg = await installPackageArchive(u8(data), this.params.packageName);
+          const pkg = await installPackageArchive(u8(data), this.packageName);
           const added = new JIntent(); added.action = "android.intent.action.PACKAGE_ADDED"; added.dataUri = `package:${pkg}`;
           sendBroadcast(appHost?.application ?? await newObj("android/content/Context"), added);
           result.extras.map.set("android.content.pm.extra.PACKAGE_NAME", pkg);
@@ -76,9 +69,12 @@ rt.register({ name: "android/content/pm/PackageInstaller", ctor: JPackageInstall
   statics: { STATUS_PENDING_USER_ACTION: -1, STATUS_SUCCESS: 0, STATUS_FAILURE: 1, STATUS_FAILURE_INVALID: 4,
     EXTRA_STATUS: "android.content.pm.extra.STATUS", EXTRA_STATUS_MESSAGE: "android.content.pm.extra.STATUS_MESSAGE", EXTRA_SESSION_ID: "android.content.pm.extra.SESSION_ID", EXTRA_PACKAGE_NAME: "android.content.pm.extra.PACKAGE_NAME" },
   methods: {
-    "createSession(Landroid/content/pm/PackageInstaller$SessionParams;)I": (params: JSessionParams) => {
+    "createSession(Landroid/content/pm/PackageInstaller$SessionParams;)I": (params: Record<string, unknown>) => {
       rt.link("android/content/pm/PackageInstaller$Session");
-      const value = new JSession(); value.id = nextSession++; value.params = Object.assign(new JSessionParams(), params); sessions.set(value.id, value); return value.id;
+      const value = new JSession(); value.id = nextSession++;
+      value.mode = params[declaredField(SESSION_PARAMS, "mode")] as number;
+      value.packageName = params[declaredField(SESSION_PARAMS, "appPackageName")] as string | null;
+      sessions.set(value.id, value); return value.id;
     },
     "openSession(I)Landroid/content/pm/PackageInstaller$Session;": session,
     "abandonSession(I)V": (id: number) => { const value = session(id); value.sealed = true; value.entries.clear(); sessions.delete(id); },
