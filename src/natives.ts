@@ -4,6 +4,7 @@
 // a registered native shadows the dex class, and those three exist to compile or dump the
 // app's own bytecode.
 import "./jvm/natives/jbox";
+import "./jvm/natives/jfloat";
 import "./jvm/natives/jlang";
 import "./jvm/natives/fdlibm";
 import "./jvm/natives/jcoll";

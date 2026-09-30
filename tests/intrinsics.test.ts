@@ -458,3 +458,45 @@ test("StringBuilder and StringBuffer match libcore's over generated operation se
   expect(a.length).toBe(3000);
   expect(a.filter((line, i) => line !== b[i]).slice(0, 5)).toEqual([]);
 }, 120_000);
+
+test("FloatingDecimal's dtoa matches its AOSP body over doubles and floats", async () => {
+  const B2A = "jdk/internal/math/FloatingDecimal$BinaryToASCIIBuffer";
+  const [dtoa, base] = await pair(B2A, "dtoa(IJIZ)V");
+  const bufs = [await newObj(B2A), await newObj(B2A)];
+  const view = new DataView(new ArrayBuffer(8));
+  // getBinaryToASCIIConverter's arguments for a finite nonzero double or float
+  const argsOf = (bits: bigint, single: boolean): [number, bigint, number] | null => {
+    const [shift, expBits, bias] = single ? [23, 0xffn, 127] : [52, 0x7ffn, 1023];
+    let binExp = Number((bits >> BigInt(shift)) & expBits), fract = bits & ((1n << BigInt(shift)) - 1n), nSig = shift + 1;
+    if (binExp === Number(expBits) || (binExp === 0 && fract === 0n)) return null;
+    if (binExp === 0) {
+      const zeros = shift + 1 - fract.toString(2).length;
+      fract <<= BigInt(zeros);
+      binExp = 1 - zeros;
+      nSig -= zeros;
+    } else fract |= 1n << BigInt(shift);
+    return [binExp - bias, fract << BigInt(52 - shift), nSig];
+  };
+  const doubleBits = (d: number) => { view.setFloat64(0, d); return view.getBigUint64(0); };
+  const floatBits = (f: number) => { view.setFloat32(0, f); return BigInt(view.getUint32(0)); };
+  const nice = Array.from({ length: 3000 }, (_, i) => [i / 7, i * 1.37e-3, i * 0.1, 1 / (i + 1), 2 ** (i % 2100 - 1074),
+    10 ** (i % 630 - 323), (i + 1) * 123456789.123, 2 ** 53 + i * 977, 9.2e18 - i * 2 ** 12]).flat();
+  const inputs: [bigint, boolean][] = [...nice.map((d): [bigint, boolean] => [doubleBits(d), false]),
+    ...nice.map((d): [bigint, boolean] => [floatBits(Math.fround(d)), true]),
+    ...Array.from({ length: 20000 }, (): [bigint, boolean] => [BigInt(random(2 ** 31)) << 33n | BigInt(random(2 ** 32)) << 1n | BigInt(random(2)), false]),
+    ...Array.from({ length: 10000 }, (): [bigint, boolean] => [BigInt(random(2 ** 31)), true])];
+  const state = (b: unknown) => fields(b, B2A, "decExponent", "firstDigitIndex", "nDigits", "decimalDigitsRoundedUp", "exactDecimalConversion", "digits")
+    .map((v) => (ArrayBuffer.isView(v) ? String.fromCharCode(...(v as Uint16Array)) : v));
+  const mismatches: unknown[] = [];
+  for (const [bits, single] of inputs) {
+    const args = argsOf(bits, single);
+    if (!args) continue;
+    for (const compatible of single ? [1] : [1, 0]) {
+      await dtoa.call(bufs[0], ...args, compatible);
+      await base.call(bufs[1], ...args, compatible);
+      const [mine, theirs] = [state(bufs[0]), state(bufs[1])];
+      if (JSON.stringify(mine) !== JSON.stringify(theirs)) mismatches.push([bits.toString(16), single, compatible, mine, theirs]);
+    }
+  }
+  expect(mismatches.slice(0, 5)).toEqual([]);
+}, 60_000);
