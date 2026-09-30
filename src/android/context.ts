@@ -138,7 +138,6 @@ const SERVICE_CLASS: Record<string, string> = {
   textservices: "android/view/textservice/TextServicesManager",
   restrictions: "android/content/RestrictionsManager",
   appwidget: "android/appwidget/AppWidgetManager",
-  shortcut: "android/content/pm/ShortcutManager",
   systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
@@ -182,6 +181,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   account: ["android/accounts/AccountManager", async (ctx) =>
     newObj("android/accounts/AccountManager", "(Landroid/content/Context;Landroid/accounts/IAccountManager;)V", ctx, await hostedService("account"))],
   permission_enforcer: ["android/os/PermissionEnforcer", (ctx) => newObj("android/os/PermissionEnforcer", "(Landroid/content/Context;)V", ctx)],
+  shortcut: ["android/content/pm/ShortcutManager", (ctx) => newObj("android/content/pm/ShortcutManager", "(Landroid/content/Context;)V", ctx)],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

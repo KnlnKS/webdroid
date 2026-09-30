@@ -1,149 +1,124 @@
-// android.content.pm.ShortcutInfo and ShortcutManager: an app's dynamic launcher shortcuts.
-
-import { rt, JObj, stubs, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
+// IShortcutService, under AOSP's ShortcutManager: ShortcutInfo and its Builder run from bytecode.
+// A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
+// There is no launcher here: nothing can be pinned, and none is persisted past the process.
+import { rt, JObj, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
-import { appHost } from "./apphost";
-import { csText } from "./text";
-import type { JIntent } from "./intent";
-import type { JBundle } from "./os";
+import { hostStub } from "./binder";
+import { getPM } from "./pm";
 
-class JShortcutInfo extends JObj {
-  id = ""; pkg = ""; shortLabel = ""; longLabel: string | null = null; disabledMessage: string | null = null;
-  intents: JIntent[] = []; icon: unknown = null; extras: JBundle | null = null;
-  rank = 0; excluded = 0; longLived = false; dynamic = false;
+const MAX_PER_ACTIVITY = 15, MAX_UPDATES_PER_INTERVAL = 10;
+const FLAG_DYNAMIC = 1, MATCH_DYNAMIC = 2, CLONE_REMOVE_FOR_CREATOR = 9;
+const SI = "Landroid/content/pm/ShortcutInfo;", CN = "Landroid/content/ComponentName;";
+/** each package's dynamic shortcuts by id, in publishing order */
+const packages = new Map<string, Map<string, JObj>>();
+const dynamicOf = (pkg: string) => {
+  let shortcuts = packages.get(pkg);
+  if (!shortcuts) packages.set(pkg, shortcuts = new Map());
+  return shortcuts;
+};
+const idOf = (si: JObj): Promise<string> => vcall(si, "getId", "()Ljava/lang/String;");
+async function mainActivity(pkg: string): Promise<JObj> {
+  const intent = await vcall(getPM(), "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
+  const component = intent && await vcall(intent, "getComponent", `()${CN}`);
+  if (!component) throw rt.mkThrowable("java/lang/IllegalStateException", "Launcher activity not found for package " + pkg);
+  return component;
 }
-async function copyShortcut(info: JShortcutInfo): Promise<JShortcutInfo> {
-  const copy = Object.assign(rt.make("android/content/pm/ShortcutInfo"), info);
-  copy.intents = await Promise.all(info.intents.map((intent) => newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent)));
-  if (info.extras) {
-    copy.extras = Object.assign(rt.make("android/os/PersistableBundle"), info.extras);
-    copy.extras.map = new Map(info.extras.map);
+/** ShortcutService.fixUpIncomingShortcutInfo: the publisher's own, complete, on an activity, as a copy it no longer holds */
+async function incoming(pkg: string, si: JObj | null, forUpdate = false): Promise<JObj> {
+  if (!si) throw rt.mkThrowable("java/lang/NullPointerException", "Null shortcut detected");
+  if (await vcall(si, "getPackage", "()Ljava/lang/String;") !== pkg) throw rt.mkThrowable("java/lang/SecurityException", "Shortcut package name mismatch");
+  const copy: JObj = await vcall(si, "clone", `(I)${SI}`, 0);
+  if (!forUpdate) {
+    if (!await vcall(copy, "getActivity", `()${CN}`)) await vcall(copy, "setActivity", `(${CN})V`, await mainActivity(pkg));
+    await vcall(copy, "enforceMandatoryFields", "(Z)V", 0);
   }
+  await vcall(copy, "setTimestamp", "(J)V", BigInt(Date.now()));
   return copy;
 }
-rt.register({
-  name: "android/content/pm/ShortcutInfo", ctor: JShortcutInfo, ifaces: ["android/os/Parcelable"],
-  statics: { SURFACE_LAUNCHER: 1 },
-  methods: {
-    "getExtras()Landroid/os/PersistableBundle;": driven(function* (this: JShortcutInfo): Gen { return (yield copyShortcut(this)).extras; }),
-    "getIntent()Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return (yield copyShortcut(this)).intents.at(-1) ?? null; }),
-    "getIntents()[Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return jarray((yield copyShortcut(this)).intents, "Landroid/content/Intent;"); }),
-    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getPackage()Ljava/lang/String;": "pkg",
-      "getShortLabel()Ljava/lang/CharSequence;": "shortLabel", "getLongLabel()Ljava/lang/CharSequence;": "longLabel",
-      "getDisabledMessage()Ljava/lang/CharSequence;": "disabledMessage", "getRank()I": "rank" }),
-    ...flagGetters({ "isDynamic()Z": "dynamic", "isLongLived()Z": "longLived" }),
-    "isExcludedFromSurfaces(I)Z": function (this: JShortcutInfo, surfaces: number) { return this.excluded & surfaces ? 1 : 0; },
-    ...stubs(0, "isPinned()Z", "isDeclaredInManifest()Z"),
-    ...stubs(1, "isEnabled()Z"),
-  },
-});
-class JShortcutBuilder extends JObj { info = new JShortcutInfo(); }
-const shortcutBuilder = "Landroid/content/pm/ShortcutInfo$Builder;";
-rt.register({
-  name: "android/content/pm/ShortcutInfo$Builder", ctor: JShortcutBuilder,
-  methods: {
-    "<init>(Landroid/content/Context;Ljava/lang/String;)V": driven(function* (this: JShortcutBuilder, context: unknown, id: string): Gen {
-      if (context == null || id == null) throw rt.mkThrowable("java/lang/NullPointerException", "Shortcut context and id required");
-      if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut id must not be empty");
-      this.info.id = id; this.info.pkg = yield vcall(context, "getPackageName", "()Ljava/lang/String;");
-    }),
-    [`setShortLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen {
-      const text = yield csText(label);
-      if (!text) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label must not be empty");
-      this.info.shortLabel = text; return this;
-    }),
-    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.longLabel = yield csText(label); return this; }),
-    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.disabledMessage = yield csText(label); return this; }),
-    [`setIntent(Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intent: JIntent) { this.info.intents = [intent]; return this; },
-    [`setIntents([Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intents: JIntent[]) { this.info.intents = intents.slice(); return this; },
-    [`setIcon(Landroid/graphics/drawable/Icon;)${shortcutBuilder}`]: function (this: JShortcutBuilder, icon: unknown) { this.info.icon = icon; return this; },
-    [`setExtras(Landroid/os/PersistableBundle;)${shortcutBuilder}`]: function (this: JShortcutBuilder, extras: JBundle) { this.info.extras = extras; return this; },
-    [`setRank(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, rank: number) {
-      if (rank < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Rank must not be negative");
-      this.info.rank = rank; return this;
-    },
-    [`setLongLived(Z)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.longLived = !!value; return this; },
-    [`setExcludedFromSurfaces(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.excluded = value; return this; },
-    "build()Landroid/content/pm/ShortcutInfo;": function (this: JShortcutBuilder) {
-      if (!this.info.shortLabel || !this.info.intents.length || this.info.intents.some((intent) => !intent?.action)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label and intents with actions are required");
-      return copyShortcut(this.info);
-    },
-  },
-});
-// There is no launcher here to pin a shortcut, so the pinned set is always empty.
-class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
-const MAX_SHORTCUTS = 15;
-function ownShortcuts(manager: JShortcutManager): Map<string, JShortcutInfo> {
-  const pkg = appHost?.pkg ?? "";
-  let shortcuts = manager.packages.get(pkg);
-  if (!shortcuts) manager.packages.set(pkg, shortcuts = new Map());
-  return shortcuts;
+const incomingList = async (pkg: string, slice: JObj) =>
+  Promise.all((await toJsArray(await vcall(slice, "getList", "()Ljava/util/List;")) as JObj[]).map((si) => incoming(pkg, si)));
+/** a package's shortcuts after a change: at most MAX_PER_ACTIVITY on an activity, each dynamic,
+ *  ranked 0..n-1 per activity by requested rank then publishing order */
+async function commit(pkg: string, shortcuts: JObj[]): Promise<void> {
+  const byActivity = new Map<string, { si: JObj; rank: number; order: number }[]>();
+  for (const [order, si] of shortcuts.entries()) {
+    const activity = String(await vcall(await vcall(si, "getActivity", `()${CN}`), "flattenToString", "()Ljava/lang/String;"));
+    let group = byActivity.get(activity);
+    if (!group) byActivity.set(activity, group = []);
+    group.push({ si, rank: await vcall(si, "getRank", "()I"), order });
+  }
+  for (const group of byActivity.values()) {
+    if (group.length > MAX_PER_ACTIVITY) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Max number of dynamic shortcuts exceeded");
+    group.sort((a, b) => a.rank - b.rank || a.order - b.order);
+    for (const [rank, { si }] of group.entries()) {
+      await vcall(si, "setRank", "(I)V", rank);
+      await vcall(si, "addFlags", "(I)V", FLAG_DYNAMIC);
+    }
+  }
+  const next = new Map<string, JObj>();
+  for (const si of shortcuts) next.set(await idOf(si), si);
+  packages.set(pkg, next);
 }
-function commitShortcuts(manager: JShortcutManager, shortcuts: Iterable<JShortcutInfo>): number {
-  const next = new Map([...shortcuts].map((info) => [info.id, info]));
-  if (next.size > MAX_SHORTCUTS) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Max number of dynamic shortcuts exceeded");
-  manager.packages.set(appHost?.pkg ?? "", next);
-  return 1;
+async function remove(pkg: string, ids: JObj | null): Promise<void> {
+  const shortcuts = dynamicOf(pkg);
+  for (const id of await toJsArray(ids) as string[]) shortcuts.delete(id);
 }
-async function dynamicCopies(list: unknown): Promise<JShortcutInfo[]> {
-  const pkg = appHost?.pkg ?? "";
-  return Promise.all((await toJsArray(list)).map(async (info) => {
-    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
-    const copy = await copyShortcut(info); copy.dynamic = true; return copy;
-  }));
-}
-const removeShortcuts = driven(function* (this: JShortcutManager, ids: unknown): Gen {
-  const shortcuts = ownShortcuts(this);
-  for (const id of (yield toJsArray(ids)) as string[]) shortcuts.delete(id);
-});
-const shortcutList = driven(function* (manager: JShortcutManager): Gen {
-  const list = newArrayList(); list.a = yield Promise.all([...ownShortcuts(manager).values()].map(copyShortcut)); return list;
-});
-rt.register({
-  name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
-  statics: { FLAG_MATCH_MANIFEST: 1, FLAG_MATCH_DYNAMIC: 2, FLAG_MATCH_PINNED: 4, FLAG_MATCH_CACHED: 8 },
-  methods: {
-    "setDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      return commitShortcuts(this, yield dynamicCopies(list));
-    }),
-    "addDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      return commitShortcuts(this, [...ownShortcuts(this).values(), ...(yield dynamicCopies(list)) as JShortcutInfo[]]);
-    }),
-    // API 30: a full set drops its lowest-ranked shortcut to make room
-    "pushDynamicShortcut(Landroid/content/pm/ShortcutInfo;)V": driven(function* (this: JShortcutManager, info: unknown): Gen {
-      const shortcuts = ownShortcuts(this), [copy] = (yield dynamicCopies(newArrayList([info]))) as JShortcutInfo[];
-      if (!shortcuts.has(copy.id) && shortcuts.size >= MAX_SHORTCUTS) {
-        const last = [...shortcuts.values()].reduce((a, b) => b.rank >= a.rank ? b : a);
-        shortcuts.delete(last.id);
-      }
-      shortcuts.set(copy.id, copy);
-    }),
-    // updates only shortcuts that exist, leaving the rest of each one as it was
-    "updateShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const shortcuts = ownShortcuts(this);
-      for (const copy of (yield dynamicCopies(list)) as JShortcutInfo[]) if (shortcuts.has(copy.id)) shortcuts.set(copy.id, copy);
-      return 1;
-    }),
-    "removeDynamicShortcuts(Ljava/util/List;)V": removeShortcuts,
-    "removeLongLivedShortcuts(Ljava/util/List;)V": removeShortcuts,
-    // disabling a shortcut removes its dynamic entry; only pinned ones would stay, disabled
-    "disableShortcuts(Ljava/util/List;)V": removeShortcuts,
-    "disableShortcuts(Ljava/util/List;Ljava/lang/CharSequence;)V": removeShortcuts,
-    "enableShortcuts(Ljava/util/List;)V": () => {},
-    "getDynamicShortcuts()Ljava/util/List;": function (this: JShortcutManager) { return shortcutList(this); },
-    "getShortcuts(I)Ljava/util/List;": function (this: JShortcutManager, flags: number) { return flags & 2 ? shortcutList(this) : newArrayList(); },
-    "getPinnedShortcuts()Ljava/util/List;": () => newArrayList(),
-    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { ownShortcuts(this).clear(); },
-    "requestPinShortcut(Landroid/content/pm/ShortcutInfo;Landroid/content/IntentSender;)Z": () => 0,
-    "createShortcutResultIntent(Landroid/content/pm/ShortcutInfo;)Landroid/content/Intent;": () => null,
-    "getMaxShortcutCountPerActivity()I": () => MAX_SHORTCUTS,
-    "getIconMaxHeight()I": () => Math.round(device.dp(96)),
-    "getIconMaxWidth()I": () => Math.round(device.dp(96)),
-    "isRateLimitingActive()Z": () => 0,
-    "reportShortcutUsed(Ljava/lang/String;)V": (id: string) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
-    "isRequestPinShortcutSupported()Z": () => 0,
+const listSlice = async (list: JObj[]) => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(list));
+const complete = (future: JObj, value: unknown) => vcall(future, "complete", "(Ljava/lang/Object;)Z", value);
+
+const SLICE = "Landroid/content/pm/ParceledListSlice;", LIST = "Ljava/util/List;", S = "Ljava/lang/String;", FUTURE = "Lcom/android/internal/infra/AndroidFuture;";
+rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup: "android/content/pm/IShortcutService$Stub", methods: {
+  [`setDynamicShortcuts(${S}${SLICE}I)Z`]: async (pkg: string, slice: JObj) => { await commit(pkg, await incomingList(pkg, slice)); return 1; },
+  [`addDynamicShortcuts(${S}${SLICE}I)Z`]: async (pkg: string, slice: JObj) => {
+    const shortcuts = new Map(dynamicOf(pkg));
+    for (const si of await incomingList(pkg, slice)) shortcuts.set(await idOf(si), si);
+    await commit(pkg, [...shortcuts.values()]);
+    return 1;
   },
-});
+  // a full activity drops its lowest-ranked shortcut to make room
+  [`pushDynamicShortcut(${S}${SI}I)V`]: async (pkg: string, si: JObj) => {
+    const pushed = await incoming(pkg, si), id = await idOf(pushed), shortcuts = new Map(dynamicOf(pkg));
+    shortcuts.delete(id);
+    const activity = await vcall(pushed, "getActivity", `()${CN}`), same: JObj[] = [];
+    for (const other of shortcuts.values()) if (await vcall(activity, "equals", "(Ljava/lang/Object;)Z", await vcall(other, "getActivity", `()${CN}`))) same.push(other);
+    if (same.length >= MAX_PER_ACTIVITY) {
+      let last = same[0];
+      for (const other of same) if (await vcall(other, "getRank", "()I") >= await vcall(last, "getRank", "()I")) last = other;
+      shortcuts.delete(await idOf(last));
+    }
+    await commit(pkg, [pushed, ...shortcuts.values()]);
+  },
+  // an update changes only shortcuts that exist, and only the fields it sets
+  [`updateShortcuts(${S}${SLICE}I)Z`]: async (pkg: string, slice: JObj) => {
+    const shortcuts = dynamicOf(pkg);
+    for (const si of await toJsArray(await vcall(slice, "getList", `()${LIST}`)) as JObj[]) {
+      const update = await incoming(pkg, si, true), target = shortcuts.get(await idOf(update));
+      if (target) await vcall(target, "copyNonNullFieldsFrom", `(${SI})V`, update);
+    }
+    await commit(pkg, [...shortcuts.values()]);
+    return 1;
+  },
+  [`removeDynamicShortcuts(${S}${LIST}I)V`]: remove,
+  [`removeLongLivedShortcuts(${S}${LIST}I)V`]: remove,
+  // disabling removes a dynamic shortcut; only a pinned one would stay, disabled
+  [`disableShortcuts(${S}${LIST}Ljava/lang/CharSequence;II)V`]: remove,
+  [`removeAllDynamicShortcuts(${S}I)V`]: (pkg: string) => { dynamicOf(pkg).clear(); },
+  [`getShortcuts(${S}II)${SLICE}`]: async (pkg: string, flags: number) =>
+    listSlice(flags & MATCH_DYNAMIC ? await Promise.all([...dynamicOf(pkg).values()].map((si) => vcall(si, "clone", `(I)${SI}`, CLONE_REMOVE_FOR_CREATOR))) : []),
+  [`getShareTargets(${S}Landroid/content/IntentFilter;I)${SLICE}`]: () => listSlice([]),
+  [`hasShareTargets(${S}${S}I)Z`]: () => 0,
+  [`getMaxShortcutCountPerActivity(${S}I)I`]: () => MAX_PER_ACTIVITY,
+  [`getIconMaxDimensions(${S}I)I`]: () => Math.round(device.dp(96)),
+  // the app in front is never rate limited
+  [`getRemainingCallCount(${S}I)I`]: () => MAX_UPDATES_PER_INTERVAL,
+  [`reportShortcutUsed(${S}${S}I)V`]: (_pkg: string, id: string | null) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
+  "isRequestPinItemSupported(II)Z": () => 0,
+  // ShortcutService completes the request with String.valueOf(accepted)
+  [`requestPinShortcut(${S}${SI}Landroid/content/IntentSender;I${FUTURE})V`]: (_pkg: string, _si: JObj, _sender: JObj, _user: number, future: JObj) =>
+    complete(future, "false"),
+  [`createShortcutResultIntent(${S}${SI}I${FUTURE})V`]: (_pkg: string, _si: JObj, _user: number, future: JObj) => complete(future, null),
+  ...noops(`enableShortcuts(${S}${LIST}I)V`, `onApplicationActive(${S}I)V`),
+} });
+hostStub("shortcut", "webdroid/ShortcutService");
