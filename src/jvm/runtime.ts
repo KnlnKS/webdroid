@@ -53,6 +53,7 @@ export interface NativeSpec {
 
 /** A native written as a generator yields each Java result, value or Promise (Runtime.drive). */
 export type Gen<T = any> = Generator<unknown, T, any>;
+export type Intrinsic = (base: (this: any, ...args: any[]) => any) => (this: any, ...args: any[]) => any;
 
 const placeholderMethods = new WeakSet<Function>();
 
@@ -313,6 +314,14 @@ export class Runtime {
     if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
     this.ifaceNames = null;
+  }
+  /** §4.7 intrinsics: per bytecode class and mangled method, what makes a TS body over the class's
+   *  own fields from the AOSP body it stands for (which it calls for cases it does not cover) */
+  intrinsics = new Map<string, Map<string, Intrinsic>>();
+  intrinsic(cls: string, table: Record<string, Intrinsic>) {
+    const methods = this.intrinsics.get(cls) ?? new Map<string, Intrinsic>();
+    for (const [sig, make] of Object.entries(table)) methods.set(mangleMethod(...splitSig(sig.replace(/^static /, ""))), make);
+    this.intrinsics.set(cls, methods);
   }
   markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
   make(cls: string): any { return new (this.link(cls).ctor)(); }

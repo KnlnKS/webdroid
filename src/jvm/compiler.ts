@@ -85,7 +85,7 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
  *  then, not for every stub a boot installs */
 export class LazyMethod {
   constructor(readonly dex: DexFile, readonly m: EncodedMethod, readonly mangled: string, readonly isStatic: boolean,
-    readonly stub: JvmFunction & Cells, readonly fallthrough: boolean) {}
+    readonly stub: JvmFunction & Cells, readonly fallthrough: boolean, readonly intrinsic?: JvmFunction) {}
   get name(): string { return methodKey(this.dex, this.m.methodIdx).name; }
   get desc(): string { return methodKey(this.dex, this.m.methodIdx).desc; }
 }
@@ -101,14 +101,16 @@ export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: Encode
     return entry.apply(this, args);
   };
   stub.$c = null;
-  info.lazy.push(new LazyMethod(dex, m, mangled, isStatic, stub, fallthrough));
-  (isStatic ? C : C.prototype)[mangled] = stub;
+  // an intrinsic stands in for the body wherever it is reached; the stub stays its AOSP fallback
+  const intrinsic = fallthrough ? undefined : R.intrinsics.get(info.name)?.get(mangled)?.(stub);
+  info.lazy.push(new LazyMethod(dex, m, mangled, isStatic, stub, fallthrough, intrinsic));
+  (isStatic ? C : C.prototype)[mangled] = intrinsic ?? stub;
   // a constructor or private method also goes under its direct name now: added once a class has
   // instances, it would change their prototype's shape under code already running
   if (!isStatic && (mangled.startsWith("i$") || m.flags & ACC.PRIVATE)) {
     const direct = directName(info.name, mangled);
-    C.prototype[direct] = stub;
-    addCell(stub, C.prototype, direct);
+    C.prototype[direct] = intrinsic ?? stub;
+    if (!intrinsic) addCell(stub, C.prototype, direct);
   }
 }
 
@@ -217,6 +219,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const installed = (): JvmFunction => {
     const fn = target[rec.mangled];
     if (typeof fn !== "function") throw new Error("invalid compiled method");
+    if (rec.intrinsic) target[rec.mangled] = rec.intrinsic;
     return fn as JvmFunction;
   };
   const compile = (src: string): JvmFunction => {
@@ -303,6 +306,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     return runCold(cold!, this, args);
   };
   invoke.$c = null;
+  if (rec.intrinsic) return install(invoke);
   if (!jvmCoverage.enabled) return install(target[rec.mangled] = invoke);
   return install(target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
     jvmCoverage.hit(profileName);
