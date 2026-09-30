@@ -755,7 +755,6 @@ for (const [name, methods, statics] of [
       return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
     },
   }],
-  ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(),
     ...stubs(0, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",
       "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z",

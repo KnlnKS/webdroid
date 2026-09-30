@@ -130,7 +130,6 @@ const SERVICE_CLASS: Record<string, string> = {
   notification: "android/app/NotificationManager",
   accessibility: "android/view/accessibility/AccessibilityManager",
   captioning: "android/view/accessibility/CaptioningManager",
-  keyguard: "android/app/KeyguardManager",
   jobscheduler: "android/app/job/JobScheduler",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
@@ -177,6 +176,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   clipboard: ["android/content/ClipboardManager", (ctx) => newObj("android/content/ClipboardManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   vibrator_manager: ["android/os/VibratorManager", (ctx) => newObj("android/os/SystemVibratorManager", "(Landroid/content/Context;)V", ctx)],
   vibrator: ["android/os/Vibrator", (ctx) => newObj("android/os/SystemVibrator", "(Landroid/content/Context;)V", ctx)],
+  keyguard: ["android/app/KeyguardManager", (ctx) => newObj("android/app/KeyguardManager", "(Landroid/content/Context;)V", ctx)],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

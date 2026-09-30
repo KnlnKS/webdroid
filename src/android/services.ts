@@ -155,15 +155,29 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
 
 // IWindowManager: what WindowManagerGlobal and screen recording callbacks ask of it. Animations run
 // at the default duration scale, and nothing records the page, so a registration reports "not
-// recorded" and that never changes.
+// recorded" and that never changes. The keyguard is never shown and has no secure lock, as on the
+// reference AVD, so an exit succeeds at once; ITrustManager agrees.
 rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
   "getCurrentAnimatorScale()F": () => 1,
   "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
   "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
+  ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
+  ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
+    "removeKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V"),
+  "exitKeyguardSecurely(Landroid/view/IOnKeyguardExitResult;)V": (callback: unknown) =>
+    vcall(callback, "onKeyguardExitResult", "(Z)V", 1),
 } });
+rt.register({ name: "webdroid/TrustManagerService", ctor: class extends JObj {}, sup: "android/app/trust/ITrustManager$Stub", methods: {
+  ...stubs(0, "isDeviceLocked(II)Z", "isDeviceSecure(II)Z"),
+} });
+// INotificationManager: notifications are still NotificationManager's TS spec (notification.ts);
+// the Stub is here for the managers that bind it at construction (KeyguardManager)
+rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends JObj {}, sup: "android/app/INotificationManager$Stub" });
 
 hostStub("audio", "webdroid/AudioService");
 hostStub("window", "webdroid/WindowManagerService");
+hostStub("trust", "webdroid/TrustManagerService");
+hostStub("notification", "webdroid/NotificationManagerService");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
