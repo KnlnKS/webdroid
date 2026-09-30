@@ -582,55 +582,91 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-09-30. The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
+Last updated 2026-09-30 (evening). The branch is `knlnks/bytecode` in `/Users/kunalan/Projects/webdroid`;
 read "Handoff state" first. Each
 commit message states what it measured. The implementation history (the 2026-09-27 to
 2026-09-30 Stage A/B/C entries) records failure mechanisms.
 
-### Handoff state (2026-09-30): start here
+### Handoff state (2026-09-30, evening): start here
 
-- **`knlnks/bytecode` tip `2d4ac175` is gated** (not pushed): typecheck; `bun run test` 1,388 pass;
-  FitNotes smoke 0 method failures; fwtest's graphics and resource exercises; fast e2e 7/7 twice; the
-  live set (YouTube failed from `show-controls` once under parallel load, then passed 3 of 3 alone);
-  `lat` cold and warm. Conform last ran on ab9f898b, all at baseline; later commits touch graphics,
-  the shell's boot order and page-level sharing, which no suite reaches.
-- **Done 2026-09-30, details in the history:** platform overrides of Object's methods run on spec
-  classes (a61f89c4); Rect, RectF, Point, PointF and Insets keep only their layout (dbb39a74); Color,
-  ColorSpace, ColorMatrix, Matrix, the ColorFilters, Shaders, PorterDuff/BlendMode/Xfermode/TileMode,
-  Path, PathMeasure and PathIterator are AOSP bytecode, their natives following Skia; lazy method
-  stubs are 70% smaller (ab9f898b); a tab's realms share CanvasKit, the platform jars and
-  framework-res (a9d43bd3); the platform is indexed and linked in a zygote phase that overlaps the
-  app's download, with the boot class path ahead of the app as on a device (7917249c); released
-  handle slots are reused (b6a038f3). Cold `lat` against 44da4521: Calculator 1,468 against 1,620 ms,
-  FitNotes 1,421 against 1,581, Mihon 2,127 against 2,346; warm Calculator 871, FitNotes 879, Mihon
-  1,785 ms.
-- **Since the gate on 2d4ac175** (typecheck, test, smoke and fast e2e twice on each; conform on
-  5eb441da): the served link table (5536ffbb); the text spans, Annotation, LengthFilter and AllCaps
-  from AOSP (C.3's first cut, -578 lines); Character's properties from ICU through libcore's 24
-  `*Impl` natives, with `platformClinit` letting a spec class run its platform `<clinit>` and
-  `Class.getPrimitiveClass` (5eb441da); Region (a real rect-list SkRegion), RegionIterator,
-  Outline, NinePatch and Picture from AOSP, with Camera's and Interpolator's natives; owned handles
-  for the classes that free native state in `finalize()` (fb3e6a2f). Gated on 19534e7c: the live set
-  6/6 but TikTok's known wedge once (3/3 alone), conform at every baseline (5eb441da), `lat` cold and
-  warm. 28fd6e26..90e404e2 carried local e2e diagnostics by mistake (per-job stack tracing in the
-  probe); e2e timings from those commits are inflated.
-- **Next: the rest of Stage C.2/C.3.** `fwtest android/graphics/` lists what the natives lack; the
-  TS references left are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields (167,
-  which stay a layout) and Bitmap (144). The fonts package and Typeface are AOSP's (fast e2e,
-  textcmp 6/6); the zygote step loads the system font map from the page's fonts.xml, and headless
-  tests do so through `loadSystemFonts` in tests/java.ts. Next: Layout/StaticLayout with the minikin natives
-  (LineBreaker, MeasuredText, TextRunShaper; textcmp is the gate); Paint, Canvas and Bitmap last, with
-  the view stack (Stage D).
-- **Finalizers do not run**, and cannot as such: a JS finalizer cannot see the object it
-  finalizes. Platform classes whose `finalize()` frees a handle in a long field get owned handles
-  instead (`ownedHandle`, `Runtime.claimOnStore`); any other finalize() is not run.
-- **Memory, measured 2026-09-30.** A realm starts at about 91 MB of heap plus the jars; the native
-  core reserves 256 MiB of wasm memory per realm (untouched pages are not resident, and in V8 it
-  adds full GCs only when allocated, not in steady state). TikTok runs 5 realms and its JS heap is
-  2.1-3.8 GB (the top realm links 42,569 classes and installs 254k method stubs); its 360 MB of dex
-  is shared already (packed archives hand realms the page's bytes). GC was 29-37% of TikTok's main
-  thread in CPU profiles, and its wedges track host load: interleaved A/B batches of the same two
-  commits went 3/8 against 3/8.
+- **Branch `knlnks/bytecode`, tip `6e60ef3e`, working tree clean, not pushed** (the user asked for
+  commits, not pushes). No servers are running; start one with `PORT=4217 bun run server.ts`.
+  `/Users/kunalan/Projects/webdroid-gate` is a detached worktree (at 1068d491) for conform runs and
+  A/B servers: `git -C ../webdroid-gate checkout --detach <commit>`, serve it with
+  `PORT=4219 bun run server.ts` from there. Its `vendor/{aosp,microg}`, `apks` and `conform-cache`
+  are symlinks.
+- **Last full gate:** 19534e7c (live set, conform on 5eb441da at every baseline, `lat` cold and warm).
+  Since then, each merge passed typecheck, `bun run test` (1,385), FitNotes smoke, fast e2e 7/7 and
+  textcmp 6/6: the fonts cut, the Typeface cut (merge after 1068d491) and 6e60ef3e (zygoteInit and the
+  system font map moved into the zygote phase). On 6e60ef3e also: `lat` cold/warm interleaved
+  against 1068d491 (cold Calculator 1,391 against 1,489 ms, FitNotes 1,345 against 1,445, Mihon 2,063
+  against 2,095; warm level or faster, gate passed) and the live set (TikTok wedged at steps 04-07
+  once, then 2/2 alone). **Not yet run on 6e60ef3e: conform** (the Typeface cut and zygote move touch
+  what libcore's suites reach only through Character/ICU; run all six to be sure).
+- **First task: an open regression to diagnose.** ChatGPT's live flow logs
+  `IllegalStateException: LifecycleOwner of this LifecycleRegistry is already garbage collected`
+  (uncaught, in a process realm, pid 1003) in 2 of 9 runs at 6e60ef3e and 0 of 3 at 1068d491
+  (`WEBDROID_URL=... bun run e2e --live --test chatgpt`, then look for "garbage collect" in
+  `tests/e2e/actual-fast/summary.json` gaps). androidx's LifecycleRegistry holds its owner in a
+  WeakReference, so something collected an owner Java still reaches. Suspects, in order: the
+  Typeface cut (it changed what process realms load and when); `weakHandle` (Picture's cut made a
+  TS Canvas's native wrapper a weak handle); the owned-handle setter on long fields (fb3e6a2f);
+  and plain JS GC timing exposing a real missing strong reference. Bisect with the gate worktree
+  (e.g. fb3e6a2f, 1068d491 + the Typeface merge) before changing code.
+- **Done 2026-09-30** (details in the history, latest entries of "JVM, DEX and process ownership"):
+  - `android/content/res/` from AOSP (131efb48), and its cold-launch cost gone.
+  - Platform overrides of Object's toString/equals/hashCode run on spec classes (a61f89c4).
+  - Graphics (C.2) from AOSP, natives following Skia/hwui/minikin: Rect/RectF/Point/PointF/Insets
+    keep only a layout; Color, ColorSpace, ColorMatrix, Matrix, the ColorFilters, Shaders,
+    PorterDuff/BlendMode/Xfermode/TileMode, Path, PathMeasure, PathIterator, Region (a real SkRegion,
+    `src/android/region.ts`), RegionIterator, Outline, NinePatch, Picture; Camera's and
+    Interpolator's natives. Each has one TS bridge to its native state (`matrixOf`,
+    `nativePathOf`, `colorFilterOf`, `ninePatchOf`, `clipToOutline`, ...), and fwtest exercises
+    with values recorded on the reference AVD.
+  - Text (C.3): the span classes, Annotation, LengthFilter, AllCaps (-578 lines); the fonts package;
+    Typeface (system font map from `/system/etc/fonts.xml` and `font_fallback.xml`, written by
+    `src/android/fonts.ts`); Character's properties from ICU through libcore's 24 `*Impl` natives.
+  - Runtime: `platformClinit` (a spec class runs its platform `<clinit>`), `Class.getPrimitiveClass`,
+    owned handles for classes that free native state in `finalize()` (`ownedHandle`,
+    `Runtime.claimOnStore`), handle-slot reuse, lazy method stubs 70% smaller.
+  - Boot and memory: the zygote phase (`startZygote` in `src/shell/device.ts`: framework-res, the
+    platform indexed and linked, zygoteInit, the font map) starts with the page and overlaps the
+    app's download, with the boot class path ahead of the app as PathClassLoader does; the link
+    table is served (`scripts/link-table.ts`, `/link-table.json`, fingerprinted); a tab's realms
+    share CanvasKit, the platform jars and framework-res (`src/shell/pageshared.ts`).
+- **Next, in plan order:**
+  1. The ChatGPT regression above, then conform on the tip.
+  2. Stage C.3's core: Layout/StaticLayout/BoringLayout/TextPaint/SpannableString(Builder) with the
+     minikin natives (LineBreaker, MeasuredText, TextRunShaper). `bun run audit apks/FitNotes.apk
+     --framework --cut android/text/` lists what is left (TextPaint 57, Layout 53, SpannableString
+     38, BidiFormatter 16 references); textcmp and the text goldens are the gate.
+  3. Stage C.2's remainder: Paint, Canvas and Bitmap (and Drawable, 222 references), which the TS
+     view stack draws through; they go with Stage D (the view stack) per §3.
+  4. Fidelity: the page has no serif or monospace faces, so those families now resolve to Roboto
+     (as `Typeface.create` does when a family has no font); pull the device's
+     `/system/fonts` serif/mono files through gen-framework and list them in `SYSTEM_FAMILIES`.
+- **Known limits added today:** Font.getGlyphBounds throws and nGetBufferAddress is missing (the
+  browser shapes text, so glyph ids are not addressable); variable-font axes do nothing (the page's
+  Roboto files are static); Picture streams (createFromStream/writeToStream) are unimplemented;
+  RuntimeShader.nativeUpdateShader (child shaders) is missing; Canvas2D gradients only clamp (tile
+  modes REPEAT/MIRROR/DECAL ignored); perspective matrices apply only their affine part;
+  `Paint.nGetFillPath` returns the source path; any finalize() other than a handle release does not
+  run.
+- **Measured and not built (see the history):** a platform code image pays little today (667 of
+  5,112 bodies in a cold Calculator launch are platform code); precompiling a first launch from RTA
+  reachability needs 8,000 methods for 78% recall; the native core's 256 MiB wasm memory per realm
+  adds no steady-state GC. TikTok (5 realms) holds a 2.1-3.8 GB JS heap and spends ~30% of its main
+  thread in GC; its wedges follow host load.
+- **Lessons from this session's parallel agents** (put these in every agent prompt):
+  - Stop only your own server (`lsof -ti tcp:<port> | xargs kill`); `pkill -f server.ts` kills every
+    worktree's server.
+  - Before `ln -s .../vendor/aosp vendor/aosp` in a worktree, check the target does not exist: into
+    an existing symlinked directory it creates a nested link inside the real vendor directory
+    (`vendor/aosp/aosp` is such a stale link from 2026-09-27, harmless).
+  - `git commit -am` sweeps local diagnostics in: 28fd6e26 committed an e2e probe patch that traced
+    every main-queue job (removed in 19534e7c); e2e timings between them are inflated.
+  - Agents on different graphics classes conflict only in `delegates.ts` imports and
+    `scripts/fwtest.ts`; merges resolved by taking both sides.
 - **Open follow-ups.**
   - TikTok reaches `ActivityThread.installProvider` by reflection (unsafe fallthrough).
   - No system service is hosted behind binder (`binderServices` in `src/android/binder.ts` is empty),
@@ -659,6 +695,14 @@ commit message states what it measured. The implementation history (the 2026-09-
     `--cpu-prof-dir` and a process that is not ended with `process.exit`.
   - Headless scripts must run `zygoteInit()` (`src/android/delegates.ts`) after `rt.linkNatives()` to
     see `System.out`: since cut 4 it writes descriptor 1, which only zygoteInit routes to logcat.
+    Anything reaching ICU (Character, text) needs the apex data mounted first, as
+    `scripts/conform/run.ts` does with `mountPlatformData`; anything reaching Typeface needs the
+    system fonts and a DOMParser (`loadSystemFonts` in `tests/java.ts`).
+  - Browser memory: a heap snapshot through CDP (`HeapProfiler.takeHeapSnapshot`, streamed to a file)
+    aggregated by node type and retainer path is what found the per-realm CanvasKit, jar and
+    framework-res copies; `performance.memory.usedJSHeapSize` omits wasm memory.
+  - Launch timing: `bun run lat <app> --cpuprofile <file>` and `scripts/lat/profsum.ts <file> 40
+    until=<ms>`; bucket the profile by 100 ms to see idle waits (how the zygote phase was found).
   - Device evidence: compile a probe with javac + d8, `adb push` it, run it with
     `CLASSPATH=/data/local/tmp/x.dex app_process / Main`, and diff its output with the same probe run
     headless (the charset tables and UTF-32 behaviour came from this). gen-framework does this for
@@ -696,7 +740,7 @@ commit message states what it measured. The implementation history (the 2026-09-
 
 Run all of these before committing a flip:
 - `bun run typecheck`;
-- `bun run test` (1,388 pass);
+- `bun run test` (1,385 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
 - `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file`. Baselines are 40,085,
