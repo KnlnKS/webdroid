@@ -1095,17 +1095,18 @@ export class Runtime {
     return 0;
   }
 
-  /** instance-of at a compiled site: caches the receiver's class with its answer (object arrays
-   *  carry their element type per instance, so they are never cached) */
+  /** instance-of at a compiled site: caches the receiver's class with its answer in the first free
+   *  of two entries, else the second (object arrays carry their element type per instance, so
+   *  they are never cached) */
   iofc(v: unknown, name: string, ic: unknown[], k: number): number {
     const r = this.iof(v, name);
-    if (v != null && !Array.isArray(v)) { ic[k] = (v as object).constructor; ic[k + 1] = r; }
+    if (v != null && !Array.isArray(v)) { const at = ic[k] === undefined ? k : k + 2; ic[at] = (v as object).constructor; ic[at + 1] = r; }
     return r;
   }
-  /** check-cast at a compiled site: caches a receiver class that passed */
+  /** check-cast at a compiled site: caches a receiver class that passed, as iofc does */
   ccc(v: unknown, name: string, ic: unknown[], k: number): void {
     this.cc(v, name);
-    if (!Array.isArray(v)) ic[k] = (v as object).constructor;
+    if (!Array.isArray(v)) ic[ic[k] === undefined ? k : k + 2] = (v as object).constructor;
   }
   /** check-cast */
   cc<T>(v: T, name: string): T {

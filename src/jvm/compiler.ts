@@ -411,8 +411,8 @@ class MethodEmitter {
   private discarded: (string | null)[] | null = null;
   private quietCalls = 0;
   private ics = 0;
-  /** Two slots in the method's type-check cache: the last receiver class and its result. */
-  private icSlot(): number { const k = this.ics; this.ics += 2; return k; }
+  /** Four slots in the method's type-check cache: two receiver classes (and their results). */
+  private icSlot(): number { const k = this.ics; this.ics += 4; return k; }
   private constants: unknown[] = [];
 
   private get cold(): boolean { return this.backend === "cold"; }
@@ -660,14 +660,14 @@ ${profileEnd}
         const v = this.reg(i.a), name = this.literal(descToName(dex.type(i.b)));
         if (this.cold) { out.push(`R.cc(${v},${name});`); break; }
         const k = this.icSlot();
-        out.push(`if(${v}!=null&&${v}!==0&&${v}.constructor!==$ic[${k}])R.ccc(${v},${name},$ic,${k});`);
+        out.push(`if(${v}!=null&&${v}!==0&&${v}.constructor!==$ic[${k}]&&${v}.constructor!==$ic[${k + 2}])R.ccc(${v},${name},$ic,${k});`);
         break;
       }
       case "instance-of": {
         const v = this.reg(i.b), name = this.literal(descToName(dex.type(i.c)));
         if (this.cold) { out.push(`${this.reg(i.a)}=R.iof(${v},${name});`); break; }
         const k = this.icSlot();
-        out.push(`${this.reg(i.a)}=${v}!=null&&${v}.constructor===$ic[${k}]?$ic[${k + 1}]:R.iofc(${v},${name},$ic,${k});`);
+        out.push(`${this.reg(i.a)}=${v}==null?0:${v}.constructor===$ic[${k}]?$ic[${k + 1}]:${v}.constructor===$ic[${k + 2}]?$ic[${k + 3}]:R.iofc(${v},${name},$ic,${k});`);
         break;
       }
       case "array-length": out.push(`${this.reg(i.a)}=${this.reg(i.b)}.length;`); break;
