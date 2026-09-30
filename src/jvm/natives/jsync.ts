@@ -1,19 +1,25 @@
 import { rt } from "../runtime";
-import { parkTimeout, unparkTimeout } from "../yield";
+import { parkTimeout, unparkTimeout, yieldToLoop } from "../yield";
 import { JThread, curThread } from "./jlang";
 
 // A parked thread wakes on its permit, its deadline, or an interrupt, which leaves the interrupt
 // status set rather than throwing (LockSupport.park). The wake is a macrotask so the unparker's
 // own chain runs to its next await first, and an untimed park still polls, as Java's spurious
-// wakeups allow, so a permit lost to a stale thread identity cannot hang it.
+// wakeups allow, so a permit lost to a stale thread identity cannot hang it. The macrotask is the
+// yield channel's: a clamped setTimeout cost each executor handoff 1 to 4 ms.
 function parkThread(t: JThread, timeoutMs?: number): void | Promise<void> {
   if (t.permit) { t.permit = false; return; }
   if (t.interrupted) return;
   return new Promise<void>((resolve) => {
-    const done = () => { t.parked = 0; t.wake = null; t.unpark = null; unparkTimeout(id); t.permit = false; resolve(); };
+    let woken = false;
+    // the first of permit, deadline and interrupt wakes it; a later one must not touch the next park
+    const done = () => {
+      if (woken) return;
+      woken = true; t.parked = 0; t.wake = null; t.unpark = null; unparkTimeout(id); t.permit = false; resolve();
+    };
     const id = parkTimeout(done, timeoutMs ?? 1000);
     t.parked = timeoutMs === undefined ? 3 : 4;
-    t.unpark = () => setTimeout(done, 0);
+    t.unpark = () => void yieldToLoop().then(done);
     t.wake = done;
   });
 }
