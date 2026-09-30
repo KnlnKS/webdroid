@@ -310,10 +310,13 @@ describe("sqlite-transaction-listener", () => {
     freshSQLiteStore();
     class Helper extends rt.link("android/database/sqlite/SQLiteOpenHelper").ctor {}
     rt.register({ name: "test/TempTableHelper", ctor: Helper, sup: "android/database/sqlite/SQLiteOpenHelper", methods: {
+      "onCreate(Landroid/database/sqlite/SQLiteDatabase;)V": () => {},
+      "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V": () => {},
       "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V": (db: unknown) =>
         vcall(db, "execSQL", "(Ljava/lang/String;)V", "CREATE TEMP TABLE temp_marker (id INTEGER)"),
     } });
-    const make = () => newObj("test/TempTableHelper", "(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V", null, "temp-isolation.db", null, 1);
+    const context = Object.assign(rt.make("android/content/Context"), { $host: { pkg: "test.sqlite" } });
+    const make = () => newObj("test/TempTableHelper", "(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V", context, "temp-isolation.db", null, 1);
     const first = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
     const second = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
     expect(first).not.toBe(second);

@@ -1,7 +1,7 @@
 // android.database observers: Observable and its DataSetObservable/ContentObservable, and the
-// DataSetObserver/ContentObserver callbacks they notify.
+// ContentObserver callbacks they notify (DataSetObserver is AOSP's).
 
-import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import type { JHandler, JFnRunnable } from "./os";
@@ -42,7 +42,6 @@ rt.register({
     "notifyInvalidated()V": function (this: JObservable) { return notifyObservers(this, "onInvalidated", "()V"); },
   },
 });
-rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V") } });
 rt.register({
   name: "android/database/ContentObservable", ctor: class extends JObservable {}, sup: "android/database/Observable",
   methods: {

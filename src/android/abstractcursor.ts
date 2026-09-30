@@ -2,7 +2,7 @@
 // that bytecode cursors extend. SQLCipher's SQLiteCursor is one — it reads mPos and mWindow and
 // fills its CursorWindow from native code — so the fields are shared with subclass bytecode.
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, driven, declaredField, type Gen } from "../jvm/runtime";
 import { vcall, newObj, defineException } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
@@ -28,15 +28,6 @@ export class JAbstractCursor extends JObj {
   notifyUris: JObj | null = null;
   extras: JObj = new JBundle();
 }
-// CharArrayBuffer: the caller's reusable char[] a text column is copied into, grown when it is short
-class JCharArrayBuffer extends JObj { data: Uint16Array | null = null; sizeCopied = 0; }
-rt.register({
-  name: "android/database/CharArrayBuffer", ctor: JCharArrayBuffer, fields: ["data", "sizeCopied"],
-  methods: {
-    "<init>(I)V": function (this: JCharArrayBuffer, n: number) { this.data = new Uint16Array(n); },
-    "<init>([C)V": function (this: JCharArrayBuffer, chars: Uint16Array) { this.data = chars; },
-  },
-});
 class JAbstractWindowedCursor extends JAbstractCursor { mWindow: JObj | null = null; }
 class JSelfContentObserver extends JObj { cursor: JAbstractCursor | null = null; }
 
@@ -104,12 +95,15 @@ rt.register({
       yield vcall(this, "onDeactivateOrClose", "()V");
     }),
     "onMove(II)Z": () => 1,
-    "copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V": driven(function* (this: JAbstractCursor, column: number, buffer: JCharArrayBuffer): Gen {
+    "copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V": driven(function* (this: JAbstractCursor, column: number, buffer: Record<string, unknown>): Gen {
       const text = (yield vcall(this, "getString", `(I)${S}`, column)) as string | null;
-      if (text === null) { buffer.sizeCopied = 0; return; }
-      if (!buffer.data || buffer.data.length < text.length) buffer.data = new Uint16Array(text.length);
-      for (let i = 0; i < text.length; i++) buffer.data[i] = text.charCodeAt(i);
-      buffer.sizeCopied = text.length;
+      const size = declaredField("android/database/CharArrayBuffer", "sizeCopied");
+      if (text === null) { buffer[size] = 0; return; }
+      const field = declaredField("android/database/CharArrayBuffer", "data");
+      let data = buffer[field] as Uint16Array | null;
+      if (!data || data.length < text.length) buffer[field] = data = new Uint16Array(text.length);
+      for (let i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
+      buffer[size] = text.length;
     }),
     "getPosition()I": function (this: JAbstractCursor) { return this.mPos; },
     "moveToPosition(I)Z": function (this: JAbstractCursor, position: number) { return moveToPosition(this, position); },

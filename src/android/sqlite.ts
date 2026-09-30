@@ -4,9 +4,9 @@ import initSqlJs, { type Database, type Statement } from "sql.js";
 import { i8, u8 } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool, newObj } from "../jvm/natives/jlang";
-import { JMap, newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { csText } from "../jvm/natives/jchars";
+import { vcall, boxInt, box, JLong, JBool, newObj } from "../jvm/natives/jlang";
+import { JMap, newArrayList } from "../jvm/natives/jutil";
+import { pathOf } from "../jvm/natives/jio";
 import { JAbstractCursor } from "./abstractcursor";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
@@ -58,8 +58,11 @@ class JSQLiteDatabase extends JObj {
   txOk = false;
   txListener: unknown = null;
   saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** a connection of its own (SQLiteOpenHelper's) rather than the path's shared one, so close() closes it */
+  separate = false;
+  txActive: (() => boolean) | null = null;
   scheduleSave() {
-    if (this.readOnly || this.path === ":memory:") return;
+    if (this.readOnly || this.path === ":memory:") { this.release(); return; }
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(async () => {
       this.saveTimer = null;
@@ -73,13 +76,21 @@ class JSQLiteDatabase extends JObj {
           vfs.write(this.path, bytes);
           await vfs.flush();
           globalThis.localStorage?.removeItem("wd:db:" + this.path);
+          this.release();
         }
         else this.scheduleSave();
       } catch (e) {
         if (e instanceof Error && e.message.includes("locked")) this.scheduleSave();
-        else console.warn("[sqlite] persist failed", e);
+        else { console.warn("[sqlite] persist failed", e); this.release(); }
       }
     }, 400);
+  }
+  /** a closed connection's handle goes once its last snapshot is taken */
+  release() {
+    if (this.open || !this.db) return;
+    if (this.txActive) sqliteStore.files.get(this.path)?.transactions.delete(this.txActive);
+    this.db.close();
+    this.db = null;
   }
 }
 const dbCache = new Map<string, JSQLiteDatabase>();
@@ -161,6 +172,7 @@ export async function openDatabase(path: string, flags = 0x10000000, separate = 
   if (jdb?.open) return jdb;
   jdb = new JSQLiteDatabase();
   jdb.path = path;
+  jdb.separate = separate;
   // a database the app streamed in may be disk-backed
   let data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null);
   let legacy = false;
@@ -178,7 +190,12 @@ export async function openDatabase(path: string, flags = 0x10000000, separate = 
     sqliteStore.files.set(path, file);
     jdb.db = sharedConnection(sql, file.db);
     const connection = jdb;
-    file.transactions.add(() => connection.txDepth > 0);
+    file.transactions.add(jdb.txActive = () => connection.txDepth > 0);
+    // opening creates the (empty) file, which callers chmod or stat before the first snapshot
+    if (!shared && !data) {
+      vfs.mkdir(path.slice(0, path.lastIndexOf("/")));
+      vfs.write(path, new Uint8Array(0));
+    }
   }
   jdb.db.exec("PRAGMA user_version");
   if (path !== ":memory:" && !separate) dbCache.set(path, jdb);
@@ -289,33 +306,6 @@ rt.register({ name: "webdroid/Cursor", ctor: JCursor, sup: ABSTRACT_CURSOR, meth
     return 0;
   },
 } });
-class JCursorWrapper extends JObj { cursor: unknown = null; }
-const cursorWrapperMethods: NativeSpec["methods"] = {};
-for (const signature of ["getCount()I", "getPosition()I", "move(I)Z", "moveToPosition(I)Z", "moveToFirst()Z", "moveToLast()Z",
-  "moveToNext()Z", "moveToPrevious()Z", "isFirst()Z", "isLast()Z", "isBeforeFirst()Z", "isAfterLast()Z",
-  "getColumnIndex(Ljava/lang/String;)I", "getColumnIndexOrThrow(Ljava/lang/String;)I", "getColumnName(I)Ljava/lang/String;",
-  "getColumnNames()[Ljava/lang/String;", "getColumnCount()I", "getBlob(I)[B", "getString(I)Ljava/lang/String;",
-  "copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V", "getShort(I)S", "getInt(I)I", "getLong(I)J", "getFloat(I)F",
-  "getDouble(I)D", "getType(I)I", "isNull(I)Z", "deactivate()V", "requery()Z", "close()V", "isClosed()Z",
-  "registerContentObserver(Landroid/database/ContentObserver;)V", "unregisterContentObserver(Landroid/database/ContentObserver;)V",
-  "registerDataSetObserver(Landroid/database/DataSetObserver;)V", "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
-  "setNotificationUri(Landroid/content/ContentResolver;Landroid/net/Uri;)V", "setNotificationUris(Landroid/content/ContentResolver;Ljava/util/List;)V",
-  "getNotificationUri()Landroid/net/Uri;", "getNotificationUris()Ljava/util/List;", "getWantsAllOnMoveCalls()Z",
-  "setExtras(Landroid/os/Bundle;)V", "getExtras()Landroid/os/Bundle;", "respond(Landroid/os/Bundle;)Landroid/os/Bundle;"]) {
-  const split = signature.indexOf("(");
-  const name = signature.slice(0, split), descriptor = signature.slice(split);
-  cursorWrapperMethods[signature] = function (this: JCursorWrapper, ...args: unknown[]) {
-    return vcall(this.cursor, name, descriptor, ...args);
-  };
-}
-rt.register({ name: "android/database/CursorWrapper", ctor: JCursorWrapper, ifaces: ["android/database/Cursor"], methods: {
-  ...cursorWrapperMethods,
-  "<init>(Landroid/database/Cursor;)V": function (this: JCursorWrapper, cursor: unknown) {
-    if (!cursor) rt.npe();
-    this.cursor = cursor;
-  },
-  "getWrappedCursor()Landroid/database/Cursor;": function (this: JCursorWrapper) { return this.cursor; },
-} });
 class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
 rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {
   "add(Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, value: unknown) {
@@ -362,12 +352,19 @@ rt.register({
       },
       "putNull(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.data.m.set(k, { k, v: null }); },
       "size()I": function (this: JContentValues) { return this.data.m.size; },
+      "isEmpty()Z": function (this: JContentValues) { return this.data.m.size ? 0 : 1; },
       "containsKey(Ljava/lang/String;)Z": function (this: JContentValues, k: string) { return this.data.m.has(k) ? 1 : 0; },
       "remove(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.data.m.delete(k); },
       "clear()V": function (this: JContentValues) { this.data.m.clear(); },
       "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContentValues, k: string) { return this.data.m.get(k)?.v ?? null; },
       "keySet()Ljava/util/Set;": function (this: JContentValues) { return vcall(this.data, "keySet", "()Ljava/util/Set;"); },
       "valueSet()Ljava/util/Set;": function (this: JContentValues) { return vcall(this.data, "entrySet", "()Ljava/util/Set;"); },
+      // live over the same entries, as AOSP hands out its mMap
+      "getValues()Landroid/util/ArrayMap;": function (this: JContentValues) {
+        const map: JMap = rt.make("android/util/ArrayMap");
+        map.m = this.data.m;
+        return map;
+      },
       "getAsBoolean(Ljava/lang/String;)Ljava/lang/Boolean;": function (this: JContentValues, k: string) {
         const v = unbox(this.data.m.get(k)?.v);
         if (v === null || v === undefined) return null;
@@ -406,6 +403,29 @@ function tableQuery(this: JSQLiteDatabase, table: string, cols: string[] | null,
 }
 const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "static create(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;": () => openDatabase(":memory:"),
+  // AOSP's SQLiteOpenHelper opens through these: each call a connection of its own
+  "static createInMemory(Landroid/database/sqlite/SQLiteDatabase$OpenParams;)Landroid/database/sqlite/SQLiteDatabase;":
+    (params: JObj) => openWithParams(":memory:", params),
+  "static openDatabase(Ljava/io/File;Landroid/database/sqlite/SQLiteDatabase$OpenParams;)Landroid/database/sqlite/SQLiteDatabase;":
+    (file: JObj, params: JObj) => openWithParams(pathOf(file), params),
+  "static deleteDatabase(Ljava/io/File;)Z": (file: JObj) => {
+    const path = pathOf(file);
+    sqliteStore.files.delete(path);
+    const deleted = vfs.delete(path);
+    for (const suffix of ["-journal", "-shm", "-wal"]) vfs.delete(path + suffix);
+    if (dbCache.get(path)?.open === false) dbCache.delete(path);
+    return deleted ? 1 : 0;
+  },
+  "reopenReadWrite()V": function (this: JSQLiteDatabase) {
+    const file = sqliteStore.files.get(this.path);
+    if (!this.readOnly || !this.open || !file || !SQL) return;
+    if (readOnlyCache.get(this.path) === this) readOnlyCache.delete(this.path);
+    this.db!.close();
+    this.db = sharedConnection(SQL, file.db);
+    this.readOnly = false;
+    this.separate = true;
+    file.transactions.add(this.txActive = () => this.txDepth > 0);
+  },
   "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)Landroid/database/sqlite/SQLiteDatabase;":
     function (path: string, _factory: unknown, flags: number) { return openDatabase(path, flags); },
   "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;ILandroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;":
@@ -512,8 +532,12 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "inTransaction()Z": function (this: JSQLiteDatabase) { return this.txDepth > 0 ? 1 : 0; },
   "isOpen()Z": function (this: JSQLiteDatabase) { return this.open ? 1 : 0; },
   "close()V": function (this: JSQLiteDatabase) {
-    if (this.readOnly) { if (this.open) this.db!.close(); this.open = false; }
-    else this.scheduleSave();
+    if (this.readOnly) { if (this.open) this.db!.close(); this.open = false; return; }
+    if (this.separate && this.open) {
+      this.open = false;
+      if (this.txDepth > 0) { this.txDepth = 0; try { this.db!.exec("ROLLBACK"); } catch { /* */ } }
+    }
+    this.scheduleSave();
   },
   "getVersion()I": function (this: JSQLiteDatabase) {
     const r = this.db!.exec("PRAGMA user_version");
@@ -524,6 +548,17 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     this.scheduleSave();
   },
   "getPath()Ljava/lang/String;": function (this: JSQLiteDatabase) { return this.path; },
+  "static findEditTable(Ljava/lang/String;)Ljava/lang/String;": (tables: string | null) => {
+    if (!tables) throw rt.mkThrowable("java/lang/IllegalStateException", "Invalid tables");
+    const space = tables.indexOf(" "), comma = tables.indexOf(",");
+    if (space > 0 && (space < comma || comma < 0)) return tables.slice(0, space);
+    if (comma > 0 && (comma < space || space < 0)) return tables.slice(0, comma);
+    return tables;
+  },
+  "validateSql(Ljava/lang/String;Landroid/os/CancellationSignal;)V": driven(function* (this: JSQLiteDatabase, sql: string, signal: unknown): Gen {
+    if (signal) yield vcall(signal, "throwIfCanceled", "()V");
+    try { this.db!.prepare(sql).free(); } catch (e) { throw sqliteExc(String(e), sql); }
+  }),
   "getAttachedDbs()Ljava/util/List;": async function (this: JSQLiteDatabase) {
     return newArrayList([await newObj("android/util/Pair", "(Ljava/lang/Object;Ljava/lang/Object;)V", "main", this.path)]);
   },
@@ -543,9 +578,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
     "yieldIfContendedSafely()Z", "static releaseMemory()I"),
 };
-function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null, distinct = false, rawTable = false): string {
+function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): string {
   const c = cols?.length ? cols.join(",") : "*";
-  let sql = `SELECT ${distinct ? "DISTINCT " : ""}${c} FROM ${rawTable ? table : `"${table}"`}`;
+  let sql = `SELECT ${c} FROM "${table}"`;
   if (sel) sql += " WHERE " + sel;
   if (groupBy) sql += " GROUP BY " + groupBy;
   if (having) sql += " HAVING " + having;
@@ -553,84 +588,6 @@ function buildQuery(table: string, cols: string[] | null, sel: string | null, gr
   if (limit) sql += " LIMIT " + limit;
   return sql;
 }
-
-function queryBuilderEditTable(tables: string | null): string {
-  if (!tables) return rt.npe();
-  return tables.split(/[\s,]/, 1)[0];
-}
-class JSQLiteQueryBuilder extends JObj {
-  tables: string | null = null;
-  projectionMap: unknown = null;
-  where = "";
-  distinct = false;
-
-  async projection(columns: string[] | null): Promise<string[] | null> {
-    const map = this.projectionMap;
-    if (!map) return columns;
-    if (columns?.length) {
-      const result: string[] = [];
-      for (const column of columns) {
-        const mapped = await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", column);
-        if (mapped !== null) result.push(String(mapped));
-        else if (/\sAS\s/i.test(column)) result.push(column);
-        else throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid column " + column);
-      }
-      return result;
-    }
-    const entries = await toJsArray(await vcall(map, "entrySet", "()Ljava/util/Set;"));
-    const result: string[] = [];
-    for (const entry of entries) {
-      if (await vcall(entry, "getKey", "()Ljava/lang/Object;") === "_count") continue;
-      result.push(String(await vcall(entry, "getValue", "()Ljava/lang/Object;")));
-    }
-    return result;
-  }
-
-  /** the appended where clause and a caller's selection, each parenthesized and ANDed */
-  whereWith(selection: string | null): string | null {
-    return [this.where && `(${this.where})`, selection && `(${selection})`].filter(Boolean).join(" AND ") || null;
-  }
-
-  async sql(columns: string[] | null, selection: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): Promise<string> {
-    return buildQuery(this.tables ?? "", await this.projection(columns), this.whereWith(selection), groupBy, having, orderBy, limit, this.distinct, true);
-  }
-}
-
-/** SQLiteQueryBuilder.query, with or without its trailing limit */
-const builderQuery = driven(function* (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, sel: string | null, args: string[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null = null): Gen {
-  return this.tables === null ? null : runQuery(db, yield this.sql(cols, sel, groupBy, having, orderBy, limit), args);
-});
-rt.register({ name: "android/database/sqlite/SQLiteQueryBuilder", ctor: JSQLiteQueryBuilder, methods: {
-  "<init>()V": () => {},
-  "setTables(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, tables: string | null) { this.tables = tables; },
-  "getTables()Ljava/lang/String;": function (this: JSQLiteQueryBuilder) { return this.tables; },
-  "setProjectionMap(Ljava/util/Map;)V": function (this: JSQLiteQueryBuilder, map: unknown) { this.projectionMap = map; },
-  "getProjectionMap()Ljava/util/Map;": function (this: JSQLiteQueryBuilder) { return this.projectionMap; },
-  "setDistinct(Z)V": function (this: JSQLiteQueryBuilder, distinct: number) { this.distinct = !!distinct; },
-  "isDistinct()Z": function (this: JSQLiteQueryBuilder) { return +this.distinct; },
-  "appendWhere(Ljava/lang/CharSequence;)V": driven(function* (this: JSQLiteQueryBuilder, where: unknown): Gen { this.where += yield csText(where); }),
-  "appendWhereStandalone(Ljava/lang/CharSequence;)V": driven(function* (this: JSQLiteQueryBuilder, where: unknown): Gen {
-    this.where += (this.where ? " AND " : "") + `(${yield csText(where)})`;
-  }),
-  "appendWhereEscapeString(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, where: string) {
-    this.where += "'" + where.replaceAll("'", "''") + "'";
-  },
-  "buildQuery([Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;":
-    function (this: JSQLiteQueryBuilder, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null) {
-      return this.sql(cols, sel, groupBy, having, orderBy, limit);
-    },
-  "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;": builderQuery,
-  "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;": builderQuery,
-  "update(Landroid/database/sqlite/SQLiteDatabase;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
-    function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, values: JContentValues, selection: string | null, args: string[] | null) {
-      if (!values) rt.npe();
-      return callSelf(dbMethods, "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", db, queryBuilderEditTable(this.tables), values, this.whereWith(selection), args);
-    },
-  "delete(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)I":
-    function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, selection: string | null, args: string[] | null) {
-      return callSelf(dbMethods, "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I", db, queryBuilderEditTable(this.tables), this.whereWith(selection), args);
-    },
-} });
 function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: string, doThrow = false): bigint {
   const keys = [...cv.data.m.keys()];
   const sql = keys.length
@@ -741,87 +698,22 @@ rt.register({
       (db: JSQLiteDatabase, sql: string, args: unknown[]) => firstLong(runQuery(db, sql, args)),
     "static stringForQuery(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)Ljava/lang/String;":
       (db: JSQLiteDatabase, sql: string, args: unknown[]) => firstString(runQuery(db, sql, args)),
+    "static executeInsert(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/Object;)J":
+      (db: JSQLiteDatabase, sql: string, args: unknown[] | null) => { runWrite(db, sql, args); return db.db!.getRowsModified() > 0 ? lastInsertRowId(db) : -1n; },
+    "static executeUpdateDelete(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/Object;)I":
+      (db: JSQLiteDatabase, sql: string, args: unknown[] | null) => { runWrite(db, sql, args); return db.db!.getRowsModified(); },
   },
 });
 
-// SQLiteOpenHelper: version migration flow
-class JOpenParams extends JObj { flags = 0; synchronous: string | null = null; }
-class JOpenParamsBuilder extends JObj { params = new JOpenParams(); }
-rt.register({ name: "android/database/sqlite/SQLiteDatabase$OpenParams", ctor: JOpenParams });
-rt.register({ name: "android/database/sqlite/SQLiteDatabase$OpenParams$Builder", ctor: JOpenParamsBuilder, methods: {
-  "<init>()V": function () {},
-  "addOpenFlags(I)Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;": function (this: JOpenParamsBuilder, flags: number) { this.params.flags |= flags; return this; },
-  "setSynchronousMode(Ljava/lang/String;)Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;": function (this: JOpenParamsBuilder, mode: string) {
-    if (mode == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "synchronousMode must not be null");
-    this.params.synchronous = mode; return this;
-  },
-  "build()Landroid/database/sqlite/SQLiteDatabase$OpenParams;": function (this: JOpenParamsBuilder) { return Object.assign(new JOpenParams(), this.params); },
-} });
-class JSQLiteOpenHelper extends JObj {
-  jctx: any = null;
-  name: string | null = null;
-  version = 1;
-  jdb: JSQLiteDatabase | null = null;
-  params = new JOpenParams();
-  opening: { thread: JThread; ready: Promise<JSQLiteDatabase> } | null = null;
-}
-function initOpenHelper(this: JSQLiteOpenHelper, ctx: unknown, name: string | null, _factory: unknown, version: number) {
-  this.jctx = ctx;
-  this.name = name;
-  this.version = version;
-}
-rt.register({
-  name: "android/database/sqlite/SQLiteOpenHelper", ctor: JSQLiteOpenHelper,
-  methods: {
-    "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V": initOpenHelper,
-    "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;ILandroid/database/DatabaseErrorHandler;)V": initOpenHelper,
-    "getWritableDatabase()Landroid/database/sqlite/SQLiteDatabase;": function (this: JSQLiteOpenHelper) { return openHelperDb(this); },
-    "getReadableDatabase()Landroid/database/sqlite/SQLiteDatabase;": function (this: JSQLiteOpenHelper) { return openHelperDb(this); },
-    "getDatabaseName()Ljava/lang/String;": function (this: JSQLiteOpenHelper) { return this.name; },
-    "close()V": function (this: JSQLiteOpenHelper) { this.jdb?.scheduleSave(); },
-    "setOpenParams(Landroid/database/sqlite/SQLiteDatabase$OpenParams;)V": function (this: JSQLiteOpenHelper, params: JOpenParams) {
-      if (params == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "OpenParams must not be null");
-      if (this.jdb) throw rt.mkThrowable("java/lang/IllegalStateException", "Database already open");
-      this.params = Object.assign(new JOpenParams(), params);
-    },
-    ...noops("onCreate(Landroid/database/sqlite/SQLiteDatabase;)V",
-      "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V",
-      "onDowngrade(Landroid/database/sqlite/SQLiteDatabase;II)V", "setWriteAheadLoggingEnabled(Z)V"),
-  },
-});
-function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
-  if (h.jdb?.open) return Promise.resolve(h.jdb);
-  if (h.opening) {
-    if (h.opening.thread === curThread) throw rt.mkThrowable("java/lang/IllegalStateException", "getDatabase called recursively");
-    return h.opening.ready;
-  }
-  const thread = curThread, ready = initializeHelperDb(h, thread).finally(() => { h.opening = null; });
-  h.opening = { thread, ready };
-  return ready;
-}
-async function initializeHelperDb(h: JSQLiteOpenHelper, thread: JThread): Promise<JSQLiteDatabase> {
-  const pkg = h.jctx?.$host?.pkg ?? "app";
-  const path = h.name ? dbPath(pkg, h.name) : ":memory:";
-  const jdb = await openDatabase(path, h.params.flags | 0x10000000, true);
-  if (h.params.synchronous !== null) jdb.db!.exec("PRAGMA synchronous='" + h.params.synchronous.replace(/'/g, "''") + "'");
-  await vcallOn(thread, h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
-  const cur = callSelf(dbMethods, "getVersion()I", jdb) as number;
-  if (cur !== h.version) {
-    await callOn(thread, () => callSelf(dbMethods, "beginTransaction()V", jdb));
-    try {
-      if (cur === 0) await vcallOn(thread, h, "onCreate", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
-      else if (cur < h.version) await vcallOn(thread, h, "onUpgrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
-      else await vcallOn(thread, h, "onDowngrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
-      callSelf(dbMethods, "setVersion(I)V", jdb, h.version);
-      callSelf(dbMethods, "setTransactionSuccessful()V", jdb);
-    } finally {
-      await callOn(thread, () => callSelf(dbMethods, "endTransaction()V", jdb));
-    }
-  }
-  await vcallOn(thread, h, "onOpen", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
-  h.jdb = jdb;
+/** SQLiteDatabase.openDatabase(File, OpenParams), read through AOSP's OpenParams getters */
+const openWithParams = driven(function* (path: string, params: JObj | null): Gen {
+  if (!params) return rt.npe();
+  const flags = (yield vcall(params, "getOpenFlags", "()I")) as number;
+  const synchronous = (yield vcall(params, "getSynchronousMode", "()Ljava/lang/String;")) as string | null;
+  const jdb = (yield openDatabase(path, flags, true)) as JSQLiteDatabase;
+  if (synchronous !== null) jdb.db!.exec("PRAGMA synchronous='" + synchronous.replace(/'/g, "''") + "'");
   return jdb;
-}
+});
 rt.markers("android/database/DatabaseErrorHandler");
 rt.markers("android/database/sqlite/SQLiteTransactionListener");
 
