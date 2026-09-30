@@ -1256,9 +1256,8 @@ export const threadExit = { hook: null as ((t: JThread) => void) | null };
 const liveThreads = new Set<JThread>();
 export class JThread extends JObj {
   jname = "Thread";
-  /** ThreadLocalRandom's per-thread state, which libcore reaches through Unsafe field offsets. It
-   *  also asks for the thread-local maps' offsets; ours live in `locals`, which those do not name,
-   *  so libcore's eraseThreadLocals (innocuous ForkJoin workers only) leaves them in place. */
+  /** the fields libcore reaches in a Thread, by name or Unsafe offset: ThreadLocalRandom's state and
+   *  ThreadLocal's maps */
   threadLocalRandomSeed = 0n; threadLocalRandomProbe = 0; threadLocalRandomSecondarySeed = 0;
   threadLocals: unknown = null; inheritableThreadLocals: unknown = null; inheritedAccessControlContext: unknown = null;
   /** LockSupport's blocker, and the id it reads through Unsafe as getId reports it */
@@ -1275,7 +1274,6 @@ export class JThread extends JObj {
   prio = 5;
   target: unknown = null;   // Runnable
   ueh: unknown = null;      // Thread.UncaughtExceptionHandler
-  locals = inheritedLocals();
   interrupted = 0;
   wake: (() => void) | null = null;
   /** LockSupport: a permit delivered while not parked, or the wake of a park in progress */
@@ -1323,6 +1321,35 @@ export function setCurThread(t: JThread) {
 let threadCounter = 0;
 const nextThreadName = () => "Thread-" + threadCounter++;
 function initGroupedThread(this: JThread, _group: unknown, target: unknown, name: string) { this.target = target; this.jname = name; }
+/** a Thread constructor that, as Thread.init does, starts the thread with a copy of its creator's
+ *  inheritable thread locals (libcore's ThreadLocal keeps them in the thread's fields) */
+function inheriting(init: (this: JThread, ...a: any[]) => void) {
+  return function (this: JThread, ...a: unknown[]) {
+    init.apply(this, a);
+    const parent = curThread.inheritableThreadLocals;
+    if (parent === null) return;
+    return after(scall("java/lang/ThreadLocal", "createInheritedMap", "(Ljava/lang/ThreadLocal$ThreadLocalMap;)Ljava/lang/ThreadLocal$ThreadLocalMap;", parent),
+      (m: unknown) => { this.inheritableThreadLocals = m; });
+  };
+}
+// §4.7: ThreadLocal.get and set when the value sits in the entry its hash names, in the thread's own
+// map (getMap not overridden, as InheritableThreadLocal does); every other case is libcore's
+{
+  const TL = "java/lang/ThreadLocal", MAP = "java/lang/ThreadLocal$ThreadLocalMap";
+  let proto: Record<string, unknown> | undefined;
+  const names: Record<string, string> = { hash: mangleField(TL, "threadLocalHashCode"), table: mangleField(MAP, "table"),
+    value: mangleField(MAP + "$Entry", "value"), getMap: mangleMethod("getMap", "(Ljava/lang/Thread;)Ljava/lang/ThreadLocal$ThreadLocalMap;") };
+  const entry = (params: string, hit: string) => (base: (this: unknown, ...a: unknown[]) => unknown) => new Function("base", "R", "proto",
+    `return function(${params}){
+      const map = this.$getMap === proto().$getMap ? R.th().threadLocals : null;
+      if (map !== null) {
+        const table = map.$table, e = table[this.$hash & (table.length - 1)];
+        if (e !== null && e.wr !== null && e.wr.deref() === this) ${hit}
+      }
+      return base.call(this${params ? ", " + params : ""});
+    }`.replace(/\$(\w+)/g, (_, f: string) => names[f]))(base, rt, () => proto ??= rt.link(TL).ctor.prototype);
+  rt.intrinsic(TL, { "get()Ljava/lang/Object;": entry("", "return e.$value;"), "set(Ljava/lang/Object;)V": entry("v", "{ e.$value = v; return; }") });
+}
 
 // Parks `t` until `wake` is called (notify/signal), the timeout elapses, or the thread is
 // interrupted: resolves true on a wake, false on a timeout, rejects with InterruptedException on
@@ -1359,13 +1386,13 @@ rt.register({
   fields: ["threadLocalRandomSeed", "threadLocalRandomProbe", "threadLocalRandomSecondarySeed", "threadLocals", "inheritableThreadLocals",
     "inheritedAccessControlContext", "parkBlocker", "tid"],
   methods: {
-    "<init>()V": function (this: JThread) { this.jname = nextThreadName(); },
-    "<init>(Ljava/lang/Runnable;)V": function (this: JThread, r: unknown) { this.target = r; this.jname = nextThreadName(); },
-    "<init>(Ljava/lang/Runnable;Ljava/lang/String;)V": function (this: JThread, r: unknown, n: string) { this.target = r; this.jname = n; },
-    "<init>(Ljava/lang/String;)V": function (this: JThread, n: string) { this.jname = n; },
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;)V": initGroupedThread,
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V": initGroupedThread,
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": function (this: JThread, _g: unknown, n: string) { this.jname = n; },
+    "<init>()V": inheriting(function () { this.jname = nextThreadName(); }),
+    "<init>(Ljava/lang/Runnable;)V": inheriting(function (r: unknown) { this.target = r; this.jname = nextThreadName(); }),
+    "<init>(Ljava/lang/Runnable;Ljava/lang/String;)V": inheriting(function (r: unknown, n: string) { this.target = r; this.jname = n; }),
+    "<init>(Ljava/lang/String;)V": inheriting(function (n: string) { this.jname = n; }),
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;)V": inheriting(initGroupedThread),
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V": inheriting(initGroupedThread),
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": inheriting(function (_g: unknown, n: string) { this.jname = n; }),
     "getName()Ljava/lang/String;": function (this: JThread) { return this.jname; },
     "setName(Ljava/lang/String;)V": function (this: JThread, n: string) { this.jname = n; },
     "setDaemon(Z)V": function (this: JThread, d: number) { this.daemon = d; },
@@ -1452,48 +1479,6 @@ rt.register({
     "enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => { console.error("[uncaught]", e); },
     "toString()Ljava/lang/String;": function (this: JThreadGroup) { return `java.lang.ThreadGroup[name=${this.gname},maxpri=10]`; },
-  },
-});
-
-class JThreadLocal extends JObj {}
-class JInheritableThreadLocal extends JThreadLocal {}
-/** a new Thread starts with its creator's inheritable values (the default childValue) */
-function inheritedLocals(): Map<object, unknown> {
-  const m = new Map<object, unknown>();
-  if (curThread) for (const [k, v] of curThread.locals) if (k instanceof JInheritableThreadLocal) m.set(k, v);
-  return m;
-}
-rt.register({
-  name: "java/lang/InheritableThreadLocal", ctor: JInheritableThreadLocal, sup: "java/lang/ThreadLocal",
-  methods: { "<init>()V": function () {}, "childValue(Ljava/lang/Object;)Ljava/lang/Object;": (v: unknown) => v },
-});
-rt.register({
-  name: "webdroid/SuppliedThreadLocal", ctor: class extends JThreadLocal { supplier: unknown = null; }, sup: "java/lang/ThreadLocal",
-  methods: { "initialValue()Ljava/lang/Object;": function (this: { supplier: unknown }) { return vcall(this.supplier, "get", "()Ljava/lang/Object;"); } },
-});
-rt.register({
-  name: "java/lang/ThreadLocal", ctor: JThreadLocal,
-  methods: {
-    "<init>()V": function () {},
-    // curThread is a global: pin the thread BEFORE initialValue suspends, or the value is
-    // stored on whichever thread happened to be current when it resolved and read back as null.
-    "get()Ljava/lang/Object;": driven(function* (this: JThreadLocal): Gen {
-      const t = curThread;
-      if (!t.locals.has(this)) {
-        const v = yield vcall(this, "initialValue", "()Ljava/lang/Object;");
-        if (!t.locals.has(this)) t.locals.set(this, v);
-      }
-      return t.locals.get(this) ?? null;
-    }),
-    "set(Ljava/lang/Object;)V": function (this: JThreadLocal, v: unknown) { curThread.locals.set(this, v); },
-    "remove()V": function (this: JThreadLocal) { curThread.locals.delete(this); },
-    "initialValue()Ljava/lang/Object;": function () { return null; },
-    "static withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;": (sup: unknown) => {
-      if (sup == null) rt.npe();
-      const t = rt.make("webdroid/SuppliedThreadLocal");
-      t.supplier = sup;
-      return t;
-    },
   },
 });
 

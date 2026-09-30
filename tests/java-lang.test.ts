@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn } from "../src/jvm/natives/jlang";
 import { boxDouble, boxFloat, boxInt } from "../src/jvm/natives/jbox";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
@@ -282,7 +282,7 @@ describe("reference", () => {
     const local = await newObj("java/lang/InheritableThreadLocal");
     await vcall(local, "set", "(Ljava/lang/Object;)V", "inherited");
     const thread = await newObj("java/lang/Thread");
-    expect(thread.locals.get(local)).toBe("inherited");
+    expect(await vcallOn(thread, local, "get", "()Ljava/lang/Object;")).toBe("inherited");
     expect(await vcall(local, "get", "()Ljava/lang/Object;")).toBe("inherited");
     await vcall(await newObj("java/lang/Object"), "hashCode", "()I");
     expect(rt.iof(local, "java/lang/ThreadLocal")).toBe(1);

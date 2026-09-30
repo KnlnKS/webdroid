@@ -420,6 +420,21 @@ test("Math's intrinsics match their AOSP bodies", async () => {
   }
 });
 
+test("ThreadLocal's intrinsics match their AOSP bodies, each on its own thread", async () => {
+  const { JThread, callOn } = await import("../src/jvm/natives/jlang");
+  const [[get, getBase], [set, setBase]] = await Promise.all(["get()Ljava/lang/Object;", "set(Ljava/lang/Object;)V"].map((sig) => pair("java/lang/ThreadLocal", sig)));
+  const locals = await Promise.all(Array.from({ length: 40 }, (_, i) => newObj(i % 3 ? "java/lang/ThreadLocal" : "java/lang/InheritableThreadLocal")));
+  const threads = [new JThread(), new JThread()];
+  let s = 11;
+  const rnd = (n: number) => (s = (Math.imul(s, 1103515245) + 12345) >>> 0) % n;
+  for (let step = 0; step < 2000; step++) {
+    const local = locals[rnd(locals.length)], op = rnd(5), value = rnd(4) ? "v" + step : null;
+    const [mine, theirs] = await Promise.all([[get, set, threads[0]], [getBase, setBase, threads[1]]].map(([g, st, t]) => callOn(t as InstanceType<typeof JThread>, () =>
+      op === 4 ? vcall(local, "remove", "()V") : op % 2 ? result(g as Function, local, []) : result(st as Function, local, [value]))));
+    expect(mine).toEqual(theirs);
+  }
+});
+
 test("Enum's intrinsics match their AOSP bodies", async () => {
   const [[cmp, cmpBase], [shared, sharedBase], [valueOf, valueOfBase]] = await Promise.all(["compareTo(Ljava/lang/Enum;)I",
     "static getSharedConstants(Ljava/lang/Class;)[Ljava/lang/Enum;", "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;"]
