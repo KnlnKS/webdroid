@@ -2,7 +2,7 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { vcall, scall, newObj, javaFormat } from "../jvm/natives/jlang";
+import { vcall, scall, newObj } from "../jvm/natives/jlang";
 import { mkUri, uriParts, type JUri } from "./net";
 import { currentResources, frameworkString } from "./res";
 import { type JMediaPlayer, mpLoad, mpReset, mpStart } from "./media";
@@ -29,7 +29,7 @@ const ringtoneTitle = driven(function* (context: unknown, uri: JUri | null, foll
   else if (uriParts(uri).authority === "settings") {
     if (followDefault) {
       const actual: string = yield ringtoneTitle(context, yield actualDefaultUri(context, defaultType(uri)), false);
-      title = javaFormat(frameworkString("ringtone_default_with_actual") ?? "%1$s", [actual]);
+      title = yield scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", frameworkString("ringtone_default_with_actual") ?? "%1$s", jarray([actual], "Ljava/lang/Object;"));
     }
   } else {
     if (uriParts(uri).authority === "media") {

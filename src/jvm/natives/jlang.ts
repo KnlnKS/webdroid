@@ -11,9 +11,8 @@ import { device } from "../../shell/config";
 import { vfs, apkPath } from "../../shell/vfs";
 import { appUserName, procIdentity } from "../../shell/procfs";
 import { csText } from "./jchars";
-import { boxDesc, boxObject, unbox } from "./jbox";
+import { boxObject } from "./jbox";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
-import { bigOf } from "./jmath";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
   if (separator == null || parts == null) rt.npe();
@@ -860,74 +859,6 @@ const valueOfObject = (v: unknown): string | null | Promise<string | null> =>
   v === null ? "null" : typeof v === "string" ? v : vcall(boxObject(v), "toString", "()Ljava/lang/String;");
 /** the text string concatenation appends for a value */
 export const stringOf = (v: unknown): string | Promise<string> => after(valueOfObject(v), String);
-export function javaFormat(fmt: string, args: unknown[]): string {
-  let ai = 0;
-  return fmt.replace(/%(\d+\$)?([-+ 0#,]*)(\d+)?(?:\.(\d+))?([sdfxXeobnch%])/g,
-    (m, argn, flags: string, width: string, prec: string, conv: string) => {
-      if (conv === "%") return "%";
-      if (conv === "n") return "\n";
-      const idx = argn ? parseInt(argn) - 1 : ai++;
-      const arg = args[idx];
-      let v = arg;
-      // BigInteger prints its whole signed magnitude; int/long print two's-complement at their width.
-      const big = rt.iof(v, "java/math/BigInteger") ? bigOf(v as JObj) : null;
-      if (big !== null) v = big;
-      // %x/%o print two's complement at the ARGUMENT's width, so a Byte -1 is "ff", not "ffffffff"
-      const desc = boxDesc(v), mask = desc === "B" ? 0xff : desc === "S" ? 0xffff : -1;
-      if (desc) v = unbox(v);
-      const radix = (r: number) => big !== null ? (big < 0n ? "-" : "") + (big < 0n ? -big : big).toString(r)
-        : (typeof v === "bigint" ? BigInt.asUintN(64, v) : ((Number(v) & mask) >>> 0)).toString(r);
-      let s: string;
-      switch (conv) {
-        case "d": s = String(v); if (flags.includes(",")) s = Number(v).toLocaleString("en-US"); break;
-        case "f": s = Number(v).toFixed(prec ? parseInt(prec) : 6); break;
-        case "e": s = Number(v).toExponential(prec ? parseInt(prec) : 6); break;
-        case "x": s = radix(16); break;
-        case "X": s = radix(16).toUpperCase(); break;
-        case "o": s = radix(8); break;
-        case "c": s = String.fromCharCode(Number(v)); break;
-        case "b": s = v === null || v === 0 ? "false" : "true"; break;
-        case "h": s = v === null ? "null" : idHash(v).toString(16); break;
-        default: s = jToString(arg); // a box prints its own toString: a Double 2 is "2.0"
-          if (prec) s = s.slice(0, parseInt(prec));
-      }
-      if (width) {
-        const w = parseInt(width);
-        if (s.length < w) s = flags.includes("-") ? s.padEnd(w) : flags.includes("0")
-          ? s.replace(/^-?/, (sign) => sign + "0".repeat(w - s.length)) : s.padStart(w);
-      }
-      return s;
-    });
-}
-class JFormatter extends JObj { out: unknown = null; s = ""; locale: unknown = null; }
-/** a Formatter without a locale takes the default FORMAT locale when made, as libcore's does */
-const formatterInit = function (this: JFormatter, out: unknown = null) {
-  this.out = out;
-  return after(linkInit("java/util/Locale$Category"), (category) =>
-    after(scall("java/util/Locale", "getDefault", "(Ljava/util/Locale$Category;)Ljava/util/Locale;", category.ctor[mangleStaticField("FORMAT")]), (l) => { this.locale = l; }));
-};
-rt.register({
-  name: "java/util/Formatter", ctor: JFormatter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
-  methods: {
-    "<init>()V": function (this: JFormatter) { return formatterInit.call(this); },
-    "<init>(Ljava/lang/Appendable;)V": formatterInit,
-    "<init>(Ljava/util/Locale;)V": function (this: JFormatter, l: unknown) { this.locale = l; },
-    "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": function (this: JFormatter, out: unknown, l: unknown) { this.out = out; this.locale = l; },
-    "locale()Ljava/util/Locale;": function (this: JFormatter) { return this.locale; },
-    "format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": driven(function* (this: JFormatter, fmt: string, args: unknown[]): Gen {
-      const s = javaFormat(fmt, args ?? []);
-      if (this.out) yield vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
-      return this;
-    }),
-    "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
-      return vcall(this, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;", fmt, args);
-    },
-    "out()Ljava/lang/Appendable;": function (this: JFormatter) { return this.out; },
-    "toString()Ljava/lang/String;": function (this: JFormatter) { return this.out ? vcall(this.out, "toString", "()Ljava/lang/String;") : this.s; },
-    "flush()V": () => {},
-    "close()V": () => {},
-  },
-});
 rt.register({
   name: "java/lang/String",
   ctor: String, // instances are JS primitives
@@ -942,9 +873,6 @@ rt.register({
     "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": valueOfObject,
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
-    "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
-    "static format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;":
-      (_l: unknown, f: string, a: unknown[]) => javaFormat(f, a),
     "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;": joinCharSequences,
     "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": joinIterable,
 
