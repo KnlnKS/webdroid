@@ -9,7 +9,7 @@ import { scall, vcall, after } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { pageShared } from "../shell/pageshared";
 import { utf8 } from "../jvm/abi";
-import { deref } from "./handles";
+import { deref, handle } from "./handles";
 
 /** Offsets of the sfnt tables we read, by tag, or null if `b` is not a font we understand. */
 export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at: Map<number, number> } | null {
@@ -34,6 +34,8 @@ export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at:
 }
 const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
 export const T_CMAP = 0x636d6170;
+const T_GLYF = 0x676c7966, T_CBLC = 0x43424c43;
+const isScalable = (at: Map<number, number>) => at.has(T_GLYF) || at.has(T_CFF) || at.has(T_CFF2);
 
 /** weight/italic from the face's OS/2 table (what AOSP's analyzeStyle reads), null if absent */
 export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boolean } | null {
@@ -44,14 +46,24 @@ export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic
 }
 
 /** FreeType's scalable-face metrics as Skia reads them, in ems: hhea ascender/descender and line
- *  gap, and head's bounding box for top/bottom (all positive downwards from the baseline). */
+ *  gap, and head's bounding box for top/bottom (all positive downwards from the baseline). A face
+ *  with only bitmaps (a CBDT emoji font) has its largest strike's line metrics, scaled. */
 export interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number }
 function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
   const t = sfntTables(b, ttcIndex);
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
   if (!t || head === undefined || hhea === undefined || head + 44 > b.length || hhea + 10 > b.length) return null;
-  const upem = t.dv.getUint16(head + 18);
+  const upem = t.dv.getUint16(head + 18), cblc = t.at.get(T_CBLC);
   if (!upem) return null;
+  if (!isScalable(t.at) && cblc !== undefined && cblc + 8 <= b.length) {
+    let best = -1;
+    for (let i = 0, n = t.dv.getUint32(cblc + 4), at = cblc + 8; i < n && at + 48 <= b.length; i++, at += 48)
+      if (best < 0 || b[at + 45] > b[best + 45]) best = at;
+    if (best >= 0 && b[best + 45]) {
+      const ppem = b[best + 45], asc = t.dv.getInt8(best + 16) / ppem, desc = -t.dv.getInt8(best + 17) / ppem;
+      return { ascent: asc, descent: desc, top: asc, bottom: desc, leading: 0 };
+    }
+  }
   const asc = t.dv.getInt16(hhea + 4) / upem, desc = -t.dv.getInt16(hhea + 6) / upem;
   return { ascent: asc, descent: desc, top: t.dv.getInt16(head + 42) / upem, bottom: -t.dv.getInt16(head + 38) / upem, leading: t.dv.getInt16(hhea + 8) / upem };
 }
@@ -159,6 +171,7 @@ let sourceIds = 0;
  *  and the axes, path and locales it was built with. A clone shares the source id and bytes. */
 export class NativeFont {
   private metrics?: FaceMetrics | null;
+  private outlines?: boolean;
   private axisTags?: readonly number[];
   constructor(readonly bytes: Uint8Array, readonly ttcIndex: number, readonly weight: number, readonly italic: boolean,
     readonly axes: readonly Axis[] = [], readonly path = "", readonly locales = "", readonly sourceId = sourceIds++) {}
@@ -166,7 +179,20 @@ export class NativeFont {
     return this.metrics === undefined ? (this.metrics = SYSTEM_FACES.get(this.path)?.family.metrics ?? sfntMetrics(this.bytes, this.ttcIndex)) : this.metrics;
   }
   get supportedAxes(): readonly number[] { return this.axisTags ??= fvarAxes(this.bytes, this.ttcIndex); }
+  /** whether the face has outlines, which FreeType hints: a bitmap-only face has linear advances */
+  get scalable(): boolean { return this.outlines ??= isScalable(sfntTables(this.bytes, this.ttcIndex)?.at ?? new Map()); }
 }
+// A Java Font's pointer is a FontWrapper: every Java Font (FontFamily.getFont, a buffer's clone, a
+// shaped glyph's font) owns its own reference, which its registry releases, to a font others share.
+class FontWrapper { constructor(readonly font: NativeFont) {} }
+export const fontOf = (h: bigint) => deref<FontWrapper>(h).font;
+export const wrapFont = (f: NativeFont) => handle(new FontWrapper(f));
+/** minikin's FontFakery bits for drawing `face` at a wanted weight and slant: bold faked two grades
+ *  short of a semi-bold or heavier weight, italic on an upright face */
+export const FAKE_BOLD = 1, FAKE_ITALIC = 2;
+export const fakery = (face: NativeFont, weight: number, italic: boolean) =>
+  (weight >= 600 && weight - face.weight >= 200 ? FAKE_BOLD : 0) | (italic && !face.italic ? FAKE_ITALIC : 0);
+
 const availableFaces = new Map<string, NativeFont>();
 /** the system collection's fonts (Font.getAvailableFonts), as installed under /system/fonts */
 export async function systemFonts(): Promise<NativeFont[]> {

@@ -3,7 +3,7 @@
 import { displayListLength, isRecording, nestedRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText, SKIA_TEXT_FACE } from "./skia-text";
-import { type FaceMetrics, type NativeFont, SYSTEM_FONT, typefaceOf } from "./fonts";
+import { type FaceMetrics, type NativeFont, SYSTEM_FONT, typefaceOf, fakery, FAKE_BOLD } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -155,10 +155,10 @@ export class JPaint extends JObj {
     // minikin draws from the primary family's closest face, faking bold two grades short of the
     // wanted weight and italic on an upright face; the face's own weight makes CSS pick that face
     const face = t.collection.families[0]?.closest(w, t.italic) ?? null;
-    const fakeBold = !!face && w >= 600 && w - face.weight >= 200;
+    const faked = face ? fakery(face, w, t.italic) : 0;
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
-    this.fFace = face; this.fFaked = fakeBold || t.italic && !!face && !face.italic;
-    const weight = !face ? w : fakeBold ? 700 : face.weight;
+    this.fFace = face; this.fFaked = faked !== 0;
+    const weight = !face ? w : faked & FAKE_BOLD ? 700 : face.weight;
     return (this.fCache = `${t.italic ? "italic " : ""}${weight} ${this.textSize}px ${t.collection.css}, sans-serif`);
   }
   /** the face font() draws from, and whether it draws it with fake bold or italic */

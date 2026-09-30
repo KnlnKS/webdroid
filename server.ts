@@ -130,6 +130,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
+    "/harfbuzz.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz.wasm"),
     // under vendor/aosp, the reference build's class path, framework-res.apk and its ICU and time
     // zone files (bun run gen-framework): they only change with the build, so let the browser keep them.
     "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),

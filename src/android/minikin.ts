@@ -21,7 +21,7 @@ const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c 
   || c >= 0x2066 && c <= 0x2069 || c >= 0x202a && c <= 0x202e || c === 0x200e || c === 0x200f;
 const breakBefore = (c: number) => breakAfter(c) || c >= 0x3400 && c <= 0x9fff;
 /** LayoutUtils' getNextWordBreakForCache: where the layout piece starting at `at` ends */
-function pieceEnd(text: string, at: number, end: number): number {
+export function pieceEnd(text: string, at: number, end: number): number {
   if (breakAfter(text.charCodeAt(at))) return at + 1;
   for (let i = at + 1; i < end; i++) if (breakBefore(text.charCodeAt(i))) return i;
   return end;
@@ -82,7 +82,7 @@ export const styleOf = (p: JPaint): TextStyle => ({
 /** control characters shape to nothing, where the browser measures a space */
 const CONTROL = /[\0-\x1f\x7f-\x9f]/;
 /** scripts whose letters join, which minikin does not letter-space */
-const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}\p{sc=Phag}\p{sc=Deva}\p{sc=Beng}\p{sc=Guru}\p{sc=Modi}\p{sc=Shrd}\p{sc=Sylo}\p{sc=Tirh}\p{sc=Ogam}]/u;
+export const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}\p{sc=Phag}\p{sc=Deva}\p{sc=Beng}\p{sc=Guru}\p{sc=Modi}\p{sc=Shrd}\p{sc=Sylo}\p{sc=Tirh}\p{sc=Ogam}]/u;
 /** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum.
  *  Letter spacing is added to every other cluster, as minikin's layout does. */
 export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0): number {

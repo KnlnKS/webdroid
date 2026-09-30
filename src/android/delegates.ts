@@ -18,12 +18,13 @@ import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } f
 import {
   JPaint,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
+  JCanvas, JBitmap, JRect, type JRectF, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
   type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches, drawPatch,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
+import { glyphBounds } from "./shaping";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
@@ -36,7 +37,7 @@ import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBy
 import {
   type Axis, NativeFont, NativeFamily, NativeTypeface, mkFamily, systemFonts, sfntTables, T_CMAP,
   fontRevision, postScriptName, isPostScriptType1, typefaceOf, setDefaultTypeface, loadSystemFontMap,
-  createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies,
+  createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies, fontOf, wrapFont,
 } from "./fonts";
 
 const delegate = rt.registerJnis.bind(rt);
@@ -344,12 +345,7 @@ delegate("android/graphics/Typeface", {
 });
 
 // ── android.graphics.fonts ─────────────────────────────────────────────────────────────
-// minikin's Font and FontFamily are fonts.ts' NativeFont and NativeFamily. A Java Font's pointer
-// is a FontWrapper: every Java Font (FontFamily.getFont, a buffer's clone) owns its own reference,
-// which its registry releases, to a font the others share.
-class FontWrapper { constructor(readonly font: NativeFont) {} }
-const fontOf = (h: bigint) => deref<FontWrapper>(h).font;
-const wrapFont = (f: NativeFont) => handle(new FontWrapper(f));
+// minikin's Font and FontFamily are fonts.ts' NativeFont and NativeFamily.
 /** a builder's state, which building consumes, as the JNI's unique_ptr does */
 function take<T>(h: bigint): T { const b = deref<T>(h); release(h); return b; }
 /** a direct buffer's bytes, as GetDirectBufferAddress and GetDirectBufferCapacity see them;
@@ -403,9 +399,7 @@ delegate("android/graphics/fonts/Font", {
     if (fm) { fm.top = f(-m.top * size); fm.ascent = ascent; fm.descent = descent; fm.bottom = f(m.bottom * size); fm.leading = leading; }
     return f(descent - ascent + leading);
   },
-  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": () => {
-    throw rt.mkThrowable("java/lang/UnsupportedOperationException", "glyph ids are not addressable: text is shaped by the browser");
-  },
+  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: JRectF | null) => glyphBounds(fontOf(h), glyph, paint(p), rect),
   "nGetAvailableFontSet()[J": () => systemFonts().then((fonts) => BigInt64Array.from(fonts, wrapFont)),
 });
 delegate("android/graphics/fonts/FontFamily$Builder", {
@@ -517,14 +511,20 @@ delegate("android/graphics/Paint", {
   "nGetTextPath(JI[CIIFFJ)V": () => {},
   "nGetFillPath(JJJ)Z": (_h: bigint, src: bigint, dst: bigint) => { path(dst).set(path(src)); return 1; },
 
+  // what glyph shaping reads (shaping.ts)
+  "nSetTextScaleX(JF)V": (h: bigint, v: number) => { paint(h).textScaleX = v; },
+  "nGetTextScaleX(J)F": (h: bigint) => paint(h).textScaleX,
+  "nSetTextSkewX(JF)V": (h: bigint, v: number) => { paint(h).textSkewX = v; },
+  "nGetTextSkewX(J)F": (h: bigint) => paint(h).textSkewX,
+  "nSetFontFeatureSettings(JLjava/lang/String;)V": (h: bigint, v: string | null) => { paint(h).fontFeatureSettings = v; },
+
   // state we accept and do not act on: one font, one locale, no hyphenation
-  ...noops("nSetElegantTextHeight(JI)V", "nSetStartHyphenEdit(JI)V", "nSetEndHyphenEdit(JI)V",
-    "nSetWordSpacing(JF)V", "nSetTextScaleX(JF)V", "nSetTextSkewX(JF)V",
+  ...noops("nSetElegantTextHeight(JI)V", "nSetStartHyphenEdit(JI)V", "nSetEndHyphenEdit(JI)V", "nSetWordSpacing(JF)V",
     "nSetXfermode(JI)V", "nSetShadowLayer(JFFFJJ)V", "nGetTextPath(JILjava/lang/String;IIFFJ)V",
-    "nSetTextLocalesByMinikinLocaleListId(JI)V", "nSetFontFeatureSettings(JLjava/lang/String;)V"),
+    "nSetTextLocalesByMinikinLocaleListId(JI)V"),
   ...stubs(0, "nGetElegantTextHeight(J)I", "nGetStartHyphenEdit(J)I", "nGetEndHyphenEdit(J)I",
-    "nGetWordSpacing(J)F", "nGetTextSkewX(J)F", "nHasShadowLayer(J)Z", "nSetTextLocales(JLjava/lang/String;)I"),
-  ...stubs(1, "nGetTextScaleX(J)F", "nHasGlyph(JILjava/lang/String;)Z"),
+    "nGetWordSpacing(J)F", "nHasShadowLayer(J)Z", "nSetTextLocales(JLjava/lang/String;)I"),
+  ...stubs(1, "nHasGlyph(JILjava/lang/String;)Z"),
 });
 
 interface Metrics { top: number; ascent: number; descent: number; bottom: number; leading: number }

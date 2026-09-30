@@ -133,5 +133,6 @@ import "./android/delegates";
 import "./android/services";
 import "./android/keystore";
 import "./android/minikin";
+import "./android/shaping";
 import "./android/assetmanager";
 import "./native/loader";

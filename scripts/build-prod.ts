@@ -37,6 +37,7 @@ await Promise.all([
   cp("vendor/microg", join(out, "vendor/microg"), { recursive: true, dereference: true }),
   cp("vendor/sql.js/dist", join(out, "sqljs"), { recursive: true, dereference: true }),
   copyFile("node_modules/canvaskit-wasm/bin/canvaskit.wasm", "canvaskit.wasm"),
+  copyFile("node_modules/harfbuzzjs/dist/harfbuzz.wasm", "harfbuzz.wasm"),
 ]);
 
 const large: Record<string, { parts: number; size: number; partSize: number }> = {};
