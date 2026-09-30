@@ -630,11 +630,8 @@ for (const [sup, names] of [
   ["IllegalArgumentException", "IllegalThreadStateException NumberFormatException"],
   ["Error", "StackOverflowError OutOfMemoryError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
-  ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
-    "java/net/UnknownHostException java/io/InterruptedIOException " +
-    "java/net/UnknownServiceException java/io/CharConversionException"],
-  ["java/net/SocketException", "java/net/ConnectException java/net/BindException"],
-  ["java/io/InterruptedIOException", "java/net/SocketTimeoutException"],
+  ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException " +
+    "java/io/InterruptedIOException java/io/CharConversionException"],
 ]) {
   if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));

@@ -1,5 +1,5 @@
-// java.net / javax.net.ssl / java.nio.channels, over a real TCP connection borrowed from the
-// dev server.
+// The boundaries java.net keeps in TS: TLS sockets (javax.net.ssl) and HttpURLConnection over the
+// dev server's fetch proxy. libcore's plain sockets run over src/native/net.ts.
 //
 // A page cannot open a socket, so one WebSocket carries one TCP connection (server.ts's /tcp
 // route) and TLS is terminated at the relay -- the page has no certificate store and could not
@@ -17,8 +17,7 @@ import { Relay } from "../../shell/relay";
 import { abandonConnection } from "../../native/net";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
-  "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
-  "java/nio/channels/ByteChannel", "java/nio/channels/Channel", "java/net/ResponseCache");
+  "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi");
 
 /** a connected TLS socket; rt.make skips <init> */
 async function dial(host: string, port: number): Promise<JSSLSocket> {
@@ -332,7 +331,6 @@ rt.register({
 // ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
 // raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
-defineException("java/net/ProtocolException", "java/io/IOException");
 defineException("javax/net/ssl/SSLException", "java/io/IOException");
 defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
