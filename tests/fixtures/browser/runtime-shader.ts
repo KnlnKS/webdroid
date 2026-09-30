@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
-import { JPaint } from "../../../src/android/graphics";
+import { newPaint } from "../../../src/android/paint";
 import { locateDrawnText, canvasOver, canvasOf } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { systemFonts } from "./fonts";
@@ -20,14 +20,15 @@ async function probe() {
   await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "boundary", 8);
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0x80ff0000);
   await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "green", 1);
-  const paint = new JPaint();
+  const paint = newPaint();
   await vcall(paint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader);
   const node = await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", "shader");
   await vcall(node, "setPosition", "(IIII)Z", 0, 0, 16, 16);
   const recording = await vcall(node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", 16, 16);
   await vcall(recording, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 0, 0, 16, 16, paint);
   await vcall(recording, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 8, 0, 16, 16, paint);
-  const textPaint = new JPaint(); textPaint.textSize = 2;
+  const textPaint = newPaint();
+  await vcall(textPaint, "setTextSize", "(F)V", 2);
   await vcall(recording, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Label", 0, 14, textPaint);
   await vcall(node, "endRecording", "()V");
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0xff0000ff);

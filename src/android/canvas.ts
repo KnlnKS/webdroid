@@ -9,13 +9,14 @@ import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { linkInit } from "../jvm/natives/jlang";
-import { type NativePath, PathMeasure, inversePath, nativePathOf } from "./path";
+import { NativePath, PathMeasure, inversePath, nativePathOf } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
 import { drawGlyphs } from "./shaping";
+import { NativePaint, BlurMask, copyPaint, defaultPaint, beginPaintShadow, measureText, strokeRec, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import {
-  JPaint, type JRect, type Affine, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, type Mat,
-  cssColor, copyPaint, defaultPaint, beginPaintShadow, blurMask, canvasLocalBounds, shaderIdentity, measureText, tintedBmp, recolor,
+  type JRect, type Affine, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, type Mat,
+  cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
   setAffine, applyMatrix, drawNinePatch, argbOfColorLong, BLEND_MODES, COMPOSITE,
 } from "./graphics";
 
@@ -56,7 +57,7 @@ export class NativeCanvas {
   private persistent: { count: number; m: DOMMatrix; apply: (ctx: Ctx2D) => void }[] | null = null;
   /** PaintFlagsDrawFilter: the paint flags every draw clears and sets */
   filter: { clear: number; set: number } | null = null;
-  private filtered: JPaint | null = null;
+  private filtered: NativePaint | null = null;
   /** the Java canvas TS made over this one, for a hardware canvas drawing a software layer */
   private twin: JavaCanvas | null = null;
   semanticOwner: DrawnTextOwner | null = null;
@@ -75,10 +76,10 @@ export class NativeCanvas {
     this.cl = this.ct = 0; this.cr = w; this.cb = h; this.poly = null;
   }
   /** a Canvas.drawXxx paint through the canvas's draw filter */
-  paint(h: bigint): JPaint {
-    const p = deref<JPaint>(h), f = this.filter;
+  paint(h: bigint): NativePaint {
+    const p = deref<NativePaint>(h), f = this.filter;
     if (!f) return p;
-    const out = this.filtered ??= new JPaint();
+    const out = this.filtered ??= new NativePaint();
     copyPaint(p, out);
     out.flags = (p.flags & ~f.clear) | f.set;
     return out;
@@ -114,44 +115,48 @@ export class NativeCanvas {
     });
   }
 
-  prep(p: JPaint, stroke: boolean) {
+  prep(p: NativePaint, stroke: boolean) {
     const ctx = this.ctx;
-    const pattern = p.drawShader()?.deferredPattern();
+    const pattern = p.shader?.deferredPattern();
     if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
       if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
       ctx.lineWidth = Math.max(p.strokeWidth, 1);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
-      ctx.setLineDash(p.dash ?? NO_DASH);
+      // Skia dashes a stroke only, not a stroke-and-fill
+      if (p.dash && p.style === 1) { ctx.setLineDash(p.dash); ctx.lineDashOffset = p.dashPhase; } else ctx.setLineDash(NO_DASH);
     } else {
       if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
     if (p.blendName === "CLEAR") ctx[stroke ? "strokeStyle" : "fillStyle"] = "#000";
     return !!pattern || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
-  private blurLayer: { source: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
-  drawMask(p: JPaint, fill: (ctx: Ctx2D) => void, stroke?: (ctx: Ctx2D) => void) {
+  private blurLayer: { source: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: NativePaint } | null = null;
+  drawMask(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke?: (ctx: Ctx2D) => void) {
     const ctx = this.ctx, w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform();
     const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
     if (!w || !h || !scale) return;
     let layer = this.blurLayer;
     if (!layer || layer.source.w !== w || layer.source.h !== h) {
       const source = new OffscreenCanvas(w, h).getContext("2d")!;
-      layer = this.blurLayer = { source: NativeCanvas.over(source, w, h), target: new OffscreenCanvas(w, h).getContext("2d")!, paint: new JPaint() };
+      layer = this.blurLayer = { source: NativeCanvas.over(source, w, h), target: new OffscreenCanvas(w, h).getContext("2d")!, paint: new NativePaint() };
     }
     const source = layer.source.ctx, target = layer.target;
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     copyPaint(p, layer.paint);
     layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
-    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shaderObj = layer.paint.shader = null; layer.paint.colorFilter = null;
+    layer.paint.color = -1; layer.paint.shader = null; layer.paint.colorFilter = null;
     if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
     else fill(source);
     target.clearRect(0, 0, w, h);
-    blurMask(target, source.canvas, p.maskFilter, 0, 0, scale);
+    const mf = p.maskFilter;
+    if (mf) mf.apply(target, source.canvas, 0, 0, scale, p.filteredColor());
+    else target.drawImage(source.canvas, 0, 0);
     target.globalCompositeOperation = "source-in";
     try {
-      if (p.shader) {
+      if (mf?.colored) { /* the filter coloured the shape itself */ }
+      else if (p.shader) {
         source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
         copyPaint(p, layer.paint);
         layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0; layer.paint.style = 0;
@@ -171,10 +176,13 @@ export class NativeCanvas {
       ctx.resetTransform(); ctx.drawImage(target.canvas, 0, 0);
     } finally { if (shadow) ctx.restore(); ctx.restore(); }
   }
-  drawShape(p: JPaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void) {
+  /** a shape drawn with the paint; `geom` gives it as a path, for a path effect to change */
+  drawShape(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath) {
+    if (p.pathEffect && !p.dash && geom) return this.drawEffected(p, geom());
     if (tryPartialSourceIn(this, p, fill, stroke)) return;
     if (tryBitmapShape(this, p, fill, stroke)) return;
-    if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
+    const mf = p.maskFilter, blur = mf instanceof BlurMask && mf.style === 0 ? mf : null;
+    if (mf && !blur) return this.drawMask(p, fill, stroke);
     if (p.transparentSourceIn() && !p.maskFilter && !p.shadowRadius) {
       const ctx = this.ctx;
       ctx.save();
@@ -192,15 +200,15 @@ export class NativeCanvas {
     const shaded = beginShaderAlpha(this.ctx, p), shadow = beginPaintShadow(this.ctx, p);
     const blend = p.compositeOp();
     const prev = blend ? this.ctx.globalCompositeOperation : null;
-    const filter = p.maskFilter ? this.ctx.filter : null;
-    if (p.maskFilter) {
+    const filter = blur ? this.ctx.filter : null;
+    if (blur) {
       const m = this.ctx.getTransform();
-      this.ctx.filter = `blur(${p.maskFilter.sigma * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))}px)`;
+      this.ctx.filter = `blur(${blur.sigma * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))}px)`;
     }
     try {
       if (blend) this.ctx.globalCompositeOperation = blend;
       if (p.style === 0 || p.style === 2) {
-        const shader = p.drawShader(), lm = shader?.local;
+        const shader = p.shader, lm = shader?.local;
         if (shader instanceof NativeBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, shader));
         else {
           const pattern = this.prep(p, false);
@@ -216,6 +224,16 @@ export class NativeCanvas {
       if (shadow) this.ctx.restore();
       if (shaded) endAlpha(this.ctx);
     }
+  }
+  private effected: NativePaint | null = null;
+  /** SkCanvas::drawPath through a path effect other than a lone dash: the geometry it makes, filled
+   *  when the effect makes a fill (PathDashPathEffect), else drawn as the paint draws */
+  private drawEffected(p: NativePaint, src: NativePath) {
+    const rec = strokeRec(p), dst = new NativePath(), q = this.effected ??= new NativePaint();
+    const path = p.pathEffect!.filter(dst, src, rec) ? dst : src;
+    copyPaint(p, q); q.setPathEffect(null);
+    if (rec.fill) q.style = 0;
+    this.drawShape(q, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
   }
   private shaderCtx: Ctx2D | null = null;
   private shaderBaseCtx: Ctx2D | null = null;
@@ -589,9 +607,9 @@ export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: nu
 // ── layers ──
 type LayerRaster = { ctx: OffscreenCanvasRenderingContext2D; pool: OffscreenCanvas[]; x: number; y: number; w: number; h: number };
 /** what a layer's paint (and an extra 0-255 `alpha`) does to its pixels when it is restored */
-export function layerStyle(paint: JPaint | null, alpha = 255): LayerStyle {
+export function layerStyle(paint: NativePaint | null, alpha = 255): LayerStyle {
   return {
-    alpha: paint ? (paint.renderAlpha ?? paint.color >>> 24) * alpha / 255 : alpha,
+    alpha: paint ? (paint.color >>> 24) * alpha / 255 : alpha,
     blend: paint?.compositeOp() ?? null, filter: paint?.colorFilter ?? null,
   };
 }
@@ -647,7 +665,7 @@ export function drawInLayer(target: Ctx2D, bounds: RectLike | null, style: Layer
 }
 /** Canvas.saveLayer: draws until the matching restore land in an offscreen raster, composited
  *  then with what the paint said when the layer was opened */
-export function saveLayer(nc: NativeCanvas, bounds: RectLike | null, paint: JPaint | null, alpha = 255): number {
+export function saveLayer(nc: NativeCanvas, bounds: RectLike | null, paint: NativePaint | null, alpha = 255): number {
   const style = layerStyle(paint, alpha);
   const count = nc.save(), parent = nc.ctx;
   let close: () => void;
@@ -693,7 +711,7 @@ function saveBehind(nc: NativeCanvas, l: number, t: number, r: number, b: number
   return count;
 }
 /** SkCanvasPriv::DrawBehind: the paint over the area a save-behind cleared, then its restore */
-function restoreBehind(nc: NativeCanvas, count: number, paint: JPaint) {
+function restoreBehind(nc: NativeCanvas, count: number, paint: NativePaint) {
   while (nc.saveCount > count + 1) nc.restore();
   if (nc.saveCount !== count + 1) return;
   const behind = (nc.layers?.at(-1) as { behind?: { image: OffscreenCanvas | null; x: number; y: number } } | undefined)?.behind;
@@ -715,8 +733,8 @@ function restoreBehind(nc: NativeCanvas, count: number, paint: JPaint) {
 /** Skia modulates a shader by the paint's alpha; a Canvas2D gradient or pattern carries none, so
  *  the draw runs under a scaled globalAlpha, applied at replay so it composes with layer alpha.
  *  True when it saved, so endAlpha must follow. */
-function beginShaderAlpha(ctx: Ctx2D, p: JPaint): boolean {
-  return p.shader ? beginAlpha(ctx, p.renderAlpha ?? p.color >>> 24) : false;
+function beginShaderAlpha(ctx: Ctx2D, p: NativePaint): boolean {
+  return p.shader ? beginAlpha(ctx, p.color >>> 24) : false;
 }
 function beginAlpha(ctx: Ctx2D, alpha: number): boolean {
   if (alpha >= 255) return false;
@@ -726,10 +744,10 @@ function beginAlpha(ctx: Ctx2D, alpha: number): boolean {
 const restoreOp = (c: Ctx2D) => c.restore();
 function endAlpha(ctx: Ctx2D) { recordOrRun(ctx, restoreOp); }
 
-export function drawPath(nc: NativeCanvas, path: NativePath, p: JPaint) {
+export function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
   if (tryBitmapPath(nc, p, path)) return;
   if (!path.inverseFill) {
-    nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+    nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path);
     return;
   }
   const bounds = canvasLocalBounds(nc.ctx);
@@ -737,7 +755,7 @@ export function drawPath(nc: NativeCanvas, path: NativePath, p: JPaint) {
   const [inverse, rule] = inversePath(path, ...bounds);
   nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
 }
-export function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
+export function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
   if (tryBitmapRect(nc, p, left, top, left + width, top + height)) return;
@@ -751,7 +769,14 @@ export function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: n
     } finally { nc.ctx.restore(); }
     return;
   }
-  nc.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height));
+  nc.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height),
+    () => shapePath((g) => g.addRect(left, top, left + width, top + height, 0)));
+}
+/** a shape as SkCanvas makes it a path, for a path effect */
+function shapePath(build: (p: NativePath) => void): NativePath {
+  const p = new NativePath();
+  build(p);
+  return p;
 }
 /** SkCanvas::drawColor: the whole clip filled with `color` under the SkBlendMode numbered `mode` */
 function drawColor(nc: NativeCanvas, color: number, mode: number) {
@@ -770,7 +795,7 @@ function drawColor(nc: NativeCanvas, color: number, mode: number) {
   });
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
-function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
+function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: NativePaint) {
   if (!(r > l && b > t) && Math.abs(sweep) < 360) return;
   const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
   if (tryBitmapOval(nc, p, left, top, right, bottom, sweep)) return;
@@ -779,25 +804,31 @@ function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, s
   if (useCenter) path.moveTo(cx, cy);
   path.ellipse(cx, cy, (right - left) / 2, (bottom - top) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
   if (useCenter) path.closePath();
-  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+  // SkPathPriv::CreateDrawArcPath: a whole oval, or the arc, through the centre when it is used
+  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => {
+    if (!useCenter && Math.abs(sweep) >= 360) return g.addOval(left, top, right, bottom, sweep < 0 ? 1 : 0);
+    if (useCenter) g.moveTo(cx, cy);
+    g.arcTo(left, top, right, bottom, start, sweep, !useCenter);
+    if (useCenter) g.close();
+  }));
 }
-export function drawOval(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
+export function drawOval(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
   if (l === r || t === b) return;
   drawArc(nc, Math.min(l, r), Math.min(t, b), Math.max(l, r), Math.max(t, b), 0, 360, 0, p);
 }
-export function drawCircle(nc: NativeCanvas, x: number, y: number, r: number, p: JPaint) {
+export function drawCircle(nc: NativeCanvas, x: number, y: number, r: number, p: NativePaint) {
   if (r > 0) drawOval(nc, x - r, y - r, x + r, y + r, p);
 }
-export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
+export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
   if (tryBitmapRoundRect(nc, p, left, top, left + width, top + height, rx, ry)) return;
   const path = new Path2D();
   path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
-  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)));
 }
 function drawDoubleRoundRect(nc: NativeCanvas, ol: number, ot: number, or: number, ob: number, orx: number, ory: number,
-  il: number, it: number, ir: number, ib: number, irx: number, iry: number, p: JPaint) {
+  il: number, it: number, ir: number, ib: number, irx: number, iry: number, p: NativePaint) {
   const ring = new Path2D();
   ring.roundRect(ol, ot, or - ol, ob - ot, { x: Math.max(orx, 0), y: Math.max(ory, 0) });
   ring.roundRect(il, it, ir - il, ib - it, { x: Math.max(irx, 0), y: Math.max(iry, 0) });
@@ -808,7 +839,18 @@ function checkPts(pts: Float32Array, off: number, n: number) {
   if (!pts) throw rt.mkThrowable("java/lang/NullPointerException", null);
   if ((off | n) < 0 || off + n > pts.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
 }
-function drawLine(nc: NativeCanvas, x0: number, y0: number, x1: number, y1: number, p: JPaint) {
+/** SkDraw::drawPoints' lines through a path effect: each a path, always stroked */
+function effectedLines(nc: NativeCanvas, pts: ArrayLike<number>, off: number, n: number, p: NativePaint) {
+  const q = new NativePaint();
+  copyPaint(p, q); q.style = 1;
+  for (let i = off, end = off + (n & ~3); i < end; i += 4) {
+    const g = new NativePath();
+    g.moveTo(pts[i], pts[i + 1]); g.lineTo(pts[i + 2], pts[i + 3]);
+    drawPath(nc, g, q);
+  }
+}
+function drawLine(nc: NativeCanvas, x0: number, y0: number, x1: number, y1: number, p: NativePaint) {
+  if (p.pathEffect && !p.dash) return effectedLines(nc, [x0, y0, x1, y1], 0, 4, p);
   if (tryBitmapLine(nc, p, x0, y0, x1, y1)) return;
   nc.prep(p, true);
   nc.ctx.beginPath();
@@ -816,8 +858,9 @@ function drawLine(nc: NativeCanvas, x0: number, y0: number, x1: number, y1: numb
   nc.ctx.lineTo(x1, y1);
   nc.ctx.stroke();
 }
-function drawLines(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: JPaint) {
+function drawLines(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: NativePaint) {
   checkPts(pts, off, n);
+  if (p.pathEffect && !p.dash) return effectedLines(nc, pts, off, n, p);
   nc.prep(p, true);
   nc.ctx.beginPath();
   for (let i = off, end = off + (n & ~3); i < end; i += 4) {
@@ -828,26 +871,26 @@ function drawLines(nc: NativeCanvas, pts: Float32Array, off: number, n: number, 
 }
 /** Skia draws a point as the stroke's cap: a disc for a round cap, otherwise a square; a
  *  hairline point is one pixel */
-function pointPath(ctx: Ctx2D, x: number, y: number, p: JPaint) {
+function pointPath(ctx: Ctx2D, x: number, y: number, p: NativePaint) {
   const w = p.strokeWidth || 1, r = w / 2;
   if (p.strokeCapN === "round" && p.strokeWidth) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 2 * Math.PI); } else ctx.rect(x - r, y - r, w, w);
 }
-function drawPoints(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: JPaint) {
+function drawPoints(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: NativePaint) {
   checkPts(pts, off, n);
   nc.prep(p, false);
   nc.ctx.beginPath();
   for (let i = off, end = off + (n & ~1); i < end; i += 2) pointPath(nc.ctx, pts[i], pts[i + 1], p);
   nc.ctx.fill();
 }
-const paintScratch = new JPaint();
-function drawPaint(nc: NativeCanvas, paint: JPaint) {
+const paintScratch = new NativePaint();
+function drawPaint(nc: NativeCanvas, paint: NativePaint) {
   const bounds = canvasLocalBounds(nc.ctx);
   if (!bounds) return;
   const [l, t, r, b] = bounds;
   copyPaint(paint, paintScratch); paintScratch.style = 0; paintScratch.maskFilter = null;
   nc.drawShape(paintScratch, c => c.fillRect(l, t, r - l, b - t), () => {});
 }
-function drawRegion(nc: NativeCanvas, region: NativeRegion, p: JPaint) {
+function drawRegion(nc: NativeCanvas, region: NativeRegion, p: NativePaint) {
   const path = new Path2D();
   region.forEachRect((l, t, r, b) => path.rect(l, t, r - l, b - t));
   nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
@@ -870,7 +913,7 @@ function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number,
 const bitmapAt = (h: bigint) => deref<NativeBitmap>(h);
 /** an image drawn through the paint as SkCanvas::drawImage does: its alpha, blend mode and colour
  *  filter; an ALPHA_8 bitmap is coverage, drawn in the paint's colour */
-function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: CanvasImageSource) => void) {
+function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, draw: (ctx: Ctx2D, image: CanvasImageSource) => void) {
   if (b.config === ALPHA_8) {
     const p = paint ?? defaultPaint;
     if (p.maskFilter || p.shader) nc.drawMask(p, (ctx) => draw(ctx, b.image));
@@ -878,7 +921,7 @@ function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: JPaint | null, dra
     return;
   }
   const f = paint?.colorFilter, image = f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.image;
-  const faded = !!paint && beginAlpha(nc.ctx, paint.renderAlpha ?? paint.color >>> 24), blend = paint?.compositeOp();
+  const faded = !!paint && beginAlpha(nc.ctx, paint.color >>> 24), blend = paint?.compositeOp();
   const prev = blend ? nc.ctx.globalCompositeOperation : null;
   try {
     if (blend) nc.ctx.globalCompositeOperation = blend;
@@ -890,7 +933,7 @@ function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: JPaint | null, dra
 }
 /** android_graphics_Canvas drawBitmap: a bitmap of another density than the canvas's is drawn in
  *  its own pixels under the scale between them */
-function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, paint: JPaint | null, canvasDensity: number, bitmapDensity: number) {
+function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, paint: NativePaint | null, canvasDensity: number, bitmapDensity: number) {
   if (canvasDensity === bitmapDensity || !canvasDensity || !bitmapDensity) {
     drawBitmap(nc, b, paint, (ctx, image) => ctx.drawImage(image, x, y));
     return;
@@ -905,10 +948,10 @@ function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, p
 }
 /** Canvas.drawPatch as android_graphics_Canvas draws it: a patch of another density is drawn in its
  *  own pixels under a scale; the paint contributes its alpha */
-export function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, paint: JPaint | null, dstDensity: number, srcDensity: number) {
+export function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, paint: NativePaint | null, dstDensity: number, srcDensity: number) {
   const ctx = nc.ctx;
   ctx.save();
-  if (paint) ctx.globalAlpha *= (paint.renderAlpha ?? paint.color >>> 24) / 255;
+  if (paint) ctx.globalAlpha *= (paint.color >>> 24) / 255;
   if (dstDensity === srcDensity || !dstDensity || !srcDensity) drawNinePatch(ctx, bmp.image, bmp.w, bmp.h, chunk, l, t, r - l, b - t);
   else {
     const s = dstDensity / srcDensity;
@@ -918,25 +961,28 @@ export function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchC
   }
   ctx.restore();
 }
-export function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p: JPaint): boolean {
+export function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint): boolean {
   return !!(nc.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
-    p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
-    !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.shadowRadius &&
+    p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm && p.textScaleX === 1 && !p.textSkewX &&
+    !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.pathEffect && !p.shadowRadius &&
     !p.colorFilter && !p.blend && !isRecording(nc.ctx) &&
     p.face()?.path === SKIA_TEXT_FACE && !p.faked() &&
     drawSkiaText(nc.ctx, s, x, y, p.textSize,
-      p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
+      p.color,
       p.style === 1 ? "hairline" : "fill", p.subpixelText || p.linearText));
 }
-export function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: JPaint) {
+export function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint) {
   nc.recordText(s, x, y, p.textSize, p.textAlignN);
   if (tryDrawBitmapText(nc, s, x, y, p)) return;
   const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
+  // SkFont's scale and skew: the glyphs under [scaleX skewX; 0 1] at the origin of the run
+  const warped = p.textScaleX !== 1 || p.textSkewX !== 0;
   try {
     ctx.font = p.font();
     ctx.textRendering = "geometricPrecision";
     if ("lang" in ctx) ctx.lang = p.language;
+    if (warped) { ctx.save(); ctx.transform(p.textScaleX, 0, p.textSkewX, 1, x - p.textScaleX * x - p.textSkewX * y, 0); }
     nc.prep(p, false);
     ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
     ctx.textBaseline = "alphabetic";
@@ -947,11 +993,14 @@ export function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: J
       ctx.strokeText(s, x, y);
     }
     if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
+    if (warped) ctx.restore();
+    // Canvas::drawTextDecorations: rects at least a pixel thick across the run's advance
     if (p.underline || p.strikeThru) {
       const w = measureText(p, s);
       const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
-      if (p.underline) ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
-      if (p.strikeThru) ctx.fillRect(sx, y - p.textSize * 0.3, w, Math.max(1, p.textSize / 14));
+      nc.prep(p, false);
+      if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));
+      if (p.strikeThru) ctx.fillRect(sx, y + strikeThruPosition(p), w, Math.max(1, strikeThruThickness(p)));
     }
   } finally { if (shadow) ctx.restore(); if (shaded) endAlpha(ctx); }
 }
@@ -959,7 +1008,7 @@ const onPath = new PathMeasure(), posTan = new Float32Array(4), graphemes = type
 /** Canvas::drawTextOnPath (SkiaCanvas::drawLayoutOnPath): each cluster placed at the middle of its
  *  advance along the path's first contour and turned to its tangent, the alignment an offset of
  *  the whole run against the contour's length */
-function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: number, vOffset: number, p: JPaint) {
+function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: number, vOffset: number, p: NativePaint) {
   onPath.setPath(path, false);
   const advance = measureText(p, s), align = p.textAlignN;
   if (align) hOffset += (align === 1 ? -0.5 : -1) * (advance - onPath.length());

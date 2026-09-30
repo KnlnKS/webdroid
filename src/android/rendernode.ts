@@ -11,7 +11,8 @@ import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
-import { JPaint, Camera3D, type Mat, type NativeColorFilter, COMPOSITE, copyPaint, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./graphics";
+import { NativePaint, copyPaint, paintAt } from "./paint";
+import { Camera3D, type Mat, type NativeColorFilter, COMPOSITE, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./graphics";
 import { NativeCanvas, drawInLayer, drawCircle, drawRoundRect, clipRoundRect } from "./canvas";
 
 let invalidateHook: (() => void) | null = null;
@@ -98,8 +99,8 @@ export class NativeRenderNode {
   }
   get cameraZ(): number { return f32(this.camera.location[2] / 72); }
   /** LayerProperties::setFromPaint */
-  setLayerPaint(p: JPaint | null): number {
-    const alpha = p ? p.renderAlpha ?? p.color >>> 24 : 255, blend = p?.blendName ?? null, filter = p?.colorFilter ?? null;
+  setLayerPaint(p: NativePaint | null): number {
+    const alpha = p ? p.color >>> 24 : 255, blend = p?.blendName ?? null, filter = p?.colorFilter ?? null;
     const changed = alpha !== this.layerAlpha || blend !== this.layerBlend || filter !== this.layerFilter;
     this.layerAlpha = alpha; this.layerBlend = blend; this.layerFilter = filter;
     return +changed;
@@ -251,7 +252,7 @@ rt.registerJnis("android/graphics/RenderNode", {
     return 1;
   },
   "nGetLayerType(J)I": get("layerType"),
-  "nSetLayerPaint(JJ)Z": (h: bigint, p: bigint) => nodeAt(h).setLayerPaint(p ? deref<JPaint>(p) : null),
+  "nSetLayerPaint(JJ)Z": (h: bigint, p: bigint) => nodeAt(h).setLayerPaint(p ? paintAt(p) : null),
   "nSetRenderEffect(JJ)Z": (h: bigint, e: bigint) => set("effect")(h, e ? deref<JRenderEffect>(e) : null),
   // a backdrop effect filters what is drawn behind the node, which needs the compositor's surface
   "nSetBackdropRenderEffect(JJ)Z": (h: bigint, e: bigint) => set("backdrop")(h, e ? deref<JRenderEffect>(e) : null),
@@ -407,10 +408,10 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
   "nGetMaximumTextureWidth()I": () => 8192,
   "nGetMaximumTextureHeight()I": () => 8192,
   "nDrawCircle(JJJJJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint) => recordOrRun(nat(h).ctx, (ctx) =>
-    drawCircle(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), prop<number>(x), prop<number>(y), prop<number>(r), prop<JPaint>(p))),
+    drawCircle(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p))),
   "nDrawRoundRect(JJJJJJJJ)V": (h: bigint, l: bigint, t: bigint, r: bigint, b: bigint, rx: bigint, ry: bigint, p: bigint) => recordOrRun(nat(h).ctx, (ctx) =>
     drawRoundRect(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b),
-      prop<number>(rx), prop<number>(ry), prop<JPaint>(p))),
+      prop<number>(rx), prop<number>(ry), prop<NativePaint>(p))),
   // the ripple is a RuntimeShader animated on the RenderThread; texture layers and WebView
   // functors are the compositor's
   "nDrawRipple(JJJJJJJIJ)V": unsupported("RecordingCanvas.drawRipple"),
@@ -419,7 +420,7 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
 });
 rt.registerJnis("android/graphics/CanvasProperty", {
   "nCreateFloat(F)J": (value: number) => ownedHandle({ value }),
-  "nCreatePaint(J)J": (p: bigint) => { const value = new JPaint(); copyPaint(deref<JPaint>(p), value); return ownedHandle({ value }); },
+  "nCreatePaint(J)J": (p: bigint) => { const value = new NativePaint(); copyPaint(paintAt(p), value); return ownedHandle({ value }); },
 });
 // VirtualRefBasePtr holds its object's only reference here: the handle it stores is released with it
 rt.registerJnis("com/android/internal/util/VirtualRefBasePtr", {

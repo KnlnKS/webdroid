@@ -13,7 +13,8 @@ import { AID, obtainStyled, rvDimen, rvInt, themeOf, frameworkDimen, resString, 
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { JContextWrapper, type JContext } from "./context";
-import { JRect, measureCtx, castShadow } from "./graphics";
+import { JRect, castShadow } from "./graphics";
+import { measureCtx } from "./paint";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { JWindowLayoutParams, addWindow, removeWindow } from "./window";
 import { csText } from "../jvm/natives/jchars";

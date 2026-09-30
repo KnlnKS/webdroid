@@ -16,7 +16,7 @@ import { handle, deref, FINALIZER } from "./handles";
 import { construct, scall, vcall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
-import { extractBitmapAlpha, type JPaint } from "./graphics";
+import { extractBitmapAlpha, paintAt } from "./paint";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -314,7 +314,7 @@ function toSrgb(space: NativeColorSpace, rgb: number[]): number[] {
   });
 }
 /** a ColorLong (android.graphics.Color's packing) as an ARGB int in sRGB */
-function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
+export function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
   if (!(color & 0x3fn)) return Number(BigInt.asUintN(32, color >> 32n)) | 0;
   const half = (s: bigint) => fromHalf(Number((color >> s) & 0xffffn));
   const [r, g, b] = toSrgb(space ?? { transfer: SRGB_TF, xyz: Float32Array.from(SRGB_D50) }, [half(48n), half(32n), half(16n)]);
@@ -467,7 +467,7 @@ rt.registerJnis(BITMAP, {
     return javaBitmap(b, density);
   },
   "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bmp(h), paint ? deref<JPaint>(paint) : null, offsetXY), MUTABLE),
+    wrap(extractBitmapAlpha(bmp(h), paint ? paintAt(paint) : null, offsetXY), MUTABLE),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
   "nativeHasAlpha(J)Z": (h: bigint) => +bmp(h).hasAlpha,

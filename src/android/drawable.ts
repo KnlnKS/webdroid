@@ -3,7 +3,8 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, scall, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum, enumName, enumOrdinal } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, jarray, parseMethodDesc } from "../jvm/abi";
-import { JRect, JRectF, JPaint, cssColor, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, isNinePatchChunk, validNinePatchChunk, ninePatchOf, drawNinePatch, type NinePatchChunk } from "./graphics";
+import { newPaint, paintOf } from "./paint";
+import { JRect, JRectF, cssColor, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, isNinePatchChunk, validNinePatchChunk, ninePatchOf, drawNinePatch, type NinePatchChunk } from "./graphics";
 import { bitmapOf, densityOf, ninePatchChunkOf } from "./bitmap";
 import { decodeBitmap } from "./decode";
 import { canvasOf, type JavaCanvas } from "./canvas";
@@ -356,8 +357,8 @@ export class JBitmapDrawable extends JDrawable {
   bmp: object | null = null;
   /** the density the bitmap is scaled to for its intrinsic size (Bitmap.getScaledWidth) */
   targetDensity = device.densityDpi;
-  /** the Paint getPaint() hands out: flags an app sets on it (filter, dither) have no effect on the 2D path */
-  bpaint: JPaint | null = null;
+  /** the Java Paint getPaint() hands out: flags an app sets on it (filter, dither) have no effect on the 2D path */
+  bpaint: object | null = null;
   paint(cv: JavaCanvas) {
     if (!this.bmp) return;
     const ctx = canvasOf(cv).ctx;
@@ -384,7 +385,7 @@ rt.register({
     "<init>(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, r: unknown, b: object) { this.bmp = b; },
     "<init>(Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, b: object) { this.bmp = b; },
     "getBitmap()Landroid/graphics/Bitmap;": function (this: JBitmapDrawable) { return this.bmp; },
-    "getPaint()Landroid/graphics/Paint;": function (this: JBitmapDrawable) { return this.bpaint ??= new JPaint(); },
+    "getPaint()Landroid/graphics/Paint;": function (this: JBitmapDrawable) { return this.bpaint ??= newPaint(); },
     "setTargetDensity(I)V": setTargetDensity,
     "setTargetDensity(Landroid/util/DisplayMetrics;)V": function (this: JBitmapDrawable, m: { densityDpi: number }) { setTargetDensity.call(this, m.densityDpi); },
     "setTargetDensity(Landroid/graphics/Canvas;)V": function (this: JBitmapDrawable) { setTargetDensity.call(this, device.densityDpi); },
@@ -1466,10 +1467,10 @@ const shapeMethods: NonNullable<NativeSpec["methods"]> = {
   },
   ...noops("<init>()V", "getOutline(Landroid/graphics/Outline;)V"),
   ...stubs(1, "hasAlpha()Z"),
-  "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JavaCanvas, p: JPaint) {
+  "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JavaCanvas, p: object) {
     const path = this.path();
     const evenOdd = this instanceof JRoundRectShape && !!this.inset;
-    canvasOf(cv).drawShape(p, (c) => c.fill(path, evenOdd ? "evenodd" : "nonzero"), (c) => c.stroke(path));
+    canvasOf(cv).drawShape(paintOf(p), (c) => c.fill(path, evenOdd ? "evenodd" : "nonzero"), (c) => c.stroke(path));
   },
   "clone()Landroid/graphics/drawable/shapes/Shape;": function (this: JShape) { return Object.assign(new (this.constructor as any)(), this); },
 };
@@ -1489,11 +1490,16 @@ rt.register({
 
 class JShapeDrawable extends JDrawable {
   shape: JShape | null = null;
-  p = new JPaint();
+  /** the Java Paint getPaint() hands out */
+  p = newPaint();
   iw = 0; ih = 0;
   padding: JRect | null = null;
   shaderFactory: unknown = null;
-  effPaint(): JPaint { return this.tint === null ? this.p : Object.assign(new JPaint(), this.p, { color: this.tint }); }
+  effPaint(): unknown {
+    if (this.tint === null) return this.p;
+    const p = newPaint();
+    return after(vcall(p, "set", "(Landroid/graphics/Paint;)V", this.p), () => after(vcall(p, "setColor", "(I)V", this.tint), () => p));
+  }
   size(vertical: boolean): number { return vertical ? this.ih : this.iw; }
 }
 class JPaintDrawable extends JShapeDrawable {
@@ -1530,8 +1536,8 @@ rt.register({
 rt.register({
   name: "android/graphics/drawable/ShapeDrawable", ctor: JShapeDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
-    "<init>()V": function (this: JShapeDrawable) { this.p.antiAlias = true; },
-    "<init>(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; this.p.antiAlias = true; },
+    "<init>()V": function () {},
+    "<init>(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; },
     "getPaint()Landroid/graphics/Paint;": function (this: JShapeDrawable) { return this.p; },
     "getShape()Landroid/graphics/drawable/shapes/Shape;": function (this: JShapeDrawable) { return this.shape; },
     "setShape(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; invalidateSelf.call(this); },
@@ -1547,9 +1553,9 @@ rt.register({
       const p = this.padding ?? (this.padding = new JRect());
       p.left = r.left; p.top = r.top; p.right = r.right; p.bottom = r.bottom;
     },
-    "setAlpha(I)V": function (this: JShapeDrawable, a: number) { this.alpha = a; this.p.setColorValue(((a << 24) | (this.p.color & 0xffffff)) | 0); invalidateSelf.call(this); },
-    "getAlpha()I": function (this: JShapeDrawable) { return this.p.color >>> 24; },
-    "getOpacity()I": function (this: JShapeDrawable) { const a = this.p.color >>> 24; return a === 255 ? -1 : a === 0 ? -2 : -3; },
+    "setAlpha(I)V": function (this: JShapeDrawable, a: number) { this.alpha = a; return after(vcall(this.p, "setAlpha", "(I)V", a), () => invalidateSelf.call(this)); },
+    "getAlpha()I": function (this: JShapeDrawable) { return vcall(this.p, "getAlpha", "()I"); },
+    "getOpacity()I": function (this: JShapeDrawable) { const a = paintOf(this.p).color >>> 24; return a === 255 ? -1 : a === 0 ? -2 : -3; },
     "getOutline(Landroid/graphics/Outline;)V": () => {},
     "setShaderFactory(Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;)V": function (this: JShapeDrawable, factory: unknown) { this.shaderFactory = factory; },
     "getShaderFactory()Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;": function (this: JShapeDrawable) { return this.shaderFactory; },
@@ -1571,10 +1577,10 @@ rt.register({
       yield vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
       ctx.save();
       ctx.translate(b.left, b.top);
-      try { yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint()); }
+      try { yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, yield this.effPaint()); }
       finally { ctx.restore(); }
     }),
-    "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JavaCanvas, p: JPaint) {
+    "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JavaCanvas, p: object) {
       return jmethod(sh, M_shapeDraw)!.call(sh, cv, p);
     },
   },
@@ -1583,8 +1589,8 @@ rt.register({ name: "android/graphics/drawable/ShapeDrawable$ShaderFactory", cto
 rt.register({
   name: "android/graphics/drawable/PaintDrawable", ctor: JPaintDrawable, sup: "android/graphics/drawable/ShapeDrawable",
   methods: {
-    "<init>()V": function (this: JPaintDrawable) { this.p.antiAlias = true; this.shape = new JShape(); },
-    "<init>(I)V": function (this: JPaintDrawable, color: number) { this.p.antiAlias = true; this.p.setColorValue(color); this.shape = new JShape(); },
+    "<init>()V": function (this: JPaintDrawable) { this.shape = new JShape(); },
+    "<init>(I)V": function (this: JPaintDrawable, color: number) { this.shape = new JShape(); return vcall(this.p, "setColor", "(I)V", color); },
     "setCornerRadius(F)V": function (this: JPaintDrawable, radius: number) {
       this.setCornerRadii(radius > 0 ? new Float32Array(8).fill(radius) : null);
     },

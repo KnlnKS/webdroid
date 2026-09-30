@@ -1,4 +1,4 @@
-import { expect, test, spyOn, describe } from "bun:test";
+import { expect, test, spyOn, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
@@ -12,7 +12,9 @@ import { classCtors } from "../src/jvm/natives/jreflect";
 import { glSurfaces } from "../src/native/egl-current";
 import { Resources, JTheme } from "../src/android/res";
 import { JWebView } from "../src/android/webkit";
-import { scall } from "./java";
+import { scall, preloadTextPaint } from "./java";
+
+beforeAll(preloadTextPaint);
 
 describe("array-adapter", () => {
   test("ArrayAdapter keeps a supplied List live", async () => {

@@ -1,6 +1,9 @@
 import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
 import "../src/natives";
-import { JPaint, fillFontMetrics, matrixColor } from "../src/android/graphics";
+import { matrixColor } from "../src/android/graphics";
+import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android/paint";
+import { typefaceOf } from "../src/android/fonts";
+import { declaredField } from "../src/jvm/runtime";
 import { canvasOver, canvasOf, locateDrawnText } from "../src/android/canvas";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { rt } from "../src/jvm/runtime";
@@ -29,7 +32,7 @@ describe("canvas-text", () => {
   const semanticOwner = () => ({ drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 });
 
   test("Canvas records custom-drawn text for semantic lookup", async () => {
-    const cv = canvas(), paint = new JPaint();
+    const cv = canvas(), paint = newPaint(), { textSize } = paintOf(paint);
     const owner = semanticOwner();
     canvasOf(cv).semanticOwner = owner;
 
@@ -37,22 +40,22 @@ describe("canvas-text", () => {
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "second", 0, 20, paint);
 
     expect(owner.drawnText).toEqual(["first", "second"]);
-    expect(owner.drawnTextPoints![0]).toBe(10 + paint.textSize);
-    expect(owner.drawnTextPoints![1]).toBeCloseTo(20 - paint.textSize * 0.3);
-    expect(owner.drawnTextPoints![2]).toBe(10 + paint.textSize);
-    expect(owner.drawnTextPoints![3]).toBeCloseTo(40 - paint.textSize * 0.3);
+    expect(owner.drawnTextPoints![0]).toBe(10 + textSize);
+    expect(owner.drawnTextPoints![1]).toBeCloseTo(20 - textSize * 0.3);
+    expect(owner.drawnTextPoints![2]).toBe(10 + textSize);
+    expect(owner.drawnTextPoints![3]).toBeCloseTo(40 - textSize * 0.3);
   });
 
   test("Canvas maps layered semantic text through its parent transform", async () => {
-    const cv = canvas(), paint = new JPaint();
+    const cv = canvas(), paint = newPaint(), { textSize } = paintOf(paint);
     const owner = semanticOwner();
     canvasOf(cv).semanticBase = { a: 1, b: 0, c: 0, d: 1, e: 100, f: 200 } as DOMMatrix;
     canvasOf(cv).semanticOwner = owner;
 
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "layered", 0, 0, paint);
 
-    expect(owner.drawnTextPoints![0]).toBe(110 + paint.textSize);
-    expect(owner.drawnTextPoints![1]).toBeCloseTo(220 - paint.textSize * 0.3);
+    expect(owner.drawnTextPoints![0]).toBe(110 + textSize);
+    expect(owner.drawnTextPoints![1]).toBeCloseTo(220 - textSize * 0.3);
   });
 
   test("text recorded inside a saveLayer keeps the replaying canvas's semantic owner", async () => {
@@ -64,7 +67,7 @@ describe("canvas-text", () => {
     g.OffscreenCanvas = class { width = 100; height = 100; getContext() { return stub(this); } };
     try {
       const ops: unknown[] = [];
-      const cv = canvasOver(recordingContext(stub({ width: 1, height: 1 }), ops), 100, 100, true), paint = new JPaint();
+      const cv = canvasOver(recordingContext(stub({ width: 1, height: 1 }), ops), 100, 100, true), paint = newPaint();
       await vcall(cv, "saveLayer", "(FFFFLandroid/graphics/Paint;)I", 0, 0, 50, 50, null);
       await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "inside", 0, 0, paint);
       await vcall(cv, "restore", "()V");
@@ -348,6 +351,9 @@ describe("egl14-query-context", () => {
 describe("font-metrics", () => {
   rt.linkNatives();
   const TF = "android/graphics/Typeface";
+  /** a Java FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */
+  const metrics = (fm: object, cls = "FontMetrics") =>
+    ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);
 
   test("loaded font metrics preserve fractional ascenders and round padded bounds outward", async () => {
     // Roboto Bold's own tables, as an app's font: hhea 2146/-555, head yMax/yMin 2163/-555 over 2048 units
@@ -357,13 +363,10 @@ describe("font-metrics", () => {
     const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, buffer), "build", "()Landroid/graphics/fonts/Font;");
     const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", "(Landroid/graphics/fonts/Font;)V", font), "build", "()Landroid/graphics/fonts/FontFamily;");
     const view = new JTextView();
-    view.paintT.tf = await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`);
-    view.paintT.textSize = 68;
-    const metrics = { top: 0, ascent: 0, descent: 0, bottom: 0, leading: 0 };
-    fillFontMetrics(view.paintT, metrics, false);
-    expect(metrics.ascent).toBeCloseTo(-71.25391, 4);
-    fillFontMetrics(view.paintT, metrics, true);
-    expect(metrics).toEqual({ top: -72, ascent: -71, descent: 18, bottom: 19, leading: 0 });
+    await setPaintTypeface(view.paintT, await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`));
+    view.tp.textSize = 68;
+    expect(await vcall(view.paintT, "ascent", "()F")).toBeCloseTo(-71.25391, 4);
+    expect(metrics(await vcall(view.paintT, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "FontMetricsInt")).toEqual([-72, -71, 18, 19, 0]);
     expect(view.textHeight(1)).toBe(91);
     expect(view.textHeight(3)).toBe(269);
     view.includePad = false;
@@ -371,8 +374,8 @@ describe("font-metrics", () => {
   });
 
   test("Paint draws the face minikin selects, faking bold two grades short", async () => {
-    const paint = new JPaint(); paint.textSize = 18;
-    const weighted = (weight: number) => scall(TF, "create", `(L${TF};IZ)L${TF};`, null, weight, 0);
+    const paint = new NativePaint(); paint.textSize = 18;
+    const weighted = async (weight: number) => typefaceOf(await scall(TF, "create", `(L${TF};IZ)L${TF};`, null, weight, 0));
     // 600 ties Medium and Bold; the earlier face in fonts.xml wins
     for (const weight of [500, 600]) {
       paint.tf = await weighted(weight);
@@ -382,19 +385,20 @@ describe("font-metrics", () => {
     expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
     expect(paint.faked()).toBe(true);
     paint.tf = null;
-    paint.fakeBold = true;
+    paint.setFlag(0x20, true);
     expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
     expect(paint.faked()).toBe(false);
   });
 
   test("system Paint metrics retain Android fractions before integer rounding", async () => {
-    const paint = new JPaint(); paint.textSize = 48;
-    const metrics = { top: 0, ascent: 0, descent: 0, bottom: 0, leading: 0 };
-    expect(fillFontMetrics(paint, metrics, false)).toBe(56.25);
-    expect(metrics).toEqual({ top: -50.6953125, ascent: -44.53125, descent: 11.71875, bottom: 13.0078125, leading: 0 });
+    const paint = newPaint();
+    await vcall(paint, "setTextSize", "(F)V", 48);
+    const fm = await newObj("android/graphics/Paint$FontMetrics", "()V"), fi = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
+    expect(await vcall(paint, "getFontMetrics", "(Landroid/graphics/Paint$FontMetrics;)F", fm)).toBe(56.25);
+    expect(metrics(fm)).toEqual([-50.6953125, -44.53125, 11.71875, 13.0078125, 0]);
     expect(await vcall(paint, "getFontSpacing", "()F")).toBe(56.25);
-    expect(fillFontMetrics(paint, metrics, true)).toBe(57);
-    expect(metrics).toEqual({ top: -51, ascent: -45, descent: 12, bottom: 14, leading: 0 });
+    expect(await vcall(paint, "getFontMetricsInt", "(Landroid/graphics/Paint$FontMetricsInt;)I", fi)).toBe(57);
+    expect(metrics(fi, "FontMetricsInt")).toEqual([-51, -45, 12, 14, 0]);
   });
 });
 
@@ -467,15 +471,14 @@ describe("lighting-color-filter", () => {
 
   test("lighting filters retain alpha and update an attached paint's RGB transform", async () => {
     const filter = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0xff104020);
-    const paint = rt.make("android/graphics/Paint");
-    if (!(paint instanceof JPaint)) throw new Error("Invalid Paint");
+    const paint = newPaint();
     await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", filter);
     expect(await vcall(filter, "getColorMultiply", "()I")).toBe(0x0080ff00);
     expect(await vcall(filter, "getColorAdd", "()I")).toBe(0xff104020);
-    expect(matrixColor(paint.colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
+    expect(matrixColor(paintOf(paint).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
     await vcall(filter, "setColorMultiply", "(I)V", 0xffffffff);
     await vcall(filter, "setColorAdd", "(I)V", 0);
-    expect(matrixColor(paint.colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8080ff80);
+    expect(matrixColor(paintOf(paint).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8080ff80);
   });
 });
 

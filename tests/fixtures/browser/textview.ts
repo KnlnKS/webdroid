@@ -3,7 +3,7 @@ import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JTextView } from "../../../src/android/textview";
-import { measureText, type JPaint } from "../../../src/android/graphics";
+import { measureText, setFontMetrics, paintOf } from "../../../src/android/paint";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { systemFonts } from "./fonts";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
@@ -26,14 +26,14 @@ async function probe() {
   await systemFonts();
   const view = rt.make("android/widget/TextView");
   if (!(view instanceof JTextView)) throw new Error("Invalid TextView");
-  view.paintT.textSize = 12;
+  view.tp.textSize = 12;
   const span = rt.make("android/text/style/ReplacementSpan");
   let measures = 0, draws = 0;
   Object.assign(span, {
     [mangleMethod("getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I")]:
-      async (_p: JPaint, _cs: unknown, _a: number, _b: number, fm: { top: number; ascent: number; descent: number; bottom: number }) => {
+      async (_p: object, _cs: unknown, _a: number, _b: number, fm: object | null) => {
         measures++; await Promise.resolve();
-        if (fm) { fm.top = fm.ascent = -32; fm.descent = fm.bottom = 0; }
+        if (fm) setFontMetrics(fm, true, -32, -32, 0, 0, 0);
         return 24;
       },
     [mangleMethod("draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V")]:
@@ -64,15 +64,15 @@ async function probe() {
   }
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
-  const width = measureText(view.paintT, "A long title…"), wrapped = await view.measuredLines(width);
+  const width = measureText(view.tp, "A long title…"), wrapped = await view.measuredLines(width);
   const ellipsized = await vcall(wrapped.java, "getEllipsisCount", "(I)I", 0) > 0;
   const desired = await vcall(rt.link("android/text/Layout").ctor, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", view.text, view.paintT);
   const fitting = (await view.measuredLines(Math.ceil(desired))).java;
   const styleInk: number[] = [];
   for (const style of [0, 1, 2]) {
     const actual = new OffscreenCanvas(100, 60).getContext("2d")!;
-    const paint = view.paintT;
-    paint.textSize = 40; paint.strokeWidth = 4; paint.style = style;
+    const paint = view.paintT, np = paintOf(paint);
+    np.textSize = 40; np.strokeWidth = 4; np.style = style;
     await vcall(canvasOver(actual, 100, 60), "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Hi", 8, 45, paint);
     const pixels = actual.getImageData(0, 0, 100, 60).data;
     let ink = 0;
@@ -82,7 +82,7 @@ async function probe() {
   const styles = [styleInk[0]! > 0, styleInk[1]! > 0, styleInk[2]! >= Math.max(styleInk[0]!, styleInk[1]!)];
   const aligned = rt.make("android/widget/TextView");
   if (!(aligned instanceof JTextView)) throw new Error("Invalid aligned TextView");
-  aligned.right = 100; aligned.bottom = 50; aligned.paintT.textSize = 20;
+  aligned.right = 100; aligned.bottom = 50; aligned.tp.textSize = 20;
   const parent = new JViewGroup(); aligned.parent = parent;
   await vcall(aligned, "setText", "(Ljava/lang/CharSequence;)V", "Hi");
   await vcall(aligned, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(50, MS_EXACTLY));
@@ -101,7 +101,7 @@ async function probe() {
   const alignment = { centers: alignmentPixels, own: await vcall(aligned, "getTextAlignment", "()I"),
     relative: [aligned.horizontalGravity("مرحبا", 2, 0), aligned.horizontalGravity("مرحبا", 3, 0),
       aligned.horizontalGravity("Hi", 5, 1), aligned.horizontalGravity("Hi", 6, 1)] };
-  view.paintT.textSize = 12;
+  view.tp.textSize = 12;
   const compound = rt.make("android/widget/TextView");
   if (!(compound instanceof JTextView)) throw new Error("Invalid compound TextView");
   compound.right = 60; compound.bottom = 70;
@@ -124,7 +124,7 @@ async function probe() {
   const retained = await Promise.all(drawables.map(async d => { const b = await vcall(d, "getBounds", "()Landroid/graphics/Rect;"); return [b.left, b.top, b.right, b.bottom]; }));
   const mixed = rt.make("android/widget/TextView");
   if (!(mixed instanceof JTextView)) throw new Error("Invalid mixed TextView");
-  mixed.paintT.textSize = 12; mixed.singleLine = mixed.ellipsizeEnd = mixed.allCaps = true;
+  mixed.tp.textSize = 12; mixed.singleLine = mixed.ellipsizeEnd = mixed.allCaps = true;
   const mixedText = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "a ß replacement trailing words");
   await vcall(mixedText, "setSpan", "(Ljava/lang/Object;III)V", span, 4, 15, 33);
   await vcall(mixed, "setText", "(Ljava/lang/CharSequence;)V", mixedText);

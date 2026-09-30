@@ -1,24 +1,25 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jlang";
-import { JPaint, tintedBmp } from "../../../src/android/graphics";
+import { tintedBmp } from "../../../src/android/graphics";
+import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
 import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap";
 import { loadPlatformDex } from "../../../src/android/framework";
-import { mountPlatformData } from "../../../src/shell/apex";
+import { systemFonts } from "./fonts";
+import { loadSkiaText } from "../../../src/android/skia-text";
 
 async function probe() {
   await loadPlatformDex();
-  mountPlatformData();
   rt.linkNatives();
+  await systemFonts();
   const results = [];
   const enums = (await linkInit("android/graphics/BlurMaskFilter$Blur")).ctor;
   for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
     const value = await vcall(enums, "valueOf", "(Ljava/lang/String;)Landroid/graphics/BlurMaskFilter$Blur;", style);
     const filter = await newObj("android/graphics/BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", 5, value);
-    const paint = rt.make("android/graphics/Paint");
-    if (!(paint instanceof JPaint)) throw new Error("Invalid Paint");
-    paint.color = 0x80ff0000;
+    const paint = newPaint();
+    await vcall(paint, "setColor", "(I)V", 0x80ff0000 | 0);
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const ctx = new OffscreenCanvas(80, 80).getContext("2d")!;
     const canvas = canvasOver(ctx, 80, 80);
@@ -43,7 +44,8 @@ async function probe() {
   const source = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 20, 20, argb);
   await vcall(source, "setDensity", "(I)V", 480);
   bitmapOf(source).ctx.fillStyle = "#ff000080"; bitmapOf(source).ctx.fillRect(5, 5, 10, 10);
-  const paint = new JPaint(); paint.color = 0x4000ff00;
+  const paint = newPaint();
+  await vcall(paint, "setColor", "(I)V", 0x4000ff00);
   const extracted = [];
   for (const radius of [0, 1, 2, 3, 5, 10]) for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
     const value = await vcall(enums, "valueOf", "(Ljava/lang/String;)Landroid/graphics/BlurMaskFilter$Blur;", style);
@@ -59,7 +61,9 @@ async function probe() {
   }
   const alpha = await vcall(source, "extractAlpha", "()Landroid/graphics/Bitmap;");
   const ctx = new OffscreenCanvas(40, 40).getContext("2d")!;
-  paint.maskFilter = null; paint.color = 0x8000ff00; paint.style = 2;
+  await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", null);
+  await vcall(paint, "setColor", "(I)V", 0x8000ff00 | 0);
+  await vcall(paint, "setStyle", "(Landroid/graphics/Paint$Style;)V", ((await linkInit("android/graphics/Paint$Style")).ctor as Record<string, unknown>).s$FILL_AND_STROKE);
   await vcall(canvasOver(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
   const shaded = Array.from(ctx.getImageData(14, 16, 1, 1).data);
   const buffer = await vcall((await linkInit("java/nio/ByteBuffer")).ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 400);
@@ -82,6 +86,59 @@ async function probe() {
     clear: pixel("SRC_IN", 0), add: pixel("PLUS", 0x40102040), multiply: pixel("MODULATE", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
   bitmap.ctx.fillStyle = "#fff"; bitmap.ctx.fillRect(0, 0, 1, 1);
   const changed = pixel("SRC_IN", 0x80ff0000);
-  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed };
+  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed, effects: await effects() };
+}
+/** path effects, the other mask filters, a shadow layer, text scale and measurement under the text flags */
+async function effects() {
+  const surface = () => { const ctx = new OffscreenCanvas(60, 60).getContext("2d")!; return { ctx, canvas: canvasOver(ctx, 60, 60), alpha: (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3] }; };
+  const set = (paint: unknown, name: string, desc: string, value: unknown) => vcall(paint, name, desc, value);
+  const rect = (canvas: unknown, paint: unknown) => vcall(canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 50, 50, paint);
+  const corner = newPaint(), c = surface();
+  await set(corner, "setPathEffect", "(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;", await newObj("android/graphics/CornerPathEffect", "(F)V", 12));
+  await rect(c.canvas, corner);
+  const shadow = newPaint(), s = surface();
+  await vcall(shadow, "setShadowLayer", "(FFFI)V", 2, 6, 6, 0xff0000ff | 0);
+  await vcall(s.canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 30, 30, shadow);
+  const emboss = newPaint(), e = surface();
+  await set(emboss, "setColor", "(I)V", 0xff808080 | 0);
+  await set(emboss, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", await newObj("android/graphics/EmbossMaskFilter", "([FFFF)V", Float32Array.of(-1, -1, 1), 0.4, 8, 4));
+  await rect(e.canvas, emboss);
+  const shade = (x: number, y: number) => e.ctx.getImageData(x, y, 1, 1).data[0];
+  const table = newPaint(), t = surface();
+  await set(table, "setAlpha", "(I)V", 255);
+  await set(table, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", await scall("android/graphics/TableMaskFilter", "CreateClipTable", "(II)Landroid/graphics/TableMaskFilter;", 0, 0));
+  await vcall(t.canvas, "drawCircle", "(FFFLandroid/graphics/Paint;)V", 30, 30, 20.5, table);
+  let partial = 0;
+  for (const v of t.ctx.getImageData(0, 0, 60, 60).data.filter((_, i) => i % 4 === 3)) if (v && v < 255) partial++;
+  const text = newPaint(), ink = async (scale: number) => {
+    const w = surface();
+    await set(text, "setTextSize", "(F)V", 20);
+    await set(text, "setTextScaleX", "(F)V", scale);
+    await vcall(w.canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "IIII", 2, 40, text);
+    let right = 0;
+    for (let x = 0; x < 60; x++) for (let y = 20; y < 45; y++) if (w.alpha(x, y)) right = Math.max(right, x);
+    return right;
+  };
+  const measure = async (flags: number) => {
+    const p = await newObj("android/graphics/Paint", "(I)V", flags);
+    await set(p, "setTextSize", "(F)V", 13.3);
+    return vcall(p, "measureText", "(Ljava/lang/String;)F", "Hello World iiilll WWW");
+  };
+  await loadSkiaText();
+  const stroke = newPaint(), P = "android/graphics/Path", stroked: string[] = [];
+  await set(stroke, "setStyle", "(Landroid/graphics/Paint$Style;)V", ((await linkInit("android/graphics/Paint$Style")).ctor as Record<string, unknown>).s$STROKE);
+  await set(stroke, "setStrokeWidth", "(F)V", 4);
+  const line = await newObj(P, "()V"), box = await newObj(P, "()V");
+  await vcall(line, "moveTo", "(FF)V", 0, 0); await vcall(line, "lineTo", "(FF)V", 100, 0); await vcall(line, "lineTo", "(FF)V", 100, 50);
+  await vcall(box, "addRect", "(FFFFLandroid/graphics/Path$Direction;)V", 0, 0, 60, 40, ((await linkInit("android/graphics/Path$Direction")).ctor as Record<string, unknown>).s$CW);
+  for (const src of [line, box]) {
+    const dst = await newObj(P, "()V"), it = (await vcall(stroke, "getFillPath", "(Landroid/graphics/Path;Landroid/graphics/Path;)Z", src, dst), await vcall(dst, "getPathIterator", "()Landroid/graphics/PathIterator;"));
+    const pts = new Float32Array(8), verbs: string[] = [];
+    for (let v; (v = await vcall(it, "next", "([FI)I", pts, 0)) !== 6;) verbs.push("MLQKCZ"[v] + [...pts.subarray(v ? 2 : 0, [2, 4, 6, 6, 8, 2][v])].join(","));
+    stroked.push(verbs.join(" "));
+  }
+  return { stroked, cornerCut: c.alpha(10, 10), cornerCenter: c.alpha(30, 30), shadow: s.alpha(34, 34), noShadow: s.alpha(8, 8),
+    emboss: [shade(14, 14), shade(46, 46), shade(30, 30)], tablePartial: partial,
+    scaled: [await ink(1), await ink(2)], measured: [await measure(1), await measure(0x81), await measure(0x41)] };
 }
 export default probe;

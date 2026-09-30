@@ -32,7 +32,7 @@ export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at:
   }
   return { dv, at };
 }
-const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
+const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164, T_POST = 0x706f7374, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
 export const T_CMAP = 0x636d6170;
 const T_GLYF = 0x676c7966, T_CBLC = 0x43424c43;
 const isScalable = (at: Map<number, number>) => at.has(T_GLYF) || at.has(T_CFF) || at.has(T_CFF2);
@@ -46,9 +46,10 @@ export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic
 }
 
 /** FreeType's scalable-face metrics as Skia reads them, in ems: hhea ascender/descender and line
- *  gap, and head's bounding box for top/bottom (all positive downwards from the baseline). A face
- *  with only bitmaps (a CBDT emoji font) has its largest strike's line metrics, scaled. */
-export interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number }
+ *  gap, and head's bounding box for top/bottom (all positive downwards from the baseline), and the
+ *  underline's top and thickness from post. A face with only bitmaps (a CBDT emoji font) has its
+ *  largest strike's line metrics, scaled, and no underline. */
+export interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number; underline?: number; underlineThickness?: number }
 function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
   const t = sfntTables(b, ttcIndex);
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
@@ -64,8 +65,13 @@ function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
       return { ascent: asc, descent: desc, top: asc, bottom: desc, leading: 0 };
     }
   }
-  const asc = t.dv.getInt16(hhea + 4) / upem, desc = -t.dv.getInt16(hhea + 6) / upem;
-  return { ascent: asc, descent: desc, top: t.dv.getInt16(head + 42) / upem, bottom: -t.dv.getInt16(head + 38) / upem, leading: t.dv.getInt16(hhea + 8) / upem };
+  const asc = t.dv.getInt16(hhea + 4) / upem, desc = -t.dv.getInt16(hhea + 6) / upem, post = t.at.get(T_POST);
+  const m: FaceMetrics = { ascent: asc, descent: desc, top: t.dv.getInt16(head + 42) / upem, bottom: -t.dv.getInt16(head + 38) / upem, leading: t.dv.getInt16(hhea + 8) / upem };
+  // FreeType moves post's underline position (its centre) to the top, and Skia moves it back
+  if (post !== undefined && post + 12 <= b.length && t.dv.getInt16(post + 10) > 0) {
+    m.underline = -t.dv.getInt16(post + 8) / upem; m.underlineThickness = t.dv.getInt16(post + 10) / upem;
+  }
+  return m;
 }
 
 // minikin's FontFileParser, which FontFileUtil's natives answer from. An unreadable face has no
@@ -119,7 +125,7 @@ function fvarAxes(b: Uint8Array, ttcIndex: number): number[] {
 
 // ── the system fonts
 /** Android's Roboto, a variable font: hhea ascender/descender and head yMax/yMin over 2048 units */
-export const SYSTEM_FONT: FaceMetrics = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2163 / 2048, bottom: 555 / 2048, leading: 0 };
+export const SYSTEM_FONT: FaceMetrics = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2163 / 2048, bottom: 555 / 2048, leading: 0, underline: 150 / 2048, underlineThickness: 100 / 2048 };
 interface SystemFamily { css: string; name?: string; lang?: string; metrics?: FaceMetrics; faces: readonly (readonly [file: string, weight: number, italic: boolean])[] }
 /** The families under /system/fonts, as the device's font configuration declares them, each one CSS
  *  family on the page. The Roboto statics stand in for instances of the device's variable Roboto,

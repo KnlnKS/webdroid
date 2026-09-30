@@ -1,16 +1,18 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
+import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
-import { JTextPaint } from "../src/android/text";
+import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
 import { JTheme, obtainStyled, rvString } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import { JTextView, JEditText } from "../src/android/textview";
 import { perf } from "../src/perf";
 
 beforeAll(loadSystemFonts);
+/** a TextPaint's public field */
+const textPaintField = (p: object, name: string) => (p as Record<string, number>)[declaredField("android/text/TextPaint", name)];
 
 describe("locale-span", () => {
   rt.linkNatives();
@@ -23,7 +25,7 @@ describe("locale-span", () => {
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
     expect(await vcall(copy, "getTextLocales", "()Landroid/os/LocaleList;")).toBe(locales);
-    expect(copy.language).toBe("ja-JP");
+    expect(paintOf(copy).language).toBe("ja-JP");
     const parcel = await newObj("android/os/Parcel");
     await vcall(span, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
@@ -77,27 +79,6 @@ describe("metric-spans", () => {
   });
 });
 
-describe("reached-text-api", () => {
-  rt.linkNatives();
-
-  test("TextPaint exposes and copies custom underline state", async () => {
-    const source = await newObj("android/text/TextPaint");
-    const target = await newObj("android/text/TextPaint");
-    expect(source).toBeInstanceOf(JTextPaint);
-    expect(target).toBeInstanceOf(JTextPaint);
-    if (!(source instanceof JTextPaint) || !(target instanceof JTextPaint)) return;
-    expect(source.underlineColor).toBe(0);
-    expect(source.underlineThickness).toBe(0);
-    const color = 0xff123456 | 0;
-    source.underlineColor = color;
-    source.underlineThickness = 2.5;
-    await vcall(target, "set", "(Landroid/text/TextPaint;)V", source);
-    expect(target.underlineColor).toBe(color);
-    expect(target.underlineThickness).toBe(2.5);
-  });
-
-});
-
 describe("spanned-append", () => {
   class RangeSequence extends JObj {}
   rt.register({ name: "test/RangeSequence", ctor: RangeSequence, ifaces: ["java/lang/CharSequence"], methods: {
@@ -126,14 +107,14 @@ describe("style-wrap", () => {
     expect(rt.iof(second, "android/text/style/MetricAffectingSpan")).toBe(1);
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/CharacterStyle;")).toBe(style);
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/MetricAffectingSpan;")).toBe(style);
-    const paint = rt.make("android/text/TextPaint") as JTextPaint;
+    const paint = newPaint("android/text/TextPaint");
     await vcall(second, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paint.textSize).toBe(23);
+    expect(paintOf(paint).textSize).toBe(23);
     const color = await newObj("android/text/style/ForegroundColorSpan", "(I)V", -65536);
     const colorWrapper = await wrap(color);
     expect(rt.iof(colorWrapper, "android/text/style/MetricAffectingSpan")).toBe(0);
     await vcall(colorWrapper, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paint.color).toBe(-65536);
+    expect(await vcall(paint, "getColor", "()I")).toBe(-65536);
   });
 });
 
@@ -159,20 +140,21 @@ describe("text-appearance-span", () => {
     const valueOf = (c: number) => scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", c | 0);
     const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
     const span = await newObj("android/text/style/TextAppearanceSpan", "(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V", null, 1, 28, color, link);
-    const paint = new JTextPaint(); paint.tf = await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2);
+    const paint = newPaint("android/text/TextPaint");
+    await setPaintTypeface(paint, await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2));
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(await vcall(paint.tf, "getStyle", "()I")).toBe(3);
-    expect(paint.textSize).toBe(28);
-    expect(paint.color).not.toBe(0xff123456 | 0);
+    expect(await vcall(paintTypeface(paint), "getStyle", "()I")).toBe(3);
+    expect(paintOf(paint).textSize).toBe(28);
+    expect(await vcall(paint, "getColor", "()I")).not.toBe(0xff123456 | 0);
     let calls = 0;
-    Object.assign(span, { [mangleMethod("updateMeasureState", "(Landroid/text/TextPaint;)V")]: async (p: JTextPaint) => {
-      await Promise.resolve(); calls++; p.textSize = 36;
+    Object.assign(span, { [mangleMethod("updateMeasureState", "(Landroid/text/TextPaint;)V")]: async (p: object) => {
+      await Promise.resolve(); calls++; paintOf(p).textSize = 36;
     } });
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
     expect(calls).toBe(1);
-    expect(paint.textSize).toBe(36);
-    expect(paint.color).toBe(0xff123456 | 0);
-    expect(paint.linkColor).toBe(0xffabcdef | 0);
+    expect(paintOf(paint).textSize).toBe(36);
+    expect(await vcall(paint, "getColor", "()I")).toBe(0xff123456 | 0);
+    expect(textPaintField(paint, "linkColor")).toBe(0xffabcdef | 0);
     expect(await vcall(span, "getTextColor", "()Landroid/content/res/ColorStateList;")).toBe(color);
     expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
   });
@@ -181,13 +163,15 @@ describe("text-appearance-span", () => {
   test("SuperscriptSpan shifts the existing baseline using virtual ascent without resizing text", async () => {
     rt.linkNatives();
     const span = await newObj("android/text/style/SuperscriptSpan", "()V");
-    const paint = new JTextPaint(); paint.baselineShift = 3; paint.textSize = 24;
+    const paint = newPaint("android/text/TextPaint");
+    (paint as unknown as Record<string, number>)[declaredField("android/text/TextPaint", "baselineShift")] = 3;
+    paintOf(paint).textSize = 24;
     Object.assign(paint, { [mangleMethod("ascent", "()F")]: async () => { await Promise.resolve(); return -15; } });
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paint.baselineShift).toBe(-4);
+    expect(textPaintField(paint, "baselineShift")).toBe(-4);
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paint.baselineShift).toBe(-11);
-    expect(paint.textSize).toBe(24);
+    expect(textPaintField(paint, "baselineShift")).toBe(-11);
+    expect(paintOf(paint).textSize).toBe(24);
     expect(await vcall(span, "getSpanTypeId", "()I")).toBe(14);
     expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
   });
@@ -202,9 +186,9 @@ describe("text-platform", () => {
     expect(await vcall(span, "getTypeface", "()Landroid/graphics/Typeface;")).toBe(typeface);
     expect(await vcall(span, "getFamily", "()Ljava/lang/String;")).toBeNull();
 
-    const paint = new JTextPaint();
+    const paint = newPaint("android/text/TextPaint");
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paint.tf).toBe(typeface);
+    expect(paintTypeface(paint)).toBe(typeface);
   });
 
 
@@ -228,20 +212,20 @@ describe("textview-link-color", () => {
     const layouts = perf.layoutRequests;
     await vcall(view, "setLinkTextColor", "(Landroid/content/res/ColorStateList;)V", colors);
     expect(await vcall(view, "getLinkTextColors", "()Landroid/content/res/ColorStateList;")).toBe(colors);
-    expect(view.paintT.linkColor).toBe(0xffabcdef | 0);
+    expect(textPaintField(view.paintT, "linkColor")).toBe(0xffabcdef | 0);
     view.pressed = true;
     await view.refreshDrawableState();
-    expect(view.paintT.linkColor).toBe(0xff123456 | 0);
+    expect(textPaintField(view.paintT, "linkColor")).toBe(0xff123456 | 0);
     await vcall(view, "setLinkTextColor", "(I)V", 0xff112233 | 0);
-    expect(view.paintT.linkColor).toBe(0xff112233 | 0);
+    expect(textPaintField(view.paintT, "linkColor")).toBe(0xff112233 | 0);
     await vcall(view, "setLinkTextColor", "(Landroid/content/res/ColorStateList;)V", null);
     expect(await vcall(view, "getLinkTextColors", "()Landroid/content/res/ColorStateList;")).toBeNull();
-    expect(view.paintT.linkColor).toBe(0xff112233 | 0);
+    expect(textPaintField(view.paintT, "linkColor")).toBe(0xff112233 | 0);
     expect(perf.layoutRequests).toBe(layouts);
     const span = await newObj("android/text/style/URLSpan", "(Ljava/lang/String;)V", "https://example.com");
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", view.paintT);
-    expect(view.paintT.color).toBe(view.paintT.linkColor);
-    expect(view.paintT.underline).toBe(true);
+    expect(await vcall(view.paintT, "getColor", "()I")).toBe(textPaintField(view.paintT, "linkColor"));
+    expect(view.tp.underline).toBe(true);
   });
 });
 
@@ -308,7 +292,7 @@ describe("minikin", () => {
     const mismatches: string[] = [];
     for (const row of rows.filter((r) => /^\d/.test(r))) {
       const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
-      const style = { font: "", lang: "en-US", size, hinted: true, letterSpacing: +spacing * Math.fround(0.05) * size, ascent: 0, descent: 0 };
+      const style = { font: "", lang: "en-US", size, hinted: true, scaleX: 1, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0, ascent: 0, descent: 0 };
       const breaks: number[] = [];
       // StaticLayout breaks each paragraph, its newline included, on its own
       for (let start = 0; start < text.length;) {

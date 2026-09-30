@@ -1,8 +1,7 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { vcall, newObj, vcallOn, curThread, JThread, mainThread, setCurThread, enumName } from "../src/jvm/natives/jlang";
-import { JPaint } from "../src/android/graphics";
+import { vcall, newObj, vcallOn, curThread, JThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
 import { canvasOver, canvasOf, type JavaCanvas } from "../src/android/canvas";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
@@ -17,60 +16,6 @@ import { scall, loadLibcore, loadFrameworkJar } from "./java";
 
 describe("android-surface-state", () => {
   rt.linkNatives();
-
-  test("Paint reset restores a fresh paint state", async () => {
-    const paint = new JPaint();
-    paint.color = 1; paint.style = 2; paint.strokeWidth = 3; paint.textSize = 4;
-    paint.dash = [1, 2]; paint.fakeBold = true; paint.strikeThru = true;
-    paint.shadowRadius = 5; paint.shadowColor = 6;
-    await vcall(paint, "reset", "()V");
-
-    const fresh = new JPaint();
-    expect({ ...paint, tf: undefined }).toEqual({ ...fresh, tf: undefined });
-    expect(paint.tf).toBe(fresh.tf);
-  });
-
-  test("Paint retains text scale and skew state", async () => {
-    const paint = new JPaint();
-    await vcall(paint, "setTextScaleX", "(F)V", 1.25);
-    await vcall(paint, "setTextSkewX", "(F)V", -0.2);
-    expect(await vcall(paint, "getTextScaleX", "()F")).toBe(1.25);
-    expect(await vcall(paint, "getTextSkewX", "()F")).toBeCloseTo(-0.2);
-
-    const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
-    expect(await vcall(copy, "getTextSkewX", "()F")).toBeCloseTo(-0.2);
-    await vcall(copy, "reset", "()V");
-    expect(await vcall(copy, "getTextScaleX", "()F")).toBe(1);
-    expect(await vcall(copy, "getTextSkewX", "()F")).toBe(0);
-  });
-
-  test("Paint returns its stroke cap and join", async () => {
-    const paint = new JPaint();
-    await vcall(paint, "setStrokeCap", "(Landroid/graphics/Paint$Cap;)V", await scall("android/graphics/Paint$Cap", "valueOf", "(Ljava/lang/String;)Landroid/graphics/Paint$Cap;", "ROUND"));
-    await vcall(paint, "setStrokeJoin", "(Landroid/graphics/Paint$Join;)V", await scall("android/graphics/Paint$Join", "valueOf", "(Ljava/lang/String;)Landroid/graphics/Paint$Join;", "BEVEL"));
-    expect(enumName(await vcall(paint, "getStrokeCap", "()Landroid/graphics/Paint$Cap;"))).toBe("ROUND");
-    expect(enumName(await vcall(paint, "getStrokeJoin", "()Landroid/graphics/Paint$Join;"))).toBe("BEVEL");
-  });
-
-  test.each([
-    ["Feature", "V", "kern=0"],
-    ["Variation", "Z", "'wdth' 125"],
-  ])("Paint retains font %s settings across copy and clears them on reset", async (kind, setterReturn, value) => {
-    const get = (paint: unknown) => vcall(paint, `getFont${kind}Settings`, "()Ljava/lang/String;");
-    const set = (paint: unknown, settings: string) => vcall(paint, `setFont${kind}Settings`, `(Ljava/lang/String;)${setterReturn}`, settings);
-    const paint = new JPaint();
-    expect(await get(paint)).toBeNull();
-    expect(await set(paint, value)).toBe(setterReturn === "Z" ? 1 : undefined);
-    expect(await get(paint)).toBe(value);
-    const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
-    expect(await get(copy)).toBe(value);
-    await vcall(copy, "reset", "()V");
-    expect(await get(copy)).toBeNull();
-    if (setterReturn === "Z") {
-      expect(await set(paint, "")).toBe(1);
-      expect(await get(paint)).toBeNull();
-    }
-  });
 
   test("uname reports the emulated Linux ABI", async () => {
     await loadLibcore();

@@ -34,7 +34,7 @@ export interface Face { readonly face: Ptr; readonly upem: number; readonly colo
 export interface Font { readonly font: Ptr; readonly face: Face; readonly outlines: Map<number, Path2D | null> }
 
 /** what an outline is drawn into: a Path2D, or a control box */
-type Sink = Pick<Path2D, "moveTo" | "lineTo" | "quadraticCurveTo" | "bezierCurveTo" | "closePath">;
+export type Sink = Pick<Path2D, "moveTo" | "lineTo" | "quadraticCurveTo" | "bezierCurveTo" | "closePath">;
 /** the box around an outline's points under (x, y) -> (a x + c y, d y), as FreeType's
  *  FT_Outline_Get_CBox bounds a transformed outline */
 class ControlBox implements Sink {
@@ -175,7 +175,8 @@ export class HarfBuzz {
     this.draw(font, glyph, b);
     return b.x0 <= b.x1 ? [b.x0, b.y0, b.x1, b.y1] : null;
   }
-  private draw(font: Font, glyph: number, sink: Sink): void {
+  /** the glyph's outline in font units, y up, into `sink` */
+  draw(font: Font, glyph: number, sink: Sink): void {
     this.sink = sink;
     try { this.x.hb_font_draw_glyph(font.font, glyph, this.drawFuncs, 0); } finally { this.sink = null; }
   }

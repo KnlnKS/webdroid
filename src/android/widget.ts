@@ -1,13 +1,13 @@
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor, cslBoundary } from "./drawable";
-import { rt, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, type JObj, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
-import { type JInsets, JRect, insetsOf, measureText, fontAscent, fontDescent } from "./graphics";
+import { type JInsets, JRect, insetsOf } from "./graphics";
+import { newPaint, paintOf, paintTypeface, setPaintTypeface, measureText, fontAscent, fontDescent } from "./paint";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
-import { JTextPaint } from "./text";
 import { csText } from "../jvm/natives/jchars";
 import { G, absGravity } from "./gravity";
 import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/natives/jlang";
@@ -470,7 +470,8 @@ class JSwitch extends JCompoundButton {
   textOn = ""; textOff = "";
   showText = true; splitTrack = false;
   thumbTextPadding = 0; switchMinWidth = 0; switchPadding = 0;
-  switchPaint: JTextPaint | null = null;
+  /** the TextPaint the switch's own text is drawn with, once it has its own appearance */
+  switchPaint: JObj | null = null;
   /** 0 off .. 1 on; while `animStart` is set it runs from `animFrom` to the checked edge */
   thumbPos = 0;
   animFrom = 0; animStart = -1;
@@ -519,11 +520,12 @@ const applySwitchTints = driven(function* applySwitchTints(v: JSwitch): Gen {
 const setSwitchTextAppearance = driven(function* setSwitchTextAppearance(v: JSwitch, id: number): Gen {
   const res = v.jres;
   if (!res || !id) return;
-  const p = v.switchPaint ??= new JTextPaint();
-  p.textSize = v.paintT.textSize; p.tf = v.paintT.tf;
+  const p = v.switchPaint ??= newPaint("android/text/TextPaint"), np = paintOf(p);
+  np.textSize = v.tp.textSize;
+  yield setPaintTypeface(p, paintTypeface(v.paintT));
   const size = res.styleLookup(id, AID("textSize")), color = res.styleLookup(id, AID("textColor"));
-  if (size) p.textSize = rvDimen(res, size, p.textSize);
-  if (color) p.setColorValue(cslColor(yield rvCsl(res, resolveStyleValue(res, v.theme, color)!, v.theme), v.drawableState()));
+  if (size) np.textSize = rvDimen(res, size, np.textSize);
+  if (color) yield vcall(p, "setColor", "(I)V", cslColor(yield rvCsl(res, resolveStyleValue(res, v.theme, color)!, v.theme), v.drawableState()));
   requestLayout(v);
 });
 rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget/CompoundButton", methods: cslBoundary({
@@ -619,7 +621,8 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
   "setTrackTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JSwitch, m: JSimpleEnum | null) { this.trackTintMode = m; return applySwitchTints(this); },
   "setSwitchTextAppearance(Landroid/content/Context;I)V": function (this: JSwitch, _c: unknown, id: number) { return setSwitchTextAppearance(this, id); },
   "setSwitchTypeface(Landroid/graphics/Typeface;)V": function (this: JSwitch, tf: object | null) {
-    (this.switchPaint ??= Object.assign(new JTextPaint(), { textSize: this.paintT.textSize })).tf = tf; requestLayout(this);
+    if (!this.switchPaint) paintOf(this.switchPaint = newPaint("android/text/TextPaint")).textSize = this.tp.textSize;
+    return after(setPaintTypeface(this.switchPaint, tf), () => requestLayout(this));
   },
   "setSwitchTypeface(Landroid/graphics/Typeface;I)V": function (this: JSwitch, tf: object | null) {
     return vcall(this, "setSwitchTypeface", "(Landroid/graphics/Typeface;)V", tf);
@@ -638,7 +641,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
       thumbW = (yield drawableSize(thumb, false, thread)) - pad.left - pad.right;
       thumbH = yield drawableSize(thumb, true, thread);
     }
-    const paint = this.switchPaint ?? this.paintT;
+    const paint = paintOf(this.switchPaint ?? this.paintT);
     const textW = this.showText ? Math.ceil(Math.max(measureText(paint, this.switchText(true)), measureText(paint, this.switchText(false)))) + this.thumbTextPadding * 2 : 0;
     this.thumbW = Math.max(textW, thumbW);
     const insets: JInsets = yield* this.insets$(thread);
@@ -679,11 +682,11 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     if (thumb) yield drawChild(thumb, cv, thread);
     const text = this.showText ? this.switchText(this.checked) : "";
     if (!text) return;
-    const paint = this.switchPaint ?? this.paintT, b = thumb?.bounds;
+    const jpaint = this.switchPaint ?? this.paintT, paint = paintOf(jpaint), b = thumb?.bounds;
     const cx = b ? (b.left + b.right) / 2 : this.width() / 2;
     const cy = (this.switchT + (track ? pad.top : 0) + this.switchB - (track ? pad.bottom : 0)) / 2;
     yield vcallOn(thread, cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,
-      cx - measureText(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, paint);
+      cx - measureText(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, jpaint);
   }),
 }) });
 class JRadioGroup extends JLinearLayout {

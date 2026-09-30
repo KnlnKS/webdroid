@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallAsync } from "../src/jvm/natives/jlang";
@@ -9,7 +9,7 @@ import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/a
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
-import { scall, loadLibcore, appResources } from "./java";
+import { scall, loadLibcore, appResources, preloadTextPaint } from "./java";
 import { toJsArray } from "../src/jvm/natives/jcoll";
 
 
@@ -29,10 +29,11 @@ rt.register({
   },
 });
 rt.linkNatives();
+beforeAll(preloadTextPaint);
 
 test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
   const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
-  expect((await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;")).color).toBe(0xff123456 | 0);
+  expect(await vcall(await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;"), "getColor", "()I")).toBe(0xff123456 | 0);
   expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
   await vcall(drawable, "setCornerRadius", "(F)V", 12);
   expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();

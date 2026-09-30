@@ -144,7 +144,7 @@ rt.register({
           v.ctx = this.jctx;
           v.jres = this.jctx?.$host?.res ?? null;
           v.theme = this.jctx?.$host?.theme ?? null;
-          v.paintT.textSize = device.dp(16);
+          v.tp.textSize = device.dp(16);
           v.padL = v.padR = device.dp(16); v.padT = v.padB = device.dp(14);
         }
         let target = v;

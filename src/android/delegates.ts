@@ -14,23 +14,22 @@
 // there because that said so.
 
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
-import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } from "./handles";
+import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
 import {
-  JPaint,
-  fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  type JRectF, CAPS, JOINS,
+  type JRectF,
   type Mat, Camera3D, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, applyMatrix,
-  NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
+  NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader,
   type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
+import { paintAt, measureCtx, preloadPaint, setFontMetrics } from "./paint";
+import { initDeviceLocales } from "./resnative";
 import { NativeCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
 import { NativeBitmap } from "./bitmap";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
-import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
 import { recordingContext, replay, replayWithSemantics, retarget, type DisplayList } from "./recording";
@@ -394,14 +393,14 @@ delegate("android/graphics/fonts/Font", {
     return BigInt(a.tag >>> 0) << 32n | BigInt(new Uint32Array(Float32Array.of(a.value).buffer)[0]);
   },
   // SkFont::getMetrics over this face at the paint's size
-  "nGetFontMetrics(JJLandroid/graphics/Paint$FontMetrics;)F": (h: bigint, p: bigint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null) => {
+  "nGetFontMetrics(JJLandroid/graphics/Paint$FontMetrics;)F": (h: bigint, p: bigint, fm: object | null) => {
     const m = fontOf(h).faceMetrics!;
-    const size = paint(p).textSize, f = Math.fround;
+    const size = paintAt(p).textSize, f = Math.fround;
     const ascent = f(-m.ascent * size), descent = f(m.descent * size), leading = f(m.leading * size);
-    if (fm) { fm.top = f(-m.top * size); fm.ascent = ascent; fm.descent = descent; fm.bottom = f(m.bottom * size); fm.leading = leading; }
+    if (fm) setFontMetrics(fm, false, f(-m.top * size), ascent, descent, f(m.bottom * size), leading);
     return f(descent - ascent + leading);
   },
-  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: JRectF | null) => glyphBounds(fontOf(h), glyph, paint(p), rect),
+  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: JRectF | null) => glyphBounds(fontOf(h), glyph, paintAt(p), rect),
   "nGetAvailableFontSet()[J": () => systemFonts().then((fonts) => BigInt64Array.from(fonts, wrapFont)),
 });
 delegate("android/graphics/fonts/FontFamily$Builder", {
@@ -427,115 +426,6 @@ delegate("android/graphics/fonts/FontFileUtil", {
   "nGetFontPostScriptName(Ljava/nio/ByteBuffer;I)Ljava/lang/String;": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => postScriptName(bytes, index)),
   "nIsPostScriptType1Font(Ljava/nio/ByteBuffer;I)I": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => isPostScriptType1(bytes, index)),
 });
-
-// ── android.graphics.Paint ─────────────────────────────────────────────────────────────
-// JPaint is the object: it already carries the tuned font-string memo, the fill-style
-// resolution and the letter spacing, and this is the same state under AOSP's names.
-const paint = (h: bigint) => deref<JPaint>(h);
-
-/** the boolean flag setters AOSP spells one per flag beside nSetFlags */
-function flag(set: (p: JPaint, v: boolean) => void) {
-  return (h: bigint, v: number) => set(paint(h), !!v);
-}
-
-delegate("android/graphics/Paint", {
-  "nInit()J": () => handle(new JPaint()),
-  "nInitWithPaint(J)J": (h: bigint) => {
-    const p = new JPaint();
-    copyPaint(paint(h), p);
-    return handle(p);
-  },
-  "nGetNativeFinalizer()J": () => FINALIZER,
-  "nReset(J)V": (h: bigint) => { replace(h, new JPaint()); },
-  "nSet(JJ)V": (h: bigint, src: bigint) => copyPaint(paint(src), paint(h)),
-
-  "nSetColor(JI)V": (h: bigint, c: number) => { paint(h).setColorValue(c); },
-  "nSetColor(JJJ)V": (h: bigint, _cs: bigint, c: bigint) => { paint(h).setColorValue(argbOfColorLong(c)); },
-  "nSetAlpha(JI)V": (h: bigint, a: number) => { paint(h).setAlphaValue(a); },
-  "nSetStyle(JI)V": (h: bigint, v: number) => { paint(h).style = v; },
-  "nGetStyle(J)I": (h: bigint) => paint(h).style,
-  "nSetStrokeWidth(JF)V": (h: bigint, w: number) => { paint(h).strokeWidth = w; },
-  "nGetStrokeWidth(J)F": (h: bigint) => paint(h).strokeWidth,
-  "nSetStrokeCap(JI)V": (h: bigint, v: number) => { paint(h).strokeCapN = CAPS[v] ?? "butt"; },
-  "nGetStrokeCap(J)I": (h: bigint) => Math.max(0, CAPS.indexOf(paint(h).strokeCapN as never)),
-  "nSetStrokeJoin(JI)V": (h: bigint, v: number) => { paint(h).strokeJoinN = JOINS[v] ?? "miter"; },
-  "nGetStrokeJoin(J)I": (h: bigint) => Math.max(0, JOINS.indexOf(paint(h).strokeJoinN as never)),
-  ...noops("nSetStrokeMiter(JF)V"), ...stubs(4, "nGetStrokeMiter(J)F"),
-
-  // flags: nSetFlags sets the lot, and AOSP also spells one entry point per flag
-  "nSetFlags(JI)V": (h: bigint, f: number) => { paint(h).flags = f; },
-  "nGetFlags(J)I": (h: bigint) => paint(h).flags,
-  "nSetAntiAlias(JZ)V": flag((p, v) => { p.antiAlias = v; }),
-  "nSetUnderlineText(JZ)V": flag((p, v) => { p.underline = v; }),
-  "nSetStrikeThruText(JZ)V": flag((p, v) => { p.strikeThru = v; }),
-  "nSetFakeBoldText(JZ)V": flag((p, v) => { p.fakeBold = v; }),
-  "nSetLinearText(JZ)V": flag((p, v) => { p.linearText = v; }),
-  "nSetSubpixelText(JZ)V": flag((p, v) => { p.subpixelText = v; }),
-  // Canvas2D has no dither, no bitmap filter toggle and no hinting
-  ...noops("nSetDither(JZ)V", "nSetFilterBitmap(JZ)V", "nSetHinting(JI)V"),
-  ...stubs(1, "nGetHinting(J)I"),
-
-  // effects: each returns the native handle it was given, which is what Paint stores back
-  "nSetShader(JJ)J": (h: bigint, sh: bigint) => { paint(h).shader = deref<NativeShader | undefined>(sh) ?? null; return sh; },
-  "nSetColorFilter(JJ)J": (h: bigint, f: bigint) => { paint(h).colorFilter = deref<NativeColorFilter | undefined>(f) ?? null; return f; },
-  "nSetMaskFilter(JJ)J": (_h: bigint, f: bigint) => f,
-  "nSetPathEffect(JJ)J": (_h: bigint, f: bigint) => f,
-
-  "nSetTypeface(JJ)V": (h: bigint, t: bigint) => { paint(h).tf = t ? deref<NativeTypeface>(t) : null; },
-  "nSetTextSize(JF)V": (h: bigint, v: number) => { paint(h).textSize = v; },
-  "nGetTextSize(J)F": (h: bigint) => paint(h).textSize,
-  "nSetTextAlign(JI)V": (h: bigint, v: number) => { paint(h).textAlignN = v; },
-  "nGetTextAlign(J)I": (h: bigint) => paint(h).textAlignN,
-  "nSetLetterSpacing(JF)V": (h: bigint, v: number) => { paint(h).letterSpacingEm = v; },
-  "nGetLetterSpacing(J)F": (h: bigint) => paint(h).letterSpacingEm,
-  "nAscent(J)F": (h: bigint) => fontAscent(paint(h)),
-  "nDescent(J)F": (h: bigint) => fontDescent(paint(h)),
-  "nGetUnderlinePosition(J)F": (h: bigint) => paint(h).textSize * 0.1,
-  "nGetUnderlineThickness(J)F": (h: bigint) => paint(h).textSize * 0.06,
-  "nGetStrikeThruPosition(J)F": (h: bigint) => -paint(h).textSize * 0.28,
-  "nGetStrikeThruThickness(J)F": (h: bigint) => paint(h).textSize * 0.06,
-  "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: Metrics) => fillFontMetrics(paint(h), fm, false),
-  "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
-  // the per-run forms answer for one text run; with one font for everything, the run does
-  // not change the answer, so they are the whole-paint metrics
-  "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _c: Uint16Array, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
-  "nGetFontMetricsIntForText(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _s: string, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
-
-  "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, _bidi: number, r: Rect) =>
-    textBounds(paint(h), charsToString(c, i, n), r),
-  "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, _bidi: number, r: Rect) =>
-    textBounds(paint(h), s.slice(a, b), r),
-  "nEqualsForTextMeasurement(JJ)Z": (a: bigint, b: bigint) => {
-    const x = paint(a), y = paint(b);
-    return x.textSize === y.textSize && x.tf === y.tf && x.letterSpacingEm === y.letterSpacingEm ? 1 : 0;
-  },
-  // an outline the Canvas2D backend cannot produce: leave the path empty rather than wrong
-  "nGetTextPath(JI[CIIFFJ)V": () => {},
-  "nGetFillPath(JJJ)Z": (_h: bigint, src: bigint, dst: bigint) => { path(dst).set(path(src)); return 1; },
-
-  // what glyph shaping reads (shaping.ts)
-  "nSetTextScaleX(JF)V": (h: bigint, v: number) => { paint(h).textScaleX = v; },
-  "nGetTextScaleX(J)F": (h: bigint) => paint(h).textScaleX,
-  "nSetTextSkewX(JF)V": (h: bigint, v: number) => { paint(h).textSkewX = v; },
-  "nGetTextSkewX(J)F": (h: bigint) => paint(h).textSkewX,
-  "nSetFontFeatureSettings(JLjava/lang/String;)V": (h: bigint, v: string | null) => { paint(h).fontFeatureSettings = v; },
-
-  // state we accept and do not act on: one font, one locale, no hyphenation
-  ...noops("nSetElegantTextHeight(JI)V", "nSetStartHyphenEdit(JI)V", "nSetEndHyphenEdit(JI)V", "nSetWordSpacing(JF)V",
-    "nSetXfermode(JI)V", "nSetShadowLayer(JFFFJJ)V", "nGetTextPath(JILjava/lang/String;IIFFJ)V",
-    "nSetTextLocalesByMinikinLocaleListId(JI)V"),
-  ...stubs(0, "nGetElegantTextHeight(J)I", "nGetStartHyphenEdit(J)I", "nGetEndHyphenEdit(J)I",
-    "nGetWordSpacing(J)F", "nHasShadowLayer(J)Z", "nSetTextLocales(JLjava/lang/String;)I"),
-  ...stubs(1, "nHasGlyph(JILjava/lang/String;)Z"),
-});
-
-interface Metrics { top: number; ascent: number; descent: number; bottom: number; leading: number }
-/** the glyph bounds the browser reports, rounded out */
-function textBounds(p: JPaint, s: string, r: Rect) {
-  const m = measureCtx(p.font(), p.language).measureText(s);
-  r.left = Math.floor(-m.actualBoundingBoxLeft); r.right = Math.ceil(m.actualBoundingBoxRight);
-  r.top = -Math.ceil(m.actualBoundingBoxAscent); r.bottom = Math.ceil(m.actualBoundingBoxDescent);
-}
 
 // ── android.graphics.Path, PathMeasure and PathIterator ────────────────────────────────
 // The geometry and Skia's rules for it live in path.ts, beside the bridge TS reaches it through.
@@ -945,7 +835,8 @@ delegate("android/os/SystemProperties", {
 /** What the zygote sets up in a forked process before app code runs: System.out and System.err
  *  reach logcat, the default time zone follows persist.sys.timezone, java.util.logging reaches
  *  logcat with the default HTTP user agent set, the JCA providers are installed and warmed, and the
- *  system font map is loaded. */
+ *  system font map is loaded; the device's languages are set and the text paint classes, whose
+ *  constructors read them, initialized. */
 export async function zygoteInit(): Promise<void> {
   // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
   await asZygote(async () => { await rt.initClass(rt.link("java/lang/System")); });
@@ -960,4 +851,6 @@ export async function zygoteInit(): Promise<void> {
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
   await scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
   await loadSystemFontMap();
+  await initDeviceLocales();
+  await preloadPaint();
 }

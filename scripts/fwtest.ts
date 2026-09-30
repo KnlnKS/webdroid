@@ -16,7 +16,7 @@ BYTECODE.push(...(CUTS.length ? CUTS : [
 ]));
 
 // imported AFTER the policy is set: rt.register consults it, so the specs never land
-const { rt, ACC } = await import("../src/jvm/runtime");
+const { rt, ACC, declaredField } = await import("../src/jvm/runtime");
 await import("../src/natives");
 
 // the whole boot class path, as a page indexes it behind the app
@@ -86,16 +86,10 @@ async function scall(cls: string, name: string, desc: string, ...args: unknown[]
   const r = (fn as (...a: unknown[]) => unknown)(...args);
   return r instanceof Promise ? await r : r;
 }
+/** a Java Paint.FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */
+const fontMetrics = (fm: object, cls = "FontMetrics") =>
+  ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);
 console.log("");
-
-await exercise("new Paint()", async () => {
-  const p = await newObj("android/graphics/Paint", "()V");
-  await vcall(p, "setColor", "(I)V", -65536);
-  const c = await vcall(p, "getColor", "()I");
-  if (c !== -65536) throw new Error(`getColor returned ${c}`);
-  await vcall(p, "setTextSize", "(F)V", 24);
-  await vcall(p, "setAntiAlias", "(Z)V", 1);
-});
 
 await exercise("Paint.measureText", async () => {
   const p = await newObj("android/graphics/Paint", "()V");
@@ -244,7 +238,7 @@ await exercise("Font, FontFamily, FontFileUtil", async () => {
   await vcall(paint, "setTextSize", "(F)V", 20);
   const fm = await newObj("android/graphics/Paint$FontMetrics", "()V");
   await vcall(regular, "getMetrics", "(Landroid/graphics/Paint;Landroid/graphics/Paint$FontMetrics;)V", paint, fm);
-  same("getMetrics", [fm.top, fm.ascent, fm.descent, fm.bottom, fm.leading], [-2163, -1900, 500, 555, 0].map((v) => Math.fround(v * 20 / 2048)));
+  same("getMetrics", fontMetrics(fm), [-2163, -1900, 500, 555, 0].map((v) => Math.fround(v * 20 / 2048)));
 
   const buffer = await vcall(regular, "getBuffer", `()${BB}`);
   same("FontFileUtil", [await scall("android/graphics/fonts/FontFileUtil", "getRevision", `(${BB}I)J`, buffer, 0),
@@ -289,8 +283,7 @@ await exercise("Typeface (system font map, styles, weights, builders; device val
   const metrics = [];
   for (const t of [DEFAULT, BOLD, await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, DEFAULT, 2), medium]) {
     await vcall(paint, "setTypeface", `(${T})${T}`, t);
-    const fm = await vcall(paint, "getFontMetrics", "()Landroid/graphics/Paint$FontMetrics;") as Record<string, number>;
-    metrics.push([fm.top, fm.ascent, fm.descent, fm.bottom, fm.leading].join(" "));
+    metrics.push(fontMetrics(await vcall(paint, "getFontMetrics", "()Landroid/graphics/Paint$FontMetrics;")).join(" "));
   }
   same("metrics", metrics, Array(4).fill([-2163, -1900, 500, 555, 0].map((v) => Math.fround(v * 20 / 2048)).join(" ")));
 
@@ -402,6 +395,196 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
 
 // Expected values are the reference AVD's (API 35) for the same calls. Skia stores ovals, round
 // rects and arcs as conics (K) and ours as cubics (C), so those compare by their end points.
+// Expected values are the reference AVD's (API 35) under the same calls. Its serif, monospace, CJK,
+// Arabic, Devanagari and symbol faces are not on the page, and its variable Roboto draws H and o
+// with other contours than the page's static instances, so those cases are left out and text
+// outlines compare by bounds. A device conic is our cubic, so circles are left out too.
+await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", async () => {
+  const { loadSystemFonts } = await import("../tests/java");
+  await loadSystemFonts();
+  const P = "android/graphics/Paint", PL = "Landroid/graphics/Paint;", PATH = "android/graphics/Path", PE = "Landroid/graphics/PathEffect;";
+  const statics = async (cls: string) => (await linkInit(cls)).ctor as Record<string, unknown>;
+  const [Style, Align, Dir, PDStyle, Blur, TF] = await Promise.all(["Paint$Style", "Paint$Align", "Path$Direction", "PathDashPathEffect$Style",
+    "BlurMaskFilter$Blur", "Typeface"].map((c) => statics("android/graphics/" + c)));
+  const call = (o: unknown, name: string, desc: string, ...a: unknown[]): Promise<any> => vcall(o, name, desc, ...a);
+  const paint = (...copy: unknown[]) => (copy.length ? newObj(P, `(${PL})V`, copy[0]) : newObj(P, "()V"));
+  /** `got` against the device's `want`, token by token, numbers within float precision */
+  const same = (what: string, got: string, want: string) => {
+    const split = (t: string) => t.split(/[\s,[\]]+|(?<=[MLQKCZ])/).filter(Boolean), g = split(got), w = split(want);
+    const ok = g.length === w.length && g.every((t, i) => t === w[i] || Math.abs(+t - +w[i]) <= 1e-4 * Math.max(1, Math.abs(+w[i])));
+    if (!ok) throw new Error(`${what}: ${got}, not ${want}`);
+  };
+  const threw = async (f: () => Promise<unknown>) => {
+    try { await f(); return "ok"; } catch (e) { return `${(e as { constructor: { $i: { name: string } } }).constructor.$i.name} ${await vcall(e, "getMessage", "()Ljava/lang/String;")}`; }
+  };
+
+  same("flags of new Paint(), Paint(0), TextPaint()", `${await call(await paint(), "getFlags", "()I")} ${await call(await newObj(P, "(I)V", 0), "getFlags", "()I")} ${await call(await newObj("android/text/TextPaint", "()V"), "getFlags", "()I")}`, "1283 1282 1283");
+  const d = await paint();
+  same("defaults", [await call(d, "getColorLong", "()J"), await call(d, "getTextSize", "()F"), await call(d, "getStrokeMiter", "()F"), await call(d, "getHinting", "()I"),
+    await call(d, "getTextScaleX", "()F"), await call(d, "getWordSpacing", "()F"), await call(d, "getEndHyphenEdit", "()I"), await call(d, "hasShadowLayer", "()Z"),
+    await call(d, "isDither", "()Z"), await call(d, "isFilterBitmap", "()Z"), await call(d, "isElegantTextHeight", "()Z")].join(" "), "-72057594037927936 12 4 1 1 0 0 0 0 1 1");
+  const f = await paint(), flags = async (v: number) => { await call(f, "setFlags", "(I)V", v); return call(f, "getFlags", "()I"); };
+  same("setFlags round trips", `${await flags(-1)} ${await flags(0x7ff)} ${await flags(0x10000)}`, "28159 1535 0");
+  await call(f, "setHinting", "(I)V", 0);
+  same("hinting off", `${await call(f, "getHinting", "()I")} ${await call(f, "getFlags", "()I")}`, "0 0");
+  await call(f, "setHinting", "(I)V", 5);
+  same("hinting 5", `${await call(f, "getHinting", "()I")}`, "1");
+  const a = await paint(), getF = async (name: string) => call(a, "get" + name, "()F");
+  for (const [set, v] of [["StrokeMiter", -1], ["StrokeWidth", -3], ["TextSize", -5]] as const) await call(a, "set" + set, "(F)V", v);
+  same("negative miter, width and size ignored", `${await getF("StrokeMiter")} ${await getF("StrokeWidth")} ${await getF("TextSize")}`, "4 0 12");
+  const shadow = async (r: number, c: number) => { await call(a, "setShadowLayer", "(FFFI)V", r, 1, 1, c); return call(a, "hasShadowLayer", "()Z"); };
+  same("hasShadowLayer: radius 0, colour 0, both", `${await shadow(0, -16777216)} ${await shadow(2, 0)} ${await shadow(2, -16777216)}`, "0 1 1");
+  await call(a, "setWordSpacing", "(F)V", 3); await call(a, "setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$RIGHT);
+  await call(a, "setStartHyphenEdit", "(I)V", 1); await call(a, "setTextSize", "(F)V", 30);
+  const copy = await paint(a);
+  same("copy", `${await call(copy, "getTextSize", "()F")} ${await call(copy, "getWordSpacing", "()F")} ${await call(copy, "hasShadowLayer", "()Z")}`, "30 3 1");
+  await call(a, "reset", "()V");
+  // Paint::reset leaves the text layout state (spacing, alignment, hyphen edits, typeface) alone
+  same("reset", `${await call(a, "getFlags", "()I")} ${await getF("TextSize")} ${await getF("WordSpacing")} ${await call(a, "hasShadowLayer", "()Z")} ${await call(a, "getStartHyphenEdit", "()I")}`
+    + ` ${await call(await call(a, "getTextAlign", "()Landroid/graphics/Paint$Align;"), "name", "()Ljava/lang/String;")}`, "1283 12 3 0 1 RIGHT");
+  const tpa = await newObj("android/text/TextPaint", "()V"), tpb = await newObj("android/text/TextPaint", "()V");
+  await call(tpa, "setTextSize", "(F)V", 20);
+  await call(tpb, "set", "(Landroid/text/TextPaint;)V", tpa);
+  same("TextPaint.set", `${await call(tpb, "getTextSize", "()F")}`, "20");
+
+  // metrics: Roboto's hhea and head, post's underline, hwui's strike-through constants, elegant height
+  const metrics = async (m: unknown) => {
+    return [...fontMetrics(await call(m, "getFontMetrics", "()Landroid/graphics/Paint$FontMetrics;")),
+      ...fontMetrics(await call(m, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "FontMetricsInt"), await call(m, "getFontSpacing", "()F"),
+      ...await Promise.all(["UnderlinePosition", "UnderlineThickness", "StrikeThruPosition", "StrikeThruThickness"].map((n) => call(m, `get${n}`, "()F")))].join(" ");
+  };
+  const DEVICE: Record<number, [string, string]> = {
+    12: ["-12.673828 -11.1328125 2.9296875 3.2519531 0 -13 -11 3 4 0 14.0625 0.87890625 0.5859375 -3.7619052 0.6666667",
+      "-14.6484375 -11.1328125 2.9296875 5.859375 0 -15 -11 3 6 0 14.0625 0.87890625 0.5859375 -3.7619052 0.6666667"],
+    14.5: ["-15.314209 -13.452148 3.540039 3.9294434 0 -16 -13 4 4 0 16.992188 1.0620117 0.7080078 -4.545635 0.8055556",
+      "-17.700195 -13.452148 3.540039 7.080078 0 -18 -13 4 8 0 16.992188 1.0620117 0.7080078 -4.545635 0.8055556"],
+    40: ["-42.246094 -37.109375 9.765625 10.839844 0 -43 -37 10 11 0 46.875 2.9296875 1.953125 -12.539683 2.2222223",
+      "-48.828125 -37.109375 9.765625 19.53125 0 -49 -37 10 20 0 46.875 2.9296875 1.953125 -12.539683 2.2222223"],
+  };
+  for (const [size, [plain, elegant]] of Object.entries(DEVICE)) {
+    const m = await paint();
+    await call(m, "setTextSize", "(F)V", +size);
+    same(`metrics ${size}`, await metrics(m), plain);
+    await call(m, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", TF.s$DEFAULT_BOLD);
+    same(`metrics bold ${size}`, await metrics(m), plain);
+    await call(m, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", null);
+    await call(m, "setFakeBoldText", "(Z)V", 1); await call(m, "setTextScaleX", "(F)V", 2); await call(m, "setTextSkewX", "(F)V", -0.25);
+    same(`metrics fake bold, scaled and skewed ${size}`, await metrics(m), plain);
+    await call(m, "setElegantTextHeight", "(Z)V", 1);
+    same(`metrics elegant ${size}`, await metrics(m), elegant);
+  }
+
+  // hasGlyph: well-formed text, variation sequences, one glyph for several characters
+  const g = await paint(), glyphs: string[] = [];
+  for (const s of ["A", "", "AB", "fi", "\u{1F600}", "☺️", "A️", "\uD83D", "é", "￿", " ", "é", "\u{1F1FA}\u{1F1F8}", "\uDE00"])
+    glyphs.push(String(await call(g, "hasGlyph", "(Ljava/lang/String;)Z", s)));
+  same("hasGlyph", glyphs.join(" "), "1 0 0 1 1 1 0 0 1 0 1 1 1 0");
+
+  // equalsForTextMeasurement: what MinikinPaint compares
+  const base = await paint();
+  await call(base, "setTextSize", "(F)V", 20);
+  const Locale = await statics("java/util/Locale"), eq: string[] = [];
+  for (const [name, desc, v] of [["setColor", "(I)V", -65536], ["setTextSize", "(F)V", 21], ["setTextScaleX", "(F)V", 2], ["setTextSkewX", "(F)V", -0.25],
+    ["setLetterSpacing", "(F)V", 0.1], ["setWordSpacing", "(F)V", 2], ["setFontFeatureSettings", "(Ljava/lang/String;)V", "\"liga\" 0"],
+    ["setFakeBoldText", "(Z)V", 1], ["setUnderlineText", "(Z)V", 1], ["setStrikeThruText", "(Z)V", 1], ["setLinearText", "(Z)V", 1],
+    ["setSubpixelText", "(Z)V", 1], ["setAntiAlias", "(Z)V", 0], ["setTextLocale", "(Ljava/util/Locale;)V", Locale.s$JAPAN], ["setElegantTextHeight", "(Z)V", 1],
+    ["setEndHyphenEdit", "(I)V", 1], ["setStrokeWidth", "(F)V", 3], ["setHinting", "(I)V", 0], ["setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$CENTER]] as const) {
+    const o = await paint(base);
+    await call(o, name, desc, v);
+    eq.push(String(await call(base, "equalsForTextMeasurement", `(${PL})Z`, o)));
+  }
+  same("equalsForTextMeasurement", eq.join(" "), "1 0 0 0 0 0 0 0 1 1 0 0 0 0 1 1 1 0 1");
+
+  // path effects, through getFillPath: SkDashPathEffect, SkCornerPathEffect, SkDiscretePathEffect
+  // (its seeded LCG), SkPath1DPathEffect's three styles, compose and sum
+  const path = async (...ops: [string, string, ...unknown[]][]) => {
+    const p = await newObj(PATH, "()V");
+    for (const [name, desc, ...args] of ops) await call(p, name, desc, ...args);
+    return p;
+  };
+  const dump = async (p: unknown) => {
+    const it = await call(p, "getPathIterator", "()Landroid/graphics/PathIterator;"), pts = new Float32Array(8), out: string[] = [];
+    while (await call(it, "hasNext", "()Z")) {
+      const v = await call(it, "next", "([FI)I", pts, 0) as number;
+      if (v === 6) break;
+      out.push("MLQKCZ"[v] + [...pts.subarray(v ? 2 : 0, [2, 4, 6, 6, 8, 2][v])].join(","));
+    }
+    return out.join(" ");
+  };
+  const fill = async (p: unknown, src: unknown) => {
+    const dst = await newObj(PATH, "()V");
+    return `${await call(p, "getFillPath", "(Landroid/graphics/Path;Landroid/graphics/Path;)Z", src, dst)} ${await dump(dst)}`;
+  };
+  const line = await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 100, 0], ["lineTo", "(FF)V", 100, 50]);
+  const rect = await path(["addRect", "(FFFFLandroid/graphics/Path$Direction;)V", 0, 0, 60, 40, Dir.s$CW]);
+  const e = await paint(), fp = await paint();
+  await call(e, "setStyle", "(Landroid/graphics/Paint$Style;)V", Style.s$STROKE);
+  const effect = async (p: unknown, cls: string, desc: string, ...args: unknown[]) => call(p, "setPathEffect", `(${PE})${PE}`, await newObj("android/graphics/" + cls, desc, ...args));
+  const dash = (iv: number[], phase: number) => newObj("android/graphics/DashPathEffect", "([FF)V", Float32Array.from(iv), phase);
+  const corner = (r: number) => newObj("android/graphics/CornerPathEffect", "(F)V", r);
+  await effect(e, "DashPathEffect", "([FF)V", Float32Array.of(10, 5), 3);
+  same("dash line", await fill(e, line), "0 M0,0 L7,0 M12,0 L22,0 M27.000002,0 L37,0 M42,0 L52,0 M57,0 L67,0 M72,0 L82,0 M87,0 L97,0 M100,2 L100,12 M100,17 L100,27.000002 M100,32 L100,42 M100,47 L100,50");
+  same("dash rect, the last dash joining the first", await fill(e, rect), "0 M12,0 L22,0 M27,0 L37,0 M42,0 L52,0 M57,0 L60,0 L60,7 M60,12 L60,22 M60,27 L60,37 M58,40 L48,40 M43,40 L33,40 M28,40 L18,40 M13,40 L3,40 M0,38 L0,28 M0,23 L0,13 M0,8 L0,0 L7,0");
+  await effect(e, "DashPathEffect", "([FF)V", Float32Array.of(10, 5, 2, 5), -4);
+  same("dash of four, negative phase", await fill(e, rect), "0 M4,0 L14,0 M19,0 L21,0 M26,0 L36,0 M41,0 L43,0 M48,0 L58,0 M60,3 L60,5 M60,10 L60,20 M60,25 L60,27 M60,32 L60,40 L58,40 M53,40 L51,40 M46,40 L36,40 M31,40 L29,40 M24,40 L14,40 M9,40 L7,40 M2,40 L0,40 L0,32 M0,27 L0,25 M0,20 L0,10 M0,5 L0,3");
+  await effect(e, "DashPathEffect", "([FF)V", Float32Array.of(-1, 5), 0);
+  same("invalid dash", await fill(e, line), "0 M0,0 L100,0 L100,50");
+  await call(fp, "setPathEffect", `(${PE})${PE}`, await dash([10, 5], 3));
+  same("dash on a fill", await fill(fp, line), "1 M0,0 L100,0 L100,50");
+  await effect(e, "CornerPathEffect", "(F)V", 10);
+  same("corner line", await fill(e, line), "0 M0,0 Q0,0,10,0 L90,0 Q100,0,100,10 L100,40 L100,50");
+  same("corner rect", await fill(e, rect), "0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
+  await effect(e, "CornerPathEffect", "(F)V", 30);
+  same("corner past half the sides", await fill(e, rect), "0 M30,0 Q60,0,60,20 Q60,40,30,40 Q0,40,0,20 Q0,0,30,0 Z");
+  await effect(e, "DiscretePathEffect", "(FF)V", 10, 3);
+  same("discrete line", await fill(e, line), "0 M0,-0.5374603 L10,-1.0631104 L20,1.6429138 L30.000002,0.5774231 L40,-1.5262299 L50,1.8825531 L60.000004,-2.6483002 L70,-0.83102417 L80,-0.375412 L90,0.7796631 L100,-2.8143768 L100.07768,10 L99.12938,20 L97.692184,30.000002 L99.071884,40 L99.52933,50");
+  same("discrete rect", await fill(e, rect), "0 M5,-0.24449158 L15,1.1396027 L25,-0.17037964 L35,0.105651855 L45,-1.2668152 L55,-0.24632263 L60.84366,5 L59.827972,15 L61.48503,25 L59.79689,35 L55,42.15909 L45,38.62845 L35,37.611526 L25,41.152695 L15,40.74904 L5,40.342957 L-1.37883,35 L0.7482605,25 L-0.56781006,15 L-2.1443024,5 Z");
+  const stamp = await path(["addRect", "(FFFFLandroid/graphics/Path$Direction;)V", -2, -1, 2, 1, Dir.s$CW]);
+  const stamps = (xs: number[][]) => xs.map(([l, t, r, b]) => `M${l},${t} L${r},${t} L${r},${b} L${l},${b} Z`).join(" ");
+  for (const [style, want] of [
+    ["TRANSLATE", stamps([[13, -1, 17, 1], [33, -1, 37, 1], [53, -1, 57, 1], [73, -1, 77, 1], [93, -1, 97, 1], [98, 14, 102, 16], [98, 34, 102, 36]])],
+    ["ROTATE", stamps([[13, -1, 17, 1], [33, -1, 37, 1], [53, -1, 57, 1], [73, -1, 77, 1], [93, -1, 97, 1]]) + " M101,13 L101,17 L99,17 L99,13 Z M101,33 L101,37 L99,37 L99,33 Z"],
+    ["MORPH", [13, 33, 53, 73, 93].map((x) => `M${x},-1 Q${x + 2},-1,${x + 4},-1 Q${x + 4},0,${x + 4},1 Q${x + 2},1,${x},1 Q${x},0,${x},-1 Z`).join(" ")
+      + " " + [13, 33].map((y) => `M101,${y} Q101,${y + 2},101,${y + 4} Q100,${y + 4},99,${y + 4} Q99,${y + 2},99,${y} Q100,${y},101,${y} Z`).join(" ")],
+  ] as const) {
+    await effect(e, "PathDashPathEffect", "(Landroid/graphics/Path;FFLandroid/graphics/PathDashPathEffect$Style;)V", stamp, 20, 5, PDStyle["s$" + style]);
+    same(`path dash ${style}`, await fill(e, line), "1 " + want);
+  }
+  await effect(e, "ComposePathEffect", `(${PE}${PE})V`, await dash([10, 5], 0), await corner(10));
+  same("compose", await fill(e, rect), "0 M25,0 L35,0 M40,0 L50,0 M54.95655,0.8400003 Q59.547035,2.7134168,59.959316,8.765032 M60,13.872475 L60,23.872475 M60,28.872475 L60,30 Q60,35.554768,56.914455,38.02399 M52.388577,39.837273 Q51.275654,40,50,40 L42.25506,40 M37.25506,40 L27.255062,40 M22.255062,40 L12.255066,40 M7.1355715,39.758892 Q1.6163669,38.74435,0.36614323,33.46083 M0,28.382599 L0,18.382599 M0,13.382599 L0,10 Q0,5.9921975,1.6062481,3.590643 M5.5320435,0.65650177 Q7.437771,0,10,0 L20,0");
+  await effect(e, "SumPathEffect", `(${PE}${PE})V`, await dash([10, 5], 0), await corner(10));
+  same("sum", await fill(e, rect), "0 M15,0 L25,0 M30,0 L40,0 M45,0 L55,0 M60,0 L60,0 L60,10 M60,15 L60,25 M60,30 L60,40 M55,40 L45,40 M40,40 L30,40 M25,40 L15,40 M10,40 L0,40 M0,35 L0,25 M0,20 L0,10 M0,5 L0,0 L10,0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
+  // stroking to a fill is CanvasKit's SkStroke, which a headless run has not loaded
+  const s = await paint();
+  await call(s, "setStyle", "(Landroid/graphics/Paint$Style;)V", Style.s$STROKE); await call(s, "setStrokeWidth", "(F)V", 4);
+  same("stroke to fill, headless", (await threw(() => fill(s, line))).split(" ")[0], "java/lang/UnsupportedOperationException");
+
+  // text outlines, as minikin lays the run out and aligns it
+  const tp = await paint(), tpath = await newObj(PATH, "()V"), box = await newObj("android/graphics/RectF", "()V");
+  await call(tp, "setTextSize", "(F)V", 20);
+  const outline = async (text: string, x: number, y: number) => {
+    await call(tp, "getTextPath", "(Ljava/lang/String;IIFFLandroid/graphics/Path;)V", text, 0, text.length, x, y, tpath);
+    await call(tpath, "computeBounds", "(Landroid/graphics/RectF;Z)V", box, 1);
+    return String(await call(box, "toShortString", "()Ljava/lang/String;"));
+  };
+  same("text path", await outline("Hi", 10, 30), "[11.650391,15.5859375][27.52539,30.0]");
+  await call(tp, "setTextSkewX", "(F)V", -0.25); await call(tp, "setTextScaleX", "(F)V", 1.5);
+  await outline("l", 0, 0);
+  same("text path, scaled and skewed", await dump(tpath), "M8.759766,-15 L5.0097656,0 L2.2851562,0 L6.0351562,-15 L8.759766,-15 Z");
+  await call(tp, "setTextSkewX", "(F)V", 0); await call(tp, "setTextScaleX", "(F)V", 1); await call(tp, "setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$CENTER);
+  same("text path, centred", await outline("Hi", 10, 30), "[2.1503906,15.5859375][18.02539,30.0]");
+  await call(tp, "setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$LEFT); await call(tp, "setLetterSpacing", "(F)V", 0.5);
+  same("text path, letter-spaced", await outline("ll", 0, 0), "[6.5234375,-15.0][23.339844,0.0]");
+
+  const mask = (cls: string, desc: string, ...args: unknown[]) => threw(() => newObj("android/graphics/" + cls, desc, ...args));
+  same("mask filters refused", [await mask("BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", 0, Blur.s$NORMAL),
+    await mask("EmbossMaskFilter", "([FFFF)V", Float32Array.of(1, 1), 0.5, 8, 3), await mask("EmbossMaskFilter", "([FFFF)V", Float32Array.of(1, 1, 1), 0.5, 8, 0),
+    await mask("EmbossMaskFilter", "([FFFF)V", Float32Array.of(1, 1, 1), 0.5, 8, 3), await mask("TableMaskFilter", "([B)V", new Int8Array(256)),
+    await threw(() => scall("android/graphics/TableMaskFilter", "CreateClipTable", "(II)Landroid/graphics/TableMaskFilter;", 10, 200)),
+    await threw(() => scall("android/graphics/TableMaskFilter", "CreateGammaTable", "(F)Landroid/graphics/TableMaskFilter;", 2))].join(" "),
+    "java/lang/IllegalArgumentException null java/lang/ArrayIndexOutOfBoundsException null java/lang/IllegalArgumentException null ok ok ok ok");
+});
+
 await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   const P = "Landroid/graphics/Path;", DIR = "Landroid/graphics/Path$Direction;", FT = "Landroid/graphics/Path$FillType;";
   const statics = async (cls: string) => (await linkInit(cls)).ctor as Record<string, unknown>;
@@ -819,7 +1002,6 @@ await exercise("NinePatch (device values)", async () => {
 // was printed by the same calls there (images in tests/fixtures/images). Headless there is no image
 // decoder, so a decode here gets a stand-in that has only the requested size: what these check is
 // geometry, configs, flags, nine-patch data and the pixel API, not decoded pixels.
-const { declaredField } = await import("../src/jvm/runtime");
 const { mangleStaticField } = await import("../src/jvm/abi");
 const BITMAP = "android/graphics/Bitmap", BF = "android/graphics/BitmapFactory", OPTS = "android/graphics/BitmapFactory$Options";
 const hex = (v: number) => (v >>> 0).toString(16);

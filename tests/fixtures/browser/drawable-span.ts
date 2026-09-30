@@ -2,7 +2,8 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
-import { JPaint, copyPaint } from "../../../src/android/graphics";
+import { newPaint, setFontMetrics } from "../../../src/android/paint";
+import { declaredField } from "../../../src/jvm/runtime";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { JTextView } from "../../../src/android/textview";
 import { loadPlatformDex } from "../../../src/android/framework";
@@ -12,9 +13,10 @@ async function probe() {
   await loadPlatformDex();
   rt.linkNatives();
   await systemFonts();
-  const paint = rt.make("android/graphics/Paint");
-  if (!(paint instanceof JPaint)) throw new Error("Invalid Paint");
-  paint.textSize = 12;
+  const paint = newPaint();
+  await vcall(paint, "setTextSize", "(F)V", 12);
+  /** a FontMetricsInt's top, bottom, ascent and descent */
+  const metric = (fm: object, k: string) => (fm as Record<string, number>)[declaredField("android/graphics/Paint$FontMetricsInt", k)];
   const results = [];
   for (const alignment of [0, 1, 2]) {
     const drawable = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff00ff00);
@@ -25,12 +27,14 @@ async function probe() {
     Object.assign(drawable, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JavaCanvas) => {
       await Promise.resolve(); draws++; canvasOf(canvas).ctx.fillStyle = "#00ff00"; canvasOf(canvas).ctx.fillRect(2, 3, 12, 14);
     } });
-    const fm = { top: 0, bottom: 0, ascent: 0, descent: 0 };
-    const width = await vcall(span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", paint, "x", 0, 1, fm);
+    const metrics = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
+    setFontMetrics(metrics, true, 0, 0, 0, 0, 0);
+    const width = await vcall(span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", paint, "x", 0, 1, metrics);
+    const fm = { top: metric(metrics, "top"), bottom: metric(metrics, "bottom"), ascent: metric(metrics, "ascent"), descent: metric(metrics, "descent") };
     const ctx = new OffscreenCanvas(60, 70).getContext("2d")!;
     await vcall(span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", canvasOver(ctx, 60, 70), "x", 0, 1, 5, 10, 40, 50, paint);
     const pixels = ctx.getImageData(0, 0, 60, 70).data;
-    const y = alignment === 0 ? 36 : alignment === 1 ? 36 - (await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;")).descent : 26;
+    const y = alignment === 0 ? 36 : alignment === 1 ? 36 - metric(await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "descent") : 26;
     results.push({ width, fm, loads, draws, aligned: pixels[(y * 60 + 7) * 4 + 1] === 255 && pixels[((y - 1) * 60 + 7) * 4 + 3] === 0,
       restored: ctx.getTransform().isIdentity, hierarchy: rt.iof(span, "android/text/style/DynamicDrawableSpan") });
   }
@@ -38,7 +42,8 @@ async function probe() {
   if (!(text instanceof JTextView)) throw new Error("Invalid TextView");
   await vcall(text, "setShadowLayer", "(FFFI)V", 1, 10, 2, 0xffff0000);
   const getters = await Promise.all(["Radius", "Dx", "Dy", "Color"].map(n => vcall(text, "getShadow" + n, "()" + (n === "Color" ? "I" : "F"))));
-  copyPaint(text.paintT, paint); paint.textSize = 30;
+  await vcall(paint, "set", "(Landroid/graphics/Paint;)V", text.paintT);
+  await vcall(paint, "setTextSize", "(F)V", 30);
   const ctx = new OffscreenCanvas(120, 50).getContext("2d")!;
   const canvas = canvasOver(ctx, 120, 50);
   await vcall(canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "I", 5, 35, paint);

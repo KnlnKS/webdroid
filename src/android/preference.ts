@@ -13,6 +13,7 @@ import { tagAttributes } from "./inflate";
 import { parserRoot } from "./assetmanager";
 import { JView, JLinearLP, addUnattachedView } from "./view";
 import { tfMedium } from "./fonts";
+import { setPaintTypeface } from "./paint";
 import { JLinearLayout } from "./layouts";
 import { JTextView } from "./textview";
 import { themeAccent } from "./widget";
@@ -328,8 +329,8 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   if (row.header) {
     const t = mkText(jctx, theme, jres);
     t.text = row.pref.titleStr;
-    t.paintT.textSize = device.dp(13);
-    t.paintT.tf = tfMedium;
+    t.tp.textSize = device.dp(13);
+    setPaintTypeface(t.paintT, tfMedium);
     t.colors.defColor = themeAccent(t);
     t.padL = t.padR = t.padT = device.dp(16); t.padB = device.dp(6);
     t.lp = lpFill();
@@ -354,7 +355,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
 
   const title = mkText(jctx, theme, jres);
   title.text = pref.titleStr;
-  title.paintT.textSize = device.dp(16);
+  title.tp.textSize = device.dp(16);
   title.colors.defColor = pref.enabled ? -13421773 : -6710887;
   title.lp = lpFill();
   addUnattachedView(col, title);
@@ -362,7 +363,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   if (pref.summaryStr) {
     const sum = mkText(jctx, theme, jres);
     sum.text = pref.summaryStr;
-    sum.paintT.textSize = device.dp(13);
+    sum.tp.textSize = device.dp(13);
     sum.colors.defColor = pref.enabled ? -8355712 : -6710887;
     sum.padT = device.dp(2);
     sum.lp = lpFill();

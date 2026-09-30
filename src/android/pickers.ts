@@ -8,6 +8,7 @@ import { reportUncaught } from "./os";
 import { JAlertDialog, initDialog } from "./dialog";
 import { JView, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
 import { tfMedium } from "./fonts";
+import { setPaintTypeface } from "./paint";
 import { JAttrSet, themeOf } from "./res";
 import { JLinearLayout } from "./layouts";
 import { JTextView } from "./textview";
@@ -77,7 +78,7 @@ function mkArrow(tp: JView, glyph: string, fn: () => void): JTextView {
   const t = new JTextView();
   inheritContext(t, tp);
   t.text = glyph;
-  t.paintT.textSize = 32;
+  t.tp.textSize = 32;
   t.colors.defColor = themeAccent(tp);
   t.padL = 24; t.padR = 24; t.padT = 12; t.padB = 12;
   t.gravityT = G.CENTER;
@@ -89,8 +90,8 @@ function mkArrow(tp: JView, glyph: string, fn: () => void): JTextView {
 function mkValueText(tp: JView): JTextView {
   const t = new JTextView();
   inheritContext(t, tp);
-  t.paintT.textSize = 64;
-  t.paintT.tf = tfMedium;
+  t.tp.textSize = 64;
+  setPaintTypeface(t.paintT, tfMedium);
   t.colors.defColor = -13421773;
   t.gravityT = G.CENTER;
   t.padT = 8; t.padB = 8; t.padL = 16; t.padR = 16;
@@ -115,7 +116,7 @@ function mkSep(tp: JTimePicker): JTextView {
   const t = new JTextView();
   inheritContext(t, tp);
   t.text = ":";
-  t.paintT.textSize = 56;
+  t.tp.textSize = 56;
   t.colors.defColor = -13421773;
   t.gravityT = G.CENTER;
   t.padL = 8; t.padR = 8;
@@ -127,8 +128,8 @@ function mkAmPmText(tp: JTimePicker, label: string, fn: () => void): JTextView {
   const t = new JTextView();
   inheritContext(t, tp);
   t.text = label;
-  t.paintT.textSize = 26;
-  t.paintT.tf = tfMedium;
+  t.tp.textSize = 26;
+  setPaintTypeface(t.paintT, tfMedium);
   t.padT = 10; t.padB = 10; t.padL = 16; t.padR = 16;
   t.gravityT = G.CENTER;
   t.lp = stepperLP();

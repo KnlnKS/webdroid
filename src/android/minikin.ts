@@ -14,7 +14,7 @@ import { rt, driven, type Gen } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
 import { scall, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
-import { type JPaint, rawWidth, measureCtx, fontAscent, fontDescent } from "./graphics";
+import { type NativePaint, paintAt, rawWidth, measureCtx, fontAscent, fontDescent } from "./paint";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
 const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c === 0x3000
@@ -38,11 +38,12 @@ function clusterStarts(s: string): number[] {
 // cache is capped and cleared wholesale like graphics.ts' width cache.
 const PIECES_MAX = 20000;
 let pieces = new Map<string, Map<string, Float32Array>>(), pieceCount = 0;
-/** One piece's advances: cluster widths by prefix difference, so they sum to the shaped width.
- *  Hinted, as Skia measures a paint without SUBPIXEL_TEXT or LINEAR_TEXT, each glyph's advance
- *  is whole pixels and only kerning stays fractional. */
-function pieceAdvances(font: string, lang: string, piece: string, hinted: boolean): Float32Array {
-  const key = font + "\0" + lang + (hinted ? "\0h" : "");
+/** One piece's advances: cluster widths by prefix difference, so they sum to the shaped width,
+ *  under the paint's horizontal scale. Hinted, as Skia measures a paint without LINEAR_TEXT (the
+ *  device's advances do not change with SUBPIXEL_TEXT), each glyph's advance is whole pixels and
+ *  only kerning stays fractional. */
+function pieceAdvances(font: string, lang: string, piece: string, hinted: boolean, scaleX: number): Float32Array {
+  const key = font + "\0" + lang + (hinted ? "\0h" : "") + (scaleX === 1 ? "" : "\0" + scaleX);
   let byFont = pieces.get(key);
   if (!byFont) pieces.set(key, byFont = new Map());
   let out = byFont.get(piece);
@@ -64,8 +65,9 @@ function pieceAdvances(font: string, lang: string, piece: string, hinted: boolea
     const scale = sum ? rawWidth(font, piece, lang) / sum : 1;
     for (const s of starts) out[s] *= scale;
   }
+  if (scaleX !== 1) for (const s of starts) out[s] *= scaleX;
   if (hinted) for (let k = 0; k < starts.length; k++) {
-    const glyph = starts.length === 1 ? out[0] : rawWidth(font, piece.slice(starts[k], starts[k + 1] ?? piece.length), lang);
+    const glyph = starts.length === 1 ? out[0] : rawWidth(font, piece.slice(starts[k], starts[k + 1] ?? piece.length), lang) * scaleX;
     out[starts[k]] += Math.round(glyph) - glyph;
   }
   if (++pieceCount > PIECES_MAX) { pieces = new Map([[key, byFont = new Map()]]); pieceCount = 1; }
@@ -74,9 +76,12 @@ function pieceAdvances(font: string, lang: string, piece: string, hinted: boolea
 }
 
 /** what measuring text under a paint depends on, taken when a run is added: the paint changes after */
-export interface TextStyle { font: string; lang: string; size: number; hinted: boolean; letterSpacing: number; ascent: number; descent: number }
-export const styleOf = (p: JPaint): TextStyle => ({
-  font: p.font(), lang: p.language, size: p.textSize, hinted: !p.subpixelText && !p.linearText, letterSpacing: p.letterSpacingEm * p.textSize, ascent: fontAscent(p), descent: fontDescent(p),
+export interface TextStyle {
+  font: string; lang: string; size: number; hinted: boolean; scaleX: number; letterSpacing: number; wordSpacing: number; ascent: number; descent: number;
+}
+export const styleOf = (p: NativePaint): TextStyle => ({
+  font: p.font(), lang: p.language, size: p.textSize, hinted: !p.linearText, scaleX: p.textScaleX,
+  letterSpacing: p.letterSpacingEm * p.textSize * p.textScaleX, wordSpacing: p.wordSpacing, ascent: fontAscent(p), descent: fontDescent(p),
 });
 
 /** control characters shape to nothing, where the browser measures a space */
@@ -84,14 +89,17 @@ const CONTROL = /[\0-\x1f\x7f-\x9f]/;
 /** scripts whose letters join, which minikin does not letter-space */
 export const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}\p{sc=Phag}\p{sc=Deva}\p{sc=Beng}\p{sc=Guru}\p{sc=Modi}\p{sc=Shrd}\p{sc=Sylo}\p{sc=Tirh}\p{sc=Ogam}]/u;
 /** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum.
- *  Letter spacing is added to every other cluster, as minikin's layout does. */
+ *  Letter spacing is added to every other cluster, as minikin's layout does, and word spacing to
+ *  every space (isWordSpace: U+0020 and U+00A0). */
 export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0): number {
   let total = 0;
   for (let i = start; i < end;) {
-    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), w = pieceAdvances(style.font, style.lang, piece, style.hinted);
+    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), w = pieceAdvances(style.font, style.lang, piece, style.hinted, style.scaleX);
     const ls = JOINING.test(piece) ? 0 : style.letterSpacing, controls = CONTROL.test(piece);
     for (let j = 0; j < w.length; j++) {
-      const a = controls && CONTROL.test(piece[j]) ? 0 : w[j] && Math.fround(w[j] + ls);
+      const c = piece.charCodeAt(j);
+      let a = controls && CONTROL.test(piece[j]) ? 0 : w[j] && Math.fround(w[j] + ls);
+      if (style.wordSpacing && (c === 0x20 || c === 0xa0)) a = Math.fround(a + style.wordSpacing);
       if (out) out[at + i - start + j] = a;
       total = Math.fround(total + a);
     }
@@ -305,11 +313,11 @@ rt.registerJnis("android/graphics/text/MeasuredText$Builder", {
   "nInitBuilder()J": () => handle([] as Run[]),
   "nFreeBuilder(J)V": release,
   "nAddStyleRun(JJIIZIIZ)V": (h: bigint, p: bigint, lbStyle: number, lbWordStyle: number, _hyphenate: number, start: number, end: number) => {
-    const paint = deref<JPaint>(p);
+    const paint = paintAt(p);
     deref<Run[]>(h).push({ start, end, style: styleOf(paint), width: 0, lang: paint.language, lbStyle, lbWordStyle });
   },
   "nAddReplacementRun(JJIIF)V": (h: bigint, p: bigint, start: number, end: number, width: number) => {
-    deref<Run[]>(h).push({ start, end, style: null, width, lang: deref<JPaint>(p).language, lbStyle: LB_NONE, lbWordStyle: LW_NONE });
+    deref<Run[]>(h).push({ start, end, style: null, width, lang: paintAt(p).language, lbStyle: LB_NONE, lbWordStyle: LW_NONE });
   },
   "nBuildMeasuredText(JJ[CZZZZ)J": (h: bigint, _hint: bigint, chars: Uint16Array) => {
     const text = charsToString(chars, 0, chars.length), runs = deref<Run[]>(h), widths = new Float32Array(text.length);
@@ -615,7 +623,7 @@ const LEFT_EDGE = 0x2000, RIGHT_EDGE = 0x4000;
 /** the advances of text[start, start+count), indexed from start. A run TextLine marks as a line's
  *  edge loses half its letter spacing there (Layout::measureText's adjustAdvanceLetterSpacingEdge). */
 function measure(h: bigint, text: string, start: number, count: number): Float32Array {
-  const p = deref<JPaint>(h), style = styleOf(p), out = new Float32Array(count);
+  const p = paintAt(h), style = styleOf(p), out = new Float32Array(count);
   advances(style, text, start, start + count, out, 0);
   const half = Math.fround(style.letterSpacing * 0.5), edge = (i: number) => {
     const cp = text.codePointAt(start + i)!;
@@ -623,8 +631,8 @@ function measure(h: bigint, text: string, start: number, count: number): Float32
     if (!JOINING.test(String.fromCodePoint(cp))) out[i] = Math.fround(out[i] - half);
     return true;
   };
-  if (half && p.otherFlags & LEFT_EDGE) for (let i = 0; i < count && !edge(i); i++);
-  if (half && p.otherFlags & RIGHT_EDGE) for (let i = count - 1; i >= 0 && !edge(i); i--);
+  if (half && p.flags & LEFT_EDGE) for (let i = 0; i < count && !edge(i); i++);
+  if (half && p.flags & RIGHT_EDGE) for (let i = count - 1; i >= 0 && !edge(i); i--);
   return out;
 }
 /** minikin's getRunAdvance: the advance up to `offset`, sharing a ligature's width among its graphemes */

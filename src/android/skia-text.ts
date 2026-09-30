@@ -64,9 +64,9 @@ function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
 
 // A process realm draws with its page's CanvasKit: the tab's realms share one thread, so one wasm
 // heap and one set of fonts serve them all rather than one per process.
-type SkiaText = { loadSkiaText: typeof loadSkiaText; drawSkiaText: typeof drawSkiaText };
+type SkiaText = { loadSkiaText: typeof loadSkiaText; drawSkiaText: typeof drawSkiaText; strokeCommands: typeof strokeCommands };
 declare global { interface Window { __wdSkiaText?: SkiaText } }
-const page = pageShared("__wdSkiaText", () => ({ loadSkiaText, drawSkiaText }));
+const page = pageShared("__wdSkiaText", () => ({ loadSkiaText, drawSkiaText, strokeCommands }));
 
 export function loadSkiaText(): Promise<void> {
   if (page.loadSkiaText !== loadSkiaText) return page.loadSkiaText();
@@ -85,6 +85,19 @@ export function loadSkiaText(): Promise<void> {
     face = emojiFace = null;
     console.warn("[skia-text] CanvasKit unavailable; using Canvas2D text", error);
   });
+}
+
+/** SkStroke through CanvasKit: a path as CanvasKit commands stroked to the outline Skia fills
+ *  (cap and join by Paint's ordinals), or null when CanvasKit is not loaded */
+export function strokeCommands(cmds: number[], width: number, miter: number, cap: number, join: number): Float32Array | null {
+  if (page.strokeCommands !== strokeCommands) return page.strokeCommands(cmds, width, miter, cap, join);
+  if (!kit) return null;
+  const path = kit.Path.MakeFromCmds(cmds);
+  if (!path) return null;
+  try {
+    return path.stroke({ width, miter_limit: miter, precision: 1, cap: [kit.StrokeCap.Butt, kit.StrokeCap.Round, kit.StrokeCap.Square][cap],
+      join: [kit.StrokeJoin.Miter, kit.StrokeJoin.Round, kit.StrokeJoin.Bevel][join] }) ? path.toCmds() : null;
+  } finally { path.delete(); }
 }
 
 export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size: number, color: number,

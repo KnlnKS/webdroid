@@ -1,50 +1,10 @@
-// android.text: TextPaint, TextUtils' plain-text parcel form, and AndroidCharacter's natives.
+// android.text: TextUtils' plain-text parcel form, and AndroidCharacter's natives.
 import { type JParcel, writeInt, readInt, writeString8, readString8 } from "./parcel";
 
 import { rt, driven, type Gen } from "../jvm/runtime";
 import { after } from "../jvm/natives/jlang";
 import { uchar } from "../jvm/natives/jicu";
-import { JPaint, copyPaint } from "./graphics";
-import { device } from "../shell/config";
 import { csText } from "../jvm/natives/jchars";
-
-export class JTextPaint extends JPaint {
-  linkColor = -16776961;
-  /** AOSP's StaticLayout reads these off the paint directly, so they are real fields rather
-   *  than accessors: a BackgroundColorSpan writes bgColor and the layout draws from it */
-  bgColor = 0;
-  baselineShift = 0;
-  drawableState: Int32Array | null = null;
-  underlineColor = 0;
-  underlineThickness = 0;
-  /** dp/sp-based span math (updateDrawState/updateMeasureState) reads this to scale —
-   *  shares the one device-density constant, not a magic literal. */
-  density = device.density;
-}
-function copyTextPaint(src: JTextPaint, dst: JTextPaint): void {
-  copyPaint(src, dst);
-  dst.linkColor = src.linkColor;
-  dst.bgColor = src.bgColor;
-  dst.baselineShift = src.baselineShift;
-  dst.drawableState = src.drawableState;
-  dst.density = src.density;
-  dst.underlineColor = src.underlineColor;
-  dst.underlineThickness = src.underlineThickness;
-}
-rt.register({
-  name: "android/text/TextPaint", ctor: JTextPaint, sup: "android/graphics/Paint",
-  fields: ["linkColor", "bgColor", "baselineShift", "drawableState", "density", "underlineColor", "underlineThickness"],
-  methods: {
-    "<init>()V": function () {},
-    "<init>(I)V": function (this: JTextPaint, f: number) { this.flags = f; },
-    "<init>(Landroid/graphics/Paint;)V": function (this: JTextPaint, p: JPaint) {
-      if (p) copyPaint(p, this);
-    },
-    "set(Landroid/text/TextPaint;)V": function (this: JTextPaint, p: JTextPaint) {
-      if (p) copyTextPaint(p, this);
-    },
-  },
-});
 
 export const writeText = driven(function* writeText(text: unknown, parcel: JParcel): Gen<void> {
   if (text !== null && rt.iof(text, "android/text/Spanned")) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");

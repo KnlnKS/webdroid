@@ -6,12 +6,12 @@ import {
   drawChild, drawableSize,
   cslBoundary,
 } from "./drawable";
-import { JTextPaint } from "./text";
+import { type NativePaint, newPaint, paintOf, paintTypeface, setPaintTypeface, fontDescent, fontAscent, fontTop, fontBottom } from "./paint";
 import { csText, csLength } from "../jvm/natives/jchars";
 import { G, gravityV, gravityH } from "./gravity";
 import { firstStrongRtl } from "../jvm/bidi";
 import { device } from "../shell/config";
-import { fontDescent, fontAscent, fontTop, fontBottom, JRect } from "./graphics";
+import { JRect } from "./graphics";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, scall, enumOrdinal } from "../jvm/natives/jlang";
 import {
@@ -20,12 +20,16 @@ import {
 } from "./res";
 import { TV } from "./axml";
 import { tfMedium, typefaceOf } from "./fonts";
-import { type NativeSpec, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { type NativeSpec, rt, JObj, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod, jmethod } from "../jvm/abi";
 import { TextViewLayouts, Align, type TextViewLayout } from "./textview-layout";
 
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 
+/** TextPaint's public fields, by their keys */
+let linkColorKey = "", densityKey = "";
+const textPaintField = (p: object) => p as Record<string, number>;
+const linkColor = (p: object) => textPaintField(p)[linkColorKey ||= declaredField("android/text/TextPaint", "linkColor")];
 export class JTextView extends JView {
   fallbackLineSpacing = true;
   lineBreakStyle = 0; lineBreakWordStyle = 0;
@@ -45,7 +49,8 @@ export class JTextView extends JView {
   /** AOSP mText: a String, SpannedString, Spannable or (for an editable buffer) Editable */
   rawText: unknown = "";
   hint = "";
-  paintT = new JTextPaint();
+  /** mTextPaint, a Java TextPaint */
+  paintT = newPaint("android/text/TextPaint");
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   colors: JColorStateList = mkCsl(-16777216);
   hintColors: JColorStateList | null = mkCsl(1627389952);
@@ -90,13 +95,15 @@ export class JTextView extends JView {
 
   constructor() {
     super();
-    this.paintT.textSize = device.dp(14); // AOSP TextView default, 14sp
-    this.paintT.setColorValue(-16777216);
+    this.tp.textSize = device.dp(14); // AOSP TextView default, 14sp
+    textPaintField(this.paintT)[densityKey ||= declaredField("android/text/TextPaint", "density")] = device.density;
   }
+  /** the text paint's native state, which layout and measurement read */
+  get tp(): NativePaint { return paintOf(this.paintT); }
   updateLinkColor() {
     if (!this.linkColors) return;
     const color = cslColor(this.linkColors, this.drawableState());
-    if (this.paintT.linkColor !== color) { this.paintT.linkColor = color; invalidate(this); }
+    if (linkColor(this.paintT) !== color) { textPaintField(this.paintT)[linkColorKey] = color; invalidate(this); }
   }
   horizontalGravity(text: string, alignment: number, layoutDirection: number): number {
     if (alignment === 4) return 1;
@@ -114,15 +121,15 @@ export class JTextView extends JView {
     this.transformed = out === this.rawText ? null : out;
   }
   lineHeight(): number {
-    const height = Math.round(fontDescent(this.paintT)) - Math.round(fontAscent(this.paintT));
+    const height = Math.round(fontDescent(this.tp)) - Math.round(fontAscent(this.tp));
     return Math.round(height * this.lineSpacingMult + this.lineSpacingExtra);
   }
   /** includeFontPadding (AOSP's default): the first line's box starts at the font's `top` and the
    *  last one's ends at its `bottom`, so a line box is taller than ascent..descent at both ends. */
-  topPad(): number { return this.includePad ? Math.round(fontAscent(this.paintT)) - Math.floor(fontTop(this.paintT)) : 0; }
-  bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
+  topPad(): number { return this.includePad ? Math.round(fontAscent(this.tp)) - Math.floor(fontTop(this.tp)) : 0; }
+  bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.tp)) - Math.round(fontDescent(this.tp)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
-  ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
+  ascent(): number { return Math.round(-fontAscent(this.tp)) + this.topPad(); }
   /** mText changed, by setText or an edit its ChangeWatcher reports: relayout and mirror a focused
    *  field into the page's input */
   *textChanged$(text?: string): Gen {
@@ -211,12 +218,12 @@ const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, 
   if (!styleId) return;
   const look = (name: string) => resolveStyleValue(res, tv.theme, res.styleLookup(styleId, AID(name)));
   const ts = look("textSize");
-  if (ts) tv.paintT.textSize = rvDimen(res, ts, tv.paintT.textSize);
+  if (ts) tv.tp.textSize = rvDimen(res, ts, tv.tp.textSize);
   const tc = look("textColor");
   if (tc) tv.colors = yield rvCsl(res, tc, tv.theme, -16777216);
   const link = look("textColorLink");
   if (link) {
-    tv.linkColors = yield rvCsl(res, link, tv.theme, tv.paintT.linkColor);
+    tv.linkColors = yield rvCsl(res, link, tv.theme, linkColor(tv.paintT));
     tv.updateLinkColor();
   }
   const st = look("textStyle");
@@ -231,11 +238,11 @@ const applyFontFamily = driven(function* applyFontFamily(tv: JTextView, res: Res
   if (!v) return;
   if (v.t === TV.REFERENCE && v.d) {
     const tf = yield vcall(res.jobj, "getFont", "(I)Landroid/graphics/Typeface;", v.d);
-    if (tf) tv.paintT.tf = tf;
+    if (tf) yield setPaintTypeface(tv.paintT, tf);
     return;
   }
   const fam = rvString(res, v);
-  if (fam) tv.paintT.tf = yield scall(TYPEFACE, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", fam, 0);
+  if (fam) yield setPaintTypeface(tv.paintT, yield scall(TYPEFACE, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", fam, 0));
 });
 const TYPEFACE = "android/graphics/Typeface";
 /** AOSP setTypeface(Typeface, int): the typeface in the style asked for, faking what it lacks */
@@ -246,8 +253,10 @@ const setStyledTypeface = driven(function* setStyledTypeface(tv: JTextView, tf: 
   const need = style > 0 ? style & ~typefaceOf(tf).apiStyle : 0;
   const fakeBold = (need & 1) !== 0, skew = need & 2 ? -0.25 : 0;
   // fake bold changes the measured width
-  if (tv.paintT.fakeBold === fakeBold && tv.paintT.textSkewX === skew) return;
-  tv.paintT.fakeBold = fakeBold; tv.paintT.textSkewX = skew;
+  const tp = tv.tp;
+  if (tp.fakeBold === fakeBold && tp.textSkewX === skew) return;
+  yield vcall(tv.paintT, "setFakeBoldText", "(Z)V", +fakeBold);
+  yield vcall(tv.paintT, "setTextSkewX", "(F)V", skew);
   if (hasLayout(tv)) yield relayout(tv);
 });
 const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number = 0): Gen {
@@ -267,7 +276,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   const g = (i: number) => ta.vals[i];
   const taRef = g(4);
   if (taRef && taRef.t === TV.REFERENCE) yield applyTextAppearance(tv, res, taRef.d);
-  if (g(1)) tv.paintT.textSize = rvDimen(res, g(1), tv.paintT.textSize);
+  if (g(1)) tv.tp.textSize = rvDimen(res, g(1), tv.tp.textSize);
   if (g(2)) tv.colors = yield rvCsl(res, g(2)!, tv.theme, -16777216);
   if (g(3)) tv.styleBits = rvInt(res, g(3), tv.styleBits);
   const maxLength = g(37) ? rvInt(res, g(37), -1) : -1;
@@ -285,7 +294,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(7)) tv.maxLinesV = rvInt(res, g(7), 0) || Infinity;
   if (g(21)) { const n = rvInt(res, g(21), 0); if (n > 0) { tv.maxLinesV = n; tv.minLinesV = n; } }
   if (g(24)) tv.minLinesV = rvInt(res, g(24), 1);
-  if (g(25) || g(26)) tv.minW = Math.max(tv.minW, Math.round(rvInt(res, (g(25) ?? g(26))!, 0) * tv.paintT.textSize));
+  if (g(25) || g(26)) tv.minW = Math.max(tv.minW, Math.round(rvInt(res, (g(25) ?? g(26))!, 0) * tv.tp.textSize));
   if (g(27)) tv.minW = Math.max(tv.minW, Math.round(rvDimen(res, g(27), 0)));
   if (g(8)) tv.singleLine = !!rvInt(res, g(8), 0);
   if (g(9)) tv.ellipsizeEnd = rvInt(res, g(9), 0) === 3;
@@ -309,12 +318,12 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(30) || g(31) || g(32) || g(33)) yield setTextShadow.call(tv, rvFloat(res, g(33), tv.shadowRadius), rvFloat(res, g(31), tv.shadowDx), rvFloat(res, g(32), tv.shadowDy), rvColor(res, g(30), tv.shadowColor));
   const link = g(34);
   if (link) {
-    tv.linkColors = yield rvCsl(res, link, tv.theme, tv.paintT.linkColor);
+    tv.linkColors = yield rvCsl(res, link, tv.theme, linkColor(tv.paintT));
     tv.updateLinkColor();
   }
   const cursor = g(35);
   if (cursor?.t === TV.REFERENCE) tv.cursorDrawableRes = cursor.d;
-  yield setStyledTypeface(tv, tv.paintT.tf, tv.styleBits);
+  yield setStyledTypeface(tv, paintTypeface(tv.paintT), tv.styleBits);
 });
 const textCursorDrawable = driven(function* textCursorDrawable(tv: JTextView): Gen<JDrawable | null> {
   if (tv.cursorDrawableRes && tv.jres) {
@@ -399,8 +408,8 @@ const setTransformation = driven(function* setTransformation(tv: JTextView, m: u
 });
 /** AOSP setRawTextSize: only a size that differs asks for layout */
 function setRawTextSize(tv: JTextView, px: number) {
-  if (tv.paintT.textSize === px) return;
-  tv.paintT.textSize = px;
+  if (tv.tp.textSize === px) return;
+  tv.tp.textSize = px;
   requestLayout(tv);
 }
 function compoundDrawables(this: JTextView) {
@@ -507,7 +516,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "setTextSize(IF)V": function (this: JTextView, unit: number, v: number) {
     setRawTextSize(this, unit === 1 || unit === 2 ? v * device.density : v); // COMPLEX_UNIT_DIP / SP
   },
-  "getTextSize()F": function (this: JTextView) { return this.paintT.textSize; },
+  "getTextSize()F": function (this: JTextView) { return this.tp.textSize; },
   "setTextColor(I)V": function (this: JTextView, c: number) { this.colors = mkCsl(c); invalidate(); },
   "setTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList) {
     if (c) this.colors = c;
@@ -528,12 +537,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   },
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
   "setTypeface(Landroid/graphics/Typeface;)V": function (this: JTextView, t: object | null) {
-    if (this.paintT.tf === t) return;
-    this.paintT.tf = t;
-    if (hasLayout(this)) return relayout(this);
+    if (paintTypeface(this.paintT) === t) return;
+    return after(setPaintTypeface(this.paintT, t), () => hasLayout(this) ? relayout(this) : undefined);
   },
   "setTypeface(Landroid/graphics/Typeface;I)V": function (this: JTextView, t: object | null, style: number) { return setStyledTypeface(this, t, style); },
-  "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },
+  "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return paintTypeface(this.paintT); },
   "getPaint()Landroid/text/TextPaint;": function (this: JTextView) { return this.paintT; },
 
   "setSingleLine()V": function (this: JTextView) { return vcall(this, "setSingleLine", "(Z)V", 1); },
@@ -552,7 +560,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     return relayout(this);
   },
   "setLetterSpacing(F)V": function (this: JTextView, v: number) {
-    if (this.paintT.letterSpacingEm !== v) { this.paintT.letterSpacingEm = v; return relayout(this); }
+    if (this.tp.letterSpacingEm !== v) { this.tp.letterSpacingEm = v; return relayout(this); }
   },
   "setIncludeFontPadding(Z)V": function (this: JTextView, on: number) { this.includePad = !!on; return relayout(this); },
   // fallback-font line spacing only changes metrics where a glyph comes from a fallback font, which one system font never does here
@@ -678,7 +686,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "getMinLines()I": function (this: JTextView) { return this.minLinesV; },
   "getMinWidth()I": function (this: JTextView) { return this.minW; },
   "getMinHeight()I": function (this: JTextView) { return this.minH; },
-  "getLetterSpacing()F": function (this: JTextView) { return this.paintT.letterSpacingEm; },
+  "getLetterSpacing()F": function (this: JTextView) { return this.tp.letterSpacingEm; },
   "setBreakStrategy(I)V": function (this: JTextView, b: number) { this.breakStrategy = b; if (hasLayout(this)) return relayout(this); },
   "getBreakStrategy()I": function (this: JTextView) { return this.breakStrategy; },
   "setHyphenationFrequency(I)V": function (this: JTextView, h: number) { this.hyphenation = h; if (hasLayout(this)) return relayout(this); },
@@ -693,7 +701,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "setMaxHeight(I)V": function (this: JTextView, h: number) { this.maxH = h; this.maxLinesV = Infinity; return relayout(this); },
   "getMaxHeight()I": function (this: JTextView) { return Number.isFinite(this.maxH) ? this.maxH : -1; },
   "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; return relayout(this); },
-  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); return relayout(this); },
+  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.tp.textSize); return relayout(this); },
   "setMaxEms(I)V": function (this: JTextView) { return relayout(this); },
   "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "setLinksClickable(Z)V": function (this: JTextView, v: number) { this.linksClickable = !!v; },
@@ -720,7 +728,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     return vcall(this, "setPadding", "(IIII)V", this.padL, Math.max(0, h - this.ascent()), this.padR, this.padB);
   },
   "setLastBaselineToBottomHeight(I)V": function (this: JTextView, h: number) {
-    return vcall(this, "setPadding", "(IIII)V", this.padL, this.padT, this.padR, Math.max(0, h - Math.round(fontDescent(this.paintT))));
+    return vcall(this, "setPadding", "(IIII)V", this.padL, this.padT, this.padR, Math.max(0, h - Math.round(fontDescent(this.tp))));
   },
   // auto-size is never active: AUTO_SIZE_TEXT_TYPE_NONE and the "unset" -1 sizes, as AOSP reports.
   // A uniform type still invalidates where AOSP's setup would succeed: not in an EditText.
@@ -806,16 +814,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "getIncludeFontPadding()Z": function (this: JTextView) { return +this.includePad; },
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
   "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; return relayout(this); },
-  "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); return relayout(this); },
+  "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.tp.textSize); return relayout(this); },
   "setPaintFlags(I)V": function (this: JTextView, f: number) {
-    const strikeThru = (f & 16) !== 0, underline = (f & 8) !== 0;
-    if (this.paintT.strikeThru === strikeThru && this.paintT.underline === underline) return;
-    this.paintT.strikeThru = strikeThru; this.paintT.underline = underline;
-    return hasLayout(this) ? relayout(this) : redraw(this);
+    if (this.tp.flags === f) return;
+    return after(vcall(this.paintT, "setFlags", "(I)V", f), () => hasLayout(this) ? relayout(this) : redraw(this));
   },
-  "getPaintFlags()I": function (this: JTextView) {
-    return (this.paintT.strikeThru ? 16 : 0) | (this.paintT.underline ? 8 : 0) | 1;
-  },
+  "getPaintFlags()I": function (this: JTextView) { return vcall(this.paintT, "getFlags", "()I"); },
   "getLineHeight()I": function (this: JTextView) { return this.lineHeight(); },
   "getLineCount()I": function (this: JTextView) { return this.layout?.lines ?? 0; },
   "getBaseline()I": function (this: JTextView) {
@@ -891,7 +895,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     // TextView.getVerticalOffset
     const vg = gravityV(this.gravityT);
     const y = vg === 16 ? (contentB - contentT - layout.height) / 2 + contentT : vg === 80 ? contentB - layout.height : contentT;
-    this.paintT.setColorValue(cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
+    yield vcall(this.paintT, "setColor", "(I)V", cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, this.width(), this.height()); ctx.clip();
     ctx.translate(contentL, y);
@@ -943,7 +947,7 @@ function applyButtonDefaults(b: JButton): void {
   // that spoke for itself — every Material3 button is sentence-case with its own face — has
   // already run in applyTvStyle, and forcing them here undid it.
   if (b.capsSet === undefined) b.allCaps = true;
-  if (!b.paintT.tf) b.paintT.tf = tfMedium;
+  if (!paintTypeface(b.paintT)) setPaintTypeface(b.paintT, tfMedium);
 }
 
 export class JEditText extends JTextView {

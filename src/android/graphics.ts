@@ -1,16 +1,10 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { type FaceMetrics, type NativeFont, SYSTEM_FONT, typefaceOf, fakery, FAKE_BOLD } from "./fonts";
-import { rt, JObj, type NativeSpec, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
-import { mangleMethod, jarray } from "../jvm/abi";
-import { device } from "../shell/config";
-import { deref, replace, weakHandle } from "./handles";
-import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, after, enumName, enumOrdinal } from "../jvm/natives/jlang";
-import type { JLocale } from "../jvm/natives/jvalues";
-import type { JLocaleList } from "./resnative";
-import { NativeBitmap, ALPHA_8, PREMUL } from "./bitmap";
+import { rt, JObj, driven, declaredField, type Gen } from "../jvm/runtime";
+import { deref, replace } from "./handles";
+import { vcall, newObj, after } from "../jvm/natives/jlang";
+import type { NativeBitmap } from "./bitmap";
 import type { Ctx2D } from "./recording";
-import { perf } from "../perf";
 import { parcelCreator } from "./parcelable";
 import type { JParcel } from "./parcel";
 
@@ -55,270 +49,6 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
 }
 rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
 
-/** Shader.getNativeInstance(boolean filterFromPaint), which a draw calls per shaded paint */
-const SHADER_INSTANCE = mangleMethod("getNativeInstance", "(Z)J");
-export class JPaint extends JObj {
-  color = -16777216;
-  renderAlpha: number | null = null;
-  setColorValue(color: number) { this.color = color; this.renderAlpha = null; }
-  setAlphaValue(alpha: number) {
-    // API 33 exposes a narrowed alpha in getColor but draws out-of-range values opaque.
-    this.color = ((((alpha < 0 ? alpha + 1 : alpha) & 255) << 24) | (this.color & 0xffffff)) | 0;
-    this.renderAlpha = alpha < 0 || alpha > 255 ? 255 : null;
-  }
-  style = 0;
-  strokeWidth = 0;
-  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
-  textSize = 12;
-  /** the Java Typeface, null for the default (a bytecode Paint hands its native typeface) */
-  tf: object | null = null;
-  antiAlias = true;
-  textAlignN = 0; // 0 left, 1 center, 2 right
-  /** the Java Shader the paint spec was given, whose native instance `shader` is */
-  shaderObj: object | null = null;
-  shader: NativeShader | null = null;
-  maskFilter: JBlurMaskFilter | null = null;
-  strokeCapN: CanvasLineCap = "butt";
-  strokeJoinN: CanvasLineJoin = "miter";
-  dash: number[] | null = null;
-  colorFilter: NativeColorFilter | null = null;
-  filterObj: object | null = null;     // kept only so getColorFilter() round-trips
-  /** the paint's Xfermode/BlendMode by BlendMode's name, and its Canvas2D form; null = plain source-over */
-  blendName: string | null = null;
-  blend: GlobalCompositeOperation | null = null;
-  xfermode: object | null = null;      // kept only so getXfermode() round-trips
-  blendMode: JSimpleEnum | null = null;
-  setBlendName(name: string | null) { this.blendName = name; this.blend = name ? COMPOSITE[name] ?? null : null; }
-  /** the shader to draw with. As AOSP's Paint.getNativeInstance does per draw, this asks the Java
-   *  Shader for its current native instance: setLocalMatrix and the like replace it. If that call
-   *  suspends (it would only on a contended monitor), the draw keeps the instance it had. */
-  drawShader(): NativeShader | null {
-    const s = this.shaderObj as Record<string, (filter: number) => bigint | Promise<bigint>> | null;
-    if (s) {
-      const h = s[SHADER_INSTANCE](1);
-      if (typeof h === "bigint") this.shader = deref<NativeShader | undefined>(h) ?? null;
-    }
-    return this.shader;
-  }
-  compositeOp(): GlobalCompositeOperation | null {
-    if (this.blend === "source-in" && !this.shader && !this.colorFilter && (this.renderAlpha ?? this.color >>> 24) === 255)
-      return "source-atop";
-    return this.blend;
-  }
-  transparentSourceIn(): boolean {
-    return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 && !this.shader && !this.colorFilter;
-  }
-  pathEffect: unknown = null;
-  letterSpacingEm = 0;
-  textScaleX = 1;
-  textSkewX = 0;
-  fontFeatureSettings: string | null = null;
-  fontVariationSettings: string | null = null;
-  locales: JLocaleList | null = null;
-  language = device.locale;
-  underline = false; strikeThru = false; fakeBold = false; linearText = false; subpixelText = false;
-  /** flag bits nothing here acts on, kept so getFlags() round-trips */
-  otherFlags = 0;
-  get flags(): number {
-    return +this.antiAlias | (this.underline ? 8 : 0) | (this.strikeThru ? 0x10 : 0) | (this.fakeBold ? 0x20 : 0)
-      | (this.linearText ? 0x40 : 0) | (this.subpixelText ? 0x80 : 0) | this.otherFlags;
-  }
-  set flags(f: number) {
-    this.antiAlias = !!(f & 1); this.underline = !!(f & 8); this.strikeThru = !!(f & 0x10); this.fakeBold = !!(f & 0x20);
-    this.linearText = !!(f & 0x40); this.subpixelText = !!(f & 0x80); this.otherFlags = f & ~0xf9;
-  }
-  bidiFlags = 2; hasCompatScaling = 0; compatScaling = 1; invCompatScaling = 1;
-  get nativePaint(): bigint { return weakHandle(this); }
-
-  // font() is called per text op and per measure; the result is a pure function of
-  // (typeface identity, textSize, fakeBold), so cache it and rebuild only when one changes.
-  private fCache = "";
-  private fTf: object | null | undefined = undefined;
-  private fSize = -1;
-  private fBold = false;
-  private fFace: NativeFont | null = null;
-  private fFaked = false;
-  font(): string {
-    if (this.fTf === this.tf && this.fSize === this.textSize && this.fBold === this.fakeBold) return this.fCache;
-    const t = typefaceOf(this.tf), w = this.fakeBold ? Math.max(700, t.weight) : t.weight;
-    // minikin draws from the primary family's closest face, faking bold two grades short of the
-    // wanted weight and italic on an upright face; the face's own weight makes CSS pick that face
-    const face = t.collection.families[0]?.closest(w, t.italic) ?? null;
-    const faked = face ? fakery(face, w, t.italic) : 0;
-    this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
-    this.fFace = face; this.fFaked = faked !== 0;
-    const weight = !face ? w : faked & FAKE_BOLD ? 700 : face.weight;
-    return (this.fCache = `${t.italic ? "italic " : ""}${weight} ${this.textSize}px ${t.collection.css}, sans-serif`);
-  }
-  /** the face font() draws from, and whether it draws it with fake bold or italic */
-  face(): NativeFont | null { this.font(); return this.fFace; }
-  faked(): boolean { this.font(); return this.fFaked; }
-  fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
-    const pattern = this.drawShader()?.pattern(ctx);
-    if (pattern) return pattern;
-    return cssColor(this.filteredColor());
-  }
-  /** the paint's colour through its colour filter */
-  filteredColor(): number {
-    const filter = this.colorFilter;
-    const color = this.renderAlpha === null ? this.color : (this.renderAlpha << 24) | (this.color & 0xffffff);
-    if (!filter) return color;
-    if (filter.matrix) return matrixColor(filter.matrix, color);
-    // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
-    // colour replaces the paint's, keeping the alpha the two agree on
-    const f = filter.color;
-    return ((f & 0xffffff) | ((((f >>> 24) * (color >>> 24) / 255) | 0) << 24)) | 0;
-  }
-}
-const paintMethods: NativeSpec["methods"] = {
-  // AOSP's own bytecode hands a paint to its native half as a long — MeasuredText.Builder and
-  // every Canvas draw do it — so a paint that is OURS still has to be able to name itself in
-  // the handle table. handles.ts is stable per object, so this is not an allocation per call,
-  // and weak, since no finalizer would release a paint drawn with once.
-  "getNativeInstance()J": function (this: JPaint) { return weakHandle(this); },
-  // The hyphen a line break may add or remove at either end. There is no hyphenator here, so
-  // there is never an edit; AOSP's MeasuredText reads these back per run whatever the answer.
-  "getStartHyphenEdit()I": () => 0, "getEndHyphenEdit()I": () => 0,
-  "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
-  "reset()V": function (this: JPaint) { copyPaint(defaultPaint, this); },
-  "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
-    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
-  },
-  "clearShadowLayer()V": function (this: JPaint) { this.shadowRadius = this.shadowDx = this.shadowDy = this.shadowColor = 0; },
-  "hasShadowLayer()Z": function (this: JPaint) { return +(this.shadowRadius > 0 && !!(this.shadowColor >>> 24)); },
-  "getShadowLayerRadius()F": function (this: JPaint) { return this.shadowRadius; },
-  "getShadowLayerDx()F": function (this: JPaint) { return this.shadowDx; },
-  "getShadowLayerDy()F": function (this: JPaint) { return this.shadowDy; },
-  "getShadowLayerColor()I": function (this: JPaint) { return this.shadowColor; },
-  "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
-  "setColor(I)V": function (this: JPaint, c: number) { this.setColorValue(c); },
-  "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(argbOfColorLong(c)); },
-  "getColorLong()J": function (this: JPaint) { return colorLongOfArgb(this.color); },
-  "getTextLocale()Ljava/util/Locale;": function (this: JPaint) {
-    return after(vcall(this, "getTextLocales", "()Landroid/os/LocaleList;"), (locales: JLocaleList) => locales.values[0] ?? null);
-  },
-  "getTextLocales()Landroid/os/LocaleList;": driven(function* (this: JPaint): Gen { return this.locales ??= yield vcall((yield linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); }),
-  "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
-    if (!locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale cannot be null");
-    return after(newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray([locale], "Ljava/util/Locale;")),
-      (locales: JLocaleList) => { this.locales = locales; this.language = locales.tags[0]; });
-  },
-  "setTextLocales(Landroid/os/LocaleList;)V": function (this: JPaint, locales: JLocaleList) {
-    if (!locales?.values.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locales cannot be null or empty");
-    this.locales = locales; this.language = locales.tags[0];
-  },
-  "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shaderObj; },
-  "getStrokeMiter()F": () => 4,
-  "getXfermode()Landroid/graphics/Xfermode;": function (this: JPaint) { return this.xfermode; },
-  "setBlendMode(Landroid/graphics/BlendMode;)V": function (this: JPaint, m: JSimpleEnum | null) {
-    this.blendMode = m;
-    this.setBlendName(m && enumName(m));
-  },
-  "getBlendMode()Landroid/graphics/BlendMode;": function (this: JPaint) { return this.blendMode; },
-  "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
-  "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": function (this: JPaint, f: JBlurMaskFilter | null) { return this.maskFilter = f; },
-  "getColor()I": function (this: JPaint) { return this.color; },
-  "setAlpha(I)V": function (this: JPaint, a: number) { this.setAlphaValue(a); },
-  "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.setColorValue(((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0); },
-  "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
-  "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: JSimpleEnum | null) { this.style = s ? enumOrdinal(s) : 0; },
-  "getStyle()Landroid/graphics/Paint$Style;": function (this: JPaint) { return paintStyleEnum[this.style]; },
-  "setStrokeWidth(F)V": function (this: JPaint, w: number) { this.strokeWidth = w; },
-  "getStrokeWidth()F": function (this: JPaint) { return this.strokeWidth; },
-  "setTextSize(F)V": function (this: JPaint, s: number) { if (s >= 0) this.textSize = s; },
-  "getTextSize()F": function (this: JPaint) { return this.textSize; },
-  "setAntiAlias(Z)V": function (this: JPaint, v: number) { this.antiAlias = !!v; },
-  "isAntiAlias()Z": function (this: JPaint) { return this.antiAlias ? 1 : 0; },
-  "setTypeface(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;": function (this: JPaint, t: object | null) { return this.tf = t; },
-  "getTypeface()Landroid/graphics/Typeface;": function (this: JPaint) { return this.tf; },
-  "setTextAlign(Landroid/graphics/Paint$Align;)V": function (this: JPaint, a: JSimpleEnum | null) { this.textAlignN = a ? enumOrdinal(a) : 0; },
-  "getTextAlign()Landroid/graphics/Paint$Align;": function (this: JPaint) { return paintAlignEnum[this.textAlignN]; },
-  "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: JSimpleEnum | null) { this.strokeCapN = CAPS[c ? enumOrdinal(c) : 0]; },
-  "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: JSimpleEnum | null) { this.strokeJoinN = JOINS[j ? enumOrdinal(j) : 0]; },
-  "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return paintCapEnum[CAPS.indexOf(this.strokeCapN)]; },
-  "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return paintJoinEnum[JOINS.indexOf(this.strokeJoinN)]; },
-  "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: object | null) {
-    this.shaderObj = s ?? null;
-    if (!s) { this.shader = null; return s; }
-    return after(vcall(s, "getNativeInstance", "(Z)J", 1), (h: bigint) => { this.shader = deref<NativeShader | undefined>(h) ?? null; return s; });
-  },
-  "setPathEffect(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;": function (this: JPaint, e: any) {
-    this.pathEffect = e ?? null;
-    this.dash = e?.intervals ?? null;
-    return e;
-  },
-  "getPathEffect()Landroid/graphics/PathEffect;": function (this: JPaint) { return this.pathEffect; },
-  "getLetterSpacing()F": function (this: JPaint) { return this.letterSpacingEm; },
-  "setColorFilter(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;": function (this: JPaint, f: object | null) {
-    this.filterObj = f ?? null;
-    return after(colorFilterOf(f), (filter) => { this.colorFilter = filter; return f; });
-  },
-  "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JPaint) { return this.filterObj; },
-  "setXfermode(Landroid/graphics/Xfermode;)Landroid/graphics/Xfermode;": function (this: JPaint, x: object | null) {
-    this.xfermode = x;
-    this.setBlendName(x && xfermodeName(x));
-    return x;
-  },
-  "setUnderlineText(Z)V": function (this: JPaint, v: number) { this.underline = !!v; },
-  "setStrikeThruText(Z)V": function (this: JPaint, v: number) { this.strikeThru = !!v; },
-  "setFakeBoldText(Z)V": function (this: JPaint, v: number) { this.fakeBold = !!v; },
-  "setLetterSpacing(F)V": function (this: JPaint, v: number) { this.letterSpacingEm = v; },
-  "setFontFeatureSettings(Ljava/lang/String;)V": function (this: JPaint, v: string | null) { this.fontFeatureSettings = v; },
-  "getFontFeatureSettings()Ljava/lang/String;": function (this: JPaint) { return this.fontFeatureSettings; },
-  "setFontVariationSettings(Ljava/lang/String;)Z": function (this: JPaint, v: string | null) {
-    this.fontVariationSettings = v || null;
-    return 1;
-  },
-  "getFontVariationSettings()Ljava/lang/String;": function (this: JPaint) { return this.fontVariationSettings; },
-  "setTextScaleX(F)V": function (this: JPaint, v: number) { this.textScaleX = v; },
-  "getTextScaleX()F": function (this: JPaint) { return this.textScaleX; },
-  "setTextSkewX(F)V": function (this: JPaint, v: number) { this.textSkewX = v; },
-  "getTextSkewX()F": function (this: JPaint) { return this.textSkewX; },
-
-  "<init>(I)V": function (this: JPaint, f: number) { this.flags = f; },
-  "setFlags(I)V": function (this: JPaint, f: number) { this.flags = f; },
-  "getFlags()I": function (this: JPaint) { return this.flags; },
-  "setSubpixelText(Z)V": function (this: JPaint, v: number) { this.subpixelText = !!v; },
-  "isSubpixelText()Z": function (this: JPaint) { return +this.subpixelText; },
-  "setLinearText(Z)V": function (this: JPaint, v: number) { this.linearText = !!v; },
-  "isLinearText()Z": function (this: JPaint) { return +this.linearText; },
-  ...noops("<init>()V", "setHinting(I)V",
-    "setElegantTextHeight(Z)V", "setStartHyphenEdit(I)V",
-    "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V"),
-  ...stubs(1, "isFilterBitmap()Z", "getHinting()I"),
-  ...stubs(0, "getWordSpacing()F", "isDither()Z"),
-  "getFontMetrics()Landroid/graphics/Paint$FontMetrics;": function (this: JPaint) {
-    const fm = new JFontMetrics();
-    fillFontMetrics(this, fm, false);
-    return fm;
-  },
-  "getFontMetrics(Landroid/graphics/Paint$FontMetrics;)F": function (this: JPaint, fm: JFontMetrics | null) {
-    return fillFontMetrics(this, fm, false);
-  },
-  "getFontMetricsInt()Landroid/graphics/Paint$FontMetricsInt;": function (this: JPaint) {
-    const fm = new JFontMetricsInt();
-    fillFontMetrics(this, fm, true);
-    return fm;
-  },
-  "getFontMetricsInt(Landroid/graphics/Paint$FontMetricsInt;)I": function (this: JPaint, fm: JFontMetricsInt | null) {
-    return fillFontMetrics(this, fm, true);
-  },
-  "getFontSpacing()F": function (this: JPaint) { return fontDescent(this) - fontAscent(this); },
-  "ascent()F": function (this: JPaint) { return fontAscent(this); },
-  "descent()F": function (this: JPaint) { return fontDescent(this); },
-};
-/** a Paint as constructed; read-only, the source for reset() and the null bitmap paint */
-export const defaultPaint = new JPaint();
-export function beginPaintShadow(ctx: Ctx2D, p: JPaint): boolean {
-  if (!(p.shadowRadius > 0) || !(p.shadowColor >>> 24)) return false;
-  const m = ctx.getTransform();
-  ctx.save();
-  ctx.shadowColor = cssColor(p.shadowColor);
-  ctx.shadowBlur = p.shadowRadius * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
-  ctx.shadowOffsetX = m.a * p.shadowDx + m.c * p.shadowDy;
-  ctx.shadowOffsetY = m.b * p.shadowDx + m.d * p.shadowDy;
-  return true;
-}
 /** The shadow a shape casts, without the shape: it is filled far to the side and its shadow
  *  offset back, since a canvas shadow takes its opacity from the fill's. `dy` is in user space. */
 export function castShadow(ctx: Ctx2D, trace: () => void, color: string, blur: number, dy: number) {
@@ -331,116 +61,6 @@ export function castShadow(ctx: Ctx2D, trace: () => void, color: string, blur: n
   ctx.beginPath(); trace(); ctx.fill();
   ctx.restore();
 }
-export function copyPaint(src: JPaint, dst: JPaint) {
-  dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
-  dst.textSize = src.textSize; dst.tf = src.tf;
-  dst.textAlignN = src.textAlignN; dst.shaderObj = src.shaderObj; dst.shader = src.shader; dst.dash = src.dash;
-  dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
-  dst.colorFilter = src.colorFilter; dst.filterObj = src.filterObj;
-  dst.flags = src.flags;
-  dst.letterSpacingEm = src.letterSpacingEm; dst.textScaleX = src.textScaleX; dst.textSkewX = src.textSkewX;
-  dst.fontFeatureSettings = src.fontFeatureSettings;
-  dst.fontVariationSettings = src.fontVariationSettings;
-  dst.locales = src.locales; dst.language = src.language;
-  dst.blendName = src.blendName; dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
-  dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
-}
-class JFontMetrics extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
-class JFontMetricsInt extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
-for (const [name, ctor] of [["FontMetrics", JFontMetrics], ["FontMetricsInt", JFontMetricsInt]] as const) {
-  rt.register({ name: `android/graphics/Paint$${name}`, ctor, fields: ["top", "ascent", "descent", "bottom", "leading"], methods: { "<init>()V": function () {} } });
-}
-let _measureCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
-/**
- * The shared measurement context. ALWAYS pass the font you are about to measure with:
- * setFont elides a redundant assignment by remembering what it last wrote, so a caller that
- * assigns ctx.font itself leaves that memo naming a font the context no longer has — and the
- * next cache miss then measures with the wrong one.
- */
-export function measureCtx(font?: string, language = "en-US"): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
-  if (!_measureCtx) {
-    const c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : (document.createElement("canvas"));
-    _measureCtx = c.getContext("2d") as CanvasRenderingContext2D;
-  }
-  if (font !== undefined) setFont(_measureCtx, font);
-  if ("lang" in _measureCtx && _measureCtx.lang !== language) _measureCtx.lang = language;
-  return _measureCtx;
-}
-// Browser text measurement is the hot path of every layout AND every draw (a TextView
-// measures, wraps, then re-wraps to draw). Width is a pure function of (font, string) and
-// the vertical metrics of (font) alone, so both are memoised. The width cache is capped and
-// cleared wholesale rather than evicted per entry — line breaking probes many short-lived
-// prefixes, so LRU bookkeeping would cost more than the refill.
-const WIDTH_CACHE_MAX = 20000;
-let widthCache = new Map<string, Map<string, number>>(), widthCount = 0;
-const vmetCache = new Map<string, { a: number; d: number }>();
-let lastFont = "";
-function setFont(ctx: { font: string }, f: string): void {
-  if (f !== lastFont) { ctx.font = f; lastFont = f; }
-}
-/** the advance of `s` in CSS font `f`, before letter spacing */
-export function rawWidth(f: string, s: string, language: string): number {
-  const key = language === "en-US" ? f : f + "\0" + language;
-  let byFont = widthCache.get(key);
-  if (byFont === undefined) widthCache.set(key, byFont = new Map());
-  const hit = byFont.get(s);
-  if (hit !== undefined) return hit;
-  perf.measureTextMiss++;
-  const w = measureCtx(f, language).measureText(s).width;
-  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[key, byFont = new Map()]]); widthCount = 1; }
-  byFont.set(s, w);
-  return w;
-}
-export function measureText(p: JPaint, s: string): number {
-  perf.measureText++;
-  return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
-}
-/** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds; the
- *  metrics are the drawn face's. Browser bounding-box metrics round to pixels even with FontFace
- *  metric overrides. */
-const metricsOf = (p: JPaint): FaceMetrics | null => p.face()?.faceMetrics ?? null;
-function vmetrics(p: JPaint): { a: number; d: number } {
-  const f = p.font();
-  const hit = vmetCache.get(f);
-  if (hit) return hit;
-  const face = metricsOf(p);
-  if (face) {
-    const v = { a: -p.textSize * face.ascent, d: p.textSize * face.descent };
-    vmetCache.set(f, v);
-    return v;
-  }
-  const ctx = measureCtx(f);
-  const m = ctx.measureText("Ag");
-  const v = {
-    a: -(m.fontBoundingBoxAscent ?? p.textSize * SYSTEM_FONT.ascent),
-    d: m.fontBoundingBoxDescent ?? p.textSize * SYSTEM_FONT.descent,
-  };
-  vmetCache.set(f, v);
-  return v;
-}
-export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
-export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
-export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).a * (m.top / m.ascent)); }
-export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).d * (m.bottom / m.descent)); }
-export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null, int: boolean) {
-  const { a, d } = vmetrics(p);
-  const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;
-  if (fm) {
-    // fontTop/fontBottom, without resolving the paint's metrics twice more
-    const m = metricsOf(p) ?? SYSTEM_FONT;
-    const top = Math.fround(a * (m.top / m.ascent)), bottom = Math.fround(d * (m.bottom / m.descent));
-    fm.ascent = ascent; fm.descent = descent;
-    fm.top = int ? Math.floor(top) : top;
-    fm.bottom = int ? Math.ceil(bottom) : bottom;
-    fm.leading = 0;
-  }
-  return descent - ascent;
-}
-
-const paintStyleEnum = mkEnumSet("android/graphics/Paint$Style", ["FILL", "STROKE", "FILL_AND_STROKE"]);
-const paintAlignEnum = mkEnumSet("android/graphics/Paint$Align", ["LEFT", "CENTER", "RIGHT"]);
-const paintCapEnum = mkEnumSet("android/graphics/Paint$Cap", ["BUTT", "ROUND", "SQUARE"]);
-const paintJoinEnum = mkEnumSet("android/graphics/Paint$Join", ["MITER", "ROUND", "BEVEL"]);
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
  * modes Canvas2D cannot express are absent and fall back to plain source-over.
@@ -468,10 +88,6 @@ export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/
   const info = rt.link(cls);
   return after(rt.initClass(info), () => (info.ctor as unknown as Record<string, unknown>)["s$" + name]);
 }
-let porterDuffMode = "";
-/** the mode a Java Xfermode names */
-const xfermodeName = (x: object) =>
-  BLEND_MODES[(x as Record<string, number>)[porterDuffMode ||= declaredField("android/graphics/Xfermode", "porterDuffMode")]];
 /**
  * A ColorFilter's native instance, as hwui builds its SkColorFilter: AOSP's row-major 4x5 colour
  * `matrix` with its offsets in 0..255 (SkColorFilters::Matrix and Lighting), or, when that is null,
@@ -484,59 +100,6 @@ export class NativeColorFilter {
 /** the native instance behind a Java ColorFilter: null for none, and for a base ColorFilter */
 export const colorFilterOf = (f: object | null): NativeColorFilter | null | Promise<NativeColorFilter | null> =>
   f && after(vcall(f, "getNativeInstance", "()J"), (h: bigint) => deref<NativeColorFilter | undefined>(h) ?? null);
-rt.register({
-  name: "android/graphics/DashPathEffect", ctor: class extends JObj { intervals: number[] = []; }, sup: "android/graphics/PathEffect",
-  methods: {
-    "<init>([FF)V": function (this: any, iv: Float32Array) { this.intervals = [...iv]; },
-  },
-});
-rt.markers("android/graphics/PathEffect");
-rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
-  methods: { "<init>(F)V": function () {} } });
-mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
-export class JBlurMaskFilter extends JObj {
-  sigma = 0; style = 0;
-  border() {
-    const sigma = Math.min(this.sigma, 135);
-    if (sigma >= 2) {
-      const window = Math.max(1, Math.floor(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5));
-      return window % 2 ? 3 * (window - 1) / 2 : 3 * window / 2 - 1;
-    }
-    const variance = sigma * sigma, q = variance * variance / 4;
-    const bessel = (n: number) => {
-      let term = n ? variance / 2 : 1, sum = term;
-      for (let k = 1; term > 1e-6; k++) { term *= q / (k * (k + n)); sum += term; }
-      return sum;
-    };
-    let previous = bessel(0), current = bessel(1), n = 1;
-    while (current / Math.exp(variance) > 0.01) {
-      const next = previous - 2 * n / variance * current;
-      previous = current; current = next; n++;
-    }
-    return n - 1;
-  }
-}
-export function blurMask(ctx: Ctx2D, source: CanvasImageSource, filter: JBlurMaskFilter | null, x = 0, y = 0, scale = 1) {
-  if (filter) ctx.filter = `blur(${Math.min(filter.sigma * scale, 135)}px)`;
-  ctx.drawImage(source, x, y); ctx.filter = "none";
-  if (filter?.style) {
-    ctx.globalCompositeOperation = filter.style === 2 ? "destination-out" : filter.style === 3 ? "destination-in" : "source-over";
-    ctx.drawImage(source, x, y);
-    ctx.globalCompositeOperation = "source-over";
-  }
-}
-rt.markers("android/graphics/MaskFilter");
-rt.register({
-  name: "android/graphics/BlurMaskFilter", ctor: JBlurMaskFilter, sup: "android/graphics/MaskFilter",
-  methods: {
-    "<init>(FLandroid/graphics/BlurMaskFilter$Blur;)V": function (this: JBlurMaskFilter, radius: number, style: JSimpleEnum) {
-      if (!(radius > 0)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "radius must be > 0");
-      this.style = enumOrdinal(style);
-      this.sigma = radius * 0.57735 + 0.5;
-    },
-  },
-});
-
 export type Affine = [number, number, number, number, number, number];
 /** a native shader's local matrix: the 3x3 behind the handle Shader passes, null for identity */
 export function localMatrix(h: bigint): Affine | null {
@@ -765,23 +328,6 @@ export function applyMatrix(ctx: Ctx2D, m: ArrayLike<number>, set = false): void
   else ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
 
-/** SkBitmap::extractAlpha: an ALPHA_8 copy of the coverage, through the paint's mask filter, its
- *  rows 4-byte aligned as SkMask lays them out */
-export function extractBitmapAlpha(src: NativeBitmap, paint: JPaint | null, offsets: Int32Array | null): NativeBitmap {
-  const filter = paint?.maskFilter ?? null, border = filter && filter.style !== 3 ? filter.border() : 0;
-  const w = src.w + 2 * border, h = src.h + 2 * border, b = new NativeBitmap(w, h, ALPHA_8, PREMUL, (w + 3) & ~3);
-  if (filter) {
-    const ctx = b.ctx;
-    blurMask(ctx, src.image, filter, border, border);
-    ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, b.w, b.h);
-    ctx.globalCompositeOperation = "source-over";
-  } else {
-    const source = src.pixels(), target = b.pixels();
-    for (let i = 3; i < target.length; i += 4) target[i] = source[i];
-  }
-  if (offsets && offsets.length >= 2) { offsets[0] = -border; offsets[1] = -border; }
-  return b;
-}
 export function canvasLocalBounds(ctx: Ctx2D): [number, number, number, number] | null {
   const inverse = ctx.getTransform().inverse();
   const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
@@ -790,8 +336,6 @@ export function canvasLocalBounds(ctx: Ctx2D): [number, number, number, number] 
   return [Math.min(...points.map(p => p.x)), Math.min(...points.map(p => p.y)),
     Math.max(...points.map(p => p.x)), Math.max(...points.map(p => p.y))];
 }
-export const CAPS = ["butt", "round", "square"] as const;
-export const JOINS = ["miter", "round", "bevel"] as const;
 const tintCache = new WeakMap<NativeBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
 /** `b` through a colour filter — `tint` blended by the BlendMode named `mode`, or every pixel through
  *  a 4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
@@ -847,11 +391,6 @@ export function matrixColor(k: Float32Array, color: number): number {
   return ((clamp(k[15] * r + k[16] * g + k[17] * b + k[18] * a + k[19]) << 24) | (clamp(k[0] * r + k[1] * g + k[2] * b + k[3] * a + k[4]) << 16)
     | (clamp(k[5] * r + k[6] * g + k[7] * b + k[8] * a + k[9]) << 8) | clamp(k[10] * r + k[11] * g + k[12] * b + k[13] * a + k[14])) | 0;
 }
-// AOSP's text measuring bodies run on this object: they read these fields and call minikin.ts' natives
-rt.register({
-  name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods,
-  fields: { mNativePaint: "nativePaint", mBidiFlags: "bidiFlags", mHasCompatScaling: "hasCompatScaling", mCompatScaling: "compatScaling", mInvCompatScaling: "invCompatScaling" },
-});
 /** Res_png_9patch deserialized, as NinePatch's native chunk holds it; colors are per patch (0 transparent) */
 export interface NinePatchChunk { xDivs: number[]; yDivs: number[]; padding: [left: number, top: number, right: number, bottom: number]; colors: number[] }
 /** Res_png_9patch: flags and counts, int32 offsets and padding (left, right, top, bottom), then xDivs, yDivs and colors */

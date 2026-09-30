@@ -2,7 +2,8 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun, type Ctx2D } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { JRect, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
+import { paintOf } from "./paint";
+import { JRect, JPoint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
 import { canvasOf, type JavaCanvas, clipToOutline, saveLayer } from "./canvas";
 import { setInvalidateHook } from "./rendernode";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
@@ -540,7 +541,8 @@ class ViewRare {
   cameraDistance = 8;
   exclusionRects: unknown = null;
   /** composites the view's layer: its alpha, blend mode and colour filter */
-  layerPaint: JPaint | null = null;
+  /** the Java Paint a layer composites with */
+  layerPaint: object | null = null;
   /** raw values, kept to see a change; resolution is always LTR */
   layoutDirection = 2;
   textDirection = 0;
@@ -864,7 +866,8 @@ export const drawView = driven(function* drawView(v: JView, cv: JavaCanvas, pare
     if (w > 0 && h > 0) nc.clipRect(0, 0, w, h); else nc.clipRect(0, 0, 0, 0);
     let into = cv;
     if (v.layerType && w > 0 && h > 0) {
-      saveLayer(nc, { left: 0, top: 0, right: w, bottom: h }, v.rare?.layerPaint ?? null);
+      const lp = v.rare?.layerPaint;
+      saveLayer(nc, { left: 0, top: 0, right: w, bottom: h }, lp ? paintOf(lp) : null);
       // a software layer draws into a bitmap even under a hardware window
       if (v.layerType === 1 && nc.accelerated) into = nc.softwareTwin();
     }
@@ -1312,12 +1315,12 @@ const viewMethods: NativeSpec["methods"] = cslBoundary({
   "findViewWithTag(Ljava/lang/Object;)Landroid/view/View;": function (this: JView, tag: unknown) {
     return findByPred(this, (v) => v.tag === tag);
   },
-  "setLayerType(ILandroid/graphics/Paint;)V": function (this: JView, t: number, p: JPaint | null) {
+  "setLayerType(ILandroid/graphics/Paint;)V": function (this: JView, t: number, p: object | null) {
     this.layerType = t;
     if (t || this.rare) rare(this).layerPaint = t ? p : null;
     invalidate(this);
   },
-  "setLayerPaint(Landroid/graphics/Paint;)V": function (this: JView, p: JPaint | null) {
+  "setLayerPaint(Landroid/graphics/Paint;)V": function (this: JView, p: object | null) {
     if (this.layerType) { rare(this).layerPaint = p; return invalidateVirtual(this); }
   },
   "getLayerType()I": function (this: JView) { return this.layerType; },

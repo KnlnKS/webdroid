@@ -18,7 +18,7 @@ export function mountApexData(): Promise<void> {
   })));
 }
 let fontMap: Promise<void> | null = null;
-/** /system/fonts and the font map the zygote preloads (whose locale scripts are ICU's), as a booted
+/** /system/fonts, the font map and text paints the zygote preloads (whose locale scripts are ICU's), as a booted
  *  page has them */
 export function loadSystemFonts(): Promise<void> {
   return fontMap ??= (async () => {
@@ -27,7 +27,14 @@ export function loadSystemFonts(): Promise<void> {
     mountSystemFonts(await Promise.all(SYSTEM_FONT_FILES.map(async (file) =>
       new Uint8Array(await Bun.file(new URL(`../vendor/fonts/${file}`, import.meta.url)).arrayBuffer()))));
     await loadSystemFontMap();
+    await preloadTextPaint();
   })();
+}
+/** the device's languages and the text paint classes, as the zygote sets them up: a TS TextView
+ *  constructs its TextPaint synchronously */
+export async function preloadTextPaint(): Promise<void> {
+  await (await import("../src/android/resnative")).initDeviceLocales();
+  await (await import("../src/android/paint")).preloadPaint();
 }
 
 /** libcore's own jars (core-oj, core-libart, core-icu4j), for platform classes that forward to natives */

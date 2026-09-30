@@ -13,6 +13,7 @@ import { themeAccent } from "./widget";
 import { JRect, castShadow } from "./graphics";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium } from "./fonts";
+import { setPaintTypeface } from "./paint";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
@@ -386,8 +387,8 @@ async function buildAlertContent(d: JAlertDialog) {
   } else if (d.titleStr) {
     const t = inherit(new JTextView());
     t.text = d.titleStr;
-    t.paintT.textSize = device.dp(20);
-    t.paintT.tf = tfMedium;
+    t.tp.textSize = device.dp(20);
+    setPaintTypeface(t.paintT, tfMedium);
     t.colors.defColor = -13421773;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(22); t.padB = device.dp(4);
     t.lp = lpFill();
@@ -396,7 +397,7 @@ async function buildAlertContent(d: JAlertDialog) {
   if (d.message) {
     const t = inherit(new JTextView());
     t.text = d.message;
-    t.paintT.textSize = device.dp(16);
+    t.tp.textSize = device.dp(16);
     t.colors.defColor = -10066330;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(d.titleStr ? 8 : 22); t.padB = device.dp(10);
     t.lp = lpFill(1);
@@ -410,7 +411,7 @@ async function buildAlertContent(d: JAlertDialog) {
     for (let i = 0; i < d.items.length; i++) {
       const t = inherit(new JTextView());
       t.text = d.items[i];
-      t.paintT.textSize = device.dp(16);
+      t.tp.textSize = device.dp(16);
       t.colors.defColor = -13421773;
       t.padL = t.padR = device.dp(24); t.padT = t.padB = device.dp(14);
       t.clickable = true;
@@ -428,8 +429,8 @@ async function buildAlertContent(d: JAlertDialog) {
     const mkBtn = (text: string, which: number, l: unknown) => {
       const b = inherit(new JButton());
       b.text = text.toUpperCase();
-      b.paintT.textSize = device.dp(15);
-      b.paintT.tf = tfMedium;
+      b.tp.textSize = device.dp(15);
+      setPaintTypeface(b.paintT, tfMedium);
       b.colors.defColor = accent;
       b.padL = b.padR = device.dp(16); b.padT = b.padB = device.dp(12);
       b.clickable = true;

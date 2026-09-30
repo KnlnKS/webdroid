@@ -21,6 +21,7 @@ beforeAll(async () => {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
     if (path === "/harfbuzz.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/harfbuzzjs/dist/harfbuzz.wasm`));
+    if (path === "/canvaskit.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/canvaskit-wasm/bin/canvaskit.wasm`), { headers: { "content-type": "application/wasm" } });
     if (path.startsWith("/vendor/aosp/") || path.startsWith("/vendor/fonts/") || path.startsWith("/tests/fixtures/images/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
@@ -71,6 +72,18 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   expect(probeResult.tints).toMatchObject({ identity: true, clear: [0, 0, 0, 0], before: [255, 0, 0, 64] });
   for (const [index, value] of [91, 53, 43, 192].entries()) expect(Math.abs(probeResult.tints.add[index] - value)).toBeLessThanOrEqual(2);
   for (const [index, value] of [64, 64, 0, 64].entries()) expect(Math.abs(probeResult.tints.multiply[index] - value)).toBeLessThanOrEqual(2);
+  const fx = probeResult.effects;
+  expect(fx).toMatchObject({ cornerCut: 0, cornerCenter: 255, noShadow: 0, tablePartial: 0 });
+  expect(fx.shadow).toBeGreaterThan(0);
+  // the reference device's pixels under the same emboss: the top-left edge dark, the bottom-right lit (by
+  // how much follows the blur's profile, the browser's Gaussian here and three box passes there)
+  for (const [index, value] of [51, 168, 125].entries()) expect(Math.abs(fx.emboss[index] - value)).toBeLessThanOrEqual(12);
+  expect(fx.scaled[1] - 2).toBeGreaterThan((fx.scaled[0] - 2) * 1.8);
+  // as on the reference device, SUBPIXEL_TEXT leaves the hinted advances alone and LINEAR_TEXT measures 130
+  expect(fx.measured[1]).toBe(fx.measured[0]);
+  expect(fx.measured[2]).toBe(130);
+  // stroked to a fill through CanvasKit's SkStroke, as Paint.getFillPath does on the device
+  expect(fx.stroked).toEqual(["M0,-2 L102,-2 L102,50 L98,50 L98,0 L100,0 L100,2 L0,2 L0,-2 Z", "M-2,-2 L62,-2 L62,42 L-2,42 Z M2,2 L2,38 L58,38 L58,2 Z"]);
 }, PAGE_TIMEOUT);
 
 // Values recorded on the reference AVD (the text box there is drawn without anti-aliasing, a pixel narrower).

@@ -38,7 +38,7 @@ export class TextViewLayouts {
   private layouts: TextViewLayout[] = [];
   /** the text as laid out: after allCaps and single-line transformation */
   private prepare(tv: JTextView, source: unknown): unknown {
-    const key = [tv.paintT.font(), tv.paintT.letterSpacingEm, tv.allCaps, tv.maxLinesV, tv.singleLine, tv.ellipsizeEnd, tv.lineSpacingMult,
+    const tp = tv.tp, key = [tp.font(), tp.letterSpacingEm, tp.textScaleX, tp.wordSpacing, tv.allCaps, tv.maxLinesV, tv.singleLine, tv.ellipsizeEnd, tv.lineSpacingMult,
       tv.lineSpacingExtra, tv.includePad, tv.breakStrategy, tv.hyphenation, tv.fallbackLineSpacing].join();
     if (source === this.source && key === this.key) return this.display;
     this.source = source; this.key = key; this.layouts = [];

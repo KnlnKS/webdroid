@@ -16,6 +16,7 @@ import { type NativeFont, type NativeFamily, typefaceOf, fakery, FAKE_BOLD, FAKE
 import { pieceEnd, JOINING } from "./minikin";
 import { type HarfBuzz, type Font, harfBuzz, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
 import type { Ctx2D } from "./recording";
+import type { NativePath } from "./path";
 
 const f32 = Math.fround;
 
@@ -187,6 +188,62 @@ export function glyphBounds(font: NativeFont, glyph: number, p: ShapePaint, rect
     }
     const advance = hb.advance(f, glyph) * sx;
     return f32(hints(p, font) ? Math.round(advance) : advance);
+  });
+}
+
+// ── Paint.hasGlyph and Paint.getTextPath
+const isSurrogate = (c: number) => c >= 0xd800 && c <= 0xdfff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+/** android_graphics_Paint's hasGlyph: well-formed UTF-16 whose variation sequences a family supports,
+ *  laid out without .notdef and, for more than one character, as one glyph (a ligature) */
+export function hasGlyph(text: string, rtl: boolean, p: ShapePaint): boolean | Promise<boolean> {
+  return after(harfBuzz(), (hb) => {
+    const families = typefaceOf(p.tf).collection.families;
+    let chars = 0, prev = -1;
+    for (let i = 0; i < text.length; i++) {
+      let c = text.charCodeAt(i);
+      if (isSurrogate(c)) {
+        if (isTrail(c) || !isTrail(text.charCodeAt(i + 1))) return false;
+        c = text.codePointAt(i++)!;
+      }
+      if (prev >= 0 && isVS(c)) {
+        // FontCollection::hasVariationSelector: a family maps the sequence, or, for the text
+        // presentation selector, a family other than colour emoji has the base character
+        const base = prev;
+        if (!families.some((f) => covers(hb, f, base, c)) && !(c === 0xfe0e && families.some((f) => !isEmojiFamily(f) && covers(hb, f, base)))) return false;
+        if (chars === 1 && i + 1 === text.length) return true;
+      }
+      chars++; prev = c;
+    }
+    const ids = layout(hb, text, 0, text.length, 0, text.length, rtl, p).ids;
+    return (ids.length === 1 || chars <= 1) && ids.length > 0 && ids.every((g) => g !== 0);
+  });
+}
+/** an outline sink placing font units under (x, y) -> (a x + c y + e, d y + f) into a path */
+class PathSink {
+  a = 1; c = 0; d = 1; e = 0; f = 0;
+  constructor(readonly path: NativePath) {}
+  moveTo(x: number, y: number) { this.path.moveTo(this.a * x + this.c * y + this.e, this.d * y + this.f); }
+  lineTo(x: number, y: number) { this.path.lineTo(this.a * x + this.c * y + this.e, this.d * y + this.f); }
+  quadraticCurveTo(x1: number, y1: number, x: number, y: number) {
+    this.path.quadTo(this.a * x1 + this.c * y1 + this.e, this.d * y1 + this.f, this.a * x + this.c * y + this.e, this.d * y + this.f);
+  }
+  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number) {
+    this.path.cubicTo(this.a * x1 + this.c * y1 + this.e, this.d * y1 + this.f, this.a * x2 + this.c * y2 + this.e, this.d * y2 + this.f,
+      this.a * x + this.c * y + this.e, this.d * y + this.f);
+  }
+  closePath() { this.path.close(); }
+}
+/** SkFont::getPaths over a layout's glyphs, each at (x, y) plus its position, appended to `dst`: the
+ *  paint's size, scale and skew, a fake italic's skew added (fake bold's emboldening is not) */
+export function layoutOutlines(l: Layout, p: ShapePaint, x: number, y: number, dst: NativePath): void | Promise<void> {
+  return after(harfBuzz(), (hb) => {
+    const sink = new PathSink(dst);
+    for (let i = 0; i < l.ids.length; i++) {
+      const faked = l.fonts[i], f = hbFont(hb, faked.font, faked.weight, faked.italic), s = p.textSize / f.face.upem;
+      sink.a = s * p.textScaleX; sink.c = -(p.textSkewX - (faked.fakery & FAKE_ITALIC ? 0.25 : 0)) * s; sink.d = -s;
+      sink.e = x + l.x[i]; sink.f = y + l.y[i];
+      hb.draw(f, l.ids[i], sink);
+    }
   });
 }
 
