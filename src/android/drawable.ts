@@ -1,7 +1,7 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum, enumName, enumOrdinal } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, jarray, parseMethodDesc } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, isNinePatchChunk, validNinePatchChunk, ninePatchOf, drawNinePatch, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
 import { device } from "../shell/config";
@@ -156,13 +156,13 @@ const drawableMethods: NativeSpec["methods"] = cslBoundary({
     this.tintCsl = csl; this.tint = csl ? cslColor(csl, this.stateSet) : null;
   },
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, mode: JSimpleEnum | null) {
-    const name = mode?.ename ?? null;
+    const name = mode ? enumName(mode) : null;
     if (this.tintMode !== name) { this.tintMode = name; invalidateSelf.call(this); }
     return forwardOnce(this, "settingTintMode", () => after(modeConstant("android/graphics/BlendMode", blendOfTint(name)),
       (blend) => vcall(this, "setTintBlendMode", "(Landroid/graphics/BlendMode;)V", blend)));
   },
   "setTintBlendMode(Landroid/graphics/BlendMode;)V": function (this: JDrawable, blend: JSimpleEnum | null) {
-    const name = blend?.ename ?? "";
+    const name = blend ? enumName(blend) : "";
     const mode = TINT_OF_BLEND[name] ?? (TINT_MODE_NAMES.has(name) ? name : "SRC_IN");
     return forwardOnce(this, "settingBlendMode", () => after(modeConstant("android/graphics/PorterDuff$Mode", mode),
       (porterDuff) => vcall(this, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", porterDuff)));
@@ -559,11 +559,11 @@ rt.register({
     "setSize(II)V": function (this: JGradientDrawable, w: number, h: number) { this.sizeW = w; this.sizeH = h; },
     "setGradientType(I)V": function (this: JGradientDrawable, t: number) { this.gradType = t; },
     "setGradientRadius(F)V": function (this: JGradientDrawable, r: number) { this.gradRadius = r; },
-    "<init>(Landroid/graphics/drawable/GradientDrawable$Orientation;[I)V": function (this: JGradientDrawable, o: { ord?: number } | null, cs: Int32Array | null) {
+    "<init>(Landroid/graphics/drawable/GradientDrawable$Orientation;[I)V": function (this: JGradientDrawable, o: JSimpleEnum | null, cs: Int32Array | null) {
       this.gradColors = cs ? [...cs] : null;
-      this.gradAngle = ORIENT_ANGLE[o?.ord ?? 0] ?? 0;
+      this.gradAngle = ORIENT_ANGLE[o ? enumOrdinal(o) : 0] ?? 0;
     },
-    "setOrientation(Landroid/graphics/drawable/GradientDrawable$Orientation;)V": function (this: JGradientDrawable, o: { ord?: number } | null) { this.gradAngle = ORIENT_ANGLE[o?.ord ?? 0] ?? 0; },
+    "setOrientation(Landroid/graphics/drawable/GradientDrawable$Orientation;)V": function (this: JGradientDrawable, o: JSimpleEnum | null) { this.gradAngle = ORIENT_ANGLE[o ? enumOrdinal(o) : 0] ?? 0; },
     "getCornerRadius()F": function (this: JGradientDrawable) { return this.radii[0]; },
     "getCornerRadii()[F": function (this: JGradientDrawable) {
       const r = this.radii;

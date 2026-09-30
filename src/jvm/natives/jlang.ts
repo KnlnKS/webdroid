@@ -1446,8 +1446,9 @@ rt.register({
     "getPriority()I": function (this: JThread) { return this.prio; },
     "isAlive()Z": function (this: JThread) { return this.alive; },
     "getState()Ljava/lang/Thread$State;": function (this: JThread) {
-      rt.link("java/lang/Thread$State");
-      return threadStates[!this.started ? 0 : !this.alive ? 5 : rt.monitors.isBlocked(this) ? 2 : this.parked || 1];
+      const state = THREAD_STATES[!this.started ? 0 : !this.alive ? 5 : rt.monitors.isBlocked(this) ? 2 : this.parked || 1];
+      const info = rt.link("java/lang/Thread$State");
+      return after(rt.initClass(info), () => info.ctor[mangleStaticField(state)]);
     },
     "getId()J": function (this: JThread) { return BigInt(idHash(this)); },
     "isInterrupted()Z": function (this: JThread) { return this.interrupted; },
@@ -1568,66 +1569,45 @@ rt.register({
   },
 });
 
-export class JEnum extends JObj {
-  ename = "";
-  ord = 0;
-}
-rt.register({
-  name: "java/lang/Enum", ctor: JEnum,
-  ifaces: ["java/lang/Comparable", "java/io/Serializable"],
-  methods: {
-    "<init>(Ljava/lang/String;I)V": function (this: JEnum, n: string, o: number) { this.ename = n; this.ord = o; },
-    "name()Ljava/lang/String;": function (this: JEnum) { return this.ename; },
-    "ordinal()I": function (this: JEnum) { return this.ord; },
-    "toString()Ljava/lang/String;": function (this: JEnum) { return this.ename; },
-    "equals(Ljava/lang/Object;)Z": function (this: JEnum, o: unknown) { return this === o ? 1 : 0; },
-    "hashCode()I": function (this: JEnum) { return idHash(this); },
-    "compareTo(Ljava/lang/Enum;)I": enumCmp,
-    "compareTo(Ljava/lang/Object;)I": enumCmp,
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JEnum) {
-      let i: ClassInfo | undefined = (this.constructor as any).$i;
-      while (i && i.superInfo && i.superInfo.name !== "java/lang/Enum") i = i.superInfo;
-      return (i?.owner ?? rt).classFor(i?.name ?? "java/lang/Enum");
-    },
-    "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;": driven(function* (cls: JClass, n: string): Gen {
-      return enumValueOf(yield sharedConstants(cls.ci!), n);
-    }),
-    // Class.getEnumConstantsShared: the values() array, made once and shared
-    "static getSharedConstants(Ljava/lang/Class;)[Ljava/lang/Enum;": (cls: JClass) => sharedConstants(cls.ci!),
+// java.lang.Enum runs from libcore; TS reads a constant's name and ordinal through these
+const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
+export type JSimpleEnum = JObj;
+export const enumName = (e: unknown): string => (e as Record<string, string>)[ENUM_NAME];
+export const enumOrdinal = (e: unknown): number => (e as Record<string, number>)[ENUM_ORDINAL];
+// §4.7: compareTo within one enum class, and valueOf over the constants getSharedConstants shares
+// (AOSP asks getClass and getDeclaringClass of both, and an LRU cache under a lock, per call)
+const sharedEnums = new WeakMap<object, Record<string, unknown>[]>();
+rt.intrinsic("java/lang/Enum", {
+  "compareTo(Ljava/lang/Enum;)I": (base) => function (this: Record<string, number>, o: Record<string, number>) {
+    return o !== null && o.constructor === this.constructor ? this[ENUM_ORDINAL] - o[ENUM_ORDINAL] : base.call(this, o);
+  },
+  "static getSharedConstants(Ljava/lang/Class;)[Ljava/lang/Enum;": (base) => (cls: JClass | null) =>
+    (cls !== null && sharedEnums.get(cls)) || after(base(cls), (values: Record<string, unknown>[] | null) => { if (cls !== null && values !== null) sharedEnums.set(cls, values); return values; }),
+  "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;": (base) => (cls: JClass | null, name: string | null) => {
+    const values = cls !== null && name !== null ? sharedEnums.get(cls) : undefined;
+    if (values) for (const e of values) if (e[ENUM_NAME] === name) return e;
+    return base(cls, name);
   },
 });
-const enumConstants = new WeakMap<ClassInfo, JEnum[]>();
-const sharedConstants = driven(function* sharedConstants(info: ClassInfo): Gen<JEnum[]> {
-  const cached = enumConstants.get(info);
-  if (cached) return cached;
-  const p = rt.initClass(info); if (p) yield p;
-  const values: JEnum[] = yield vcall(info.ctor, "values", `()[L${info.name};`);
-  enumConstants.set(info, values);
-  return values;
-});
-function enumCmp(this: JEnum, o: JEnum) { return this.ord - o.ord; }
-export function enumValueOf<T extends JEnum>(values: T[], name: string): T {
-  if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", "Name is null");
-  const v = values.find((e) => e.ename === name);
-  if (!v) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No enum constant " + name);
-  return v;
-}
-export class JSimpleEnum extends JEnum {}
 /**
  * A Java enum with nothing behind it but its constants: registers the class (a fresh ctor per
- * enum, so each has its own statics and ClassInfo), and returns the constants in declaration
- * order. `extra` adds methods a specific enum needs beyond Enum's own (name/ordinal/toString/
- * compareTo come from java/lang/Enum via the prototype chain).
+ * enum, so each has its own statics and ClassInfo; libcore's Enum becomes its superclass when it
+ * links), and returns the constants in declaration order. `extra` adds methods a specific enum
+ * needs beyond Enum's own.
  */
 export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["methods"] = {}, ifaces?: string[], fields?: NativeSpec["fields"]): JSimpleEnum[] {
-  const ctor = class extends JSimpleEnum {};
-  const vals = names.map((n, i) => { const e = new ctor(); e.ename = n; e.ord = i; return e; });
+  const ctor = class extends JObj {};
+  const vals = names.map((n, i) => Object.assign(new ctor(), { [ENUM_NAME]: n, [ENUM_ORDINAL]: i }));
   rt.register({
     name: cls, ctor, sup: "java/lang/Enum", ifaces, fields,
     statics: Object.fromEntries(names.map((n, i) => [n, vals[i]])),
     methods: {
       [`static values()[L${cls};`]: () => jarray(vals.slice(), `L${cls};`),
-      [`static valueOf(Ljava/lang/String;)L${cls};`]: (n: string) => enumValueOf(vals, n),
+      // Enum.valueOf's answers
+      [`static valueOf(Ljava/lang/String;)L${cls};`]: (n: string | null) => {
+        if (n === null) throw rt.mkThrowable("java/lang/NullPointerException", "Name is null");
+        return vals.find((e) => enumName(e) === n) ?? (() => { throw rt.mkThrowable("java/lang/IllegalArgumentException", `No enum constant ${dotName(cls).replace(/\$/g, ".")}.${n}`); })();
+      },
       ...extra,
     },
   });
@@ -1635,38 +1615,7 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
 }
 
 rt.markers("java/lang/Thread$UncaughtExceptionHandler");
-const threadStates = mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
-
-// java.lang.Character.UnicodeScript. Java's constant names ARE Unicode's script names, and the
-// regex engine already carries the table, so `of()` is a property test rather than a range list.
-const SCRIPT_NAMES = ["COMMON", "LATIN", "GREEK", "CYRILLIC", "ARMENIAN", "HEBREW", "ARABIC", "SYRIAC",
-  "THAANA", "DEVANAGARI", "BENGALI", "GURMUKHI", "GUJARATI", "ORIYA", "TAMIL", "TELUGU", "KANNADA",
-  "MALAYALAM", "SINHALA", "THAI", "LAO", "TIBETAN", "MYANMAR", "GEORGIAN", "HANGUL", "ETHIOPIC",
-  "CHEROKEE", "OGHAM", "RUNIC", "KHMER", "MONGOLIAN", "HIRAGANA", "KATAKANA", "BOPOMOFO", "HAN",
-  "YI", "GOTHIC", "DESERET", "CANADIAN_ABORIGINAL", "TAGALOG", "BRAILLE", "CHAM", "COPTIC",
-  "GLAGOLITIC", "JAVANESE", "TIFINAGH", "VAI", "INHERITED", "UNKNOWN"];
-const scriptRe = SCRIPT_NAMES.map((n) => {
-  const uni = n.toLowerCase().split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("_");
-  try { return new RegExp(`\\p{Script=${uni}}`, "u"); } catch { return null; }
-});
-const scriptMemo = new Map<number, unknown>();
-const scriptEnums = mkEnumSet("java/lang/Character$UnicodeScript", SCRIPT_NAMES, {
-  "static of(I)Ljava/lang/Character$UnicodeScript;": (cp: number) => {
-    let hit = scriptMemo.get(cp);
-    if (hit !== undefined) return hit;
-    if (cp < 0 || cp > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a valid code point");
-    const ch = String.fromCodePoint(cp);
-    hit = scriptEnums[SCRIPT_NAMES.length - 1];
-    for (let i = 0; i < scriptRe.length; i++) if (scriptRe[i]?.test(ch)) { hit = scriptEnums[i]; break; }
-    scriptMemo.set(cp, hit);
-    return hit;
-  },
-  "static forName(Ljava/lang/String;)Ljava/lang/Character$UnicodeScript;": (n: string) => {
-    const i = SCRIPT_NAMES.indexOf(String(n).toUpperCase().replace(/[- ]/g, "_"));
-    if (i < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", String(n));
-    return scriptEnums[i];
-  },
-});
+const THREAD_STATES = ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"];
 
 class JRef extends JObj { referent: unknown = null; queue: JRefQueue | null = null; state = 0; }
 class JRefQueue extends JObj { items: JRef[] = []; waiters = new Set<() => void>(); }

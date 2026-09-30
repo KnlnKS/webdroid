@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { vcall, newObj, vcallOn, curThread, JThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallOn, curThread, JThread, mainThread, setCurThread, enumName } from "../src/jvm/natives/jlang";
 import { JPaint, JCanvas, canvasMethods } from "../src/android/graphics";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
@@ -45,10 +45,10 @@ describe("android-surface-state", () => {
 
   test("Paint returns its stroke cap and join", async () => {
     const paint = new JPaint();
-    await vcall(paint, "setStrokeCap", "(Landroid/graphics/Paint$Cap;)V", { ord: 1 });
-    await vcall(paint, "setStrokeJoin", "(Landroid/graphics/Paint$Join;)V", { ord: 2 });
-    expect((await vcall(paint, "getStrokeCap", "()Landroid/graphics/Paint$Cap;") as { ename: string }).ename).toBe("ROUND");
-    expect((await vcall(paint, "getStrokeJoin", "()Landroid/graphics/Paint$Join;") as { ename: string }).ename).toBe("BEVEL");
+    await vcall(paint, "setStrokeCap", "(Landroid/graphics/Paint$Cap;)V", await scall("android/graphics/Paint$Cap", "valueOf", "(Ljava/lang/String;)Landroid/graphics/Paint$Cap;", "ROUND"));
+    await vcall(paint, "setStrokeJoin", "(Landroid/graphics/Paint$Join;)V", await scall("android/graphics/Paint$Join", "valueOf", "(Ljava/lang/String;)Landroid/graphics/Paint$Join;", "BEVEL"));
+    expect(enumName(await vcall(paint, "getStrokeCap", "()Landroid/graphics/Paint$Cap;"))).toBe("ROUND");
+    expect(enumName(await vcall(paint, "getStrokeJoin", "()Landroid/graphics/Paint$Join;"))).toBe("BEVEL");
   });
 
   test.each([

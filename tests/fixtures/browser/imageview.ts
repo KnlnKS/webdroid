@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
-import { newObj, vcall } from "../../../src/jvm/natives/jlang";
+import { enumOrdinal, newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JImageView } from "../../../src/android/imageview";
 import { JCanvas } from "../../../src/android/graphics";
 import { loadPlatformDex } from "../../../src/android/framework";
@@ -37,7 +37,7 @@ async function probe() {
     await vcall(view, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", type);
     const source = await newObj("android/graphics/Matrix", "()V");
     await vcall(source, "setValues", "([F)V", Float32Array.of(2, 0, 5, 0, 3, 7, 0, 0, 1));
-    if (!type.ord) {
+    if (!enumOrdinal(type)) {
       await vcall(view, "setImageMatrix", "(Landroid/graphics/Matrix;)V", source);
       await vcall(source, "setTranslate", "(FF)V", 99, 0);
     }
@@ -45,7 +45,7 @@ async function probe() {
     await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, 80));
     const matrix = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
     const bounds = await vcall(drawable, "getBounds", "()Landroid/graphics/Rect;");
-    results.push({ type: (await vcall(view, "getScaleType", "()Landroid/widget/ImageView$ScaleType;")).ord,
+    results.push({ type: enumOrdinal(await vcall(view, "getScaleType", "()Landroid/widget/ImageView$ScaleType;")),
       matrix: await affine(matrix), transform, bounds: [bounds.left, bounds.top, bounds.right, bounds.bottom],
       restored: ctx.getTransform().isIdentity, pixel: [...ctx.getImageData(8, 11, 1, 1).data] });
   }

@@ -4,7 +4,7 @@ import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize,
   cslBoundary,
 } from "./drawable";
-import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
+import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import { restoreCanvasToCount, saveCanvas, modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JBitmap, type JCanvas } from "./graphics";
@@ -123,8 +123,8 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
   },
   "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number } | null) {
     if (!st) return rt.npe();
-    if (this.scaleType === st.ord) return;
-    this.scaleType = st.ord; requestLayout(this);
+    if (this.scaleType === enumOrdinal(st)) return;
+    this.scaleType = enumOrdinal(st); requestLayout(this);
     return invalidateV(this);
   },
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) {

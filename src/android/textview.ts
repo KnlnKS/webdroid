@@ -13,7 +13,7 @@ import { device } from "../shell/config";
 import {
   fontDescent, fontAscent, fontTop, fontBottom, JRect, type JCanvas,
 } from "./graphics";
-import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, scall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, scall, enumOrdinal } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
@@ -495,7 +495,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "setMinLines(I)V": function (this: JTextView, n: number) { this.minLinesV = n; this.minH = 0; return relayout(this); },
   "setLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.maxH = Infinity; this.minLinesV = n; this.minH = 0; return relayout(this); },
   "setEllipsize(Landroid/text/TextUtils$TruncateAt;)V": function (this: JTextView, e: { ord: number } | null) {
-    const end = e?.ord === 2;
+    const end = e !== null && enumOrdinal(e) === 2;
     if (this.ellipsizeEnd !== end) { this.ellipsizeEnd = end; return relayout(this); }
   },
   "setAllCaps(Z)V": function (this: JTextView, v: number) { this.allCaps = !!v; this.capsSet = true; requestLayout(this); },

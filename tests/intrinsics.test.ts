@@ -420,6 +420,19 @@ test("Math's intrinsics match their AOSP bodies", async () => {
   }
 });
 
+test("Enum's intrinsics match their AOSP bodies", async () => {
+  const [[cmp, cmpBase], [shared, sharedBase], [valueOf, valueOfBase]] = await Promise.all(["compareTo(Ljava/lang/Enum;)I",
+    "static getSharedConstants(Ljava/lang/Class;)[Ljava/lang/Enum;", "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;"]
+    .map((sig) => pair("java/lang/Enum", sig)));
+  const classes = ["java/lang/Thread$State", "java/util/concurrent/TimeUnit"].map((c) => rt.classFor(c));
+  const constants = (await Promise.all(classes.map((c) => sharedBase(c)))).flat();
+  for (const a of constants) for (const b of [...constants, null]) expect(await result(cmp, a, [b])).toEqual(await result(cmpBase, a, [b]));
+  for (const c of [...classes, rt.classFor("java/lang/String"), null]) {
+    expect(await result(shared, null, [c])).toEqual(await result(sharedBase, null, [c]));
+    for (const name of ["NEW", "SECONDS", "TERMINATED", "new", "", null]) expect(await result(valueOf, null, [c, name])).toEqual(await result(valueOfBase, null, [c, name]));
+  }
+});
+
 // The TS builders stand for libcore's whole StringBuilder and StringBuffer, so libcore's run in a
 // process that serves them from bytecode; both take the same generated operations.
 test("StringBuilder and StringBuffer match libcore's over generated operation sequences", async () => {

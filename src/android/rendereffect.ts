@@ -1,5 +1,5 @@
 import { rt, JObj } from "../jvm/runtime";
-import { type JSimpleEnum } from "../jvm/natives/jlang";
+import { type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 
 type Effect = { kind: "offset"; x: number; y: number } | { kind: "blur"; x: number; y: number; tile: number };
 /** the rasters a blur reuses from one run to the next */
@@ -101,6 +101,6 @@ rt.register({ name: "android/graphics/RenderEffect", ctor: JRenderEffect, method
   "static createOffsetEffect(FF)Landroid/graphics/RenderEffect;": (x: number, y: number) => effect({ kind: "offset", x, y }),
   "static createBlurEffect(FFLandroid/graphics/Shader$TileMode;)Landroid/graphics/RenderEffect;": (x: number, y: number, tile: JSimpleEnum) => {
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid blur radius");
-    return effect({ kind: "blur", x, y, tile: tile.ord });
+    return effect({ kind: "blur", x, y, tile: enumOrdinal(tile) });
   },
 } });

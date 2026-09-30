@@ -9,7 +9,7 @@ import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/
 import { device } from "../shell/config";
 import { handle, deref, replace, weakHandle } from "./handles";
 import { csText } from "../jvm/natives/jchars";
-import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, after } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, after, enumName, enumOrdinal } from "../jvm/natives/jlang";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
 import { readStreamFully, fdInt } from "../jvm/natives/jio";
@@ -218,7 +218,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getXfermode()Landroid/graphics/Xfermode;": function (this: JPaint) { return this.xfermode; },
   "setBlendMode(Landroid/graphics/BlendMode;)V": function (this: JPaint, m: JSimpleEnum | null) {
     this.blendMode = m;
-    this.setBlendName(m && m.ename);
+    this.setBlendName(m && enumName(m));
   },
   "getBlendMode()Landroid/graphics/BlendMode;": function (this: JPaint) { return this.blendMode; },
   "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
@@ -227,7 +227,7 @@ const paintMethods: NativeSpec["methods"] = {
   "setAlpha(I)V": function (this: JPaint, a: number) { this.setAlphaValue(a); },
   "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.setColorValue(((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0); },
   "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
-  "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: { ord: number }) { this.style = s?.ord ?? 0; },
+  "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: JSimpleEnum | null) { this.style = s ? enumOrdinal(s) : 0; },
   "getStyle()Landroid/graphics/Paint$Style;": function (this: JPaint) { return paintStyleEnum[this.style]; },
   "setStrokeWidth(F)V": function (this: JPaint, w: number) { this.strokeWidth = w; },
   "getStrokeWidth()F": function (this: JPaint) { return this.strokeWidth; },
@@ -237,10 +237,10 @@ const paintMethods: NativeSpec["methods"] = {
   "isAntiAlias()Z": function (this: JPaint) { return this.antiAlias ? 1 : 0; },
   "setTypeface(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;": function (this: JPaint, t: object | null) { return this.tf = t; },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JPaint) { return this.tf; },
-  "setTextAlign(Landroid/graphics/Paint$Align;)V": function (this: JPaint, a: { ord: number }) { this.textAlignN = a?.ord ?? 0; },
+  "setTextAlign(Landroid/graphics/Paint$Align;)V": function (this: JPaint, a: JSimpleEnum | null) { this.textAlignN = a ? enumOrdinal(a) : 0; },
   "getTextAlign()Landroid/graphics/Paint$Align;": function (this: JPaint) { return paintAlignEnum[this.textAlignN]; },
-  "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: { ord: number }) { this.strokeCapN = CAPS[c?.ord ?? 0]; },
-  "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: { ord: number }) { this.strokeJoinN = JOINS[j?.ord ?? 0]; },
+  "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: JSimpleEnum | null) { this.strokeCapN = CAPS[c ? enumOrdinal(c) : 0]; },
+  "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: JSimpleEnum | null) { this.strokeJoinN = JOINS[j ? enumOrdinal(j) : 0]; },
   "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return paintCapEnum[CAPS.indexOf(this.strokeCapN)]; },
   "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return paintJoinEnum[JOINS.indexOf(this.strokeJoinN)]; },
   "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: object | null) {
@@ -539,7 +539,7 @@ rt.register({
   methods: {
     "<init>(FLandroid/graphics/BlurMaskFilter$Blur;)V": function (this: JBlurMaskFilter, radius: number, style: JSimpleEnum) {
       if (!(radius > 0)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "radius must be > 0");
-      this.style = style.ord;
+      this.style = enumOrdinal(style);
       this.sigma = radius * 0.57735 + 0.5;
     },
   },
@@ -997,10 +997,10 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
     "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": driven(function* (this: JBitmap, fmt: { ord: number } | null, q: number, out: unknown): Gen {
       if (!fmt) throw rt.npe();
-      const type = ["image/jpeg", "image/png", "image/webp", "image/webp", "image/webp"][fmt.ord];
+      const type = ["image/jpeg", "image/png", "image/webp", "image/webp", "image/webp"][enumOrdinal(fmt)];
       if (!type) return 0;
       // WEBP_LOSSLESS keeps every pixel whatever quality asks
-      const blob = yield this.canvas.convertToBlob({ type, quality: fmt.ord === 4 ? 1 : Math.max(0, Math.min(1, q / 100)) });
+      const blob = yield this.canvas.convertToBlob({ type, quality: enumOrdinal(fmt) === 4 ? 1 : Math.max(0, Math.min(1, q / 100)) });
       if (blob.type !== type) return 0;
       const bytes = new Int8Array(yield blob.arrayBuffer());
       yield vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
@@ -1749,7 +1749,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "drawColor(I)V": drawColor,
   "drawColor(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JCanvas, c: number, m: { ord: number }) {
-    drawColor.call(this, c, m?.ord === 0);
+    drawColor.call(this, c, m !== null && enumOrdinal(m) === 0);
   },
   "drawRGB(III)V": function (this: JCanvas, r: number, g: number, b: number) {
     (this as any)[drawColorKey]((0xff000000 | (r << 16) | (g << 8) | b) | 0);

@@ -4,7 +4,7 @@ import { JCanvas, JPaint, locateDrawnText, fillFontMetrics, matrixColor } from "
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
-import { newObj, linkInit, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
+import { newObj, linkInit, vcall, vcallOn, curThread, JThread, enumName } from "../src/jvm/natives/jlang";
 import { JTextView } from "../src/android/textview";
 import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 import { ST, JDrawable } from "../src/android/drawable";
@@ -224,7 +224,7 @@ describe("drawable-size-overrides", () => {
     await vcallOn(thread, view, "setColorFilter", "(I)V", -65536);
     const filter = await vcall(view, "getColorFilter", "()Landroid/graphics/ColorFilter;");
     expect(await vcall(filter, "getColor", "()I")).toBe(-65536);
-    expect((await vcall(filter, "getMode", "()Landroid/graphics/PorterDuff$Mode;")).ename).toBe("SRC_ATOP");
+    expect(enumName(await vcall(filter, "getMode", "()Landroid/graphics/PorterDuff$Mode;"))).toBe("SRC_ATOP");
     expect(events).toEqual([]);
     for (const d of [make(), make()]) {
       await vcallOn(thread, view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);

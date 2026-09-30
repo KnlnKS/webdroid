@@ -811,6 +811,7 @@ rt.register({
       const ps = parseMethodDesc(this.desc).params, a = (args ?? []).map((v, i) => argFor(ps[i], v));
       const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? lateMethod.find?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
+      if (this.isStatic) { const init = rt.initClass(this.owner); if (init) yield init; }
       let val: unknown;
       try {
         const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
