@@ -1219,17 +1219,18 @@ function installClassReflection() {
     for (let ci = this.ci; ci; ci = ci.superInfo) a.push(...classFields(ci));
     return jarray(a, "Ljava/lang/reflect/Field;");
   };
-  const ctorsOf = (c: JClass) => jarray(c.ci ? classCtors(c.ci).slice() : [], "Ljava/lang/reflect/Constructor;");
-  M["getConstructors()[Ljava/lang/reflect/Constructor;"] = function (this: JClass) { return ctorsOf(this); };
-  M["getDeclaredConstructors()[Ljava/lang/reflect/Constructor;"] = function (this: JClass) { return ctorsOf(this); };
-  M["getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"] = function (this: JClass, params: JClass[]) {
+  // getConstructors and getConstructor see only public constructors; the declared forms see all
+  const ctors = (c: JClass, declared: boolean) => (c.ci ? classCtors(c.ci) : []).filter((x) => declared || x.flags & 1);
+  M["getConstructors()[Ljava/lang/reflect/Constructor;"] = function (this: JClass) { return jarray(ctors(this, false), "Ljava/lang/reflect/Constructor;"); };
+  M["getDeclaredConstructors()[Ljava/lang/reflect/Constructor;"] = function (this: JClass) { return jarray(ctors(this, true), "Ljava/lang/reflect/Constructor;"); };
+  const findCtor = (declared: boolean) => function (this: JClass, params: JClass[]) {
     const want = (params ?? []).map(classDesc).join("");
-    const c = (this.ci ? classCtors(this.ci) : []).find((x) => parseMethodDesc(x.desc).params.join("") === want);
+    const c = ctors(this, declared).find((x) => parseMethodDesc(x.desc).params.join("") === want);
     if (!c) throw rt.mkThrowable("java/lang/NoSuchMethodException", dotName(this.ci?.name ?? "?") + ".<init>(" + want + ")");
     return c;
   };
-  M["getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"] =
-    M["getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"];
+  M["getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"] = findCtor(false);
+  M["getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"] = findCtor(true);
   // real inner-class metadata lives in the dalvik.annotation.InnerClass system
   // annotation (accessFlags there carries STATIC, unlike class_def flags)
   const innerAnno = (ci: ClassInfo | null | undefined) =>
