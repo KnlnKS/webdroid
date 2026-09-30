@@ -1,7 +1,7 @@
 import { JObj, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
-import type { JBundle } from "./os";
+import { type JBundle, uptimeMillis } from "./os";
 import { vcall, vcallOn, curThread, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
@@ -72,12 +72,14 @@ rt.register({
 class JPackageItemInfo extends JObj {
   archiveResources: Resources | null = null;
   name = ""; packageName = ""; labelRes = 0; nonLocalizedLabel: string | null = null; icon = 0; metaData: JBundle | null = null;
+  // the rest of AOSP's fields, which its copy constructors read: showUserIcon is UserHandle.USER_NULL
+  banner = 0; logo = 0; showUserIcon = -10000; isArchived = 0;
 }
 /** the ApplicationInfo PackageManager resolves an item's resources through */
 const ownerAppInfo = (item: JPackageItemInfo) => item instanceof JComponentInfo ? item.applicationInfo : item instanceof JApplicationInfo ? item : null;
 rt.register({
   name: "android/content/pm/PackageItemInfo", ctor: JPackageItemInfo,
-  fields: ["name", "packageName", "labelRes", "nonLocalizedLabel", "icon", "metaData"],
+  fields: ["name", "packageName", "labelRes", "nonLocalizedLabel", "icon", "metaData", "banner", "logo", "showUserIcon", "isArchived"],
   methods: {
     "<init>()V": function () {},
     "loadXmlMetaData(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": function (this: JPackageItemInfo, pm: JPackageManager, name: string) {
@@ -309,8 +311,27 @@ class JApplicationInfo extends JPackageItemInfo {
   // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
   splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
   sharedLibraryFiles: string[] | null = null;
+  // the rest of AOSP's fields, at ApplicationInfo()'s defaults: its copy constructor and accessors
+  // read them (NetworkSecurityConfigProvider copies the app's info to find its config)
+  taskAffinity: string | null = null; permission: string | null = null; privateFlags = 0; privateFlagsExt = 0;
+  requiresSmallestWidthDp = 0; compatibleWidthLimitDp = 0; largestWidthLimitDp = 0; volumeUuid: string | null = null;
+  scanSourceDir: string | null = null; scanPublicSourceDir: string | null = null; splitDependencies: unknown = null;
+  secondaryNativeLibraryDir: string | null = null; nativeLibraryRootDir: string | null = null; nativeLibraryRootRequiresIsa = 0;
+  primaryCpuAbi: string | null = null; secondaryCpuAbi: string | null = null; resourceDirs: string[] | null = null;
+  overlayPaths: string[] | null = null; seInfo: string | null = null; seInfoUser: string | null = null;
+  sharedLibraryInfos: unknown = null; optionalSharedLibraryInfos: unknown = null; credentialProtectedDataDir: string | null = null;
+  versionCode = 0; longVersionCode = 0n; enabledSetting = 0; installLocation = -1; manageSpaceActivityName: string | null = null;
+  backupAgentName: string | null = null; descriptionRes = 0; uiOptions = 0; fullBackupContent = 0; dataExtractionRulesRes = 0;
+  crossProfile = 0; networkSecurityConfigRes = 0; targetSandboxVersion = 0; classLoaderName: string | null = null;
+  splitClassLoaderNames: string[] | null = null; compileSdkVersion = 0; compileSdkVersionCodename: string | null = null;
+  appComponentFactory: string | null = null; iconRes = 0; roundIconRes = 0; mHiddenApiPolicy = -1; hiddenUntilInstalled = 0;
+  zygotePreloadName: string | null = null; gwpAsanMode = -1; memtagMode = -1; nativeHeapZeroInitialized = -1;
+  requestRawExternalStorageAccess: unknown = null; createTimestamp = BigInt(Math.floor(uptimeMillis()));
+  mAppClassNamesByProcess: unknown = null; localeConfigRes = 0; allowCrossUidActivitySwitchFromBelow = 1;
+  mKnownActivityEmbeddingCerts: unknown = null; maxAspectRatio = 0; minAspectRatio = 0;
 }
 export const FLAG_IS_GAME = 0x02000000;
+const FLAG_DEBUGGABLE = 0x2, FLAG_USES_CLEARTEXT_TRAFFIC = 0x08000000;
 rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/content/pm/ApplicationInfo", async (parcel) => {
@@ -320,7 +341,17 @@ rt.register({
   }); } },
   fields: ["packageName", "sourceDir", "dataDir", "deviceProtectedDataDir", "storageUuid", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
     "theme", "labelRes", "nonLocalizedLabel", "icon", "className", "publicSourceDir", "uid", "processName", "enabled",
-    "metaData", "category", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles"],
+    "metaData", "category", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles",
+    "taskAffinity", "permission", "privateFlags", "privateFlagsExt", "requiresSmallestWidthDp", "compatibleWidthLimitDp", "largestWidthLimitDp",
+    "volumeUuid", "scanSourceDir", "scanPublicSourceDir", "splitDependencies", "secondaryNativeLibraryDir", "nativeLibraryRootDir",
+    "nativeLibraryRootRequiresIsa", "primaryCpuAbi", "secondaryCpuAbi", "resourceDirs", "overlayPaths", "seInfo", "seInfoUser",
+    "sharedLibraryInfos", "optionalSharedLibraryInfos", "credentialProtectedDataDir", "versionCode", "longVersionCode", "enabledSetting",
+    "installLocation", "manageSpaceActivityName", "backupAgentName", "descriptionRes", "uiOptions", "fullBackupContent",
+    "dataExtractionRulesRes", "crossProfile", "networkSecurityConfigRes", "targetSandboxVersion", "classLoaderName",
+    "splitClassLoaderNames", "compileSdkVersion", "compileSdkVersionCodename", "appComponentFactory", "iconRes", "roundIconRes",
+    "mHiddenApiPolicy", "hiddenUntilInstalled", "zygotePreloadName", "gwpAsanMode", "memtagMode", "nativeHeapZeroInitialized",
+    "requestRawExternalStorageAccess", "createTimestamp", "mAppClassNamesByProcess", "localeConfigRes",
+    "allowCrossUidActivitySwitchFromBelow", "mKnownActivityEmbeddingCerts", "maxAspectRatio", "minAspectRatio"],
   methods: {
     "<init>()V": function () {},
     "describeContents()I": () => 0,
@@ -355,7 +386,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
-    fillManifestAppInfo(cachedAppInfo, node);
+    fillManifestAppInfo(cachedAppInfo, node, manifestRoot);
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;
@@ -992,7 +1023,6 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   ai.deviceProtectedDataDir = `/data/user_de/0/${pkg}`;
-  fillManifestAppInfo(ai, app);
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
@@ -1000,14 +1030,22 @@ function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resou
   const sdk = usesSdk(root);
   ai.minSdkVersion = sdk.min;
   ai.targetSdkVersion = sdk.target;
+  fillManifestAppInfo(ai, app, root);
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }
-function fillManifestAppInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
+/** what the package parser takes from <application> (and the root <manifest>), after targetSdkVersion */
+function fillManifestAppInfo(ai: JApplicationInfo, app: XmlNode | null | undefined, root: XmlNode | null | undefined): void {
   ai.category = app ? attr(app, "appCategory")?.data ?? -1 : -1;
   if (app && attr(app, "isGame")?.data) ai.flags |= FLAG_IS_GAME;
   // the package parser makes a debuggable app profileable by the shell too
   ai.profileableByShell = !!app && !!(attr(app, "debuggable")?.data || app.children.some((n) => n.name === "profileable" && attr(n, "shell")?.data));
+  if (app && attr(app, "debuggable")?.data) ai.flags |= FLAG_DEBUGGABLE;
+  // cleartext is permitted by default only below API 28; a network security config can still say otherwise
+  const cleartext = app ? attr(app, "usesCleartextTraffic") : undefined;
+  if (cleartext ? cleartext.data : ai.targetSdkVersion < 28) ai.flags |= FLAG_USES_CLEARTEXT_TRAFFIC;
+  ai.networkSecurityConfigRes = app ? attr(app, "networkSecurityConfig")?.data ?? 0 : 0;
+  ai.targetSandboxVersion = root ? attr(root, "targetSandboxVersion")?.data ?? 1 : 1;
 }
 function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
   info.sharedUserId = attrStr(root, "sharedUserId");

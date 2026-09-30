@@ -228,6 +228,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   return onMain(async () => {
     onStatus("Starting app…");
     const baseCtx = newContextImpl(host);
+    // handleBindApplication installs the app's network security config (AndroidNSSP, and the
+    // cleartext policy) before any of its code runs
+    await callOn(mainThread, () => scall("android/security/net/config/NetworkSecurityConfigProvider", "install", "(Landroid/content/Context;)V", baseCtx));
     let appInfo;
     try {
       appInfo = rt.link(appCls);
