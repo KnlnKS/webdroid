@@ -219,17 +219,22 @@ export function mainExecutor(): Promise<unknown> {
   return _mainExecutor ??= newObj("android/os/HandlerExecutor", "(Landroid/os/Handler;)V", mainHandler());
 }
 
+// Every constructor names a looper (the calling thread's by default) and an optional callback. Messages
+// are never asynchronous-only here: there are no sync barriers to pass.
+function initHandlerLooper(this: JHandler, l: JLooper | null, cb: unknown = null) { this.looper = l ?? mainLooper; this.cb = cb; }
+function initHandlerCallback(this: JHandler, cb: unknown) { initHandlerLooper.call(this, curThread.looper as JLooper, cb); }
+function initHandler(this: JHandler) { initHandlerCallback.call(this, null); }
 rt.register({
   name: "android/os/Handler", ctor: JHandler,
   methods: {
-    "<init>()V": function (this: JHandler) { this.looper = (curThread.looper as JLooper) ?? mainLooper; },
-    "<init>(Landroid/os/Looper;)V": function (this: JHandler, l: JLooper) { this.looper = l ?? mainLooper; },
-    "<init>(Landroid/os/Looper;Landroid/os/Handler$Callback;)V": function (this: JHandler, l: JLooper, cb: unknown) {
-      this.looper = l ?? mainLooper; this.cb = cb;
-    },
-    "<init>(Landroid/os/Handler$Callback;)V": function (this: JHandler, cb: unknown) {
-      this.looper = (curThread.looper as JLooper) ?? mainLooper; this.cb = cb;
-    },
+    "<init>()V": initHandler,
+    "<init>(Z)V": initHandler,
+    "<init>(Landroid/os/Handler$Callback;)V": initHandlerCallback,
+    "<init>(Landroid/os/Handler$Callback;Z)V": initHandlerCallback,
+    "<init>(Landroid/os/Looper;)V": initHandlerLooper,
+    "<init>(Landroid/os/Looper;Landroid/os/Handler$Callback;)V": initHandlerLooper,
+    "<init>(Landroid/os/Looper;Landroid/os/Handler$Callback;Z)V": initHandlerLooper,
+    "<init>(Landroid/os/Looper;Landroid/os/Handler$Callback;ZZ)V": initHandlerLooper,
     "handleMessage(Landroid/os/Message;)V": function () {},
     "dispatchMessage(Landroid/os/Message;)V": driven(function* (this: JHandler, msg: JMessage): Gen {
       const thread = curThread;
