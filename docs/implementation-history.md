@@ -828,7 +828,9 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   window (animator scale, screen recording, keyguard), connectivity, power, thermalservice,
   deviceidle, user, uimode, alarm, clipboard, vibrator_manager, batterystats and
   batteryproperties, appops, trust, notification (an empty Stub; notifications stay TS),
-  usagestats, jobscheduler, location and account. Values come from app_process probes and
+  usagestats, jobscheduler, location, account, shortcut, locale, textservices, game, dropbox,
+  restrictions, accessibility, auth and usb (fingerprint is built without a service, as on a device
+  without the feature). Values come from app_process probes and
   `dumpsys` on the reference AVD; failure paths from the AVD's services.jar (`dis` reads it).
   Findings:
   - AppOps: a runtime permission's op is IGNORED until granted (the AVD lists every
@@ -853,6 +855,15 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Locations need a location permission, and a caller without one sees no providers, as in
     LocationManagerService; the AVD's providers are passive, network, fused and gps. A coarse grant
     is not fudged.
+  - TS copies of these managers had drifted from AOSP: DropBox reported every tag disabled (a
+    device enables them by default), and ShortcutManager accepted intents without an action
+    (AOSP's builder rejects them) and never normalized ranks. Hidden platform methods the managers
+    reach were missing: `Context.getMainThreadHandler` (FingerprintManager), `Log.println_native`
+    (every Slog), `Binder(String)` (AttributionSource's token).
+  - Deliberately not moved: DevicePolicyManager and TelephonyManager. This device declares neither
+    FEATURE_DEVICE_ADMIN nor FEATURE_TELEPHONY while framework-res is the AVD's (a phone, voice
+    capable), so AOSP's managers would answer from a mixed device model; the device's features
+    have to be decided first.
 
 ## Java, storage and framework semantics
 

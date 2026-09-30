@@ -621,9 +621,12 @@ commit message states what it measured. The implementation history (the 2026-09-
     user, uimode, alarm, clipboard, vibrator, battery (with the sticky BATTERY_CHANGED), appops
     (with AttributionSource from bytecode), keyguard/trust, usagestats, jobscheduler (JobService
     and JobServiceEngine from bytecode), location and account (AbstractAccountAuthenticator from
-    bytecode, sessions calling authenticators as system_server). Next: notification (the TS
-    NotificationManager; the Stub is empty), telephony and bluetooth/nfc (need
-    `ActivityThread.initializeMainlineModules` and an absent-services set), display (Stage D);
+    bytecode, sessions calling authenticators as system_server), shortcut, locale, textservices,
+    game, dropbox, restrictions, accessibility, biometric/fingerprint/usb. Next: notification (the
+    TS Notification stack, with Icon and RemoteViews, belongs to Stage D; the Stub is empty),
+    device_policy and telephony (decide the device's FEATURE_DEVICE_ADMIN/FEATURE_TELEPHONY
+    first), bluetooth/nfc (need `ActivityThread.initializeMainlineModules` and an absent-services
+    set), wifi, nsd, display and input (Stage D);
     window and input_method stay with the TS view stack until Stage D's flip. Conform was not rerun
     for these commits (no libcore suite class changed).
 - **Done 2026-09-30** (details in the history, latest entries of "JVM, DEX and process ownership"):
