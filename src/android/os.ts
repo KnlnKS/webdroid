@@ -360,6 +360,12 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 });
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
+/** set while the zygote initializes what every app inherits: it runs as root */
+let zygoteRunning = false;
+export async function asZygote(init: () => Promise<void>): Promise<void> {
+  zygoteRunning = true;
+  try { await init(); } finally { zygoteRunning = false; }
+}
 export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; procIdentity.uid = uid; }
 export class JUserHandle extends JObj { constructor(readonly id = 0) { super(); } }
 const userHandles = new Map<number, JUserHandle>();
@@ -1313,7 +1319,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return processEnv[key] ?? null;
     },
     "getpid()I": () => PROCESS_PID,
-    "getuid()I": () => PROCESS_UID,
+    "getuid()I": () => zygoteRunning ? 0 : PROCESS_UID,
     // bionic's passwd entry: every id has one, named as appUserName names it
     "getpwuid(I)Landroid/system/StructPasswd;": (uid: number) =>
       newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh"),
