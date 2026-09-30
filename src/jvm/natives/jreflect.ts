@@ -1252,15 +1252,14 @@ function installClassReflection() {
   M["getDeclaredMethods()[Ljava/lang/reflect/Method;"] = function (this: JClass) {
     return jarray(this.ci ? classMethods(this.ci, true) : [], "Ljava/lang/reflect/Method;");
   };
-  M["getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"] = function (this: JClass, name: string, params: JClass[]) {
-    const wantParams = (params ?? []).map((c) => classDesc(c));
-    const all = this.ci ? classMethods(this.ci, false) : [];
-    const m = all.find((mm) => mm.name === name && parseMethodDesc(mm.desc).params.join("") === wantParams.join(""));
+  const findMethod = (declaredOnly: boolean) => function (this: JClass, name: string, params: JClass[]) {
+    const wantParams = (params ?? []).map((c) => classDesc(c)).join("");
+    const m = (this.ci ? classMethods(this.ci, declaredOnly) : []).find((mm) => mm.name === name && parseMethodDesc(mm.desc).params.join("") === wantParams);
     if (!m) throw rt.mkThrowable("java/lang/NoSuchMethodException", name);
     return m;
   };
-  M["getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"] =
-    M["getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"];
+  M["getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"] = findMethod(false);
+  M["getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"] = findMethod(true);
   const annotations = (info: ClassInfo) => {
     const out: { annotation: EncAnnotation; runtime: Runtime }[] = [];
     const seen = new Set<string>();
