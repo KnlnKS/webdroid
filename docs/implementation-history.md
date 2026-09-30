@@ -820,6 +820,39 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Compose's text runs AOSP's StaticLayout (warm light 75 -> 90 ms); every gated tap stays under
   150 ms. Hyphenation (no patterns on the page), glyph bounds (no overhang) and TextRunShaper/
   PositionedGlyphs remain unimplemented.
+- 2026-09-30, system services behind binder (Stage D.3). Each service is a TS subclass of its AIDL
+  Stub (`hostStub` in binder.ts; a Stub whose methods declare @EnforcePermission is built with a
+  PermissionEnforcer), and AOSP's manager runs from bytecode over it, built as SystemServiceRegistry
+  builds it (`AOSP_MANAGERS` in context.ts). In-process calls reach the Stub through
+  queryLocalInterface without parceling. Hosted: activity, activity_task, audio (loudness only),
+  window (animator scale, screen recording, keyguard), connectivity, power, thermalservice,
+  deviceidle, user, uimode, alarm, clipboard, vibrator_manager, batterystats and
+  batteryproperties, appops, trust, notification (an empty Stub; notifications stay TS),
+  usagestats, jobscheduler, location and account. Values come from app_process probes and
+  `dumpsys` on the reference AVD; failure paths from the AVD's services.jar (`dis` reads it).
+  Findings:
+  - AppOps: a runtime permission's op is IGNORED until granted (the AVD lists every
+    unrequested one as `ignore`), other ops take their default mode (MODE_DEFAULT for special
+    access), and a package the uid does not own reads as the op's default when checked but ERRORED
+    when noted. The TS manager allowed every op and had no permissionToOp.
+  - Registering for BATTERY_CHANGED returned null: the platform keeps it sticky, and a receiver
+    hears it at once (`stickyBroadcasts` in broadcast.ts).
+  - Every generated Proxy obtains its parcel with `Parcel.obtain(IBinder)`, whose body calls the
+    native markForBinder; it fell through, so no AIDL Proxy could call another process. Found
+    through the account service, the first to call a Stub in another process (microG's
+    authenticator).
+  - A hosted service stands in for system_server, so its calls into other binders carry uid 1000
+    (`asSystem`): an authenticator's @EnforcePermission(ACCOUNT_MANAGER) checks the caller, and its
+    Stub, built in an app process, asks `ActivityThread.getSystemContext()` for its enforcer (the
+    application answers there). AccountManagerService binds an authenticator with its action set;
+    microG's onBind dereferences it.
+  - JobScheduler, JobParameters, JobWorkItem, JobService and JobServiceEngine, Location,
+    LocationRequest and the listener transports, AccountManager with its futures and
+    AbstractAccountAuthenticator, and AttributionSource now run from bytecode; the TS halves are
+    the IJobScheduler/IJobCallback, ILocationManager and IAccountManager services.
+  - Locations need a location permission, and a caller without one sees no providers, as in
+    LocationManagerService; the AVD's providers are passive, network, fused and gps. A coarse grant
+    is not fudged.
 
 ## Java, storage and framework semantics
 

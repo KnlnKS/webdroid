@@ -617,9 +617,15 @@ commit message states what it measured. The implementation history (the 2026-09-
     (ConnectivityManager, NetworkCallback over CALLBACK_* messages, NetworkUtils natives), power,
     thermalservice and deviceidle (PowerManager, WakeLock, PowerExemptionManager). Values come from
     probes of the reference AVD. A Stub method this process does not implement fails as "not a
-    function" naming the AIDL method. Next services by reach: user, uimode, keyguard, appops,
-    notification, alarm, jobscheduler, clipboard, vibrator, location, account; window and
-    input_method stay with the TS view stack until Stage D's flip.
+    function" naming the AIDL method. Since then (history: "system services behind binder"):
+    user, uimode, alarm, clipboard, vibrator, battery (with the sticky BATTERY_CHANGED), appops
+    (with AttributionSource from bytecode), keyguard/trust, usagestats, jobscheduler (JobService
+    and JobServiceEngine from bytecode), location and account (AbstractAccountAuthenticator from
+    bytecode, sessions calling authenticators as system_server). Next: notification (the TS
+    NotificationManager; the Stub is empty), telephony and bluetooth/nfc (need
+    `ActivityThread.initializeMainlineModules` and an absent-services set), display (Stage D);
+    window and input_method stay with the TS view stack until Stage D's flip. Conform was not rerun
+    for these commits (no libcore suite class changed).
 - **Done 2026-09-30** (details in the history, latest entries of "JVM, DEX and process ownership"):
   - `android/content/res/` from AOSP (131efb48), and its cold-launch cost gone.
   - Platform overrides of Object's toString/equals/hashCode run on spec classes (a61f89c4).
