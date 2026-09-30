@@ -1,6 +1,7 @@
 export type StoredAccount = {
   name: string; type: string; owner: string; password: string | null;
   data: Record<string, string>; tokens: Record<string, string>; visibility: Record<string, number>;
+  previousName?: string;
 };
 const strings = (value: unknown): value is Record<string, string> => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(v => typeof v === "string");
 export class AccountStore {

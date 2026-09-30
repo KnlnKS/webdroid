@@ -9,7 +9,8 @@ export const INTERFACE_TRANSACTION = 0x5f4e5446;
 const emptyParcel = (): ParcelData => ({ bytes: new Uint8Array(), objects: [] });
 export type BinderHandle = { pid: number; id: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | null][] };
-export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
+/** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
+export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
 export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
 export const binderTransport: {
@@ -69,11 +70,19 @@ export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCE
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
-export async function withCallingIdentity<T>(caller: Caller, call: () => Promise<T>): Promise<T> {
+export async function withCallingIdentity<T>(caller: Caller, call: () => Promise<T>, system = false): Promise<T> {
   const thread = new JThread();
   thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller);
+  if (system) systemThreads.add(thread);
   try { return await callOn(thread, call); }
   finally { callers.delete(thread); }
+}
+/** system_server's identity: what a hosted service's binder calls carry, local or remote */
+export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
+const systemThreads = new WeakSet<JThread>();
+/** run a hosted service's calls into other binders as system_server makes them */
+export function asSystem<T>(call: () => Promise<T>): Promise<T> {
+  return withCallingIdentity(SYSTEM_CALLER, call, true);
 }
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);
@@ -138,7 +147,7 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
   "pingBinder()Z": proxyAlive,
   "isBinderAlive()Z": proxyAlive,
   "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinderProxy, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {
-    const result = yield binderTransport.transact({ handle: this.handle, code, data: exportParcel(data), flags });
+    const result = yield binderTransport.transact({ handle: this.handle, code, data: exportParcel(data), flags, system: systemThreads.has(curThread) });
     if (reply) importParcel(result.data, reply);
     return result.handled;
   }),

@@ -43,7 +43,6 @@ import "./android/util";
 import "./android/atomicfile";
 import "./android/accounts";
 import "./android/devicepolicy";
-import "./android/authenticator";
 import "./android/parcel";
 import "./android/cursorwindow";
 import "./android/abstractcursor";

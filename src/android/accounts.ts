@@ -1,194 +1,230 @@
-import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
+// IAccountManager, the TS half of AOSP's AccountManager: AccountManager, Account,
+// AbstractAccountAuthenticator, AccountAuthenticatorResponse and AuthenticatorDescription run from
+// bytecode, and accounts live in the broker's store, shared by every process. An operation an
+// authenticator answers runs as an AccountManagerService session: bind the authenticator's
+// service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
+import { JObj, rt, noops, declaredField } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { defineException, stringHash, vcall, curThread, mainThread, boxInt, newObj } from "../jvm/natives/jlang";
+import { boxInt, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { toJsArray } from "../jvm/natives/jutil";
 import { appHost } from "./apphost";
-import { onMain } from "./mainloop";
-import { PROCESS_UID, bundleBox, bundlePrimitive, type JHandler, type JBundle } from "./os";
-import { packages } from "./packages";
+import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
+import { packages, qualifyComponent } from "./packages";
 import { AccountStore, type StoredAccount } from "../shell/accounts";
-import { JParcel, parcelCreator } from "./parcel";
-import { authenticators } from "./authenticator";
-import { accountFuture, type JAccountFuture } from "./accountfuture";
-import { accountOptions, requestAccount } from "./accountrequest";
+import { attr, attrStr, parseAXML } from "./axml";
+import { servicesMatching } from "./pm";
+import { resString } from "./res";
+import { asSystem, hostStub } from "./binder";
+import { bindAsSystem } from "./runningservices";
+import { mkComponentName } from "./intent";
+import { deliverBroadcast } from "./broadcast";
 
-class JAccount extends JObj { name = ""; type = ""; accessId: string | null = null; }
-function initAccount(this: JAccount, name: string | null, type: string | null, accessId: string | null = null) {
-  if (!name || !type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account name and type must not be empty");
-  this.name = name; this.type = type; this.accessId = accessId;
+type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
+/** the manifests' authenticator services, each described by its <account-authenticator> resource */
+function authenticators(): Authenticator[] {
+  const out: Authenticator[] = [];
+  for (const { node, meta, owner } of servicesMatching("android.accounts.AccountAuthenticator")) {
+    if (!owner.enabled || attr(node, "enabled")?.data === 0) continue;
+    const id = meta.map.get("android.accounts.AccountAuthenticator");
+    const bytes = typeof id === "number" ? owner.res.fileOf(id)?.bytes : null;
+    if (!bytes) continue;
+    const n = parseAXML(bytes), ref = (name: string) => attr(n, name)?.data ?? 0;
+    out.push({
+      // accountType is a literal or a @string reference; a reference has no string of its own
+      type: attr(n, "accountType")?.str ?? resString(owner.res, ref("accountType")) ?? "", pkg: owner.pkg,
+      cls: qualifyComponent(attrStr(node, "name") ?? "", owner.pkg), label: ref("label"), icon: ref("icon"),
+      smallIcon: ref("smallIcon"), preferences: ref("accountPreferences"), customTokens: !!attr(n, "customTokens")?.data,
+    });
+  }
+  return out;
 }
+const authenticatorFor = (type: string) => authenticators().find((a) => a.type === type);
 
-rt.register({
-  name: "android/accounts/Account", ctor: JAccount, ifaces: ["android/os/Parcelable"],
-  fields: ["name", "type"],
-  statics: { get CREATOR() { return parcelCreator("android/accounts/Account", async p => {
-    const name = await vcall(p, "readString", "()Ljava/lang/String;"), type = await vcall(p, "readString", "()Ljava/lang/String;");
-    const account = new JAccount(); initAccount.call(account, name, type, await vcall(p, "readString", "()Ljava/lang/String;")); return account;
-  }); } },
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": initAccount,
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": initAccount,
-    "getAccessId()Ljava/lang/String;": function (this: JAccount) { return this.accessId; },
-    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JAccount, p: JParcel): Gen {
-      for (const value of [this.name, this.type, this.accessId]) yield vcall(p, "writeString", "(Ljava/lang/String;)V", value);
-    }),
-    "equals(Ljava/lang/Object;)Z": function (this: JAccount, other: unknown) {
-      return other instanceof JAccount && this.name === other.name && this.type === other.type ? 1 : 0;
-    },
-    "hashCode()I": function (this: JAccount) { return (Math.imul(527 + stringHash(this.name), 31) + stringHash(this.type)) | 0; },
-    "toString()Ljava/lang/String;": function (this: JAccount) { return `Account {name=${this.name}, type=${this.type}}`; },
-    "describeContents()I": () => 0,
-  },
-});
-
-for (const [name, sup] of [["android/accounts/AccountsException", "java/lang/Exception"], ["android/accounts/AuthenticatorException", "android/accounts/AccountsException"],
-  ["android/accounts/OperationCanceledException", "android/accounts/AccountsException"], ["android/accounts/NetworkErrorException", "android/accounts/AccountsException"]]) defineException(name, sup);
-
-for (const i of ["android/accounts/AccountManagerFuture", "android/accounts/AccountManagerCallback", "android/accounts/OnAccountsUpdateListener"]) rt.register({ name: i, ctor: class extends JObj {} });
-
+// ── the store, and what a caller may see and change of it
 let accountStore = new AccountStore(), stopAccountUpdates = () => {};
+/** AccountManagerService's broadcasts on a change, which AccountManager's listeners hear */
+const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
+function accountsChanged(): void {
+  const context = appHost?.application;
+  if (!context) return;
+  for (const action of CHANGED) {
+    void newObj("android/content/Intent", "(Ljava/lang/String;)V", action)
+      .then((intent) => deliverBroadcast(context, intent, null, false)).catch(reportUncaught);
+  }
+}
 export function useAccountStore(store: AccountStore): () => void {
   stopAccountUpdates(); accountStore = store;
-  return stopAccountUpdates = store.watch(() => { for (const l of listeners) notifyUpdated(l); });
+  return stopAccountUpdates = store.watch(accountsChanged);
 }
 useAccountStore(accountStore);
 const accounts = () => accountStore.records;
 const persist = () => accountStore.persist();
-const owns = (s: StoredAccount) => packages.get(s.owner)?.uid === PROCESS_UID;
-function visible(s: StoredAccount, pkg = appHost?.pkg ?? ""): boolean {
-  const owner = packages.get(s.owner), caller = packages.get(pkg);
-  return !!owner && !!caller && (owner.uid === caller.uid || s.visibility[pkg] === 1 || s.visibility[pkg] === 2);
+const caller = () => appHost?.pkg ?? "";
+const sameUid = (a: string, b: string) => packages.get(a) !== undefined && packages.get(a)?.uid === packages.get(b)?.uid;
+function visible(s: StoredAccount, pkg = caller()): boolean {
+  return sameUid(s.owner, pkg) || s.visibility[pkg] === 1 || s.visibility[pkg] === 2;
 }
-function find(a: JAccount | null): StoredAccount | undefined {
-  const stored = accounts().find(s => s.name === a?.name && s.type === a?.type);
-  if (stored && !owns(stored)) throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
-  return stored;
+/** an account's visibility to `pkg`: its owner's uid always sees it */
+const visibilityFor = (s: StoredAccount, pkg: string) => sameUid(s.owner, pkg) ? 1 : s.visibility[pkg] ?? 4;
+const field = (account: JObj, name: string) => (account as unknown as Record<string, string>)[declaredField("android/accounts/Account", name)];
+const stored = (account: JObj | null) => account ? accounts().find((s) => s.name === field(account, "name") && s.type === field(account, "type")) : undefined;
+/** an account the caller manages: its authenticator is the caller's */
+function owned(account: JObj | null): StoredAccount | undefined {
+  if (!account) throw rt.mkThrowable("java/lang/IllegalArgumentException", "account is null");
+  const type = field(account, "type"), owner = authenticatorFor(type)?.pkg;
+  if (!owner || !sameUid(owner, caller())) throw rt.mkThrowable("java/lang/SecurityException", `uid ${PROCESS_UID} cannot manage accounts of type: ${type}`);
+  return stored(account);
 }
-const toJ = (s: StoredAccount) => { const a = new JAccount(); a.name = s.name; a.type = s.type; return a; };
-const accountArray = (list: StoredAccount[]) => { rt.link("android/accounts/Account"); return jarray(list.map(toJ), "Landroid/accounts/Account;"); };
-const allAccounts = () => accountArray(accounts().filter(s => visible(s)));
-const byType = (type: string | null, pkg = appHost?.pkg ?? "") => accountArray(accounts().filter(s => (type === null || s.type === type) && visible(s, pkg)));
-const listeners = new Set<unknown>();
-const notifyUpdated = (l: unknown) => void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-/** drop a stored account; 0 when it is not there */
-function drop(stored: StoredAccount | undefined): number {
-  const i = stored ? accounts().indexOf(stored) : -1;
+const javaAccount = (s: StoredAccount) => newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;)V", s.name, s.type);
+const accountArray = async (list: StoredAccount[]) => jarray(await Promise.all(list.map(javaAccount)), "Landroid/accounts/Account;");
+const byType = (type: string | null, pkg = caller()) => accountArray(accounts().filter((s) => (type === null || s.type === type) && visible(s, pkg)));
+function drop(s: StoredAccount | undefined): number {
+  const i = s ? accounts().indexOf(s) : -1;
   if (i < 0) return 0;
   accounts().splice(i, 1); persist();
   return 1;
 }
-/** an account's visibility to `pkg`: its owner's uid always sees it */
-const visibilityFor = (s: StoredAccount, pkg: string) => packages.get(s.owner)?.uid === packages.get(pkg)?.uid ? 1 : s.visibility[pkg] ?? 4;
+async function bundle(values: Record<string, string | JObj | number | boolean>): Promise<JObj> {
+  const b = await newObj("android/os/Bundle");
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value === "string") await vcall(b, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", key, value);
+    else if (typeof value === "number") await vcall(b, "putInt", "(Ljava/lang/String;I)V", key, value);
+    else if (typeof value === "boolean") await vcall(b, "putBoolean", "(Ljava/lang/String;Z)V", key, +value);
+    else await vcall(b, "putParcelableArray", "(Ljava/lang/String;[Landroid/os/Parcelable;)V", key, value);
+  }
+  return b;
+}
 
-const unsupported = () => { throw rt.mkThrowable("android/accounts/AuthenticatorException", "Account operation is unavailable"); };
-const boolResult = (b: JBundle) => {
-  if (!b.map.has("booleanResult")) throw rt.mkThrowable("android/accounts/AuthenticatorException", "Missing boolean result");
-  return bundleBox(bundlePrimitive(b.map.get("booleanResult"), "Z", 0), "Z");
+// ── sessions with an authenticator
+const ERROR_REMOTE = 1, ERROR_INVALID_RESPONSE = 5, ERROR_BAD_ARGUMENTS = 7;
+const reply = (response: JObj, result: JObj) => vcall(response, "onResult", "(Landroid/os/Bundle;)V", result);
+const fail = (response: JObj, code: number, message: string) => vcall(response, "onError", "(ILjava/lang/String;)V", code, message);
+const bundleString = (b: JObj, key: string): Promise<string | null> => vcall(b, "getString", "(Ljava/lang/String;)Ljava/lang/String;", key);
+const has = (b: JObj, key: string): Promise<number> => vcall(b, "containsKey", "(Ljava/lang/String;)Z", key);
+type SessionOptions = {
+  /** the session stays open past an intent the caller will launch, for the activity's result */
+  expectActivityLaunch?: boolean;
+  /** only getAuthToken hands its caller the token */
+  keepToken?: boolean;
+  /** what AccountManagerService does with a result before relaying it, or the error it answers instead */
+  process?: (result: JObj) => Promise<JObj | SessionError>;
 };
-function features(a: JAccount, values: string[], cb: unknown, handler: JHandler | null): JAccountFuture {
-  if (!a || !values) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account and features are required");
-  return requestAccount({ type: a.type, method: "hasFeatures", args: [a, values], callback: cb, handler, convert: boolResult });
+class SessionError { constructor(readonly code: number, readonly message: string) {} }
+class JAccountSession extends JObj {
+  response: JObj | null = null; options: SessionOptions = {}; unbind: () => Promise<void> = async () => {};
+  /** the response to answer, and the session closed unless it waits on an activity */
+  take(keepOpen: boolean): JObj | null {
+    const response = this.response;
+    if (!keepOpen) { this.response = null; void this.unbind().catch(reportUncaught); }
+    return response;
+  }
 }
-function accountsWithFeatures(type: string, values: string[] | null, cb: unknown, handler: JHandler | null): JAccountFuture {
-  if (!type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account type is required");
-  const list = byType(type);
-  if (!values?.length) return accountFuture(cb, handler, list);
-  const future = accountFuture(cb, handler), matches: JAccount[] = [];
-  let active: JAccountFuture | null = null;
-  future.cleanup = () => { active?.finish({ kind: "canceled" }); };
-  void (async () => {
-    try {
-      for (const account of list) {
-        if (!future.pending) return;
-        active = features(account, values, null, null); await active.done();
-        if (bundlePrimitive(await active.result(), "Z", 0)) matches.push(account);
-      }
-      future.finish({ kind: "result", value: jarray(matches, "Landroid/accounts/Account;") });
-    } catch (error) { future.finish({ kind: "error", error }); }
-  })();
-  return future;
-}
-function authToken(a: JAccount, type: string, options: JBundle | null, activity: unknown, cb: unknown, handler: JHandler | null): JAccountFuture {
-  if (!a || !type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account and token type are required");
-  return requestAccount({ type: a.type, method: "getAuthToken", args: [a, type, accountOptions(options)], activity, callback: cb, handler,
-    convert: result => {
-      if (result.map.has("authtoken") && (result.map.get("authAccount") !== a.name || result.map.get("accountType") !== a.type))
-        throw rt.mkThrowable("android/accounts/AuthenticatorException", "Token account does not match request");
-      return result;
-    } });
-}
-function removeAccount(a: JAccount, activity: unknown, cb: unknown, handler: JHandler | null, boolean: boolean): JAccountFuture {
-  const stored = find(a);
-  return requestAccount({ type: a.type, method: "getAccountRemovalAllowed", args: [a], activity, callback: cb, handler, convert: result => {
-    if (!result.map.has("intent") && bundlePrimitive(boolResult(result), "Z", 0)) drop(stored);
-    return boolean ? boolResult(result) : result;
+rt.register({ name: "webdroid/AccountSession", ctor: JAccountSession, sup: "android/accounts/IAccountAuthenticatorResponse$Stub",
+  ifaces: ["android/os/IBinder$DeathRecipient"], methods: {
+    "onResult(Landroid/os/Bundle;)V": async function (this: JAccountSession, result: JObj | null) {
+      if (!this.response) return;
+      if (!result) { const response = this.take(false); if (response) await fail(response, ERROR_INVALID_RESPONSE, "null bundle returned"); return; }
+      const launch = !!this.options.expectActivityLaunch && !!await has(result, "intent");
+      const processed = this.options.process ? await this.options.process(result) : result;
+      const response = this.take(launch && !(processed instanceof SessionError));
+      if (!response) return;
+      if (processed instanceof SessionError) { await fail(response, processed.code, processed.message); return; }
+      result = processed;
+      if (!this.options.keepToken) await vcall(result, "remove", "(Ljava/lang/String;)V", "authtoken");
+      await reply(response, result);
+    },
+    "onRequestContinued()V": () => {},
+    "onError(ILjava/lang/String;)V": async function (this: JAccountSession, code: number, message: string | null) {
+      const response = this.take(false);
+      if (response) await fail(response, code, message ?? "");
+    },
+    "binderDied()V": async function (this: JAccountSession) {
+      const response = this.take(false);
+      if (response) await fail(response, ERROR_REMOTE, "disconnected");
+    },
   } });
+let nextSession = 1;
+async function session(type: string, response: JObj, call: (authenticator: JObj, session: JAccountSession) => Promise<unknown>, options: SessionOptions = {}): Promise<void> {
+  const owner = authenticatorFor(type);
+  if (!owner) { await fail(response, ERROR_BAD_ARGUMENTS, "unknown account type"); return; }
+  const s: JAccountSession = await newObj("webdroid/AccountSession");
+  s.response = response; s.options = options;
+  try {
+    const { binder, unbind } = await bindAsSystem(mkComponentName(owner.pkg, owner.cls), `account:${PROCESS_PID}:${nextSession++}`, "android.accounts.AccountAuthenticator");
+    s.unbind = unbind;
+    await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", s, 0);
+    const authenticator = await scall("android/accounts/IAccountAuthenticator$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/accounts/IAccountAuthenticator;", binder);
+    await asSystem(() => call(authenticator, s) as Promise<unknown>);
+  } catch (error) {
+    reportUncaught(error);
+    const lost = s.take(false);
+    if (lost) await fail(lost, ERROR_REMOTE, "bind failure");
+  }
 }
-
-/** a new password invalidates every token issued under the old one */
-function setPassword(a: JAccount, p: string | null) {
-  const s = find(a);
-  if (s) { s.password = p; s.tokens = Object.create(null); persist(); }
+/** the caller's identity, which AccountManagerService adds to what an authenticator is asked */
+async function withCaller(options: JObj | null): Promise<JObj> {
+  const b = options ?? await newObj("android/os/Bundle");
+  await vcall(b, "putInt", "(Ljava/lang/String;I)V", "callerUid", PROCESS_UID);
+  await vcall(b, "putInt", "(Ljava/lang/String;I)V", "callerPid", PROCESS_PID);
+  return b;
 }
-function addUpdateListener(l: unknown, _h: unknown, now: number) {
-  listeners.add(l);
-  if (now) notifyUpdated(l);
+/** an account's features, asked of its authenticator in a session of its own */
+function hasFeatures(account: JObj, features: string[]): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    void newObj("webdroid/AccountFeatures").then((response: JAccountFeatures) => {
+      response.settle = resolve;
+      return session(field(account, "type"), response, (auth, s) =>
+        vcall(auth, "hasFeatures", "(Landroid/accounts/IAccountAuthenticatorResponse;Landroid/accounts/Account;[Ljava/lang/String;)V", s, account, features));
+    }).catch(reject);
+  });
 }
+class JAccountFeatures extends JObj { settle: (has: boolean) => void = () => {}; }
+rt.register({ name: "webdroid/AccountFeatures", ctor: JAccountFeatures, sup: "android/accounts/IAccountManagerResponse$Stub", methods: {
+  "onResult(Landroid/os/Bundle;)V": async function (this: JAccountFeatures, result: JObj) {
+    this.settle(!!await vcall(result, "getBoolean", "(Ljava/lang/String;Z)Z", "booleanResult", 0));
+  },
+  "onError(ILjava/lang/String;)V": function (this: JAccountFeatures) { this.settle(false); },
+} });
 
-class JAccountManager extends JObj {}
-let manager: JAccountManager | null = null;
-const statics: Record<string, unknown> = {
-  VISIBILITY_UNDEFINED: 0, VISIBILITY_VISIBLE: 1, VISIBILITY_USER_MANAGED_VISIBLE: 2, VISIBILITY_NOT_VISIBLE: 3, VISIBILITY_USER_MANAGED_NOT_VISIBLE: 4,
-  ERROR_CODE_REMOTE_EXCEPTION: 1, ERROR_CODE_NETWORK_ERROR: 3, ERROR_CODE_CANCELED: 4, ERROR_CODE_INVALID_RESPONSE: 5, ERROR_CODE_UNSUPPORTED_OPERATION: 6,
-  ERROR_CODE_BAD_ARGUMENTS: 7, ERROR_CODE_BAD_REQUEST: 8, ERROR_CODE_BAD_AUTHENTICATION: 9,
-  KEY_ACCOUNT_NAME: "authAccount", KEY_ACCOUNT_TYPE: "accountType", KEY_AUTHTOKEN: "authtoken", KEY_INTENT: "intent", KEY_PASSWORD: "password", KEY_ACCOUNTS: "accounts",
-  KEY_ACCOUNT_AUTHENTICATOR_RESPONSE: "accountAuthenticatorResponse", KEY_ACCOUNT_MANAGER_RESPONSE: "accountManagerResponse", KEY_AUTHENTICATOR_TYPES: "authenticator_types",
-  KEY_AUTH_FAILED_MESSAGE: "authFailedMessage", KEY_AUTH_TOKEN_LABEL: "authTokenLabelKey", KEY_BOOLEAN_RESULT: "booleanResult", KEY_ERROR_CODE: "errorCode", KEY_ERROR_MESSAGE: "errorMessage",
-  KEY_USERDATA: "userdata", KEY_CALLER_UID: "callerUid", KEY_CALLER_PID: "callerPid", KEY_ANDROID_PACKAGE_NAME: "androidPackageName", LOGIN_ACCOUNTS_CHANGED_ACTION: "android.accounts.LOGIN_ACCOUNTS_CHANGED",
-};
-
-const ACC = "Landroid/accounts/Account;", CB = "Landroid/accounts/AccountManagerCallback;", H = "Landroid/os/Handler;", F = "Landroid/accounts/AccountManagerFuture;", S = "Ljava/lang/String;";
-const methods: NativeSpec["methods"] = {
-  "static get(Landroid/content/Context;)Landroid/accounts/AccountManager;": () => manager ??= new JAccountManager(),
-  [`getAccounts()[${ACC}`]: allAccounts,
-  [`getAccountsByType(${S})[${ACC}`]: byType,
-  [`getAccountsByTypeForPackage(${S}${S})[${ACC}`]: (type: string, pkg: string) => {
-    if (pkg !== appHost?.pkg && !authenticators().some(d => d.type === type && packages.get(d.packageName)?.uid === PROCESS_UID))
-      throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
+const RESPONSE = "Landroid/accounts/IAccountManagerResponse;", AUTH = "Landroid/accounts/IAccountAuthenticatorResponse;";
+const A = "Landroid/accounts/Account;", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
+rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {}, sup: "android/accounts/IAccountManager$Stub", methods: {
+  [`getAccountsAsUser(${S}I${S})[${A}`]: (type: string | null) => byType(type),
+  [`getAccountsForPackage(${S}I${S})[${A}`]: (pkg: string) => byType(null, pkg),
+  [`getAccountsByTypeForPackage(${S}${S}${S})[${A}`]: (type: string | null, pkg: string) => {
+    if (pkg !== caller() && !(type && sameUid(authenticatorFor(type)?.pkg ?? "", caller())))
+      throw rt.mkThrowable("java/lang/SecurityException", `uid ${PROCESS_UID} cannot get accounts of other packages`);
     return byType(type, pkg);
   },
-  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: accountsWithFeatures,
-  [`hasFeatures(${ACC}[${S}${CB}${H})${F}`]: features,
-  [`addAccountExplicitly(${ACC}${S}Landroid/os/Bundle;)Z`]: (a: JAccount, password: string | null, extras: JBundle | null) => {
-    const owner = authenticators().find(d => d.type === a.type)?.packageName;
-    if (!owner || packages.get(owner)?.uid !== PROCESS_UID) throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
-    if (find(a)) return 0;
-    const data: Record<string, string> = Object.create(null);
-    for (const [k, v] of extras?.map ?? []) if (v != null) data[k] = String(v);
-    accounts().push({ name: a.name, type: a.type, owner, password, data, tokens: Object.create(null), visibility: Object.create(null) });
-    persist();
-    return 1;
+  "getAuthenticatorTypes(I)[Landroid/accounts/AuthenticatorDescription;": async () => jarray(await Promise.all(authenticators().map((a) =>
+    newObj("android/accounts/AuthenticatorDescription", "(Ljava/lang/String;Ljava/lang/String;IIIIZ)V",
+      a.type, a.pkg, a.label, a.icon, a.smallIcon, a.preferences, +a.customTokens))), "Landroid/accounts/AuthenticatorDescription;"),
+  [`addAccountExplicitly(${A}${S}${B}${S})Z`]: (account: JObj, password: string | null, extras: JObj | null) => addExplicitly(account, password, extras, null),
+  [`addAccountExplicitlyWithVisibility(${A}${S}${B}Ljava/util/Map;${S})Z`]: addExplicitly,
+  [`removeAccountExplicitly(${A})Z`]: (account: JObj) => drop(owned(account)),
+  [`accountAuthenticated(${A})Z`]: (account: JObj) => +!!owned(account),
+  [`someUserHasAccount(${A})Z`]: (account: JObj) => +!!stored(account),
+  [`hasAccountAccess(${A}${S}Landroid/os/UserHandle;)Z`]: (account: JObj, pkg: string) => { const s = stored(account); return +(!!s && visible(s, pkg)); },
+  [`getPassword(${A})${S}`]: (account: JObj) => owned(account)?.password ?? null,
+  // a new password invalidates every token issued under the old one
+  [`setPassword(${A}${S})V`]: (account: JObj, password: string | null) => {
+    const s = owned(account);
+    if (s) { s.password = password; s.tokens = Object.create(null); persist(); }
   },
-  [`removeAccountExplicitly(${ACC})Z`]: (a: JAccount) => drop(find(a)),
-  [`removeAccount(${ACC}${CB}${H})${F}`]: (a: JAccount, cb: unknown, h: JHandler | null) => removeAccount(a, null, cb, h, true),
-  [`removeAccount(${ACC}Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, act: unknown, cb: unknown, h: JHandler | null) => removeAccount(a, act, cb, h, false),
-  [`renameAccount(${ACC}${S}${CB}${H})${F}`]: (a: JAccount, name: string, cb: unknown, h: JHandler | null) => {
-    const s = find(a);
-    if (s) { s.name = name; persist(); }
-    return accountFuture(cb, h, s ? toJ(s) : null);
+  [`clearPassword(${A})V`]: (account: JObj) => {
+    const s = owned(account);
+    if (s) { s.password = null; s.tokens = Object.create(null); persist(); }
   },
-  [`getUserData(${ACC}${S})${S}`]: (a: JAccount, k: string) => find(a)?.data[k] ?? null,
-  [`setUserData(${ACC}${S}${S})V`]: (a: JAccount, k: string, v: string | null) => {
-    const s = find(a);
+  [`getUserData(${A}${S})${S}`]: (account: JObj, key: string) => owned(account)?.data[key] ?? null,
+  [`setUserData(${A}${S}${S})V`]: (account: JObj, key: string, value: string | null) => {
+    const s = owned(account);
     if (!s) return;
-    if (v == null) delete s.data[k]; else s.data[k] = v;
+    if (value == null) delete s.data[key]; else s.data[key] = value;
     persist();
   },
-  [`getPassword(${ACC})${S}`]: (a: JAccount) => find(a)?.password ?? null,
-  [`setPassword(${ACC}${S})V`]: setPassword,
-  [`clearPassword(${ACC})V`]: (a: JAccount) => setPassword(a, null),
-  [`peekAuthToken(${ACC}${S})${S}`]: (a: JAccount, type: string) => find(a)?.tokens[type] ?? null,
-  [`setAuthToken(${ACC}${S}${S})V`]: (a: JAccount, type: string, token: string | null) => {
-    const s = find(a);
+  [`peekAuthToken(${A}${S})${S}`]: (account: JObj, type: string) => owned(account)?.tokens[type] ?? null,
+  [`setAuthToken(${A}${S}${S})V`]: (account: JObj, type: string, token: string | null) => {
+    const s = owned(account);
     if (!s) return;
     if (token == null) delete s.tokens[type]; else s.tokens[type] = token;
     persist();
@@ -197,47 +233,109 @@ const methods: NativeSpec["methods"] = {
     for (const s of accounts()) for (const k of Object.keys(s.tokens)) if (s.type === type && s.tokens[k] === token) delete s.tokens[k];
     persist();
   },
-  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: driven(function* (a: JAccount, type: string): Gen {
-    if (curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManager cannot block the main thread");
-    const thread = curThread, result = yield authToken(a, type, null, null, null, null).result(undefined, thread);
-    return (yield vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken")) ?? null;
-  }),
-  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: authToken,
-  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: (a: JAccount, type: string, o: JBundle | null, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, o, null, cb, h),
-  [`getAuthToken(${ACC}${S}Z${CB}${H})${F}`]: (a: JAccount, type: string, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, null, null, cb, h),
-  [`getAuthTokenByFeatures(${S}${S}[${S}Landroid/app/Activity;Landroid/os/Bundle;Landroid/os/Bundle;${CB}${H})${F}`]: unsupported,
-  [`addAccount(${S}${S}[${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (type: string, token: string | null, features: string[] | null, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) => {
-    if (!type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account type is required");
-    return requestAccount({ type, method: "addAccount", args: [type, token, features, accountOptions(options)], activity, callback, handler });
-  },
-  [`confirmCredentials(${ACC}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
-    requestAccount({ type: a.type, method: "confirmCredentials", args: [a, accountOptions(options)], activity, callback, handler }),
-  [`updateCredentials(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, token: string, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
-    requestAccount({ type: a.type, method: "updateCredentials", args: [a, token, accountOptions(options)], activity, callback, handler }),
-  [`editProperties(${S}Landroid/app/Activity;${CB}${H})${F}`]: (type: string, activity: unknown, callback: unknown, handler: JHandler | null) =>
-    requestAccount({ type, method: "editProperties", args: [type], activity, callback, handler }),
-  "getAuthenticatorTypes()[Landroid/accounts/AuthenticatorDescription;": () => jarray(authenticators(), "Landroid/accounts/AuthenticatorDescription;"),
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: addUpdateListener,
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: addUpdateListener,
-  "removeOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;)V": (l: unknown) => { listeners.delete(l); },
-  [`setAccountVisibility(${ACC}${S}I)Z`]: (a: JAccount, pkg: string, visibility: number) => {
-    if (visibility < 0 || visibility > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid account visibility");
-    const stored = find(a);
-    if (!stored || !packages.has(pkg)) return 0;
-    if (visibility) stored.visibility[pkg] = visibility; else delete stored.visibility[pkg];
+  [`getPreviousName(${A})${S}`]: (account: JObj) => owned(account)?.previousName ?? null,
+  [`getAccountVisibility(${A}${S})I`]: (account: JObj, pkg: string) => { const s = owned(account); return s ? visibilityFor(s, pkg) : 0; },
+  [`setAccountVisibility(${A}${S}I)Z`]: (account: JObj, pkg: string, visibility: number) => {
+    const s = owned(account);
+    if (!s || !packages.has(pkg) || visibility < 0 || visibility > 4) return 0;
+    if (visibility) s.visibility[pkg] = visibility; else delete s.visibility[pkg];
     persist(); return 1;
   },
-  [`getAccountVisibility(${ACC}${S})I`]: (a: JAccount, pkg: string) => {
-    const stored = find(a);
-    return stored ? visibilityFor(stored, pkg) : 0;
+  [`getPackagesAndVisibilityForAccount(${A})Ljava/util/Map;`]: async (account: JObj) => {
+    const s = owned(account), map = await newObj("java/util/HashMap");
+    for (const [pkg, visibility] of Object.entries(s?.visibility ?? {})) await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", pkg, boxInt(visibility));
+    return map;
   },
-  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: driven(function* (pkg: string, type: string | null): Gen {
-    const result = yield newObj("java/util/HashMap");
-    for (const account of accounts()) if (owns(account) && (type === null || account.type === type)) {
-      yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibilityFor(account, pkg)));
+  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: async (pkg: string, type: string | null) => {
+    const map = await newObj("java/util/HashMap");
+    for (const s of accounts()) if ((type === null || s.type === type) && sameUid(authenticatorFor(s.type)?.pkg ?? "", caller())) {
+      await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", await javaAccount(s), boxInt(visibilityFor(s, pkg)));
     }
-    return result;
-  }),
-  [`notifyAccountAuthenticated(${ACC})Z`]: (a: JAccount) => +!!find(a),
-};
-rt.register({ name: "android/accounts/AccountManager", ctor: JAccountManager, statics, methods });
+    return map;
+  },
+  // every process hears its own broadcast when the shared store changes
+  ...noops(`registerAccountListener([${S}${S})V`, `unregisterAccountListener([${S}${S})V`, `onAccountAccessed(${S})V`),
+
+  [`addAccount(${RESPONSE}${S}${S}[${S}Z${B})V`]: addAccount,
+  [`addAccountAsUser(${RESPONSE}${S}${S}[${S}Z${B}I)V`]: addAccount,
+  [`getAuthToken(${RESPONSE}${A}${S}ZZ${B})V`]: getAuthToken,
+  [`getAuthTokenLabel(${RESPONSE}${S}${S})V`]: (response: JObj, type: string, tokenType: string) =>
+    session(type, response, (auth, s) => vcall(auth, "getAuthTokenLabel", `(${AUTH}${S})V`, s, tokenType)),
+  [`hasFeatures(${RESPONSE}${A}[${S}I${S})V`]: (response: JObj, account: JObj, features: string[]) =>
+    session(field(account, "type"), response, (auth, s) => vcall(auth, "hasFeatures", `(${AUTH}${A}[${S})V`, s, account, features)),
+  [`removeAccountAsUser(${RESPONSE}${A}ZI)V`]: (response: JObj, account: JObj, expectActivityLaunch: number) => {
+    const s = owned(account);
+    return session(field(account, "type"), response, (auth, r) => vcall(auth, "getAccountRemovalAllowed", `(${AUTH}${A})V`, r, account), {
+      expectActivityLaunch: !!expectActivityLaunch,
+      process: async (result) => {
+        if (!await has(result, "intent") && await vcall(result, "getBoolean", "(Ljava/lang/String;)Z", "booleanResult")) drop(s);
+        return result;
+      },
+    });
+  },
+  [`confirmCredentialsAsUser(${RESPONSE}${A}${B}ZI)V`]: (response: JObj, account: JObj, options: JObj | null, expectActivityLaunch: number) =>
+    session(field(account, "type"), response, (auth, s) => vcall(auth, "confirmCredentials", `(${AUTH}${A}${B})V`, s, account, options),
+      { expectActivityLaunch: !!expectActivityLaunch }),
+  [`updateCredentials(${RESPONSE}${A}${S}Z${B})V`]: (response: JObj, account: JObj, tokenType: string | null, expectActivityLaunch: number, options: JObj | null) =>
+    session(field(account, "type"), response, (auth, s) => vcall(auth, "updateCredentials", `(${AUTH}${A}${S}${B})V`, s, account, tokenType, options),
+      { expectActivityLaunch: !!expectActivityLaunch }),
+  [`editProperties(${RESPONSE}${S}Z)V`]: (response: JObj, type: string, expectActivityLaunch: number) =>
+    session(type, response, (auth, s) => vcall(auth, "editProperties", `(${AUTH}${S})V`, s, type), { expectActivityLaunch: !!expectActivityLaunch }),
+  [`getAccountsByFeatures(${RESPONSE}${S}[${S}${S})V`]: async (response: JObj, type: string, features: string[] | null) => {
+    const matches: StoredAccount[] = [];
+    for (const s of accounts()) if (s.type === type && visible(s) && (!features?.length || await hasFeatures(await javaAccount(s), features))) matches.push(s);
+    await reply(response, await bundle({ accounts: await accountArray(matches) }));
+  },
+  [`renameAccount(${RESPONSE}${A}${S})V`]: async (response: JObj, account: JObj, name: string) => {
+    const s = owned(account);
+    if (s) { s.previousName = s.name; s.name = name; persist(); }
+    await reply(response, await bundle(s ? { authAccount: s.name, accountType: s.type } : {}));
+  },
+} });
+hostStub("account", "webdroid/AccountManagerService");
+
+function addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Promise<number> {
+  return (async () => {
+    if (owned(account)) return 0;
+    const data: Record<string, string> = Object.create(null);
+    if (extras) for (const key of await toJsArray(await vcall(await vcall(extras, "keySet", "()Ljava/util/Set;"), "toArray", "()[Ljava/lang/Object;")) as string[]) {
+      const value = await vcall(extras, "get", "(Ljava/lang/String;)Ljava/lang/Object;", key);
+      if (value != null) data[key] = typeof value === "string" ? value : await vcall(value, "toString", "()Ljava/lang/String;");
+    }
+    const visibilities: Record<string, number> = Object.create(null);
+    if (visibility) for (const entry of await toJsArray(await vcall(await vcall(visibility, "entrySet", "()Ljava/util/Set;"), "toArray", "()[Ljava/lang/Object;")) as JObj[]) {
+      const pkg: string = await vcall(entry, "getKey", "()Ljava/lang/Object;");
+      visibilities[pkg] = await vcall(await vcall(entry, "getValue", "()Ljava/lang/Object;"), "intValue", "()I");
+    }
+    accounts().push({ name: field(account, "name"), type: field(account, "type"), owner: authenticatorFor(field(account, "type"))!.pkg,
+      password, data, tokens: Object.create(null), visibility: visibilities });
+    persist();
+    return 1;
+  })();
+}
+async function addAccount(response: JObj, type: string, tokenType: string | null, features: string[] | null, expectActivityLaunch: number, options: JObj | null) {
+  const withIdentity = await withCaller(options);
+  return session(type, response, (auth, s) => vcall(auth, "addAccount", `(${AUTH}${S}${S}[${S}${B})V`, s, type, tokenType, features, withIdentity),
+    { expectActivityLaunch: !!expectActivityLaunch });
+}
+/** a cached token answers at once unless the authenticator keeps its own; a new one is cached */
+async function getAuthToken(response: JObj, account: JObj, tokenType: string, notifyOnFailure: number, expectActivityLaunch: number, options: JObj | null) {
+  const type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, s = stored(account);
+  if (!s || !visible(s)) { await fail(response, ERROR_BAD_ARGUMENTS, "account doesn't exist"); return; }
+  const cached = custom ? undefined : s.tokens[tokenType];
+  if (cached !== undefined) { await reply(response, await bundle({ authtoken: cached, authAccount: s.name, accountType: s.type })); return; }
+  const withIdentity = await withCaller(options);
+  if (notifyOnFailure) await vcall(withIdentity, "putBoolean", "(Ljava/lang/String;Z)V", "notifyOnAuthFailure", 1);
+  return session(type, response, (auth, r) => vcall(auth, "getAuthToken", `(${AUTH}${A}${S}${B})V`, r, account, tokenType, withIdentity), {
+    expectActivityLaunch: !!expectActivityLaunch, keepToken: true,
+    process: async (result) => {
+      const token = await bundleString(result, "authtoken");
+      if (token === null) return result;
+      const name = await bundleString(result, "authAccount"), resultType = await bundleString(result, "accountType");
+      if (!name || !resultType) return new SessionError(ERROR_INVALID_RESPONSE, "the type and name should not be empty");
+      const target = !custom && accounts().find((a) => a.name === name && a.type === resultType);
+      if (target) { target.tokens[tokenType] = token; persist(); }
+      return result;
+    },
+  });
+}

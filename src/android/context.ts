@@ -118,7 +118,6 @@ const SERVICE_CLASS: Record<string, string> = {
   input_method: "android/view/inputmethod/InputMethodManager",
   device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
-  account: "android/accounts/AccountManager",
   performance_hint: "android/os/PerformanceHintManager",
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
@@ -180,6 +179,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     newObj("android/app/JobSchedulerImpl", "(Landroid/content/Context;Landroid/app/job/IJobScheduler;)V", ctx, await hostedService("jobscheduler"))],
   location: ["android/location/LocationManager", async (ctx) =>
     newObj("android/location/LocationManager", "(Landroid/content/Context;Landroid/location/ILocationManager;)V", ctx, await hostedService("location"))],
+  account: ["android/accounts/AccountManager", async (ctx) =>
+    newObj("android/accounts/AccountManager", "(Landroid/content/Context;Landroid/accounts/IAccountManager;)V", ctx, await hostedService("account"))],
+  permission_enforcer: ["android/os/PermissionEnforcer", (ctx) => newObj("android/os/PermissionEnforcer", "(Landroid/content/Context;)V", ctx)],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

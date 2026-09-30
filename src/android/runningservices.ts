@@ -219,12 +219,12 @@ export function svcFg(svc: unknown, fg: boolean) {
   if (si) { si.foreground = fg ? 1 : 0; si.flags = fg ? si.flags | 2 : si.flags & ~2; }
 }
 /** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
-export async function bindAsSystem(component: JComponentName, key: string): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
+export async function bindAsSystem(component: JComponentName, key: string, action: string | null = null): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
   const owner = packages.get(component.pkg), cls = qualifyComponent(component.cls, component.pkg);
   const node = owner?.components.service.get(cls), ctx = appHost?.application;
   if (!owner || !node || !ctx) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + component.pkg + "/" + cls + "}");
   const intent: JIntent = rt.make("android/content/Intent");
-  intent.component = cls; intent.componentPkg = owner.pkg;
+  intent.component = cls; intent.componentPkg = owner.pkg; intent.action = action;
   const process = owner.process(node);
   if (owner.pkg === ctx.$host.pkg && process === (PROCESS_NAME || owner.pkg)) return { binder: await bindLocalService(ctx, intent, key) as JObj, unbind: () => unbindLocalService(key) };
   return { binder: await serviceTransport.bind(owner, process, intent, key) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };

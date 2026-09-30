@@ -559,6 +559,10 @@ rt.register({
     "static currentPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
     "static currentProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || null,
     "getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
+    // A process's system context serves framework code that runs as the system in it, which asks
+    // it for services such as a Stub's PermissionEnforcer. There is no "android" package context
+    // here; the application answers, and its permission checks answer as the system's would.
+    "getSystemContext()Landroid/app/ContextImpl;": currentApplication,
   },
 });
 rt.register({

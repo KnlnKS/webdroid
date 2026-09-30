@@ -3,15 +3,13 @@ import { Alarms } from "./alarms";
 import { ActivityTasks } from "./activitytasks";
 import { AccountStore } from "./accounts";
 import { useAccountStore } from "../android/accounts";
-import { authenticators, authenticatorMethods } from "../android/authenticator";
-import { accountTransport } from "../android/accountrequest";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, type IntentData } from "../android/intentipc";
 import { PermissionStore, usePermissionStore } from "../android/context";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
-import { binderTransport, receiveTransaction, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
+import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { JParcel } from "../android/parcel";
 import { JIntent, activityTransport, deliverActivityResult, type ActivityResultTarget } from "../android/intent";
 import { onMain } from "../android/mainloop";
@@ -341,7 +339,7 @@ class ProcessBroker {
       return { handled, data: exportParcel(reply) };
     }
     const target = this.entry(request.handle.pid);
-    return this.request(target, (endpoint) => endpoint.transact(request, { pid: caller.pid, uid: caller.uid }));
+    return this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid }));
   }
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     const caller = pid === null ? null : this.entry(pid);
@@ -358,18 +356,6 @@ class ProcessBroker {
       if (request.kind === "bind" && caller?.bindings.get(request.key) === binding) caller.bindings.delete(request.key);
       throw error;
     }
-  }
-  async accountRequest(pid: number, type: string, code: number, key: string, data: ParcelData): Promise<number> {
-    const caller = this.entry(pid), owner = authenticators().find(a => a.type === type);
-    if (!owner || !authenticatorMethods[code - 1]) throw rt.mkThrowable("android/accounts/AuthenticatorException", "Authenticator unavailable");
-    rt.link("android/content/Intent"); const intent = new JIntent();
-    intent.action = "android.accounts.AccountAuthenticator"; intent.componentPkg = owner.packageName; intent.component = owner.component;
-    const handle = await this.service(pid, owner.packageName, owner.process, { kind: "bind", key, intent: await encodeIntent(intent) });
-    if (!handle || caller.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Authenticator unavailable");
-    const target = this.entry(handle.pid);
-    if (target.pkg !== owner.packageName || target.process !== owner.process) throw rt.mkThrowable("java/lang/SecurityException", "Unexpected authenticator Binder owner");
-    await this.request(target, endpoint => endpoint.transact({ handle, code, flags: 1, data }, { pid: 0, uid: 1000 }));
-    return target.pid;
   }
   async releaseBinding(pid: number, key: string): Promise<void> {
     const caller = this.entries.get(pid), binding = caller?.bindings.get(key);
@@ -492,8 +478,6 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
-  accountTransport.request = (type, code, key, data) => remote(broker.accountRequest(PROCESS_PID, type, code, key, data));
-  accountTransport.finish = key => remote(broker.releaseBinding(PROCESS_PID, key));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);

@@ -322,6 +322,8 @@ rt.register({
   name: "android/os/Parcel", ctor: JParcel,
   methods: {
     [`static obtain()${P}`]: () => new JParcel(),
+    // one wire format serves every binder, so a parcel needs no marking for its target's
+    [`static obtain(Landroid/os/IBinder;)${P}`]: () => new JParcel(),
     "recycle()V": function (this: JParcel) { this.pos = this.size = 0; this.objects.clear(); },
     "dataSize()I": function (this: JParcel) { return this.size; },
     "dataPosition()I": function (this: JParcel) { return this.pos; },
