@@ -610,7 +610,7 @@ commit message states what it measured. The implementation history (the 2026-09-
     android.text.method now run from bytecode; the TS TextView lays out and draws through AOSP's
     StaticLayout, and links fire through LinkMovementMethod.
   - Stage D.3 started: system services hosted behind binder as TS subclasses of AOSP's generated
-    Stubs (`src/android/services.ts`, `hostService`/`hostedService` in binder.ts), with AOSP's
+    Stubs (`src/android/services.ts`, `hostStub`/`hostedService` in binder.ts), with AOSP's
     managers from bytecode built as SystemServiceRegistry builds them (`AOSP_MANAGERS` in
     context.ts): activity and activity_task (ActivityManager, AppTask), audio (codec loudness
     only), window (animator scale, screen recording callbacks only), connectivity
