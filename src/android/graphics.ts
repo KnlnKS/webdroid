@@ -2,16 +2,17 @@
 
 import { displayListLength, isRecording, nestedRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
-import { drawSkiaText } from "./skia-text";
+import { drawSkiaText, SKIA_TEXT_FACE } from "./skia-text";
+import { type FaceMetrics, type NativeFont, SYSTEM_FONT, typefaceOf } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8, jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle, deref, replace, weakHandle } from "./handles";
-import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, mkEnumSet, JSimpleEnum, linkInit, after } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
 import type { JLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
-import { pathOf, readStreamFully, fdInt } from "../jvm/natives/jio";
+import { readStreamFully, fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
@@ -23,7 +24,6 @@ import { JTypedValue, type JDisplayMetrics } from "./util";
 import { parcelCreator } from "./parcelable";
 import type { JParcel } from "./parcel";
 import { decodeHeif, isHeif } from "./heif";
-import { nativeAssets } from "./res";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -66,85 +66,6 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
 }
 rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
 
-const ROBOTO = "Roboto, sans-serif";
-export const SYSTEM_FONTS = [
-  ["Roboto", "Roboto-Regular.ttf", 400, "normal"], ["Roboto Medium", "Roboto-Medium.ttf", 500, "normal"],
-  ["Roboto", "Roboto-Bold.ttf", 700, "normal"], ["Roboto", "Roboto-Italic.ttf", 400, "italic"],
-] as const;
-export const SYSTEM_EMOJI_FONTS = [["Noto Emoji", "NotoColorEmoji.ttf"], ["Noto Emoji Flags", "NotoColorEmojiFlags.ttf"]] as const;
-const EMOJI_FALLBACK = SYSTEM_EMOJI_FONTS.map(([family]) => family).join(", ");
-export class JTypeface extends JObj {
-  family = ROBOTO;
-  bold = false; italic = false;
-  weight = 400;
-  style(): number { return (this.bold ? 1 : 0) | (this.italic ? 2 : 0); }
-}
-export function mkTypeface(family: string, bold: boolean, italic: boolean, weight = bold ? 700 : 400): JTypeface {
-  const t = new JTypeface();
-  t.family = family; t.bold = bold; t.italic = italic; t.weight = weight;
-  return t;
-}
-export const tfDefault = mkTypeface(ROBOTO, false, false);
-const tfBold = mkTypeface(ROBOTO, true, false);
-/** Typeface.create(family, style): the framework family names land on the faces we ship (Roboto,
- *  Roboto Medium, and the browser's serif/monospace); light/thin/condensed fall back to Roboto */
-export function typefaceFor(fam: string | null, style = 0): JTypeface {
-  const family = fam === "sans-serif-medium" ? "Roboto Medium, " + ROBOTO
-    : fam === "monospace" || fam === "serif" ? fam : ROBOTO;
-  const t = mkTypeface(family, (style & 1) !== 0, (style & 2) !== 0);
-  if (fam === "sans-serif-medium") t.weight = 500;
-  else if (fam === "sans-serif-light") t.weight = 300;
-  return t;
-}
-/** the medium face framework chrome uses (dialog buttons, picker values, the action bar title) */
-export const tfMedium = typefaceFor("sans-serif-medium");
-// fonts.ts owns font parsing and imports this module, so the loader arrives from there
-let loadTypeface: (bytes: Uint8Array | null) => Promise<JTypeface | null> = async () => null;
-export const setTypefaceLoader = (f: typeof loadTypeface) => { loadTypeface = f; };
-/** fonts.ts's answers for the statics AOSP's ResourcesImpl.loadFont calls, set as it loads */
-export const resourceTypefaces = {
-  find: (_am: unknown, _path: string): JTypeface | null => null,
-  create: (_entry: unknown, _am: unknown, _path: string): JTypeface | Promise<JTypeface> => tfDefault,
-};
-const assetFont = (am: unknown, path: string) => {
-  const bytes = am ? nativeAssets(am).zip["assets/" + path] : undefined;
-  if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Font asset not found " + path);
-  return loadTypeface(bytes);
-};
-rt.register({
-  name: "android/graphics/Typeface", ctor: JTypeface,
-  statics: {
-    DEFAULT: tfDefault, DEFAULT_BOLD: tfBold, SANS_SERIF: tfDefault,
-    SERIF: mkTypeface("serif", false, false), MONOSPACE: mkTypeface("monospace", false, false),
-    NORMAL: 0, BOLD: 1, ITALIC: 2, BOLD_ITALIC: 3,
-  },
-  methods: {
-    "static create(Ljava/lang/String;I)Landroid/graphics/Typeface;": typefaceFor,
-    "static createFromAsset(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": assetFont,
-    "static findFromCache(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": (am: unknown, path: string) => resourceTypefaces.find(am, path),
-    "static createFromResources(Landroid/content/res/FontResourcesParser$FamilyResourceEntry;Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;":
-      (entry: unknown, am: unknown, path: string) => resourceTypefaces.create(entry, am, path),
-    "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": driven(function* (p: string): Gen { return loadTypeface(yield vfs.readFile(p)); }),
-    "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": driven(function* (f: JObj | null): Gen { return loadTypeface(f ? yield vfs.readFile(pathOf(f)) : null); }),
-    "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) =>
-      mkTypeface(base?.family ?? ROBOTO, weight >= 600, !!italic, weight),
-    "static create(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;": (base: JTypeface | null, style: number) =>
-      mkTypeface(base?.family ?? ROBOTO, (style & 1) !== 0, (style & 2) !== 0),
-    "static defaultFromStyle(I)Landroid/graphics/Typeface;": (style: number) =>
-      mkTypeface(ROBOTO, (style & 1) !== 0, (style & 2) !== 0),
-    "getStyle()I": function (this: JTypeface) { return this.style(); },
-    "getWeight()I": function (this: JTypeface) { return this.weight; },
-    "isBold()Z": function (this: JTypeface) { return this.bold ? 1 : 0; },
-    "isItalic()Z": function (this: JTypeface) { return this.italic ? 1 : 0; },
-    // AOSP caches one instance per (base, style), so two creates of a family the system lacks
-    // compare equal to the default -- which is how apps probe for a system font family
-    "equals(Ljava/lang/Object;)Z": function (this: JTypeface, o: unknown) {
-      return o instanceof JTypeface && o.family === this.family && o.bold === this.bold && o.italic === this.italic && o.weight === this.weight ? 1 : 0;
-    },
-    "hashCode()I": function (this: JTypeface) { return (stringHash(this.family) * 31 + this.style() * 7 + this.weight) | 0; },
-  },
-});
-
 /** Shader.getNativeInstance(boolean filterFromPaint), which a draw calls per shaded paint */
 const SHADER_INSTANCE = mangleMethod("getNativeInstance", "(Z)J");
 export class JPaint extends JObj {
@@ -160,7 +81,8 @@ export class JPaint extends JObj {
   strokeWidth = 0;
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   textSize = 12;
-  tf: JTypeface = tfDefault;
+  /** the Java Typeface, null for the default (a bytecode Paint hands its native typeface) */
+  tf: object | null = null;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right
   /** the Java Shader the paint spec was given, whose native instance `shader` is */
@@ -210,26 +132,26 @@ export class JPaint extends JObj {
   // font() is called per text op and per measure; the result is a pure function of
   // (typeface identity, textSize, fakeBold), so cache it and rebuild only when one changes.
   private fCache = "";
-  private fTf: JTypeface | null = null;
+  private fTf: object | null | undefined = undefined;
   private fSize = -1;
   private fBold = false;
+  private fFace: NativeFont | null = null;
+  private fFaked = false;
   font(): string {
     if (this.fTf === this.tf && this.fSize === this.textSize && this.fBold === this.fakeBold) return this.fCache;
-    let w = this.fakeBold ? Math.max(700, this.tf.weight) : this.tf.weight;
-    if (!(w >= 100 && w <= 1000)) w = 400; // bogus weights (untyped-register artifacts) → regular
-    let family = this.tf.family;
-    if (family === ROBOTO) {
-      // Minikin keeps the first face on an equal weight/slant score; CSS prefers heavier weights.
-      const score = (face: typeof SYSTEM_FONTS[number]) => Math.abs(Math.floor(w / 100) - face[2] / 100) + (this.tf.italic !== (face[3] === "italic") ? 2 : 0);
-      let face: typeof SYSTEM_FONTS[number] = SYSTEM_FONTS[0];
-      for (const candidate of SYSTEM_FONTS) if (score(candidate) < score(face)) face = candidate;
-      family = face[0] + ", sans-serif";
-      w = w >= 600 && w - face[2] >= 200 ? 700 : face[2];
-    }
-    const it = this.tf.italic ? "italic " : "";
+    const t = typefaceOf(this.tf), w = this.fakeBold ? Math.max(700, t.weight) : t.weight;
+    // minikin draws from the primary family's closest face, faking bold two grades short of the
+    // wanted weight and italic on an upright face; the face's own weight makes CSS pick that face
+    const face = t.collection.families[0]?.closest(w, t.italic) ?? null;
+    const fakeBold = !!face && w >= 600 && w - face.weight >= 200;
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
-    return (this.fCache = `${it}${w} ${this.textSize}px ${family.replace(/, sans-serif$/, "")}, ${EMOJI_FALLBACK}, sans-serif`);
+    this.fFace = face; this.fFaked = fakeBold || t.italic && !!face && !face.italic;
+    const weight = !face ? w : fakeBold ? 700 : face.weight;
+    return (this.fCache = `${t.italic ? "italic " : ""}${weight} ${this.textSize}px ${t.collection.css}, sans-serif`);
   }
+  /** the face font() draws from, and whether it draws it with fake bold or italic */
+  face(): NativeFont | null { this.font(); return this.fFace; }
+  faked(): boolean { this.font(); return this.fFaked; }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
     const pattern = this.drawShader()?.pattern(ctx);
     if (pattern) return pattern;
@@ -310,11 +232,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getTextSize()F": function (this: JPaint) { return this.textSize; },
   "setAntiAlias(Z)V": function (this: JPaint, v: number) { this.antiAlias = !!v; },
   "isAntiAlias()Z": function (this: JPaint) { return this.antiAlias ? 1 : 0; },
-  "setTypeface(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;": function (this: JPaint, t: JTypeface | null) {
-    const o = this.tf;
-    this.tf = t ?? tfDefault;
-    return o;
-  },
+  "setTypeface(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;": function (this: JPaint, t: object | null) { return this.tf = t; },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JPaint) { return this.tf; },
   "setTextAlign(Landroid/graphics/Paint$Align;)V": function (this: JPaint, a: { ord: number }) { this.textAlignN = a?.ord ?? 0; },
   "getTextAlign()Landroid/graphics/Paint$Align;": function (this: JPaint) { return paintAlignEnum[this.textAlignN]; },
@@ -529,20 +447,10 @@ export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
   return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
 }
-/** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds.
- * Browser bounding-box metrics round to pixels even with FontFace metric overrides. */
-export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2163 / 2048, bottom: 555 / 2048 };
-type FontMetrics = typeof SYSTEM_FONT;
-/** Per CSS family, the metrics AOSP would report for it; anything unregistered is the device
- *  font's. fonts.ts fills this in as it registers a face out of an app's own resources. */
-const familyMetrics = new Map<string, FontMetrics>(SYSTEM_FONTS.map(([family]): [string, FontMetrics] => [family, SYSTEM_FONT]));
-export function setFamilyMetrics(family: string, m: FontMetrics) { familyMetrics.set(family, m); }
-/** the metrics of the first family in a paint's CSS stack — the one the browser will pick */
-function metricsOf(p: JPaint): FontMetrics | undefined {
-  const fam = p.tf.family;
-  const i = fam.indexOf(",");
-  return familyMetrics.get(i < 0 ? fam : fam.slice(0, i));
-}
+/** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds; the
+ *  metrics are the drawn face's. Browser bounding-box metrics round to pixels even with FontFace
+ *  metric overrides. */
+const metricsOf = (p: JPaint): FaceMetrics | null => p.face()?.faceMetrics ?? null;
 function vmetrics(p: JPaint): { a: number; d: number } {
   const f = p.font();
   const hit = vmetCache.get(f);
@@ -1992,7 +1900,7 @@ export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, 
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
     !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.shadowRadius &&
     !p.colorFilter && !p.blend && !isRecording(cv.ctx) &&
-    p.tf.family === ROBOTO && !p.tf.bold && !p.tf.italic &&
+    p.face()?.path === SKIA_TEXT_FACE && !p.faked() &&
     drawSkiaText(cv.ctx, s, x, y, p.textSize,
       p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
       p.style === 1 ? "hairline" : "fill", subpixel));

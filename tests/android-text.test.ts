@@ -1,15 +1,17 @@
-import { expect, test, describe } from "bun:test";
-import { loadLibcore, fakeStyles, scall } from "./java";
+import { expect, test, describe, beforeAll } from "bun:test";
+import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { JLayout, JSpannable, JTextPaint, JSpanned } from "../src/android/text";
-import { fillFontMetrics, measureText, typefaceFor } from "../src/android/graphics";
+import { fillFontMetrics, measureText } from "../src/android/graphics";
 import { JTheme, obtainStyled, rvString } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import { JTextView, JEditText } from "../src/android/textview";
 import { perf } from "../src/perf";
+
+beforeAll(loadSystemFonts);
 
 describe("linkify", () => {
   rt.linkNatives();
@@ -313,9 +315,9 @@ describe("text-appearance-span", () => {
     const valueOf = (c: number) => scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", c | 0);
     const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
     const span = await newObj("android/text/style/TextAppearanceSpan", "(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V", null, 1, 28, color, link);
-    const paint = new JTextPaint(); paint.tf = typefaceFor("serif", 2);
+    const paint = new JTextPaint(); paint.tf = await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2);
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paint.tf.style()).toBe(3);
+    expect(await vcall(paint.tf, "getStyle", "()I")).toBe(3);
     expect(paint.textSize).toBe(28);
     expect(paint.color).not.toBe(0xff123456 | 0);
     let calls = 0;
@@ -351,7 +353,7 @@ describe("text-platform", () => {
   rt.linkNatives();
 
   test("TypefaceSpan retains and applies a supplied typeface", async () => {
-    const typeface = typefaceFor("monospace", 1);
+    const typeface = await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "monospace", 1);
     const span = await newObj("android/text/style/TypefaceSpan", "(Landroid/graphics/Typeface;)V", typeface);
     expect(await vcall(span, "getTypeface", "()Landroid/graphics/Typeface;")).toBe(typeface);
     expect(await vcall(span, "getFamily", "()Ljava/lang/String;")).toBeNull();

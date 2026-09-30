@@ -2,11 +2,11 @@
 import { codeStats } from "./jvm/codecache";
 import "./natives";
 import { recordVsync, PROCESS_PID } from "./android/os";
-import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
-import { locateDrawnText, SYSTEM_FONT, SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "./android/graphics";
+import { locateDrawnText } from "./android/graphics";
+import { fetchSystemFonts, mountSystemFonts, registerSystemFonts } from "./android/fonts";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
@@ -333,28 +333,9 @@ const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : ne
   requestAnimationFrame(sample);
 });
 
-const fontsReady = Promise.all([Promise.all(SYSTEM_FONTS.map(async ([name, file, weight, style]) => {
-  const response = await fetch(`/vendor/fonts/${file}`);
-  if (!response.ok) throw new Error(`font ${file}: ${response.status}`);
-  const bytes = await response.arrayBuffer();
-  vfs.write(`/system/fonts/${file}`, new Uint8Array(bytes));
-  const f = new FontFace(name, bytes, {
-    weight: String(weight), style,
-    ascentOverride: `${SYSTEM_FONT.ascent * 100}%`, descentOverride: `${SYSTEM_FONT.descent * 100}%`,
-  });
-  document.fonts.add(await f.load());
-  return `<font weight="${weight}" style="${style}">${file}</font>`;
-})), Promise.all(SYSTEM_EMOJI_FONTS.map(async ([name, file]) => {
-  const url = `/vendor/fonts/${file}`;
-  const [font, nativeFile] = await Promise.all([new FontFace(name, `url(${url})`).load(), RangeFile.open(url)]);
-  document.fonts.add(font);
-  vfs.mount(`/system/fonts/${file}`, nativeFile);
-}))]).then(([fonts]) => {
-  // Native Skia reads the same faces through Android's system font configuration.
-  vfs.write("/system/etc/fonts.xml", new TextEncoder().encode(
-    `<?xml version="1.0"?><familyset version="23"><family name="sans-serif">${fonts.join("")}</family>` +
-    '<alias name="sans-serif-medium" to="sans-serif" weight="500"/>' +
-    SYSTEM_EMOJI_FONTS.map(([, file]) => `<family lang="und-Zsye"><font weight="400" style="normal">${file}</font></family>`).join("") + '</familyset>'));
+const fontsReady = fetchSystemFonts().then(async (bytes) => {
+  mountSystemFonts(bytes);
+  await registerSystemFonts(bytes);
   uiState.needsDraw = true;
 });
 void fontsReady.catch((e) => console.error("[fonts]", e));

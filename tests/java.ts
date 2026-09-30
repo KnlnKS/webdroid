@@ -10,6 +10,49 @@ export async function loadFrameworkJar(): Promise<void> {
   for (const dex of jarDexes(jar, "framework.jar")) rt.loadDex(dex, true);
 }
 
+/** Enough of DOMParser for Xml.newPullParser over plain configuration XML (elements, attributes,
+ *  text; no namespaces or entities beyond the predefined ones), where there is no DOM. */
+class XmlNode {
+  childNodes: XmlNode[] = []; attributes: { name: string; localName: string; value: string; prefix: null; namespaceURI: null }[] = [];
+  prefix = null; namespaceURI = null;
+  constructor(readonly nodeType: number, readonly tagName = "", readonly nodeValue: string | null = null) {}
+  get localName() { return this.tagName; }
+  querySelector() { return null; }
+}
+const ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+const unescape = (s: string) => s.replace(/&(lt|gt|amp|quot|apos);/g, (_, e: string) => ENTITIES[e]);
+function parseXml(text: string): XmlNode {
+  const doc = new XmlNode(9), open = [doc];
+  for (const m of text.matchAll(/<\?[^]*?\?>|<!--[^]*?-->|<(\/?)([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*"[^"]*")*)\s*(\/?)>|([^<]+)/g)) {
+    const parent = open[open.length - 1];
+    if (m[5] !== undefined) parent.childNodes.push(new XmlNode(3, "", unescape(m[5])));
+    else if (m[1]) open.pop();
+    else if (m[2]) {
+      const e = new XmlNode(1, m[2]);
+      for (const a of m[3].matchAll(/([\w:.-]+)\s*=\s*"([^"]*)"/g)) e.attributes.push({ name: a[1], localName: a[1], value: unescape(a[2]), prefix: null, namespaceURI: null });
+      parent.childNodes.push(e);
+      if (!m[4]) open.push(e);
+    }
+  }
+  return doc;
+}
+
+let fontMap: Promise<void> | null = null;
+/** /system/fonts and the font map the zygote preloads (whose locale scripts are ICU's), as a booted
+ *  page has them */
+export function loadSystemFonts(): Promise<void> {
+  return fontMap ??= (async () => {
+    (globalThis as { DOMParser?: unknown }).DOMParser ??= class { parseFromString(text: string) { return parseXml(text); } };
+    const { SYSTEM_FONT_FILES, mountSystemFonts, loadSystemFontMap } = await import("../src/android/fonts");
+    (await import("../src/shell/apex")).mountPlatformData((path, size) => ({
+      size, read: async (at, length) => new Uint8Array(await Bun.file(new URL(`../vendor/aosp${path}`, import.meta.url)).slice(at, at + length).arrayBuffer()),
+    }));
+    mountSystemFonts(await Promise.all(SYSTEM_FONT_FILES.map(async (file) =>
+      new Uint8Array(await Bun.file(new URL(`../vendor/fonts/${file}`, import.meta.url)).arrayBuffer()))));
+    await loadSystemFontMap();
+  })();
+}
+
 /** libcore's own jars (core-oj, core-libart, core-icu4j), for platform classes that forward to natives */
 export async function loadLibcore(): Promise<void> {
   const { loadPlatformJar } = await import("../src/android/framework");

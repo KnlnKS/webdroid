@@ -616,8 +616,9 @@ commit message states what it measured. The implementation history (the 2026-09-
   probe); e2e timings from those commits are inflated.
 - **Next: the rest of Stage C.2/C.3.** `fwtest android/graphics/` lists what the natives lack; the
   TS references left are dominated by Drawable (222), Canvas (207), Paint (195), Rect's fields (167,
-  which stay a layout), Bitmap (144) and Typeface (52). The fonts package is AOSP's (merged after
-  a6c01947; fast e2e, textcmp 6/6). Next: Typeface, then Layout/StaticLayout with the minikin natives
+  which stay a layout) and Bitmap (144). The fonts package and Typeface are AOSP's (fast e2e,
+  textcmp 6/6); the zygote step loads the system font map from the page's fonts.xml, and headless
+  tests do so through `loadSystemFonts` in tests/java.ts. Next: Layout/StaticLayout with the minikin natives
   (LineBreaker, MeasuredText, TextRunShaper; textcmp is the gate); Paint, Canvas and Bitmap last, with
   the view stack (Stage D).
 - **Finalizers do not run**, and cannot as such: a JS finalizer cannot see the object it

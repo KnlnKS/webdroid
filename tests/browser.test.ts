@@ -20,7 +20,7 @@ beforeAll(async () => {
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
-    if (path.startsWith("/vendor/aosp/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
+    if (path.startsWith("/vendor/aosp/") || path.startsWith("/vendor/fonts/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
 }, PAGE_TIMEOUT);

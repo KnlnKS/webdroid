@@ -12,7 +12,7 @@ import { JAttrSet, xmlAttrRV, resString, rvString, type Resources, type RV, JThe
 import { tagAttributes } from "./inflate";
 import { parserRoot } from "./assetmanager";
 import { JView, JLinearLP, addUnattachedView } from "./view";
-import { tfMedium } from "./graphics";
+import { tfMedium } from "./fonts";
 import { JLinearLayout } from "./layouts";
 import { JTextView } from "./textview";
 import { themeAccent } from "./widget";

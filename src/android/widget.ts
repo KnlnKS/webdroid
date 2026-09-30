@@ -4,7 +4,7 @@ import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, dr
 import { rt, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
-import { type JCanvas, type JInsets, JRect, JTypeface, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
+import { type JCanvas, type JInsets, JRect, insetsOf, measureText, fontAscent, fontDescent } from "./graphics";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
 import { JTextPaint, spannedString } from "./text";
 import { G, absGravity } from "./gravity";
@@ -609,10 +609,10 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
   "setThumbTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JSwitch, m: JSimpleEnum | null) { this.thumbTintMode = m; return applySwitchTints(this); },
   "setTrackTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JSwitch, m: JSimpleEnum | null) { this.trackTintMode = m; return applySwitchTints(this); },
   "setSwitchTextAppearance(Landroid/content/Context;I)V": function (this: JSwitch, _c: unknown, id: number) { return setSwitchTextAppearance(this, id); },
-  "setSwitchTypeface(Landroid/graphics/Typeface;)V": function (this: JSwitch, tf: JTypeface | null) {
-    (this.switchPaint ??= Object.assign(new JTextPaint(), { textSize: this.paintT.textSize })).tf = tf ?? tfDefault; requestLayout(this);
+  "setSwitchTypeface(Landroid/graphics/Typeface;)V": function (this: JSwitch, tf: object | null) {
+    (this.switchPaint ??= Object.assign(new JTextPaint(), { textSize: this.paintT.textSize })).tf = tf; requestLayout(this);
   },
-  "setSwitchTypeface(Landroid/graphics/Typeface;I)V": function (this: JSwitch, tf: JTypeface | null) {
+  "setSwitchTypeface(Landroid/graphics/Typeface;I)V": function (this: JSwitch, tf: object | null) {
     return vcall(this, "setSwitchTypeface", "(Landroid/graphics/Typeface;)V", tf);
   },
   "drawableStateChanged()V": driven(function* (this: JSwitch): Gen {

@@ -765,6 +765,23 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   ParcelFileDescriptor.AutoCloseInputStream lacked FileInputStream's getFD and getChannel.
   Font.getGlyphBounds throws (glyph ids are not addressable: the browser shapes text), and
   nGetBufferAddress stays missing (no framework caller).
+- 2026-09-30, Typeface from AOSP (Stage C.3). Typeface, Typeface.Builder and CustomFallbackBuilder
+  run AOSP's bytecode; a Typeface's native_instance is hwui's Typeface (a minikin collection, the
+  API style, the base weight and the drawn weight/slant) and the TS Paint reaches it through
+  `typefaceOf`, cached per paint with the face minikin would draw from. The TS Typeface answered
+  serif and monospace with the browser's generic families, gave `create(tf, 500, false)` and
+  medium/light no face of their own, returned the old typeface from Paint.setTypeface, and gave a new
+  Paint DEFAULT where AOSP has null. The system font map is AOSP's own: zygoteInit calls
+  loadPreinstalledSystemFontMap over the page's fonts.xml and font_fallback.xml (sans-serif with the
+  device's weight aliases, emoji fallbacks); families the page has no font for fall back to DEFAULT as
+  Typeface.create does. System faces keep the CSS families the page registered (Roboto's four statics
+  are now one CSS family, "Roboto", selected by exact weight) and the device's variable-Roboto metrics
+  for every weight. The reference AVD's values for the constants, aliases, relative and exact weights
+  and metrics are in fwtest: Android 15 keeps exact weights (`create(tf, 550, true)` is 2/550), clamped
+  to 1..1000. Cost: the Typeface <clinit> resolves the locale's script through ICU's LikelySubtags,
+  about 60 ms cold in a realm that had not loaded it (Calculator M boot 425 -> 510 ms; FitNotes and
+  Mihon load it anyway, FitNotes +15 ms); the rest is 15 ms cold, 3 ms warm. Headless realms have no
+  DOMParser for Xml.newPullParser, so tests parse fonts.xml with a minimal one (tests/java.ts).
 
 ## Java, storage and framework semantics
 

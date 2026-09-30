@@ -1,6 +1,7 @@
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
-import { type JCanvas, tfMedium } from "./graphics";
+import type { JCanvas } from "./graphics";
+import { tfMedium, typefaceOf } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, curThread, after } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
@@ -76,7 +77,7 @@ export class JActionBarView extends JViewGroup {
     // The title must stop before the first action slot; Android ellipsizes, it does not overlap.
     const titleMax = (slots ? this.slotX(0, slots) - 56 : this.width() - 24) - x - 16;
     ctx.fillStyle = "#ffffff";
-    ctx.font = `500 36px ${tfMedium.family}`;
+    ctx.font = `500 36px ${typefaceOf(tfMedium).collection.css}`;
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     const ell = (s: string, max: number) => {

@@ -11,16 +11,15 @@ import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
 import {
-  fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, JRect,
-  type JCanvas, tfMedium
+  fontDescent, fontAscent, fontTop, fontBottom, measureText, JRect, type JCanvas,
 } from "./graphics";
-import { vcall, vcallOn, callOn, curThread, after, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, after, mkEnumSet, newObj, scall } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
 } from "./res";
 import { TV } from "./axml";
-import { fontResource } from "./fonts";
+import { tfMedium, typefaceOf } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod, jmethod } from "../jvm/abi";
 import { TextViewLayouts, drawTextViewLayout } from "./textview-layout";
@@ -188,12 +187,25 @@ const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, 
 const applyFontFamily = driven(function* applyFontFamily(tv: JTextView, res: Resources, v: RV | null): Gen {
   if (!v) return;
   if (v.t === TV.REFERENCE && v.d) {
-    const tf = yield fontResource(res, v.d);
+    const tf = yield vcall(res.jobj, "getFont", "(I)Landroid/graphics/Typeface;", v.d);
     if (tf) tv.paintT.tf = tf;
     return;
   }
   const fam = rvString(res, v);
-  if (fam) tv.paintT.tf = typefaceFor(fam);
+  if (fam) tv.paintT.tf = yield scall(TYPEFACE, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", fam, 0);
+});
+const TYPEFACE = "android/graphics/Typeface";
+/** AOSP setTypeface(Typeface, int): the typeface in the style asked for, faking what it lacks */
+const setStyledTypeface = driven(function* setStyledTypeface(tv: JTextView, tf: object | null, style: number): Gen {
+  if (style > 0) tf = yield tf ? scall(TYPEFACE, "create", "(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", tf, style)
+    : scall(TYPEFACE, "defaultFromStyle", "(I)Landroid/graphics/Typeface;", style);
+  yield vcall(tv, "setTypeface", "(Landroid/graphics/Typeface;)V", tf);
+  const need = style > 0 ? style & ~typefaceOf(tf).apiStyle : 0;
+  const fakeBold = (need & 1) !== 0, skew = need & 2 ? -0.25 : 0;
+  // fake bold changes the measured width
+  if (tv.paintT.fakeBold === fakeBold && tv.paintT.textSkewX === skew) return;
+  tv.paintT.fakeBold = fakeBold; tv.paintT.textSkewX = skew;
+  if (hasLayout(tv)) yield relayout(tv);
 });
 const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number = 0): Gen {
   const res = tv.jres;
@@ -259,8 +271,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   }
   const cursor = g(35);
   if (cursor?.t === TV.REFERENCE) tv.cursorDrawableRes = cursor.d;
-  if (tv.styleBits & 1) tv.paintT.fakeBold = true;
-  if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
+  yield setStyledTypeface(tv, tv.paintT.tf, tv.styleBits);
 });
 const textCursorDrawable = driven(function* textCursorDrawable(tv: JTextView): Gen<JDrawable | null> {
   if (tv.cursorDrawableRes && tv.jres) {
@@ -345,13 +356,6 @@ function setRawTextSize(tv: JTextView, px: number) {
   if (tv.paintT.textSize === px) return;
   tv.paintT.textSize = px;
   requestLayout(tv);
-}
-/** AOSP setTypeface: the typeface already in use asks for nothing. Fake bold counts as a change
- *  here because it changes the measured width. */
-function applyTypeface(tv: JTextView, tf: JTypeface, fakeBold: boolean) {
-  if (tv.paintT.tf === tf && tv.paintT.fakeBold === fakeBold) return;
-  tv.paintT.tf = tf; tv.paintT.fakeBold = fakeBold;
-  return relayout(tv);
 }
 function compoundDrawables(this: JTextView) {
   return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
@@ -467,13 +471,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     return redraw(this);
   },
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
-  "setTypeface(Landroid/graphics/Typeface;)V": function (this: JTextView, t: JTypeface | null) {
-    return applyTypeface(this, t ?? tfDefault, this.paintT.fakeBold);
+  "setTypeface(Landroid/graphics/Typeface;)V": function (this: JTextView, t: object | null) {
+    if (this.paintT.tf === t) return;
+    this.paintT.tf = t;
+    if (hasLayout(this)) return relayout(this);
   },
-  "setTypeface(Landroid/graphics/Typeface;I)V": function (this: JTextView, t: JTypeface | null, style: number) {
-    return after(vcall(this, "setTypeface", "(Landroid/graphics/Typeface;)V", t),
-      () => applyTypeface(this, this.paintT.tf, (style & 1) !== 0));
-  },
+  "setTypeface(Landroid/graphics/Typeface;I)V": function (this: JTextView, t: object | null, style: number) { return setStyledTypeface(this, t, style); },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },
   "getPaint()Landroid/text/TextPaint;": function (this: JTextView) { return this.paintT; },
 
@@ -870,7 +873,7 @@ function applyButtonDefaults(b: JButton): void {
   // that spoke for itself — every Material3 button is sentence-case with its own face — has
   // already run in applyTvStyle, and forcing them here undid it.
   if (b.capsSet === undefined) b.allCaps = true;
-  if (b.paintT.tf === tfDefault) b.paintT.tf = tfMedium;
+  if (!b.paintT.tf) b.paintT.tf = tfMedium;
 }
 
 export class JEditText extends JTextView {

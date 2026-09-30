@@ -6,7 +6,7 @@ import { vcall, boxInt, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JAlertDialog, initDialog } from "./dialog";
 import { JView, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
-import { tfMedium } from "./graphics";
+import { tfMedium } from "./fonts";
 import { JAttrSet, themeOf } from "./res";
 import { JLinearLayout } from "./layouts";
 import { JTextView } from "./textview";

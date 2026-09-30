@@ -10,7 +10,8 @@ import {
 import { JFrameLayout, JLinearLayout } from "./layouts";
 import { JTextView, JButton } from "./textview";
 import { themeAccent } from "./widget";
-import { JCanvas, tfMedium, JRect, castShadow } from "./graphics";
+import { JCanvas, JRect, castShadow } from "./graphics";
+import { tfMedium } from "./fonts";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";

@@ -194,7 +194,7 @@ await exercise("Shaders (gradients, bitmap, compose; setLocalMatrix replaces the
 
 // Expected values are Roboto's own tables: OS/2 weight 400/700, head.fontRevision 0x22354, name ID 6
 // "RobotoStatic-Regular", hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units per em.
-await exercise("Font, FontFamily, FontFileUtil and the Typeface bridge", async () => {
+await exercise("Font, FontFamily, FontFileUtil", async () => {
   const { vfs } = await import("../src/shell/vfs");
   const { familyOf } = await import("../src/android/fonts");
   const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
@@ -250,13 +250,64 @@ await exercise("Font, FontFamily, FontFileUtil and the Typeface bridge", async (
     await scall("android/graphics/fonts/FontFileUtil", "getPostScriptName", `(${BB}I)Ljava/lang/String;`, buffer, 0),
     await scall("android/graphics/fonts/FontFileUtil", "isPostScriptType1Font", `(${BB}I)I`, buffer, 0)], [0x22354, "RobotoStatic-Regular", 0]);
   same("available fonts", await vcall(await scall("android/graphics/fonts/SystemFonts", "getAvailableFonts", "()Ljava/util/Set;"), "size", "()I"), 2);
+});
 
-  // the bridge the TS Typeface builds on; a cut Typeface runs AOSP's over the natives instead
-  if (isBytecode("android/graphics/Typeface")) return;
-  const tf = await vcall(await vcall(await newObj("android/graphics/Typeface$CustomFallbackBuilder", `(${FF})V`, family), "setStyle",
-    "(Landroid/graphics/fonts/FontStyle;)Landroid/graphics/Typeface$CustomFallbackBuilder;", await newObj("android/graphics/fonts/FontStyle", "(II)V", 700, 1)),
-    "build", "()Landroid/graphics/Typeface;") as { family: string; weight: number; italic: boolean };
-  same("CustomFallbackBuilder", [tf.family.startsWith(familyOf(family).css + ", "), tf.weight, tf.italic], [true, 700, true]);
+// Expected values are the reference AVD's (API 35), whose Roboto is one variable font: every
+// weight has Roboto-Regular's metrics.
+await exercise("Typeface (system font map, styles, weights, builders; device values)", async () => {
+  const { loadSystemFonts } = await import("../tests/java");
+  const { familyOf, typefaceOf } = await import("../src/android/fonts");
+  await loadSystemFonts();
+  const T = "Landroid/graphics/Typeface;", info = await linkInit("android/graphics/Typeface");
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  const d = async (t: unknown) => `${await vcall(t, "getStyle", "()I")}/${await vcall(t, "getWeight", "()I")}`;
+  const statics = (name: string) => (info.ctor as Record<string, object>)[info.staticFieldTable.get(`${name}:${T}`)!];
+  const named = (name: string, style: number) => scall("android/graphics/Typeface", "create", `(Ljava/lang/String;I)${T}`, name, style);
+  const weighted = (base: unknown, weight: number, italic: boolean) => scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, base, weight, +italic);
+  const DEFAULT = statics("DEFAULT"), BOLD = statics("DEFAULT_BOLD");
+  same("constants", [await d(DEFAULT), await d(BOLD), statics("SANS_SERIF") === DEFAULT], ["0/400", "1/700", true]);
+  const families = [];
+  for (const name of ["sans-serif-medium", "sans-serif-light", "sans-serif-thin", "sans-serif-black", "arial", "no-such-family"]) {
+    const t = await named(name, 0);
+    families.push(`${name} ${await d(t)} ${await d(await named(name, 1))} ${await d(await named(name, 2))} ${t === DEFAULT}`);
+  }
+  same("families", families, ["sans-serif-medium 0/500 1/800 2/500 false", "sans-serif-light 0/300 1/600 2/300 false",
+    "sans-serif-thin 0/100 1/400 2/100 false", "sans-serif-black 0/900 1/1000 2/900 false", "arial 0/400 1/700 2/400 true",
+    "no-such-family 0/400 1/700 2/400 true"]);
+  same("exact weights", [await d(await weighted(null, 550, true)), await d(await weighted(DEFAULT, 650, false)), await d(await weighted(DEFAULT, 0, false)),
+    await d(await weighted(DEFAULT, 1000, false))], ["2/550", "1/650", "0/1", "1/1000"]);
+  const medium = await named("sans-serif-medium", 0);
+  same("derived", [await d(await weighted(medium, 300, false)), await d(await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, medium, 3)),
+    await d(await scall("android/graphics/Typeface", "defaultFromStyle", `(I)${T}`, 3))], ["0/300", "3/800", "3/700"]);
+  same("identity", [await vcall(await named("arial", 0), "equals", "(Ljava/lang/Object;)Z", DEFAULT),
+    await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, DEFAULT, 1) === BOLD], [1, true]);
+
+  const paint = await newObj("android/graphics/Paint", "()V");
+  same("a new Paint's typeface", await vcall(paint, "getTypeface", `()${T}`), null);
+  await vcall(paint, "setTextSize", "(F)V", 20);
+  const metrics = [];
+  for (const t of [DEFAULT, BOLD, await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, DEFAULT, 2), medium]) {
+    await vcall(paint, "setTypeface", `(${T})${T}`, t);
+    const fm = await vcall(paint, "getFontMetrics", "()Landroid/graphics/Paint$FontMetrics;") as Record<string, number>;
+    metrics.push([fm.top, fm.ascent, fm.descent, fm.bottom, fm.leading].join(" "));
+  }
+  same("metrics", metrics, Array(4).fill([-2163, -1900, 500, 555, 0].map((v) => Math.fround(v * 20 / 2048)).join(" ")));
+
+  // an app's font over the system fallback, and a Builder's style from the font's tables
+  const F = "Landroid/graphics/fonts/Font;", FF = "Landroid/graphics/fonts/FontFamily;", CFB = "Landroid/graphics/Typeface$CustomFallbackBuilder;";
+  const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/system/fonts/Roboto-Bold.ttf");
+  const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", "(Ljava/io/File;)V", file), "build", `()${F}`);
+  const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", `(${F})V`, font), "build", `()${FF}`);
+  const custom = async (style: unknown) => {
+    const builder = await newObj("android/graphics/Typeface$CustomFallbackBuilder", `(${FF})V`, family);
+    if (style) await vcall(builder, "setStyle", `(Landroid/graphics/fonts/FontStyle;)${CFB}`, style);
+    return vcall(builder, "build", `()${T}`);
+  };
+  const styled = await custom(await newObj("android/graphics/fonts/FontStyle", "(II)V", 700, 1)), plain = await custom(null);
+  const { families: members } = typefaceOf(styled).collection, system = typefaceOf(DEFAULT).collection.families;
+  same("CustomFallbackBuilder", [await d(styled), await d(plain), members[0] === familyOf(family), members.length === 1 + system.length && system.every((f, i) => members[i + 1] === f)],
+    ["3/700", "0/400", true, true]);
+  same("Typeface.Builder", await d(await vcall(await newObj("android/graphics/Typeface$Builder", "(Ljava/io/File;)V", file), "build", `()${T}`)), "1/700");
 });
 
 // Expected values are the reference AVD's (API 35) for the same calls. Skia stores ovals, round

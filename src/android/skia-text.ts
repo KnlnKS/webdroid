@@ -13,6 +13,8 @@ let surface: Surface | null = null;
 let surfaceWidth = 0, surfaceHeight = 0;
 let bitmap: OffscreenCanvasRenderingContext2D | null = null;
 let emojiClips = new Map<number, [number, number]>();
+/** the system face this draws text in */
+export const SKIA_TEXT_FACE = "/system/fonts/Roboto-Regular.ttf";
 
 function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, x: number, y: number,
   matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {

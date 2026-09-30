@@ -16,7 +16,7 @@
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } from "./handles";
 import {
-  JPaint, JTypeface, tfDefault, mkTypeface, measureText,
+  JPaint, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, CAPS, JOINS, clipPath, drawPath,
   type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
@@ -35,8 +35,9 @@ import { breakLines } from "./linebreak";
 import { device } from "../shell/config";
 import { type JBuffer, resident, mappedReadOnlyBuffer } from "../jvm/natives/jnio";
 import {
-  type Axis, NativeFont, NativeFamily, mkFamily, typefaceOver, systemFonts, sfntTables, sfntStyle, T_CMAP,
-  fontRevision, postScriptName, isPostScriptType1,
+  type Axis, NativeFont, NativeFamily, NativeTypeface, mkFamily, systemFonts, sfntTables, T_CMAP,
+  fontRevision, postScriptName, isPostScriptType1, typefaceOf, setDefaultTypeface, loadSystemFontMap,
+  createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies,
 } from "./fonts";
 
 type Fn = (...a: never[]) => unknown;
@@ -316,40 +317,35 @@ delegate("android/graphics/RuntimeShader", {
 });
 
 // ── android.graphics.Typeface ──────────────────────────────────────────────────────────
+// hwui's Typeface over fonts.ts' collections; a null handle is the default, as resolveDefault has it
+const typefaceAt = (h: bigint) => h ? deref<NativeTypeface>(h) : typefaceOf(null);
 delegate("android/graphics/Typeface", {
-  "nativeCreateFromTypeface(JI)J": (h: bigint, style: number) => {
-    const src = deref<JTypeface>(h) ?? tfDefault;
-    return handle(mkTypeface(src.family, (style & 1) !== 0, (style & 2) !== 0));
-  },
-  "nativeCreateFromTypefaceWithVariation(JLjava/util/List;)J": (h: bigint) => handle(deref<JTypeface>(h) ?? tfDefault),
-  "nativeCreateWeightAlias(JI)J": (h: bigint, weight: number) => {
-    const src = deref<JTypeface>(h) ?? tfDefault;
-    return handle(mkTypeface(src.family, src.bold, src.italic, weight));
-  },
-  "nativeGetStyle(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).style(),
-  "nativeGetWeight(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).weight,
   "nativeGetReleaseFunc()J": () => FINALIZER,
-  "nativeCreateFromTypefaceWithExactStyle(JIZ)J": (h: bigint, weight: number, italic: number) => {
-    const src = deref<JTypeface>(h) ?? tfDefault;
-    return handle(mkTypeface(src.family, weight >= 600, !!italic, weight));
+  "nativeCreateFromTypeface(JI)J": (h: bigint, style: number) => handle(createRelative(typefaceAt(h), style)),
+  "nativeCreateFromTypefaceWithExactStyle(JIZ)J": (h: bigint, weight: number, italic: number) => handle(createAbsolute(typefaceAt(h), weight, !!italic)),
+  "nativeCreateFromTypefaceWithVariation(JLjava/util/List;)J": (h: bigint, axes: object) => after(createWithVariation(typefaceAt(h), axes), handle),
+  "nativeCreateWeightAlias(JI)J": (h: bigint, weight: number) => handle(createWithBaseWeight(typefaceAt(h), weight)),
+  "nativeCreateFromArray([JJII)J": (families: BigInt64Array, fallback: bigint, weight: number, italic: number) =>
+    handle(createFromFamilies(Array.from(families, (h) => deref<NativeFamily>(h)), weight, italic, fallback ? deref<NativeTypeface>(fallback) : null)),
+  "nativeGetStyle(J)I": (h: bigint) => deref<NativeTypeface>(h).apiStyle,
+  "nativeGetWeight(J)I": (h: bigint) => deref<NativeTypeface>(h).weight,
+  "nativeGetSupportedAxes(J)[I": (h: bigint) => {
+    const axes = deref<NativeTypeface>(h).collection.supportedAxes;
+    return axes.length ? Int32Array.from(axes) : null;
   },
-  // RESOLVE_BY_FONT_TABLE (-1) reads the OS/2 style of the first family's closest match to regular
-  "nativeCreateFromArray([JJII)J": (families: BigInt64Array, fallback: bigint, weight: number, italic: number) => {
-    const fams = Array.from(families, (h) => deref<NativeFamily>(h));
-    const regular = fams.length ? fams[0].closest(400, false) : null;
-    const table = (weight === -1 || italic === -1) && regular ? sfntStyle(regular.bytes, regular.ttcIndex) : null;
-    return handle(typefaceOver(fams, deref<JTypeface>(fallback) ?? tfDefault,
-      weight === -1 ? table?.weight ?? 400 : weight, italic === -1 ? !!table?.italic : italic === 1));
+  "nativeSetDefault(J)V": (h: bigint) => { setDefaultTypeface(deref<NativeTypeface>(h)); },
+  // DEFAULT and the other constants are static finals setSystemFontMap assigns
+  "nativeForceSetStaticFinalField(Ljava/lang/String;Landroid/graphics/Typeface;)V": (name: string, t: object) => {
+    const info = rt.link("android/graphics/Typeface");
+    info.ctor[info.staticFieldTable.get(name + ":Landroid/graphics/Typeface;")!] = t;
   },
-  // the serialised typeface cache a process shares with the system; there is no other process
+  // Minikin's registries of generic families and locales serve native font lookups, which the
+  // browser's font matching does here; warming a font's cache has nothing to warm.
+  ...noops("nativeRegisterGenericFamily(Ljava/lang/String;J)V", "nativeRegisterLocaleList(Ljava/lang/String;)V", "nativeWarmUpCache(Ljava/lang/String;)V"),
+  // the font map a process shares with the system server; there is no other process
   "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
-  ...stubs(null, "nativeGetSupportedAxes(J)[I"),
-  ...noops("nativeSetDefault(J)V", "nativeRegisterGenericFamily(Ljava/lang/String;J)V",
-    "nativeRegisterLocaleList(Ljava/lang/String;)V", "nativeAddFontCollections(J)V",
-    "nativeWarmUpCache(Ljava/lang/String;)V"),
+  ...noops("nativeAddFontCollections(J)V"),
   ...stubs(0, "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I"),
-  // Typeface.DEFAULT and friends are set through this from the static initialiser
-  "nativeForceSetStaticFinalField(Ljava/lang/String;Landroid/graphics/Typeface;)V": () => {},
 });
 
 // ── android.graphics.fonts ─────────────────────────────────────────────────────────────
@@ -501,7 +497,7 @@ delegate("android/graphics/Paint", {
   "nSetMaskFilter(JJ)J": (_h: bigint, f: bigint) => f,
   "nSetPathEffect(JJ)J": (_h: bigint, f: bigint) => f,
 
-  "nSetTypeface(JJ)V": (h: bigint, t: bigint) => { paint(h).tf = deref<JTypeface>(t) ?? tfDefault; },
+  "nSetTypeface(JJ)V": (h: bigint, t: bigint) => { paint(h).tf = t ? deref<NativeTypeface>(t) : null; },
   "nSetTextSize(JF)V": (h: bigint, v: number) => { paint(h).textSize = v; },
   "nGetTextSize(J)F": (h: bigint) => paint(h).textSize,
   "nSetTextAlign(JI)V": (h: bigint, v: number) => { paint(h).textAlignN = v; },
@@ -1256,9 +1252,9 @@ delegate("android/os/SystemProperties", {
   "native_report_sysprop_change()V": () => vcall(rt.link("android/os/SystemProperties").ctor, "callChangeCallbacks", "()V"),
 });
 
-/** What ZygoteInit.zygoteInit sets up in a forked process before app code runs: System.out and
- *  System.err reach logcat, the default time zone follows persist.sys.timezone, and
- *  java.util.logging reaches logcat. */
+/** What the zygote sets up in a forked process before app code runs: System.out and System.err
+ *  reach logcat, the default time zone follows persist.sys.timezone, java.util.logging reaches
+ *  logcat, and the system font map is loaded. */
 export async function zygoteInit(): Promise<void> {
   await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
@@ -1266,6 +1262,7 @@ export async function zygoteInit(): Promise<void> {
   await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("Supplier", deviceProperties["persist.sys.timezone"]));
   await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
   await newObj("com/android/internal/logging/AndroidConfig", "()V");
+  await loadSystemFontMap();
 }
 
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────

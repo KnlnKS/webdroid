@@ -4,7 +4,8 @@ import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JLayout, JTextPaint, prepareSpans, drawLayout } from "../../../src/android/text";
 import { JTextView } from "../../../src/android/textview";
-import { JCanvas, measureText, typefaceFor, type JPaint } from "../../../src/android/graphics";
+import { JCanvas, measureText, type JPaint } from "../../../src/android/graphics";
+import { systemFonts } from "./fonts";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
 import { nativePathOf } from "../../../src/android/path";
 import { loadPlatformDex } from "../../../src/android/framework";
@@ -12,6 +13,7 @@ import { loadPlatformDex } from "../../../src/android/framework";
 async function probe() {
   await loadPlatformDex();
   rt.linkNatives();
+  await systemFonts();
   const view = rt.make("android/widget/TextView");
   if (!(view instanceof JTextView)) throw new Error("Invalid TextView");
   view.paintT.textSize = 12;
@@ -157,7 +159,7 @@ async function probe() {
   await vcall(input, "setTextCursorDrawable", "(I)V", 0);
   const cursorCleared = await vcall(input, "getTextCursorDrawable", "()Landroid/graphics/drawable/Drawable;") === null;
   const balancedText = "aaaaa bb cccc\nz";
-  const balancedPaint = await newObj("android/text/TextPaint"); balancedPaint.tf = typefaceFor("monospace", 0); balancedPaint.textSize = 20;
+  const balancedPaint = await newObj("android/text/TextPaint"); balancedPaint.tf = await vcall(rt.link("android/graphics/Typeface").ctor, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "monospace", 0); balancedPaint.textSize = 20;
   const builder = await vcall(rt.link("android/text/StaticLayout$Builder").ctor, "obtain", "(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;",
     balancedText, 0, balancedText.length, balancedPaint, Math.ceil(measureText(balancedPaint, "aaaaa bb") + 1));
   await vcall(builder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);

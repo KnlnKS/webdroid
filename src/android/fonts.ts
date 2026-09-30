@@ -1,20 +1,15 @@
-// The native half of android.graphics.fonts (minikin's Font and FontFamily), and the Typeface
-// builders over it. A font is the bytes of one face; a family becomes one CSS font family (each
-// member a FontFace with its own weight/style, which is exactly how CSS selects within a family);
-// a Typeface names that family (plus fallbacks) with a weight and slant.
+// The native half of android.graphics.fonts and Typeface: minikin's Font, FontFamily and
+// FontCollection, and hwui's Typeface. A font is the bytes of one face; a family becomes one CSS
+// font family (each member a FontFace with its own weight/style, which is how CSS selects within a
+// family); a collection is a CSS family list in fallback order, and a typeface draws from one with
+// a weight and slant.
 
-import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../jvm/runtime";
-import { vcall, scall, after } from "../jvm/natives/jlang";
-import { parseAXML, attr } from "./axml";
-import { pathOf, fdInt } from "../jvm/natives/jio";
+import { declaredField } from "../jvm/runtime";
+import { scall, vcall, after } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
-import { readFully } from "../shell/lazyfile";
-import { javaFdSource } from "../native/stdio";
+import { pageShared } from "../shell/pageshared";
+import { utf8 } from "../jvm/abi";
 import { deref } from "./handles";
-import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader, resourceTypefaces, tfDefault, SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "./graphics";
-import { type Resources, nativeAssets } from "./res";
-
-const fileBytes = (path: string | null | undefined) => path ? vfs.readFile(path) : null;
 
 /** Offsets of the sfnt tables we read, by tag, or null if `b` is not a font we understand. */
 export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at: Map<number, number> } | null {
@@ -37,7 +32,7 @@ export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at:
   }
   return { dv, at };
 }
-const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632;
+const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
 export const T_CMAP = 0x636d6170;
 
 /** weight/italic from the face's OS/2 table (what AOSP's analyzeStyle reads), null if absent */
@@ -50,7 +45,7 @@ export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic
 
 /** FreeType's scalable-face metrics as Skia reads them, in ems: hhea ascender/descender and line
  *  gap, and head's bounding box for top/bottom (all positive downwards from the baseline). */
-interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number }
+export interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number }
 function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
   const t = sfntTables(b, ttcIndex);
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
@@ -101,61 +96,113 @@ export function postScriptName(b: Uint8Array, index: number): string | null {
 export interface Axis { tag: number; value: number }
 const tagName = (t: number) => String.fromCharCode(t >>> 24, (t >>> 16) & 255, (t >>> 8) & 255, t & 255);
 
+/** the variation axes a face declares in its fvar table */
+function fvarAxes(b: Uint8Array, ttcIndex: number): number[] {
+  const t = sfntTables(b, ttcIndex), fvar = t?.at.get(T_FVAR);
+  if (!t || fvar === undefined || fvar + 12 > b.length) return [];
+  const count = t.dv.getUint16(fvar + 8), size = t.dv.getUint16(fvar + 10), tags: number[] = [];
+  for (let i = 0, at = fvar + t.dv.getUint16(fvar + 4); i < count && at + 4 <= b.length; i++, at += size) tags.push(t.dv.getUint32(at));
+  return tags;
+}
+
+// ── the system fonts
+/** Android's Roboto, a variable font: hhea ascender/descender and head yMax/yMin over 2048 units */
+export const SYSTEM_FONT: FaceMetrics = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2163 / 2048, bottom: 555 / 2048, leading: 0 };
+interface SystemFamily { css: string; name?: string; lang?: string; metrics?: FaceMetrics; faces: readonly (readonly [file: string, weight: number, italic: boolean])[] }
+/** The families under /system/fonts, as the device's font configuration declares them, each one CSS
+ *  family on the page. The Roboto statics stand in for instances of the device's variable Roboto,
+ *  so they keep its metrics; the emoji families are its und-Zsye fallbacks. */
+export const SYSTEM_FAMILIES: readonly SystemFamily[] = [
+  { css: "Roboto", name: "sans-serif", metrics: SYSTEM_FONT,
+    faces: [["Roboto-Regular.ttf", 400, false], ["Roboto-Medium.ttf", 500, false], ["Roboto-Bold.ttf", 700, false], ["Roboto-Italic.ttf", 400, true]] },
+  { css: "Noto Emoji", lang: "und-Zsye", faces: [["NotoColorEmoji.ttf", 400, false]] },
+  { css: "Noto Emoji Flags", lang: "und-Zsye", faces: [["NotoColorEmojiFlags.ttf", 400, false]] },
+];
+/** the device's aliases of sans-serif; its other families and aliases name fonts the page lacks */
+const SANS_SERIF_ALIASES = [["sans-serif-thin", 100], ["sans-serif-light", 300], ["sans-serif-medium", 500], ["sans-serif-black", 900],
+  ["arial", 400], ["helvetica", 400], ["tahoma", 400], ["verdana", 400]] as const;
+/** the files under /system/fonts, in SYSTEM_FAMILIES order */
+export const SYSTEM_FONT_FILES = SYSTEM_FAMILIES.flatMap((f) => f.faces.map(([file]) => file));
+const SYSTEM_FACES = new Map<string, { family: SystemFamily; weight: number; italic: boolean }>(SYSTEM_FAMILIES.flatMap((family) =>
+  family.faces.map(([file, weight, italic]) => [`/system/fonts/${file}`, { family, weight, italic }] as const)));
+const familyXml = (f: SystemFamily) => `<family${f.name ? ` name="${f.name}"` : ""}${f.lang ? ` lang="${f.lang}"` : ""}>` +
+  f.faces.map(([file, weight, italic]) => `<font weight="${weight}" style="${italic ? "italic" : "normal"}">${file}</font>`).join("") + "</family>";
+const fontsXml = (attrs: string) => `<?xml version="1.0" encoding="utf-8"?><familyset${attrs}>${familyXml(SYSTEM_FAMILIES[0])}` +
+  SANS_SERIF_ALIASES.map(([name, weight]) => `<alias name="${name}" to="sans-serif"${weight === 400 ? "" : ` weight="${weight}"`}/>`).join("") +
+  SYSTEM_FAMILIES.slice(1).map(familyXml).join("") + "</familyset>";
+
+declare global { interface Window { __wdSystemFonts?: Promise<Uint8Array[]> } }
+/** the system faces' bytes, in SYSTEM_FAMILIES order, fetched once per tab */
+export function fetchSystemFonts(): Promise<Uint8Array[]> {
+  return pageShared("__wdSystemFonts", () => Promise.all(SYSTEM_FONT_FILES.map(async (file) => {
+    const res = await fetch(`/vendor/fonts/${file}`);
+    if (!res.ok) throw new Error(`font ${file}: ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }))).then((list) => list.map((b) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength)));
+}
+/** a realm's /system/fonts, and the font configuration naming them (the legacy and current files) */
+export function mountSystemFonts(bytes: readonly Uint8Array[]): void {
+  SYSTEM_FONT_FILES.forEach((file, i) => vfs.write(`/system/fonts/${file}`, bytes[i]));
+  vfs.write("/system/etc/fonts.xml", utf8.enc.encode(fontsXml(' version="23"')));
+  vfs.write("/system/etc/font_fallback.xml", utf8.enc.encode(fontsXml("")));
+}
+/** the page's FontFaces for the system faces, which its realms share */
+export async function registerSystemFonts(bytes: readonly Uint8Array[]): Promise<void> {
+  await Promise.all(SYSTEM_FONT_FILES.map((file, i) => {
+    const path = `/system/fonts/${file}`, { family, weight, italic } = SYSTEM_FACES.get(path)!;
+    return registerFace(new NativeFont(bytes[i], 0, weight, italic, [], path), family.css);
+  }));
+}
+
 let sourceIds = 0;
 /** minikin::Font over its MinikinFontSkia: one face of a font file, the style it is selected by,
  *  and the axes, path and locales it was built with. A clone shares the source id and bytes. */
 export class NativeFont {
   private metrics?: FaceMetrics | null;
+  private axisTags?: readonly number[];
   constructor(readonly bytes: Uint8Array, readonly ttcIndex: number, readonly weight: number, readonly italic: boolean,
     readonly axes: readonly Axis[] = [], readonly path = "", readonly locales = "", readonly sourceId = sourceIds++) {}
   get faceMetrics(): FaceMetrics | null {
-    return this.metrics === undefined ? (this.metrics = sfntMetrics(this.bytes, this.ttcIndex)) : this.metrics;
+    return this.metrics === undefined ? (this.metrics = SYSTEM_FACES.get(this.path)?.family.metrics ?? sfntMetrics(this.bytes, this.ttcIndex)) : this.metrics;
   }
+  get supportedAxes(): readonly number[] { return this.axisTags ??= fvarAxes(this.bytes, this.ttcIndex); }
 }
-const systemFaces = new Map<string, NativeFont>();
+const availableFaces = new Map<string, NativeFont>();
 /** the system collection's fonts (Font.getAvailableFonts), as installed under /system/fonts */
 export async function systemFonts(): Promise<NativeFont[]> {
-  const faces = [...SYSTEM_FONTS.map(([, file, weight, style]) => [file, weight, style === "italic"] as const),
-    ...SYSTEM_EMOJI_FONTS.map(([, file]) => [file, 400, false] as const)];
   const out: NativeFont[] = [];
-  for (const [file, weight, italic] of faces) {
-    const path = `/system/fonts/${file}`;
-    let font = systemFaces.get(path);
+  for (const [path, { weight, italic }] of SYSTEM_FACES) {
+    let font = availableFaces.get(path);
     if (!font) {
-      const bytes = await fileBytes(path);
+      const bytes = await vfs.readFile(path);
       if (!bytes) continue;
-      systemFaces.set(path, font = new NativeFont(bytes, 0, weight, italic, [], path));
+      availableFaces.set(path, font = new NativeFont(bytes, 0, weight, italic, [], path));
     }
     out.push(font);
   }
   return out;
 }
-/** a font from bytes, its unset (-1) weight and italic resolved from the face as AOSP does */
-function fontFrom(bytes: Uint8Array, weight: number, italic: number, ttcIndex = 0, axes: readonly Axis[] = []): NativeFont {
-  const st = weight <= 0 || italic < 0 ? sfntStyle(bytes, ttcIndex) : null;
-  return new NativeFont(bytes, ttcIndex, Math.max(1, Math.min(1000, weight > 0 ? weight : st?.weight || 400)),
-    italic >= 0 ? italic === 1 : !!st?.italic, axes);
-}
 
 /** minikin's FontFamily: its fonts, registered under one CSS family */
 export class NativeFamily {
+  private axisTags?: readonly number[];
   constructor(readonly fonts: readonly NativeFont[], readonly css: string, readonly langTags = "", readonly variant = 0) {}
-  /** the member minikin selects for `weight`/`italic` (FontStyle's match score) */
+  /** getClosestMatch: the first member scoring lowest, a point per grade of weight and two for the slant */
   closest(weight: number, italic: boolean): NativeFont {
-    const score = (f: NativeFont) => Math.abs((f.weight - weight) / 100) + (f.italic !== italic ? 2 : 0);
+    const grade = Math.trunc(weight / 100);
+    const score = (f: NativeFont) => Math.abs(grade - Math.trunc(f.weight / 100)) + (f.italic !== italic ? 2 : 0);
     let best = this.fonts[0];
     for (const f of this.fonts) if (score(f) < score(best)) best = f;
     return best;
   }
+  get supportedAxes(): readonly number[] { return this.axisTags ??= [...new Set(this.fonts.flatMap((f) => f.supportedAxes))]; }
 }
 
 /** Register one face under a CSS family. The load is awaited so no text is ever measured against
  *  a face that later swaps in (every width memo in graphics.ts is keyed by font string alone). */
 async function registerFace(f: NativeFont, family: string): Promise<void> {
-  const vm = f.faceMetrics;
-  if (vm) setFamilyMetrics(family, vm);
   if (typeof FontFace === "undefined") return;
-  const b = f.bytes;
+  const b = f.bytes, vm = f.faceMetrics;
   const src = b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer : b.slice().buffer;
   const desc: FontFaceDescriptors & { variationSettings?: string } = { weight: String(f.weight), style: f.italic ? "italic" : "normal" };
   if (f.axes.length) desc.variationSettings = f.axes.map((a) => `"${tagName(a.tag)}" ${a.value}`).join(", ");
@@ -172,181 +219,110 @@ async function registerFace(f: NativeFont, family: string): Promise<void> {
     console.warn("[fonts] FontFace rejected", family, e);
   }
 }
+/** the CSS family the page registered for exactly these faces, if they are one system family */
+function pageFamily(fonts: readonly NativeFont[]): string | null {
+  const family = fonts.length ? SYSTEM_FACES.get(fonts[0].path)?.family : undefined;
+  if (!family || family.faces.length !== fonts.length) return null;
+  for (const f of fonts) {
+    const face = SYSTEM_FACES.get(f.path);
+    if (face?.family !== family || f.weight !== face.weight || f.italic !== face.italic || f.ttcIndex || f.axes.length) return null;
+  }
+  return family.css;
+}
 let familySeq = 0;
-/** a family of these faces under a fresh CSS family name, every face loaded before it is used */
+/** a family of these faces: the page's own for its system faces, otherwise a fresh CSS family name,
+ *  every face loaded before it is used */
 export async function mkFamily(fonts: readonly NativeFont[], langTags = "", variant = 0): Promise<NativeFamily> {
+  const page = pageFamily(fonts);
+  if (page) return new NativeFamily(fonts, page, langTags, variant);
   const fam = new NativeFamily(fonts, "wd-font-" + (++familySeq), langTags, variant);
   for (const f of fonts) await registerFace(f, fam.css);
   return fam;
 }
 
-// ── the bridge from Java objects to native state, for the TS Typeface
-let familyPtr = "", axisTag = "", axisValue = "", styleWeight = "", styleSlant = "";
+let familyPtr = "", axisTag = "", axisValue = "";
 /** the native family behind a Java FontFamily */
 export const familyOf = (f: object): NativeFamily =>
   deref<NativeFamily>((f as Record<string, bigint>)[familyPtr ||= declaredField("android/graphics/fonts/FontFamily", "mNativePtr")]);
-/** a Java FontVariationAxis[] as the axes minikin receives */
-function axesOf(a: ArrayLike<object> | null): Axis[] {
-  if (!a) return [];
+/** Java FontVariationAxis objects as the axes minikin receives */
+function axesOf(a: ArrayLike<object>): Axis[] {
   axisTag ||= declaredField("android/graphics/fonts/FontVariationAxis", "mTag");
   axisValue ||= declaredField("android/graphics/fonts/FontVariationAxis", "mStyleValue");
   return Array.from(a, (x) => ({ tag: (x as Record<string, number>)[axisTag], value: (x as Record<string, number>)[axisValue] }));
 }
-/** FontVariationAxis.fromFontVariationSettings, as axes */
-const parseAxes = (s: string | null) =>
-  after(scall("android/graphics/fonts/FontVariationAxis", "fromFontVariationSettings", "(Ljava/lang/String;)[Landroid/graphics/fonts/FontVariationAxis;", s), axesOf);
-const styleOf = (s: object) => {
-  styleWeight ||= declaredField("android/graphics/fonts/FontStyle", "mWeight");
-  styleSlant ||= declaredField("android/graphics/fonts/FontStyle", "mSlant");
-  return { weight: (s as Record<string, number>)[styleWeight], italic: (s as Record<string, number>)[styleSlant] === 1 };
-};
 
-/** minikin's Typeface over these families (Typeface.createFromFamilies, CustomFallbackBuilder):
- *  the families, then the fallback typeface's */
-export function typefaceOver(families: readonly NativeFamily[], fallback: JTypeface, weight: number, italic: boolean): JTypeface {
-  const css = families.map((f) => f.css).concat(fallback.family).join(", ");
-  return mkTypeface(css, weight >= 600, italic, weight);
-}
-
-// ── Typeface.CustomFallbackBuilder / Typeface.Builder
-const MAX_CUSTOM_FALLBACK = 64;
-class JCustomFallbackBuilder extends JObj { families: object[] = []; style: object | null = null; sys: string | null = null; }
-rt.register({
-  name: "android/graphics/Typeface$CustomFallbackBuilder", ctor: JCustomFallbackBuilder,
-  methods: {
-    "<init>(Landroid/graphics/fonts/FontFamily;)V": function (this: JCustomFallbackBuilder, f: object) {
-      if (!f) throw rt.mkThrowable("java/lang/NullPointerException", "family");
-      this.families.push(f);
-    },
-    "addCustomFallback(Landroid/graphics/fonts/FontFamily;)Landroid/graphics/Typeface$CustomFallbackBuilder;": function (this: JCustomFallbackBuilder, f: object) {
-      if (this.families.length >= MAX_CUSTOM_FALLBACK) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Custom fallback limit exceeded(" + MAX_CUSTOM_FALLBACK + ")");
-      this.families.push(f);
-      return this;
-    },
-    "setStyle(Landroid/graphics/fonts/FontStyle;)Landroid/graphics/Typeface$CustomFallbackBuilder;": function (this: JCustomFallbackBuilder, s: object) { this.style = s; return this; },
-    "setSystemFallback(Ljava/lang/String;)Landroid/graphics/Typeface$CustomFallbackBuilder;": function (this: JCustomFallbackBuilder, s: string) { this.sys = s; return this; },
-    // AOSP: no style is weight 400, upright
-    "build()Landroid/graphics/Typeface;": function (this: JCustomFallbackBuilder) {
-      const st = this.style ? styleOf(this.style) : { weight: 400, italic: false };
-      return typefaceOver(this.families.map(familyOf), typefaceFor(this.sys ?? "sans-serif"), st.weight, st.italic);
-    },
-    "static getMaxCustomFallbackCount()I": () => MAX_CUSTOM_FALLBACK,
-  },
-});
-
-class JTypefaceBuilder extends JObj {
-  bytes: Uint8Array | null = null;
-  weight = -1; italic = -1; ttcIndex = 0;
-  axes: Axis[] = [];
-  fallback: string | null = null;
-}
-function tfbFrom(this: JTypefaceBuilder, b: Uint8Array | null) { this.bytes = b; }
-const tfbMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/io/File;)V": driven(function* (this: JTypefaceBuilder, f: JObj): Gen { tfbFrom.call(this, yield fileBytes(pathOf(f))); }),
-  "<init>(Ljava/lang/String;)V": driven(function* (this: JTypefaceBuilder, p: string): Gen { tfbFrom.call(this, yield fileBytes(p)); }),
-  "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JTypefaceBuilder, fd: JObj | null): Gen {
-    const source = javaFdSource(fdInt(fd));
-    tfbFrom.call(this, source ? yield readFully(source) : null);
-  }),
-  "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JTypefaceBuilder, am: unknown, p: string) { tfbFrom.call(this, assetFile(am, p)); },
-  "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": function (this: JTypefaceBuilder, am: unknown, p: string, isAsset: number) {
-    tfbFrom.call(this, assetFile(am, p, !!isAsset));
-  },
-  "setWeight(I)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, w: number) { this.weight = w; return this; },
-  "setItalic(Z)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, i: number) { this.italic = i ? 1 : 0; return this; },
-  "setTtcIndex(I)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, i: number) { this.ttcIndex = i; return this; },
-  "setFontVariationSettings(Ljava/lang/String;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, s: string | null) {
-    return after(parseAxes(s), (a: Axis[]) => { this.axes = a; return this; });
-  },
-  "setFontVariationSettings([Landroid/graphics/fonts/FontVariationAxis;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, a: object[] | null) { this.axes = axesOf(a); return this; },
-  "setFallback(Ljava/lang/String;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, s: string | null) { this.fallback = s; return this; },
-  // AOSP returns null when the font cannot be read (rather than throwing)
-  "build()Landroid/graphics/Typeface;": function (this: JTypefaceBuilder) { return buildTypeface(this.bytes, this); },
-};
-/** font bytes → a registered Typeface, null when they are not a font this can read */
-async function buildTypeface(bytes: Uint8Array | null, o: Partial<JTypefaceBuilder> = {}): Promise<JTypeface | null> {
-  if (!bytes) return null;
-  const { weight = -1, italic = -1, ttcIndex = 0, axes = [], fallback = null } = o;
-  if (!sfntStyle(bytes, ttcIndex)) return null;
-  const f = fontFrom(bytes, weight, italic, ttcIndex, axes);
-  return typefaceOver([await mkFamily([f])], typefaceFor(fallback ?? "sans-serif"), f.weight, f.italic);
-}
-setTypefaceLoader(buildTypeface);
-rt.register({ name: "android/graphics/Typeface$Builder", ctor: JTypefaceBuilder, methods: tfbMethods });
-
-/** a file an AssetManager opens: under assets/, or a resource file of its packages (isAsset false) */
-function assetFile(am: unknown, path: string, isAsset = true): Uint8Array | null {
-  const res = nativeAssets(am);
-  if (isAsset) return res.zip["assets/" + path] ?? null;
-  return res.zip[path] ?? res.arsc?.files(path) ?? res.tbl(0x01000000)?.files(path) ?? null;
-}
-
-const fontMemo = new WeakMap<Resources, Map<number, Promise<JTypeface | null>>>();
-/**
- * Resources.getFont(id), parsed and registered once per (Resources, id). A style is applied per
- * view, so an app whose theme names a @font/ family would otherwise re-parse it and load a new
- * FontFace for every TextView — and graphics.ts memoises text widths on the font string alone,
- * so a face that swaps in late poisons them.
- */
-export function fontResource(res: Resources, id: number): Promise<JTypeface | null> {
-  let m = fontMemo.get(res);
-  if (!m) fontMemo.set(res, (m = new Map()));
-  let p = m.get(id);
-  if (!p) m.set(id, (p = loadFontResource(res, id)));
-  return p;
-}
-
-/** one family over these members, carrying its regular member's style */
-async function familyTypeface(fonts: NativeFont[]): Promise<JTypeface> {
-  const fam = await mkFamily(fonts);
-  const regular = fonts.find((f) => f.weight === 400 && !f.italic) ?? fonts[0];
-  return typefaceOver([fam], tfDefault, regular.weight, regular.italic);
-}
-// AOSP's ResourcesImpl.loadFont: Typeface.findFromCache, then createFromResources over
-// FontResourcesParser's entry, remembered per AssetManager and file.
-const byFile = new WeakMap<Resources, Map<string, JTypeface>>();
-const fileCache = (am: unknown) => { const res = nativeAssets(am); let m = byFile.get(res); if (!m) byFile.set(res, m = new Map()); return m; };
-resourceTypefaces.find = (am, path) => fileCache(am).get(path) ?? null;
-resourceTypefaces.create = driven(function* createFromResources(entry: unknown, am: unknown, path: string): Gen<JTypeface> {
-  if (rt.iof(entry, "android/content/res/FontResourcesParser$ProviderResourceEntry")) {
-    const system: string | null = yield vcall(entry, "getSystemFontFamilyName", "()Ljava/lang/String;");
-    // no font provider is installed, so FontsContract finds none and AOSP answers DEFAULT
-    return system ? typefaceFor(system, 0) : tfDefault;
+// ── hwui's Typeface
+/** minikin's FontCollection: families in fallback order, one CSS font-family list */
+export class FontCollection {
+  readonly css: string;
+  private axisTags?: readonly number[];
+  constructor(readonly families: readonly NativeFamily[]) { this.css = [...new Set(families.map((f) => f.css))].join(", "); }
+  /** getSupportedAxes, sorted */
+  get supportedAxes(): readonly number[] {
+    return this.axisTags ??= [...new Set(this.families.flatMap((f) => f.supportedAxes))].sort((a, b) => a - b);
   }
-  const cached = fileCache(am).get(path);
-  if (cached) return cached;
-  const E = "Landroid/content/res/FontResourcesParser$FontFileResourceEntry;";
-  const fonts: NativeFont[] = [];
-  for (const e of yield vcall(entry, "getEntries", `()[${E}`)) {
-    const b = assetFile(am, yield vcall(e, "getFileName", "()Ljava/lang/String;"), false);
-    const weight: number = yield vcall(e, "getWeight", "()I"), italic: number = yield vcall(e, "getItalic", "()I");
-    const ttcIndex: number = yield vcall(e, "getTtcIndex", "()I");
-    const axes: Axis[] = yield parseAxes(yield vcall(e, "getVariationSettings", "()Ljava/lang/String;"));
-    if (b) fonts.push(fontFrom(b, weight, italic, ttcIndex, axes));
+}
+/** hwui's Typeface: a collection, the style the API reports (Typeface.BOLD and ITALIC bits), the
+ *  base weight relative styles derive from, and the style its text is drawn in */
+export class NativeTypeface {
+  constructor(readonly collection: FontCollection, readonly baseWeight: number, readonly apiStyle: number,
+    readonly weight: number, readonly italic: boolean) {}
+}
+const BOLD = 1, ITALIC = 2, RESOLVE_BY_FONT_TABLE = -1;
+/** computeMinikinStyle's weight */
+const minikinWeight = (weight: number) => Math.min(1000, Math.max(1, weight));
+/** Typeface::createRelative: the base weight 300 bolder for BOLD */
+export const createRelative = (src: NativeTypeface, style: number) => new NativeTypeface(src.collection, src.baseWeight, style,
+  minikinWeight(src.baseWeight + (style & BOLD ? 300 : 0)), (style & ITALIC) !== 0);
+/** Typeface::createAbsolute: bold from semi-bold, as SkTypeface counts it */
+export const createAbsolute = (src: NativeTypeface, weight: number, italic: boolean) => new NativeTypeface(src.collection, src.baseWeight,
+  (weight >= 600 ? BOLD : 0) | (italic ? ITALIC : 0), minikinWeight(weight), italic);
+/** Typeface::createWithDifferentBaseWeight, which a weight alias of fonts.xml is */
+export const createWithBaseWeight = (src: NativeTypeface, weight: number) => createRelative(new NativeTypeface(src.collection, weight, 0, 0, false), src.apiStyle);
+/** Typeface::createFromFamilies: the families, then the fallback's; a weight or slant left to the
+ *  font table is the first family's regular face's */
+export function createFromFamilies(families: NativeFamily[], weight: number, italic: number, fallback: NativeTypeface | null): NativeTypeface {
+  const collection = new FontCollection(fallback ? families.concat(fallback.collection.families) : families);
+  if (weight === RESOLVE_BY_FONT_TABLE || italic === RESOLVE_BY_FONT_TABLE) {
+    const regular = families[0]?.closest(400, false), table = regular && sfntStyle(regular.bytes, regular.ttcIndex);
+    if (weight === RESOLVE_BY_FONT_TABLE) weight = table ? table.weight : 400;
+    if (italic === RESOLVE_BY_FONT_TABLE) italic = table?.italic ? 1 : 0;
   }
-  // a member that cannot be read fails the family, and AOSP caches DEFAULT for it
-  const typeface = fonts.length ? yield familyTypeface(fonts) : tfDefault;
-  fileCache(am).set(path, typeface);
-  return typeface;
-});
+  if (weight < 0) weight = 400;
+  return createAbsolute(new NativeTypeface(collection, weight, 0, 0, false), weight, italic !== 0);
+}
+/** Typeface::createFromTypefaceWithVariation: the style kept, each family supporting one of the
+ *  axes rebuilt with them, the same collection when none does */
+export function createWithVariation(src: NativeTypeface, list: object): NativeTypeface | Promise<NativeTypeface> {
+  return after(vcall(list, "toArray", "()[Ljava/lang/Object;"), (array: object[]) => {
+    const axes = axesOf(array), families = src.collection.families;
+    const varies = (tags: readonly number[]) => axes.some((a) => tags.includes(a.tag));
+    const same = () => new NativeTypeface(src.collection, src.baseWeight, src.apiStyle, src.weight, src.italic);
+    if (!families.some((f) => varies(f.supportedAxes))) return same();
+    return Promise.all(families.map((f) => varies(f.supportedAxes) ? mkFamily(f.fonts.map((font) => varies(font.supportedAxes)
+      ? new NativeFont(font.bytes, font.ttcIndex, font.weight, font.italic, axes, font.path, font.locales, font.sourceId) : font), f.langTags, f.variant) : f))
+      .then((varied) => new NativeTypeface(new FontCollection(varied), src.baseWeight, src.apiStyle, src.weight, src.italic));
+  });
+}
 
-/** Resources.getFont(id): a font file resource, or a <font-family> XML whose members become one
- *  family; the Typeface carries the regular member's style. */
-async function loadFontResource(res: Resources, id: number): Promise<JTypeface | null> {
-  const path = res.value(id).s;
-  if (!path) return null;
-  const fonts: NativeFont[] = [];
-  const add = (b: Uint8Array | null | undefined, weight: number, italic: number) => { if (b) fonts.push(fontFrom(b, weight, italic)); };
-  if (path.endsWith(".xml")) {
-    const root = parseAXML(res.zip[path]);
-    if (root.name !== "font-family") return null;
-    for (const c of root.children) {
-      if (c.name !== "font") continue;
-      const ref = attr(c, "font"), w = attr(c, "fontWeight"), it = attr(c, "fontStyle");
-      if (!ref || !ref.data) continue;
-      add(res.fileOf(ref.data)?.bytes, w?.data ?? 0, it ? it.data : -1);
-    }
-  } else add(res.zip[path], 0, -1);
-  if (!fonts.length) return null;
-  return familyTypeface(fonts);
+let systemDefault: NativeTypeface | undefined;
+/** Typeface::setDefault */
+export const setDefaultTypeface = (t: NativeTypeface) => { systemDefault = t; };
+let nativeInstance = "";
+/** The native typeface behind a Java Typeface, the default for null as hwui resolves it. Under a
+ *  bytecode Paint the native paint is handed the native typeface itself. */
+export function typefaceOf(t: object | null): NativeTypeface {
+  if (!t) return systemDefault!;
+  if (t instanceof NativeTypeface) return t;
+  return deref<NativeTypeface>((t as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Typeface", "native_instance")]);
+}
+
+/** Typeface.create("sans-serif-medium", NORMAL), the face framework chrome uses (dialog buttons,
+ *  picker values, the action bar title), once the system font map is loaded */
+export let tfMedium: object | null = null;
+/** the zygote's preload of the system font map: Typeface.DEFAULT and the named families */
+export async function loadSystemFontMap(): Promise<void> {
+  const T = "android/graphics/Typeface";
+  await scall(T, "loadPreinstalledSystemFontMap", "()V");
+  tfMedium = await scall(T, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "sans-serif-medium", 0);
 }

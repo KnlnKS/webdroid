@@ -1,6 +1,6 @@
 import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
 import "../src/natives";
-import { JCanvas, JPaint, locateDrawnText, fillFontMetrics, mkTypeface, JTypeface, setFamilyMetrics, matrixColor } from "../src/android/graphics";
+import { JCanvas, JPaint, locateDrawnText, fillFontMetrics, matrixColor } from "../src/android/graphics";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
@@ -13,7 +13,9 @@ import { TV, type XmlNode } from "../src/android/axml";
 import { JImageView } from "../src/android/imageview";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { recordingContext, replay, replayWithSemantics } from "../src/android/recording";
-import { appResources, axmlBytes, scall } from "./java";
+import { appResources, axmlBytes, loadSystemFonts, scall } from "./java";
+
+beforeAll(loadSystemFonts);
 
 describe("canvas-text", () => {
   rt.linkNatives();
@@ -356,34 +358,44 @@ describe("egl14-query-context", () => {
 
 describe("font-metrics", () => {
   rt.linkNatives();
+  const TF = "android/graphics/Typeface";
 
-  test("loaded font metrics preserve fractional ascenders and round padded bounds outward", () => {
-    setFamilyMetrics("metrics-probe", { ascent: 966 / 975, descent: 204 / 975, top: 1129 / 975, bottom: 251 / 975 });
+  test("loaded font metrics preserve fractional ascenders and round padded bounds outward", async () => {
+    // Roboto Bold's own tables, as an app's font: hhea 2146/-555, head yMax/yMin 2163/-555 over 2048 units
+    const bytes = new Uint8Array(await Bun.file("vendor/fonts/Roboto-Bold.ttf").arrayBuffer()), BB = "Ljava/nio/ByteBuffer;";
+    const buffer = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, bytes.length);
+    await vcall(buffer, "put", `([B)${BB}`, new Int8Array(bytes.buffer));
+    const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, buffer), "build", "()Landroid/graphics/fonts/Font;");
+    const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", "(Landroid/graphics/fonts/Font;)V", font), "build", "()Landroid/graphics/fonts/FontFamily;");
     const view = new JTextView();
-    view.paintT.tf = mkTypeface("metrics-probe", true, false);
+    view.paintT.tf = await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`);
     view.paintT.textSize = 68;
     const metrics = { top: 0, ascent: 0, descent: 0, bottom: 0, leading: 0 };
     fillFontMetrics(view.paintT, metrics, false);
-    expect(metrics.ascent).toBeCloseTo(-67.37231, 4);
+    expect(metrics.ascent).toBeCloseTo(-71.25391, 4);
     fillFontMetrics(view.paintT, metrics, true);
-    expect(metrics).toEqual({ top: -79, ascent: -67, descent: 14, bottom: 18, leading: 0 });
-    expect(view.textHeight(1)).toBe(97);
-    expect(view.textHeight(3)).toBe(259);
+    expect(metrics).toEqual({ top: -72, ascent: -71, descent: 18, bottom: 19, leading: 0 });
+    expect(view.textHeight(1)).toBe(91);
+    expect(view.textHeight(3)).toBe(269);
     view.includePad = false;
-    expect(view.textHeight(3)).toBe(243);
+    expect(view.textHeight(3)).toBe(267);
   });
 
-  test("Paint selects the nearest system face without promoting every bold style to 700", () => {
+  test("Paint draws the face minikin selects, faking bold two grades short", async () => {
     const paint = new JPaint(); paint.textSize = 18;
+    const weighted = (weight: number) => scall(TF, "create", `(L${TF};IZ)L${TF};`, null, weight, 0);
+    // 600 ties Medium and Bold; the earlier face in fonts.xml wins
     for (const weight of [500, 600]) {
-      paint.tf = mkTypeface("Roboto, sans-serif", weight >= 600, false, weight);
-      expect(paint.font()).toBe("500 18px Roboto Medium, Noto Emoji, Noto Emoji Flags, sans-serif");
+      paint.tf = await weighted(weight);
+      expect(paint.font()).toBe("500 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
     }
-    paint.tf = mkTypeface("custom-family", true, false, 900);
-    expect(paint.font()).toBe("900 18px custom-family, Noto Emoji, Noto Emoji Flags, sans-serif");
-    paint.tf = mkTypeface("Roboto, sans-serif", false, false, 400);
+    paint.tf = await weighted(900);
+    expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
+    expect(paint.faked()).toBe(true);
+    paint.tf = null;
     paint.fakeBold = true;
     expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
+    expect(paint.faked()).toBe(false);
   });
 
   test("system Paint metrics retain Android fractions before integer rounding", async () => {
@@ -700,6 +712,6 @@ describe("typed-array-font", () => {
     const id = archive.res.idFor("font", "fontawesome", archive.pkg);
     expect(id).not.toBe(0);
     const jres = await appResources(archive.res, "typed-array-font");
-    expect(await vcall(jres, "getFont", "(I)Landroid/graphics/Typeface;", id)).toBeInstanceOf(JTypeface);
+    expect(rt.iof(await vcall(jres, "getFont", "(I)Landroid/graphics/Typeface;", id), "android/graphics/Typeface")).toBe(1);
   });
 });
