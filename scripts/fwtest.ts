@@ -714,6 +714,21 @@ await exercise("AndroidCharacter (device values)", async () => {
   const mc = chars("(a[b]<");
   sameText("mirror", [await scall(AC, "mirror", "([CII)Z", mc, 1, 4), String.fromCharCode(...mc), await scall(AC, "mirror", "([CII)Z", chars("abc"), 0, 3)], [1, "(a]b[<", 0]);
 });
+/** a Spanned's spans as the device probe prints them: name[start,end,flags in hex] */
+async function spanList(text: unknown, name: (span: any) => Promise<string>): Promise<string> {
+  const out: string[] = [];
+  for (const span of await vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, await vcall(text, "length", "()I"), rt.classFor("java/lang/Object")))
+    out.push(`${await name(span)}[${await vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", span)},${await vcall(text, "getSpanEnd", "(Ljava/lang/Object;)I", span)},${(await vcall(text, "getSpanFlags", "(Ljava/lang/Object;)I", span)).toString(16)}]`);
+  return out.join(" ");
+}
+await exercise("Linkify.addLinks (device values)", async () => {
+  const L = "android/text/util/Linkify", url = async (span: unknown) => `url:${await vcall(span, "getURL", "()Ljava/lang/String;")}`;
+  const links = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "Visit example.com or https://www.android.com/path?q=1, mail user@example.com, not a@b");
+  sameText("web and email", [await scall(L, "addLinks", "(Landroid/text/Spannable;I)Z", links, 3), await spanList(links, url)],
+    [1, "url:http://example.com[6,17,21] url:https://www.android.com/path?q=1[21,53,21] url:mailto:user@example.com[60,76,21]"]);
+  const tel = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "Call +1 650-253-0000 or 555.");
+  sameText("phone", [await scall(L, "addLinks", "(Landroid/text/Spannable;I)Z", tel, 4), await spanList(tel, url)], [1, "url:tel:+16502530000[5,20,21]"]);
+});
 
 // The resource natives, under AOSP's own Resources: the framework and an app installed as the
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read
