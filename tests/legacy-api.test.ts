@@ -487,7 +487,7 @@ test("modern Java helpers preserve their public contracts", async () => {
   expect(await vcall(encoder, "maxBytesPerChar", "()F")).toBe(3);
   const encoded = await vcall(utf8, "encode", "(Ljava/lang/String;)Ljava/nio/ByteBuffer;", "A£");
   expect(await vcall(encoded, "remaining", "()I")).toBe(3);
-  expect([...await vcall(encoded, "array", "()[B")]).toEqual([65, -62, -93]);
+  expect([...(await vcall(encoded, "array", "()[B")).subarray(0, 3)]).toEqual([65, -62, -93]);
 });
 
 test("concrete maps, EnumSet factories, and primitive streams preserve Java dispatch", async () => {

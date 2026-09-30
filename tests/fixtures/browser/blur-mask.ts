@@ -2,8 +2,10 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, linkInit } from "../../../src/jvm/natives/jlang";
 import { JBitmap, JCanvas, JPaint, tintedBmp } from "../../../src/android/graphics";
+import { loadCoreOj } from "./libcore";
 
 async function probe() {
+  await loadCoreOj();
   rt.linkNatives();
   const results = [];
   const enums = (await linkInit("android/graphics/BlurMaskFilter$Blur")).ctor;

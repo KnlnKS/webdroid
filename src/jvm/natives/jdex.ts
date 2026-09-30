@@ -7,7 +7,7 @@ import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
 import { vfs } from "../../shell/vfs";
 import { packedArchives } from "../../shell/packedarchive";
-import { resident, type JBuffer } from "./jnio";
+import { remainingBytes, resident, type JBuffer } from "./jnio";
 
 function initRuntime(loader: JClassLoader, parent: JClassLoader | null): void {
   loader.parent = parent;
@@ -96,8 +96,7 @@ function initMemory(this: JClassLoader, buffers: JBuffer[], parent: JClassLoader
   const load = () => {
     initRuntime(this, parent);
     for (const [index, buffer] of buffers.entries()) {
-      const view = buffer.dv;
-      const bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos).slice();
+      const bytes = remainingBytes(buffer).slice();
       for (const dex of dexesIn(bytes, `memory:${index}`)) this.runtime.loadDex(dex);
     }
   };

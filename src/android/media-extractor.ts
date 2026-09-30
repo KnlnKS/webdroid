@@ -1,6 +1,6 @@
 import type { Sample } from "mp4box";
 import { JMediaFormat } from "./media-format";
-import { mkByteBuffer } from "../jvm/natives/jnio";
+import { allocateDirectNow, bufferBytes, directReady } from "../jvm/natives/jnio";
 import { readFully, type FileSource } from "../shell/lazyfile";
 
 function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
@@ -10,7 +10,7 @@ function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   return result;
 }
 function csd(format: JMediaFormat, key: string, data: Uint8Array): void {
-  const buffer = mkByteBuffer(data.length, true); new Uint8Array(buffer.ab).set(data);
+  const buffer = allocateDirectNow(data.length); bufferBytes(buffer).set(data);
   format.values.set(key, { type: 5, value: buffer });
 }
 type Track = { format: JMediaFormat; samples: Sample[]; nalLength: number; timeOffset: number; index: number; selected: boolean };
@@ -30,6 +30,7 @@ export class MediaExtractor {
     }
     const movie = file.getInfo();
     if (!movie.hasMoov || !movie.tracks.length) throw new Error("Unsupported media container");
+    await directReady();
     this.tracks = movie.tracks.map(track => {
       const samples = file.getTrackSamplesInfo(track.id), entry = samples[0]?.description;
       const format = new JMediaFormat();

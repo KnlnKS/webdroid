@@ -1,9 +1,8 @@
 import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, vcallOn, curThread, after } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
-import { resident, type JBuffer } from "../jvm/natives/jnio";
+import { resident, remainingBytes, type JBuffer } from "../jvm/natives/jnio";
 import { decodeBytes } from "./graphics";
-import { u8 } from "../jvm/abi";
 import { drawableFromBitmap } from "./drawable";
 import { device } from "../shell/config";
 
@@ -67,7 +66,7 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
   "static createSource(Ljava/util/concurrent/Callable;)Landroid/graphics/ImageDecoder$Source;": (callable: unknown) =>
     streamSource(async () => vcall(await vcall(callable, "call", "()Ljava/lang/Object;"), "createInputStream", "()Ljava/io/FileInputStream;")),
   "static createSource(Ljava/nio/ByteBuffer;)Landroid/graphics/ImageDecoder$Source;": (buffer: JBuffer) => after(resident(buffer), () => {
-    const view = buffer.dv, bytes = u8(view, buffer.pos, buffer.lim - buffer.pos);
+    const bytes = remainingBytes(buffer).slice();
     const source = rt.make("android/graphics/ImageDecoder$Source") as JImageSource;
     source.read = async () => bytes;
     return source;

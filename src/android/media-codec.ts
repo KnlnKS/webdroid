@@ -1,7 +1,7 @@
 import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
-import { jarray, u8 } from "../jvm/abi";
-import { box, boxInt, JDouble, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
-import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
+import { jarray } from "../jvm/abi";
+import { after, box, boxInt, JDouble, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, isBuffer, nativeOrder, remainingBytes, setLimit, setPosition } from "../jvm/natives/jnio";
 import { JMediaFormat } from "./media-format";
 import { JBufferInfo } from "./media";
 import { JSurface, presentSurface, type GlSurface } from "./glview";
@@ -27,9 +27,8 @@ const numberValue = (format: JMediaFormat, key: string, fallback: number): numbe
 const stringValue = (format: JMediaFormat, key: string): string => {
   const value = format.values.get(key)?.value; return typeof value === "string" ? value : "";
 };
-function bufferBytes(buffer: JBuffer): Uint8Array { const view = buffer.dv; return u8(view, buffer.pos, buffer.lim - buffer.pos); }
 function codecData(format: JMediaFormat, key: string): Uint8Array | undefined {
-  const value = format.values.get(key)?.value; return value instanceof JBuffer ? bufferBytes(value) : undefined;
+  const value = format.values.get(key)?.value; return isBuffer(value) ? remainingBytes(value) : undefined;
 }
 function videoKeyFrame(mime: string, data: Uint8Array): boolean {
   if (mime === "video/x-vnd.on2.vp8") return data.length > 0 && !(data[0] & 1);
@@ -255,9 +254,11 @@ export class JMediaCodec extends JObj {
           const color = frame.format === "I420" ? 19 : frame.format === "NV12" ? 21 : 0;
           if (!color) throw new Error(`unsupported raw video format: ${frame.format}`);
           const height = frame.visibleRect?.height ?? frame.displayHeight;
-          const buffer = mkByteBuffer(frame.allocationSize(), true);
-          void frame.copyTo(new Uint8Array(buffer.ab)).then(layout => {
+          const pixels = new Uint8Array(frame.allocationSize());
+          void frame.copyTo(pixels).then(layout => {
             frame.close(); if (epoch !== this.epoch) return;
+            const buffer = nativeOrder(allocateDirectNow(pixels.length));
+            bufferBytes(buffer).set(pixels);
             const stride = layout[0].stride;
             if (numberValue(this.outputFormat, "color-format", 0) !== color || numberValue(this.outputFormat, "stride", 0) !== stride || numberValue(this.outputFormat, "slice-height", 0) !== height) {
               const format = new JMediaFormat(); format.values = new Map(this.outputFormat.values);
@@ -266,7 +267,7 @@ export class JMediaCodec extends JObj {
               format.values.set("slice-height", { type: 1, value: height });
               this.changed(format);
             }
-            info.size = buffer.cap; this.output({ kind: "video-buffer", buffer, info });
+            info.size = pixels.length; this.output({ kind: "video-buffer", buffer, info });
           }).catch(e => { frame.close(); if (epoch === this.epoch) this.fail(e); });
         } catch (e) { frame.close(); this.fail(e); }
       } });
@@ -275,29 +276,28 @@ export class JMediaCodec extends JObj {
       outputFormat.values.set("mime", { type: 4, value: "audio/raw" }); outputFormat.values.set("pcm-encoding", { type: 1, value: 2 });
       this.decoder = new AudioDecoder({ error: e => { if (epoch === this.epoch) this.fail(e); }, output: audio => {
         if (epoch !== this.epoch) { audio.close(); return; }
-        const buffer = mkByteBuffer(audio.numberOfFrames * audio.numberOfChannels * 2, true);
-        buffer.little = true;
-        const pcm = new Int16Array(buffer.ab), plane = new Float32Array(audio.numberOfFrames);
+        const size = audio.numberOfFrames * audio.numberOfChannels * 2, buffer = nativeOrder(allocateDirectNow(size)), bytes = bufferBytes(buffer);
+        const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, size >> 1), plane = new Float32Array(audio.numberOfFrames);
         for (let channel = 0; channel < audio.numberOfChannels; channel++) {
           audio.copyTo(plane, { planeIndex: channel, format: "f32-planar" });
           for (let i = 0; i < plane.length; i++) pcm[i * audio.numberOfChannels + channel] = Math.max(-32768, Math.min(32767, Math.round(plane[i] * 32768)));
         }
-        const info = new JBufferInfo(); info.presentationTimeUs = BigInt(audio.timestamp); info.size = buffer.cap;
+        const info = new JBufferInfo(); info.presentationTimeUs = BigInt(audio.timestamp); info.size = size;
         audio.close(); this.output({ kind: "audio", buffer, info });
       } });
       this.decoder.configure(audioConfig(this.info.definition, this.format));
     }
     const capacity = numberValue(this.format, "max-input-size", this.info.definition.kind === "video" ? Math.ceil(numberValue(this.format, "width", 640) * numberValue(this.format, "height", 360) * 1.5) : 65536);
-    rt.link("java/nio/ByteBuffer"); rt.link("android/media/MediaCodec$BufferInfo"); rt.link("android/media/MediaFormat");
-    if (this.inputs.length !== 4 || this.inputs[0].cap !== capacity) this.inputs = Array.from({ length: 4 }, () => { const buffer = mkByteBuffer(capacity, true); buffer.little = true; return buffer; });
+    rt.link("android/media/MediaCodec$BufferInfo"); rt.link("android/media/MediaFormat");
+    if (this.inputs.length !== 4 || bufferCapacity(this.inputs[0]) !== capacity) this.inputs = Array.from({ length: 4 }, () => nativeOrder(allocateDirectNow(capacity)));
     this.available = new Set([0, 1, 2, 3]); this.changed(outputFormat); this.pump();
   }
   queue(index: number, offset: number, size: number, timestamp: bigint, flags: number): void {
     this.check(); const decoder = this.decoder, buffer = this.inputs[index];
     if (!decoder || !buffer || !this.announced.delete(index)) throw rt.mkThrowable("java/lang/IllegalStateException", "input buffer is not dequeued");
     this.available.delete(index);
-    if (offset < 0 || size < 0 || offset + size > buffer.cap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid input range");
-    let data = u8(buffer.dv, offset, size);
+    if (offset < 0 || size < 0 || offset + size > bufferCapacity(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid input range");
+    let data = bufferBytes(buffer).subarray(offset, offset + size);
     if (!(flags & 2) && size) {
       this.inFlight++;
       if (decoder instanceof VideoDecoder) {
@@ -372,11 +372,11 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
   "configure(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V": function (this: JMediaCodec, format: JMediaFormat, surface: JSurface | null, crypto: unknown, flags: number) {
     this.configure(format, surface, crypto, flags);
   },
-  "start()V": function (this: JMediaCodec) { this.start(); },
+  "start()V": function (this: JMediaCodec) { return after(directReady(), () => this.start()); },
   "stop()V": function (this: JMediaCodec) { this.reset(); },
   "flush()V": function (this: JMediaCodec) { const restart = this.started && !this.callback; this.reset(); if (restart) this.start(); },
   "release()V": function (this: JMediaCodec) { this.reset(); this.inputs = []; this.released = true; },
-  "getInputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const b = this.inputs[index]; if (!b) return null; b.pos = 0; b.lim = b.cap; return b; },
+  "getInputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const b = this.inputs[index]; if (!b) return null; setLimit(b, bufferCapacity(b)); setPosition(b, 0); return b; },
   "getOutputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const o = this.outputs.get(index); return o?.kind === "audio" || o?.kind === "video-buffer" ? o.buffer : null; },
   "getInputBuffers()[Ljava/nio/ByteBuffer;": function (this: JMediaCodec) { return jarray(this.inputs.slice(), "Ljava/nio/ByteBuffer;"); },
   // a copy of what configure() was given, as getFormatNative(true) reports it

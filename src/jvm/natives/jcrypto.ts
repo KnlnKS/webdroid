@@ -8,7 +8,7 @@ import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array, type RsaScheme } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams, invalidKey } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
-import { type JBuffer, remainingBytes, resident } from "./jnio";
+import { type JBuffer, limit, remainingBytes, resident, setPosition } from "./jnio";
 import { filterIn, filterOut, setFilterIn, setFilterOut, readStreamFully } from "./jio";
 
 rt.markers("java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec");
@@ -353,7 +353,7 @@ rt.register({
     "updateAAD([B)V": function (this: JCipher, b: Int8Array) { requireAad(this); this.aad.push(bytes(b)); },
     "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { requireAad(this); this.aad.push(bytes(b, off, len)); },
     "updateAAD(Ljava/nio/ByteBuffer;)V": function (this: JCipher, bb: JBuffer) {
-      return after(resident(bb), () => { this.aad.push(u8(remainingBytes(bb)).slice()); bb.pos = bb.lim; });
+      return after(resident(bb), () => { this.aad.push(remainingBytes(bb).slice()); setPosition(bb, limit(bb)); });
     },
     "doFinal()[B": function (this: JCipher) { return doFinal(this); },
     "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },

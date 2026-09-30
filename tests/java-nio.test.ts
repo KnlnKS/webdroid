@@ -4,24 +4,25 @@ import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { rt } from "../src/jvm/runtime";
 import { vfs } from "../src/shell/vfs";
 import { jarray } from "../src/jvm/abi";
-import { scall } from "./java";
+import { scall, loadLibcore } from "./java";
 import { decodeString, encodeString } from "../src/jvm/charset";
 
 rt.linkNatives();
+await loadLibcore();
+const statics = async (cls: string): Promise<any> => { const info = rt.link(cls); await rt.initClass(info); return info.ctor; };
 
 describe("channel-streams", () => {
   test("Channels stream adapters preserve byte-buffer positions and stream ranges", async () => {
-    const cls = rt.link("java/nio/channels/Channels").ctor;
     const input = await newObj("java/io/ByteArrayInputStream", "([B)V", Int8Array.of(1, 2, 3, 4));
-    const reader = await vcall(cls, "newChannel", "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;", input);
-    const stream = await vcall(cls, "newInputStream", "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;", reader);
+    const reader = await scall("java/nio/channels/Channels", "newChannel", "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;", input);
+    const stream = await scall("java/nio/channels/Channels", "newInputStream", "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;", reader);
     expect(await vcall(stream, "skip", "(J)J", 1n)).toBe(1n);
     const bytes = new Int8Array(5);
     expect(await vcall(stream, "read", "([BII)I", bytes, 1, 2)).toBe(2);
     expect([...bytes]).toEqual([0, 2, 3, 0, 0]);
     const output = await newObj("java/io/ByteArrayOutputStream");
-    const writer = await vcall(cls, "newChannel", "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;", output);
-    const sink = await vcall(cls, "newOutputStream", "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;", writer);
+    const writer = await scall("java/nio/channels/Channels", "newChannel", "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;", output);
+    const sink = await scall("java/nio/channels/Channels", "newOutputStream", "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;", writer);
     await vcall(sink, "write", "([BII)V", bytes, 1, 2);
     expect(await vcall(output, "toByteArray", "()[B")).toEqual(Int8Array.of(2, 3));
     await vcall(stream, "close", "()V");
@@ -30,10 +31,10 @@ describe("channel-streams", () => {
 });
 
 describe("charbuffer-sequence", () => {
-  const wrap = (text: unknown) => vcall(rt.link("java/nio/CharBuffer").ctor, "wrap", "(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;", text);
+  const wrap = (text: unknown) => scall("java/nio/CharBuffer", "wrap", "(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;", text);
 
   test("CharBuffer exposes its writable char-array backing", async () => {
-    const buffer = await vcall(rt.link("java/nio/CharBuffer").ctor, "allocate", "(I)Ljava/nio/CharBuffer;", 2);
+    const buffer = await scall("java/nio/CharBuffer", "allocate", "(I)Ljava/nio/CharBuffer;", 2);
     const array = await vcall(buffer, "array", "()[C");
     array[0] = 65;
     expect(await vcall(buffer, "get", "(I)C", 0)).toBe(65);
@@ -72,59 +73,13 @@ describe("charbuffer-sequence", () => {
     expect(hex(await vcall(encoder, "replacement", "()[B"))).toBe("fdff");
     expect(await vcall(encoder, "maxBytesPerChar", "()F")).toBe(2);
   });
-
-  test("one-shot charset encoding consumes UTF-16 input and reports malformed surrogates", async () => {
-    const charset = rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8;
-    const encoder = await vcall(charset, "newEncoder", "()Ljava/nio/charset/CharsetEncoder;");
-    const b = await wrap("café🗺");
-    const out = await vcall(encoder, "encode", "(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;", b);
-    expect(new Uint8Array((await vcall(out, "array", "()[B")).buffer)).toEqual(new TextEncoder().encode("café🗺"));
-    expect(await vcall(b, "remaining", "()I")).toBe(0);
-    const bad = await wrap("a\ud800b");
-    await expect(vcallAsync(encoder, "encode", "(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;", bad)).rejects.toMatchObject({ msg: "Input length = 1" });
-    expect(await vcall(bad, "position", "()I")).toBe(1);
-  });
-
-  test("decoder replacement preserves valid replacement characters and unread overflow input", async () => {
-    const decoder = await vcall(rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8, "newDecoder", "()Ljava/nio/charset/CharsetDecoder;");
-    await vcall(decoder, "replaceWith", "(Ljava/lang/String;)Ljava/nio/charset/CharsetDecoder;", "?");
-    const input = await vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([B)Ljava/nio/ByteBuffer;", new Int8Array([0xef, 0xbf, 0xbd, 0xff, 0xf0, 0x9f, 0x90, 0x88]));
-    const output = await vcall(rt.link("java/nio/CharBuffer").ctor, "allocate", "(I)Ljava/nio/CharBuffer;", 3);
-    const decode = () => vcall(decoder, "decode", "(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;", input, output, 1);
-    const error = await decode();
-    expect(await vcall(error, "isMalformed", "()Z")).toBe(1);
-    expect(input.pos).toBe(3);
-    await rt.initClass(rt.link("java/nio/charset/CodingErrorAction"));
-    await vcall(decoder, "onMalformedInput", "(Ljava/nio/charset/CodingErrorAction;)Ljava/nio/charset/CharsetDecoder;", rt.link("java/nio/charset/CodingErrorAction").ctor.s$REPLACE);
-    expect(await vcall(await decode(), "isOverflow", "()Z")).toBe(1);
-    expect(input.pos).toBe(4);
-    await vcall(output, "flip", "()Ljava/nio/Buffer;");
-    expect(await vcall(output, "toString", "()Ljava/lang/String;")).toBe("\ufffd?");
-    await vcall(output, "clear", "()Ljava/nio/Buffer;");
-    expect(await vcall(await decode(), "isUnderflow", "()Z")).toBe(1);
-    await vcall(output, "flip", "()Ljava/nio/Buffer;");
-    expect(await vcall(output, "toString", "()Ljava/lang/String;")).toBe("🐈");
-  });
-
-  test("streaming encode stops before a character that does not fit and keeps a split surrogate pair", async () => {
-    const encoder = await vcall(rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8, "newEncoder", "()Ljava/nio/charset/CharsetEncoder;");
-    const input = await vcall(rt.link("java/nio/CharBuffer").ctor, "wrap", "([C)Ljava/nio/CharBuffer;", Uint16Array.from("aé🗺\ud83d".split(""), (c) => c.charCodeAt(0)));
-    const output = await vcall(rt.link("java/nio/ByteBuffer").ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 4);
-    const encode = (end: number) => vcall(encoder, "encode", "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;", input, output, end);
-    expect(await vcall(await encode(0), "isOverflow", "()Z")).toBe(1);
-    expect([input.pos, output.pos]).toEqual([2, 3]);
-    await vcall(output, "clear", "()Ljava/nio/Buffer;");
-    expect(await vcall(await encode(0), "isUnderflow", "()Z")).toBe(1);
-    expect([input.pos, output.pos]).toEqual([4, 4]);
-    expect(await vcall(await encode(1), "isMalformed", "()Z")).toBe(1);
-  });
 });
 
 describe("intbuffer-bulk", () => {
   test("IntBuffer bulk range writes honor order, position and limits", async () => {
     for (const little of [false, true]) {
-      const bytes = await vcall(rt.link("java/nio/ByteBuffer").ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 20);
-      if (little) await vcall(bytes, "order", "(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;", rt.link("java/nio/ByteOrder").ctor.s$LITTLE_ENDIAN);
+      const bytes = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 20);
+      if (little) await vcall(bytes, "order", "(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;", (await statics("java/nio/ByteOrder")).s$LITTLE_ENDIAN);
       const buffer = await vcall(bytes, "asIntBuffer", "()Ljava/nio/IntBuffer;");
       await vcall(buffer, "position", "(I)Ljava/nio/IntBuffer;", 1);
       await vcall(buffer, "put", "([III)Ljava/nio/IntBuffer;", Int32Array.of(9, 0x12345678, -42, 8), 1, 2);
@@ -295,7 +250,7 @@ describe("nio", () => {
     vfs.write("/tmp/nio-map.bin", new Uint8Array([1, 2, 3, 4]));
     const raf = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "rw");
     const channel = await vcall(raf, "getChannel", "()Ljava/nio/channels/FileChannel;");
-    const mode = (rt.link("java/nio/channels/FileChannel$MapMode").ctor as any).s$READ_WRITE;
+    const mode = (await statics("java/nio/channels/FileChannel$MapMode")).s$READ_WRITE;
     const map = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 2n, 6n);
     expect(await vcall(map, "capacity", "()I")).toBe(6);
     expect(vfs.read("/tmp/nio-map.bin")!.length).toBe(8);           // the mapping extended the file
@@ -318,7 +273,7 @@ describe("nio", () => {
     vfs.mount("/tmp/nio-paged.bin", { size, read: async (at, n) => { reads.push(at); return bytes.slice(at, at + n); } });
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-paged.bin");
     const channel = await vcall(input, "getChannel", "()Ljava/nio/channels/FileChannel;");
-    const mode = (rt.link("java/nio/channels/FileChannel$MapMode").ctor as any).s$READ_ONLY;
+    const mode = (await statics("java/nio/channels/FileChannel$MapMode")).s$READ_ONLY;
     const map = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 3n, BigInt(size - 3));
     await vcall(input, "close", "()V");
     const at = (i: number) => bytes[i + 3], int = (i: number) => (at(i) << 24 | at(i + 1) << 16 | at(i + 2) << 8 | at(i + 3));

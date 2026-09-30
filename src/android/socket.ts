@@ -4,7 +4,7 @@ import { rt, JObj, declaredField } from "../jvm/runtime";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
-import { errno, sys, ioResult, readBytes, ioRegion, FD, type IoBuffer } from "./os";
+import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
 import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd } from "../native/stdio";
 import {
@@ -72,8 +72,7 @@ const withEndpoint = <T>(ep: Endpoint | Promise<Endpoint>, f: (ep: Endpoint) => 
 function connect(d: JObj | null, ep: Endpoint) { return waited("connect", socketConnect(fdInt(d), ep), () => {}); }
 function bind(d: JObj | null, ep: Endpoint) { sys("bind", socketBind(fdInt(d), ep)); }
 function sendto(d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, ep: Endpoint | null) {
-  const bytes = ioRegion(buffer, offset, count);
-  return ioResult("sendto", socketSend(fdInt(d), bytes, ep));
+  return writeBytes(buffer, offset, count, (bytes) => ioResult("sendto", socketSend(fdInt(d), bytes, ep)));
 }
 /** a socketpair end's options: an AF_UNIX stream socket, which the socket core does not model */
 function unixOption(fd: number, level: number, name: number): number {

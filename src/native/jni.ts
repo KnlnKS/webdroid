@@ -8,7 +8,7 @@ import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8 } from "../jvm/abi";
 import { curThread, callOn, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
-import { JBuffer, directBufferAddress, nativeByteBuffer, resident } from "../jvm/natives/jnio";
+import { addressOf, capacity, directAddress, isBuffer, newDirectBuffer } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
 
 export const jniMissing = new Set<string>();
@@ -519,20 +519,25 @@ export function jniInit(): void {
   def(226, "NewWeakGlobalRef", T[21]!);
   def(227, "DeleteWeakGlobalRef", T[22]!);
   def(228, "ExceptionCheck", (cpu) => (cpu.exc ? 1 : 0));
-  def(229, "NewDirectByteBuffer", (_cpu, a) => {
+  def(229, "NewDirectByteBuffer", (cpu, a) => {
     a.p(); const address = a.p(), cap = a.l();
-    return cap < 0n || cap > 0x7fffffffn ? 0 : toRef(nativeByteBuffer(address, Number(cap)));
+    if (cap < 0n || cap > 0x7fffffffn) return 0;
+    try {
+      const b = newDirectBuffer(mem.va(address), Number(cap));
+      return b instanceof Promise ? b.then(toRef, (e) => { pend(cpu, e); return 0; }) : toRef(b);
+    } catch (e) { pend(cpu, e); return 0; }
   });
   def(230, "GetDirectBufferAddress", (cpu, a) => {
     a.p(); const b = deref(a.p());
-    if (!(b instanceof JBuffer)) return 0;
-    const address = () => { try { return directBufferAddress(b); } catch (e) { pend(cpu, e); return 0; } };
-    const wait = resident(b);
-    return wait ? wait.then(address, (e) => { pend(cpu, e); return 0; }) : address();
+    if (!isBuffer(b)) return 0;
+    try {
+      const address = directAddress(b);
+      return address instanceof Promise ? address.catch((e) => { pend(cpu, e); return 0; }) : address;
+    } catch (e) { pend(cpu, e); return 0; }
   });
   def(231, "GetDirectBufferCapacity", (_cpu, a) => {
     a.p(); const b = deref(a.p());
-    return b instanceof JBuffer && b.direct ? BigInt(b.cap) : -1n;
+    return isBuffer(b) && addressOf(b) ? BigInt(capacity(b)) : -1n;
   });
   def(232, "GetObjectRefType", (_c, a) => { a.p(); const h = a.p(); return h === 0 ? 0 : h & GLOBAL_BIT ? 2 : 1; });
 

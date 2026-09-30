@@ -2,7 +2,7 @@
 
 import { rt, JObj } from "../jvm/runtime";
 import { curThread, threadSwitch } from "../jvm/natives/jlang";
-import { JBuffer, bufferView } from "../jvm/natives/jnio";
+import { type JBuffer, remainingBytes, bufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
 import { activeUniformInfo, externalSamplersAs2D, gles3Extensions, pixelStore, textureTarget } from "../native/gles3";
@@ -50,8 +50,7 @@ export function put<O extends object>(tbl: (O | null)[], obj: O | null): number 
 
 function bytesFrom(buf: JBuffer | null): Uint8Array<ArrayBuffer> | null {
   if (!buf) return null;
-  const v = bufferView(buf);
-  return new Uint8Array(v.ab, v.byteFromPos, (buf.lim - buf.pos) * 2 ** buf.elemShift);
+  return remainingBytes(buf) as Uint8Array<ArrayBuffer>;
 }
 
 /** glGenX into an int[] or an IntBuffer; glDeleteX drops each slot (see glDeleteShader) */
@@ -105,7 +104,7 @@ function streamClientArrays(g: GL): void {
   const prev = g.getParameter(g.ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
   for (const [idx, { buf, from, length }] of client.attribs) {
     g.bindBuffer(g.ARRAY_BUFFER, client.buffers[idx]!);
-    g.bufferData(g.ARRAY_BUFFER, new Uint8Array(buf.ab, bufferView(buf).byteOffset + from, length), g.STREAM_DRAW);
+    g.bufferData(g.ARRAY_BUFFER, bufferBytes(buf).subarray(from, from + length) as Uint8Array<ArrayBuffer>, g.STREAM_DRAW);
   }
   g.bindBuffer(g.ARRAY_BUFFER, prev);
 }
@@ -271,7 +270,7 @@ rt.register({
         gl.bindBuffer(gl.ARRAY_BUFFER, client.buffers[idx] ??= gl.createBuffer());
         gl.vertexAttribPointer(idx, size, type, !!normalized, stride, 0);
         gl.bindBuffer(gl.ARRAY_BUFFER, prev);
-        client.attribs.set(idx, { buf, from: buf.pos << buf.elemShift, length: (buf.lim - buf.pos) << buf.elemShift });
+        client.attribs.set(idx, { buf, from: position(buf) << elementShift(buf), length: (limit(buf) - position(buf)) << elementShift(buf) });
       },
     "static glVertexAttribPointer(IIIZII)V": (idx: number, size: number, type: number, normalized: number, stride: number, offset: number) => {
       if (!gl) return;

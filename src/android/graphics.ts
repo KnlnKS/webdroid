@@ -16,7 +16,7 @@ import { readStreamFully, fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
-import { JBuffer } from "../jvm/natives/jnio";
+import { type JBuffer, remainingBytes, position, limit, elementShift, setPosition } from "../jvm/natives/jnio";
 import { type NativePath, inversePath, nativePathOf } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
@@ -883,9 +883,10 @@ function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   if (!["ByteBuffer", "ShortBuffer", "IntBuffer"].some((name) => rt.iof(buffer, "java/nio/" + name)))
     throw rt.mkThrowable("java/lang/RuntimeException", "unsupported Buffer subclass");
   const length = bitmap.rowBytes * bitmap.h;
-  if ((buffer.lim - buffer.pos) * 2 ** buffer.elemShift < length)
+  const shift = elementShift(buffer);
+  if ((limit(buffer) - position(buffer)) << shift < length)
     throw rt.mkThrowable("java/lang/RuntimeException", "Buffer not large enough for pixels");
-  const view = buffer.dv, bytes = u8(view, buffer.pos * 2 ** buffer.elemShift, length);
+  const bytes = remainingBytes(buffer).subarray(0, length);
   const pixels = bitmap.pixels(), alpha = !bitmap.hasAlpha ? 1 : bitmap.premultiplied ? 0 : 2;
   if (bitmap.config === 1) {
     for (let i = 0; i < length; i++) {
@@ -895,7 +896,7 @@ function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   } else if (from) copyBitmapPixels(bytes, pixels, alpha, true);
   else copyBitmapPixels(pixels, bytes, alpha, false);
   if (from) bitmap.commit(0, 0, bitmap.w, bitmap.h);
-  buffer.pos += length >> buffer.elemShift;
+  setPosition(buffer, position(buffer) + (length >> shift));
 }
 
 /** Exported for the same reason canvasMethods is: AOSP's own Bitmap bytecode reaches these

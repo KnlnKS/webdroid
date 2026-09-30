@@ -8,7 +8,7 @@ import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdSource } from "../native/stdio";
 import { readFully } from "../shell/lazyfile";
-import type { JBuffer } from "../jvm/natives/jnio";
+import { type JBuffer, limit, position, remainingBytes, setPosition } from "../jvm/natives/jnio";
 import { onMain } from "./mainloop";
 import { JBundle, reportUncaught } from "./os";
 import { mkUri, uriParts, type JUri } from "./net";
@@ -658,12 +658,12 @@ export class JAudioTrack extends JObj {
   }
   writeBuffer(buffer: JBuffer, n: number, mode: number): number | Promise<number> {
     if (this.state !== 1) return -3;
-    if (!buffer || n < 0 || n > buffer.lim - buffer.pos || (mode !== 0 && mode !== 1)) return -2;
+    if (!buffer || n < 0 || n > limit(buffer) - position(buffer) || (mode !== 0 && mode !== 1)) return -2;
     const requested = Math.floor(n / this.frameBytes()) * this.frameBytes();
     const available = Math.max(0, this.bufBytes - Math.ceil(this.queuedSec() * this.rate) * this.frameBytes());
     n = Math.floor(Math.min(requested, available) / this.frameBytes()) * this.frameBytes();
     if (!n) return mode === 0 && requested ? this.finishWrite(buffer, requested, 0) : 0;
-    const data = new DataView(buffer.ab, buffer.dv.byteOffset + buffer.pos, n);
+    const bytes = remainingBytes(buffer), data = new DataView(bytes.buffer, bytes.byteOffset, n);
     const count = n / this.bytesPerSample;
     // AudioTrack consumes native-order PCM, independently of ByteBuffer.order().
     const SampleArray = this.bytesPerSample === 4 ? Float32Array : this.bytesPerSample === 2 ? Int16Array : Int8Array;
@@ -671,7 +671,7 @@ export class JAudioTrack extends JObj {
     const samples = aligned ? new SampleArray(data.buffer, data.byteOffset, count) : new SampleArray(count);
     if (!aligned) for (let i = 0; i < count; i++) samples[i] = this.bytesPerSample === 4 ? data.getFloat32(i * 4, true) : data.getInt16(i * 2, true);
     this.push(samples, n / this.frameBytes());
-    buffer.pos += n;
+    setPosition(buffer, position(buffer) + n);
     return mode === 0 && n < requested ? this.finishWrite(buffer, requested, n) : n;
   }
   async finishWrite(buffer: JBuffer, requested: number, written: number): Promise<number> {

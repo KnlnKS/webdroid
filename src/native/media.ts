@@ -2,7 +2,8 @@ import { JMediaFormat } from "../android/media-format";
 import { MediaExtractor } from "../android/media-extractor";
 import { createCodec, type JMediaCodec } from "../android/media-codec";
 import { JBufferInfo } from "../android/media";
-import { directBufferAddress, JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
+import { capacity, directAddress, directCopy, directReady, isBuffer } from "../jvm/natives/jnio";
+import { after } from "../jvm/natives/jlang";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./stdio";
 import { windowOf } from "./libandroid";
@@ -73,12 +74,12 @@ export function mediaInit(): void {
     },
     AMediaFormat_getBuffer: (_cpu, a) => {
       const format = formats.get(a.p()), key = a.str(), out = a.p(), size = a.p(), value = format?.value.values.get(key)?.value;
-      if (!(value instanceof JBuffer) || !out) return 0;
-      stpVa(out, directBufferAddress(value)); sizeOut(size, value.cap); return 1;
+      if (!isBuffer(value) || !out) return 0;
+      return after(directAddress(value), (address) => { stpVa(out, address); sizeOut(size, capacity(value)); return 1; });
     },
     AMediaFormat_setBuffer: (_cpu, a) => {
       const format = formats.get(a.p()), key = a.str(), data = a.p(), size = a.u(); if (!format) return;
-      const value = mkByteBuffer(size, true); new Uint8Array(value.ab).set(mem.bytes(data, size)); format.value.values.set(key, { type: 5, value });
+      return after(directCopy(mem.bytes(data, size)), (value) => { format.value.values.set(key, { type: 5, value }); });
     },
     AMediaExtractor_new: () => { const handle = nextHandle++; extractors.set(handle, { value: new MediaExtractor(), source: null, close: null }); return handle; },
     AMediaExtractor_delete: async (cpu, a) => { const handle = a.p(), extractor = extractors.get(handle); if (!extractor) return BAD_OBJECT; extractors.delete(handle); await extractor.close?.(cpu); return 0; },
@@ -118,11 +119,11 @@ export function mediaInit(): void {
       const surface = windowOf(window); if (window && !surface) return INVALID;
       try { codec.configure(format.value, surface, crypto, flags); return 0; } catch { return INVALID; }
     },
-    AMediaCodec_start: codecStatus(codec => codec.start()),
+    AMediaCodec_start: (cpu, a) => after(directReady(), () => codecStatus(codec => codec.start())(cpu, a)),
     AMediaCodec_stop: codecStatus(codec => codec.reset()),
     AMediaCodec_flush: codecStatus(codec => { const restart = codec.started; codec.reset(); if (restart) codec.start(); }),
-    AMediaCodec_getInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), index = a.u(), size = a.p(), buffer = codec?.inputs[index]; sizeOut(size, buffer?.cap ?? 0); return buffer ? directBufferAddress(buffer) : 0; },
-    AMediaCodec_getOutputBuffer: (_cpu, a) => { const output = codecs.get(a.p())?.outputs.get(a.u()), size = a.p(), buffer = output?.kind === "audio" || output?.kind === "video-buffer" ? output.buffer : null; sizeOut(size, buffer?.cap ?? 0); return buffer ? directBufferAddress(buffer) : 0; },
+    AMediaCodec_getInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), index = a.u(), size = a.p(), buffer = codec?.inputs[index]; sizeOut(size, buffer ? capacity(buffer) : 0); return buffer ? directAddress(buffer) : 0; },
+    AMediaCodec_getOutputBuffer: (_cpu, a) => { const output = codecs.get(a.p())?.outputs.get(a.u()), size = a.p(), buffer = output?.kind === "audio" || output?.kind === "video-buffer" ? output.buffer : null; sizeOut(size, buffer ? capacity(buffer) : 0); return buffer ? directAddress(buffer) : 0; },
     AMediaCodec_dequeueInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), timeout = a.l(); if (!codec) return BAD_OBJECT; try { const result = codec.dequeueInput(timeout); return result instanceof Promise ? result.catch(() => INVALID) : result; } catch { return INVALID; } },
     AMediaCodec_dequeueOutputBuffer: (_cpu, a) => {
       const codec = codecs.get(a.p()), out = a.p(), timeout = a.l(); if (!codec || !out) return INVALID;

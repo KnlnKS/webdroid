@@ -24,7 +24,6 @@ import "./jvm/natives/jec";
 import "./jvm/natives/jsignature";
 import "./jvm/natives/jnet";
 import "./jvm/natives/jhttp";
-import "./jvm/natives/jchannels";
 import "./jvm/natives/jzip";
 import "./android/gl";
 import "./android/glview";

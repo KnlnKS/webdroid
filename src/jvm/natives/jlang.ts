@@ -1869,6 +1869,8 @@ export class JThread extends JObj {
   threadLocals: unknown = null; inheritableThreadLocals: unknown = null; inheritedAccessControlContext: unknown = null;
   /** LockSupport's blocker, and the id it reads through Unsafe as getId reports it */
   parkBlocker: unknown = null;
+  /** the Interruptible of the channel operation blocking this thread (Thread.blockedOn) */
+  blocker: unknown = null;
   get tid(): bigint { return BigInt(idHash(this)); }
   daemon = 0;
   private live = 0;
@@ -1983,7 +1985,12 @@ rt.register({
     },
     "getId()J": function (this: JThread) { return BigInt(idHash(this)); },
     "isInterrupted()Z": function (this: JThread) { return this.interrupted; },
-    "interrupt()V": function (this: JThread) { this.interrupted = 1; this.wake?.(); },
+    // an interruptible channel operation blocked here is closed by its Interruptible, as libcore's Thread does
+    "interrupt()V": function (this: JThread) {
+      this.interrupted = 1; this.wake?.();
+      return this.blocker ? vcall(this.blocker, "interrupt", "(Ljava/lang/Thread;)V", this) : undefined;
+    },
+    "blockedOn(Lsun/nio/ch/Interruptible;)V": function (this: JThread, b: unknown) { this.blocker = b; },
     "start()V": function (this: JThread) {
       if (this.started) throw rt.mkThrowable("java/lang/IllegalThreadStateException", "Thread already started");
       this.alive = 1;

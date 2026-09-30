@@ -850,8 +850,8 @@ Run all of these before committing a flip:
 - `bun run test` (1,378 pass);
 - `WEBDROID_URL=http://localhost:4217 bun run e2e` twice (7/7);
 - the live set above;
-- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file`. Baselines are 40,085,
-  2,544, 27,514, 1,277, 537 and 173; jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
+- `bun run conform guava|jsr166|ojluni-time|luni-io|luni-net|luni-nio-file|luni-nio`. Baselines are 40,085,
+  2,544, 27,514, 1,279, 537, 173 and 2,616 (luni-nio: buffers, charsets, file channels); jsr166 and luni-io take about 5 minutes, ojluni-time about 2.5 and luni-net 10 s.
   luni-io is libcore's java.io and java.util.zip tests (harmony and luni) from LineageOS's Android 14
   mirror; luni-net is its java.net tests without those that open sockets or servers;
 - `bun run lat` cold and `--warm`;
@@ -969,6 +969,12 @@ These classes now run from AOSP bytecode, with their TS code deleted:
   `new URL(s)` costs 0.85 µs against 0.38, toString 0.12 against 0.06; getters and equals got
   faster. Limit: class path archives open unverified (JarVerifier's PKCS7 parse needs a bytecode
   ByteArrayInputStream).
+- **java.nio's buffers and charset coders (B.7 cut 5).** Every Buffer class, Charset and the
+  CharsetICU coders run from libcore; TS reads a buffer as NIOAccess does (`bufferBytes` in jnio.ts),
+  direct buffers and non-movable byte arrays live in guest memory, read-only file mappings page
+  outside it (jmemory.ts `Region`), and NativeConverter's natives run charset.ts's ICU-model
+  converters, checked against a device probe. String's codecs stay TS over the same tables. The new
+  `luni-nio` suite went from 926 to 2,616 of 2,815 (history entry, with the measured costs).
 
 Fixes that apply to every mode:
 - Fallthrough ordering. A platform body that cannot run on a TS class yields to the spec's
@@ -1029,7 +1035,7 @@ precomputed mangled key). Rerun `--write-baseline` after fixes so the backlog sh
      (7) java.net value classes (URI blocks the cookie classes: AOSP's cookie store needs
      `URI.compareTo`). (8) sockets over `native/net.ts`.
    - **Stays TS as boundaries.** HttpURLConnection over the fetch proxy, TLS at the relay, lazy asset
-     streams (`AssetManager$AssetInputStream`), and probably the Buffers and charset codecs.
+     streams (`AssetManager$AssetInputStream`) and String's own charset codecs (a VM built-in).
    - `luni-io` (1,275 of 1,541 after cut 4) is the conformance suite for java.io and java.util.zip.
    - Cut 3 limits. Unbuffered IO pays a syscall per call, as on a device: RandomAccessFile.readLine
      reads a byte at a time (about 30x the TS time), readInt 2.4x, 1-byte FileOutputStream writes

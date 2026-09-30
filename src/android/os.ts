@@ -24,7 +24,7 @@ import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
-import { JBuffer, mkByteBuffer, resident } from "../jvm/natives/jnio";
+import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { clearGuestTimeout, guestNow, guestSleep, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
@@ -645,23 +645,17 @@ export const PARCELABLE = {
 } as const;
 rt.markers("android/os/Parcelable");
 rt.markers("android/os/OutcomeReceiver");
-const sharedMappings = new WeakSet<JBuffer["backing"]>();
+const sharedMappings = new WeakSet<JBuffer>();
+/** the ashmem region: guest memory, which each mapping's direct buffer addresses */
 class JSharedMemory extends JObj {
-  bytes = new Uint8Array(0);
+  bytes: Int8Array = new Int8Array(0);
   protection = 7;
   closed = false;
-  map(prot: number, offset: number, length: number): JBuffer {
+  map(prot: number, offset: number, length: number): JBuffer | Promise<JBuffer> {
     if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
     if (offset < 0 || length <= 0 || offset > this.bytes.length - length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid shared memory range");
     if (prot < 0 || prot & ~7 || (prot & this.protection) !== prot) throw errno("mmap", E.ACCES);
-    rt.link("java/nio/ByteBuffer");
-    const buffer = mkByteBuffer(0, true);
-    buffer.backing = { storage: { kind: "direct", ab: this.bytes.buffer as ArrayBuffer } };
-    buffer.byteOffset = offset;
-    buffer.cap = buffer.lim = length;
-    buffer.readOnly = !(prot & 2);
-    sharedMappings.add(buffer.backing);
-    return buffer;
+    return after(directView(this.bytes, offset, length, !(prot & 2)), (buffer) => { sharedMappings.add(buffer); return buffer; });
   }
 }
 rt.register({
@@ -669,13 +663,13 @@ rt.register({
   statics: { get CREATOR() { return parcelCreator("android/os/SharedMemory", async (p) => {
     const protection = await vcall(p, "readInt", "()I") as number;
     const bytes = await vcall(p, "createByteArray", "()[B") as Int8Array;
-    const shared = new JSharedMemory(); shared.protection = protection; shared.bytes = Uint8Array.from(bytes);
+    const shared = new JSharedMemory(); shared.protection = protection; shared.bytes = nonMovableBytes(bytes.length); shared.bytes.set(bytes);
     return shared;
   }); } },
   methods: {
     "static create(Ljava/lang/String;I)Landroid/os/SharedMemory;": (_name: string | null, size: number) => {
       if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Size must be positive");
-      const shared = new JSharedMemory(); shared.bytes = new Uint8Array(size); return shared;
+      const shared = new JSharedMemory(); shared.bytes = nonMovableBytes(size); return shared;
     },
     "getSize()I": function (this: JSharedMemory) {
       if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
@@ -692,15 +686,15 @@ rt.register({
     },
     "static unmap(Ljava/nio/ByteBuffer;)V": (buffer: JBuffer | null) => {
       if (!buffer) return rt.npe();
-      if (!sharedMappings.delete(buffer.backing)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer is not mapped shared memory");
-      buffer.backing.storage = { kind: "direct", ab: new ArrayBuffer(0) };
+      if (!sharedMappings.delete(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer is not mapped shared memory");
+      return scall("java/nio/NioUtils", "freeDirectBuffer", "(Ljava/nio/ByteBuffer;)V", buffer);
     },
     "close()V": function (this: JSharedMemory) { this.closed = true; },
     "describeContents()I": () => 1,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JSharedMemory, parcel: JParcel): Gen {
       if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
       yield vcall(parcel, "writeInt", "(I)V", this.protection);
-      yield vcall(parcel, "writeByteArray", "([B)V", new Int8Array(this.bytes.buffer));
+      yield vcall(parcel, "writeByteArray", "([B)V", this.bytes.slice());
     }),
   },
 });
@@ -1230,9 +1224,9 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
       readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position))),
     [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      after(buffer instanceof JBuffer ? resident(buffer) : null, () => ioResult("write", javaWriteFd(fdInt(d), ioRegion(buffer, offset, count)))),
+      writeBytes(buffer, offset, count, (bytes) => ioResult("write", javaWriteFd(fdInt(d), bytes))),
     [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      after(buffer instanceof JBuffer ? resident(buffer) : null, () => ioResult("pwrite", javaPwriteFd(fdInt(d), ioRegion(buffer, offset, count), Number(position)))),
+      writeBytes(buffer, offset, count, (bytes) => ioResult("pwrite", javaPwriteFd(fdInt(d), bytes, Number(position)))),
     [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => sys("ftruncate", javaTruncateFd(fdInt(d), Number(length))),
     [`fsync(${FD})V`]: (d: JObj | null) => sys("fsync", javaSyncFd(fdInt(d))),
     [`fdatasync(${FD})V`]: (d: JObj | null) => sys("fdatasync", javaSyncFd(fdInt(d))),
@@ -1356,15 +1350,19 @@ const SENDFILE_CHUNK = 1 << 20;
 export type IoBuffer = Int8Array | JBuffer | null;
 export function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
   if (buffer === null) return rt.npe();
-  const view = buffer instanceof JBuffer ? buffer.dv : buffer;
+  const view = isBuffer(buffer) ? bufferBytes(buffer) : buffer;
   checkFromIndexSize(offset, count, view.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
   return new Uint8Array(view.buffer, view.byteOffset + offset, count);
+}
+/** the bytes to write, once a mapped direct buffer's pages are in */
+export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): T | Promise<T> {
+  return after(isBuffer(buffer) ? resident(buffer) : null, () => write(ioRegion(buffer, offset, count)));
 }
 /** A direct buffer may live in guest memory, which can move while a read waits: it takes the
  *  bytes once they have arrived. */
 export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
   const target = ioRegion(buffer, offset, count);
-  if (!(buffer instanceof JBuffer)) return after(read(target), (n) => ioResult(fn, n));
+  if (!isBuffer(buffer)) return after(read(target), (n) => ioResult(fn, n));
   const scratch = new Uint8Array(count);
   return after(read(scratch), (n) => {
     if (n > 0) ioRegion(buffer, offset, n).set(scratch.subarray(0, n));

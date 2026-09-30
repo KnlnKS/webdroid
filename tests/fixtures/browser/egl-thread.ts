@@ -16,7 +16,8 @@ import { gles1Init } from "../../../src/native/gles1";
 import { gles3Init, pixelStore } from "../../../src/native/gles3";
 import { nativeWindowFor, ndkInit } from "../../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../../src/native/host";
-import { mkByteBuffer } from "../../../src/jvm/natives/jnio";
+import { allocateDirectNow, bufferBytes, directReady, nativeOrder } from "../../../src/jvm/natives/jnio";
+import { loadCoreOj } from "./libcore";
 
 function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
   let i = 0;
@@ -114,13 +115,14 @@ function clientArrays() {
   g.createBuffer = () => { created++; return create(); };
   const gles = rt.link("android/opengl/GLES20").ctor;
   const call = (name: string, desc: string, ...args: unknown[]) => Reflect.apply(Reflect.get(gles, mangleMethod(name, desc)), gles, args);
-  const vertices = mkByteBuffer(24, true), indices = mkByteBuffer(12, true);
-  new Uint32Array(indices.ab).set([0, 1, 2]);
+  const vertices = nativeOrder(allocateDirectNow(24)), indices = nativeOrder(allocateDirectNow(12));
+  const f32 = (b: typeof vertices) => { const bytes = bufferBytes(b); return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length >> 2); };
+  new Uint32Array(f32(indices).buffer, f32(indices).byteOffset, 3).set([0, 1, 2]);
   call("glEnableVertexAttribArray", "(I)V", 0);
   const pixels: number[][] = [];
   for (let i = 0; i < 2; i++) {
     call("glVertexAttribPointer", "(IIIZILjava/nio/Buffer;)V", 0, 2, g.FLOAT, 0, 0, vertices);
-    new Float32Array(vertices.ab).set([-1, -1, 3, -1, -1, 3]);
+    f32(vertices).set([-1, -1, 3, -1, -1, 3]);
     g.clear(g.COLOR_BUFFER_BIT);
     call("glDrawElements", "(IIILjava/nio/Buffer;)V", g.TRIANGLES, 3, g.UNSIGNED_INT, indices);
     const pixel = new Uint8Array(4); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, pixel); pixels.push([...pixel]);
@@ -213,7 +215,9 @@ function externalTexture() {
 }
 
 async function probe() {
+  await loadCoreOj();
   rt.linkNatives();
+  await directReady();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
   const c14 = rt.link("android/opengl/EGL14").ctor;
   const call14 = (name: string, desc: string, ...args: unknown[]) => Reflect.apply(Reflect.get(c14, mangleMethod(name, desc)), c14, args);

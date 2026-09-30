@@ -6,7 +6,7 @@ import { utf8, i8, u8 } from "../abi";
 import { vcall, newObj, after, defineException, checkFromIndexSize } from "./jlang";
 import { pathOf, readStreamFully, heldByteReads, filterOut, setFilterOut } from "./jio";
 import { vfs } from "../../shell/vfs";
-import { JBuffer, resident } from "./jnio";
+import { type JBuffer, limit, remainingBytes, resident, setPosition } from "./jnio";
 import { mkEnumeration, newArrayList } from "./jcoll";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
@@ -231,8 +231,8 @@ const checksumMethods = {
   "update([BII)V": updateBytes,
   "update(Ljava/nio/ByteBuffer;)V": function (this: unknown, bb: JBuffer) {
     return after(resident(bb), () => {
-      const n = bb.lim - bb.pos, bytes = new Uint8Array(bb.ab, bb.dv.byteOffset + bb.pos, n);
-      bb.pos = bb.lim;
+      const bytes = remainingBytes(bb), n = bytes.length;
+      setPosition(bb, limit(bb));
       if (this instanceof JChecksum) this.state = this.algo.step(this.state, bytes, 0, n);
       else return vcall(this, "update", "([BII)V", new Int8Array(bytes), 0, n);
     });

@@ -6,7 +6,9 @@ import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, defineException, t
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { mappedBuffer, mappedReadOnlyBuffer, pagedMapping, mkByteBuffer, remainingBytes, resident, type JBuffer } from "./jnio";
+import { mappedBuffer, readOnlyMapping, wrapBytes, remainingBytes, resident, limit, setLimit, setPosition, position as bufferPosition, type JBuffer } from "./jnio";
+import { mem } from "../../native/mem";
+import { syncShared, trackSharedMap } from "../../native/mappings";
 import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile } from "../../native/stdio";
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
@@ -355,24 +357,26 @@ class JFileChannel extends JObj {
 }
 const fdSize = (fd: number): number => javaFdStat(fd)?.size ?? lastError(-E.BADF, null);
 function channelRead(channel: JFileChannel, dst: JBuffer, position = -1): number | Promise<number> {
-  const fd = channel.reading(), len = dst.lim - dst.pos;
+  const fd = channel.reading(), len = limit(dst) - bufferPosition(dst);
   if (len === 0) return 0;
-  dst.clampPut(0);
-  const view = u8(remainingBytes(dst));
-  return after(position < 0 ? javaReadFd(fd, view) : javaPreadFd(fd, view, position), (n) => {
+  if (vcall(dst, "isReadOnly", "()Z")) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+  // the bytes land once the read completes: guest memory may have moved meanwhile
+  const scratch = new Uint8Array(len);
+  return after(position < 0 ? javaReadFd(fd, scratch) : javaPreadFd(fd, scratch, position), (n) => {
     if (!lastError(n, null)) return -1;
-    dst.pos += n;
+    remainingBytes(dst).set(scratch.subarray(0, n));
+    setPosition(dst, bufferPosition(dst) + n);
     return n;
   });
 }
 function channelWrite(channel: JFileChannel, src: JBuffer, position = -1): number | Promise<number> {
   if (!src) throw rt.mkThrowable("java/lang/NullPointerException", "src");
   const fd = channel.writing();
-  if (src.lim === src.pos) return 0;
+  if (limit(src) === bufferPosition(src)) return 0;
   return after(resident(src), () => {
-    const bytes = u8(remainingBytes(src));
+    const bytes = remainingBytes(src);
     const n = lastError(position < 0 ? javaWriteFd(fd, bytes) : javaPwriteFd(fd, bytes, position), null);
-    src.pos += n;
+    setPosition(src, bufferPosition(src) + n);
     return n;
   });
 }
@@ -422,23 +426,26 @@ rt.register({
       if (!source) return lastError(-E.INVAL, null);
       if (mode.ename === "READ_ONLY") {
         if (start + length > source.size) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
-        if (file && !file.source) { vfs.sync(file); return mappedReadOnlyBuffer(file.data.subarray(start, start + length)); }
-        // the mapping outlives the descriptor, so it pages from the file's own source
-        if (file?.source && !writable(file.source)) return pagedMapping(file.source, start, length);
-        return readFully(source, start, length).then(mappedReadOnlyBuffer);
+        // an immutable file's mapping pages from the file's own source, which outlives the descriptor
+        if (file?.source && !writable(file.source)) return readOnlyMapping(file.source, start, length, this.fd);
+      } else {
+        if (!file) return lastError(-E.INVAL, null);
+        // a writable mapping past the end extends the file first (FileChannelImpl.map truncates it up to position + size)
+        if (start + length > file.len) vfs.resize(file, start + length);
       }
-      if (!file) return lastError(-E.INVAL, null);
-      // a writable mapping past the end extends the file first (FileChannelImpl.map truncates it up to position + size)
-      if (start + length > file.len) vfs.resize(file, start + length);
-      if (file.source) {
-        // a disk-backed file maps a copy of the region, written back when the mapping is forced
-        return readFully(file.source, start, length).then((bytes) =>
-          mappedBuffer(bytes.slice(), mode.ename === "PRIVATE" ? () => {} : () => vfs.writeAt(file, start, bytes)));
-      }
-      if (mode.ename === "PRIVATE") return mappedBuffer(file.data.slice(start, start + length), () => {});
-      const buffer = mappedBuffer(file.data.subarray(start, start + length), () => vfs.publish(file));
-      (file.maps ??= []).push(buffer);
-      return buffer;
+      // guest memory holding the file's bytes: a shared mapping is kept coherent with the file
+      // (mappings.ts), as a native MAP_SHARED one is
+      return after(readFully(source, start, length), (bytes) => {
+        const va = length ? mem.mapVa(length, false) : 0;
+        if (length && !va) throw rt.mkThrowable("java/io/IOException", "Map failed");
+        if (length) mem.write(mem.txVa(BigInt(va)), bytes);
+        if (file && length && mode.ename !== "PRIVATE") trackSharedMap(BigInt(va), length, start, file, mode.ename === "READ_WRITE");
+        return mappedBuffer(va, length, this.fd, mode.ename === "READ_ONLY", () => {
+          if (!length) return;
+          syncShared(BigInt(va), length, true);
+          mem.unmapVa(BigInt(va), length);
+        });
+      });
     },
     "read(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, dst: JBuffer) { return channelRead(this, dst); },
     "read(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, dst: JBuffer, position: bigint) {
@@ -459,12 +466,12 @@ rt.register({
       const available = BigInt(fdSize(fd)) - position;
       const length = Number(count < available ? count : available);
       if (length <= 0) return 0n;
-      const buffer = mkByteBuffer(Math.min(length, 65536)), bytes = new Uint8Array(buffer.ab);
+      const chunk = new Int8Array(Math.min(length, 65536)), bytes = u8(chunk), buffer: JBuffer = yield wrapBytes(chunk);
       let transferred = 0;
       while (transferred < length) {
         const n = lastError(yield javaPreadFd(this.reading(), bytes.subarray(0, Math.min(length - transferred, bytes.length)), Number(position) + transferred), null);
         if (!n) break;
-        buffer.pos = 0; buffer.lim = n;
+        setLimit(buffer, n); setPosition(buffer, 0);
         const written = Number(yield vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer));
         transferred += written;
         if (written < n) break;

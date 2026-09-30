@@ -2,7 +2,6 @@
 // files) and directories. Java streams, native descriptors and the shell all read and write it.
 import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
 import { procText } from "./procfs";
-import type { JBuffer } from "../jvm/natives/jnio";
 import type { SharedMaps } from "../native/mappings";
 import { utf8 } from "../jvm/abi";
 
@@ -10,22 +9,17 @@ import { utf8 } from "../jvm/abi";
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
 export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk` : "/data/app/base.apk";
 
-/** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file. `maps`
- *  are Java mappings of its pages; `sharedMaps` native MAP_SHARED copies of them, told of every
+/** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file;
+ *  `sharedMaps` are MAP_SHARED copies of its pages (Java and native), told of every
  *  write and flushed before a read */
-export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; maps?: JBuffer[]; sharedMaps?: SharedMaps }
+export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps }
 export const EMPTY = new Uint8Array(0);
 /** room for `size` bytes, doubling so appends stay linear */
 function reserve(file: VfsFile, size: number) {
   if (size <= file.data.length) return;
   const grown = new Uint8Array(Math.max(size, file.data.length * 2, 4096));
   grown.set(file.data.subarray(0, file.len));
-  setData(file, grown);
-}
-/** READ_WRITE mappings are the file's pages, so they move with its storage */
-function setData(file: VfsFile, data: Uint8Array) {
-  if (file.maps && data.buffer !== file.data.buffer) for (const m of file.maps) m.backing.storage = { kind: "direct", ab: data.buffer as ArrayBuffer };
-  file.data = data;
+  file.data = grown;
 }
 const openFiles = new Map<string, VfsFile>();
 const volatileFiles = new Set<string>();
@@ -127,7 +121,7 @@ export const vfs = {
     this.mtimes.set(path, Date.now());
     const file = openFiles.get(path);
     if (file) {
-      setData(file, data);
+      file.data = data;
       file.len = data.length;
       file.source = undefined;
     }

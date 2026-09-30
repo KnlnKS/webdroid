@@ -31,7 +31,7 @@ import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathO
 import { NativeRegion, nativeRegionOf } from "./region";
 import { recordingContext, replay, replayWithSemantics, type DisplayList } from "./recording";
 import { device } from "../shell/config";
-import { type JBuffer, resident, mappedReadOnlyBuffer } from "../jvm/natives/jnio";
+import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
   type Axis, NativeFont, NativeFamily, NativeTypeface, mkFamily, systemFonts, sfntTables, T_CMAP,
   fontRevision, postScriptName, isPostScriptType1, typefaceOf, setDefaultTypeface, loadSystemFontMap,
@@ -355,11 +355,9 @@ function take<T>(h: bigint): T { const b = deref<T>(h); release(h); return b; }
  *  guest memory can move, so bytes there are copied */
 function directBytes<T>(b: JBuffer | null, then: (bytes: Uint8Array) => T): T | Promise<T> {
   if (!b) rt.npe();
-  if (!b!.direct) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a direct buffer");
-  return after(resident(b!), () => {
-    const v = b!.dv, bytes = new Uint8Array(v.buffer, v.byteOffset, b!.cap);
-    return then(b!.backing.storage.kind === "native" ? bytes.slice() : bytes);
-  });
+  const address = addressOf(b!);
+  if (!address) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a direct buffer");
+  return after(resident(b!), () => then(isExternal(address) ? bufferBytes(b!) : bufferBytes(b!).slice()));
 }
 const PACKED_ITALIC = 1 << 16;
 delegate("android/graphics/fonts/Font$Builder", {
@@ -383,7 +381,7 @@ delegate("android/graphics/fonts/Font$Builder", {
 delegate("android/graphics/fonts/Font", {
   "nGetReleaseNativeFont()J": () => FINALIZER,
   "nCloneFont(J)J": (h: bigint) => wrapFont(fontOf(h)),
-  "nNewByteBuffer(J)Ljava/nio/ByteBuffer;": (h: bigint) => mappedReadOnlyBuffer(fontOf(h).bytes),
+  "nNewByteBuffer(J)Ljava/nio/ByteBuffer;": (h: bigint) => readOnlyBuffer(fontOf(h).bytes),
   // identity only: Font.equals compares these
   "nGetMinikinFontPtr(J)J": (h: bigint) => weakHandle(fontOf(h)),
   "nGetSourceId(J)I": (h: bigint) => fontOf(h).sourceId,

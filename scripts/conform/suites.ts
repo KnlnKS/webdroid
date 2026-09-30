@@ -54,6 +54,19 @@ export const SUITES: Record<string, Suite> = {
       exclude: /\/nio\/file\/(Files2?Test|SimpleFileVisitorTest|DefaultFileSystemProvider2Test|FileSystemsTest|LinuxFileSystemTest|LinuxPathTest|spi\/FileTypeDetectorTest)\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
     },
   },
+  // libcore's java.nio buffer, charset and file channel tests at the same commit, without sockets,
+  // selectors, pipes and asynchronous channels
+  "luni-nio": {
+    maven: JUNIT,
+    source: {
+      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests|luni\/src\/test\/java\/libcore)\/java\/nio\/(\w+\.java|charset|channels\/(\w*(File|Channels|MapMode)\w*|\w+Exception\w*)\.java)|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/testframework|libcore\/testing\/io)|test-rules\/src\/main\/java\/libcore\/junit)\/?|\/libcore\/libcore\/util\/SerializationTester\.java$/,
+      tests: /^(?!Abstract|Support_)\w+Test\.java$/,
+      // these name hidden platform classes, mockito or junitparams
+      exclude: /\/(\w*Direct\w*BufferTest|Asynchronous\w*|FileIOInterruptTest|EnableDeprecatedBouncyCastleAlgorithmsRule|StandardCharsetsEncoderTest)\.java$|harmony\/tests\/java\/nio\/channels\/FileLockTest\.java$|libcore\/java\/nio\/(BufferTest|channels\/(Channels|FileChannel)Test)\.java$/,
+    },
+  },
   "ojluni-time": {
     maven: ["org.testng:testng:7.4.0", "com.beust:jcommander:1.78", ...JUNIT],
     source: {

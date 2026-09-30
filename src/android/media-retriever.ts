@@ -3,7 +3,7 @@ import { concat } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
-import { JBuffer } from "../jvm/natives/jnio";
+import { isBuffer, remainingBytes } from "../jvm/natives/jnio";
 import { javaFdSource } from "../native/stdio";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { JBitmap } from "./graphics";
@@ -13,7 +13,7 @@ import { inspectMp3 } from "./media-mp3";
 const value = (format: MediaExtractor["tracks"][number]["format"], key: string) => format.values.get(key)?.value;
 const codecBytes = (format: MediaExtractor["tracks"][number]["format"], key: string): Uint8Array => {
   const buffer = value(format, key);
-  return buffer instanceof JBuffer ? new Uint8Array(buffer.dv.buffer, buffer.dv.byteOffset + buffer.pos, buffer.lim - buffer.pos) : new Uint8Array(0);
+  return isBuffer(buffer) ? remainingBytes(buffer) : new Uint8Array(0);
 };
 
 class JMediaMetadataRetriever extends JObj {

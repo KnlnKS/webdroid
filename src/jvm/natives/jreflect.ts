@@ -8,6 +8,7 @@ import { unsafeFallthrough } from "../compiler";
 import { device } from "../../shell/config";
 import { mem } from "../../native/mem";
 import { handle } from "../../android/handles";
+import { nonMovableBytes } from "./jnio";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -476,9 +477,12 @@ rt.register({
   methods: {
     "static getRuntime()Ldalvik/system/VMRuntime;": () => theVmRuntime,
     "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
-    "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
-    // a non-movable array's address is the handle JNI implementations dereference it by
-    "addressOf(Ljava/lang/Object;)J": (array: object) => handle(array),
+    "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) =>
+      len >= 0 && elemDescOf(cls) === "B" ? nonMovableBytes(len) : newArrayOf(cls, len),
+    // a byte[] in guest memory is at its address there; another non-movable array's address is
+    // the handle JNI implementations dereference it by
+    "addressOf(Ljava/lang/Object;)J": (array: object) =>
+      array instanceof Int8Array && array.buffer === mem.buf ? BigInt(mem.va(array.byteOffset)) : handle(array),
     "getTargetSdkVersion()I": () => targetSdk,
     "setTargetSdkVersion(I)V": setTargetSdkVersion,
     // ro.build.version.sdk

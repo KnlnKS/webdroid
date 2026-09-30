@@ -906,6 +906,48 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     back as-is).
   - Harness: bun's test runner spends tens of seconds formatting a failed expectation whose value is
     a Java object (it walks the reachable heap); a Java object now inspects as its class and message.
+- 2026-10-01, java.nio's buffers and charset coders from libcore (B.7 cut 5). Measured first: with
+  the buffer classes cut over (`WEBDROID_BYTECODE`), libcore's heap buffers passed every harmony
+  heap/wrapped/read-only buffer test the TS copy failed (the TS Long/Short/Double buffers lacked
+  most of their API) at about the TS speed, and direct buffers only needed real addresses. So
+  every Buffer class is libcore's, and TS reaches a buffer's memory as NIOAccess does
+  (`bufferBytes`/`remainingBytes` in jnio.ts: `address`, else `hb` and `offset`, else a view's `bb`
+  and `byteOffset`).
+  - **Direct memory.** `VMRuntime.newNonMovableArray(byte)` allocates in guest memory (memory is
+    sized for the app's ABI first, since growing it would detach the array) and `addressOf` answers
+    its address, so allocateDirect's MemoryRef, JNI's NewDirectByteBuffer (DirectByteBuffer(JI)),
+    GetDirectBufferAddress (`address`) and the NDK media buffers all share one memory. libcore.io
+    Memory's natives serve DirectByteBuffer; `unsafeBulkGet/Put` index the element array in
+    elements and the byte array in bytes (the TS copy never reached them).
+  - **Mappings.** A READ_ONLY mapping of an immutable file keeps its 64 KB pages outside guest
+    memory, at addresses from 2^48 (`Region` in jmemory.ts); the Memory natives read them and
+    load a page on first touch (a Promise the caller suspends on), and native code asking for the
+    address gets the whole mapping copied into guest memory once. Other mappings are guest memory
+    kept coherent with the file as native MAP_SHARED ones are (mappings.ts); `force` syncs them.
+    SharedMemory is guest memory its mappings address. Font buffers are read-only mappings of the
+    font's bytes.
+  - **Charsets.** Charset, CharsetDecoder/Encoder and CharsetICU's coders run from bytecode over
+    NativeConverter natives: one ICU UConverter model per charset table (`Converter` in charset.ts)
+    with ICU's partial input, overflow buffers, callbacks and error counts. A device probe (every
+    served charset's metadata, and decode/encode of 26 byte and 9 char vectors under each action
+    and output size) now matches except one: `new String({0xc3}, "UTF-16")` is "" on the device,
+    U+FFFD here. Findings from it: after a malformed input a decoder's position is past it (ICU
+    consumes it), an encoder's is before it; an unmapped byte in a single-byte table is unmappable,
+    not malformed (only US-ASCII's high bytes are malformed); 27 bytes of 152 tables decode to a
+    character that encodes to another byte (the table records them); aliases() includes the
+    canonical name, in device order; the encode native reports the output offset reached, the
+    decode native the count produced. String's own codecs stay TS (a VM built-in) over the same
+    tables and follow Charset.decode/encode's allocation, including its 2n+1 growth.
+  - Channels' TS stream adapters are gone (libcore's need `Thread.blockedOn`, now implemented).
+  - Measured, V8, HEAD → this, median ms: heapGetInt 64K 3.5 → 6.0, heap get() 4.1 → 3.2, bulk
+    get/put 0.12 → 0.15, FloatBuffer put/get 0.04 → 0.05, direct FloatBuffer put 0.025 → 0.093,
+    direct putInt/putDouble/get mix 1.47 → 4.7 (a direct access pays BigInt address arithmetic),
+    CharBuffer 1.7 → 1.1, CharsetDecoder UTF-8 100 KB 0.73 → 0.92, encoder 22.5 → 3.9,
+    InputStreamReader 0.52 → 0.69, Charset.forName 0.47 → 0.37. luni-nio (new suite: libcore's
+    buffer, charset and file channel tests) 926 → 2,616 of 2,815; luni-io 1,277 → 1,279.
+  - Limits: the multi-byte legacy charsets (Shift_JIS, GBK, EUC-*, ISO-2022-*, UTF-7, CESU-8,
+    SCSU, BOCU-1) and the x-UTF-16LE-BOM/x-UnicodeBig variants are unsupported, as before, and ICU
+    aliases outside aliases() (`unicode-1-1-utf-8`) do not resolve.
 
 ## Java, storage and framework semantics
 
