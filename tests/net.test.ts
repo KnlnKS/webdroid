@@ -220,13 +220,13 @@ describe("inet", () => {
   });
 
   test("SSL wrapping keeps the underlying socket open until the wrapper closes", async () => {
-    const plain = rt.make("java/net/Socket");
+    const plain = await newObj("java/net/Socket");
     const factory = await scall("javax/net/ssl/SSLSocketFactory", "getDefault", "()Ljavax/net/SocketFactory;");
     const secure = await vcall(factory, "createSocket", "(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;", plain, "example.com", 443, 1);
     expect(await vcall(plain, "isClosed", "()Z")).toBe(0);
     await vcall(secure, "close", "()V");
     expect(await vcall(plain, "isClosed", "()Z")).toBe(1);
-    const retained = rt.make("java/net/Socket");
+    const retained = await newObj("java/net/Socket");
     const independent = await vcall(factory, "createSocket", "(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;", retained, "example.com", 443, 0);
     await vcall(independent, "close", "()V");
     expect(await vcall(retained, "isClosed", "()Z")).toBe(0);

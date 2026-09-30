@@ -323,8 +323,6 @@ test("network support objects retain packet and HTTP parameter state", async () 
   expect(await vcall(integer, "bitLength", "()I")).toBeLessThanOrEqual(13);
   expect(await vcall(integer, "signum", "()I")).toBeGreaterThanOrEqual(0);
 
-  const server = await newObj("java/net/ServerSocket");
-  await expect(vcallAsync(server, "bind", "(Ljava/net/SocketAddress;)V", null)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
 });
 
 test("optional device services report their unavailable state", async () => {

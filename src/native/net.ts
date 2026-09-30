@@ -184,6 +184,8 @@ interface SocketState {
   local: Endpoint | null;
   /** setsockopt values by level << 16 | option */
   options: Map<number, number>;
+  readShut: boolean;
+  writeShut: boolean;
 }
 interface StreamSocket extends SocketState {
   kind: "stream";
@@ -191,8 +193,6 @@ interface StreamSocket extends SocketState {
   connecting: boolean;
   /** a listening socket's connections not yet accepted */
   backlog: StreamSocket[] | null;
-  readShut: boolean;
-  writeShut: boolean;
 }
 interface Datagram { bytes: Uint8Array; source: Endpoint }
 interface DatagramSocket extends SocketState {
@@ -269,11 +269,11 @@ export function socketCreate(domain: number, type: number, protocol: number): nu
   if (protocol !== 0 && protocol !== expected) return -E.PROTONOSUPPORT;
   const common: SocketState = {
     family: domain, protocol: expected, nonblock: !!(type & SOCK_NONBLOCK), connected: false, error: 0,
-    waiters: new Set(), references: 1, peer: null, local: null, options: new Map(),
+    waiters: new Set(), references: 1, peer: null, local: null, options: new Map(), readShut: false, writeShut: false,
   };
   const socket: Socket = kind === SOCK_DGRAM
     ? { ...common, kind: "datagram", relay: null, queue: [], queuedBytes: 0, groups: new Set() }
-    : { ...common, kind: "stream", stream: null, connecting: false, backlog: null, readShut: false, writeShut: false };
+    : { ...common, kind: "stream", stream: null, connecting: false, backlog: null };
   const fd = allocateFd();
   sockets.set(fd, { cloexec: !!(type & SOCK_CLOEXEC), socket });
   record(`socket fd=${fd} family=${domain} type=${type.toString(16)} protocol=${protocol}`);
@@ -362,7 +362,6 @@ export function socketConnect(fd: number, ep: Endpoint | null): number | Promise
     if (!ep) { socket.peer = null; socket.connected = false; return 0; }
     const error = familyError(socket, ep);
     if (error) return error;
-    if (!ep.port) return -E.INVAL;
     if (!socket.local) { const r = bindTo(socket, { address: anyFor(socket), port: 0 }); if (r) return r; }
     socket.peer = ep;
     socket.connected = true;
@@ -384,6 +383,7 @@ export function socketConnect(fd: number, ep: Endpoint | null): number | Promise
       const r = bindTo(socket, { address: target.address.length === 4 ? V4_LOOPBACK : V6_LOOPBACK, port: 0 });
       if (r) return r;
     }
+    if (isAny(socket.local!.address)) socket.local = { address: target.address.length === 4 ? V4_LOOPBACK : V6_LOOPBACK, port: socket.local!.port };
     const listener = listenerFor(target);
     record(`connect fd=${fd} loopback :${target.port} ${listener ? "accepted" : "refused"}`);
     if (!listener) {
@@ -408,7 +408,7 @@ export function socketConnect(fd: number, ep: Endpoint | null): number | Promise
     socket.connected = true;
     const local = relay.localEndpoint;
     const address = local?.family === "IPv4" ? parseIpv4(local.address) : local ? parseIpv6(local.address) : null;
-    if (local && address && !socket.local) socket.local = endpointOf(address, local.port);
+    if (local && address && (!socket.local || isAny(socket.local.address))) socket.local = endpointOf(address, local.port);
     record(`connected fd=${fd}`);
     wake(socket);
     return 0;
@@ -449,9 +449,9 @@ export function socketShutdown(fd: number, how: number): number {
   const socket = socketOf(fd);
   if (!socket) return -E.BADF;
   if (how !== SHUT_RD && how !== SHUT_WR && how !== SHUT_RDWR) return -E.INVAL;
-  if (socket.kind !== "stream" || !socket.connected) return socket.kind === "stream" && socket.backlog ? 0 : -E.NOTCONN;
+  if (!socket.connected) return socket.kind === "stream" && socket.backlog ? 0 : -E.NOTCONN;
   if (how !== SHUT_WR) socket.readShut = true;
-  if (how !== SHUT_RD && !socket.writeShut) { socket.writeShut = true; socket.stream?.shutdownWrite(); }
+  if (how !== SHUT_RD && !socket.writeShut) { socket.writeShut = true; if (socket.kind === "stream") socket.stream?.shutdownWrite(); }
   wake(socket);
   return 0;
 }
@@ -494,6 +494,7 @@ export function socketSend(fd: number, bytes: Uint8Array, destination: Endpoint 
     if (!bytes.length) return 0;
     return socket.stream.write(bytes) ? bytes.length : -E.PIPE;
   }
+  if (socket.writeShut) return -E.PIPE;
   if (bytes.length > UDP_MAX_PAYLOAD) return -E.MSGSIZE;
   const endpoint = destination ?? socket.peer;
   if (!endpoint) return -E.DESTADDRREQ;
@@ -537,6 +538,7 @@ export function socketReceive(fd: number, target: Uint8Array, flags = 0, from?: 
     if (socket.nonblock || flags & MSG_DONTWAIT) return -E.AGAIN;
     return block(fd, socket, attempt, SO_RCVTIMEO);
   }
+  if (socket.readShut) return 0;
   const attempt = (): number | null => {
     const datagram = socket.queue[0];
     if (!datagram) { if (socket.error) { const e = socket.error; socket.error = 0; return -e; } return null; }
@@ -578,7 +580,7 @@ export function socketOption(fd: number, level: number, name: number): number {
       case SO_REUSEADDR: case SO_BROADCAST: case 9 /* SO_KEEPALIVE */: case 10 /* SO_OOBINLINE */: case 5 /* SO_DONTROUTE */:
       case SO_RCVTIMEO: case SO_SNDTIMEO:
         return stored ?? 0;
-      case SO_LINGER: return stored ?? -1;
+      case SO_LINGER: return stored ?? 0;
     }
     return -E.NOPROTOOPT;
   }
@@ -602,7 +604,8 @@ export function socketOption(fd: number, level: number, name: number): number {
   }
   return -E.NOPROTOOPT;
 }
-/** setsockopt(2) for an int-valued option (SO_LINGER takes the seconds, -1 for off; the timeouts ms) */
+/** setsockopt(2) for an int-valued option (SO_LINGER takes the seconds, -1 for off, and reads back
+ *  as seconds + 1, 0 for off; the timeouts are ms) */
 export function setSocketOption(fd: number, level: number, name: number, value: number): number {
   const socket = socketOf(fd);
   if (!socket) return -E.BADF;
@@ -612,7 +615,7 @@ export function setSocketOption(fd: number, level: number, name: number, value: 
   let stored = value;
   if (level === SOL_SOCKET && name === SO_RCVBUF) stored = Math.max(2 * Math.max(0, value), RCVBUF_MIN);
   else if (level === SOL_SOCKET && name === SO_SNDBUF) stored = Math.max(2 * Math.max(0, value), SNDBUF_MIN);
-  else if (level === SOL_SOCKET && name === SO_LINGER) stored = value < 0 ? -1 : value;
+  else if (level === SOL_SOCKET && name === SO_LINGER) stored = value < 0 ? 0 : Math.min(value, 65535) + 1;
   else if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) stored = Math.max(0, value);
   else if (level === IPPROTO_IP && (name === IP_TTL || name === IP_MULTICAST_TTL) && (value < -1 || value > 255 || name === IP_TTL && value === 0)) return -E.INVAL;
   else if (!(level === IPPROTO_IP && (name === IP_TOS || name === IP_TTL || name === IP_MULTICAST_TTL || name === IP_MULTICAST_IF)) &&
@@ -645,6 +648,7 @@ export function nativeSocketIoctl(cpu: Cpu, fd: number, request: number, argumen
 /** FIONREAD on an open socket: a stream's buffered bytes, a datagram socket's next packet */
 export function nativeSocketAvailable(fd: number): number {
   const socket = sockets.get(fd)!.socket;
+  if (socket.readShut) return 0;
   return socket.kind === "stream" ? socket.stream?.available() ?? 0 : socket.queue[0]?.bytes.length ?? 0;
 }
 
@@ -888,6 +892,10 @@ function nativeGetsockopt(cpu: Cpu, fd: number, level: number, name: number, val
   if (!value || !length || mem.ld32(length) < 4) return fail(cpu, E.FAULT);
   const result = socketOption(fd, level, name);
   if (result < 0) return fail(cpu, -result);
+  if (level === SOL_SOCKET && name === SO_LINGER && mem.ld32(length) >= 8) {
+    mem.st32(value, +(result > 0)); mem.st32(value + 4, Math.max(0, result - 1)); mem.st32(length, 8);
+    return 0;
+  }
   mem.st32(value, result);
   mem.st32(length, 4);
   return 0;

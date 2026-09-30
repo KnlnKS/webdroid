@@ -6,7 +6,7 @@ import { jarray } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, ioRegion, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, javaSocketPair } from "../native/stdio";
+import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd } from "../native/stdio";
 import {
   AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
   socketCreate, socketConnect, socketBind, socketListen, socketAccept, socketShutdown, socketSend, socketReceive, socketName,
@@ -75,7 +75,17 @@ function sendto(d: JObj | null, buffer: IoBuffer, offset: number, count: number,
   const bytes = ioRegion(buffer, offset, count);
   return ioResult("sendto", socketSend(fdInt(d), bytes, ep));
 }
-const intOption = (fn: string, d: JObj | null, level: number, name: number) => ioResult(fn, socketOption(fdInt(d), level, name));
+/** a socketpair end's options: an AF_UNIX stream socket, which the socket core does not model */
+function unixOption(fd: number, level: number, name: number): number {
+  if (!javaIsSocketFd(fd)) return -E.BADF;
+  // SO_TYPE, SO_DOMAIN; SO_ERROR and SO_LINGER (off) read 0
+  if (level !== SOL_SOCKET) return -E.NOPROTOOPT;
+  return name === 3 ? 1 : name === 39 ? 1 : name === 4 || name === 13 ? 0 : -E.NOPROTOOPT;
+}
+const intOption = (fn: string, d: JObj | null, level: number, name: number) => {
+  const fd = fdInt(d);
+  return ioResult(fn, isNativeSocket(fd) ? socketOption(fd, level, name) : unixOption(fd, level, name));
+};
 const setIntOption = (fn: string, d: JObj | null, level: number, name: number, value: number) => sys(fn, setSocketOption(fdInt(d), level, name, value));
 /** getaddrinfo's EAI_* as android.system.GaiException */
 const gaiError = (fn: string, code: number) => thrown("android/system/GaiException", "(Ljava/lang/String;I)V", fn, code);
@@ -105,7 +115,10 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`listen(${FD}I)V`]: (d: JObj | null) => sys("listen", socketListen(fdInt(d))),
   [`accept(${FD}${SOCKADDR})${FD}`]: (d: JObj | null, peer: JObj | null) =>
     waited("accept", socketAccept(fdInt(d)), (r: { fd: number; peer: Endpoint }) => after(fillSocketAddress(peer, r.peer), () => mkFd(r.fd))),
-  [`shutdown(${FD}I)V`]: (d: JObj | null, how: number) => sys("shutdown", socketShutdown(fdInt(d), how)),
+  [`shutdown(${FD}I)V`]: (d: JObj | null, how: number) => {
+    const fd = fdInt(d);
+    sys("shutdown", isNativeSocket(fd) ? socketShutdown(fd, how) : javaShutdownFd(fd, how));
+  },
   [`getsockname(${FD})${SOCKADDR}`]: (d: JObj | null) => {
     const ep = socketName(fdInt(d), false);
     if (typeof ep === "number") throw errno("getsockname", -ep);
@@ -130,8 +143,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`getsockoptByte(${FD}II)I`]: (d: JObj | null, level: number, name: number) => intOption("getsockopt", d, level, name) & 255,
   [`setsockoptByte(${FD}III)V`]: (d: JObj | null, level: number, name: number, value: number) => setIntOption("setsockopt", d, level, name, value & 255),
   [`getsockoptLinger(${FD}II)Landroid/system/StructLinger;`]: (d: JObj | null, level: number, name: number) => {
-    const secs = intOption("getsockopt", d, level, name);
-    return newObj("android/system/StructLinger", "(II)V", secs < 0 ? 0 : 1, Math.max(0, secs));
+    const linger = intOption("getsockopt", d, level, name);
+    return newObj("android/system/StructLinger", "(II)V", linger ? 1 : 0, Math.max(0, linger - 1));
   },
   [`setsockoptLinger(${FD}IILandroid/system/StructLinger;)V`]: (d: JObj | null, level: number, name: number, linger: JObj | null) => {
     if (linger === null) return rt.npe();
@@ -174,7 +187,10 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     address === null ? sendto(d, buffer, offset, count, flags, null) : withEndpoint(socketAddressEndpoint("sendto", address), (ep) => sendto(d, buffer, offset, count, flags, ep)),
   [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
     const from = { source: null as Endpoint | null }, fd = fdInt(d);
-    const n = readBytes("recvfrom", buffer, offset, count, (target) => socketReceive(fd, target, flags, from));
+    const n = readBytes("recvfrom", buffer, offset, count, (target) => {
+      const r = socketReceive(fd, target, flags, from);
+      return r instanceof Promise ? r.then((v) => closedUnder("recvfrom", v)) : r;
+    });
     return after(n, (received) => after(fillSocketAddress(source, from.source), () => received));
   },
   "android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;": (node: string | null, hints: JObj | null) => {

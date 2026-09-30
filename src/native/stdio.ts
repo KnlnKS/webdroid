@@ -12,7 +12,7 @@ import { procIdentity, procMemory, procText } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketAvailable, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd, socketReceive, socketSend } from "./net";
-import { allocateFd, releaseFd, reserveFd } from "./fd";
+import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd";
 import { armClockTimer, disarmClockTimer, timerState, validTime, type ClockTimer } from "./timers";
 const dec = new TextDecoder();
 
@@ -214,6 +214,17 @@ export const javaDupFd = (fd: number): number => fdDup(null, fd);
 export const javaDup2Fd = (fd: number, to: number): number => fdDup2(null, fd, to);
 /** socketpair's ends are the only sockets this table holds; net.ts keeps the rest */
 export const javaIsSocketFd = (fd: number): boolean => isNativeSocket(fd) || fds.get(fd)?.path === "socketpair";
+/** shutdown(2) of a socketpair end: SHUT_WR (or RDWR) ends what its peer reads; -errno otherwise */
+export function javaShutdownFd(fd: number, how: number): number {
+  const f = fds.get(fd);
+  if (!f) return -E.BADF;
+  if (f.path !== "socketpair") return -E.NOTSOCK;
+  if (how !== 0 && f.wpipe && !f.wpipe.closed) {
+    if (!--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
+    f.wpipe = { ...newPipe(1), closed: true };
+  }
+  return 0;
+}
 /** socketpair(2): two connected descriptors, each reading what the other writes */
 export function javaSocketPair(type: number): [number, number] {
   const ab = newPipe(1), ba = newPipe(1), nb = !!(type & O_NONBLOCK);
@@ -466,23 +477,29 @@ function fdDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
   f.references++;
   return put(f, cloexec, min);
 }
+/** dup2's implicit close of `to`, which (unlike close) leaves bionic's fdsan owner tag in place */
+function closeReplaced(cpu: Cpu | null, to: number): () => number {
+  const tag = fdsanOwnerTag(to);
+  if (isNativeSocket(to)) nativeSocketClose(cpu, to);
+  else if (fds.has(to)) fdClose(cpu, to);
+  return () => { if (tag) fdsanExchangeOwnerTag(to, 0n, tag); return to; };
+}
 function fdDup2(cpu: Cpu | null, fd: number, to: number, cloexec = false): number {
   if (to < 0) return fail(cpu, E.BADF);
   if (fd === to) return isNativeSocket(fd) || fds.has(fd) ? fd : fail(cpu, E.BADF);
   if (isNativeSocket(fd)) {
-    if (isNativeSocket(to)) nativeSocketClose(cpu, to);
-    else if (fds.has(to)) fdClose(cpu, to);
-    return nativeSocketDup(cpu, fd, to, cloexec);                                 // `to` is free now
+    const retag = closeReplaced(cpu, to);
+    nativeSocketDup(cpu, fd, to, cloexec);                                         // `to` is free now
+    return retag();
   }
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  if (isNativeSocket(to)) nativeSocketClose(cpu, to);
-  else if (fds.has(to)) fdClose(cpu, to);
+  const retag = closeReplaced(cpu, to);
   f.references++;
   reserveFd(to);
   fds.set(to, f);
   if (cloexec) closeOnExec.add(to);
-  return to;
+  return retag();
 }
 /** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
 function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number {
