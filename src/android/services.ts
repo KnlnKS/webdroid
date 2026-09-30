@@ -413,6 +413,23 @@ rt.register({ name: "webdroid/UsageStatsService", ctor: class extends JObj {}, s
 } });
 hostStub("usagestats", "webdroid/UsageStatsService");
 
+// No biometric sensor and no USB host or accessory: FingerprintManager has no service, as
+// SystemServiceRegistry builds it without FEATURE_FINGERPRINT; IAuthService and IUsbManager answer
+// as their system services do with no hardware behind them.
+const BIOMETRIC_ERROR_NO_HARDWARE = 12;
+rt.register({ name: "webdroid/AuthService", ctor: class extends JObj {}, sup: "android/hardware/biometrics/IAuthService$Stub", methods: {
+  "canAuthenticate(Ljava/lang/String;II)I": () => BIOMETRIC_ERROR_NO_HARDWARE,
+  "hasEnrolledBiometrics(ILjava/lang/String;)Z": () => 0,
+  "getSensorProperties(Ljava/lang/String;)Ljava/util/List;": () => newArrayList(),
+  "getAuthenticatorIds(I)[J": () => new BigInt64Array(0),
+} });
+rt.register({ name: "webdroid/UsbService", ctor: class extends JObj {}, sup: "android/hardware/usb/IUsbManager$Stub", methods: {
+  ...noops("getDeviceList(Landroid/os/Bundle;)V"),
+  "getCurrentAccessory()Landroid/hardware/usb/UsbAccessory;": () => null,
+} });
+hostStub("auth", "webdroid/AuthService");
+hostStub("usb", "webdroid/UsbService");
+
 // IBatteryStats and IBatteryPropertiesRegistrar, under BatteryManager: the configured battery's
 // capacity and status; any other property is NAME_NOT_FOUND, as healthd answers one its HAL lacks
 const BATTERY_CAPACITY = 4, BATTERY_STATUS = 6, NAME_NOT_FOUND = -2;
