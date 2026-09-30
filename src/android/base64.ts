@@ -1,9 +1,7 @@
 // android.util.Base64. Not java.util.Base64: the flag word, the trailing newline and the
 // 76-char wrapping are AOSP-specific and apps round-trip against them.
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
-import { filterOut, setFilterOut, heldByteWrites } from "../jvm/natives/jio";
+import { rt, JObj } from "../jvm/runtime";
 
 const DEFAULT = 0, NO_PADDING = 1, NO_WRAP = 2, CRLF = 4, URL_SAFE = 8, NO_CLOSE = 16;
 
@@ -101,28 +99,6 @@ rt.register({
     "static decode(Ljava/lang/String;I)[B": (s: string) => decodeString(s),
     "static decode([BI)[B": (b: Int8Array) => dec(b, 0, b.length),
     "static decode([BIII)[B": (b: Int8Array, o: number, l: number) => dec(b, o, l),
-  },
-});
-
-// The stream forms buffer and encode on close: base64 of a concatenation is not the
-// concatenation of the base64s, so there is nothing to gain from emitting early, and the
-// one-shot path keeps line wrapping and the tail padding in a single place.
-class JB64OS extends JObj { chunks: number[] = []; flags = 0; }
-rt.register({
-  name: "android/util/Base64OutputStream", ctor: JB64OS, sup: "java/io/FilterOutputStream",
-  methods: {
-    "<init>(Ljava/io/OutputStream;I)V": function (this: JB64OS, o: unknown, f: number) { setFilterOut(this, o); this.flags = f; },
-    ...heldByteWrites,
-    "flush()V": function (this: JB64OS) { const out = filterOut(this); return out ? vcall(out, "flush", "()V") : undefined; },
-    "close()V": driven(function* (this: JB64OS): Gen {
-      const body = enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags);
-      this.chunks.length = 0;
-      const out = filterOut(this);
-      if (!out) return;
-      yield vcall(out, "write", "([BII)V", body, 0, body.length);
-      yield vcall(out, "flush", "()V");
-      if (!(this.flags & NO_CLOSE)) yield vcall(out, "close", "()V");
-    }),
   },
 });
 

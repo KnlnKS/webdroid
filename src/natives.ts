@@ -40,7 +40,6 @@ import "./android/os";
 import "./android/keyevent";
 import "./android/observable";
 import "./android/util";
-import "./android/atomicfile";
 import "./android/accounts";
 import "./android/devicepolicy";
 import "./android/parcel";
