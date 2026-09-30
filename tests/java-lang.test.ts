@@ -512,6 +512,8 @@ describe("string-case", () => {
     expect(await call("İ", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "i")).toBe(1);
     expect(await call("Straße", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "STRASSE")).toBe(0);
     expect(await call("MiXeD", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "mixed")).toBe(1);
+    expect(await call("a@[", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "a`{")).toBe(0);
+    expect(await call("ok", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "o\u212a")).toBe(1);
     const cmp = (rt.link("java/lang/String").ctor as Record<string, unknown>)[mangleStaticField("CASE_INSENSITIVE_ORDER")];
     expect(await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "b", "A")).toBe(1);
   });

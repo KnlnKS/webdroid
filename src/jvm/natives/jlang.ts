@@ -690,13 +690,17 @@ sm("codePointAt(I)I", function (i: number) { return cpAt(this, i); });
 sm("codePointBefore(I)I", function (i: number) { return cpBefore(this, i); });
 sm("hashCode()I", function () { return stringHash(this as string); });
 sm("equals(Ljava/lang/Object;)Z", function (o: unknown) { return (this as string) === o ? 1 : 0; });
-// Case-insensitive comparison is libcore's (Character.toUpperCase, then toLowerCase, per char); two
-// ASCII strings, the usual case, compare here
-const NOT_ASCII = /[^\x00-\x7f]/;
+// Case-insensitive comparison is libcore's (Character.toUpperCase, then toLowerCase, per char); ASCII
+// chars, whose cases are ASCII letters, compare here
 sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
   if (o === null || o.length !== this.length) return 0;
-  if (!NOT_ASCII.test(this) && !NOT_ASCII.test(o)) return this.toLowerCase() === o.toLowerCase() ? 1 : 0;
-  return vcall(this, "regionMatches", "(ZILjava/lang/String;II)Z", 1, 0, o, 0, this.length);
+  for (let i = 0; i < o.length; i++) {
+    const a = this.charCodeAt(i), b = o.charCodeAt(i), lower = a | 0x20;
+    if (a === b) continue;
+    if ((a | b) >= 0x80) return vcall(this, "regionMatches", "(ZILjava/lang/String;II)Z", 1, 0, o, 0, this.length);
+    if (lower !== (b | 0x20) || lower < 0x61 || lower > 0x7a) return 0;
+  }
+  return 1;
 });
 function stringCompare(a: string, b: string): number {
   const n = Math.min(a.length, b.length);
