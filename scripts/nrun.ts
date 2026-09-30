@@ -9,7 +9,6 @@ import { openApk, dexesOf } from "./lib";
 import { rt } from "../src/jvm/runtime";
 import "../src/jvm/natives/jlang";
 import "../src/jvm/natives/jcoll";
-import "../src/jvm/natives/jrandom";
 import "../src/jvm/natives/jvalues";
 import "../src/jvm/natives/jio";
 import { loadNativeLib, linkNativeLib } from "../src/native/loader";

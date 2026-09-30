@@ -79,6 +79,17 @@ test("Arrays.copyOf keeps the original's array class, pads with null and fails a
   }
 });
 
+test("Random's step matches its AOSP body for every width and many seeds", async () => {
+  const [next, base] = await pair("java/util/Random", "next(I)I");
+  for (const seed of [0n, 1n, -1n, 42n, 0x5deece66dn, -9223372036854775808n, 9223372036854775807n, 123456789012345n]) {
+    const randoms = [await newObj("java/util/Random", "(J)V", seed), await newObj("java/util/Random", "(J)V", seed)];
+    for (let i = 0; i < 200; i++) {
+      const bits = [1, 7, 16, 31, 32, 33, 48, 0][i % 8];
+      expect(await outcome(next, randoms[0], [bits])).toEqual(await outcome(base, randoms[1], [bits]));
+    }
+  }
+});
+
 test("ConcurrentHashMap's bin accessors match their Unsafe bodies", async () => {
   const N = "Ljava/util/concurrent/ConcurrentHashMap$Node;";
   const [[tabAt, tabAtBase], [cas, casBase], [set, setBase]] = await Promise.all(

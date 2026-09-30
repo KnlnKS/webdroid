@@ -80,7 +80,8 @@ export function arrayMapEntries(map: Obj): [unknown, unknown][] {
 // modification failures, tree bins, other keys) is the AOSP body's. Each is compiled with its
 // fields' own names (`$field` below): a named load stays monomorphic where a keyed one would not.
 const FIELDS: Record<string, string> = { data: DATA, size: SIZE, mod: MOD, outer: OUTER, cursor: CURSOR, limit: LIMIT, last: LAST,
-  expected: EXPECTED, table: TABLE, hash: HASH, key: KEY, value: VALUE, next: NEXT };
+  expected: EXPECTED, table: TABLE, hash: HASH, key: KEY, value: VALUE, next: NEXT,
+  seed: mangleField("java/util/Random", "seed"), long: mangleField("java/util/concurrent/atomic/AtomicLong", "value") };
 const compile = (params: string, body: string, env: Record<string, unknown> = {}): Intrinsic => (base) =>
   new Function("base", ...Object.keys(env), `return function(${params}){${body.replace(/\$(\w+)/g, (_, f: string) => FIELDS[f])}}`)(base, ...Object.values(env));
 rt.intrinsic(AL, {
@@ -155,4 +156,21 @@ rt.intrinsic("java/util/concurrent/ConcurrentHashMap", {
     tab[i] = v;
     return 1;
   },
+});
+// Random's 48-bit LCG step over three 16-bit limbs of the seed's AtomicLong, reading and writing it
+// through one word instead of BigInt arithmetic
+const word = new BigInt64Array(1), halves = new Int32Array(word.buffer);
+rt.intrinsic("java/util/Random", {
+  "next(I)I": compile("bits", `
+    const seed = this.$seed;
+    word[0] = seed.$long;
+    const lo = halves[0], s2 = halves[1];
+    if (!(bits >= 1 && bits <= 32) || s2 >>> 16 !== 0) return base.call(this, bits);
+    const s0 = lo & 0xffff, s1 = lo >>> 16;
+    const r0 = s0 * 0xe66d + 0xb, r1 = s1 * 0xe66d + s0 * 0xdeec + Math.floor(r0 / 65536);
+    const n1 = r1 & 0xffff, n2 = (s2 * 0xe66d + s1 * 0xdeec + s0 * 5 + Math.floor(r1 / 65536)) & 0xffff;
+    halves[0] = n1 << 16 | r0 & 0xffff;
+    halves[1] = n2;
+    seed.$long = word[0];
+    return ((n2 << 16 | n1) >>> (32 - bits)) | 0;`, { word, halves }),
 });
