@@ -1124,7 +1124,6 @@ function nativeLoad(file: string, loader: JClassLoader | null): string | null | 
 }
 rt.register({
   name: "java/lang/System", ctor: class extends JObj {}, platformClinit: true,
-  statics: { LOCK: null, cons: null, unchangeableProps: null, props: null, lineSeparator: null, in: null, out: null, err: null, runGC: 0, justRanFinalization: 0 },
   // Reflection.getCallerClass names a frame's class, not its defining loader: compiled callers pass their Runtime
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
   methods: {

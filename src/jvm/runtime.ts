@@ -757,6 +757,11 @@ export class Runtime {
       if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = this.encToJs(dex, value);
     });
     const lists = [def.directMethods, def.virtualMethods], R = this, cls = info.name, platformClinit = this.natives.get(cls)?.platformClinit;
+    // the rest of a platform <clinit>'s statics, which it sets
+    if (platformClinit) for (const f of def.staticFields) {
+      const fr = dex.field(f.fieldIdx), prop = mangleStaticField(fr.name);
+      if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = defaultValue(dex.type(fr.type));
+    }
     const fill = ([list, index, mangled, kind]: Gap) => {
       const m = lists[list][index], isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
       if (kind === 2) { target[mangled] = info.superInfo!.ctor.prototype[mangled]; return; }

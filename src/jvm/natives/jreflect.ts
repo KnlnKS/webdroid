@@ -592,10 +592,7 @@ rt.register({ name: "sun/misc/Unsafe", ctor: JUnsafe, statics: { theUnsafe: unsa
     if (m !== "Ordered") jdk[`putReference${m}(${O}J${O})V`] = uPut;
     if (m !== "Opaque") jdk[`${put}Object${suffix}(${O}J${O})V`] = uPut;
   }
-  const statics = ["THE_ONE", "theUnsafe", "ADDRESS_SIZE", ...["BOOLEAN", "BYTE", "SHORT", "CHAR", "INT", "LONG", "FLOAT", "DOUBLE", "OBJECT"]
-    .flatMap((t) => [`ARRAY_${t}_BASE_OFFSET`, `ARRAY_${t}_INDEX_SCALE`])];
-  rt.register({ name: "jdk/internal/misc/Unsafe", ctor: class extends JObj {}, platformClinit: true, methods: jdk as NativeSpec["methods"],
-    statics: Object.fromEntries(statics.map((n) => [n, null])) });
+  rt.register({ name: "jdk/internal/misc/Unsafe", ctor: class extends JObj {}, platformClinit: true, methods: jdk as NativeSpec["methods"] });
   // private static natives, which only the class's own names reach
   rt.registerJnis("jdk/internal/misc/Unsafe", {
     "getArrayBaseOffsetForComponentType(Ljava/lang/Class;)I": () => 0,
