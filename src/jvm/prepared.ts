@@ -119,7 +119,7 @@ export function endsBlock(op: number): boolean {
   return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
 }
 
-export function writesRegister(op: number): boolean {
+function writesRegister(op: number): boolean {
   if (op === 0 || (op >= 0x0e && op <= 0x11) || (op >= 0x1d && op <= 0x1f) ||
       (op >= 0x26 && op <= 0x2c) || (op >= 0x32 && op <= 0x3d) ||
       (op >= 0x4b && op <= 0x51) || (op >= 0x59 && op <= 0x5f) ||
@@ -385,7 +385,7 @@ function typeConstants(
 }
 
 /** the registers an instruction names; a written one comes first */
-function registersOf({ fmt, a, b, c, regs }: MutableInstruction): readonly number[] {
+export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readonly number[] {
   switch (fmt) {
     case "10x": case "10t": case "20t": case "30t": return NO_REGS;
     case "35c": case "3rc": case "45cc": case "4rcc": return regs;
@@ -394,35 +394,42 @@ function registersOf({ fmt, a, b, c, regs }: MutableInstruction): readonly numbe
     default: return [a];
   }
 }
+/** the register an instruction writes without reading it, else -1 (invokes and 2addr forms read theirs) */
+export function overwritten(ins: PreparedInstruction): number {
+  return registersOf(ins) !== ins.regs && writesRegister(ins.op) && !(ins.op >= 0xb0 && ins.op <= 0xcf) ? ins.a : -1;
+}
+/** the pcs control reaches when `ins` completes: its branch targets, and the next instruction unless it ends the block */
+export function successors(code: CodeItem, ins: PreparedInstruction): readonly number[] {
+  return endsBlock(ins.op) ? branchTargets(code, ins) : [...branchTargets(code, ins), ins.pc + ins.len];
+}
+/** the handlers an exception thrown at `pc` can reach */
+export function handlersAt(code: CodeItem, pc: number): number[] {
+  const out: number[] = [];
+  for (const t of code.tries) if (pc >= t.start && pc < t.end) {
+    for (const [, handler] of t.handlers) out.push(handler);
+    if (t.catchAllAddr >= 0) out.push(t.catchAllAddr);
+  }
+  return out;
+}
 
 /** Does every path read the int written by the move-result at `from` only with zero tests, directly
  *  or through moves? Then only its sign matters. Any other read, a handler's included, needs it exact. */
-function readAsSign(code: CodeItem, instructions: readonly MutableInstruction[], index: Int32Array, from: number): boolean {
-  const seen = new Set<string>(), work: [number, number[]][] = [[from + 1, [instructions[from].a]]];
+function readAsSign(code: CodeItem, at: Map<number, MutableInstruction>, from: MutableInstruction): boolean {
+  const seen = new Set<string>(), work: [number, number[]][] = [[from.pc + from.len, [from.a]]];
   for (let item = work.pop(); item; item = work.pop()) {
-    let [k, live] = item;
-    while (live.length && k >= 0 && k < instructions.length) {
-      const key = `${k} ${live}`;
-      if (seen.has(key)) break;
-      seen.add(key);
-      const ins = instructions[k], { op, pc, a } = ins;
-      for (const t of code.tries) if (pc >= t.start && pc < t.end) {
-        for (const [, handler] of t.handlers) work.push([index[handler], live]);
-        if (t.catchAllAddr >= 0) work.push([index[t.catchAllAddr], live]);
-      }
-      const named = registersOf(ins);
-      if (op >= 0x01 && op <= 0x03) live = !live.includes(ins.b) ? live.filter((r) => r !== a) : live.includes(a) ? live : [...live, a];
-      else if (!(op >= 0x38 && op <= 0x3d) && named.some((r) => live.includes(r))) {
-        // only overwritten: a destination the instruction does not also read
-        if (!writesRegister(op) || named === ins.regs || (op >= 0xb0 && op <= 0xcf) || named.slice(1).some((r) => live.includes(r))) return false;
-        live = live.filter((r) => r !== a);
-      }
-      if ((op >= 0x0e && op <= 0x11) || op === 0x27) break;
-      const targets = branchTargets(code, ins);
-      if (op >= 0x28 && op <= 0x2a) { k = index[targets[0]]; continue; }
-      for (const target of targets) work.push([index[target], live]);
-      k++;
+    let [pc, live] = item;
+    const ins = at.get(pc), key = `${pc} ${live}`;
+    if (!ins || !live.length || seen.has(key)) continue;
+    seen.add(key);
+    for (const handler of handlersAt(code, pc)) work.push([handler, live]);
+    const op = ins.op;
+    if (op >= 0x01 && op <= 0x03) live = !live.includes(ins.b) ? live.filter((r) => r !== ins.a) : live.includes(ins.a) ? live : [...live, ins.a];
+    else if (!(op >= 0x38 && op <= 0x3d) && registersOf(ins).some((r) => live.includes(r))) {
+      const dest = overwritten(ins);
+      if (dest < 0 || registersOf(ins).slice(1).some((r) => live.includes(r))) return false;
+      live = live.filter((r) => r !== dest);
     }
+    for (const next of successors(code, ins)) work.push([next, live]);
   }
   return true;
 }
@@ -430,15 +437,15 @@ function readAsSign(code: CodeItem, instructions: readonly MutableInstruction[],
 /** Marks the compareTo calls whose results are only tested against zero: a String receiver then
  *  compares natively, in one step instead of a char loop. */
 function markSignOnly(dex: DexFile, code: CodeItem, instructions: MutableInstruction[]): void {
-  let index: Int32Array | undefined;
+  let at: Map<number, MutableInstruction> | undefined;
   for (let k = 0; k + 1 < instructions.length; k++) {
     const ins = instructions[k], op = ins.op;
     if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78 || ins.regs.length !== 2 || instructions[k + 1].op !== 0x0a) continue;
     if (dex.method(ins.b).name !== "compareTo") continue;
     const desc = dex.methodDesc(ins.b);
     if (desc !== "(Ljava/lang/Object;)I" && desc !== "(Ljava/lang/String;)I") continue;
-    if (!index) { index = new Int32Array(code.insns.length).fill(-1); instructions.forEach((x, i) => { index![x.pc] = i; }); }
-    if (readAsSign(code, instructions, index, k + 1)) ins.signOnly = true;
+    at ??= new Map(instructions.map((x) => [x.pc, x]));
+    if (readAsSign(code, at, instructions[k + 1])) ins.signOnly = true;
   }
 }
 

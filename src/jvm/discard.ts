@@ -13,7 +13,7 @@ import type { CodeItem, DexFile } from "./dex";
 import type { ClassInfo, Runtime } from "./runtime";
 import type { LazyMethod } from "./compiler";
 import { descToName, mangleMethod } from "./abi";
-import { branchTargets, decodeInstructions, endsBlock, writesRegister, type PreparedInstruction as Ins } from "./prepared";
+import { decodeInstructions, handlersAt, overwritten, registersOf, successors, type PreparedInstruction as Ins } from "./prepared";
 
 const FINAL = 0x10, PRIVATE = 0x2;
 /** methods, as a call names them, that observe and keep no throwable: String and StringBuilder
@@ -32,19 +32,6 @@ const PURE = new Set([
 ]);
 const M_FILL = mangleMethod("fillInStackTrace", "()Ljava/lang/Throwable;");
 
-const invokeLike = (ins: Ins) => ins.fmt === "35c" || ins.fmt === "3rc" || ins.fmt === "45cc" || ins.fmt === "4rcc";
-function registers(ins: Ins): readonly number[] {
-  if (invokeLike(ins)) return ins.regs;
-  switch (ins.fmt) {
-    case "23x": return [ins.a, ins.b, ins.c];
-    case "12x": case "22x": case "32x": case "22b": case "22t": case "22s": case "22c": return [ins.a, ins.b];
-    case "10x": case "10t": case "20t": case "30t": return [];
-    default: return [ins.a];
-  }
-}
-/** the register an instruction only writes, else -1 */
-const written = (ins: Ins) => !invokeLike(ins) && writesRegister(ins.op) && !(ins.op >= 0xb0 && ins.op <= 0xcf) ? ins.a : -1;
-
 /** Does the handler at `pc` never read the exception? Every path from its move-exception is
  *  followed until it overwrites that register; a read of it, or of a wide pair holding it, fails,
  *  but for rethrowing it when `rethrows` (a synchronized block's handler, inside a callee). */
@@ -60,12 +47,9 @@ function discards(code: CodeItem, at: Map<number, Ins>, pc: number, rethrows = f
     const ins = at.get(next);
     if (!ins) return false;
     if (rethrows && ins.op === 0x27 && ins.a === x) continue;
-    const regs = registers(ins), dest = written(ins);
+    const regs = registersOf(ins), dest = overwritten(ins);
     for (let k = dest < 0 ? 0 : 1; k < regs.length; k++) if (regs[k] === x || regs[k] === x - 1) return false;
-    if (dest === x) continue;
-    work.push(...branchTargets(code, ins));
-    if (!endsBlock(ins.op)) work.push(next + ins.len);
-    for (const t of code.tries) if (next >= t.start && next < t.end) work.push(...handlersOf(t));
+    if (dest !== x) work.push(...successors(code, ins), ...handlersAt(code, next));
   }
   return true;
 }
