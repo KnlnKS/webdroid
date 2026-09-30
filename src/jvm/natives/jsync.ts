@@ -23,3 +23,5 @@ const unparkThread = (t: JThread | null) => { if (!t) return; if (t.unpark) { t.
 rt.registerJni("jdk/internal/misc/Unsafe", "park(ZJ)V", (absolute: number, time: bigint) =>
   parkThread(curThread, absolute ? Math.max(0, Number(time) - Date.now()) : time > 0n ? Number(time) / 1e6 : undefined));
 rt.registerJni("jdk/internal/misc/Unsafe", "unpark(Ljava/lang/Object;)V", unparkThread);
+// libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock; JS does
+rt.registerJni("java/util/concurrent/atomic/AtomicLong", "VMSupportsCS8()Z", () => 1);

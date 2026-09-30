@@ -476,127 +476,155 @@ rt.register({
   },
 });
 
-// ── sun.misc.Unsafe: enough for kotlinx-coroutines' artificial stack frames
+// ── Unsafe: sun.misc's for kotlinx-coroutines' artificial stack frames, and jdk.internal.misc's for
+// libcore's atomics, CAS loops and LockSupport. A realm is one thread, so every memory order is
+// plain and a read-modify-write is a read then a write.
 class JUnsafe extends JObj {}
 const rawAddress = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
 const unsafe = new JUnsafe();
-rt.register({
-  name: "sun/misc/Unsafe", ctor: JUnsafe,
-  statics: { theUnsafe: unsafe },
-  methods: {
-    "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
-    // raw memory is the process's native heap (sun.nio.fs passes paths through it)
-    "allocateMemory(J)J": (size: bigint) => {
-      if (size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-      const p = mem.malloc(Number(size));
-      if (!p) throw rt.mkThrowable("java/lang/OutOfMemoryError", null);
-      return BigInt(mem.va(p));
-    },
-    "freeMemory(J)V": (address: bigint) => mem.free(rawAddress(address)),
-    "putByte(JB)V": (address: bigint, value: number) => mem.st8(rawAddress(address), value),
-    "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
-      const info = cls.ci!;
-      const p = rt.initClass(info); if (p) yield p;
-      return new info.ctor();
-    }),
-    "objectFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
-    "arrayBaseOffset(Ljava/lang/Class;)I": () => 0,
-    "arrayIndexScale(Ljava/lang/Class;)I": arrayIndexScale,
-    "getObject(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
-    "getObjectVolatile(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
-    "putObject(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
-    "putObjectVolatile(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
-    "putOrderedObject(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
-    "compareAndSwapObject(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z":
-      (o: any, off: bigint, exp: unknown, val: unknown) => {
-        const k = uKey(o, off);
-        if (o[k] !== exp && !(o[k] === undefined && exp === null)) return 0;
-        o[k] = val; return 1;
-      },
-    "compareAndSwapLong(Ljava/lang/Object;JJJ)Z": (o: any, off: bigint, exp: bigint, val: bigint) => {
-      if (uGetLong(o, off) !== exp) return 0;
-      uPutLong(o, off, val); return 1;
-    },
-    "compareAndSwapInt(Ljava/lang/Object;JII)Z": (o: any, off: bigint, exp: number, val: number) => {
-      if (uGetInt(o, off) !== exp) return 0;
-      uPutInt(o, off, val); return 1;
-    },
-    "getInt(Ljava/lang/Object;J)I": uGetInt,
-    "putInt(Ljava/lang/Object;JI)V": uPutInt,
-    "getLong(Ljava/lang/Object;J)J": uGetLong,
-    "putLong(Ljava/lang/Object;JJ)V": uPutLong,
-    ...Object.fromEntries(([
-      ["Boolean", "Z", (v: DataView, at: number) => (v.getUint8(at) ? 1 : 0), (v: DataView, at: number, x: number) => v.setUint8(at, x ? 1 : 0)],
-      ["Byte", "B", (v: DataView, at: number) => v.getInt8(at), (v: DataView, at: number, x: number) => v.setInt8(at, x)],
-      ["Float", "F", (v: DataView, at: number) => v.getFloat32(at, true), (v: DataView, at: number, x: number) => v.setFloat32(at, x, true)],
-      ["Double", "D", (v: DataView, at: number) => v.getFloat64(at, true), (v: DataView, at: number, x: number) => v.setFloat64(at, x, true)],
-    ] as const).flatMap(([n, d, get, put]) => [
-      [`get${n}(Ljava/lang/Object;J)${d}`, (o: any, off: bigint) => { const view = uView(o); return view ? get(view, Number(off)) : (d === "Z" ? (o[uKey(o, off)] ? 1 : 0) : o[uKey(o, off)] ?? 0); }],
-      [`put${n}(Ljava/lang/Object;J${d})V`, (o: any, off: bigint, v: number) => { const view = uView(o); if (view) put(view, Number(off), v); else o[uKey(o, off)] = v; }],
-    ])),
-    "getLongVolatile(Ljava/lang/Object;J)J": uGetLong,
-    "getIntVolatile(Ljava/lang/Object;J)I": uGetInt,
-    "putIntVolatile(Ljava/lang/Object;JI)V": uPutInt,
-    "getAndAddInt(Ljava/lang/Object;JI)I": (o: any, off: bigint, d: number) => { const old = uGetInt(o, off); uPutInt(o, off, (old + d) | 0); return old; },
-    "getAndAddLong(Ljava/lang/Object;JJ)J": (o: any, off: bigint, d: bigint) => { const old = uGetLong(o, off); uPutLong(o, off, BigInt.asIntN(64, old + d)); return old; },
-    "getAndSetInt(Ljava/lang/Object;JI)I": (o: any, off: bigint, v: number) => { const old = uGetInt(o, off); uPutInt(o, off, v); return old; },
-    "putLongVolatile(Ljava/lang/Object;JJ)V": uPutLong,
-    "putOrderedLong(Ljava/lang/Object;JJ)V": uPutLong,
-    "getAndSetObject(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;": (o: any, off: bigint, v: unknown) => {
-      const k = uKey(o, off); const old = o[k] ?? null; o[k] = v; return old;
-    },
+const sunMethods: NativeSpec["methods"] = {
+  "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
+  // raw memory is the process's native heap (sun.nio.fs passes paths through it)
+  "allocateMemory(J)J": (size: bigint) => {
+    if (size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    const p = mem.malloc(Number(size));
+    if (!p) throw rt.mkThrowable("java/lang/OutOfMemoryError", null);
+    return BigInt(mem.va(p));
   },
-});
-// jdk.internal.misc.Unsafe is libcore's own bytecode (ClassValue, VarHandle-free atomics): its
-// natives are sun.misc.Unsafe's operations under the JDK's names, where an object is a "Reference".
-// A realm is one thread, so the fences order nothing.
+  "freeMemory(J)V": (address: bigint) => mem.free(rawAddress(address)),
+  "putByte(JB)V": (address: bigint, value: number) => mem.st8(rawAddress(address), value),
+  "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
+    const info = cls.ci!;
+    const p = rt.initClass(info); if (p) yield p;
+    return new info.ctor();
+  }),
+  "objectFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
+  "arrayBaseOffset(Ljava/lang/Class;)I": () => 0,
+  "arrayIndexScale(Ljava/lang/Class;)I": arrayIndexScale,
+  "getObject(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
+  "getObjectVolatile(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
+  "putObject(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
+  "putObjectVolatile(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
+  "putOrderedObject(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
+  "compareAndSwapObject(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z": casRef,
+  "compareAndSwapLong(Ljava/lang/Object;JJJ)Z": casLong,
+  "compareAndSwapInt(Ljava/lang/Object;JII)Z": casInt,
+  "getInt(Ljava/lang/Object;J)I": uGetInt,
+  "putInt(Ljava/lang/Object;JI)V": uPutInt,
+  "getLong(Ljava/lang/Object;J)J": uGetLong,
+  "putLong(Ljava/lang/Object;JJ)V": uPutLong,
+  ...Object.fromEntries(([
+    ["Boolean", "Z", (v: DataView, at: number) => (v.getUint8(at) ? 1 : 0), (v: DataView, at: number, x: number) => v.setUint8(at, x ? 1 : 0)],
+    ["Byte", "B", (v: DataView, at: number) => v.getInt8(at), (v: DataView, at: number, x: number) => v.setInt8(at, x)],
+    ["Float", "F", (v: DataView, at: number) => v.getFloat32(at, true), (v: DataView, at: number, x: number) => v.setFloat32(at, x, true)],
+    ["Double", "D", (v: DataView, at: number) => v.getFloat64(at, true), (v: DataView, at: number, x: number) => v.setFloat64(at, x, true)],
+  ] as const).flatMap(([n, d, get, put]) => [
+    [`get${n}(Ljava/lang/Object;J)${d}`, (o: any, off: bigint) => { const view = uView(o); if (view) return get(view, Number(off)); const v = uGet(o, off); return d === "Z" ? (v ? 1 : 0) : v ?? 0; }],
+    [`put${n}(Ljava/lang/Object;J${d})V`, (o: any, off: bigint, v: number) => { const view = uView(o); if (view) put(view, Number(off), v); else uPut(o, off, v); }],
+  ])),
+  "getLongVolatile(Ljava/lang/Object;J)J": uGetLong,
+  "getIntVolatile(Ljava/lang/Object;J)I": uGetInt,
+  "putIntVolatile(Ljava/lang/Object;JI)V": uPutInt,
+  "getAndAddInt(Ljava/lang/Object;JI)I": intRmw((a, b) => (a + b) | 0),
+  "getAndAddLong(Ljava/lang/Object;JJ)J": longRmw((a, b) => BigInt.asIntN(64, a + b)),
+  "getAndSetInt(Ljava/lang/Object;JI)I": intRmw((_, b) => b),
+  "putLongVolatile(Ljava/lang/Object;JJ)V": uPutLong,
+  "putOrderedLong(Ljava/lang/Object;JJ)V": uPutLong,
+  "getAndSetObject(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;": getAndSetRef,
+};
+rt.register({ name: "sun/misc/Unsafe", ctor: JUnsafe, statics: { theUnsafe: unsafe }, methods: sunMethods });
+// jdk.internal.misc.Unsafe keeps libcore's class for its statics and checked helpers. Its natives
+// are sun.misc.Unsafe's operations under the JDK's names, where an object is a "Reference"; the
+// accessors and read-modify-writes libcore composes from them (a getAndAdd is a volatile read and a
+// weak CAS in a loop, three frames each) are single operations here.
 {
-  const sun = rt.natives.get("sun/misc/Unsafe")!.methods!;
-  const fence = () => {};
-  const natives: Record<string, unknown> = {
-    "addressSize()I": () => 4,
-    "pageSize()I": () => 4096,
+  const O = "Ljava/lang/Object;", fence = () => {};
+  const jdk: Record<string, unknown> = {
+    "addressSize()I": () => 4, "pageSize()I": () => 4096,
+    "fullFence()V": fence, "loadFence()V": fence, "storeFence()V": fence, "loadLoadFence()V": fence, "storeStoreFence()V": fence,
+    "getAndAddInt(Ljava/lang/Object;JI)I": intRmw((a, b) => (a + b) | 0),
+    "getAndSetInt(Ljava/lang/Object;JI)I": intRmw((_, b) => b),
+    "getAndBitwiseAndInt(Ljava/lang/Object;JI)I": intRmw((a, b) => a & b),
+    "getAndBitwiseOrInt(Ljava/lang/Object;JI)I": intRmw((a, b) => a | b),
+    "getAndBitwiseXorInt(Ljava/lang/Object;JI)I": intRmw((a, b) => a ^ b),
+    "getAndAddLong(Ljava/lang/Object;JJ)J": longRmw((a, b) => BigInt.asIntN(64, a + b)),
+    "getAndSetLong(Ljava/lang/Object;JJ)J": longRmw((_, b) => b),
+    [`getAndSetReference(${O}J${O})${O}`]: getAndSetRef, [`getAndSetObject(${O}J${O})${O}`]: getAndSetRef,
+  };
+  for (const sig of ["allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;", "allocateMemory(J)J", "freeMemory(J)V", "putByte(JB)V",
+    ...[["Boolean", "Z"], ["Byte", "B"], ["Float", "F"], ["Double", "D"]].flatMap(([n, d]) => [`get${n}(${O}J)${d}`, `put${n}(${O}J${d})V`])])
+    jdk[sig] = sunMethods[sig];
+  for (const n of ["compareAndSwapInt", "compareAndSetInt", "weakCompareAndSetInt"]) jdk[`${n}(${O}JII)Z`] = casInt;
+  for (const n of ["compareAndSwapLong", "compareAndSetLong"]) jdk[`${n}(${O}JJJ)Z`] = casLong;
+  for (const n of ["compareAndSwapObject", "compareAndSetObject", "compareAndSetReference", "weakCompareAndSetReference"]) jdk[`${n}(${O}J${O}${O})Z`] = casRef;
+  for (const m of ["", "Acquire", "Opaque", "Volatile"]) {
+    jdk[`getInt${m}(${O}J)I`] = uGetInt;
+    jdk[`getLong${m}(${O}J)J`] = uGetLong;
+    jdk[`getReference${m}(${O}J)${O}`] = uGet;
+    if (m !== "Opaque") jdk[`getObject${m}(${O}J)${O}`] = uGet;
+  }
+  for (const m of ["", "Release", "Opaque", "Volatile", "Ordered"]) {
+    const put = m === "Ordered" ? "putOrdered" : "put", suffix = m === "Ordered" ? "" : m;
+    jdk[`${put}Int${suffix}(${O}JI)V`] = uPutInt;
+    jdk[`${put}Long${suffix}(${O}JJ)V`] = uPutLong;
+    if (m !== "Ordered") jdk[`putReference${m}(${O}J${O})V`] = uPut;
+    if (m !== "Opaque") jdk[`${put}Object${suffix}(${O}J${O})V`] = uPut;
+  }
+  const statics = ["THE_ONE", "theUnsafe", "ADDRESS_SIZE", ...["BOOLEAN", "BYTE", "SHORT", "CHAR", "INT", "LONG", "FLOAT", "DOUBLE", "OBJECT"]
+    .flatMap((t) => [`ARRAY_${t}_BASE_OFFSET`, `ARRAY_${t}_INDEX_SCALE`])];
+  rt.register({ name: "jdk/internal/misc/Unsafe", ctor: class extends JObj {}, platformClinit: true, methods: jdk as NativeSpec["methods"],
+    statics: Object.fromEntries(statics.map((n) => [n, null])) });
+  // private static natives, which only the class's own names reach
+  rt.registerJnis("jdk/internal/misc/Unsafe", {
     "getArrayBaseOffsetForComponentType(Ljava/lang/Class;)I": () => 0,
     "getArrayIndexScaleForComponentType(Ljava/lang/Class;)I": (c: JClass) => arrayIndexScale(rt.classFor("[" + classDesc(c)) as JClass),
-    "fullFence()V": fence, "loadFence()V": fence, "storeFence()V": fence,
-  };
-  for (const [sig, fn] of Object.entries(sun)) {
-    const jdk = sig.replace(/Object(Volatile)?\(/, "Reference$1(").replace(/^compareAndSwap(\w+)/, "compareAndSet$1").replace("compareAndSetObject", "compareAndSetReference");
-    for (const name of new Set([sig, jdk])) natives[name] = fn;
-  }
-  const declared = new Set(["allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;", "compareAndSetInt(Ljava/lang/Object;JII)Z",
-    "compareAndSetLong(Ljava/lang/Object;JJJ)Z", "compareAndSetReference(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
-    "compareAndSwapInt(Ljava/lang/Object;JII)Z", "compareAndSwapLong(Ljava/lang/Object;JJJ)Z",
-    "compareAndSwapObject(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", "getIntVolatile(Ljava/lang/Object;J)I",
-    "getLongVolatile(Ljava/lang/Object;J)J", "getReference(Ljava/lang/Object;J)Ljava/lang/Object;",
-    "getReferenceVolatile(Ljava/lang/Object;J)Ljava/lang/Object;", "putIntVolatile(Ljava/lang/Object;JI)V",
-    "putLongVolatile(Ljava/lang/Object;JJ)V", "putOrderedInt(Ljava/lang/Object;JI)V", "putOrderedLong(Ljava/lang/Object;JJ)V",
-    "putOrderedObject(Ljava/lang/Object;JLjava/lang/Object;)V", "putReference(Ljava/lang/Object;JLjava/lang/Object;)V",
-    "putReferenceVolatile(Ljava/lang/Object;JLjava/lang/Object;)V", "addressSize()I", "pageSize()I",
-    "getArrayBaseOffsetForComponentType(Ljava/lang/Class;)I", "getArrayIndexScaleForComponentType(Ljava/lang/Class;)I",
-    "fullFence()V", "loadFence()V", "storeFence()V",
-    ...["Boolean Z", "Byte B", "Char C", "Short S", "Int I", "Long J", "Float F", "Double D"].flatMap((t) => {
-      const [n, d] = t.split(" ");
-      return [`get${n}(Ljava/lang/Object;J)${d}`, `put${n}(Ljava/lang/Object;J${d})V`];
-    })]);
-  for (const sig of declared) if (natives[sig]) rt.registerJni("jdk/internal/misc/Unsafe", sig, natives[sig] as (...a: never[]) => unknown);
+  });
 }
 // Unsafe "offsets" index this table of fields, with a stride of 8 so the word arithmetic
 // protobuf's Android accessor applies to them (offset & ~3, (offset & 3) << 3) is an identity.
 // An access wider or narrower than the field's own type moves the bits, as memory would: that
-// same accessor reads a double as getLong and a float as getInt.
-const unsafeFields: { prop: string; desc: string }[] = [];
+// same accessor reads a double as getLong and a float as getInt. Each field's accessors are
+// compiled with its property name, so the property access in each stays monomorphic.
+/** A field's accessors, compiled with its property name so each access stays monomorphic. An
+ *  int or long access to a float or double field moves its bits. Reads of a field a TS object
+ *  never set see its zero. */
+interface UField {
+  get(o: any): unknown; put(o: any, v: unknown): void;
+  getInt(o: any): number; putInt(o: any, v: number): void;
+  getLong(o: any): bigint; putLong(o: any, v: bigint): void;
+}
+const unsafeFields: UField[] = [];
 const unsafeIndex = new Map<string, number>();
 function fieldOffset(f: JField): bigint {
   let i = unsafeIndex.get(f.prop);
-  if (i === undefined) { i = unsafeFields.length; unsafeFields.push({ prop: f.prop, desc: f.desc }); unsafeIndex.set(f.prop, i); }
+  if (i === undefined) {
+    const at = `o[${JSON.stringify(f.prop)}]`, fl = f.desc === "F", db = f.desc === "D";
+    i = unsafeFields.length;
+    unsafeFields.push(new Function("F2I", "I2F", "D2L", "L2D", `return {
+get(o){return ${at}},put(o,v){${at}=v},
+getInt(o){return ${fl ? `F2I(${at}??0)` : `${at}??0`}},putInt(o,v){${at}=${fl ? "I2F(v)" : "v"}},
+getLong(o){return ${db ? `D2L(${at}??0)` : `${at}??0n`}},putLong(o,v){${at}=${db ? "L2D(v)" : "v"}}}`)(
+      floatToIntBits, intBitsToFloat, doubleToLongBits, longBitsToDouble));
+    unsafeIndex.set(f.prop, i);
+  }
   return BigInt(i * 8);
 }
-function uKey(o: unknown, off: bigint): string | number {
-  return Array.isArray(o) ? Number(off) / 4 : ArrayBuffer.isView(o) ? Number(off) : unsafeFields[Number(off) / 8].prop;
+// Each operation converts its offset once, as the low word of a BigInt64Array store: in V8 that is
+// about half the cost of Number(), which is most of an access's cost.
+const offWord = new BigInt64Array(1), offLow = new Int32Array(offWord.buffer);
+const low32 = (off: bigint) => { offWord[0] = off; return offLow[0]; };
+const uField = (off: bigint) => unsafeFields[low32(off) >> 3];
+/** a reference: an object array's element (4 bytes each), or a field */
+function uGet(o: any, off: bigint): unknown {
+  if (Array.isArray(o)) return o[low32(off) >> 2] ?? null;
+  if (ArrayBuffer.isView(o)) return (o as any)[Number(off)] ?? null;
+  return uField(off).get(o) ?? null;
 }
-function uGet(o: any, off: bigint) { return o[uKey(o, off)] ?? null; }
-function uPut(o: any, off: bigint, v: unknown) { o[uKey(o, off)] = v; }
+function uPut(o: any, off: bigint, v: unknown): void {
+  if (Array.isArray(o)) o[low32(off) >> 2] = v;
+  else if (ArrayBuffer.isView(o)) (o as any)[Number(off)] = v;
+  else uField(off).put(o, v);
+}
 const unsafeViews = new WeakMap<object, DataView>();
 function uView(o: unknown): DataView | null {
   if (!ArrayBuffer.isView(o)) return null;
@@ -604,36 +632,70 @@ function uView(o: unknown): DataView | null {
   if (!view) { view = new DataView(o.buffer, o.byteOffset, o.byteLength); unsafeViews.set(o, view); }
   return view;
 }
-function uGetInt(o: any, off: bigint): number {
-  const view = uView(o);
-  if (!view) { const f = unsafeFields[Number(off) / 8], v = o[f.prop] ?? 0; return f.desc === "F" ? floatToIntBits(v) : v; }
-  const offset = Number(off);
+function viewGetInt(o: ArrayBufferView, off: bigint): number {
+  const view = uView(o)!, offset = Number(off);
   if (offset + 4 <= view.byteLength || offset < 0 || offset >= view.byteLength) return view.getInt32(offset, true);
   let value = 0;
   for (let i = 0; offset + i < view.byteLength; i++) value |= view.getUint8(offset + i) << (i * 8);
   return value | 0;
 }
-function uPutInt(o: any, off: bigint, value: number): void {
-  const view = uView(o);
-  if (!view) { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "F" ? intBitsToFloat(value) : value; return; }
-  const offset = Number(off);
+function viewPutInt(o: ArrayBufferView, off: bigint, value: number): void {
+  const view = uView(o)!, offset = Number(off);
   if (offset + 4 <= view.byteLength || offset < 0 || offset >= view.byteLength) { view.setInt32(offset, value, true); return; }
   for (let i = 0; offset + i < view.byteLength; i++) view.setUint8(offset + i, value >>> (i * 8));
 }
-function uGetLong(o: any, off: bigint): bigint {
-  const view = uView(o);
-  if (view) return view.getBigInt64(Number(off), true);
-  const f = unsafeFields[Number(off) / 8], v = o[f.prop];
-  return f.desc === "D" ? doubleToLongBits(v ?? 0) : v ?? 0n;
+function uGetInt(o: any, off: bigint): number { return ArrayBuffer.isView(o) ? viewGetInt(o, off) : uField(off).getInt(o); }
+function uPutInt(o: any, off: bigint, value: number): void {
+  if (ArrayBuffer.isView(o)) viewPutInt(o, off, value); else uField(off).putInt(o, value);
 }
+function uGetLong(o: any, off: bigint): bigint { return ArrayBuffer.isView(o) ? uView(o)!.getBigInt64(Number(off), true) : uField(off).getLong(o); }
 function uPutLong(o: any, off: bigint, value: bigint): void {
-  const view = uView(o);
-  if (view) view.setBigInt64(Number(off), value, true);
-  else { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "D" ? longBitsToDouble(value) : value; }
+  if (ArrayBuffer.isView(o)) uView(o)!.setBigInt64(Number(off), value, true); else uField(off).putLong(o, value);
+}
+/** an int read-modify-write returning the old value */
+function intRmw(op: (cur: number, x: number) => number) { return (o: any, off: bigint, x: number) => {
+  if (ArrayBuffer.isView(o)) { const old = viewGetInt(o, off); viewPutInt(o, off, op(old, x)); return old; }
+  const f = uField(off), old = f.getInt(o);
+  f.putInt(o, op(old, x));
+  return old;
+}; }
+function longRmw(op: (cur: bigint, x: bigint) => bigint) { return (o: any, off: bigint, x: bigint) => {
+  if (ArrayBuffer.isView(o)) { const view = uView(o)!, at = Number(off), old = view.getBigInt64(at, true); view.setBigInt64(at, op(old, x), true); return old; }
+  const f = uField(off), old = f.getLong(o);
+  f.putLong(o, op(old, x));
+  return old;
+}; }
+function casInt(o: any, off: bigint, exp: number, val: number): number {
+  if (ArrayBuffer.isView(o)) { if (viewGetInt(o, off) !== exp) return 0; viewPutInt(o, off, val); return 1; }
+  const f = uField(off);
+  if (f.getInt(o) !== exp) return 0;
+  f.putInt(o, val); return 1;
+}
+function casLong(o: any, off: bigint, exp: bigint, val: bigint): number {
+  if (ArrayBuffer.isView(o)) { const view = uView(o)!, at = Number(off); if (view.getBigInt64(at, true) !== exp) return 0; view.setBigInt64(at, val, true); return 1; }
+  const f = uField(off);
+  if (f.getLong(o) !== exp) return 0;
+  f.putLong(o, val); return 1;
+}
+function casRef(o: any, off: bigint, exp: unknown, val: unknown): number {
+  if (Array.isArray(o)) {
+    const i = low32(off) >> 2, cur = o[i];
+    if (cur !== exp && !(cur === undefined && exp === null)) return 0;
+    o[i] = val; return 1;
+  }
+  const f = uField(off), cur = f.get(o);
+  if (cur !== exp && !(cur === undefined && exp === null)) return 0;
+  f.put(o, val); return 1;
+}
+function getAndSetRef(o: any, off: bigint, v: unknown): unknown {
+  if (Array.isArray(o)) { const i = low32(off) >> 2, old = o[i] ?? null; o[i] = v; return old; }
+  const f = uField(off), old = f.get(o) ?? null;
+  f.put(o, v); return old;
 }
 function arrayIndexScale(cls: JClass): number {
   return PRIM_ARRAYS[cls.arrDesc?.[1] as PrimElem]?.BYTES_PER_ELEMENT ?? 4;
 }
+
 
 const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
 /** Class.getMethods (public, own and inherited) or, when declaredOnly, getDeclaredMethods */

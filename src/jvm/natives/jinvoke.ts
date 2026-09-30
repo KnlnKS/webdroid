@@ -131,76 +131,71 @@ rt.register({
   },
 });
 
-// ── VarHandle: every access mode reads and writes through one pair of accessors over two
-// coordinates (receiver; array and index; or none), which compiled call sites always pass.
-// A realm is one thread, so the plain, opaque, acquire/release and volatile modes coincide.
+// ── VarHandle: every access mode reads and writes through two coordinates (receiver; array and
+// index; or none), which compiled call sites always pass. A realm is one thread, so the plain,
+// opaque, acquire/release and volatile modes coincide. Each field, static and array element type
+// gets a class whose modes name the variable literally, so a call site such as
+// AtomicInteger.incrementAndGet stays monomorphic and V8 inlines it as a property update.
 
-type Coord = any;
-abstract class JVarHandle extends JObj {
+class JVarHandle extends JObj {
   /** the variable's descriptor */
   type = "";
-  abstract ld(a: Coord, b: Coord): any;
-  abstract st(a: Coord, b: Coord, v: unknown): void;
-  $get(a: Coord, b: Coord) { return this.ld(a, b); }
-  $set(a: Coord, b: Coord, v: unknown) { this.st(a, b, v); }
-  $compareAndSet(a: Coord, b: Coord, expect: unknown, v: unknown) {
-    if (!same(this.ld(a, b), expect)) return 0;
-    this.st(a, b, v);
-    return 1;
-  }
-  $compareAndExchange(a: Coord, b: Coord, expect: unknown, v: unknown) {
-    const cur = this.ld(a, b);
-    if (same(cur, expect)) this.st(a, b, v);
-    return cur;
-  }
-  $getAndSet(a: Coord, b: Coord, v: unknown) { const cur = this.ld(a, b); this.st(a, b, v); return cur; }
-  $getAndAdd(a: Coord, b: Coord, v: any) { const cur = this.ld(a, b); this.st(a, b, this.wrap(cur + v)); return cur; }
-  $getAndBitwiseOr(a: Coord, b: Coord, v: any) { const cur = this.ld(a, b); this.st(a, b, this.wrap(cur | v)); return cur; }
-  $getAndBitwiseAnd(a: Coord, b: Coord, v: any) { const cur = this.ld(a, b); this.st(a, b, this.wrap(cur & v)); return cur; }
-  $getAndBitwiseXor(a: Coord, b: Coord, v: any) { const cur = this.ld(a, b); this.st(a, b, this.wrap(cur ^ v)); return cur; }
-  private wrap(v: any): unknown {
-    switch (this.type) {
-      case "I": return v | 0;
-      case "J": return BigInt.asIntN(64, v);
-      case "S": return (v << 16) >> 16;
-      case "B": return (v << 24) >> 24;
-      case "C": return v & 0xffff;
-      case "Z": return v & 1;
-      case "F": return Math.fround(v);
-      case "D": return v;
-    }
-    throw rt.mkThrowable("java/lang/UnsupportedOperationException", "numeric access mode on " + this.type);
-  }
 }
 /** CAS comparison: references by identity (a null reference may read as 0), NaN equal to NaN */
 const same = (x: unknown, y: unknown) => x === y || (x !== x && y !== y) || (x == null || x === 0) && (y == null || y === 0);
-
-const accessModes = JVarHandle.prototype as unknown as Record<string, unknown>;
-for (const mode of VARHANDLE_MODES) {
-  const base = mode.replace(/^weakCompareAndSet\w*/, "compareAndSet").replace(/(Volatile|Opaque|Acquire|Release)$/, "");
-  accessModes["$" + mode] ??= accessModes["$" + base];
-}
-
-class FieldVarHandle extends JVarHandle {
-  constructor(readonly prop: string) { super(); }
-  ld(o: Coord) { return o[this.prop]; }
-  st(o: Coord, _: Coord, v: unknown) { o[this.prop] = v; }
-}
-class StaticVarHandle extends JVarHandle {
-  constructor(readonly holder: Record<string, unknown>, readonly prop: string) { super(); }
-  ld() { return this.holder[this.prop]; }
-  st(_a: Coord, _b: Coord, v: unknown) { this.holder[this.prop] = v; }
-}
-class ArrayVarHandle extends JVarHandle {
-  ld(a: Coord, i: number) {
-    if ((i >>> 0) >= a.length) rt.aio(i, a.length);
-    return a[i];
+const WRAP: Record<string, ((x: string) => string) | undefined> = {
+  I: (x) => `(${x})|0`, J: (x) => `BigInt.asIntN(64,${x})`, S: (x) => `((${x})<<16)>>16`, B: (x) => `((${x})<<24)>>24`,
+  C: (x) => `(${x})&65535`, Z: (x) => `(${x})&1`, F: (x) => `Math.fround(${x})`, D: (x) => `(${x})`,
+};
+const numeric = (type: string) => rt.mkThrowable("java/lang/UnsupportedOperationException", "numeric access mode on " + type);
+/** the access modes over one variable of `type`, read by the expression `ld` and written by `st(v)`
+ *  over coordinates a and b, after the statement `check`; `E` is the static holder */
+function handleClass(base: typeof JVarHandle, type: string, ld: string, st: (v: string) => string, check: string, holder: unknown): new () => JVarHandle {
+  const w = WRAP[type], eq = w && type !== "F" && type !== "D" ? "c===e" : "c===e||same(c,e)";
+  const rmw = (op: string) => w ? `{${check}const c=${ld};${st(w(`c${op}v`))};return c}` : `{throw numeric(${JSON.stringify(type)})}`;
+  const cls = new Function("Base", "same", "numeric", "R", "E", `return class extends Base{
+$get(a,b){${check}return ${ld}}
+$set(a,b,v){${check}${st("v")}}
+$compareAndSet(a,b,e,v){${check}const c=${ld};if(!(${eq}))return 0;${st("v")};return 1}
+$compareAndExchange(a,b,e,v){${check}const c=${ld};if(${eq})${st("v")};return c}
+$getAndSet(a,b,v){${check}const c=${ld};${st("v")};return c}
+$getAndAdd(a,b,v)${rmw("+")}
+$getAndBitwiseOr(a,b,v)${rmw("|")}
+$getAndBitwiseAnd(a,b,v)${rmw("&")}
+$getAndBitwiseXor(a,b,v)${rmw("^")}
+}`)(base, same, numeric, rt, holder);
+  const modes = cls.prototype as Record<string, unknown>;
+  for (const mode of VARHANDLE_MODES) {
+    const plain = mode.replace(/^weakCompareAndSet\w*/, "compareAndSet").replace(/(Volatile|Opaque|Acquire|Release)$/, "");
+    modes["$" + mode] ??= modes["$" + plain];
   }
-  st(a: Coord, i: number, v: unknown) {
-    if ((i >>> 0) >= a.length) rt.aio(i, a.length);
-    a[i] = v;
-  }
+  return cls;
 }
+class FieldVarHandle extends JVarHandle {}
+class StaticVarHandle extends JVarHandle {}
+class ArrayVarHandle extends JVarHandle {}
+const handleClasses = new Map<unknown, Map<string, new () => JVarHandle>>();
+/** one class per variable: a field's by its property, a static's by its holder too */
+function varHandle(holder: unknown, key: string, make: () => new () => JVarHandle, type: string): JVarHandle {
+  let byKey = handleClasses.get(holder);
+  if (!byKey) handleClasses.set(holder, byKey = new Map());
+  let cls = byKey.get(key);
+  if (!cls) byKey.set(key, cls = make());
+  const h = new cls();
+  h.type = type;
+  return h;
+}
+const fieldHandle = (prop: string, type: string) => {
+  const at = `a[${JSON.stringify(prop)}]`;
+  return varHandle(null, prop + ":" + type, () => handleClass(FieldVarHandle, type, at, (v) => `${at}=${v}`, "", null), type);
+};
+const staticHandle = (holder: object, prop: string, type: string) => {
+  const at = `E[${JSON.stringify(prop)}]`;
+  return varHandle(holder, prop + ":" + type, () => handleClass(StaticVarHandle, type, at, (v) => `${at}=${v}`, "", holder), type);
+};
+const arrayHandle = (type: string) => varHandle(null, "[" + type,
+  () => handleClass(ArrayVarHandle, type, "a[b]", (v) => `a[b]=${v}`, "if((b>>>0)>=a.length)R.aio(b,a.length);", null), type);
+
 
 const fence = () => {};
 rt.register({
@@ -254,9 +249,7 @@ rt.register({
     "static arrayElementVarHandle(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;": (arrayClass: JClass) => {
       if (!arrayClass) rt.npe();
       if (!arrayClass.arrDesc) throw rt.mkThrowable("java/lang/IllegalArgumentException", "not an array class");
-      const h = new ArrayVarHandle();
-      h.type = arrayClass.arrDesc.slice(1);
-      return h;
+      return arrayHandle(arrayClass.arrDesc.slice(1));
     },
   },
 });
@@ -274,16 +267,12 @@ rt.register({
     },
     "findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;": (refc: JClass, name: string, type: JClass) => {
       const { f, desc } = findField(refc, name, type, false);
-      const h = new FieldVarHandle(f.prop);
-      h.type = desc;
-      return h;
+      return fieldHandle(f.prop, desc);
     },
     "findStaticVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;": driven(function* (refc: JClass, name: string, type: JClass): Gen {
       const { f, desc } = findField(refc, name, type, true);
       const p = rt.initClass(f.owner); if (p) yield p;
-      const h = new StaticVarHandle(f.owner.ctor, f.prop);
-      h.type = desc;
-      return h;
+      return staticHandle(f.owner.ctor, f.prop, desc);
     }),
     "findVirtual(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;":
       (refc: JClass, name: string, type: JMethodType) => handle(findMethod(refc, name, type, false), Kind.Virtual),

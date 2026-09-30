@@ -15,7 +15,6 @@ import "./jvm/natives/jmath";
 import "./jvm/natives/jio";
 import "./jvm/natives/jobjectstream";
 import "./jvm/natives/jdex";
-import "./jvm/natives/jatomic";
 import "./jvm/natives/jblockingqueue";
 import "./jvm/natives/jsync";
 import "./jvm/natives/jconc";

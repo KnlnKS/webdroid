@@ -230,6 +230,9 @@ rt.register({
     },
     "hashCode()I": function () { return idHash(this); },
     "isInstance(Ljava/lang/Object;)Z": function (this: JClass, o: unknown) {
+      // a field updater's receiver and value checks, per call: most receivers are exactly the
+      // class, and most reference updaters take any Object
+      if (o != null && ((o as JObj).constructor === this.ci?.ctor || this.ci?.name === "java/lang/Object")) return 1;
       return (this.ci?.owner ?? rt).iof(o, this.ci?.name ?? this.arrDesc ?? "?");
     },
     "isAssignableFrom(Ljava/lang/Class;)Z": function (this: JClass, other: JClass) {
