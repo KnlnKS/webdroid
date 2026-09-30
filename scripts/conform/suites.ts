@@ -29,7 +29,8 @@ export const SUITES: Record<string, Suite> = {
       exclude: /(harmony\/tests\/java\/io\/Fil(e|ter)OutputStreamTest|harmony\/tests\/java\/util\/zip\/Zip(File|OutputStream)Test|libcore\/java\/io\/(Console|FileDescriptor|FileInputStream|File|ObjectStreamClassSuid)Test|Zip64FileTest|EnableDeprecatedBouncyCastleAlgorithmsRule)\.java$/,
     },
   },
-  // libcore's java.net tests at the same commit, without those that open sockets or servers
+  // libcore's java.net tests at the same commit, without those that open sockets or servers or
+  // need hidden APIs
   "luni-net": {
     maven: ["com.google.mockwebserver:mockwebserver:20130706", ...JUNIT],
     source: {
@@ -37,7 +38,7 @@ export const SUITES: Record<string, Suite> = {
       root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
       include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests\/java|luni\/src\/test\/java\/libcore\/java)\/net|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/testframework|libcore\/testing\/io)|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Support_|Abstract)\w+Test\.java$/,
-      exclude: /\/net\/(\w*(Datagram|Multicast|ServerSocket|SocketImpl|JarURLConnection|URLClassLoader|NetworkInterface)\w*|(Old)?Socket(Timeout)?Test|OldSocketTest\w*|OldUnixSocketTest|InterfaceAddressTest|InetAddressThreadTest|ConcurrentCloseTest|FtpURLConnectionTest|URLConnectionTest|DelegatingSocketFactory|OldCookieHandlerTest)\.java$|libcore\/java\/net\/InetAddressTest\.java$|harmony\/tests\/java\/net\/URLDecoderTest\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
+      exclude: /\/net\/(\w*(ServerSocket|SocketImpl|JarURLConnection|URLClassLoader)\w*|(Old)?Socket(Timeout)?Test|OldSocketTest\w*|OldUnixSocketTest|ConcurrentCloseTest|FtpURLConnectionTest|URLConnectionTest|DelegatingSocketFactory|OldCookieHandlerTest)\.java$|libcore\/java\/net\/(InetAddress|NetworkInterface|DatagramSocket)Test\.java$|harmony\/tests\/java\/net\/(URLDecoder|DatagramSocket)Test\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
     },
   },
   // libcore's java.nio.file tests at the same commit, without those needing mockito, junitparams or

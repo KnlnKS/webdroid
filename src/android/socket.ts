@@ -23,7 +23,14 @@ const field = (o: JObj, cls: string, name: string) => (o as unknown as Obj)[decl
 const setField = (o: JObj, cls: string, name: string, v: unknown) => { (o as unknown as Obj)[declaredField(cls, name)] = v; };
 
 /** a bytecode throwable, initialized before it is made (a native's exception needs its class ready) */
-const thrown = (cls: string, desc: string, ...args: unknown[]): Promise<never> => newObj(cls, desc, ...args).then((e) => { throw e; });
+function thrown(cls: string, desc: string, ...args: unknown[]): never | Promise<never> {
+  const info = rt.link(cls), init = rt.initClass(info);
+  const make = (): never | Promise<never> => {
+    const e = new info.ctor();
+    return after(vcall(e, "<init>", desc, ...args), () => { throw e; }) as never | Promise<never>;
+  };
+  return init ? init.then(make) : make();
+}
 const socketClosed = () => rt.mkThrowable("java/net/SocketException", "Socket closed");
 /** the descriptor a call waited on closed under it: libcore's AsynchronousCloseMonitor answer */
 const closedUnder = (fn: string, r: number) => { if (r === -E.BADF) throw socketClosed(); sys(fn, r); return r; };
