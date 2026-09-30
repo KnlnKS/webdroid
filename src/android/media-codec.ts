@@ -379,6 +379,12 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
   "getInputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const b = this.inputs[index]; if (!b) return null; b.pos = 0; b.lim = b.cap; return b; },
   "getOutputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const o = this.outputs.get(index); return o?.kind === "audio" || o?.kind === "video-buffer" ? o.buffer : null; },
   "getInputBuffers()[Ljava/nio/ByteBuffer;": function (this: JMediaCodec) { return jarray(this.inputs.slice(), "Ljava/nio/ByteBuffer;"); },
+  // a copy of what configure() was given, as getFormatNative(true) reports it
+  "getInputFormat()Landroid/media/MediaFormat;": function (this: JMediaCodec) {
+    this.check();
+    const format = new JMediaFormat(); format.values = new Map(this.format.values);
+    return format;
+  },
   "getOutputFormat()Landroid/media/MediaFormat;": function (this: JMediaCodec) { return this.outputFormat; },
   "getOutputFormat(I)Landroid/media/MediaFormat;": function (this: JMediaCodec) { return this.outputFormat; },
   "queueInputBuffer(IIIJI)V": function (this: JMediaCodec, index: number, offset: number, size: number, timestamp: bigint, flags: number) { this.queue(index, offset, size, timestamp, flags); },

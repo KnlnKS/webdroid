@@ -1,10 +1,11 @@
-// The activity and activity_task system services, hosted behind binder as the TS halves of
-// AOSP's generated IActivityManager.Stub and IActivityTaskManager.Stub: AOSP's ActivityManager and
-// ActivityManager.AppTask run from bytecode over them, and a raw transaction (Shizuku's probe)
-// reaches the Stub's own onTransact. A method not implemented here is reported as missing.
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+// System services hosted behind binder, each the TS half of AOSP's generated AIDL Stub: AOSP's
+// managers run from bytecode over them (ActivityManager, AppTask, LoudnessCodecController,
+// ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
+// code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
+// missing by its AIDL name.
+import { JObj, rt, noops, declaredField, type NativeSpec } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { appHost, jclsNameOf } from "./apphost";
 import { type JComponentName, mkComponentName } from "./intent";
@@ -117,3 +118,35 @@ rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends J
 
 hostService("activity", () => newObj("webdroid/ActivityManagerService"));
 hostService("activity_task", () => newObj("webdroid/ActivityTaskManagerService"));
+
+// IAudioService: codec loudness only. A codec's loudness parameters are the reference AVD's for its
+// output (the speaker): the target reference level, and the DRC setting for the metadata type.
+rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "android/media/IAudioService$Stub", methods: {
+  "getLoudnessParams(Landroid/media/LoudnessCodecInfo;)Landroid/os/PersistableBundle;": async (info: Record<string, number>) => {
+    const bundle = await newObj("android/os/PersistableBundle"), type = info[declaredField("android/media/LoudnessCodecInfo", "metadataType")];
+    await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-target-ref-level", 64);
+    if (type === 1) await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-heavy-compression", 1);
+    if (type === 2) await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-effect-type", 3);
+    return bundle;
+  },
+  // the output never changes, so no updated parameters are ever dispatched
+  ...noops("registerLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V",
+    "unregisterLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V", "startLoudnessCodecUpdates(I)V",
+    "stopLoudnessCodecUpdates(I)V", "addLoudnessCodecInfo(IILandroid/media/LoudnessCodecInfo;)V",
+    "removeLoudnessCodecInfo(ILandroid/media/LoudnessCodecInfo;)V"),
+} });
+
+// IWindowManager: what WindowManagerGlobal and screen recording callbacks ask of it. Animations run
+// at the default duration scale, and nothing records the page, so a registration reports "not
+// recorded" and that never changes.
+rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
+  "getCurrentAnimatorScale()F": () => 1,
+  "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
+  "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
+} });
+
+/** a Stub whose methods declare @EnforcePermission takes its enforcer at construction; these
+ *  services never call it, as no method here is one that checks a permission */
+const withEnforcer = async (cls: string) => newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer"));
+hostService("audio", () => withEnforcer("webdroid/AudioService"));
+hostService("window", () => withEnforcer("webdroid/WindowManagerService"));
