@@ -5,6 +5,7 @@
 // app's own bytecode.
 import "./jvm/natives/jbox";
 import "./jvm/natives/jlang";
+import "./jvm/natives/fdlibm";
 import "./jvm/natives/jcoll";
 import "./jvm/natives/jvalues";
 import "./jvm/natives/jmath";

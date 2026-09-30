@@ -392,3 +392,30 @@ test("integer formatting and parsing intrinsics match their AOSP bodies", async 
     for (const args of inputs) expect(await result(fn, null, args)).toEqual(await result(base, null, args));
   }
 });
+
+test("Math's intrinsics match their AOSP bodies", async () => {
+  const D = [0, -0, 0.5, -0.5, 1.5, -2.5, 0.49999999999999994, -0.49999999999999994, 2 ** 52 + 1, -(2 ** 53), 1e300, -1e-300,
+    5e-324, 2147483647.5, -2147483648.5, 9.3e18, -9.3e18, Infinity, -Infinity, NaN, ...INTS.map((v) => v / 7)];
+  const F = D.map(Math.fround);
+  const cases: [string, unknown[][]][] = [
+    ["static abs(I)I", INTS.map((v) => [v])], ["static abs(J)J", LONGS.map((v) => [v])],
+    ["static abs(F)F", F.map((v) => [v])], ["static abs(D)D", D.map((v) => [v])],
+    ["static round(F)I", F.map((v) => [v])], ["static round(D)J", D.map((v) => [v])],
+    ["static signum(F)F", F.map((v) => [v])], ["static signum(D)D", D.map((v) => [v])],
+  ];
+  for (const t of ["max", "min"]) {
+    cases.push([`static ${t}(II)I`, INTS.map((v, i) => [v, INTS[(i * 7) % INTS.length]])]);
+    cases.push([`static ${t}(JJ)J`, LONGS.map((v, i) => [v, LONGS[(i * 7) % LONGS.length]])]);
+    cases.push([`static ${t}(FF)F`, F.flatMap((v) => [[v, 0], [v, -0], [v, NaN], [0, v], [v, 1.5]])]);
+    cases.push([`static ${t}(DD)D`, D.flatMap((v) => [[v, 0], [v, -0], [v, NaN], [0, v], [v, 1.5]])]);
+  }
+  for (const t of ["floorDiv", "floorMod"]) cases.push([`static ${t}(II)I`, INTS.flatMap((v) => [0, 1, -1, 3, -7, 2147483647, -2147483648].map((d) => [v, d]))]);
+  for (const [sig, inputs] of cases) {
+    const [fn, base] = await pair("java/lang/Math", sig);
+    for (const args of inputs) {
+      const [mine, theirs] = [await result(fn, null, args), await result(base, null, args)] as { value?: unknown }[];
+      if (typeof mine.value === "number" && Number.isNaN(mine.value)) expect(theirs.value).toBeNaN();
+      else expect(mine).toEqual(theirs);
+    }
+  }
+});

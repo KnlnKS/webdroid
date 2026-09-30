@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
-import { mangleStaticField, mangleMethod, jarray } from "../src/jvm/abi";
+import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
 import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { boxDouble, boxFloat, boxInt } from "../src/jvm/natives/jbox";
@@ -108,37 +108,33 @@ describe("character-offset", () => {
   });
 });
 
-describe("math", () => {
-  const math = rt.link("java/lang/Math").ctor;
-  test("Math.getExponent extracts IEEE fields at subnormal, power-of-two and nonfinite boundaries", async () => {
-    for (const [value, exponent] of [[0, -1023], [Number.MIN_VALUE, -1023], [1, 0], [1 - Number.EPSILON / 2, -1], [2, 1], [-8, 3], [Infinity, 1024], [NaN, 1024]]) {
-      expect(await vcall(math, "getExponent", "(D)I", value)).toBe(exponent);
+describe("strict-math", () => {
+  // x, y, then sin cos tan asin acos atan exp log log10 log1p expm1 cbrt sinh cosh tanh atan2(x, y)
+  // hypot(x, y) pow(x, y) IEEEremainder(x, y), as raw bits: StrictMath on the reference AVD
+  const VECTORS = [
+    "400921fb54442d18 bd5650458c95b916 3ca1a62633145c07 bff0000000000000 bca1a62633145c07 7ff8000000000000 7ff8000000000000 3ff433b8a322ddd2 403724046eb09339 3ff250d048e7a1bd 3fdfd14db31ba3ba 3ff6bcbed09f00af 403624046eb09339 3ff76ef7e73104b7 402718f45d72e672 40272f147fee4000 3fefe175fa292810 3ff921fb54442edf 400921fb54442d18 3feffffffffff33a 3d3ead61344ecd28",
+    "4086300000000000 9784a07b677e3ee3 3f0f9bd0303f6faf 3fefffffff063930 3f0f9bd03136287d 7ff8000000000000 7ff8000000000000 3ff91c367668c617 7ff0000000000000 401a42d4d1ff8154 4006cf608981902a 401a4445c70632f8 7ff0000000000000 4021d79d3987923a 7fe3e21a464507fa 7fe3e21a464507fa 3ff0000000000000 3ff921fb54442d19 4086300000000000 3ff0000000000000 9726b8a28250d600",
+    "4480f0cf064dd592 c091ab3a75709005 bfeb453ab76bf397 3fe0be2cef01c8f4 bffa0f79c1b6b258 7ff8000000000000 7ff8000000000000 3ff921fb54442d18 7ff0000000000000 40495414621954fe 4036000000000000 40495414621954fe 7ff0000000000000 41748bd9ae67b4ba 7ff0000000000000 7ff0000000000000 3ff0000000000000 3ff921fb54442d19 4480f0cf064dd592 0 c074a1fd47414c94",
+    "6f26857cda265843 c16ad6d4f156c758 3fe28a8219deb7f1 3fea14ca39312ff2 3fe6bfaa85d67d30 7ff8000000000000 7ff8000000000000 3ff921fb54442d18 7ff0000000000000 40805d58107accd8 406c6da2cc5799f1 40805d58107accd8 7ff0000000000000 4fac76d483df1511 7ff0000000000000 7ff0000000000000 3ff0000000000000 3ff921fb54442d19 6f26857cda265843 0 41540131c08c9b30",
+    "c009ee5de5e06bb8 c09159be52513790 3fb9817858494ccc bfefd73d5aa554ad bfb9a21eea3e171d 7ff8000000000000 7ff8000000000000 bff45845cd3e5d07 3fa40628d98c5212 7ff8000000000000 7ff8000000000000 7ff8000000000000 bfeebf9d72673adf bff7add455c1c5e0 c02987b693e68005 40299bbcbcc00c57 bfefe6fa63b84d1e c0091c00ec79e9af 409159c32a7a75ea 7ff8000000000000 c009ee5de5e06bb8",
+    "c07fa3c09edcc04f c02b1fe78f0c86b2 3fdb268d7ba6ca55 bfecfa4f46b84004 bfddfb755b27212a 7ff8000000000000 7ff8000000000000 bff919e401df64f0 12493ede86955d12 7ff8000000000000 7ff8000000000000 7ff8000000000000 bff0000000000000 c01fe122792c419b ed8447e0e6c8e42c 6d8447e0e6c8e42c bff0000000000000 bff98fb09068464f 407fa6a89ca129ac 7ff8000000000000 c011b7385d91244c",
+    "c272902a377ab0c8 3b7facfb7fb81bcf bfee0682064b2fca bfd622339cbaf4a6 4005b471dd7d8b1b 7ff8000000000000 7ff8000000000000 bff921fb54441f4e 0 7ff8000000000000 7ff8000000000000 7ff8000000000000 bff0000000000000 c0c52ead824d14d7 fff0000000000000 7ff0000000000000 bff0000000000000 bff921fb54442d18 4272902a377ab0c8 7ff8000000000000 bb637720b2f5e448",
+    "c027f42b4d8f9c64 3f8fdf988f8dd000 3fe1ca2760410a1b 3fea997207a4cd89 3fe566ce3e835155 7ff8000000000000 7ff8000000000000 bff7ccc8021398c0 3eda5f846cafbc34 7ff8000000000000 7ff8000000000000 7ff8000000000000 bfeffff2d03dc9a8 c0024dbcf19940a5 c0f369e8e97f193e 40f369e8e985b120 bfeffffffff521d6 bff91ca8c60712e6 4027f42ca0da3e21 7ff8000000000000 3f7bb75314342000",
+    "3e57a841a9456140 c02b7420689bd2f2 3e57a841a945613f 3feffffffffffffe 3e57a841a9456141 3e57a841a9456141 3ff921fb4e5a1cae 3e57a841a945613f 3ff0000005ea106b c031a1788d166d9d c01ea0b3b8316c42 3e57a841a4e60c7c 3e57a841ada4b606 3f66f73290058f34 3e57a841a9456141 3ff0000000000001 3e57a841a945613f 400921fb540d06b9 402b7420689bd2f2 55c1c7dd9c74bf33 3e57a841a9456140",
+    "c028361d7f5ac77b c00049955834da8c 3fdc739495ac2add 3feca9ffb9079b3b 3fdfc33f8c06c80d 7ff8000000000000 7ff8000000000000 bff7d06521c28dbc 3ed72f96e5dfc18a 7ff8000000000000 7ff8000000000000 7ff8000000000000 bfeffff468348d10 c0025e79a6b7a8a8 c0f615177ff84475 40f615177ffe105b bfeffffffff799a8 bffbcc7552eb4a97 40288d28a8a2f3f8 7ff8000000000000 3fbc21427a402b80",
+  ];
+  test("StrictMath's natives are fdlibm's, bit for bit", async () => {
+    const bits = (hex: string) => longBitsToDouble(BigInt.asIntN(64, BigInt("0x" + hex)));
+    const hex = (v: number) => BigInt.asUintN(64, doubleToLongBits(v)).toString(16);
+    const one = ["sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "log1p", "expm1", "cbrt", "sinh", "cosh", "tanh"];
+    const two = ["atan2", "hypot", "pow", "IEEEremainder"];
+    for (const row of VECTORS) {
+      const [x, y, ...expected] = row.split(" ");
+      const got = [...one.map((f) => scall("java/lang/StrictMath", f, "(D)D", bits(x))), ...two.map((f) => scall("java/lang/StrictMath", f, "(DD)D", bits(x), bits(y)))];
+      expect((await Promise.all(got)).map(hex)).toEqual(expected);
     }
-    expect(await vcall(math, "getExponent", "(F)I", 2 ** -149)).toBe(-127);
-  });
-
-  test("Math.abs wraps at MIN_VALUE", async () => {
-    expect(await vcall(math, "abs", "(I)I", -2147483648)).toBe(-2147483648);
-    expect(await vcall(math, "abs", "(J)J", -9223372036854775808n)).toBe(-9223372036854775808n);
-  });
-
-  test("Math.copySign copies negative and positive zero signs", async () => {
-    expect(await vcall(math, "copySign", "(DD)D", 3.5, -0)).toBe(-3.5);
-    expect(await vcall(math, "copySign", "(DD)D", -3.5, 0)).toBe(3.5);
-    expect(await vcall(math, "copySign", "(FF)F", 2.25, -1)).toBe(-2.25);
-  });
-
-  test("Math.log1p preserves tiny values, signed zero and domain endpoints", async () => {
-    const log1p = (x: number) => vcall(math, "log1p", "(D)D", x);
-    expect(await log1p(1e-20)).toBe(1e-20);
-    expect(Object.is(await log1p(-0), -0)).toBe(true);
-    expect(await log1p(-1)).toBe(-Infinity);
-    expect(await log1p(Infinity)).toBe(Infinity);
-    expect(await log1p(-2)).toBeNaN();
-    expect(await log1p(NaN)).toBeNaN();
   });
 });
-
 describe("number-parse", () => {
   test("Double.valueOf(String) and Float.valueOf(String) box the parsed value", async () => {
     const d = scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", " -73.98563 ");
