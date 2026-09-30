@@ -1,14 +1,13 @@
 // android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics, LruCache,
-// TypedValue, Size, FloatMath and JsonReader.
+// TypedValue, Size and FloatMath.
 
-import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, after, stringHash, JEnum, linkInit, newObj, stringOf } from "../jvm/natives/jlang";
+import { vcall, after, stringHash, linkInit, newObj, stringOf } from "../jvm/natives/jlang";
 import { jeq } from "../jvm/natives/jutil";
 import { jclsNameOf } from "./apphost";
 import { PATTERNS } from "./pattern-data";
-import { readerText } from "./xmlpull";
 
 rt.register({
   name: "android/util/Patterns", ctor: class extends JObj {},
@@ -521,145 +520,5 @@ rt.register({
     "static sin(F)F": fm1(Math.sin), "static cos(F)F": fm1(Math.cos), "static sqrt(F)F": fm1(Math.sqrt),
     "static floor(F)F": fm1(Math.floor), "static ceil(F)F": fm1(Math.ceil), "static exp(F)F": fm1(Math.exp),
     "static pow(FF)F": fm2(Math.pow), "static hypot(FF)F": fm2(Math.hypot),
-  },
-});
-
-// ── android.util.JsonReader: the streaming pull parser Android ships. Reading the document
-// through and walking the parsed value as a token stream is the same contract a strict reader
-// offers, without a second hand-written JSON scanner in the tree.
-class JJsonToken extends JEnum {}
-const JSON_TOKENS = ["BEGIN_ARRAY", "END_ARRAY", "BEGIN_OBJECT", "END_OBJECT", "NAME",
-  "STRING", "NUMBER", "BOOLEAN", "NULL", "END_DOCUMENT"];
-const jsonToken: Record<string, JJsonToken> = {};
-JSON_TOKENS.forEach((n, i) => { const t = new JJsonToken(); t.ename = n; t.ord = i; jsonToken[n] = t; });
-rt.register({
-  name: "android/util/JsonToken", ctor: JJsonToken, sup: "java/lang/Enum",
-  statics: jsonToken,
-  methods: {
-    "static values()[Landroid/util/JsonToken;": () => JSON_TOKENS.map((n) => jsonToken[n]),
-    "static valueOf(Ljava/lang/String;)Landroid/util/JsonToken;": (n: string) => jsonToken[n],
-  },
-});
-type JsonEv = { t: string; v?: unknown };
-function flattenJson(v: unknown, out: JsonEv[]) {
-  if (v === null) out.push({ t: "NULL" });
-  else if (Array.isArray(v)) {
-    out.push({ t: "BEGIN_ARRAY" });
-    for (const x of v) flattenJson(x, out);
-    out.push({ t: "END_ARRAY" });
-  } else if (typeof v === "object") {
-    out.push({ t: "BEGIN_OBJECT" });
-    for (const k of Object.keys(v as object)) { out.push({ t: "NAME", v: k }); flattenJson((v as Record<string, unknown>)[k], out); }
-    out.push({ t: "END_OBJECT" });
-  } else out.push({ t: typeof v === "string" ? "STRING" : typeof v === "number" ? "NUMBER" : "BOOLEAN", v });
-}
-class JJsonReader extends JObj {
-  src: unknown = null;
-  ev: JsonEv[] | null = null;
-  i = 0;
-}
-/** the document is drained through the VIRTUAL read, so an app's own Reader subclass works */
-async function jsonEvents(r: JJsonReader): Promise<JsonEv[]> {
-  if (r.ev) return r.ev;
-  const s = await readerText(r.src);
-  const out: JsonEv[] = [];
-  if (s.trim()) flattenJson(JSON.parse(s), out);
-  out.push({ t: "END_DOCUMENT" });
-  return (r.ev = out);
-}
-const jsonNext = async (r: JJsonReader, want?: string) => {
-  const ev = await jsonEvents(r);
-  const e = ev[r.i] ?? { t: "END_DOCUMENT" };
-  if (want && e.t !== want) throw rt.mkThrowable("java/lang/IllegalStateException", `Expected ${want} but was ${e.t}`);
-  r.i++;
-  return e;
-};
-const jsonNum = async (r: JJsonReader) => Number((await jsonNext(r)).v);
-rt.register({
-  name: "android/util/JsonReader", ctor: JJsonReader, ifaces: ["java/io/Closeable"],
-  methods: {
-    "<init>(Ljava/io/Reader;)V": function (this: JJsonReader, r: unknown) { this.src = r; },
-    "setLenient(Z)V": () => {},
-    "close()V": function (this: JJsonReader) { this.ev = null; },
-    "beginArray()V": function (this: JJsonReader) { return jsonNext(this, "BEGIN_ARRAY").then(() => {}); },
-    "endArray()V": function (this: JJsonReader) { return jsonNext(this, "END_ARRAY").then(() => {}); },
-    "beginObject()V": function (this: JJsonReader) { return jsonNext(this, "BEGIN_OBJECT").then(() => {}); },
-    "endObject()V": function (this: JJsonReader) { return jsonNext(this, "END_OBJECT").then(() => {}); },
-    "nextName()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return (yield jsonNext(this, "NAME")).v as string; }),
-    // AOSP coerces between the scalar types, so a number read as a string is legal and common
-    "nextString()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return String((yield jsonNext(this)).v); }),
-    "nextInt()I": driven(function* (this: JJsonReader): Gen { return (yield jsonNum(this)) | 0; }),
-    "nextLong()J": driven(function* (this: JJsonReader): Gen { return BigInt(Math.trunc(yield jsonNum(this))); }),
-    "nextDouble()D": function (this: JJsonReader) { return jsonNum(this); },
-    "nextBoolean()Z": driven(function* (this: JJsonReader): Gen { return (yield jsonNext(this)).v ? 1 : 0; }),
-    "nextNull()V": function (this: JJsonReader) { return jsonNext(this, "NULL").then(() => {}); },
-    "peek()Landroid/util/JsonToken;": driven(function* (this: JJsonReader): Gen {
-      const ev = yield jsonEvents(this);
-      return jsonToken[(ev[this.i] ?? { t: "END_DOCUMENT" }).t];
-    }),
-    "hasNext()Z": driven(function* (this: JJsonReader): Gen {
-      const t = (yield jsonEvents(this))[this.i]?.t;
-      return t && t !== "END_OBJECT" && t !== "END_ARRAY" && t !== "END_DOCUMENT" ? 1 : 0;
-    }),
-    "skipValue()V": driven(function* (this: JJsonReader): Gen {
-      const ev = yield jsonEvents(this);
-      if (ev[this.i]?.t === "NAME") this.i++;
-      let depth = 0;
-      do {
-        const t = ev[this.i++]?.t;
-        if (t === "BEGIN_ARRAY" || t === "BEGIN_OBJECT") depth++;
-        else if (t === "END_ARRAY" || t === "END_OBJECT") depth--;
-        else if (t === undefined) break;
-      } while (depth > 0);
-    }),
-  },
-});
-
-// ── android.util.JsonWriter: the streaming writer paired with JsonReader. Text reaches the
-// Writer through its VIRTUAL write so an app's own subclass sees it.
-class JJsonWriter extends JObj { out: unknown = null; scopes: { array: boolean; n: number; named: boolean }[] = []; }
-const JW = "Landroid/util/JsonWriter;";
-/** a value or a name: separated from its predecessor by a comma, except a value after its name */
-async function jsonEmit(w: JJsonWriter, s: string) {
-  const top = w.scopes[w.scopes.length - 1];
-  if (top && !top.named && top.n++) s = "," + s;
-  if (top) top.named = false;
-  await vcall(w.out, "write", "(Ljava/lang/String;)V", s);
-  return w;
-}
-const jsonOpen = (array: boolean) => async function (this: JJsonWriter) {
-  await jsonEmit(this, array ? "[" : "{");
-  this.scopes.push({ array, n: 0, named: false });
-  return this;
-};
-const jsonClose = (c: string) => async function (this: JJsonWriter) {
-  this.scopes.pop();
-  await vcall(this.out, "write", "(Ljava/lang/String;)V", c);
-  return this;
-};
-const jsonValue = (f: (v: any) => string) => function (this: JJsonWriter, v: unknown) { return jsonEmit(this, f(v)); };
-rt.register({
-  name: "android/util/JsonWriter", ctor: JJsonWriter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
-  methods: {
-    "<init>(Ljava/io/Writer;)V": function (this: JJsonWriter, out: unknown) { this.out = out; },
-    ...noops("setIndent(Ljava/lang/String;)V", "setLenient(Z)V"),
-    ...stubs(0, "isLenient()Z"),
-    [`beginArray()${JW}`]: jsonOpen(true),
-    [`endArray()${JW}`]: jsonClose("]"),
-    [`beginObject()${JW}`]: jsonOpen(false),
-    [`endObject()${JW}`]: jsonClose("}"),
-    [`name(Ljava/lang/String;)${JW}`]: driven(function* (this: JJsonWriter, n: string): Gen {
-      yield jsonEmit(this, JSON.stringify(n) + ":");
-      this.scopes[this.scopes.length - 1].named = true;
-      return this;
-    }),
-    [`nullValue()${JW}`]: function (this: JJsonWriter) { return jsonEmit(this, "null"); },
-    [`value(Ljava/lang/String;)${JW}`]: jsonValue((v) => v === null ? "null" : JSON.stringify(v)),
-    [`value(Z)${JW}`]: jsonValue((v) => v ? "true" : "false"),
-    [`value(D)${JW}`]: jsonValue((v) => String(v)),
-    [`value(J)${JW}`]: jsonValue((v) => String(v)),
-    [`value(Ljava/lang/Number;)${JW}`]: jsonValue((v) => v === null ? "null" : String(v.v ?? v)),
-    "flush()V": function (this: JJsonWriter) { return vcall(this.out, "flush", "()V"); },
-    "close()V": function (this: JJsonWriter) { return vcall(this.out, "close", "()V"); },
   },
 });
