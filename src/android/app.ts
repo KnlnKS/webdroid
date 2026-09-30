@@ -788,21 +788,6 @@ for (const [name, methods, statics] of [
     },
   }],
   ["android/content/ClipboardManager", clipboardMethods],
-  // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees).
-  // getNightMode reports the device's own setting, which is not this app's to change.
-  ["android/app/UiModeManager", {
-    "getNightMode()I": () => device.night ? 2 : 1,
-    "setNightMode(I)V": () => {},
-    "setApplicationNightMode(I)V": (mode: number) => {
-      if (mode < 0 || mode > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unknown mode: ${mode}`);
-      appHost?.setApplicationNightMode(mode);
-    },
-    "getCurrentModeType()I": () => 1,
-    // API 34: the device's contrast setting is standard, and it does not change underneath an app
-    "getContrast()F": () => 0,
-    "addContrastChangeListener(Ljava/util/concurrent/Executor;Landroid/app/UiModeManager$ContrastChangeListener;)V": () => {},
-    "removeContrastChangeListener(Landroid/app/UiModeManager$ContrastChangeListener;)V": () => {},
-  }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(),
     ...stubs(0, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",

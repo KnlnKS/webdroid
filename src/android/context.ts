@@ -132,7 +132,6 @@ const SERVICE_CLASS: Record<string, string> = {
   notification: "android/app/NotificationManager",
   alarm: "android/app/AlarmManager",
   clipboard: "android/content/ClipboardManager",
-  uimode: "android/app/UiModeManager",
   accessibility: "android/view/accessibility/AccessibilityManager",
   captioning: "android/view/accessibility/CaptioningManager",
   keyguard: "android/app/KeyguardManager",
@@ -147,7 +146,6 @@ const SERVICE_CLASS: Record<string, string> = {
   display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
   textservices: "android/view/textservice/TextServicesManager",
-  user: "android/os/UserManager",
   restrictions: "android/content/RestrictionsManager",
   appwidget: "android/appwidget/AppWidgetManager",
   shortcut: "android/content/pm/ShortcutManager",
@@ -177,6 +175,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   deviceidle: ["android/os/DeviceIdleManager", async (ctx) =>
     newObj("android/os/DeviceIdleManager", "(Landroid/content/Context;Landroid/os/IDeviceIdleController;)V", ctx, await hostedService("deviceidle"))],
   power_exemption: ["android/os/PowerExemptionManager", (ctx) => newObj("android/os/PowerExemptionManager", "(Landroid/content/Context;)V", ctx)],
+  user: ["android/os/UserManager", async (ctx) =>
+    newObj("android/os/UserManager", "(Landroid/content/Context;Landroid/os/IUserManager;)V", ctx, await hostedService("user"))],
+  uimode: ["android/app/UiModeManager", (ctx) => newObj("android/app/UiModeManager", "(Landroid/content/Context;)V", ctx)],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };

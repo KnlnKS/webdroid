@@ -7,6 +7,7 @@ import { JObj, rt, noops, stubs, declaredField, type NativeSpec } from "../jvm/r
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
+import { device } from "../shell/config";
 import { appHost, jclsNameOf } from "./apphost";
 import { type JComponentName, mkComponentName } from "./intent";
 import type { JActivity } from "./app";
@@ -18,6 +19,15 @@ import { hostService } from "./binder";
 import { registerSystemActivity } from "./intent";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
+
+const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
+/** Host a Stub subclass as a system service. A Stub whose methods declare @EnforcePermission takes
+ *  its enforcer at construction (its no-argument constructor asks the system context for one);
+ *  none of these services calls it, as no method here is one that checks a permission. */
+function hostStub(name: string, cls: string): void {
+  hostService(name, async () => M_ENFORCED in rt.link(cls).ctor.prototype
+    ? newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer")) : newObj(cls));
+}
 
 class JRunningAppProcessInfo extends JObj {
   processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];
@@ -119,8 +129,8 @@ rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends J
   },
 } });
 
-hostService("activity", () => newObj("webdroid/ActivityManagerService"));
-hostService("activity_task", () => newObj("webdroid/ActivityTaskManagerService"));
+hostStub("activity", "webdroid/ActivityManagerService");
+hostStub("activity_task", "webdroid/ActivityTaskManagerService");
 
 // IAudioService: codec loudness only. A codec's loudness parameters are the reference AVD's for its
 // output (the speaker): the target reference level, and the DRC setting for the metadata type.
@@ -148,11 +158,8 @@ rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}
   "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
 } });
 
-/** a Stub whose methods declare @EnforcePermission takes its enforcer at construction; these
- *  services never call it, as no method here is one that checks a permission */
-const withEnforcer = async (cls: string) => newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer"));
-hostService("audio", () => withEnforcer("webdroid/AudioService"));
-hostService("window", () => withEnforcer("webdroid/WindowManagerService"));
+hostStub("audio", "webdroid/AudioService");
+hostStub("window", "webdroid/WindowManagerService");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
@@ -259,7 +266,7 @@ if (typeof addEventListener !== "undefined") for (const event of ["online", "off
     for (const r of registrations.values()) await sendCallback(r, event === "online" ? "CALLBACK_AVAILABLE" : "CALLBACK_LOST");
   })().catch(reportUncaught));
 
-hostService("connectivity", () => newObj("webdroid/ConnectivityService"));
+hostStub("connectivity", "webdroid/ConnectivityService");
 
 // NetworkUtils (libframework-connectivity-jni): binding to the one network, which every socket
 // already uses
@@ -314,6 +321,44 @@ rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}
   "isPowerSaveWhitelistExceptIdleApp(Ljava/lang/String;)Z": exempt,
 } });
 
-hostService("power", () => newObj("webdroid/PowerManagerService"));
-hostService("thermalservice", () => newObj("webdroid/ThermalService"));
-hostService("deviceidle", () => withEnforcer("webdroid/DeviceIdleController"));
+hostStub("power", "webdroid/PowerManagerService");
+hostStub("thermalservice", "webdroid/ThermalService");
+hostStub("deviceidle", "webdroid/DeviceIdleController");
+
+// IUserManager: one unlocked, running system user, user 0, as the reference AVD's (pm list users:
+// UserInfo{0:Owner:4c13}), with no restrictions and no profiles
+const USER = 0, USER_FLAGS = 0x4c13, USER_TYPE = "android.os.usertype.full.SYSTEM";
+const userInfo = () => newObj("android/content/pm/UserInfo", "(ILjava/lang/String;Ljava/lang/String;ILjava/lang/String;)V", USER, "Owner", null, USER_FLAGS, USER_TYPE);
+const isUser = (id: number) => +(id === USER);
+rt.register({ name: "webdroid/UserManagerService", ctor: class extends JObj {}, sup: "android/os/IUserManager$Stub", methods: {
+  "getUserName()Ljava/lang/String;": () => "Owner",
+  "getUserInfo(I)Landroid/content/pm/UserInfo;": (id: number) => id === USER ? userInfo() : null,
+  "getProfiles(IZ)Ljava/util/List;": async () => newArrayList([await userInfo()]),
+  "getUsers(ZZZ)Ljava/util/List;": async () => newArrayList([await userInfo()]),
+  "getProfileIds(IZ)[I": () => Int32Array.of(USER),
+  "getProfileIdsExcludingHidden(IZ)[I": () => Int32Array.of(USER),
+  "getProfileType(I)Ljava/lang/String;": () => "",
+  "isUserOfType(ILjava/lang/String;)Z": (id: number, type: string) => +(id === USER && type === USER_TYPE),
+  "isUserUnlocked(I)Z": isUser, "isUserUnlockingOrUnlocked(I)Z": isUser, "isUserRunning(I)Z": isUser, "isUserForeground(I)Z": isUser,
+  "getUserSerialNumber(I)I": (id: number) => id === USER ? 0 : -1,
+  "getUserHandle(I)I": (serial: number) => serial === 0 ? USER : -1,
+  ...stubs(0, "isDemoUser(I)Z", "isQuietModeEnabled(I)Z", "hasUserRestriction(Ljava/lang/String;I)Z", "hasUserRestrictionOnAnyUser(Ljava/lang/String;)Z"),
+  "getUserRestrictions(I)Landroid/os/Bundle;": () => newObj("android/os/Bundle"),
+  "getApplicationRestrictions(Ljava/lang/String;)Landroid/os/Bundle;": () => newObj("android/os/Bundle"),
+  "getApplicationRestrictionsForUser(Ljava/lang/String;I)Landroid/os/Bundle;": () => newObj("android/os/Bundle"),
+} });
+
+// IUiModeManager: a handset (UI_MODE_TYPE_NORMAL) at standard contrast, which never changes, in
+// the device's night mode (the browser's preference, "no" or "yes"); an app's own night mode
+// follows the shell's configuration
+rt.register({ name: "webdroid/UiModeManagerService", ctor: class extends JObj {}, sup: "android/app/IUiModeManager$Stub", methods: {
+  "getCurrentModeType()I": () => 1,
+  "getNightMode()I": () => device.night ? 2 : 1,
+  "getContrast()F": () => 0,
+  "setApplicationNightMode(I)V": (mode: number) => { appHost?.setApplicationNightMode(mode); },
+  ...stubs(0, "isNightModeLocked()Z", "isUiModeLocked()Z", "getActiveProjectionTypes()I"),
+  ...noops("addCallback(Landroid/app/IUiModeManagerCallback;)V"),
+} });
+
+hostStub("user", "webdroid/UserManagerService");
+hostStub("uimode", "webdroid/UiModeManagerService");

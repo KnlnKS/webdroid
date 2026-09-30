@@ -1,10 +1,9 @@
-// System services and binder-ish plumbing: UserManager/UserHandle, FileObserver,
+// System services and binder-ish plumbing: UserHandle, FileObserver,
 // and the callback/marker interfaces apps implement (ServiceConnection, IInterface).
 
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
-import { newArrayList } from "../jvm/natives/jutil";
 import { vcall } from "../jvm/natives/jlang";
-import { JBundle, JUserHandle, PARCELABLE, PROCESS_UID, reportUncaught, userHandleForUid } from "./os";
+import { JBundle, JUserHandle, PARCELABLE, reportUncaught, userHandleForUid } from "./os";
 import { onMain } from "./mainloop";
 
 // ── UserHandle: handles are canonical per Android user id.
@@ -19,21 +18,6 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JUserHandle) { return "UserHandle{" + this.id + "}"; },
     ...PARCELABLE,
     "static getUserHandleForUid(I)Landroid/os/UserHandle;": userHandleForUid,
-  },
-});
-
-// ── UserManager: one unlocked, running, non-managed system user.
-rt.register({
-  name: "android/os/UserManager", ctor: class extends JObj {},
-  methods: {
-    "getUserName()Ljava/lang/String;": () => "Owner",
-    "getUserProfiles()Ljava/util/List;": function () { return newArrayList([userHandleForUid(PROCESS_UID)]); },
-    ...stubs(1, "isUserUnlocked()Z", "isUserUnlocked(Landroid/os/UserHandle;)Z",
-      "isUserRunning(Landroid/os/UserHandle;)Z", "isSystemUser()Z", "getUserCount()I"),
-    ...stubs(0, "isUserAGoat()Z", "isDemoUser()Z", "isManagedProfile()Z", "isProfile()Z",
-      "isQuietModeEnabled(Landroid/os/UserHandle;)Z", "hasUserRestriction(Ljava/lang/String;)Z"),
-    ...stubs(0n, "getSerialNumberForUser(Landroid/os/UserHandle;)J"),
-    "getUserForSerialNumber(J)Landroid/os/UserHandle;": () => userHandleForUid(PROCESS_UID),
   },
 });
 
