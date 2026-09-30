@@ -10,7 +10,8 @@ import {
 import { JFrameLayout, JLinearLayout } from "./layouts";
 import { JTextView, JButton } from "./textview";
 import { themeAccent } from "./widget";
-import { JCanvas, JRect, castShadow } from "./graphics";
+import { JRect, castShadow } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium } from "./fonts";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
@@ -113,8 +114,8 @@ rt.register({
         yield layoutView(c, l, t, l + c.measuredW, t + c.measuredH);
       }
     }),
-    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: DialogRoot, cv: JCanvas): Gen {
-      const ctx = cv.ctx;
+    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: DialogRoot, cv: JavaCanvas): Gen {
+      const ctx = canvasOf(cv).ctx;
       const win = this.dialog?.win;
       // An explicit Window.setBackgroundDrawable replaces the theme's frame (Compose sets it
       // transparent and draws its own surface); only the platform frame casts a shadow.

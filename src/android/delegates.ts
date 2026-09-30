@@ -18,21 +18,22 @@ import { handle, weakHandle, ownedHandle, deref, replace, release, FINALIZER } f
 import {
   JPaint,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JRect, type JRectF, canvasMethods, setCanvasBitmap, drawBitmapAt, drawBitmapRect, CAPS, JOINS, clipPath, drawPath,
-  type Mat, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, setAffine, applyMatrix,
+  type JRectF, CAPS, JOINS,
+  type Mat, Camera3D, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, applyMatrix,
   NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader, measureCtx,
-  type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches, drawPatch,
+  type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches,
 } from "./graphics";
 import { RuntimeShaderBuilder } from "./runtime-shader";
+import { NativeCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
-import { NativeBitmap, setPixels, ARGB_8888, PREMUL, OPAQUE } from "./bitmap";
+import { NativeBitmap } from "./bitmap";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
 import { charsToString } from "../jvm/abi";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
-import { recordingContext, replay, replayWithSemantics, type DisplayList } from "./recording";
+import { recordingContext, replay, replayWithSemantics, retarget, type DisplayList } from "./recording";
 import { device } from "../shell/config";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
@@ -703,38 +704,6 @@ delegate("android/graphics/RegionIterator", {
 
 
 // ── android.graphics.Camera: Sk3DView ──────────────────────────────────────────────────
-// A stack of 4x4 transforms (SkM44, row-major, float) viewed by SkCamera3D, whose location is
-// in inches (72 points each) and whose observer sits on the view axis at the location's depth.
-class Camera3D {
-  stack = [Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)];
-  location = [0, 0, -576];
-  get top() { return this.stack[this.stack.length - 1]; }
-  /** top = top * m (SkM44::preConcat) */
-  preConcat(m: ArrayLike<number>) {
-    const a = this.top.slice(), out = this.top;
-    for (let r = 0; r < 16; r += 4) for (let c = 0; c < 4; c++) out[r + c] = a[r] * m[c] + a[r + 1] * m[4 + c] + a[r + 2] * m[8 + c] + a[r + 3] * m[12 + c];
-  }
-  /** SkM44::Rotate about a unit axis */
-  rotate(x: number, y: number, z: number, deg: number) {
-    const rad = Math.fround(Math.fround(deg * Math.fround(Math.PI)) / 180), s = Math.sin(rad), c = Math.cos(rad), t = 1 - c;
-    this.preConcat([t * x * x + c, t * x * y - s * z, t * x * z + s * y, 0, t * x * y + s * z, t * y * y + c, t * y * z - s * x, 0,
-      t * x * z - s * y, t * y * z + s * x, t * z * z + c, 0, 0, 0, 0, 1]);
-  }
-  /** SkPatch3D (u = (1,0,0), v = (0,-1,0) at the origin) through the top transform */
-  patch() {
-    const m = this.top;
-    return { u: [m[0], m[4], m[8]], v: [-m[1], -m[5], -m[9]], origin: [m[3], m[7], m[11]] };
-  }
-  /** SkCamera3D::patchToMatrix, with the orientation its doUpdate derives for the fixed axis
-   *  (0,0,1) and zenith (0,-1,0) and an observer at (0, 0, location z) */
-  matrix(out: Mat) {
-    const { u, v, origin } = this.patch(), z = this.location[2];
-    const rows = [[-z, 0, 0], [0, z, 0], [0, 0, 1]];
-    const diff = [origin[0] - this.location[0], origin[1] - this.location[1], origin[2] - z];
-    const dot = diff[2], at = (p: number[], row: number) => (p[0] * rows[row][0] + p[1] * rows[row][1] + p[2] * rows[row][2]) / dot;
-    out.set([at(u, 0), at(v, 0), at(diff, 0), at(u, 1), at(v, 1), at(diff, 1), at(u, 2), at(v, 2), 1].map(Math.fround));
-  }
-}
 let nativeInstance = "";
 /** where a Java Camera keeps its Sk3DView, which its natives set and read themselves */
 const cameraSlot = (c: object) => c as Record<string, bigint>;
@@ -762,7 +731,7 @@ delegate("android/graphics/Camera", {
   "nativeApplyToCanvas(J)V": function (this: object, h: bigint) {
     const m = identity();
     camera(this).matrix(m);
-    applyMatrix(canvas(h).ctx, m);
+    applyMatrix(deref<NativeCanvas>(h).ctx, m);
   },
   // SkPatch3D::dotWith, whose y term Skia computes as u.z*v.x - u.x*v.y
   "dotWithNormal(FFF)F": function (this: object, x: number, y: number, z: number) {
@@ -894,12 +863,14 @@ delegate("android/graphics/NinePatch", {
 class NativePicture {
   w = 0; h = 0;
   ops: DisplayList | null = null;
-  /** while recording: the canvas handle and the list it records into */
-  canvas = 0n; recording: DisplayList | null = null;
+  /** while recording: the canvas recording into `recording` (PictureCanvas owns its handle) */
+  canvas: NativeCanvas | null = null; recording: DisplayList | null = null;
+  /** SkPictureRecorder::finishRecordingAsPicture: the list is the picture's, and the canvas records no more of it */
   endRecording() {
     if (!this.recording) return;
     this.ops = this.recording; this.recording = null;
-    release(this.canvas); this.canvas = 0n;
+    retarget(this.canvas!.recording!.ctx, []);
+    this.canvas = null;
   }
 }
 const picture = (h: bigint) => deref<NativePicture>(h);
@@ -912,18 +883,19 @@ delegate("android/graphics/Picture", {
   },
   "nativeDestructor(J)V": (h: bigint) => { picture(h).endRecording(); release(h); },
   "nativeBeginRecording(JII)J": (h: bigint, w: number, ht: number) => {
-    const p = picture(h), c = new JCanvas();
+    const p = picture(h);
     p.endRecording();
-    p.w = w; p.h = ht; p.ops = null; p.recording = [];
-    c.ctx = recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, p.recording);
-    c.w = w; c.h = ht;
-    return p.canvas = handle(c);
+    p.w = w; p.h = ht; p.ops = null;
+    const ops: DisplayList = p.recording = [], ctx = recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, ops);
+    const c = p.canvas = NativeCanvas.over(ctx, w, ht);
+    c.recording = { ctx, ops };
+    return handle(c);
   },
   "nativeEndRecording(J)V": (h: bigint) => picture(h).endRecording(),
   "nativeGetWidth(J)I": (h: bigint) => picture(h).w,
   "nativeGetHeight(J)I": (h: bigint) => picture(h).h,
   "nativeDraw(JJ)V": (c: bigint, h: bigint) => {
-    const p = picture(h), cv = canvas(c);
+    const p = picture(h), cv = deref<NativeCanvas>(c);
     p.endRecording();
     const ops = p.ops;
     if (!ops) return;
@@ -933,144 +905,6 @@ delegate("android/graphics/Picture", {
     });
   },
 });
-
-// ── android.graphics.Canvas / BaseCanvas ───────────────────────────────────────────────
-// Every one of these routes into canvasMethods, which is the table our own Canvas native
-// already uses: one copy of each draw body, reached under two sets of names.
-/** a TS-spec canvas hands out a weak handle (handles.ts' weakHandle) */
-const canvas = (h: bigint) => { const c = deref<JCanvas | WeakRef<JCanvas>>(h); return c instanceof WeakRef ? c.deref()! : c; };
-/** one of our own native method bodies, by its Java descriptor */
-function specFn<T>(table: Record<string, unknown> | undefined, what: string, desc: string) {
-  const fn = table?.[desc];
-  if (typeof fn !== "function") throw new Error(`delegates: no ${what}[${desc}]`);
-  return fn as (this: T, ...a: never[]) => unknown;
-}
-const cm = (desc: string) => specFn<JCanvas>(canvasMethods, "canvasMethods", desc);
-const on = (desc: string) => {
-  const fn = cm(desc);
-  return (h: bigint, ...a: unknown[]) => (fn as (...x: unknown[]) => unknown).apply(canvas(h), a);
-};
-const optPaint = (pt: bigint) => (pt ? paint(pt) : null);
-/** the trailing paint handle every nDraw* carries has to become the paint itself */
-const withPaint = (desc: string, arity: number) => {
-  const fn = cm(desc);
-  return (h: bigint, ...a: unknown[]) => { a[arity] = paint(a[arity] as bigint); return (fn as (...x: unknown[]) => unknown).apply(canvas(h), a); };
-};
-
-delegate("android/graphics/Canvas", {
-  "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(deref<NativeBitmap>(b))),
-  "nGetNativeFinalizer()J": () => FINALIZER,
-  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<NativeBitmap>(b))); },
-  "nGetWidth(J)I": (h: bigint) => canvas(h).w,
-  "nGetHeight(J)I": (h: bigint) => canvas(h).h,
-
-  "nSave(JI)I": on("save()I"),
-  "nRestore(J)Z": (h: bigint) => { const c = canvas(h); if (c.saveCount <= 1) return 0; on("restore()V")(h); return 1; },
-  "nRestoreToCount(JI)V": on("restoreToCount(I)V"),
-  "nGetSaveCount(J)I": on("getSaveCount()I"),
-  "nSaveLayer(JFFFFJ)I": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => on("saveLayer(FFFFLandroid/graphics/Paint;)I")(h, l, t, r, b, optPaint(p)),
-  "nSaveLayerAlpha(JFFFFI)I": on("saveLayerAlpha(FFFFI)I"),
-  // an unclipped layer is a plain save here: there is no clip to lift
-  "nSaveUnclippedLayer(JIIII)I": on("save()I"),
-  "nRestoreUnclippedLayer(JIJ)V": (h: bigint, count: number) => on("restoreToCount(I)V")(h, count),
-
-  "nTranslate(JFF)V": on("translate(FF)V"),
-  "nScale(JFF)V": on("scale(FF)V"),
-  "nRotate(JF)V": on("rotate(F)V"),
-  "nSkew(JFF)V": on("skew(FF)V"),
-  "nConcat(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h).ctx, matrix(m)),
-  "nConcat(J[F)V": (h: bigint, v: Float32Array) => applyMatrix(canvas(h).ctx, v),
-  "nSetMatrix(JJ)V": (h: bigint, m: bigint) => { if (m) applyMatrix(canvas(h).ctx, matrix(m), true); else canvas(h).ctx.setTransform(1, 0, 0, 1, 0, 0); },
-  "nGetMatrix(JJ)V": (h: bigint, into: bigint) => {
-    const t = canvas(h).ctx.getTransform();
-    setAffine(matrix(into), t.a, t.b, t.c, t.d, t.e, t.f);
-  },
-
-  "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => on(op === 0 ? "clipOutRect(FFFF)Z" : "clipRect(FFFF)Z")(h, l, t, r, b),
-  // SkClipOp: 0 difference, 1 intersect
-  "nClipPath(JJI)Z": (h: bigint, p: bigint, op: number) => (clipPath(canvas(h), path(p), op === 0) ? 1 : 0),
-  "nGetClipBounds(JLandroid/graphics/Rect;)Z": on("getClipBounds(Landroid/graphics/Rect;)Z"),
-  ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
-  ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
-  // nothing is cached natively, so there is nothing to free
-  "nFreeCaches()V": () => {}, "nFreeTextLayoutCaches()V": () => {},
-});
-
-const drawText = (h: bigint, s: string, x: number, y: number, pt: bigint) =>
-  cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), s as never, x as never, y as never, paint(pt) as never);
-delegate("android/graphics/BaseCanvas", {
-  "nDrawColor(JII)V": (h: bigint, c: number) => on("drawColor(I)V")(h, c),
-  "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint) => on("drawColor(I)V")(h, argbOfColorLong(c)),
-  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => on("drawPaint(Landroid/graphics/Paint;)V")(h, paint(p)),
-  "nDrawRect(JFFFFJ)V": withPaint("drawRect(FFFFLandroid/graphics/Paint;)V", 4),
-  "nDrawRoundRect(JFFFFFFJ)V": withPaint("drawRoundRect(FFFFFFLandroid/graphics/Paint;)V", 6),
-  "nDrawCircle(JFFFJ)V": withPaint("drawCircle(FFFLandroid/graphics/Paint;)V", 3),
-  "nDrawOval(JFFFFJ)V": withPaint("drawOval(FFFFLandroid/graphics/Paint;)V", 4),
-  "nDrawArc(JFFFFFFZJ)V": withPaint("drawArc(FFFFFFZLandroid/graphics/Paint;)V", 7),
-  "nDrawLine(JFFFFJ)V": withPaint("drawLine(FFFFLandroid/graphics/Paint;)V", 4),
-  "nDrawPoint(JFFJ)V": withPaint("drawPoint(FFLandroid/graphics/Paint;)V", 2),
-  "nDrawPath(JJJ)V": (h: bigint, p: bigint, pt: bigint) => drawPath(canvas(h), path(p), paint(pt)),
-  "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
-    cm("drawLines([FIILandroid/graphics/Paint;)V").call(canvas(h), pts as never, off as never, count as never, paint(pt) as never),
-  "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
-    cm("drawPoints([FIILandroid/graphics/Paint;)V").call(canvas(h), pts as never, off as never, count as never, paint(pt) as never),
-  "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _f: number, pt: bigint) => drawText(h, s.slice(start, end), x, y, pt),
-  "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _f: number, pt: bigint) => drawText(h, charsToString(c, i, n), x, y, pt),
-  "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, pt: bigint) =>
-    drawText(h, s.slice(start, end), x, y, pt),
-  "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, pt: bigint) =>
-    drawText(h, charsToString(c, i, n), x, y, pt),
-  "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, pt: bigint) => drawBitmapAt(canvas(h), deref<NativeBitmap>(b), x, y, optPaint(pt)),
-  "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, pt: bigint) =>
-    drawBitmapRect(canvas(h), deref<NativeBitmap>(b), rect(sl, st, sr, sb), rect(dl, dt, dr, db), optPaint(pt)),
-  "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, pt: bigint) => {
-    const c = canvas(h);
-    c.ctx.save();
-    applyMatrix(c.ctx, matrix(m));
-    drawBitmapAt(c, deref<NativeBitmap>(b), 0, 0, optPaint(pt));
-    c.ctx.restore();
-  },
-  // a colour array rather than a Bitmap: put the pixels in one and draw that
-  "nDrawBitmap(J[IIIFFIIZJ)V": (h: bigint, colors: Int32Array, offset: number, stride: number, x: number, y: number, w: number, ih: number, hasAlpha: number, pt: bigint) => {
-    const b = new NativeBitmap(w, ih, ARGB_8888, hasAlpha ? PREMUL : OPAQUE);
-    setPixels(b, colors, offset, stride, 0, 0, w, ih);
-    drawBitmapAt(canvas(h), b, x, y, optPaint(pt));
-  },
-  // the ring between two round rects, which is how a ripple's bounded edge is drawn: the
-  // outer filled with the inner taken out of it
-  "nDrawDoubleRoundRect(JFFFFFFFFFFFFJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orx: number, ory: number, il: number, it: number, ir: number, ib: number, irx: number, iry: number, pt: bigint) =>
-    doubleRoundRect(canvas(h), [ol, ot, or, ob], [orx, ory], [il, it, ir, ib], [irx, iry], paint(pt)),
-  "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array, il: number, it: number, ir: number, ib: number, irad: Float32Array, pt: bigint) =>
-    doubleRoundRect(canvas(h), [ol, ot, or, ob], [orad[0], orad[1]], [il, it, ir, ib], [irad[0], irad[1]], paint(pt)),
-  "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint, dstDensity: number, srcDensity: number) =>
-    drawPatch(canvas(h), deref<NativeBitmap>(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(pt), dstDensity, srcDensity),
-  // positioned glyph ids, which only a shaping engine produces: there is none behind
-  // Canvas2D, and the text entry points above are what the framework actually uses
-  "nDrawGlyphs(J[I[FIIIJJ)V": () => {},
-  // text on a path, meshes, vertices and regions have no Canvas2D form; a hole punched in a
-  // surface is a compositor operation there is no surface for
-  ...noops("nDrawTextOnPath(J[CIIJFFIJ)V", "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V",
-    "nDrawBitmapMesh(JJII[FI[IIJ)V", "nDrawMesh(JJIJ)V", "nDrawVertices(JII[FI[FI[II[SIIJ)V",
-    "nDrawRegion(JJJ)V", "nPunchHole(JFFFFFFF)V"),
-});
-
-/** a Canvas over a bitmap's backing context, as Canvas(Bitmap) makes one */
-export function bitmapCanvas(b: NativeBitmap | undefined): JCanvas {
-  const c = new JCanvas();
-  setCanvasBitmap(c, b ?? null);
-  return c;
-}
-function doubleRoundRect(c: JCanvas, o: number[], orad: number[], i: number[], irad: number[], p: JPaint) {
-  const ring = new Path2D();
-  ring.roundRect(o[0], o[1], o[2] - o[0], o[3] - o[1], Math.min(orad[0], (o[2] - o[0]) / 2, (o[3] - o[1]) / 2));
-  ring.roundRect(i[0], i[1], i[2] - i[0], i[3] - i[1], Math.min(irad[0], (i[2] - i[0]) / 2, (i[3] - i[1]) / 2));
-  c.drawShape(p, (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
-}
-function rect(l: number, t: number, r: number, b: number): JRect {
-  const o = new JRect();
-  o.left = l; o.top = t; o.right = r; o.bottom = b;
-  return o;
-}
 
 // ── android.os.SystemProperties ────────────────────────────────────────────────────────
 // A property is ABSENT unless the device profile (src/shell/config.ts) answers it, so other reads

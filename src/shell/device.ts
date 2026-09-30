@@ -39,7 +39,7 @@ import { onMain, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, copyEvent, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
-import { JCanvas } from "../android/graphics";
+import { windowCanvas, setCanvasTargetSdk } from "../android/canvas";
 import { overlays, drawToasts, FLAG_NOT_FOCUSABLE, FLAG_NOT_TOUCHABLE, FLAG_NOT_TOUCH_MODAL, FLAG_WATCH_OUTSIDE_TOUCH, type Overlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
@@ -223,6 +223,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
   setViewTargetSdk(target);
+  await setCanvasTargetSdk(target);
   setTargetSdkVersion(target);
   prepared?.();
 
@@ -363,7 +364,7 @@ const drawStartWin = driven(function* drawStartWin(w: { view: JView; fullscreen:
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
     ctx.translate(0, contentY);
-    yield drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY, true));
+    yield drawView(w.view, windowCanvas(ctx, SCREEN_W, SCREEN_H - contentY));
     ctx.resetTransform();
     const bars = resolveSystemBars(w.view, []);
     drawSystemBarBackgrounds(ctx, bars);
@@ -498,7 +499,7 @@ const tick0 = driven(function* tick0(): Gen {
       try {
         if (activities[0].window.translucent) ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
         else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
-        const cv = JCanvas.wrap(ctx, SCREEN_W, SCREEN_H, true);
+        const cv = windowCanvas(ctx, SCREEN_W, SCREEN_H);
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {

@@ -694,6 +694,60 @@ await exercise("Camera (device values)", async () => {
   near("facing away", [await vcall(turned, "dotWithNormal", "(FFF)F", 0, 0, 1) as number], [1]);
 });
 
+// Values recorded on the reference AVD: RenderProperties' defaults, which setters report a change
+// (RP_SET), the clamped alpha, the implicit pivot and camera, and updateMatrix's 2D and 3D forms.
+await exercise("RenderNode (properties, device values)", async () => {
+  const same = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+  const near = (what: string, got: number[], want: number[]) => {
+    if (got.length !== want.length || got.some((g, i) => Math.abs(g - want[i]) > 1e-5 * Math.max(1, Math.abs(want[i])))) throw new Error(`${what}: [${got}], not [${want}]`);
+  };
+  const call = (o: unknown, name: string, desc: string, ...a: unknown[]) => vcall(o, name, desc, ...a);
+  const n = await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", "probe");
+  const F = (name: string, v: number) => call(n, name, "(F)Z", v);
+  same("defaults", [await call(n, "getAlpha", "()F"), await call(n, "getCameraDistance", "()F"), await call(n, "getPivotX", "()F"),
+    await call(n, "getClipToBounds", "()Z"), await call(n, "hasIdentityMatrix", "()Z"), await call(n, "hasOverlappingRendering", "()Z"),
+    await call(n, "isForceDarkAllowed", "()Z"), await call(n, "hasDisplayList", "()Z"), (await call(n, "getAmbientShadowColor", "()I")) >>> 0],
+  [1, 8, 0, 1, 1, 0, 1, 0, 0xff000000]);
+  same("alpha", [await F("setAlpha", 0.5), await F("setAlpha", 0.5), await F("setAlpha", 0.0005), await call(n, "getAlpha", "()F"),
+    await F("setAlpha", 1.5), await F("setAlpha", 0.9995), await call(n, "getAlpha", "()F")], [1, 0, 1, 0, 1, 0, 1]);
+  same("position", [await call(n, "setPosition", "(IIII)Z", 0, 0, 100, 50), await call(n, "setPosition", "(IIII)Z", 0, 0, 100, 50),
+    await call(n, "getPivotX", "()F"), await call(n, "getPivotY", "()F"), await call(n, "offsetLeftAndRight", "(I)Z", 0)], [1, 0, 50, 25, 0]);
+  same("pivot", [await F("setPivotX", 0), await F("setPivotX", 0), await call(n, "getPivotY", "()F"),
+    await call(n, "resetPivot", "()Z"), await call(n, "resetPivot", "()Z"), await call(n, "getPivotX", "()F")], [1, 0, 25, 1, 0, 50]);
+  same("camera", [await F("setCameraDistance", 8), await F("setCameraDistance", 10), await F("setCameraDistance", 10),
+    await F("setCameraDistance", 1234.5), await call(n, "getCameraDistance", "()F")], [0, 1, 0, 1, 1234.5]);
+  const rect = await newObj("android/graphics/Rect", "(IIII)V", 1, 2, 3, 4);
+  const clipRect = (r: unknown) => call(n, "setClipRect", "(Landroid/graphics/Rect;)Z", r);
+  same("clip", [await call(n, "setClipToBounds", "(Z)Z", 1), await clipRect(rect), await clipRect(rect), await clipRect(null), await clipRect(null)], [0, 1, 0, 1, 0]);
+  const outline = await newObj("android/graphics/Outline", "()V");
+  await call(outline, "setRoundRect", "(IIIIF)V", 0, 0, 100, 50, 8);
+  await call(outline, "setAlpha", "(F)V", 0.5);
+  same("outline, shadow", [await call(n, "setOutline", "(Landroid/graphics/Outline;)Z", outline), await call(n, "setOutline", "(Landroid/graphics/Outline;)Z", outline),
+    await call(n, "hasShadow", "()Z"), await F("setElevation", 4), await F("setElevation", 4), await call(n, "hasShadow", "()Z"),
+    await call(n, "setClipToOutline", "(Z)Z", 1), await call(n, "setClipToOutline", "(Z)Z", 1)], [1, 1, 0, 1, 0, 1, 1, 1]);
+  const paint = await newObj("android/graphics/Paint", "()V");
+  await call(paint, "setAlpha", "(I)V", 128);
+  const layer = (on: number, p: unknown) => call(n, "setUseCompositingLayer", "(ZLandroid/graphics/Paint;)Z", on, p);
+  same("layer", [await layer(1, null), await layer(1, null), await layer(1, paint), await layer(1, paint), await layer(0, paint), await layer(0, null)], [1, 0, 1, 0, 1, 1]);
+  same("flags", [await call(n, "setHasOverlappingRendering", "(Z)Z", 1), await call(n, "setProjectBackwards", "(Z)Z", 0),
+    await call(n, "setAmbientShadowColor", "(I)Z", 0xff000000 | 0), await call(n, "setForceDarkAllowed", "(Z)Z", 1),
+    await call(n, "stretch", "(FFFF)Z", 0.1, 0, 100, 50), await call(n, "clearStretch", "()Z"), await call(n, "clearStretch", "()Z")], [1, 0, 0, 0, 1, 1, 0]);
+  const t = await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", "t"), m = await newObj("android/graphics/Matrix", "()V"), v = new Float32Array(9);
+  const matrix = async (name = "getMatrix") => { await call(t, name, "(Landroid/graphics/Matrix;)V", m); await call(m, "getValues", "([F)V", v); return [...v]; };
+  await call(t, "setPosition", "(IIII)Z", 10, 20, 110, 70);
+  same("identity after setPosition", await call(t, "hasIdentityMatrix", "()Z"), 1);
+  for (const [name, value] of [["setRotationZ", 30], ["setScaleX", 2], ["setTranslationX", 5], ["setTranslationY", -3]] as const) await call(t, name, "(F)Z", value);
+  near("2D", await matrix(), [1.7320508, -0.5, -19.10254, 1, 0.8660254, -49.650635, 0, 0, 1]);
+  near("2D inverse", await matrix("getInverseMatrix"), [0.4330127, 0.25, 20.684301, -0.5, 0.8660254, 33.44744, 0, 0, 1]);
+  await call(t, "setRotationX", "(F)Z", 20);
+  near("3D", await matrix(), [1.6993926, -0.5282828, -16.762562, 0.92662936, 0.8024845, -44.39358, -5.9378496e-4, -5.1423284e-4, 1.0425451]);
+  await call(t, "setCameraDistance", "(F)Z", 3);
+  await call(t, "setRotationY", "(F)Z", -15);
+  near("3D, camera", await matrix(), [1.4786806, -0.52741945, -5.7485485, 0.7086285, 0.84027576, -34.438316, -0.0035336704, -8.0830074e-4, 1.196891]);
+  for (const [name, value] of [["setScaleX", 0], ["setRotationX", 0], ["setRotationY", 0]] as const) await call(t, name, "(F)Z", value);
+  near("singular", [...await matrix(), ...await matrix("getInverseMatrix")], [0, -0.5, 67.5, 0, 0.8660254, 0.34936523, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+});
+
 await exercise("Interpolator (device values)", async () => {
   const run = async (ip: unknown, cases: [number, string][], out: Float32Array) => {
     for (const [time, want] of cases) {

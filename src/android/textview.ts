@@ -11,9 +11,8 @@ import { csText, csLength } from "../jvm/natives/jchars";
 import { G, gravityV, gravityH } from "./gravity";
 import { firstStrongRtl } from "../jvm/bidi";
 import { device } from "../shell/config";
-import {
-  fontDescent, fontAscent, fontTop, fontBottom, JRect, type JCanvas,
-} from "./graphics";
+import { fontDescent, fontAscent, fontTop, fontBottom, JRect } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, scall, enumOrdinal } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
@@ -859,9 +858,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     this.measuredH = resolveSize(h, hSpec);
     this.layoutWidthFor = w;
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JTextView, cv: JCanvas): Gen {
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JTextView, cv: JavaCanvas): Gen {
     if (this.width() <= 0 || this.height() <= 0) return;
-    const thread = curThread, ctx = cv.ctx;
+    const thread = curThread, ctx = canvasOf(cv).ctx;
     const display = this.text;
     const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
     const alignment = Number(resolved instanceof Promise ? yield resolved : resolved);

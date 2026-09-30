@@ -3,9 +3,10 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, scall, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum, enumName, enumOrdinal } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, jarray, parseMethodDesc } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JPaint, cssColor, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, isNinePatchChunk, validNinePatchChunk, ninePatchOf, drawNinePatch, type NinePatchChunk } from "./graphics";
+import { JRect, JRectF, JPaint, cssColor, tintedBmp, matrixColor, colorFilterOf, modeConstant, insetsOf, isNinePatchChunk, validNinePatchChunk, ninePatchOf, drawNinePatch, type NinePatchChunk } from "./graphics";
 import { bitmapOf, densityOf, ninePatchChunkOf } from "./bitmap";
 import { decodeBitmap } from "./decode";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
@@ -42,7 +43,7 @@ export class JDrawable extends JObj {
   settingBlendMode = false;
 
   /** TS-side paint. Subclasses override. */
-  paint(cv: JCanvas): unknown { return undefined; }
+  paint(cv: JavaCanvas): unknown { return undefined; }
   size(vertical: boolean): number | Promise<number> { return -1; }
   onStateChange(): boolean { return false; }
 }
@@ -64,8 +65,8 @@ const M_drawD = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
  * the base class's empty one and the child silently draws nothing. Returns whatever the child
  * returns, so a compiled override that suspends is awaitable by a caller that can.
  */
-export function drawChild(d: JDrawable, cv: JCanvas, thread = curThread): unknown {
-  const f = (d as unknown as Record<string, (cv: JCanvas) => unknown>)[M_drawD];
+export function drawChild(d: JDrawable, cv: JavaCanvas, thread = curThread): unknown {
+  const f = (d as unknown as Record<string, (cv: JavaCanvas) => unknown>)[M_drawD];
   return callOn(thread, () => f ? f.call(d, cv) : d.paint(cv));
 }
 /** AOSP setBounds: only a real change invalidates the old area and reaches onBoundsChange, both
@@ -107,7 +108,7 @@ function invalidateSelf(this: JDrawable) {
   withCallback(this, (c) => void vcall(c, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", this));
 }
 const drawableMethods: NativeSpec["methods"] = cslBoundary({
-  "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JCanvas) { return this.paint(cv); },
+  "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JavaCanvas) { return this.paint(cv); },
   "setBounds(IIII)V": setBounds,
   // AOSP forwards through the virtual setBounds(IIII), which a subclass may override
   "setBounds(Landroid/graphics/Rect;)V": function (this: JDrawable, r: JRect) {
@@ -323,9 +324,9 @@ rt.markers("android/graphics/drawable/Animatable");
 
 export class JColorDrawable extends JDrawable {
   color = 0;
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     if (!(this.color >>> 24) || this.alpha === 0) return;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     ctx.save();
     const color = this.tintMatrix ? matrixColor(this.tintMatrix, this.color) : this.tint ?? this.color;
     const alpha = ((color >>> 24) * (this.alpha + (this.alpha >>> 7))) >>> 8;
@@ -357,9 +358,9 @@ export class JBitmapDrawable extends JDrawable {
   targetDensity = device.densityDpi;
   /** the Paint getPaint() hands out: flags an app sets on it (filter, dither) have no effect on the 2D path */
   bpaint: JPaint | null = null;
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     if (!this.bmp) return;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
     const src = tintedBmp(bitmapOf(this.bmp), this.tintMode ? this.tint : null, this.tintMatrix, blendOfTint(this.tintMode));
@@ -407,13 +408,13 @@ class JNinePatchDrawable extends JDrawable {
     p.left = scaleFromDensity(padding.left, from, targetDensity); p.top = scaleFromDensity(padding.top, from, targetDensity);
     p.right = scaleFromDensity(padding.right, from, targetDensity); p.bottom = scaleFromDensity(padding.bottom, from, targetDensity);
   }
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     const { chunk } = this, { left, top } = this.bounds;
     if (!this.bmp || !chunk) return;
     const bmp = bitmapOf(this.bmp), density = densityOf(this.bmp);
     // AOSP draws a patch of another density in its own pixels under a canvas scale
     const s = density && density !== this.targetDensity ? this.targetDensity / density : 1;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
     ctx.translate(left, top);
@@ -508,11 +509,11 @@ class JGradientDrawable extends JDrawable {
     this.strokeColor = typeof color === "number" ? color : color ? cslColor(color, this.stateSet) : 0;
     this.dashW = dashWidth; this.dashGap = dashGap;
   }
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
     if (w <= 0 || h <= 0) return;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
     const path = this.shapePath(left, top, right, bottom);
@@ -648,7 +649,7 @@ class JStateListDrawable extends JDrawableContainer {
     for (let i = 0; i < items.length; i++) if (matchesState(items[i], this.stateSet)) return items[i].d ?? null;
     return items[items.length - 1]?.d ?? null;
   }
-  paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
+  paint(cv: JavaCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.items, vertical); }
 }
 /** AOSP LevelListDrawable: the first item whose range holds the level, else none */
@@ -659,13 +660,13 @@ class JLevelListDrawable extends JDrawableContainer {
     for (const it of this.items) if (this.level >= it.min && this.level <= it.max) return it.d;
     return null;
   }
-  paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
+  paint(cv: JavaCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.items, vertical); }
 }
 class JAnimationDrawable extends JDrawableContainer {
   frames: { d: JDrawable; ms: number }[] = [];
   cur = 0; oneShot = false; running = false; run = 0;
-  paint(cv: JCanvas) { const child = adoptChild(this, this.frames[this.cur]?.d ?? null); return child ? drawChild(child, cv) : undefined; }
+  paint(cv: JavaCanvas) { const child = adoptChild(this, this.frames[this.cur]?.d ?? null); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.frames, vertical); }
   /** AOSP schedules each frame on the looper for its duration; the run token cancels a stale timer */
   start() {
@@ -690,7 +691,7 @@ class JAnimationScaleListDrawable extends JDrawableContainer {
   children: { d: JDrawable }[] = [];
   animated = -1;
   current(): JDrawable | null { return this.children[this.animated]?.d ?? null; }
-  paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
+  paint(cv: JavaCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.children, vertical); }
 }
 rt.register({ name: "com/android/internal/graphics/drawable/AnimationScaleListDrawable", ctor: JAnimationScaleListDrawable,
@@ -803,7 +804,7 @@ export class JLayerDrawable extends JDrawable {
   }
   /** Every layer through its virtual draw. Stays synchronous — no promise allocated — unless a
    *  compiled child actually suspends, in which case the rest follow it in order. */
-  paint(cv: JCanvas): unknown {
+  paint(cv: JavaCanvas): unknown {
     const thread = curThread;
     const step = (i: number): unknown => {
       for (; i < this.layers.length; i++) {
@@ -926,7 +927,7 @@ class JTransitionDrawable extends JLayerDrawable {
   from = 0;
   to = 0;
   mix = 0;
-  paint(cv: JCanvas): unknown {
+  paint(cv: JavaCanvas): unknown {
     const thread = curThread;
     let done = true;
     if (this.transition === 1) {
@@ -993,20 +994,22 @@ class JAdaptiveIconDrawable extends JLayerDrawable {
     const dx = (right - left) / 4, dy = (bottom - top) / 4;
     for (const l of this.layers) if (l.d) yield vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
   }
-  clip(cv: JCanvas) {
+  clip(cv: JavaCanvas) {
     const { left, top, right, bottom } = this.bounds;
-    cv.ctx.beginPath();
-    cv.ctx.roundRect(left, top, right - left, bottom - top, Math.min(right - left, bottom - top) * 0.28);
-    cv.ctx.clip();
+    const ctx = canvasOf(cv).ctx;
+    ctx.beginPath();
+    ctx.roundRect(left, top, right - left, bottom - top, Math.min(right - left, bottom - top) * 0.28);
+    ctx.clip();
   }
-  paint(cv: JCanvas) {
-    cv.ctx.save();
+  paint(cv: JavaCanvas) {
+    const ctx = canvasOf(cv).ctx;
+    ctx.save();
     this.clip(cv);
     try {
       const result = super.paint(cv);
-      if (result instanceof Promise) return result.finally(() => cv.ctx.restore());
-    } catch (error) { cv.ctx.restore(); throw error; }
-    cv.ctx.restore();
+      if (result instanceof Promise) return result.finally(() => ctx.restore());
+    } catch (error) { ctx.restore(); throw error; }
+    ctx.restore();
   }
   size(vertical: boolean): number | Promise<number> {
     return after(super.size(vertical), n => n < 0 ? n : Math.round(n * 2 / 3));
@@ -1056,10 +1059,10 @@ class JRippleDrawable extends JLayerDrawable {
     const c = csl ? cslColor(csl, this.stateSet) : 0x33000000;
     this.rippleColor = (c >>> 24) > 0x80 ? ((c & 0xffffff) | 0x80000000) | 0 : c;
   }
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     return after(super.paint(cv), () => this.ripple(cv));
   }
-  ripple(cv: JCanvas) {
+  ripple(cv: JavaCanvas) {
     const now = guestNow();
     let grow: number, fade: number, animating: boolean;
     if (this.active) {
@@ -1078,7 +1081,7 @@ class JRippleDrawable extends JLayerDrawable {
     const cx0 = (left + right) / 2, cy0 = (top + bottom) / 2;
     const cx = Number.isNaN(this.hx) ? cx0 : this.hx + (cx0 - this.hx) * grow;
     const cy = Number.isNaN(this.hy) ? cy0 : this.hy + (cy0 - this.hy) * grow;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     ctx.save();
     ctx.beginPath();
     ctx.rect(left, top, right - left, bottom - top);
@@ -1155,11 +1158,11 @@ class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
   root: VRoot = { name: "", rotation: 0, pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, children: [], alpha: 1 };
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
     if (w <= 0 || h <= 0) return;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255 * this.root.alpha;
     ctx.translate(left, top);
@@ -1177,7 +1180,7 @@ class JAnimatedVectorDrawable extends JVectorDrawable {
   startT = -1;
   callbacks: unknown[] = [];
   length() { return Math.max(0, ...this.targets.map((t) => timelineLength(t.timeline))); }
-  paint(cv: JCanvas) {
+  paint(cv: JavaCanvas) {
     if (this.startT >= 0) {
       const ms = guestNow() - this.startT;
       this.evaluate(ms);
@@ -1214,7 +1217,7 @@ rt.register({ name: "android/graphics/drawable/Animatable2$AnimationCallback", c
 // own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
 class JDrawableWrapper extends JDrawable {
   dr: JDrawable | null = null;
-  paint(cv: JCanvas): unknown { if (this.dr) return drawChild(this.dr, cv); }
+  paint(cv: JavaCanvas): unknown { if (this.dr) return drawChild(this.dr, cv); }
   size(vertical: boolean) { return this.dr ? drawableSize(this.dr, vertical) : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
 }
@@ -1272,8 +1275,8 @@ rt.register({
 class JClipDrawable extends JDrawableWrapper {
   gravity = 3;
   orientation = 1;
-  paint(cv: JCanvas): unknown { return rt.drive(this.paint$(cv)); }
-  *paint$(cv: JCanvas): Gen {
+  paint(cv: JavaCanvas): unknown { return rt.drive(this.paint$(cv)); }
+  *paint$(cv: JavaCanvas): Gen {
     if (!this.dr || this.level <= 0) return;
     const b = this.bounds, f = Math.min(1, this.level / 10000);
     const w = b.right - b.left, h = b.bottom - b.top;
@@ -1282,9 +1285,10 @@ class JClipDrawable extends JDrawableWrapper {
     const gravity = absGravity(this.gravity, this.layoutDir);
     const left = (gravity & 7) === 5 ? b.right - width : (gravity & 7) === 1 ? b.left + Math.round((w - width) / 2) : b.left;
     const top = (gravity & 112) === 80 ? b.bottom - height : (gravity & 112) === 16 ? b.top + Math.round((h - height) / 2) : b.top;
-    cv.ctx.save();
-    cv.ctx.beginPath(); cv.ctx.rect(left, top, width, height); cv.ctx.clip();
-    try { yield drawChild(this.dr, cv); } finally { cv.ctx.restore(); }
+    const ctx = canvasOf(cv).ctx;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
+    try { yield drawChild(this.dr, cv); } finally { ctx.restore(); }
   }
 }
 rt.register({ name: "android/graphics/drawable/ClipDrawable", ctor: JClipDrawable,
@@ -1350,9 +1354,9 @@ rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawa
 class JRotateDrawable extends JDrawableWrapper {
   fromDegrees = 0; toDegrees = 360; currentDegrees = 0;
   pivotX = 0.5; pivotY = 0.5; pivotXRelative = true; pivotYRelative = true;
-  paint(canvas: JCanvas): unknown {
+  paint(canvas: JavaCanvas): unknown {
     if (!this.dr) return;
-    const b = this.dr.bounds, ctx = canvas.ctx;
+    const b = this.dr.bounds, ctx = canvasOf(canvas).ctx;
     const x = b.left + this.pivotX * (this.pivotXRelative ? b.right - b.left : 1);
     const y = b.top + this.pivotY * (this.pivotYRelative ? b.bottom - b.top : 1);
     ctx.save(); ctx.translate(x, y);
@@ -1386,7 +1390,7 @@ rt.register({ name: "android/graphics/drawable/RotateDrawable", ctor: JRotateDra
 class JScaleDrawable extends JDrawableWrapper {
   scaleWidth = -1; scaleHeight = -1; gravity = 3; useIntrinsicMinimum = false;
   scaled = new JRect();
-  paint(canvas: JCanvas) { if (this.dr && this.dr.level !== 0) return drawChild(this.dr, canvas); }
+  paint(canvas: JavaCanvas) { if (this.dr && this.dr.level !== 0) return drawChild(this.dr, canvas); }
   layout(thread = curThread): unknown { return rt.drive(this.layout$(thread)); }
   *layout$(thread = curThread): Gen {
     const child = this.dr;
@@ -1462,10 +1466,10 @@ const shapeMethods: NonNullable<NativeSpec["methods"]> = {
   },
   ...noops("<init>()V", "getOutline(Landroid/graphics/Outline;)V"),
   ...stubs(1, "hasAlpha()Z"),
-  "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JCanvas, p: JPaint) {
+  "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JavaCanvas, p: JPaint) {
     const path = this.path();
     const evenOdd = this instanceof JRoundRectShape && !!this.inset;
-    cv.drawShape(p, (c) => c.fill(path, evenOdd ? "evenodd" : "nonzero"), (c) => c.stroke(path));
+    canvasOf(cv).drawShape(p, (c) => c.fill(path, evenOdd ? "evenodd" : "nonzero"), (c) => c.stroke(path));
   },
   "clone()Landroid/graphics/drawable/shapes/Shape;": function (this: JShape) { return Object.assign(new (this.constructor as any)(), this); },
 };
@@ -1560,17 +1564,17 @@ rt.register({
       }
     }),
     // the virtual route: an app Shape subclass's onResize/draw, and an app ShapeDrawable's onDraw
-    "draw(Landroid/graphics/Canvas;)V": driven(function* (this: JShapeDrawable, cv: JCanvas): Gen {
+    "draw(Landroid/graphics/Canvas;)V": driven(function* (this: JShapeDrawable, cv: JavaCanvas): Gen {
       const sh = this.shape;
       if (!sh) return;
-      const b = this.bounds, ctx = cv.ctx;
+      const b = this.bounds, ctx = canvasOf(cv).ctx;
       yield vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
       ctx.save();
       ctx.translate(b.left, b.top);
       try { yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint()); }
       finally { ctx.restore(); }
     }),
-    "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
+    "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JavaCanvas, p: JPaint) {
       return jmethod(sh, M_shapeDraw)!.call(sh, cv, p);
     },
   },

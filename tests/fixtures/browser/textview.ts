@@ -3,7 +3,8 @@ import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JTextView } from "../../../src/android/textview";
-import { JCanvas, measureText, type JPaint } from "../../../src/android/graphics";
+import { measureText, type JPaint } from "../../../src/android/graphics";
+import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { systemFonts } from "./fonts";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
 import { nativePathOf } from "../../../src/android/path";
@@ -36,9 +37,9 @@ async function probe() {
         return 24;
       },
     [mangleMethod("draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V")]:
-      async (canvas: JCanvas, _cs: unknown, _a: number, _b: number, x: number, _top: number, baseline: number) => {
+      async (canvas: JavaCanvas, _cs: unknown, _a: number, _b: number, x: number, _top: number, baseline: number) => {
         draws++; await Promise.resolve();
-        canvas.ctx.fillStyle = "#00ff00"; canvas.ctx.fillRect(x, baseline - 32, 24, 32);
+        canvasOf(canvas).ctx.fillStyle = "#00ff00"; canvasOf(canvas).ctx.fillRect(x, baseline - 32, 24, 32);
       },
   });
   const text = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "replacement");
@@ -51,7 +52,7 @@ async function probe() {
   const remeasured = measures - measured;
   view.right = 100; view.bottom = view.measuredH;
   const canvas = new OffscreenCanvas(100, view.measuredH), ctx = canvas.getContext("2d")!;
-  await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, view.measuredH));
+  await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 100, view.measuredH));
   const result = { remeasured, draws, width: await vcall(view.layout!.java, "getLineWidth", "(I)F", 0), height: view.measuredH,
     center: [...ctx.getImageData(50, 16, 1, 1).data], outside: [...ctx.getImageData(10, 16, 1, 1).data],
     layout: await vcall(view, "getLayout", "()Landroid/text/Layout;") === view.layout!.java };
@@ -72,7 +73,7 @@ async function probe() {
     const actual = new OffscreenCanvas(100, 60).getContext("2d")!;
     const paint = view.paintT;
     paint.textSize = 40; paint.strokeWidth = 4; paint.style = style;
-    await vcall(JCanvas.wrap(actual, 100, 60), "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Hi", 8, 45, paint);
+    await vcall(canvasOver(actual, 100, 60), "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Hi", 8, 45, paint);
     const pixels = actual.getImageData(0, 0, 100, 60).data;
     let ink = 0;
     for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) ink++;
@@ -89,7 +90,7 @@ async function probe() {
   for (const alignment of [2, 4, 3]) {
     await vcall(parent, "setTextAlignment", "(I)V", alignment);
     const ctx = new OffscreenCanvas(100, 50).getContext("2d")!;
-    await vcall(aligned, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, 50));
+    await vcall(aligned, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 100, 50));
     const pixels = ctx.getImageData(0, 0, 100, 50).data;
     let lo = 100, hi = -1;
     for (let y = 0; y < 50; y++) for (let x = 0; x < 100; x++) if (pixels[(y * 100 + x) * 4 + 3]) { lo = Math.min(lo, x); hi = Math.max(hi, x); }
@@ -110,16 +111,16 @@ async function probe() {
   for (const bound of bounds) {
     const d = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff00ff00);
     await vcall(d, "setBounds", "(IIII)V", ...bound);
-    Object.assign(d, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JCanvas) => {
-      await Promise.resolve(); const m = canvas.ctx.getTransform(); drawsAt.push([m.e, m.f]);
-      canvas.ctx.fillStyle = "#00ff00"; canvas.ctx.fillRect(bound[0], bound[1], bound[2] - bound[0], bound[3] - bound[1]);
+    Object.assign(d, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JavaCanvas) => {
+      await Promise.resolve(); const m = canvasOf(canvas).ctx.getTransform(); drawsAt.push([m.e, m.f]);
+      canvasOf(canvas).ctx.fillStyle = "#00ff00"; canvasOf(canvas).ctx.fillRect(bound[0], bound[1], bound[2] - bound[0], bound[3] - bound[1]);
     } });
     drawables.push(d);
   }
   await vcall(compound, "setCompoundDrawables", "(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V", ...drawables);
   await vcall(compound, "onMeasure", "(II)V", makeSpec(60, MS_EXACTLY), makeSpec(70, MS_EXACTLY));
   const surface = new OffscreenCanvas(60, 70).getContext("2d")!;
-  await vcall(compound, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(surface, 60, 70));
+  await vcall(compound, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(surface, 60, 70));
   const retained = await Promise.all(drawables.map(async d => { const b = await vcall(d, "getBounds", "()Landroid/graphics/Rect;"); return [b.left, b.top, b.right, b.bottom]; }));
   const mixed = rt.make("android/widget/TextView");
   if (!(mixed instanceof JTextView)) throw new Error("Invalid mixed TextView");
@@ -132,8 +133,8 @@ async function probe() {
   const mixedLayout = await vcall(mixed, "getLayout", "()Landroid/text/Layout;");
   const mixedCanvas = new OffscreenCanvas(80, 60).getContext("2d")!;
   const directCanvas = new OffscreenCanvas(80, 60).getContext("2d")!;
-  await vcall(mixed, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(mixedCanvas, 80, 60));
-  await vcall(mixedLayout, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(directCanvas, 80, 60));
+  await vcall(mixed, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(mixedCanvas, 80, 60));
+  await vcall(mixedLayout, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(directCanvas, 80, 60));
   const directPixels = directCanvas.getImageData(0, 0, 80, 60).data;
   const combined = { width: await vcall(mixedLayout, "getLineWidth", "(I)F", 0),
     ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0), original: await vcall(mixedText, "toString", "()Ljava/lang/String;"),
@@ -150,7 +151,7 @@ async function probe() {
   const emptyCanvas = await newObj("android/graphics/Canvas", "()V"), otherCanvas = await newObj("android/graphics/Canvas", "()V");
   await vcall(emptyCanvas, "save", "()I");
   await vcall(emptyCanvas, "translate", "(FF)V", 4, 7);
-  const independentCanvas = otherCanvas.ctx.getTransform().isIdentity && emptyCanvas.ctx.getTransform().e === 4;
+  const independentCanvas = canvasOf(otherCanvas).ctx.getTransform().isIdentity && canvasOf(emptyCanvas).ctx.getTransform().e === 4;
   const checkBox = rt.make("android/widget/CheckBox");
   await vcall(checkBox, "measure", "(II)V", 0x40000030, 0x40000030);
   const checkBoxHeight = await vcall(checkBox, "getMeasuredHeight", "()I");
@@ -167,7 +168,7 @@ async function probe() {
   await vcall(input, "setTextCursorDrawable", "(Landroid/graphics/drawable/Drawable;)V", cursor);
   const cursorIdentity = await vcall(input, "getTextCursorDrawable", "()Landroid/graphics/drawable/Drawable;") === cursor;
   const caretCanvas = new OffscreenCanvas(100, 50).getContext("2d")!;
-  await vcall(input, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(caretCanvas, 100, 50));
+  await vcall(input, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(caretCanvas, 100, 50));
   const caretAtStart = caretCanvas.getImageData(2, 0, 1, 50).data.some((v, i) => i % 4 === 3 && v === 255);
   const cursorPixels = [...caretCanvas.getImageData(2, 20, 1, 1).data];
   await vcall(input, "setTextCursorDrawable", "(I)V", 0);

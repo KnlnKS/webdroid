@@ -73,6 +73,24 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   for (const [index, value] of [64, 64, 0, 64].entries()) expect(Math.abs(probeResult.tints.multiply[index] - value)).toBeLessThanOrEqual(2);
 }, PAGE_TIMEOUT);
 
+// Values recorded on the reference AVD (the text box there is drawn without anti-aliasing, a pixel narrower).
+test.concurrent("AOSP's Canvas reports the reference device's clips, saves, layers and bitmap densities", async () => {
+  const { textOnPath, ...result } = await probe("canvas");
+  expect(result).toEqual({
+    clip0: "[0,0][100,80]", qr: [0, 1, 1, 0, 1],
+    restore: ["Underflow in restore - more restores than saves", "Underflow in restoreToCount - more restores than saves"],
+    clipRect: [1, 1, "[10,10][50,50]", 2], clipOut: [0, "[0,0][0,0]", 1], clipOutSides: [1, "[0,40][100,80]", 1, "[10,40][100,80]"],
+    rotated: ["[-14,-24][114,104]", 1, "[30,20][70,60]"], scaled: ["[-5,-1][45,26]", 0, "[0,0][0,0]", 1], clipPath: [1, "[30,20][70,60]", 1, 0],
+    saveLayer: [1, 2, "[0,0][50,50]"], empty: [0, "[0,0][0,0]", 0, 1],
+    partialClip: ["[1.0, 0.0, 3.0][0.0, 1.0, 4.0][0.0, 0.0, 1.0]", "[-3,-4][7,6]"], partialMatrix: ["[1.0, 0.0, 0.0][0.0, 1.0, 0.0][0.0, 0.0, 1.0]", "[1,1][3,3]"],
+    density: [0, "ff0000ff", "0", "800000ff", "0"], colors: ["80ff0000", "8000ff00", "0"],
+    unclipped: [1, 2, "0", "ffff0000", 1, "ff807f00", "ff00ff00"], punch: ["7fffffff", "ffffffff"],
+    recording: [100, 1, 8192, 0, "[0,0][100,50]", 0, 1],
+    recorded: [1, "No recording in progress, forgot to call #beginRecording()?", "Software rendering doesn't support drawRenderNode"],
+  });
+  [12, 25, 55, 39].forEach((v, i) => expect(Math.abs((textOnPath as number[])[i] - v)).toBeLessThanOrEqual(1));
+}, PAGE_TIMEOUT);
+
 test.concurrent("framework seek resources resolve dimensions, tint, enabled states and vector group transforms", async () => {
   const result = await probe("drawableResources");
   expect(result).toMatchObject({ heights: [6, 6, 6], above: [0, 0, 0, 0], outside: [0, 0, 0, 0], restored: true,

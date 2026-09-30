@@ -1,6 +1,7 @@
 export { default as back } from "./back";
 export { default as bitmapDecode } from "./bitmap-decode";
 export { default as blurMask } from "./blur-mask";
+export { default as canvas } from "./canvas";
 export { default as drawableResources } from "./drawable-resources";
 export { default as drawableSpan } from "./drawable-span";
 export { default as eglThread } from "./egl-thread";

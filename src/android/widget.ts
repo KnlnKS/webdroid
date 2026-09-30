@@ -4,7 +4,8 @@ import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, dr
 import { rt, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
-import { type JCanvas, type JInsets, JRect, insetsOf, measureText, fontAscent, fontDescent } from "./graphics";
+import { type JInsets, JRect, insetsOf, measureText, fontAscent, fontDescent } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
 import { JTextPaint } from "./text";
 import { csText } from "../jvm/natives/jchars";
@@ -49,7 +50,7 @@ class JProgressBar extends JView {
 /** ProgressBar.updateDrawableBounds and drawTrack for the indeterminate drawable: a spinner keeps
  *  its aspect ratio, centred; an Animatable starts on its first draw, anything else is drawn at
  *  the level of a linear AlphaAnimation over the duration */
-const drawIndeterminate = driven(function* drawIndeterminate(pb: JProgressBar, cv: JCanvas, d: JDrawable): Gen {
+const drawIndeterminate = driven(function* drawIndeterminate(pb: JProgressBar, cv: JavaCanvas, d: JDrawable): Gen {
   const thread = curThread, w = pb.width() - pb.padL - pb.padR, h = pb.height() - pb.padT - pb.padB;
   let left = 0, top = 0, right = w, bottom = h;
   if (pb.onlyIndeterminate && !rt.iof(d, "android/graphics/drawable/AnimationDrawable")) {
@@ -67,8 +68,9 @@ const drawIndeterminate = driven(function* drawIndeterminate(pb: JProgressBar, c
     yield vcallOn(thread, d, "setLevel", "(I)Z", Math.trunc((pb.behavior === 2 && Math.floor(cycles) % 2 ? 1 - phase : phase) * 10000));
     invalidate(pb);
   }
-  cv.ctx.save(); cv.ctx.translate(pb.padL, pb.padT);
-  try { yield drawChild(d, cv, thread); } finally { cv.ctx.restore(); }
+  const ctx = canvasOf(cv).ctx;
+  ctx.save(); ctx.translate(pb.padL, pb.padT);
+  try { yield drawChild(d, cv, thread); } finally { ctx.restore(); }
 });
 /** applyPrimaryProgressTint: the progress layer, or the whole drawable when it has none */
 const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): Gen {
@@ -78,7 +80,7 @@ const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): 
   yield vcall(target, "setTintList", "(Landroid/content/res/ColorStateList;)V", pb.tintCsl);
 });
 /** ProgressBar.onDraw's drawTrack: the progress and secondary layers at their levels, inside the padding */
-const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JCanvas, d: JDrawable): Gen {
+const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JavaCanvas, d: JDrawable): Gen {
   const thread = curThread;
   yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, pb.width() - pb.padL - pb.padR, pb.height() - pb.padT - pb.padB);
   for (let primary = 0; primary < 2; primary++) {
@@ -86,8 +88,9 @@ const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JCanvas, d: J
     const layer = d instanceof JLayerDrawable ? yield vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
     yield vcallOn(thread, layer ?? d, "setLevel", "(I)Z", Math.trunc(pb.fraction(v) * 10000));
   }
-  cv.ctx.save(); cv.ctx.translate(pb.padL, pb.padT);
-  try { yield drawChild(d, cv, thread); } finally { cv.ctx.restore(); }
+  const ctx = canvasOf(cv).ctx;
+  ctx.save(); ctx.translate(pb.padL, pb.padT);
+  try { yield drawChild(d, cv, thread); } finally { ctx.restore(); }
 });
 const initProgressBar = driven(function* initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style: number = AID("progressBarStyle"), def: number = 0): Gen {
   yield initViewFromCtx(this, c, set, style, def);
@@ -165,7 +168,7 @@ rt.register({
       this.measuredW = resolveSize(dw + this.padL + this.padR, wSpec);
       this.measuredH = resolveSize(dh + this.padT + this.padB, hSpec);
     }),
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JProgressBar, cv: JCanvas) {
+    "onDraw(Landroid/graphics/Canvas;)V": function (this: JProgressBar, cv: JavaCanvas) {
       const d = this.current();
       return !d ? undefined : this.indeterminate ? drawIndeterminate(this, cv, d) : drawTrack(this, cv, d);
     },
@@ -246,8 +249,8 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
     this.measuredW = resolveSize(Math.max(this.minW, w + this.padL + this.padR), ws);
     this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSeekBar, canvas: JCanvas): Gen {
-    const thread = curThread, ctx = canvas.ctx;
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSeekBar, canvas: JavaCanvas): Gen {
+    const thread = curThread, ctx = canvasOf(canvas).ctx;
     if (this.progressD) yield drawTrack(this, canvas, this.progressD);
     if (!this.thumb) return;
     const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
@@ -380,7 +383,7 @@ function compoundCtors<T extends JCompoundButton>(styleAttr: string, then?: (v: 
 }
 function compoundPadLeft(this: JCompoundButton) { return compoundPadL.call(this) + this.buttonW; }
 syncCompoundPads.add(compoundPadLeft);
-const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv: JCanvas): Gen {
+const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv: JavaCanvas): Gen {
   const d = this.buttonD, thread = curThread;
   if (d) {
     const h = yield drawableSize(d, true, thread), top = indicatorTop(this, h);
@@ -390,8 +393,9 @@ const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv
   if (!d) return;
   // drawn at the view's origin however far its content scrolled
   const sx = this.scrollX, sy = this.scrollY;
-  if (sx || sy) cv.ctx.translate(sx, sy);
-  try { yield drawChild(d, cv, thread); } finally { if (sx || sy) cv.ctx.translate(-sx, -sy); }
+  const ctx = canvasOf(cv).ctx;
+  if (sx || sy) ctx.translate(sx, sy);
+  try { yield drawChild(d, cv, thread); } finally { if (sx || sy) ctx.translate(-sx, -sy); }
 });
 const compoundMethods: NativeSpec["methods"] = cslBoundary({
   ...textViewMethods,
@@ -654,7 +658,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
       : g === G.BOTTOM ? this.height() - this.padB - this.switchH : this.padT;
     this.switchB = this.switchT + this.switchH;
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSwitch, cv: JCanvas): Gen {
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSwitch, cv: JavaCanvas): Gen {
     const thread = curThread, pad = this.pad, { thumb, track } = this;
     if (this.animateThumb()) invalidate(this);
     // AOSP Switch.draw: the track spans the switch, the thumb sits along the scroll range
@@ -856,7 +860,7 @@ rt.register({
       yield callSelf(textViewMethods, "drawableStateChanged()V", this);
       if (this.checkMark && (yield vcall(this.checkMark, "setState", "([I)Z", Int32Array.from(this.drawableState())))) invalidate(this);
     }),
-    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JCheckedTextView, cv: JCanvas): Gen {
+    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JCheckedTextView, cv: JavaCanvas): Gen {
       yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
       const d = this.checkMark, thread = curThread;
       if (!d) return;

@@ -1,4 +1,5 @@
 import { rt, JObj } from "../jvm/runtime";
+import { weakHandle } from "./handles";
 import { type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 
 type Effect = { kind: "offset"; x: number; y: number } | { kind: "blur"; x: number; y: number; tile: number };
@@ -98,6 +99,8 @@ export class JRenderEffect extends JObj implements BlurCache {
 }
 function effect(value: Effect) { const e = new JRenderEffect(); e.effect = value; return e; }
 rt.register({ name: "android/graphics/RenderEffect", ctor: JRenderEffect, methods: {
+  // what RenderNode.setRenderEffect hands its native half
+  "getNativeInstance()J": function (this: JRenderEffect) { return weakHandle(this); },
   "static createOffsetEffect(FF)Landroid/graphics/RenderEffect;": (x: number, y: number) => effect({ kind: "offset", x, y }),
   "static createBlurEffect(FFLandroid/graphics/Shader$TileMode;)Landroid/graphics/RenderEffect;": (x: number, y: number, tile: JSimpleEnum) => {
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid blur radius");

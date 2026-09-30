@@ -1,7 +1,8 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
-import { JCanvas, JPaint, locateDrawnText } from "../../../src/android/graphics";
+import { JPaint } from "../../../src/android/graphics";
+import { locateDrawnText, canvasOver, canvasOf } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { systemFonts } from "./fonts";
 
@@ -31,9 +32,9 @@ async function probe() {
   await vcall(node, "endRecording", "()V");
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0xff0000ff);
   const ctx = new OffscreenCanvas(64, 64).getContext("2d")!;
-  const canvas = JCanvas.wrap(ctx, 64, 64);
+  const canvas = canvasOver(ctx, 64, 64, true);
   const owner = { drawnText: null, drawnTextPoints: null, drawnTextCount: 0 };
-  canvas.semanticOwner = owner;
+  canvasOf(canvas).semanticOwner = owner;
   ctx.translate(10, 12); ctx.scale(2, 2);
   let rasterizations = 0;
   const drawArrays = WebGL2RenderingContext.prototype.drawArrays;

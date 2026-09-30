@@ -17,7 +17,7 @@ import { assetBytes } from "./assetmanager";
 import { NativeBitmap, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { decodeHeif } from "./heif";
 import type { JRect } from "./graphics";
-import { bitmapCanvas } from "./delegates";
+import { bitmapCanvas } from "./canvas";
 
 // ── headers
 export interface ImageHeader {

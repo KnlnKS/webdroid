@@ -1,13 +1,15 @@
 import "../../../src/natives";
+import { loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
 import { vcall, newObj } from "../../../src/jvm/natives/jlang";
 import { zipTree } from "../../../src/jvm/natives/jzip";
 import { Arsc } from "../../../src/android/arsc";
 import { Resources, JTheme, setFramework } from "../../../src/android/res";
 import { loadDrawable, JLayerDrawable, ST } from "../../../src/android/drawable";
-import { JCanvas } from "../../../src/android/graphics";
+import { canvasOver } from "../../../src/android/canvas";
 
 async function probe() {
+  await loadPlatformDex();
   const zip = zipTree(new Uint8Array(await (await fetch("/framework.apk")).arrayBuffer()));
   const arsc = new Arsc(zip["resources.arsc"], path => zip[path] ?? null);
   setFramework(arsc); rt.linkNatives();
@@ -20,7 +22,7 @@ async function probe() {
   const progress = await vcall(track, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", 0x0102000d);
   await vcall(progress, "setLevel", "(I)Z", 5000);
   const ctx = new OffscreenCanvas(300, 54).getContext("2d")!;
-  await vcall(track, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  await vcall(track, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const heights = track.layers.flatMap(x => x.d ? [x.d.bounds.bottom - x.d.bounds.top] : []);
   const pixel = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data];
   const before = pixel(50, 27), after = pixel(250, 27), above = pixel(50, 15);
@@ -28,7 +30,7 @@ async function probe() {
   await vcall(thumb, "setBounds", "(IIII)V", 0, 0, 54, 54);
   ctx.clearRect(0, 0, 300, 54); ctx.globalAlpha = 0.5;
   await vcall(thumb, "setState", "([I)Z", Int32Array.of(ST.enabled));
-  await vcall(thumb, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  await vcall(thumb, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const center = pixel(27, 27), outside = pixel(2, 2);
   ctx.globalAlpha = 1; ctx.clearRect(0, 0, 300, 54);
   const rotate = await newObj("android/graphics/drawable/RotateDrawable", "()V");
@@ -37,18 +39,18 @@ async function probe() {
   await vcall(rotate, "setBounds", "(IIII)V", 10, 20, 50, 40);
   await vcall(rotate, "setToDegrees", "(F)V", 180);
   await vcall(rotate, "setLevel", "(I)Z", 5000);
-  await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const rotated = [pixel(30, 12), pixel(12, 30)];
   ctx.clearRect(0, 0, 300, 54);
   await vcall(rotate, "setPivotXRelative", "(Z)V", 0);
   await vcall(rotate, "setPivotX", "(F)V", 5);
   await vcall(rotate, "setLevel", "(I)Z", 10000);
-  await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const absolute = [pixel(0, 30), pixel(30, 30)], restored = ctx.getTransform().isIdentity;
   ctx.clearRect(0, 0, 300, 54);
   const inset = await newObj("android/graphics/drawable/InsetDrawable", "(Landroid/graphics/drawable/Drawable;I)V", fill, 4);
   const dialog = Object.assign(rt.make("webdroid/DialogRoot"), { cardBg: inset, right: 300, bottom: 54 });
-  await vcall(dialog, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  await vcall(dialog, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   return { heights, before, after, above, center, outside, rotated, absolute, restored, dialogCenter: pixel(150, 27) };
 }
 export default probe;

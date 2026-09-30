@@ -7,7 +7,8 @@ import {
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
-import { restoreCanvasToCount, saveCanvas, modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat, type JCanvas } from "./graphics";
+import { modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
@@ -216,7 +217,7 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
       }
     }
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JImageView, cv: JCanvas): Gen {
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JImageView, cv: JavaCanvas): Gen {
     const d = this.drawable;
     if (!d) return;
     const thread = curThread;
@@ -226,8 +227,8 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
     const stretch = this.scaleType === 1 || this.drawableW <= 0 || this.drawableH <= 0;
     const dw = stretch ? aw : this.drawableW, dh = stretch ? ah : this.drawableH;
     const matrix = this.drawMatrix();
-    const ctx = cv.ctx;
-    const saveCount = saveCanvas(cv);
+    const nc = canvasOf(cv), ctx = nc.ctx;
+    const saveCount = nc.save();
     try {
       if (this.imageAlpha !== 255) ctx.globalAlpha *= this.imageAlpha / 255;
       if (this.cropToPadding) {
@@ -239,7 +240,7 @@ const imageViewMethods: NativeSpec["methods"] = cslBoundary({
       if (bounds instanceof Promise) yield bounds;
       const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
       if (draw instanceof Promise) yield draw;
-    } finally { restoreCanvasToCount(cv, saveCount); }
+    } finally { nc.restoreToCount(saveCount); }
   }),
 });
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });

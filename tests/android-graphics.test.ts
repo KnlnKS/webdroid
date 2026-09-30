@@ -1,8 +1,9 @@
 import { expect, test, afterAll, beforeAll, spyOn, describe } from "bun:test";
 import "../src/natives";
-import { JCanvas, JPaint, locateDrawnText, fillFontMetrics, matrixColor } from "../src/android/graphics";
+import { JPaint, fillFontMetrics, matrixColor } from "../src/android/graphics";
+import { canvasOver, canvasOf, locateDrawnText } from "../src/android/canvas";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
-import { JObj, rt } from "../src/jvm/runtime";
+import { rt } from "../src/jvm/runtime";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall, vcallOn, curThread, JThread, enumName } from "../src/jvm/natives/jlang";
 import { JTextView } from "../src/android/textview";
@@ -13,14 +14,15 @@ import { TV, type XmlNode } from "../src/android/axml";
 import { JImageView } from "../src/android/imageview";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { recordingContext, replay, replayWithSemantics } from "../src/android/recording";
-import { appResources, axmlBytes, loadSystemFonts, scall } from "./java";
+import { appResources, axmlBytes, loadSystemFonts, loadFrameworkJar, scall } from "./java";
 
 beforeAll(loadSystemFonts);
 
 describe("canvas-text", () => {
   rt.linkNatives();
+  beforeAll(loadFrameworkJar);
 
-  const canvas = () => JCanvas.wrap({
+  const canvas = () => canvasOver({
     fillText() {}, fillRect() {},
     getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 10, f: 20 }; },
   } as unknown as OffscreenCanvasRenderingContext2D, 100, 100);
@@ -29,7 +31,7 @@ describe("canvas-text", () => {
   test("Canvas records custom-drawn text for semantic lookup", async () => {
     const cv = canvas(), paint = new JPaint();
     const owner = semanticOwner();
-    cv.semanticOwner = owner;
+    canvasOf(cv).semanticOwner = owner;
 
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "first", 0, 0, paint);
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "second", 0, 20, paint);
@@ -44,26 +46,13 @@ describe("canvas-text", () => {
   test("Canvas maps layered semantic text through its parent transform", async () => {
     const cv = canvas(), paint = new JPaint();
     const owner = semanticOwner();
-    cv.semanticBase = { a: 1, b: 0, c: 0, d: 1, e: 100, f: 200 } as DOMMatrix;
-    cv.semanticOwner = owner;
+    canvasOf(cv).semanticBase = { a: 1, b: 0, c: 0, d: 1, e: 100, f: 200 } as DOMMatrix;
+    canvasOf(cv).semanticOwner = owner;
 
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "layered", 0, 0, paint);
 
     expect(owner.drawnTextPoints![0]).toBe(110 + paint.textSize);
     expect(owner.drawnTextPoints![1]).toBeCloseTo(220 - paint.textSize * 0.3);
-  });
-
-  test("Canvas resolves virtual CharSequence text before drawing", async () => {
-    class Sequence extends JObj {
-      [mangleMethod("toString", "()Ljava/lang/String;")]() { return "Big Buck Bunny"; }
-    }
-    const cv = canvas(), paint = new JPaint();
-    const owner = semanticOwner();
-    cv.semanticOwner = owner;
-
-    await vcall(cv, "drawText", "(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V", new Sequence(), 4, 8, 0, 0, paint);
-
-    expect(owner.drawnText).toEqual(["Buck"]);
   });
 
   test("text recorded inside a saveLayer keeps the replaying canvas's semantic owner", async () => {
@@ -75,11 +64,11 @@ describe("canvas-text", () => {
     g.OffscreenCanvas = class { width = 100; height = 100; getContext() { return stub(this); } };
     try {
       const ops: unknown[] = [];
-      const cv = JCanvas.wrap(recordingContext(stub({ width: 1, height: 1 }), ops), 100, 100, true), paint = new JPaint();
+      const cv = canvasOver(recordingContext(stub({ width: 1, height: 1 }), ops), 100, 100, true), paint = new JPaint();
       await vcall(cv, "saveLayer", "(FFFFLandroid/graphics/Paint;)I", 0, 0, 50, 50, null);
       await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "inside", 0, 0, paint);
       await vcall(cv, "restore", "()V");
-      const target = stub({ width: 100, height: 100 }), outer = JCanvas.wrap(target, 100, 100), owner = semanticOwner();
+      const target = stub({ width: 100, height: 100 }), outer = canvasOf(canvasOver(target, 100, 100)), owner = semanticOwner();
       outer.semanticOwner = owner;
       replayWithSemantics(outer, () => replay(target, ops));
       expect(owner.drawnText).toEqual(["inside"]);

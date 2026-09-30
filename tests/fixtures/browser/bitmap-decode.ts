@@ -2,7 +2,7 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { vcall, scall } from "../../../src/jvm/natives/jlang";
-import { JCanvas } from "../../../src/android/graphics";
+import { canvasOver } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { mountPlatformData } from "../../../src/shell/apex";
 
@@ -39,7 +39,7 @@ async function probe() {
   catch (e) { invalid = await vcall(e, "toString", "()Ljava/lang/String;"); }
   const gif = await scall("android/graphics/ImageDecoder", "decodeDrawable", `(${SRC})Landroid/graphics/drawable/Drawable;`,
     await scall("android/graphics/ImageDecoder", "createSource", `([B)${SRC}`, await image("anim.gif")));
-  const ctx = new OffscreenCanvas(3, 2).getContext("2d", { willReadFrequently: true })!, canvas = JCanvas.wrap(ctx, 3, 2);
+  const ctx = new OffscreenCanvas(3, 2).getContext("2d", { willReadFrequently: true })!, canvas = canvasOver(ctx, 3, 2);
   await vcall(gif, "setBounds", "(IIII)V", 0, 0, 3, 2);
   const frame = async () => { ctx.clearRect(0, 0, 3, 2); await vcall(gif, "draw", "(Landroid/graphics/Canvas;)V", canvas); return Array.from(ctx.getImageData(1, 1, 1, 1).data); };
   for (let i = 0; i < 100 && !(await frame())[3]; i++) await new Promise((r) => setTimeout(r, 10));

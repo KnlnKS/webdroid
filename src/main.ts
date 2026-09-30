@@ -5,7 +5,7 @@ import { recordVsync, PROCESS_PID } from "./android/os";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
-import { locateDrawnText } from "./android/graphics";
+import { locateDrawnText } from "./android/canvas";
 import { fetchSystemFonts, mountSystemFonts, registerSystemFonts } from "./android/fonts";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";

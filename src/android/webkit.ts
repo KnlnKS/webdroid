@@ -20,7 +20,7 @@ import { EXT_MIME, MIME_EXT } from "../mime";
 import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
-import type { JCanvas } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { recordOrRun } from "./recording";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
@@ -639,11 +639,12 @@ rt.register({
       this.measuredW = defaultSize(Math.max(this.minW, this.padL + this.padR, this.remoteWidth * device.density), w);
       this.measuredH = defaultSize(Math.max(this.minH, this.padT + this.padB, this.remoteHeight * device.density), h);
     },
-    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JWebView, canvas: JCanvas): Gen {
+    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JWebView, canvas: JavaCanvas): Gen {
       // a recorded display list (a Compose layer) is replayed without calling onDraw again
-      if (!canvas.bmp) { recordOrRun(canvas.ctx, () => { this.drawnAt = frame; live.add(this); }); return; }
+      const nc = canvasOf(canvas);
+      if (!nc.bmp) { recordOrRun(nc.ctx, () => { this.drawnAt = frame; live.add(this); }); return; }
       const image = yield this.bitmapSnapshot();
-      try { canvas.ctx.drawImage(image, 0, 0, this.width(), this.height()); }
+      try { nc.ctx.drawImage(image, 0, 0, this.width(), this.height()); }
       finally { image.close(); }
     }),
     "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); live.delete(this); },

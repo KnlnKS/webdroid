@@ -1,9 +1,10 @@
 import { devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline";
 import type { NativePath } from "./path";
 import { isRecording, type Ctx2D } from "./recording";
-import type { JCanvas, JPaint } from "./graphics";
+import type { JPaint } from "./graphics";
+import type { NativeCanvas } from "./canvas";
 
-function eligible(canvas: JCanvas, paint: JPaint): boolean {
+function eligible(canvas: NativeCanvas, paint: JPaint): boolean {
   return !!canvas.bmp && !paint.shader && !paint.maskFilter &&
     !paint.shadowRadius && !paint.transparentSourceIn() && !isRecording(canvas.ctx);
 }
@@ -14,7 +15,7 @@ function applyBlend(ctx: Ctx2D, paint: JPaint): void {
   if (blend) ctx.globalCompositeOperation = blend;
 }
 
-function deviceFill(canvas: JCanvas, paint: JPaint, pixels: Path2D): void {
+function deviceFill(canvas: NativeCanvas, paint: JPaint, pixels: Path2D): void {
   const ctx = canvas.ctx;
   ctx.save();
   try {
@@ -25,7 +26,7 @@ function deviceFill(canvas: JCanvas, paint: JPaint, pixels: Path2D): void {
   } finally { ctx.restore(); }
 }
 
-function composite(canvas: JCanvas, paint: JPaint, image: OffscreenCanvas): void {
+function composite(canvas: NativeCanvas, paint: JPaint, image: OffscreenCanvas): void {
   const ctx = canvas.ctx;
   ctx.save();
   try {
@@ -35,7 +36,7 @@ function composite(canvas: JCanvas, paint: JPaint, image: OffscreenCanvas): void
   } finally { ctx.restore(); }
 }
 
-function sampled(canvas: JCanvas, paint: JPaint, left: number, top: number, right: number, bottom: number,
+function sampled(canvas: NativeCanvas, paint: JPaint, left: number, top: number, right: number, bottom: number,
   contains: (x: number, y: number) => boolean): boolean {
   const pixels = sampledFill(canvas.ctx, left, top, right, bottom, contains);
   if (!pixels) return false;
@@ -43,7 +44,7 @@ function sampled(canvas: JCanvas, paint: JPaint, left: number, top: number, righ
   return true;
 }
 
-function shapeMask(canvas: JCanvas, paint: JPaint,
+function shapeMask(canvas: NativeCanvas, paint: JPaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): OffscreenCanvas {
   const image = new OffscreenCanvas(canvas.w, canvas.h);
   const ctx = image.getContext("2d")!;
@@ -63,7 +64,7 @@ function shapeMask(canvas: JCanvas, paint: JPaint,
   return image;
 }
 
-export function tryPartialSourceIn(canvas: JCanvas, paint: JPaint,
+export function tryPartialSourceIn(canvas: NativeCanvas, paint: JPaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
   const alpha = paint.renderAlpha ?? paint.color >>> 24;
   if (paint.blend !== "source-in" || alpha <= 0 || alpha >= 255 ||
@@ -92,7 +93,7 @@ export function tryPartialSourceIn(canvas: JCanvas, paint: JPaint,
   return true;
 }
 
-function deviceHairline(canvas: JCanvas, paint: JPaint, path: Path2D): void {
+function deviceHairline(canvas: NativeCanvas, paint: JPaint, path: Path2D): void {
   const ctx = canvas.ctx, devicePath = new Path2D();
   devicePath.addPath(path, ctx.getTransform());
   ctx.save();
@@ -103,7 +104,7 @@ function deviceHairline(canvas: JCanvas, paint: JPaint, path: Path2D): void {
   } finally { ctx.restore(); }
 }
 
-export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
+export function tryBitmapShape(canvas: NativeCanvas, paint: JPaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
   if (paint.style !== 2 || paint.strokeWidth <= 0 || paint.antiAlias || paint.dash ||
     canvas.w * canvas.h > 250_000 || !eligible(canvas, paint)) return false;
@@ -116,7 +117,7 @@ export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
   return true;
 }
 
-export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top: number,
+export function tryBitmapRect(canvas: NativeCanvas, paint: JPaint, left: number, top: number,
   right: number, bottom: number): boolean {
   if (!eligible(canvas, paint)) return false;
   if (paint.style === 1 && paint.strokeWidth === 0) {
@@ -146,7 +147,7 @@ export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top:
   return false;
 }
 
-export function tryBitmapOval(canvas: JCanvas, paint: JPaint, left: number, top: number,
+export function tryBitmapOval(canvas: NativeCanvas, paint: JPaint, left: number, top: number,
   right: number, bottom: number, sweep: number): boolean {
   if (Math.abs(sweep) < 360 || !eligible(canvas, paint)) return false;
   const cx = (left + right) / 2, cy = (top + bottom) / 2;
@@ -170,7 +171,7 @@ export function tryBitmapOval(canvas: JCanvas, paint: JPaint, left: number, top:
   return true;
 }
 
-export function tryBitmapRoundRect(canvas: JCanvas, paint: JPaint, left: number, top: number,
+export function tryBitmapRoundRect(canvas: NativeCanvas, paint: JPaint, left: number, top: number,
   right: number, bottom: number, rx: number, ry: number): boolean {
   if (!(right > left && bottom > top) || paint.antiAlias ||
     !(paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0) || !eligible(canvas, paint)) return false;
@@ -186,7 +187,7 @@ export function tryBitmapRoundRect(canvas: JCanvas, paint: JPaint, left: number,
   });
 }
 
-export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
+export function tryBitmapLine(canvas: NativeCanvas, paint: JPaint,
   x0: number, y0: number, x1: number, y1: number): boolean {
   if (paint.dash || !eligible(canvas, paint)) return false;
   const ctx = canvas.ctx;
@@ -219,7 +220,7 @@ export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
   return true;
 }
 
-export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: NativePath): boolean {
+export function tryBitmapPath(canvas: NativeCanvas, paint: JPaint, path: NativePath): boolean {
   const strokeInverse = path.inverseFill && paint.style === 1 && paint.strokeWidth > 0 && !paint.dash;
   const fillsOnly = paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0;
   let fillInverse = path.inverseFill && path.fillRule === "nonzero" && fillsOnly;

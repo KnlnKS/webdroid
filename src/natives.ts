@@ -47,6 +47,8 @@ import "./android/graphics";
 import "./android/bitmap";
 import "./android/decode";
 import "./android/animatedimage";
+import "./android/canvas";
+import "./android/rendernode";
 import "./android/rendereffect";
 import "./android/fonts";
 import "./android/path";

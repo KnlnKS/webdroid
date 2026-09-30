@@ -8,7 +8,7 @@ import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, 
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources, attrSet } from "./res";
 import { attr } from "./axml";
-import { JCanvas } from "./graphics";
+import type { JavaCanvas } from "./canvas";
 import { JDrawable, loadDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
@@ -535,7 +535,7 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     this.finishLayout();
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JListView, cv: JCanvas): Gen {
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JListView, cv: JavaCanvas): Gen {
     const d = this.divDraw, thread = curThread;
     if (!d || this.divH <= 0) return;
     const vs = this.allViews();

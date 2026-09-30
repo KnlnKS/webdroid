@@ -1,8 +1,10 @@
 import type { FrameCallback } from "./os";
-import { isRecording, recordOrRun } from "./recording";
+import { isRecording, recordOrRun, type Ctx2D } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, clipToOutline, clipEmptyCanvas, saveCanvas, saveLayer, restoreCanvasToCount, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
+import { JRect, JPoint, type JPaint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./graphics";
+import { canvasOf, type JavaCanvas, clipToOutline, saveLayer } from "./canvas";
+import { setInvalidateHook } from "./rendernode";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, callOn, after, newObj, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
@@ -816,7 +818,7 @@ const clipRejects = (p: JViewGroup, v: JView): boolean =>
   p.clipChildren && !v.jAnim && !v.animTf && !v.translationX && !v.translationY && !v.rotationV && v.scaleXv === 1 && v.scaleYv === 1 &&
   (v.right - p.scrollX <= 0 || v.bottom - p.scrollY <= 0 || v.left - p.scrollX >= p.width() || v.top - p.scrollY >= p.height());
 /** full draw of the subtree onto ctx (already positioned at parent's content origin) */
-export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?: JViewGroup): Gen {
+export const drawView = driven(function* drawView(v: JView, cv: JavaCanvas, parent?: JViewGroup): Gen {
   if (v.visibility !== 0) return;
   // Android calls computeScroll() before drawing each child — drives Scroller
   // animations (ViewPager page snaps, OverScroller flings)
@@ -824,11 +826,11 @@ export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?
   if (cs && cs !== noopComputeScroll) yield cs.call(v);
   if (parent && clipRejects(parent, v)) { perf.viewsRejected++; return; }
   perf.viewsDrawn++;
-  const ctx = cv.ctx;
+  const nc = canvasOf(cv), ctx = nc.ctx;
   // AOSP View.draw() brackets the whole thing with getSaveCount()/restoreToCount(): a view
   // that throws between save() and restore() must not leave its clip on the shared context,
   // or every later frame inherits a dead frame's clip and the screen stays blank.
-  const sc = saveCanvas(cv);
+  const sc = nc.save();
   try {
     ctx.translate(v.left + v.translationX, v.top + v.translationY);
     if (v.alphaV < 1) ctx.globalAlpha *= v.alphaV;
@@ -859,39 +861,31 @@ export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?
       }
       clipToOutline(ctx, outline);
     }
-    if (w <= 0 || h <= 0) clipEmptyCanvas(ctx);
-    else {
-      ctx.beginPath();
-      ctx.rect(0, 0, w, h);
-      ctx.clip();
-    }
+    if (w > 0 && h > 0) nc.clipRect(0, 0, w, h); else nc.clipRect(0, 0, 0, 0);
     let into = cv;
     if (v.layerType && w > 0 && h > 0) {
-      saveLayer(cv, { left: 0, top: 0, right: w, bottom: h }, v.rare?.layerPaint ?? null);
+      saveLayer(nc, { left: 0, top: 0, right: w, bottom: h }, v.rare?.layerPaint ?? null);
       // a software layer draws into a bitmap even under a hardware window
-      if (v.layerType === 1 && cv instanceof JRecordingCanvas) {
-        into = JCanvas.wrap(cv.ctx, cv.w, cv.h);
-        into.clipDevice = cv.clipDevice; into.clipPolygon = cv.clipPolygon; into.semanticBase = cv.semanticBase;
-      }
+      if (v.layerType === 1 && nc.accelerated) into = nc.softwareTwin();
     }
-    try { yield drawSemantic(v, into); } finally { if (into !== cv) restoreCanvasToCount(into, 1); }
+    try { yield drawSemantic(v, into); } finally { if (into !== cv) canvasOf(into).restoreToCount(1); }
   } catch (e) {
     perf.drawErrors++;
     noteDrawError(v, e);
   } finally {
-    restoreCanvasToCount(cv, sc);
+    nc.restoreToCount(sc);
   }
 });
 
-const drawSemantic = driven(function* drawSemantic(v: JView, cv: JCanvas): Gen {
-  const parentOwner = cv.semanticOwner;
+const drawSemantic = driven(function* drawSemantic(v: JView, cv: JavaCanvas): Gen {
+  const nc = canvasOf(cv), parentOwner = nc.semanticOwner;
   if (v.drawnText) v.drawnText.length = 0;
   v.drawnTextCount = 0;
-  cv.semanticOwner = v;
+  nc.semanticOwner = v;
   try {
     yield drawSelf(v, cv);
   } finally {
-    cv.semanticOwner = parentOwner;
+    nc.semanticOwner = parentOwner;
   }
 });
 
@@ -900,14 +894,14 @@ const drawSemantic = driven(function* drawSemantic(v: JView, cv: JCanvas): Gen {
  * label and box there and calls super — so the traversal goes through the override when there
  * is one, and straight to the base body when there is not.
  */
-const baseDraw = function (this: JView, cv: JCanvas) { return drawContent(this, cv); };
-function drawSelf(v: JView, cv: JCanvas): unknown {
+const baseDraw = function (this: JView, cv: JavaCanvas) { return drawContent(this, cv); };
+function drawSelf(v: JView, cv: JavaCanvas): unknown {
   const fn = jmethod(v, M_draw);
   return fn && fn !== baseDraw ? fn.call(v, cv) : drawContent(v, cv);
 }
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
-const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
-  const ctx = cv.ctx;
+const drawContent = driven(function* drawContent(v: JView, cv: JavaCanvas): Gen {
+  const ctx = canvasOf(cv).ctx;
   if (v.surfaceBacked && isRecording(ctx)) {
     if (!v.surfaceLayer && v.background) {
       yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
@@ -935,7 +929,7 @@ const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
   if (fg && (v.foreground || fg !== drawForeground)) yield fg.call(v, cv);
 });
 
-const drawForeground = driven(function* drawForeground(this: JView, cv: JCanvas): Gen {
+const drawForeground = driven(function* drawForeground(this: JView, cv: JavaCanvas): Gen {
   const d = this.foreground;
   if (!d) return;
   const thread = curThread, w = this.width(), h = this.height();
@@ -954,7 +948,7 @@ const drawForeground = driven(function* drawForeground(this: JView, cv: JCanvas)
   yield callOn(thread, () => guardCall(d, M_draw, cv));
 });
 
-function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
+function drawSurface(v: JView, ctx: Ctx2D) {
   if (!v.surfaceLayer) return;
   if (v.surfaceTransform) {
     ctx.save();
@@ -973,7 +967,7 @@ function overlayOf(this: JView) {
 }
 
 /** AOSP draws the overlay last, over the host's own content and children */
-const drawOverlay = driven(function* drawOverlay(o: JViewOverlay, cv: JCanvas): Gen {
+const drawOverlay = driven(function* drawOverlay(o: JViewOverlay, cv: JavaCanvas): Gen {
   for (const d of o.drawables) yield guardCall(d, M_draw, cv);
   for (const v of o.views) yield drawView(v, cv);
 });
@@ -2147,7 +2141,7 @@ export const vgMethods: NativeSpec["methods"] = {
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": function (this: JViewGroup, lp: JLayoutParams) {
     return lp;
   },
-  "dispatchDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JViewGroup, cv: JCanvas): Gen {
+  "dispatchDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JViewGroup, cv: JavaCanvas): Gen {
     if (this.layoutAnimationScheduled && this.layoutAnimation && this.children.some((c) => c.visibility === 0)) {
       this.layoutAnimationScheduled = false;
       startGroupAnim(this, this.layoutAnimation);
@@ -2245,7 +2239,7 @@ export const vgMethods: NativeSpec["methods"] = {
     yield notifyChildRemoved(this, c, thread);
   }),
   "detachViewFromParent(Landroid/view/View;)V": function (this: JViewGroup, c: JView) { unlinkChild(this, c); },
-  "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": driven(function* (this: JViewGroup, cv: JCanvas, c: JView): Gen {
+  "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": driven(function* (this: JViewGroup, cv: JavaCanvas, c: JView): Gen {
     yield drawView(c, cv, this);
     return 0;
   }),

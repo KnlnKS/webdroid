@@ -1,8 +1,9 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { vcall, newObj, vcallOn, curThread, JThread, mainThread, setCurThread, enumName } from "../src/jvm/natives/jlang";
-import { JPaint, JCanvas, canvasMethods } from "../src/android/graphics";
+import { JPaint } from "../src/android/graphics";
+import { canvasOver, canvasOf, type JavaCanvas } from "../src/android/canvas";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { JView, JViewGroup, makeSpec, MS_EXACTLY, measureView, layoutView, MS_AT_MOST, resolveSize, drawView, attachView, detachView, addUnattachedView, dispatchAttached, dispatchDetached, layoutRoot, replayLayoutRequests, requestLayout, JLayoutParams, setViewTargetSdk } from "../src/android/view";
@@ -12,7 +13,7 @@ import { Resources, JTheme } from "../src/android/res";
 import { JImageView } from "../src/android/imageview";
 import { JWindowInsets } from "../src/android/windowinsets";
 import { JWebView } from "../src/android/webkit";
-import { scall, loadLibcore } from "./java";
+import { scall, loadLibcore, loadFrameworkJar } from "./java";
 
 describe("android-surface-state", () => {
   rt.linkNatives();
@@ -206,6 +207,7 @@ describe("layout-measure-passes", () => {
 });
 
 describe("surface-display-list", () => {
+  beforeAll(loadFrameworkJar);
   test("a recorded SurfaceView picks up its first frame after recording", async () => {
     const view = await newObj("android/view/SurfaceView", "(Landroid/content/Context;)V", null);
     view.right = 320;
@@ -214,9 +216,10 @@ describe("surface-display-list", () => {
     const images: unknown[] = [];
     const target = new Proxy({
       drawImage: (image: unknown) => images.push(image),
+      getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
     }, { get: (object, key) => key in object ? object[key as keyof typeof object] : () => {} }) as unknown as CanvasRenderingContext2D;
 
-    await drawView(view, JCanvas.wrap(recordingContext(target, ops), 320, 180));
+    await drawView(view, canvasOver(recordingContext(target, ops), 320, 180));
     expect(images).toHaveLength(0);
 
     const firstFrame = {} as VideoFrame;
@@ -502,6 +505,8 @@ describe("view-attachment-order", () => {
 
 describe("view-draw-state", () => {
   rt.linkNatives();
+  beforeAll(loadFrameworkJar);
+  const identity = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
 
   test("view traversal exposes the child draw save to Android canvas code", async () => {
     let depth = 0;
@@ -513,12 +518,13 @@ describe("view-draw-state", () => {
       beginPath() {},
       rect() {},
       clip() {},
+      getTransform: identity,
     } as unknown as OffscreenCanvasRenderingContext2D;
-    const canvas = JCanvas.wrap(context, 100, 100);
+    const canvas = canvasOver(context, 100, 100);
     class CustomView extends JView {
       observedSaveCount = 0;
-      [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")](target: JCanvas) {
-        this.observedSaveCount = target.saveCount;
+      [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")](target: JavaCanvas) {
+        this.observedSaveCount = canvasOf(target).saveCount;
       }
     }
     const view = new CustomView();
@@ -527,14 +533,14 @@ describe("view-draw-state", () => {
     await drawView(view, canvas);
 
     expect(view.observedSaveCount).toBe(2);
-    expect(canvas.saveCount).toBe(1);
+    expect(canvasOf(canvas).saveCount).toBe(1);
     expect(depth).toBe(0);
   });
 
   test("view Z changes child paint order relative to elevation", async () => {
     const order: string[] = [];
-    const context = { save() {}, restore() {}, translate() {}, beginPath() {}, rect() {}, clip() {} } as unknown as OffscreenCanvasRenderingContext2D;
-    const canvas = JCanvas.wrap(context, 100, 100);
+    const context = { save() {}, restore() {}, translate() {}, beginPath() {}, rect() {}, clip() {}, getTransform: identity } as unknown as OffscreenCanvasRenderingContext2D;
+    const canvas = canvasOver(context, 100, 100);
     class Child extends JView {
       constructor(readonly label: string) { super(); this.right = this.bottom = 100; }
       [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]() { order.push(this.label); }
@@ -550,18 +556,17 @@ describe("view-draw-state", () => {
     expect(order).toEqual(["lowered", "raised"]);
   });
 
-  test("canvas root state rejects unmatched restores", () => {
+  test("canvas root state rejects unmatched restores", async () => {
     let restores = 0;
     const context = {
       restore() { restores++; },
     } as unknown as OffscreenCanvasRenderingContext2D;
-    const canvas = JCanvas.wrap(context, 100, 100);
-    const restore = canvasMethods!["restore()V"] as (this: JCanvas) => void;
-    const restoreToCount = canvasMethods!["restoreToCount(I)V"] as (this: JCanvas, count: number) => void;
+    const canvas = canvasOver(context, 100, 100);
+    const thrown = async (f: () => unknown) => { try { await f(); } catch (e) { return rt.jx(e).msg; } return null; };
 
-    expect(() => restore.call(canvas)).toThrow();
-    expect(() => restoreToCount.call(canvas, 0)).toThrow();
-    expect(canvas.saveCount).toBe(1);
+    expect(await thrown(() => vcall(canvas, "restore", "()V"))).toBe("Underflow in restore - more restores than saves");
+    expect(await thrown(() => vcall(canvas, "restoreToCount", "(I)V", 0))).toBe("Underflow in restoreToCount - more restores than saves");
+    expect(canvasOf(canvas).saveCount).toBe(1);
     expect(restores).toBe(0);
   });
 
@@ -579,8 +584,9 @@ describe("view-draw-state", () => {
       beginPath() {},
       rect() {},
       clip() {},
+      getTransform: identity,
     } as unknown as OffscreenCanvasRenderingContext2D;
-    const canvas = JCanvas.wrap(context, 100, 100);
+    const canvas = canvasOver(context, 100, 100);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let completed = false;
@@ -608,7 +614,7 @@ describe("view-draw-state", () => {
     release();
     await drawing;
     expect(completed).toBeTrue();
-    expect(canvas.saveCount).toBe(1);
+    expect(canvasOf(canvas).saveCount).toBe(1);
     expect(depth).toBe(0);
   });
 });

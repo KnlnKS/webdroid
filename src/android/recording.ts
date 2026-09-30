@@ -1,4 +1,4 @@
-import type { JCanvas } from "./graphics";
+import type { NativeCanvas } from "./canvas";
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 type Operation = (ctx: Ctx2D) => void;
@@ -7,15 +7,17 @@ type Operation = (ctx: Ctx2D) => void;
 export type DisplayList = unknown[];
 const CALL = 0, SET = 1, DEFER = 2;
 
-const recordings = new WeakMap<Ctx2D, DisplayList>();
-const replayCanvases = new WeakMap<Ctx2D, JCanvas>();
+/** where a recording context appends: retargeted when a pooled canvas starts another list */
+type Recording = { ops: DisplayList };
+const recordings = new WeakMap<Ctx2D, Recording>();
+const replayCanvases = new WeakMap<Ctx2D, NativeCanvas>();
 const mirrors = new WeakMap<Ctx2D, Ctx2D>();
 
 export function isRecording(ctx: Ctx2D): boolean { return recordings.has(ctx); }
 
 export function recordOrRun(ctx: Ctx2D, operation: Operation): void {
-  const ops = recordings.get(ctx);
-  if (ops) ops.push(DEFER, null, operation);
+  const rec = recordings.get(ctx);
+  if (rec) rec.ops.push(DEFER, null, operation);
   else operation(ctx);
 }
 
@@ -30,9 +32,9 @@ export function replay(ctx: Ctx2D, ops: DisplayList): void {
 }
 export const displayListLength = (ops: DisplayList): number => ops.length / 3;
 
-export function replayCanvas(ctx: Ctx2D): JCanvas | undefined { return replayCanvases.get(ctx); }
+export function replayCanvas(ctx: Ctx2D): NativeCanvas | undefined { return replayCanvases.get(ctx); }
 /** `draw` with text recorded for replay into `ctx` attributed to `canvas` */
-export function replayWithSemantics(canvas: JCanvas, draw: () => void, ctx: Ctx2D = canvas.ctx): void {
+export function replayWithSemantics(canvas: NativeCanvas, draw: () => void, ctx: Ctx2D = canvas.ctx): void {
   const previous = replayCanvases.get(ctx);
   replayCanvases.set(ctx, canvas);
   try { draw(); }
@@ -49,6 +51,7 @@ const DRAWS = new Set(["fillRect", "strokeRect", "clearRect", "fillText", "strok
 
 /** Mirror native operations for measurement while retaining them for display-list replay. */
 export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D {
+  const rec: Recording = { ops };
   const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
   const context = new Proxy(mirror, {
     get(target, key) {
@@ -59,19 +62,24 @@ export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D {
         const fn = value as (...args: unknown[]) => unknown;
         const read = READS.has(key as string), draw = DRAWS.has(key as string);
         methods.set(key, method = read ? (...args) => fn.apply(target, args)
-          : draw ? (...args) => { ops.push(CALL, key, args); }
-          : (...args) => { ops.push(CALL, key, args); return fn.apply(target, args); });
+          : draw ? (...args) => { rec.ops.push(CALL, key, args); }
+          : (...args) => { rec.ops.push(CALL, key, args); return fn.apply(target, args); });
       }
       return method;
     },
     set(target, key, value) {
-      ops.push(SET, key, value);
+      rec.ops.push(SET, key, value);
       return Reflect.set(target, key, value, target);
     },
   });
-  recordings.set(context, ops);
+  recordings.set(context, rec);
   mirrors.set(context, mirror);
   return context;
+}
+/** a recording context appending to `ops` from now on, its mirror reset to a fresh canvas state */
+export function retarget(ctx: Ctx2D, ops: DisplayList): void {
+  recordings.get(ctx)!.ops = ops;
+  (mirrors.get(ctx) as OffscreenCanvasRenderingContext2D).reset();
 }
 /** A recording that shares `ctx`'s mirror, so its state stays continuous, but keeps its
  *  operations in `ops`: the content of a layer, replayed into the layer's own raster. */

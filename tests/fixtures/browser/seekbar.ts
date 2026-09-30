@@ -1,12 +1,14 @@
 import "../../../src/natives";
+import { loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall, vcallOn, curThread, JThread } from "../../../src/jvm/natives/jlang";
-import { JCanvas } from "../../../src/android/graphics";
+import { canvasOver } from "../../../src/android/canvas";
 import { JView } from "../../../src/android/view";
 import { JMotionEvent } from "../../../src/android/motionevent";
 
 async function probe() {
+  await loadPlatformDex();
   rt.linkNatives();
   const view = rt.make("android/widget/SeekBar");
   if (!(view instanceof JView)) throw new Error("Invalid SeekBar");
@@ -29,7 +31,7 @@ async function probe() {
   await vcall(view, "setProgressDrawable", "(Landroid/graphics/drawable/Drawable;)V", track);
   await vcall(view, "setProgress", "(I)V", 50);
   const ctx = new OffscreenCanvas(100, 40).getContext("2d")!;
-  await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, 40));
+  await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 100, 40));
   const pixel = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data];
   const thread = new JThread(), events: unknown[] = [];
   const listener = rt.make("java/lang/Object");

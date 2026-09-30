@@ -3,7 +3,7 @@ import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { enumOrdinal, newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JImageView } from "../../../src/android/imageview";
-import { JCanvas } from "../../../src/android/graphics";
+import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
 
 /** a Matrix as a 2D context's affine [a, b, c, d, e, f] */
@@ -23,10 +23,10 @@ async function probe() {
   const drawable = rt.make("android/graphics/drawable/Drawable");
   let transform: number[] = [];
   Object.assign(drawable, {
-    [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JCanvas) => {
+    [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JavaCanvas) => {
       await Promise.resolve();
-      const m = canvas.ctx.getTransform(); transform = [m.a, m.b, m.c, m.d, m.e, m.f];
-      canvas.ctx.fillStyle = "#00ff00"; canvas.ctx.fillRect(0, 0, 2, 3);
+      const m = canvasOf(canvas).ctx.getTransform(); transform = [m.a, m.b, m.c, m.d, m.e, m.f];
+      canvasOf(canvas).ctx.fillStyle = "#00ff00"; canvasOf(canvas).ctx.fillRect(0, 0, 2, 3);
     },
   });
   await vcall(view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", drawable);
@@ -42,7 +42,7 @@ async function probe() {
       await vcall(source, "setTranslate", "(FF)V", 99, 0);
     }
     const ctx = new OffscreenCanvas(100, 80).getContext("2d")!;
-    await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, 80));
+    await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 100, 80));
     const matrix = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
     const bounds = await vcall(drawable, "getBounds", "()Landroid/graphics/Rect;");
     results.push({ type: enumOrdinal(await vcall(view, "getScaleType", "()Landroid/widget/ImageView$ScaleType;")),

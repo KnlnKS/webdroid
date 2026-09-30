@@ -6,7 +6,7 @@ import {
 import { JObj, type NativeSpec, rt, callSelf, noops, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework, attrSet } from "./res";
 import { type JDrawable, loadDrawableRV, drawChild } from "./drawable";
-import type { JCanvas } from "./graphics";
+import type { JavaCanvas } from "./canvas";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { device } from "../shell/config";
@@ -310,7 +310,7 @@ export const linearMethods: NativeSpec["methods"] = {
       }
     }
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JLinearLayout, canvas: JCanvas): Gen {
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JLinearLayout, canvas: JavaCanvas): Gen {
     if (!this.divider || !this.showDividers) return;
     const vertical = this.orientation === 1, kids = this.children.filter(c => c.visibility !== 8);
     const size = vertical ? this.dividerH : this.dividerW, d = this.divider, self = this;

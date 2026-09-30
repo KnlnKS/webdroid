@@ -1,7 +1,8 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jlang";
-import { JCanvas, JPaint, tintedBmp } from "../../../src/android/graphics";
+import { JPaint, tintedBmp } from "../../../src/android/graphics";
+import { canvasOver } from "../../../src/android/canvas";
 import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { mountPlatformData } from "../../../src/shell/apex";
@@ -20,7 +21,7 @@ async function probe() {
     paint.color = 0x80ff0000;
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const ctx = new OffscreenCanvas(80, 80).getContext("2d")!;
-    const canvas = JCanvas.wrap(ctx, 80, 80);
+    const canvas = canvasOver(ctx, 80, 80);
     ctx.translate(8, 4);
     ctx.scale(2, 2);
     ctx.beginPath(); ctx.rect(10, 0, 30, 40); ctx.clip();
@@ -59,7 +60,7 @@ async function probe() {
   const alpha = await vcall(source, "extractAlpha", "()Landroid/graphics/Bitmap;");
   const ctx = new OffscreenCanvas(40, 40).getContext("2d")!;
   paint.maskFilter = null; paint.color = 0x8000ff00; paint.style = 2;
-  await vcall(JCanvas.wrap(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
+  await vcall(canvasOver(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
   const shaded = Array.from(ctx.getImageData(14, 16, 1, 1).data);
   const buffer = await vcall((await linkInit("java/nio/ByteBuffer")).ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 400);
   await vcall(alpha, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", buffer);
@@ -72,7 +73,7 @@ async function probe() {
   ctx.clearRect(0, 0, 40, 40); ctx.translate(20, 20); ctx.rotate(Math.PI / 4);
   ctx.beginPath(); ctx.rect(-8, -8, 16, 16); ctx.clip();
   const before = ctx.getTransform().toString();
-  await vcall(JCanvas.wrap(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
+  await vcall(canvasOver(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
   const plane = { inside: Array.from(ctx.getImageData(20, 20, 1, 1).data), outside: Array.from(ctx.getImageData(0, 0, 1, 1).data), restored: ctx.getTransform().toString() === before };
   const bitmap = new NativeBitmap(1, 1);
   bitmap.ctx.fillStyle = "#80402080"; bitmap.ctx.fillRect(0, 0, 1, 1);

@@ -7,7 +7,7 @@ import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import { type JView, vgMethods } from "./view";
 import { AID, type JAttrSet, obtainStyled, rvDimen } from "./res";
 import { type JDrawable, ST, loadDrawableRV, drawableSize, drawChild } from "./drawable";
-import { type JCanvas } from "./graphics";
+import { type JavaCanvas } from "./canvas";
 import { JListView, JBaseAdapter, baseAdapterMethods, listViewMethods } from "./listview";
 import { inflateLayout } from "./inflate";
 
@@ -194,7 +194,7 @@ rt.register({
     "static getPackedPositionType(J)I": (p: bigint) => p === PACKED_NULL ? 2 : p < 0n ? 1 : 0,
     "static getPackedPositionGroup(J)I": packedGroup,
     "static getPackedPositionChild(J)I": packedChild,
-    "dispatchDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JExpandableListView, cv: JCanvas): Gen {
+    "dispatchDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JExpandableListView, cv: JavaCanvas): Gen {
       yield callSelf(vgMethods, "dispatchDraw(Landroid/graphics/Canvas;)V", this, cv);
       if (!this.connector || (!this.groupIndicator && !this.childIndicator)) return;
       const thread = curThread, { rows, expanded } = this.connector, vs = this.allViews(), top = this.scrollY, bottom = top + this.height();

@@ -1,6 +1,6 @@
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
-import type { JCanvas } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium, typefaceOf } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, curThread, after } from "../jvm/natives/jlang";
@@ -49,9 +49,9 @@ export class JActionBarView extends JViewGroup {
     const overflow = vis.filter((m) => !chosen.has(m));
     return { action, overflow, slots: action.length + (overflow.length ? 1 : 0) };
   }
-  *onDrawSelf$(cv: JCanvas): Gen {
+  *onDrawSelf$(cv: JavaCanvas): Gen {
     const thread = curThread;
-    const ctx = cv.ctx;
+    const ctx = canvasOf(cv).ctx;
     const h = this.height();
     if (this.mode) { ctx.fillStyle = "#303030"; ctx.fillRect(0, 0, this.width(), h); }
     let x = 27;
@@ -142,7 +142,7 @@ rt.register({
       this.measuredW = specSize(wSpec);
       this.measuredH = this.barH;
     },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { return rt.drive(this.onDrawSelf$(cv)); },
+    "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JavaCanvas) { return rt.drive(this.onDrawSelf$(cv)); },
     "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActionBarView, ev: any): Gen {
       if ((ev.action & 0xff) === 1) {
         if (this.showUp && ev.x < 80) {

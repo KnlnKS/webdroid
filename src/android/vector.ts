@@ -6,7 +6,8 @@
 import { parseAXML, TV, type XmlNode } from "./axml";
 import { namedAttrRV, rvColor, rvFloat, rvInt, type Resources, type RV } from "./res";
 import { canMorph, flatten, morph, parsePathData, pathDataString, trimmed, type PathNode } from "./pathdata";
-import { cssColor, type JCanvas } from "./graphics";
+import { cssColor } from "./graphics";
+import type { Ctx2D } from "./recording";
 import { accelDecel, argbLerp, interpolatorAttr } from "./interpolator";
 
 export interface VGroup {
@@ -35,7 +36,7 @@ export function namedTargets(g: VGroup, into = new Map<string, VGroup | VPath>()
 
 /** a tint replaces the colour and keeps the path's alpha, as SRC_IN does */
 export const tinted = (color: number, tint: number | null) => tint === null ? color : (tint & 0xffffff) | Math.round((tint >>> 24) * (color >>> 24) / 255) << 24;
-export function drawVectorGroup(ctx: JCanvas["ctx"], g: VGroup, tint: number | null, alpha: number) {
+export function drawVectorGroup(ctx: Ctx2D, g: VGroup, tint: number | null, alpha: number) {
   ctx.save();
   ctx.translate(g.translateX + g.pivotX, g.translateY + g.pivotY);
   ctx.rotate(g.rotation * Math.PI / 180);

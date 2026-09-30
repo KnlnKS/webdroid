@@ -6,7 +6,8 @@
 
 import { rt } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
-import { type JCanvas, type NativeColorFilter, tintedBmp } from "./graphics";
+import { type NativeColorFilter, tintedBmp } from "./graphics";
+import { type NativeCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import type { NativeImageDecoder } from "./decode";
 import { uptimeMillis } from "./os";
@@ -61,7 +62,7 @@ class AnimatedImage {
     this.current = i;
     return BigInt(Math.max(1, Math.ceil(this.frames[i].ms - at)));
   }
-  draw(cv: JCanvas): void {
+  draw(cv: NativeCanvas): void {
     const frame = this.frames[this.current];
     if (!frame) return;
     const [l, t, r, b] = this.bounds, ctx = cv.ctx;
@@ -77,7 +78,6 @@ class AnimatedImage {
 }
 
 const anim = (h: bigint) => deref<AnimatedImage>(h);
-const canvasOf = (h: bigint) => { const c = deref<JCanvas | WeakRef<JCanvas>>(h); return c instanceof WeakRef ? c.deref()! : c; };
 rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   "nCreate(JLandroid/graphics/ImageDecoder;IIJZLandroid/graphics/Rect;)J":
     (decoder: bigint, _jdecoder: unknown, w: number, h: number, _cs: bigint, _extended: number, crop: { left: number; top: number; right: number; bottom: number } | null) => {
@@ -92,7 +92,7 @@ rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   "nNativeByteSize(J)J": (h: bigint) => BigInt(anim(h).w * anim(h).h * 4),
   "nDraw(JJ)J": (h: bigint, canvas: bigint) => {
     const a = anim(h), next = a.advance(uptimeMillis());
-    a.draw(canvasOf(canvas));
+    a.draw(deref<NativeCanvas>(canvas));
     return next;
   },
   "nSetAlpha(JI)V": (h: bigint, alpha: number) => { anim(h).alpha = alpha; },

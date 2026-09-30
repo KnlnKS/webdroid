@@ -28,42 +28,50 @@ export function handle(o: object): bigint {
   return h;
 }
 
-const collected = new FinalizationRegistry<number>((n) => { objs[n] = undefined; free.push(n); });
-/** A long for an object no Java finalizer releases (a TS-spec Canvas asked for its native
- *  wrapper): the slot holds a WeakRef, which its reader unwraps, and frees itself once the
- *  object is collected. Such a handle is never released or replaced by hand. */
+/** a weak slot: `objs` holds this marker and `refs` the object's WeakRef */
+const WEAK = {};
+const refs: (WeakRef<object> | undefined)[] = [];
+const collected = new FinalizationRegistry<{ n: number; ref: WeakRef<object> }>(({ n, ref }) => {
+  if (refs[n] !== ref) return;
+  objs[n] = refs[n] = undefined;
+  free.push(n);
+});
+/** A long for an object no Java finalizer releases, such as a TS-spec Paint or Bitmap asked for
+ *  its native instance by every draw: the slot does not keep the object alive, and frees itself
+ *  once the object is collected. */
 export function weakHandle(o: object): bigint {
   let h = byObj.get(o);
   if (h === undefined) {
-    const n = free.pop() ?? objs.push(undefined) - 1;
-    objs[n] = new WeakRef(o);
+    const n = free.pop() ?? objs.push(undefined) - 1, ref = new WeakRef(o);
+    objs[n] = WEAK; refs[n] = ref;
     byObj.set(o, (h = BigInt(n)));
-    collected.register(o, n);
+    collected.register(o, { n, ref });
   }
   return h;
 }
 
 /** the object behind a long, or undefined for the null handle */
 export function deref<T>(h: bigint): T {
-  return objs[Number(h)] as T;
+  const n = Number(h), o = objs[n];
+  return (o === WEAK ? refs[n]!.deref() : o) as T;
 }
 
 /** put a different object behind an existing handle — reset/set-from-source, where the
  *  framework keeps its long and we swap what it points at */
 export function replace(h: bigint, o: object): void {
   const n = Number(h);
-  const old = objs[n];
+  const old = deref<object | undefined>(h);
   if (old) byObj.delete(old);
-  objs[n] = o;
+  objs[n] = o; refs[n] = undefined;
   byObj.set(o, h);
 }
 
 export function release(h: bigint): void {
   const n = Number(h);
-  const old = objs[n];
-  if (!old) return;
-  byObj.delete(old);
-  objs[n] = undefined;
+  if (!objs[n]) return;
+  const old = deref<object | undefined>(h);
+  if (old) byObj.delete(old);
+  objs[n] = refs[n] = undefined;
   free.push(n);
 }
 

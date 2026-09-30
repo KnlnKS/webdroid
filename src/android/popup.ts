@@ -13,7 +13,8 @@ import { AID, obtainStyled, rvDimen, rvInt, themeOf, frameworkDimen, resString, 
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { JContextWrapper, type JContext } from "./context";
-import { JCanvas, JRect, measureCtx, castShadow } from "./graphics";
+import { JRect, measureCtx, castShadow } from "./graphics";
+import { canvasOf, type JavaCanvas } from "./canvas";
 import { JWindowLayoutParams, addWindow, removeWindow } from "./window";
 import { csText } from "../jvm/natives/jchars";
 import { onMain } from "./mainloop";
@@ -189,8 +190,8 @@ rt.register({
       this.measuredW = Math.min(device.dp(280), Math.ceil(w));
       this.measuredH = this.items.length * this.itemH + this.padV * 2;
     },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: PopupMenuView, cv: JCanvas) {
-      const ctx = cv.ctx;
+    "onDraw(Landroid/graphics/Canvas;)V": function (this: PopupMenuView, cv: JavaCanvas) {
+      const ctx = canvasOf(cv).ctx;
       ctx.save();
       ctx.shadowColor = "rgba(0,0,0,0.35)";
       ctx.shadowBlur = device.dp(12);
@@ -302,11 +303,12 @@ rt.register({
       if (p.touchInterceptor && (yield vcall(p.touchInterceptor, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))) return 1;
       return rt.link("android/widget/FrameLayout").ctor.prototype[M_dispatchTouch].call(this, ev);
     }),
-    "draw(Landroid/graphics/Canvas;)V": driven(function* (this: PopupDecorView, cv: JCanvas): Gen {
+    "draw(Landroid/graphics/Canvas;)V": driven(function* (this: PopupDecorView, cv: JavaCanvas): Gen {
       const p = this.popup!;
       // the window's elevation shadow: cast from the background's shape (a filled rect is close
       // enough for the shadow itself; the real background paints over it)
-      if (p.elevation > 0 && this.background) castShadow(cv.ctx, () => cv.ctx.rect(0, 0, this.width(), this.height()), "rgba(0,0,0,0.3)", p.elevation * 1.5, p.elevation / 2);
+      const ctx = canvasOf(cv).ctx;
+      if (p.elevation > 0 && this.background) castShadow(ctx, () => ctx.rect(0, 0, this.width(), this.height()), "rgba(0,0,0,0.3)", p.elevation * 1.5, p.elevation / 2);
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_drawableDraw];
       yield sup.call(this, cv);
     }),
