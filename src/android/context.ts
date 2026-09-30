@@ -134,7 +134,6 @@ const SERVICE_CLASS: Record<string, string> = {
   fingerprint: "android/hardware/fingerprint/FingerprintManager",
   biometric: "android/hardware/biometrics/BiometricManager",
   usb: "android/hardware/usb/UsbManager",
-  location: "android/location/LocationManager",
   display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
   textservices: "android/view/textservice/TextServicesManager",
@@ -179,6 +178,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     "(Landroid/content/Context;Landroid/app/usage/IUsageStatsManager;)V", ctx, await hostedService("usagestats"))],
   jobscheduler: ["android/app/job/JobScheduler", async (ctx) =>
     newObj("android/app/JobSchedulerImpl", "(Landroid/content/Context;Landroid/app/job/IJobScheduler;)V", ctx, await hostedService("jobscheduler"))],
+  location: ["android/location/LocationManager", async (ctx) =>
+    newObj("android/location/LocationManager", "(Landroid/content/Context;Landroid/location/ILocationManager;)V", ctx, await hostedService("location"))],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
