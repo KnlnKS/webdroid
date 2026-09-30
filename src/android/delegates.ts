@@ -1094,11 +1094,23 @@ const deviceProperties: Record<string, () => string> = {
   // the reference AVD's heap limits, which ActivityManager reports as the memory classes
   "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
 };
+/** android_os_SystemProperties.cpp's readers: an absent or unparsable value is the default */
+const propValue = (key: string) => deviceProperties[key]?.() ?? null;
+const propInt = (v: string | null, def: number) => v !== null && /^-?\d+$/.test(v.trim()) ? Number(BigInt.asIntN(32, BigInt(v.trim()))) : def;
+const propLong = (v: string | null, def: bigint) => v !== null && /^-?\d+$/.test(v.trim()) ? BigInt.asIntN(64, BigInt(v.trim())) : def;
+const propBool = (v: string | null, def: number) => v === null ? def : /^(1|y|yes|on|true)$/.test(v) ? 1 : /^(0|n|no|off|false)$/.test(v) ? 0 : def;
+/** a property handle (SystemProperties.find) names a property the device has */
+const propAt = (h: bigint) => propValue(deref<{ key: string }>(h).key);
 delegate("android/os/SystemProperties", {
-  "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (key: string, def: string | null) => deviceProperties[key]?.() ?? def ?? "",
-  "native_get_boolean(Ljava/lang/String;Z)Z": (_k: string, def: number) => def,
-  "native_get_int(Ljava/lang/String;I)I": (_k: string, def: number) => def,
-  "native_get_long(Ljava/lang/String;J)J": (_k: string, def: bigint) => def,
+  "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (key: string, def: string | null) => propValue(key) ?? def ?? "",
+  "native_get_boolean(Ljava/lang/String;Z)Z": (key: string, def: number) => propBool(propValue(key), def),
+  "native_get_int(Ljava/lang/String;I)I": (key: string, def: number) => propInt(propValue(key), def),
+  "native_get_long(Ljava/lang/String;J)J": (key: string, def: bigint) => propLong(propValue(key), def),
+  "native_find(Ljava/lang/String;)J": (key: string) => key in deviceProperties ? handle({ key }) : 0n,
+  "native_get(J)Ljava/lang/String;": (h: bigint) => propAt(h) ?? "",
+  "native_get_boolean(JZ)Z": (h: bigint, def: number) => propBool(propAt(h), def),
+  "native_get_int(JI)I": (h: bigint, def: number) => propInt(propAt(h), def),
+  "native_get_long(JJ)J": (h: bigint, def: bigint) => propLong(propAt(h), def),
   "native_set(Ljava/lang/String;Ljava/lang/String;)V": () => {
     throw rt.mkThrowable("java/lang/RuntimeException", "failed to set system property (check logcat for reason)");
   },

@@ -3,7 +3,7 @@
 // ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
-import { JObj, rt, noops, declaredField, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, noops, stubs, declaredField, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -15,6 +15,9 @@ import { runningServices } from "./runningservices";
 import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { hostService } from "./binder";
+import { registerSystemActivity } from "./intent";
+import { packages } from "./packages";
+import { getPrefs } from "./sharedprefs";
 
 class JRunningAppProcessInfo extends JObj {
   processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];
@@ -268,3 +271,49 @@ rt.registerJnis("android/net/NetworkUtils", {
   "bindProcessToNetworkForHostResolution(I)Z": () => 1,
   "bindSocketToNetworkHandle(Ljava/io/FileDescriptor;J)I": () => 0,
 });
+
+// IPowerManager: the screen is on and never dozes, battery saver is off, and wake locks are
+// accepted, as nothing here sleeps. IThermalService: no thermal pressure (THERMAL_STATUS_NONE) and
+// no headroom forecast (NaN, as on the reference AVD, which has no thermal HAL).
+rt.register({ name: "webdroid/PowerManagerService", ctor: class extends JObj {}, sup: "android/os/IPowerManager$Stub", methods: {
+  ...stubs(1, "isInteractive()Z", "isWakeLockLevelSupported(I)Z"),
+  ...stubs(0, "isPowerSaveMode()Z", "isDeviceIdleMode()Z", "isLightDeviceIdleMode()Z", "isLowPowerStandbyEnabled()Z", "isLowPowerStandbySupported()Z"),
+  "getPowerSaveState(I)Landroid/os/PowerSaveState;": async () =>
+    vcall(await newObj("android/os/PowerSaveState$Builder"), "build", "()Landroid/os/PowerSaveState;"),
+  ...noops("acquireWakeLock(Landroid/os/IBinder;ILjava/lang/String;Ljava/lang/String;Landroid/os/WorkSource;Ljava/lang/String;ILandroid/os/IWakeLockCallback;)V",
+    "acquireWakeLockAsync(Landroid/os/IBinder;ILjava/lang/String;Ljava/lang/String;Landroid/os/WorkSource;Ljava/lang/String;)V",
+    "releaseWakeLock(Landroid/os/IBinder;I)V", "releaseWakeLockAsync(Landroid/os/IBinder;I)V",
+    "updateWakeLockWorkSource(Landroid/os/IBinder;Landroid/os/WorkSource;Ljava/lang/String;)V",
+    "updateWakeLockUids(Landroid/os/IBinder;[I)V", "updateWakeLockUidsAsync(Landroid/os/IBinder;[I)V",
+    "updateWakeLockCallback(Landroid/os/IBinder;Landroid/os/IWakeLockCallback;)V"),
+} });
+rt.register({ name: "webdroid/ThermalService", ctor: class extends JObj {}, sup: "android/os/IThermalService$Stub", methods: {
+  "getCurrentThermalStatus()I": () => 0,
+  "getThermalHeadroom(I)F": () => NaN,
+  // ThermalManagerService reports the current status to a listener as it registers
+  "registerThermalStatusListener(Landroid/os/IThermalStatusListener;)Z": async (listener: unknown) => {
+    await vcall(listener, "onStatusChange", "(I)V", 0); return 1;
+  },
+  "unregisterThermalStatusListener(Landroid/os/IThermalStatusListener;)Z": () => 1,
+} });
+// IDeviceIdleController's power-save allowlist, which PowerManager.isIgnoringBatteryOptimizations
+// reads. The system's "let this app run in the background?" dialog, answered by the grant policy runtime
+// permissions follow (context.ts). AOSP's activity ignores an app that did not declare the
+// permission to ask, which reads as the user declining.
+const DOZE_EXEMPTION = "__system_power";
+registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
+  const pkg = intent.dataUri?.startsWith("package:") ? intent.dataUri.slice(8) : null;
+  if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
+  const prefs = getPrefs(pkg, DOZE_EXEMPTION);
+  prefs.map.set("exempt", 1); prefs.persist();
+  return rt.make("android/content/Intent");
+});
+const exempt = (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1);
+rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}, sup: "android/os/IDeviceIdleController$Stub", methods: {
+  "isPowerSaveWhitelistApp(Ljava/lang/String;)Z": exempt,
+  "isPowerSaveWhitelistExceptIdleApp(Ljava/lang/String;)Z": exempt,
+} });
+
+hostService("power", () => newObj("webdroid/PowerManagerService"));
+hostService("thermalservice", () => newObj("webdroid/ThermalService"));
+hostService("deviceidle", () => withEnforcer("webdroid/DeviceIdleController"));

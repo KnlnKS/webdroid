@@ -1,7 +1,7 @@
 import { JContextWrapper, JContextThemeWrapper, JAttributionSource, systemService, wrapperMethods, themeWrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
-  JIntent, activityTransport, launchIntent, mkComponentName, registerSystemActivity,
+  JIntent, activityTransport, launchIntent, mkComponentName,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -26,7 +26,6 @@ import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
-import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import type { JBitmap } from "./graphics";
 import { getPM } from "./pm";
 import { transactionCaller } from "./binder";
@@ -611,69 +610,7 @@ rt.register({
       "getTimers(I)Ljava/util/Map;", "getMeasurements(I)Ljava/util/Map;"].map((sig) => [sig, () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); }])),
   },
 });
-// The system's "let this app run in the background?" dialog, answered by the grant policy runtime
-// permissions follow (context.ts). AOSP's activity ignores an app that did not declare the
-// permission to ask, which reads as the user declining.
-const DOZE_EXEMPTION = "__system_power";
-/** PowerManager.WakeLock's counting: a timeout releases only the internal count (RELEASE_FLAG_TIMEOUT),
- *  and becoming held or unheld (or any change when not reference-counted) cancels pending timeouts */
-const RELEASE_FLAG_TIMEOUT = 1 << 16;
-class JWakeLock extends JObj {
-  tag: string | null = null;
-  internal = 0; external = 0; refCounted = true; held = false;
-  releasers = new Set<GuestTimer>();
-  cancelReleasers(): void { for (const t of this.releasers) clearGuestTimeout(t); this.releasers.clear(); }
-  acquire(): void {
-    this.internal++; this.external++;
-    if (!this.refCounted || this.internal === 1) { this.cancelReleasers(); this.held = true; }
-  }
-  release(flags: number): void {
-    if (this.internal > 0) this.internal--;
-    if (!(flags & RELEASE_FLAG_TIMEOUT)) this.external--;
-    if (!this.refCounted || this.internal === 0) { this.cancelReleasers(); this.held = false; }
-    if (this.refCounted && this.external < 0) throw rt.mkThrowable("java/lang/RuntimeException", "WakeLock under-locked " + this.tag);
-  }
-}
-rt.register({ name: "android/os/PowerManager$WakeLock", ctor: JWakeLock, methods: {
-  "acquire()V": function (this: JWakeLock) { this.acquire(); },
-  "acquire(J)V": function (this: JWakeLock, timeoutMs: bigint) {
-    this.acquire();
-    const timer = setGuestTimeout(() => { this.releasers.delete(timer); this.release(RELEASE_FLAG_TIMEOUT); }, Number(timeoutMs));
-    this.releasers.add(timer);
-  },
-  "release()V": function (this: JWakeLock) { this.release(0); },
-  "release(I)V": function (this: JWakeLock, flags: number) { this.release(flags); },
-  "setReferenceCounted(Z)V": function (this: JWakeLock, on: number) { this.refCounted = !!on; },
-  "isHeld()Z": function (this: JWakeLock) { return +this.held; },
-  // WorkSource only attributes power use to other uids
-  ...noops("setWorkSource(Landroid/os/WorkSource;)V"),
-} });
-registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
-  const pkg = intent.dataUri?.startsWith("package:") ? intent.dataUri.slice(8) : null;
-  if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
-  const prefs = getPrefs(pkg, DOZE_EXEMPTION);
-  prefs.map.set("exempt", 1); prefs.persist();
-  return rt.make("android/content/Intent");
-});
 for (const [name, methods, statics] of [
-  ["android/os/PowerManager", {
-    "getLocationPowerSaveMode()I": () => 0,
-    "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": (_levels: number, tag: string) => {
-      const lock: JWakeLock = rt.make("android/os/PowerManager$WakeLock");
-      lock.tag = tag;
-      return lock;
-    },
-    // the screen is on, so the device is never dozing
-    "isDeviceIdleMode()Z": () => 0,
-    "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z": (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1),
-    "getCurrentThermalStatus()I": () => 0,                                       // THERMAL_STATUS_NONE
-    ...noops("addThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
-      "addThermalStatusListener(Ljava/util/concurrent/Executor;Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
-      "removeThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V"),
-    ...stubs(1, "isInteractive()Z", "isScreenOn()Z"),
-    ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
-      "isLowPowerStandbyEnabled()Z"),
-  }],
   // No Bluetooth or NFC radio: the managers exist, as AOSP always registers them, and report no
   // adapter, which is what a device without the feature answers.
   ["android/bluetooth/BluetoothAdapter", {

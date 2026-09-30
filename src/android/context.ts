@@ -120,7 +120,6 @@ const SERVICE_CLASS: Record<string, string> = {
   game: "android/app/GameManager",
   usagestats: "android/app/usage/UsageStatsManager",
   account: "android/accounts/AccountManager",
-  power: "android/os/PowerManager",
   performance_hint: "android/os/PerformanceHintManager",
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
@@ -172,6 +171,12 @@ const SERVICE_CLASS: Record<string, string> = {
  *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
 const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promise<unknown>]> = {
   activity: ["android/app/ActivityManager", (ctx) => newObj("android/app/ActivityManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
+  power: ["android/os/PowerManager", async (ctx) => newObj("android/os/PowerManager",
+    "(Landroid/content/Context;Landroid/os/IPowerManager;Landroid/os/IThermalService;Landroid/os/Handler;)V",
+    ctx, await hostedService("power"), await hostedService("thermalservice"), mainHandler())],
+  deviceidle: ["android/os/DeviceIdleManager", async (ctx) =>
+    newObj("android/os/DeviceIdleManager", "(Landroid/content/Context;Landroid/os/IDeviceIdleController;)V", ctx, await hostedService("deviceidle"))],
+  power_exemption: ["android/os/PowerExemptionManager", (ctx) => newObj("android/os/PowerExemptionManager", "(Landroid/content/Context;)V", ctx)],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };
