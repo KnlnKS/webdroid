@@ -125,7 +125,6 @@ const SERVICE_CLASS: Record<string, string> = {
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
   notification: "android/app/NotificationManager",
-  accessibility: "android/view/accessibility/AccessibilityManager",
   captioning: "android/view/accessibility/CaptioningManager",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
@@ -186,6 +185,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     "(Landroid/content/Context;Lcom/android/internal/os/IDropBoxManagerService;)V", ctx, await hostedService("dropbox"))],
   restrictions: ["android/content/RestrictionsManager", async (ctx) =>
     newObj("android/content/RestrictionsManager", "(Landroid/content/Context;Landroid/content/IRestrictionsManager;)V", ctx, await hostedService("restrictions"))],
+  accessibility: ["android/view/accessibility/AccessibilityManager", async (ctx) => scall("android/view/accessibility/AccessibilityManager",
+    "getInstance", "(Landroid/content/Context;)Landroid/view/accessibility/AccessibilityManager;", ctx)],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

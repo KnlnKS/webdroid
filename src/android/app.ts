@@ -13,7 +13,7 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj, scall } from "../jvm/natives/jlang";
 import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
@@ -27,7 +27,7 @@ import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import type { JBitmap } from "./graphics";
 import { getPM } from "./pm";
-import { transactionCaller } from "./binder";
+import { hostStub, transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { JActionMode, startActionMode } from "./actionmode";
@@ -839,36 +839,25 @@ rt.register({
 });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.markers("android/hardware/display/DisplayManager$DisplayListener");
-class JAccessibilityManager extends JObj {
-  stateListeners = new Set<unknown>();
-  touchListeners = new Set<unknown>();
-  servicesListeners = new Set<unknown>();
-  audioListeners = new Set<unknown>();
+// IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
+// or enabled, so a client's state is all off; the focus highlight is framework-res's
+async function systemResource(type: string, name: string, read: string, desc: string, ...args: unknown[]): Promise<number> {
+  const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id: number = await vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
+  return vcall(res, read, desc, id, ...args);
 }
-rt.register({
-  name: "android/view/accessibility/AccessibilityManager", ctor: JAccessibilityManager,
-  methods: {
-    "isEnabled()Z": () => 0,
-    "isAudioDescriptionRequested()Z": () => 0,
-    "sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
-    "addAccessibilityServicesStateChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": function (this: JAccessibilityManager, _executor: unknown, listener: unknown) { this.servicesListeners.add(listener); },
-    "addAudioDescriptionRequestedChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)V": function (this: JAccessibilityManager, _executor: unknown, listener: unknown) { this.audioListeners.add(listener); },
-    "removeAudioDescriptionRequestedChangeListener(Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.audioListeners.delete(listener); },
-    "isTouchExplorationEnabled()Z": () => 0,
-    "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
-    "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { this.stateListeners.add(listener); return 1; },
-    "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.stateListeners.delete(listener); },
-    "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { this.touchListeners.add(listener); return 1; },
-    "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.touchListeners.delete(listener); },
-    "addAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": function (this: JAccessibilityManager, listener: unknown) { this.servicesListeners.add(listener); },
-    "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.servicesListeners.delete(listener); },
-    "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
-    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
-  },
-});
-for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener", "AudioDescriptionRequestedChangeListener"]) {
-  rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
-}
+rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends JObj {}, sup: "android/view/accessibility/IAccessibilityManager$Stub", methods: {
+  "addClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)J": () => 0n,
+  "removeClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)Z": () => 1,
+  "getRecommendedTimeoutMillis()J": () => 0n,
+  "getFocusStrokeWidth()I": () => systemResource("dimen", "accessibility_focus_highlight_stroke_width", "getDimensionPixelSize", "(I)I"),
+  "getFocusColor()I": () => systemResource("color", "accessibility_focus_highlight_color", "getColor", "(ILandroid/content/res/Resources$Theme;)I", null),
+  "getEnabledAccessibilityServiceList(II)Ljava/util/List;": () => newArrayList(),
+  "getInstalledAccessibilityServiceList(I)Landroid/content/pm/ParceledListSlice;": () =>
+    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+  ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;I)V", "interrupt(I)V"),
+} });
+hostStub("accessibility", "webdroid/AccessibilityManagerService");
 rt.register({
   name: "android/app/ActivityManager$MemoryInfo",
   ctor: class extends JObj { totalMem = 0n; availMem = 0n; lowMemory = 0; threshold = 0n; },

@@ -11,25 +11,6 @@ import { device } from "../src/shell/config";
 import { JActivity } from "../src/android/app";
 import { scall } from "./java";
 
-describe("accessibility-listeners", () => {
-  rt.linkNatives();
-  test("accessibility listeners deduplicate registrations and report removal per manager", async () => {
-    const first = rt.make("android/view/accessibility/AccessibilityManager");
-    const second = rt.make("android/view/accessibility/AccessibilityManager");
-    const listener = new JObj();
-    for (const kind of ["AccessibilityState", "TouchExplorationState", "AccessibilityServicesState"]) {
-      const arg = `(Landroid/view/accessibility/AccessibilityManager$${kind}ChangeListener;)`;
-      const add = `add${kind}ChangeListener`, remove = `remove${kind}ChangeListener`;
-      const addDesc = arg + (kind === "AccessibilityServicesState" ? "V" : "Z");
-      await vcall(first, add, addDesc, listener);
-      await vcall(first, add, addDesc, listener);
-      expect(await vcall(second, remove, arg + "Z", listener)).toBe(0);
-      expect(await vcall(first, remove, arg + "Z", listener)).toBe(1);
-      expect(await vcall(first, remove, arg + "Z", listener)).toBe(0);
-    }
-  });
-});
-
 describe("focus-change", () => {
   rt.linkNatives();
 
