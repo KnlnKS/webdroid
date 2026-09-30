@@ -56,15 +56,18 @@ export function charsetNamed(name: string): CharsetInfo | null {
   return cs;
 }
 
-let charsetName: string | undefined;
+let charsetName: string | undefined, lastCharset: unknown, lastInfo: CharsetInfo;
 /** the charset named by a string or a Charset, or UnsupportedEncodingException */
 export function charsetInfo(value: unknown): CharsetInfo {
+  // the last one answers again without the name's keyed load and lookup
+  if (value === lastCharset) return lastInfo;
   const name = typeof value === "string" ? value : value && typeof value === "object"
     ? (value as Record<string, unknown>)[charsetName ??= declaredField("java/nio/charset/Charset", "name")] : null;
   if (typeof name !== "string") throw rt.mkThrowable("java/lang/NullPointerException", "charset");
   const cs = charsetNamed(name);
   if (!cs) throw rt.mkThrowable("java/io/UnsupportedEncodingException", name);
-  return cs;
+  lastCharset = value;
+  return lastInfo = cs;
 }
 
 /** the byte a table charset encodes `c` as, or -1 */
@@ -346,9 +349,12 @@ function asciiBytes(text: string): Int8Array | null {
   for (let i = 0; i < n; i++) { const c = text.charCodeAt(i); if (c >= 0x80) return null; out[i] = c; }
   return out;
 }
-function isAscii(bytes: Int8Array | Uint8Array): boolean {
-  for (let i = 0; i < bytes.length; i++) if ((bytes[i] & 0x80) !== 0) return false;
-  return true;
+// fromCharCode over a plain array costs a fraction of what it does over a typed array view
+const ASCII_UNITS = Array.from({ length: SHORT + 1 }, (_, n) => new Array<number>(n).fill(0));
+function asciiText(bytes: Int8Array | Uint8Array, off: number, n: number): string | null {
+  const units = ASCII_UNITS[n];
+  for (let i = 0; i < n; i++) { const b = bytes[off + i]; if ((b & 0x80) !== 0) return null; units[i] = b; }
+  return Reflect.apply(String.fromCharCode, null, units) as string;
 }
 /** String.getBytes: CharsetUtils' fast paths replace each unencodable char with '?', the rest
  *  encode as the charset's encoder does with REPLACE */
@@ -370,16 +376,16 @@ export function encodeString(text: string, charset: unknown): Int8Array {
 }
 /** new String(bytes, charset): StringFactory's UTF-8, ISO-8859-1 and US-ASCII fast paths, else
  *  Charset.decode */
-export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown): string {
+export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown, off = 0, n = bytes.length): string {
   const cs = charsetInfo(charset);
-  if (cs.kind === "utf8") return bytes.length <= SHORT && isAscii(bytes) ? Reflect.apply(String.fromCharCode, null, bytes) as string : utf8.dec.decode(bytes);
+  if (cs.kind === "utf8") return (n <= SHORT ? asciiText(bytes, off, n) : null) ?? utf8.dec.decode(bytes.subarray(off, off + n));
   if (cs.kind === "latin1" || cs.kind === "ascii") {
-    const chars = new Uint16Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) { const b = bytes[i] & 255; chars[i] = cs.kind === "ascii" && b > 0x7f ? 0xfffd : b; }
-    return charsToString(chars, 0, bytes.length);
+    const chars = new Uint16Array(n);
+    for (let i = 0; i < n; i++) { const b = bytes[off + i] & 255; chars[i] = cs.kind === "ascii" && b > 0x7f ? 0xfffd : b; }
+    return charsToString(chars, 0, n);
   }
-  const conv = replacing(cs), n = bytes.length;
-  const chars = whole(n, cs.averageChars, Uint16Array, (out, dp, flush, sp) => conv.decode(bytes, sp, n, out, dp, out.length, flush), conv, () => conv.resetToUnicode());
+  const conv = replacing(cs), src = bytes.subarray(off, off + n);
+  const chars = whole(n, cs.averageChars, Uint16Array, (out, dp, flush, sp) => conv.decode(src, sp, n, out, dp, out.length, flush), conv, () => conv.resetToUnicode());
   return charsToString(chars, 0, chars.length);
 }
 const replacing = (cs: CharsetInfo) => { const conv = new Converter(cs); conv.onMalformed = conv.onUnmappable = REPLACE; return conv; };

@@ -9,7 +9,7 @@ import { yieldToLoop } from "./yield";
 import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
+import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, addCell, type Cells, type CompiledCtor, type ResumeBody, type LazyMethod } from "./compiler";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, type Gap } from "./codecache";
@@ -1165,54 +1165,54 @@ export class Runtime {
     if (off < 0 || len < 0 || off > chars.length - len) throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
     return charsToString(chars, off, len);
   }
-  /** String.<init> replacement (see compiler special-case) */
-  newStr(desc: string, args: unknown[]): string {
+  /** String.<init> replacement (see compiler special-case), its arguments in order */
+  newStr(desc: string, a?: unknown, b?: unknown, c?: unknown, d?: unknown): string {
     switch (desc) {
       case "()V": return "";
-      case "(Ljava/lang/String;)V": return args[0] as string;
+      case "(Ljava/lang/String;)V": return a as string;
       case "(Ljava/lang/StringBuilder;)V": case "(Ljava/lang/StringBuffer;)V":
-        return String(args[0]);
-      case "([C)V": return charsToString(args[0] as Uint16Array, 0, (args[0] as Uint16Array).length);
-      case "([CII)V": return this.strChars(args[0] as Uint16Array, args[1] as number, args[2] as number);
-      case "([B)V": return utf8.dec.decode(args[0] as Int8Array);
+        return String(a);
+      case "([C)V": return charsToString(a as Uint16Array, 0, (a as Uint16Array).length);
+      case "([CII)V": return this.strChars(a as Uint16Array, b as number, c as number);
       // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
       case "([BB)V": {
-        const bytes = args[0] as Int8Array, n = args[1] ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
-        if (args[1]) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
+        const bytes = a as Int8Array, n = b ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
+        if (b) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
         else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
         return charsToString(chars, 0, n);
       }
       case "([BI)V": case "([BIII)V": {
-        const bytes = args[0] as Int8Array;
+        const bytes = a as Int8Array;
         if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");
-        const high = (args[1] as number) << 8;
-        const off = desc === "([BI)V" ? 0 : args[2] as number;
-        const count = desc === "([BI)V" ? bytes.length : args[3] as number;
-        if (off < 0 || count < 0 || off > bytes.length - count)
-          throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", "offset/count");
+        const high = (b as number) << 8;
+        const off = desc === "([BI)V" ? 0 : c as number;
+        const count = desc === "([BI)V" ? bytes.length : d as number;
+        this.byteRange(bytes, off, count);
         const chars = new Uint16Array(count);
         for (let i = 0; i < count; i++) chars[i] = high | (bytes[off + i] & 255);
         return charsToString(chars, 0, count);
       }
-      case "([BII)V": {
-        const b = args[0] as Int8Array;
-        return utf8.dec.decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
-      }
+      case "([B)V": return decodeString(a as Int8Array, "UTF-8");
+      case "([BII)V": return decodeString(a as Int8Array, "UTF-8", this.byteRange(a as Int8Array, b as number, c as number), c as number);
       case "([BLjava/lang/String;)V": case "([BLjava/nio/charset/Charset;)V":
-        return decodeString(args[0] as Int8Array, args[1]);
-      case "([BIILjava/lang/String;)V": case "([BIILjava/nio/charset/Charset;)V": {
-        const b = args[0] as Int8Array;
-        return decodeString(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)), args[3]);
-      }
+        return decodeString(a as Int8Array, b);
+      case "([BIILjava/lang/String;)V": case "([BIILjava/nio/charset/Charset;)V":
+        return decodeString(a as Int8Array, d, this.byteRange(a as Int8Array, b as number, c as number), c as number);
       // code points, not chars: each element is a whole Unicode scalar
       case "([III)V": {
-        const cp = args[0] as Int32Array, off = args[1] as number, n = args[2] as number;
+        const cp = a as Int32Array, off = b as number, n = c as number;
         let out = "";
         for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
         return out;
       }
       default: throw this.unimplemented("String.<init>" + desc);
     }
+  }
+  /** String's checkBoundsOffCount over a byte array: the offset */
+  private byteRange(bytes: Int8Array, off: number, count: number): number {
+    if (off < 0 || count < 0 || off > bytes.length - count)
+      throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
+    return off;
   }
   /** virtual call on an array receiver (clone etc.) */
   arrCall(a: any, name: string): unknown {
