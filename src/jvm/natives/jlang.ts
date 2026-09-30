@@ -172,6 +172,7 @@ export function enclosingClass(this: JClass): JClass | null {
   const n = this.ci?.name ?? "", i = n.lastIndexOf("$");
   return i > 0 ? rt.classFor(n.slice(0, i)) : null;
 }
+const knownArrayClasses = new WeakMap<Runtime, Map<string, JClass>>();
 const arrayClasses = new WeakMap<Runtime, Map<string, JClass>>();
 const classCache = new Map<string, JClass>();
 function arrayOwner(runtime: Runtime, desc: string): Runtime {
@@ -187,11 +188,19 @@ function arrayOwner(runtime: Runtime, desc: string): Runtime {
 }
 rt.classFor = function (this: Runtime, name: string): JClass {
   if (name[0] === "[") {
+    // an array's getClass is hot (Arrays.copyOf asks for every grown collection): once its element
+    // class is linked, its owner cannot change, so the answer is kept per asking runtime
+    let known = knownArrayClasses.get(this);
+    if (!known) knownArrayClasses.set(this, known = new Map());
+    let cls = known.get(name);
+    if (cls) return cls;
     const owner = arrayOwner(this, name);
     let cache = arrayClasses.get(owner);
     if (!cache) arrayClasses.set(owner, cache = new Map());
-    let cls = cache.get(name);
+    cls = cache.get(name);
     if (!cls) { cls = new JClass(); cls.arrDesc = name; cls.componentOwner = owner; cache.set(name, cls); }
+    const element = name.replace(/^\[+/, "");
+    if (element[0] !== "L" || this.classes.has(descToName(element))) known.set(name, cls);
     return cls;
   }
   const primitive = Object.hasOwn(PRIM_DESC, name);
