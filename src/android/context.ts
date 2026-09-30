@@ -4,7 +4,7 @@ import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, nativeTheme, nativeRes, type JAttrSet } from "./res";
-import { newObj, vcall, vcallOn, curThread, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, vcallOn, curThread, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
@@ -135,7 +135,6 @@ const SERVICE_CLASS: Record<string, string> = {
   usb: "android/hardware/usb/UsbManager",
   display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
-  textservices: "android/view/textservice/TextServicesManager",
   restrictions: "android/content/RestrictionsManager",
   appwidget: "android/appwidget/AppWidgetManager",
   systemhealth: "android/os/health/SystemHealthManager",
@@ -183,6 +182,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   shortcut: ["android/content/pm/ShortcutManager", (ctx) => newObj("android/content/pm/ShortcutManager", "(Landroid/content/Context;)V", ctx)],
   locale: ["android/app/LocaleManager", async (ctx) =>
     newObj("android/app/LocaleManager", "(Landroid/content/Context;Landroid/app/ILocaleManager;)V", ctx, await hostedService("locale"))],
+  textservices: ["android/view/textservice/TextServicesManager", async (ctx) => scall("android/view/textservice/TextServicesManager",
+    "createInstance", "(Landroid/content/Context;)Landroid/view/textservice/TextServicesManager;", ctx)],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

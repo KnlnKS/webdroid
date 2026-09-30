@@ -17,6 +17,7 @@ import { JEditable, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate, rootOf } from "./view";
 import { matrixOf, javaMatrix, identity, type Mat } from "./graphics";
 import { AID, type JAttrSet, obtainStyled } from "./res";
+import { hostStub } from "./binder";
 import { loadDrawableRV } from "./drawable";
 import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, textDiff, fireEditorAction, editorAction } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
@@ -30,23 +31,15 @@ rt.register({ name: "android/inputmethodservice/InputMethodService", ctor: class
   "<init>()V": function () {},
 } });
 
-rt.markers("android/view/textservice/SpellCheckerSession$SpellCheckerSessionListener");
-rt.register({
-  name: "android/view/textservice/TextServicesManager", ctor: class extends JObj {},
-  methods: {
-    "isSpellCheckerEnabled()Z": () => 0,
-    "getEnabledSpellCheckerInfos()Ljava/util/List;": () => newArrayList(),
-    "getEnabledSpellCheckers()[Landroid/view/textservice/SpellCheckerInfo;": () => jarray([], "Landroid/view/textservice/SpellCheckerInfo;"),
-    "getCurrentSpellCheckerInfo()Landroid/view/textservice/SpellCheckerInfo;": () => null,
-    "getCurrentSpellCheckerSubtype(Z)Landroid/view/textservice/SpellCheckerSubtype;": () => null,
-    "newSpellCheckerSession(Landroid/os/Bundle;Ljava/util/Locale;Landroid/view/textservice/SpellCheckerSession$SpellCheckerSessionListener;Z)Landroid/view/textservice/SpellCheckerSession;":
-      (_bundle: unknown, locale: unknown, listener: unknown, referToSettings: number) => {
-        if (!listener) throw rt.mkThrowable("java/lang/NullPointerException", "listener");
-        if (!referToSettings && !locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale");
-        return null;
-      },
-  },
-});
+// ITextServicesManager, under AOSP's TextServicesManager: no spell checker is installed, so none
+// is enabled or current, and a new session is null as AOSP's manager returns then
+rt.register({ name: "webdroid/TextServicesManagerService", ctor: class extends JObj {}, sup: "com/android/internal/textservice/ITextServicesManager$Stub", methods: {
+  "isSpellCheckerEnabled(I)Z": () => 0,
+  "getCurrentSpellChecker(ILjava/lang/String;)Landroid/view/textservice/SpellCheckerInfo;": () => null,
+  "getCurrentSpellCheckerSubtype(IZ)Landroid/view/textservice/SpellCheckerSubtype;": () => null,
+  "getEnabledSpellCheckers(I)[Landroid/view/textservice/SpellCheckerInfo;": () => jarray([], "Landroid/view/textservice/SpellCheckerInfo;"),
+} });
+hostStub("textservices", "webdroid/TextServicesManagerService");
 
 class JEditorInfo extends JObj {
   inputType = 0;
