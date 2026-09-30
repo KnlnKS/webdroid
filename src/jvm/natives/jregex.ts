@@ -375,7 +375,7 @@ function javaRegex(source: string, flags: string): RegExp {
   if (!re) {
     if (regexMemo.size > 4096) regexMemo.clear();
     try { re = new RegExp(source, flags); }
-    catch (e) {
+    catch {
       const [js, extra] = javaToJs(source);
       let f = flags;
       for (const c of extra) if (!f.includes(c)) f += c;

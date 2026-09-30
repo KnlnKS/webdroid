@@ -152,9 +152,9 @@ const pokeArray = (address: bigint, array: Elements | null, offset: number, coun
   // a set within one buffer copies as memmove does, so a guest-memory array needs no copy first
   if (count) mem.write(physical(address), swap ? swapped(source, array!.BYTES_PER_ELEMENT) : source);
 };
-/** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
 let bufferAddress: ((buffer: object) => bigint) | null = null;
 export function setBufferAddress(read: (buffer: object) => bigint): void { bufferAddress = read; }
+/** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
 function objectBytes(o: Elements | object | null, at: number, n: number): Uint8Array | Promise<Uint8Array> {
   if (o === null) return rt.npe();
   if (ArrayBuffer.isView(o)) return new Uint8Array(o.buffer, o.byteOffset + at, n);

@@ -155,7 +155,7 @@ async function session(type: string, response: JObj, call: (authenticator: JObj,
     s.unbind = unbind;
     await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", s, 0);
     const authenticator = await scall("android/accounts/IAccountAuthenticator$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/accounts/IAccountAuthenticator;", binder);
-    await asSystem(() => call(authenticator, s) as Promise<unknown>);
+    await asSystem(() => call(authenticator, s));
   } catch (error) {
     reportUncaught(error);
     const lost = s.take(false);

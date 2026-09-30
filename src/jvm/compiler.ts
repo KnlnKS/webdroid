@@ -80,8 +80,6 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
   return out.join("\n");
 }
 
-/** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body.
- *  `fallthrough` marks a platform body installed on a native class, compiled only if safe. */
 /** a method installed as a stub that compiles it on first call; name and descriptor are decoded
  *  then, not for every stub a boot installs */
 export class LazyMethod {
@@ -91,6 +89,8 @@ export class LazyMethod {
   get desc(): string { return methodKey(this.dex, this.m.methodIdx).desc; }
 }
 
+/** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body.
+ *  `fallthrough` marks a platform body installed on a native class, compiled only if safe. */
 export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, fallthrough = false,
   mangled = methodKey(dex, m.methodIdx).mangled): void {
   const isStatic = (m.flags & ACC.STATIC) !== 0;
@@ -327,7 +327,6 @@ export function entryBody(R: Runtime, info: ClassInfo, methodIdx: number): [key:
 }
 
 /** a method ref's name, descriptor and mangled property: every class compile needs them */
-
 export function methodKey(dex: DexFile, methodIdx: number): MethodKey {
   let keys = methodKeys.get(dex);
   if (!keys) methodKeys.set(dex, keys = []);

@@ -105,8 +105,6 @@ export function uintOf(t: Tlv): bigint {
   if (!t.body.length || t.body[0] & 0x80) throw new DerError("negative or empty integer");
   return bytesToBig(t.body);
 }
-/** two's-complement big-endian with a leading zero when the top bit is set, as BigInteger(byte[]) reads */
-export const signedBytes = (v: bigint) => { const b = bigToBytes(v); return !b.length || b[0] & 0x80 ? concat([Uint8Array.of(0), b]) : b; };
 /** BigInteger.toByteArray's encoding → its value */
 export function fromSigned(b: Uint8Array): bigint {
   const v = bytesToBig(b);

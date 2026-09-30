@@ -241,7 +241,7 @@ await exercise("Font, FontFamily, FontFileUtil", async () => {
 
   const paint = await newObj("android/graphics/Paint", "()V");
   await vcall(paint, "setTextSize", "(F)V", 20);
-  const fm = await newObj("android/graphics/Paint$FontMetrics", "()V") as any;
+  const fm = await newObj("android/graphics/Paint$FontMetrics", "()V");
   await vcall(regular, "getMetrics", "(Landroid/graphics/Paint;Landroid/graphics/Paint$FontMetrics;)V", paint, fm);
   same("getMetrics", [fm.top, fm.ascent, fm.descent, fm.bottom, fm.leading], [-2163, -1900, 500, 555, 0].map((v) => Math.fround(v * 20 / 2048)));
 
@@ -479,7 +479,7 @@ await exercise("Region, RegionIterator (device values)", async () => {
   const region = (...a: number[]) => a.length ? newObj("android/graphics/Region", "(IIII)V", ...a) : newObj("android/graphics/Region", "()V");
   const op = (r: unknown, l: number, t: number, rr: number, b: number, o: string) => vcall(r, "op", `(IIII${OP})Z`, l, t, rr, b, ops[`s$${o}`]);
   const rects = async (r: unknown) => {
-    const it = await newObj("android/graphics/RegionIterator", `(${R})V`, r), rc = await newObj("android/graphics/Rect", "()V") as any, out: string[] = [];
+    const it = await newObj("android/graphics/RegionIterator", `(${R})V`, r), rc = await newObj("android/graphics/Rect", "()V"), out: string[] = [];
     while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
     return out.join(" ");
   };
@@ -649,7 +649,7 @@ await exercise("NinePatch (device values)", async () => {
   const bmp = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 30, 30, cfg);
   const rects = async (r: unknown) => {
     if (!r) return "null";
-    const it = await newObj("android/graphics/RegionIterator", "(Landroid/graphics/Region;)V", r), rc = await newObj("android/graphics/Rect", "()V") as any, out: string[] = [];
+    const it = await newObj("android/graphics/RegionIterator", "(Landroid/graphics/Region;)V", r), rc = await newObj("android/graphics/Rect", "()V"), out: string[] = [];
     while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
     return out.join(" ");
   };

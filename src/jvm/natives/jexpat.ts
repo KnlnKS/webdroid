@@ -60,7 +60,7 @@ function resolve(c: Context, qName: string, attribute: boolean): Name {
 }
 
 const PARSER_NAME = "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V";
-/** the markup at the head of the buffer, or null when it is not complete yet */
+/** where the markup at the head of the buffer ends, or -1 when it is not complete yet */
 function markupEnd(buffer: string): number {
   if (buffer.startsWith("<!--")) { const e = buffer.indexOf("-->", 4); return e < 0 ? -1 : e + 3; }
   if (buffer.startsWith("<![CDATA[")) { const e = buffer.indexOf("]]>", 9); return e < 0 ? -1 : e + 3; }

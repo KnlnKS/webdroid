@@ -696,7 +696,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   // AOSP: an unbounded maximum reads back as Integer.MAX_VALUE, and callers Math.min() with it
   "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   // AOSP: null until the first measure; afterwards the Layout over the measured text width
-  // AOSP: null until the first measure; afterwards the Layout over the measured text width
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
     return this.layoutWidthFor < 0 ? null : this.layout?.java ?? null;
   },

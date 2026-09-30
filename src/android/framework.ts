@@ -9,8 +9,6 @@
 import { yieldToLoop } from "../jvm/yield";
 import { Arsc } from "./arsc";
 import { DEVICE_COLORS } from "./device-colors";
-
-const TYPE_INT_COLOR_ARGB8 = 0x1c;
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt } from "../jvm/runtime";
 import { dexesIn, isDexEntry, type DexFile } from "../jvm/dex";
@@ -24,6 +22,7 @@ import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
 
+const TYPE_INT_COLOR_ARGB8 = 0x1c;
 // the tab fetches these once; each realm views the page's bytes
 declare global { interface Window { __wdPlatformJars?: Promise<Uint8Array[]>; __wdFrameworkRes?: Promise<Uint8Array> } }
 let pending: Promise<Arsc> | null = null;

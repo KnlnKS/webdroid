@@ -16,7 +16,6 @@ import "../src/natives";
 import { jarDexes } from "../src/android/framework";
 import { openDexes } from "./lib";
 
-
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dir, "..");
 export const OVERRIDES = resolve(root, "tests/fixtures/app-overrides.json");

@@ -2695,7 +2695,7 @@ rt.register({
     "getTouchscreenBlocksFocus()Z": function (this: JView) { return this.touchBlocksFocus ? 1 : 0; },
     "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
       let v: JView | null = this.parent;
-      while (v) { (v as any).disallowIntercept = !!dis; v = v.parent; }
+      while (v) { (v as JViewGroup).disallowIntercept = !!dis; v = v.parent; }
     },
     ...stubs(0, "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z"),
     "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,

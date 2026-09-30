@@ -9,20 +9,17 @@ import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost, jclsNameOf } from "./apphost";
-import { type JComponentName, mkComponentName } from "./intent";
+import { type JComponentName, type JIntent, mkComponentName, registerSystemActivity } from "./intent";
 import type { JActivity } from "./app";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught, bundleBox } from "./os";
 import { runningServices } from "./runningservices";
 import { JConfigurationInfo, getPM } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { hostStub } from "./binder";
-import { registerSystemActivity } from "./intent";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
 import { isRuntimePermission, permissionGranted } from "./context";
 import { stickyBroadcasts } from "./broadcast";
-import type { JIntent } from "./intent";
-import { bundleBox } from "./os";
 
 class JRunningAppProcessInfo extends JObj {
   processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];

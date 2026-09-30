@@ -217,13 +217,12 @@ const keymint = async <T>(body: () => T | Promise<T>): Promise<T> => {
 
 // ── operations
 type Op = { e: Entry; params: Param[]; purpose: number; input: Uint8Array[]; aad: Uint8Array[]; nonce: Uint8Array | null; done: boolean };
-const joined = (parts: Uint8Array[]) => concat(parts);
 function keyOf(e: Entry): PKey { return parsePrivateKey(unb64(e.material!)); }
 function blockCipher(op: Op, data: Uint8Array): Uint8Array {
   const ps = op.params, mode = num(ps, TAG.BLOCK_MODE) ?? MODE.ECB, pad = num(ps, TAG.PADDING) ?? PAD.NONE, enc = op.purpose === PURPOSE.ENCRYPT;
   const key = unb64(op.e.material!);
   if (mode === MODE.GCM) {
-    const gcm = new AesGcm(key), tagLen = (num(ps, TAG.MAC_LENGTH) ?? 128) / 8, aad = joined(op.aad);
+    const gcm = new AesGcm(key), tagLen = (num(ps, TAG.MAC_LENGTH) ?? 128) / 8, aad = concat(op.aad);
     if (enc) return gcm.seal(op.nonce!, data, aad, tagLen);
     const out = gcm.open(op.nonce!, data, aad, tagLen);
     if (!out) throw ERR.VERIFICATION_FAILED;
@@ -248,7 +247,7 @@ function blockCipher(op: Op, data: Uint8Array): Uint8Array {
   return out;
 }
 function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
-  const alg = num(op.e.params.map(decodeParam), TAG.ALGORITHM)!, ps = op.params, data = joined(op.input);
+  const alg = num(op.e.params.map(decodeParam), TAG.ALGORITHM)!, ps = op.params, data = concat(op.input);
   if (alg === ALG.AES) return blockCipher(op, data);
   const digestName = DIGEST_NAMES[num(ps, TAG.DIGEST) ?? 0] ?? null;
   if (alg === ALG.HMAC) {

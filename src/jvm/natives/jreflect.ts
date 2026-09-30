@@ -602,8 +602,7 @@ rt.register({ name: "sun/misc/Unsafe", ctor: JUnsafe, statics: { theUnsafe: unsa
 // Unsafe "offsets" index this table of fields, with a stride of 8 so the word arithmetic
 // protobuf's Android accessor applies to them (offset & ~3, (offset & 3) << 3) is an identity.
 // An access wider or narrower than the field's own type moves the bits, as memory would: that
-// same accessor reads a double as getLong and a float as getInt. Each field's accessors are
-// compiled with its property name, so the property access in each stays monomorphic.
+// same accessor reads a double as getLong and a float as getInt.
 /** A field's accessors, compiled with its property name so each access stays monomorphic. An
  *  int or long access to a float or double field moves its bits. Reads of a field a TS object
  *  never set see its zero. */

@@ -99,8 +99,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`socketpair(III${FD}${FD})V`]: (domain: number, type: number, _protocol: number, a: JObj | null, b: JObj | null) => {
     if (domain !== 1 /* AF_UNIX */) throw errno("socketpair", E.AFNOSUPPORT);
     const [x, y] = javaSocketPair(type);
-    (a as unknown as Obj)[declaredField("java/io/FileDescriptor", "descriptor")] = x;
-    (b as unknown as Obj)[declaredField("java/io/FileDescriptor", "descriptor")] = y;
+    setField(a!, "java/io/FileDescriptor", "descriptor", x);
+    setField(b!, "java/io/FileDescriptor", "descriptor", y);
   },
   [`dup2(${FD}I)${FD}`]: (d: JObj | null, to: number) => {
     const fd = javaDup2Fd(fdInt(d), to);

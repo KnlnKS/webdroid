@@ -762,7 +762,8 @@ export function nativeAssets(am: unknown): Resources {
 }
 /** the native theme behind a Resources.Theme, ours or AOSP's */
 export function nativeTheme(theme: unknown): JTheme | null {
-  if (!theme || theme instanceof JTheme) return (theme as JTheme | null) ?? null;
+  if (!theme) return null;
+  if (theme instanceof JTheme) return theme;
   if (!rt.iof(theme, "android/content/res/Resources$Theme")) return null;
   const t = deref<JTheme>(javaField(javaField(theme, "android/content/res/Resources$Theme", "mThemeImpl"), "android/content/res/ResourcesImpl$ThemeImpl", "mTheme"));
   t.jobj = theme;
