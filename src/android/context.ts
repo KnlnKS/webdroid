@@ -118,7 +118,6 @@ const SERVICE_CLASS: Record<string, string> = {
   input_method: "android/view/inputmethod/InputMethodManager",
   device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
-  usagestats: "android/app/usage/UsageStatsManager",
   account: "android/accounts/AccountManager",
   performance_hint: "android/os/PerformanceHintManager",
   input: "android/hardware/input/InputManager",
@@ -177,6 +176,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   vibrator_manager: ["android/os/VibratorManager", (ctx) => newObj("android/os/SystemVibratorManager", "(Landroid/content/Context;)V", ctx)],
   vibrator: ["android/os/Vibrator", (ctx) => newObj("android/os/SystemVibrator", "(Landroid/content/Context;)V", ctx)],
   keyguard: ["android/app/KeyguardManager", (ctx) => newObj("android/app/KeyguardManager", "(Landroid/content/Context;)V", ctx)],
+  usagestats: ["android/app/usage/UsageStatsManager", async (ctx) => newObj("android/app/usage/UsageStatsManager",
+    "(Landroid/content/Context;Landroid/app/usage/IUsageStatsManager;)V", ctx, await hostedService("usagestats"))],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",

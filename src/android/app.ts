@@ -803,11 +803,6 @@ for (const [name, methods, statics] of [
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
-// the app in front is in the ACTIVE standby bucket and never inactive
-rt.register({ name: "android/app/usage/UsageStatsManager", ctor: class extends JObj {}, methods: {
-  "getAppStandbyBucket()I": () => 10,
-  "isAppInactive(Ljava/lang/String;)Z": () => 0,
-} });
 // callback bases apps extend; without a radio nothing ever invokes them
 for (const name of ["android/bluetooth/le/ScanCallback", "android/bluetooth/BluetoothGattCallback"]) {
   rt.register({ name, ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });

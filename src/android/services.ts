@@ -407,6 +407,21 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
 } });
 hostStub("appops", "webdroid/AppOpsService");
 
+// IUsageStatsManager, under UsageStatsManager: the app in front is in the ACTIVE standby bucket and
+// never inactive. Usage history needs PACKAGE_USAGE_STATS, which an app is never granted here, so
+// queries answer null as UsageStatsService does for a caller without it (the manager returns empty).
+rt.register({ name: "webdroid/UsageStatsService", ctor: class extends JObj {}, sup: "android/app/usage/IUsageStatsManager$Stub", methods: {
+  "getAppStandbyBucket(Ljava/lang/String;Ljava/lang/String;I)I": () => 10,
+  "isAppInactive(Ljava/lang/String;ILjava/lang/String;)Z": () => 0,
+  ...stubs(null, "queryUsageStats(IJJLjava/lang/String;I)Landroid/content/pm/ParceledListSlice;",
+    "queryConfigurationStats(IJJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;",
+    "queryEventStats(IJJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;",
+    "queryEvents(JJLjava/lang/String;)Landroid/app/usage/UsageEvents;",
+    "queryEventsWithFilter(Landroid/app/usage/UsageEventsQuery;Ljava/lang/String;)Landroid/app/usage/UsageEvents;",
+    "queryEventsForPackage(JJLjava/lang/String;)Landroid/app/usage/UsageEvents;"),
+} });
+hostStub("usagestats", "webdroid/UsageStatsService");
+
 // IBatteryStats and IBatteryPropertiesRegistrar, under BatteryManager: the configured battery's
 // capacity and status; any other property is NAME_NOT_FOUND, as healthd answers one its HAL lacks
 const BATTERY_CAPACITY = 4, BATTERY_STATUS = 6, NAME_NOT_FOUND = -2;
