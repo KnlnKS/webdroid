@@ -475,6 +475,21 @@ describe("java-math-boundary", () => {
   });
 });
 
+describe("thread-group", () => {
+  test("threads live in libcore's main group, under system, while they run", async () => {
+    const group = await vcall(await newObj("java/lang/Thread"), "getThreadGroup", "()Ljava/lang/ThreadGroup;");
+    expect(await vcall(group, "getName", "()Ljava/lang/String;")).toBe("main");
+    expect(await vcall(await vcall(group, "getParent", "()Ljava/lang/ThreadGroup;"), "getName", "()Ljava/lang/String;")).toBe("system");
+    const before = await vcall(group, "activeCount", "()I");
+    const thread = await newObj("java/lang/Thread");
+    await vcall(thread, "start", "()V");
+    expect(await vcall(group, "activeCount", "()I")).toBe(before + 1);
+    await vcall(thread, "join", "()V");
+    expect(await vcall(group, "activeCount", "()I")).toBe(before);
+    expect(await vcall(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;")).toBeNull();
+  });
+});
+
 describe("string-case", () => {
   test("case-insensitive comparison folds char by char, as libcore does", async () => {
     const call = (self: string, name: string, desc: string, o: string) => vcall(self, name, desc, o);

@@ -1281,6 +1281,8 @@ export class JThread extends JObj {
   unpark: (() => void) | null = null;
   done: Promise<void> | null = null;
   looper: unknown = null;   // android Looper, set by android/os
+  /** the ThreadGroup a Java constructor named; null is the main group */
+  group: unknown = null;
   /** native calls in progress on this thread: its looper cannot dispatch while it is inside one */
   inNative = 0;
   nativeIdle: (() => void)[] = [];
@@ -1320,7 +1322,12 @@ export function setCurThread(t: JThread) {
 }
 let threadCounter = 0;
 const nextThreadName = () => "Thread-" + threadCounter++;
-function initGroupedThread(this: JThread, _group: unknown, target: unknown, name: string) { this.target = target; this.jname = name; }
+function initGroupedThread(this: JThread, group: unknown, target: unknown, name: string) { this.group = group ?? curThread.group; this.target = target; this.jname = name; }
+/** the ThreadGroup ART makes at startup, libcore's ThreadGroup.mainThreadGroup */
+function mainThreadGroup(): unknown {
+  const info = rt.link("java/lang/ThreadGroup");
+  return after(rt.initClass(info), () => info.ctor[mangleStaticField("mainThreadGroup")]);
+}
 /** a Thread constructor that, as Thread.init does, starts the thread with a copy of its creator's
  *  inheritable thread locals (libcore's ThreadLocal keeps them in the thread's fields) */
 function inheriting(init: (this: JThread, ...a: any[]) => void) {
@@ -1369,6 +1376,24 @@ export function park(t: JThread, arm: (wake: () => void) => () => void, timeoutM
   });
 }
 
+/** Thread.start's body, the thread in its group */
+function startThread(t: JThread): void {
+  t.alive = 1;
+  // the body begins now, not after the caller's whole main-looper job: a thread that
+  // publishes its Handler has it by the time the next lifecycle call posts to it
+  t.done = new Promise((resolve) => {
+    queueMicrotask(async () => {
+      try { await vcallOn(t, t, "run", "()V"); }
+      catch (e) { await dispatchUncaught(t, e); }
+      finally {
+        t.alive = 0;
+        try { await vcallOn(t, t.group, "threadTerminated", "(Ljava/lang/Thread;)V", t); } catch (e) { reportUncaught(e); }
+        threadExit.hook?.(t);
+        resolve();
+      }
+    });
+  });
+}
 function join(t: JThread, ms: number): Promise<void> | undefined {
   const done = t.done;
   if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
@@ -1392,7 +1417,7 @@ rt.register({
     "<init>(Ljava/lang/String;)V": inheriting(function (n: string) { this.jname = n; }),
     "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;)V": inheriting(initGroupedThread),
     "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V": inheriting(initGroupedThread),
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": inheriting(function (_g: unknown, n: string) { this.jname = n; }),
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": inheriting(function (g: unknown, n: string) { this.group = g ?? curThread.group; this.jname = n; }),
     "getName()Ljava/lang/String;": function (this: JThread) { return this.jname; },
     "setName(Ljava/lang/String;)V": function (this: JThread, n: string) { this.jname = n; },
     "setDaemon(Z)V": function (this: JThread, d: number) { this.daemon = d; },
@@ -1415,24 +1440,20 @@ rt.register({
     "blockedOn(Lsun/nio/ch/Interruptible;)V": function (this: JThread, b: unknown) { this.blocker = b; },
     "start()V": function (this: JThread) {
       if (this.started) throw rt.mkThrowable("java/lang/IllegalThreadStateException", "Thread already started");
-      this.alive = 1;
-      // the body begins now, not after the caller's whole main-looper job: a thread that
-      // publishes its Handler has it by the time the next lifecycle call posts to it
-      this.done = new Promise((resolve) => {
-        queueMicrotask(async () => {
-          try { await vcallOn(this, this, "run", "()V"); }
-          catch (e) { await dispatchUncaught(this, e); }
-          finally { this.alive = 0; threadExit.hook?.(this); resolve(); }
-        });
-      });
+      return after(this.group ?? mainThreadGroup(), (group) => after(vcall(group, "addUnstarted", "()V"), () => after(vcall(group, "add", "(Ljava/lang/Thread;)V", this), () => {
+        this.group = group;
+        startThread(this);
+      })));
     },
+
     "run()V": driven(function* (this: JThread): Gen {
       if (this.target) yield vcall(this.target, "run", "()V");
     }),
     "join()V": function (this: JThread) { return join(this, 0); },
     "join(J)V": function (this: JThread, ms: bigint) { return join(this, Number(ms)); },
     "join(JI)V": function (this: JThread, ms: bigint, ns: number) { return join(this, Number(ms) + (ns > 0 ? 1 : 0)); },
-    "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
+    // a thread that has ended has no group
+    "getThreadGroup()Ljava/lang/ThreadGroup;": function (this: JThread) { return this.started && !this.alive ? null : this.group ?? mainThreadGroup(); },
     "getContextClassLoader()Ljava/lang/ClassLoader;": systemClassLoader,
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
     "getStackTrace()[Ljava/lang/StackTraceElement;": threadTrace,
@@ -1464,24 +1485,6 @@ function enumerateThreads(threads: unknown[]): number {
   for (const thread of liveThreads) { if (count === threads.length) break; threads[count++] = thread; }
   return count;
 }
-// One ThreadGroup for the process: crash handlers and thread factories walk up to it, and its
-// parent chain ends here (ART's "main" group under "system").
-class JThreadGroup extends JObj { gname = "main"; }
-const mainGroup = new JThreadGroup();
-rt.register({
-  name: "java/lang/ThreadGroup", ctor: JThreadGroup,
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JThreadGroup, n: string) { this.gname = n; },
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": function (this: JThreadGroup, _p: unknown, n: string) { this.gname = n; },
-    "getName()Ljava/lang/String;": function (this: JThreadGroup) { return this.gname; },
-    "getParent()Ljava/lang/ThreadGroup;": function (this: JThreadGroup) { return this === mainGroup ? null : mainGroup; },
-    "activeCount()I": () => liveThreads.size,
-    "enumerate([Ljava/lang/Thread;)I": enumerateThreads,
-    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => { console.error("[uncaught]", e); },
-    "toString()Ljava/lang/String;": function (this: JThreadGroup) { return `java.lang.ThreadGroup[name=${this.gname},maxpri=10]`; },
-  },
-});
-
 // java.lang.Enum runs from libcore; TS reads a constant's name and ordinal through these
 const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
 export type JSimpleEnum = JObj;
@@ -1527,7 +1530,6 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
   return vals;
 }
 
-rt.markers("java/lang/Thread$UncaughtExceptionHandler");
 const THREAD_STATES = ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"];
 
 class JRef extends JObj { referent: unknown = null; queue: JRefQueue | null = null; state = 0; }
