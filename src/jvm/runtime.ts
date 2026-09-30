@@ -759,10 +759,15 @@ export class Runtime {
       if (kind === 2) { target[mangled] = info.superInfo!.ctor.prototype[mangled]; return; }
       if (!isStatic) info.ownMethods.push(mangled);
       if (kind === 0) { installLazy(this, dex, info, m, true, mangled); return; }
+      // resolved on first call, and kept: a call site that captured this stub keeps calling it
+      let fn: ((...a: never[]) => unknown) | null = null;
       target[mangled] = function (this: unknown, ...args: unknown[]) {
-        const { name, desc } = methodKey(dex, m.methodIdx), fn = R.jniFn(cls, name + desc);
-        if (!fn) throw R.ulink(cls, name, desc);
-        return (target[mangled] = fn).apply(this, args as never[]);
+        if (!fn) {
+          const { name, desc } = methodKey(dex, m.methodIdx);
+          if (!(fn = R.jniFn(cls, name + desc))) throw R.ulink(cls, name, desc);
+          target[mangled] = fn;
+        }
+        return fn.apply(this, args as never[]);
       };
     };
     const known = gapsOf(cls);
