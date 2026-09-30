@@ -2,7 +2,8 @@
 import { type JParcel, writeInt, readInt, writeString8, readString8 } from "./parcel";
 
 import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj, after } from "../jvm/natives/jlang";
+import { uchar } from "../jvm/natives/jicu";
 import { JPaint, copyPaint } from "./graphics";
 import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -358,31 +359,49 @@ export function readText(parcel: JParcel) {
   if (text !== null && kind !== 1 && readInt(parcel) !== 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
   return text;
 }
-// AndroidCharacter: the bidi mirror pairs of the characters apps ask about (Unicode BidiMirroring's
-// paired brackets and quotes); everything else mirrors to itself
-const MIRROR = new Map<number, number>();
-for (const [a, b] of ["()", "[]", "{}", "<>", "«»", "‹›", "⁅⁆", "⁽⁾", "₍₎", "〈〉", "《》", "「」", "『』", "【】", "〔〕", "〖〗", "〘〙", "〚〛", "（）", "［］", "｛｝", "｟｠", "｢｣", "≤≥", "∈∋", "∼∽"]) { MIRROR.set(a.charCodeAt(0), b.charCodeAt(0)); MIRROR.set(b.charCodeAt(0), a.charCodeAt(0)); }
-rt.register({
-  name: "android/text/AndroidCharacter", ctor: class extends JObj {},
-  statics: { EAST_ASIAN_WIDTH_NEUTRAL: 0, EAST_ASIAN_WIDTH_AMBIGUOUS: 1, EAST_ASIAN_WIDTH_HALF_WIDTH: 2, EAST_ASIAN_WIDTH_FULL_WIDTH: 3, EAST_ASIAN_WIDTH_NARROW: 4, EAST_ASIAN_WIDTH_WIDE: 5 },
-  methods: {
-    "static getMirror(C)C": (c: number) => MIRROR.get(c) ?? c,
-    "static mirror([CII)Z": (chars: Uint16Array, start: number, count: number) => {
-      let changed = 0;
-      for (let i = start; i < start + count; i++) { const m = MIRROR.get(chars[i]); if (m !== undefined) { chars[i] = m; changed = 1; } }
-      return changed;
-    },
-    "static getDirectionalities([C[BI)V": (chars: Uint16Array, out: Int8Array, count: number) => { for (let i = 0; i < count; i++) out[i] = chars[i] >= 0x590 && chars[i] <= 0x8ff ? 1 : 0; },
-    "static getEastAsianWidth(C)I": (c: number) => (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xff60) ? 5 : (c >= 0xff61 && c <= 0xffdc) ? 2 : (c >= 0xffe0 && c <= 0xffe6) ? 3 : 0,
-  },
-});
 
-rt.register({
-  name: "android/text/InputType", ctor: class extends JObj {},
-  statics: {
-    TYPE_CLASS_TEXT: 1, TYPE_CLASS_NUMBER: 2, TYPE_CLASS_PHONE: 3, TYPE_CLASS_DATETIME: 4,
-    TYPE_NUMBER_FLAG_DECIMAL: 8192, TYPE_NUMBER_FLAG_SIGNED: 4096,
-    TYPE_TEXT_FLAG_CAP_SENTENCES: 16384, TYPE_TEXT_FLAG_MULTI_LINE: 131072,
-    TYPE_TEXT_VARIATION_PASSWORD: 128,
+// android_text_AndroidCharacter.cpp: u_charDirection, u_getIntPropertyValue(UCHAR_EAST_ASIAN_WIDTH)
+// and u_charMirror, answered by ICU4J's UCharacter over the same ICU data
+const icuDirection = uchar("getDirection", "(I)I"), icuProperty = uchar("getIntPropertyValue", "(II)I"), icuMirror = uchar("getMirror", "(I)I");
+/** ICU's UCharDirection as Character.DIRECTIONALITY_*; the isolates (19-22) are outside the map
+ *  and read as PROPERTY_UNDEFINED, as on the device */
+const DIRECTIONALITY = [0, 1, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 2, 16, 17, 18, 8, 9];
+const directionality = (c: number) => after(icuDirection(c), (d) => DIRECTIONALITY[d as number] ?? -1);
+const eastAsianWidth = (c: number) => icuProperty(c, 0x1004);
+function checkRange(length: number, start: number, count: number) {
+  if (start < 0 || count < 0 || length < start + count) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+}
+/** each unit of a surrogate pair gets its code point's value */
+const perCodePoint = driven(function* perCodePoint(src: Uint16Array, start: number, count: number, dest: Int8Array, value: (c: number) => unknown): Gen {
+  for (let i = 0; i < count; i++) {
+    const c = src[start + i], next = i + 1 < count ? src[start + i + 1] : 0;
+    if (c >= 0xd800 && c <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+      dest[i] = dest[i + 1] = yield value(0x10000 + ((c - 0xd800) << 10) + (next & 0x3ff));
+      i++;
+    } else dest[i] = yield value(c);
+  }
+});
+rt.registerJnis("android/text/AndroidCharacter", {
+  "getDirectionalities([C[BI)V": (src: Uint16Array | null, dest: Int8Array | null, count: number) => {
+    if (!src || !dest) return rt.npe();
+    checkRange(Math.min(src.length, dest.length), 0, count);
+    return perCodePoint(src, 0, count, dest, directionality);
   },
+  "getEastAsianWidths([CII[B)V": (src: Uint16Array | null, start: number, count: number, dest: Int8Array | null) => {
+    if (!src || !dest) return rt.npe();
+    checkRange(src.length, start, count); checkRange(dest.length, 0, count);
+    return perCodePoint(src, start, count, dest, eastAsianWidth);
+  },
+  "getEastAsianWidth(C)I": eastAsianWidth,
+  "getMirror(C)C": icuMirror,
+  "mirror([CII)Z": driven(function* (chars: Uint16Array | null, start: number, count: number): Gen {
+    if (!chars) return rt.npe();
+    checkRange(chars.length, start, count);
+    let changed = 0;
+    for (let i = start; i < start + count; i++) {
+      const mirrored: number = yield icuMirror(chars[i]);
+      if (mirrored !== chars[i]) { chars[i] = mirrored; changed = 1; }
+    }
+    return changed;
+  }),
 });

@@ -71,7 +71,7 @@ async function exercise(name: string, fn: () => Promise<void>, needsDom = false)
     const missed = reached.slice(before);
     console.log(`${missed.length ? "MISS" : "ok  "} ${name}${missed.length ? "  " + missed.slice(0, 3).join(" ") : ""}`);
   } catch (e) {
-    const msg = (e as { msg?: string })?.msg ?? String(e);
+    const msg = (e as { msg?: string })?.msg ?? (e instanceof Error ? String(e) : String(await vcall(e, "toString", "()Ljava/lang/String;")));
     console.log(`FAIL ${name}  ${msg.split("\n")[0].slice(0, 150)}`);
   }
 }
@@ -693,6 +693,26 @@ await exercise("Bitmap.createBitmap + pixels", async () => {
   await vcall(b, "eraseColor", "(I)V", -1);
   if (await vcall(b, "getPixel", "(II)I", 3, 0) !== -1) throw new Error("eraseColor did not reach every pixel");
   if (await vcall(b, "isRecycled", "()Z")) throw new Error("a fresh bitmap reports recycled");
+});
+
+// text: expected values printed by the same calls on the reference AVD
+const sameText = (what: string, got: unknown, want: unknown) => { if (String(got) !== String(want)) throw new Error(`${what}: ${got}, not ${want}`); };
+await exercise("AndroidCharacter (device values)", async () => {
+  const AC = "android/text/AndroidCharacter", chars = (s: string) => Uint16Array.from(s.split(""), (c) => c.charCodeAt(0));
+  const widths: number[] = [];
+  for (const c of [0x41, 0xa1, 0xff61, 0xff21, 0x3042, 0x20a9, 0x2026, 0xac00, 0x300, 0x1100, 0x4e00]) widths.push(await scall(AC, "getEastAsianWidth", "(C)I", c));
+  sameText("getEastAsianWidth", widths, [4, 1, 2, 3, 5, 2, 1, 5, 1, 5, 5]);
+  const mirrors: number[] = [];
+  for (const c of "(>«a∈⁅〈»") mirrors.push(await scall(AC, "getMirror", "(C)C", c.charCodeAt(0)));
+  sameText("getMirror", mirrors, [41, 60, 187, 97, 8715, 8262, 12297, 171]);
+  const dirs = "aא1 ,٣‮😀א̀ا⁧\n\t", d = new Int8Array(dirs.length);
+  await scall(AC, "getDirectionalities", "([C[BI)V", chars(dirs), d, dirs.length);
+  sameText("getDirectionalities", d, [0, 1, 3, 12, 7, 6, 17, 13, 13, 1, 8, 2, -1, 10, 11]);
+  const w = "aあ𠀀bｶ", ew = new Int8Array(w.length);
+  await scall(AC, "getEastAsianWidths", "([CII[B)V", chars(w), 0, w.length, ew);
+  sameText("getEastAsianWidths", ew, [4, 5, 5, 5, 4, 2]);
+  const mc = chars("(a[b]<");
+  sameText("mirror", [await scall(AC, "mirror", "([CII)Z", mc, 1, 4), String.fromCharCode(...mc), await scall(AC, "mirror", "([CII)Z", chars("abc"), 0, 3)], [1, "(a]b[<", 0]);
 });
 
 // The resource natives, under AOSP's own Resources: the framework and an app installed as the

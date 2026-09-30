@@ -79,15 +79,16 @@ const displayOf = (method: string) => driven(function* (target: string, display:
   return vcall(yield ulocale(target), method, `(${ULOCALE})${STRING}`, yield ulocale(display));
 });
 
-/** java_lang_Character.cpp: each native is one ICU4C property call, answered here by ICU4J's
- *  UCharacter (compiled and called directly once its class is initialized). ASCII, whose
- *  properties are fixed, is answered without it for the predicates text loops call. */
+/** a static of ICU4J's UCharacter, the counterpart of an ICU4C property call, called directly once
+ *  its class is initialized */
+export function uchar(name: string, desc: string): (...args: unknown[]) => unknown {
+  let fn: ((...a: unknown[]) => unknown) | null = null;
+  return (...args: unknown[]) => fn ? fn(...args) : after(icuClass("android/icu/lang/UCharacter"),
+    (ctor) => (fn = (...a: unknown[]) => (ctor as Record<string, (...a: unknown[]) => unknown>)[mangleMethod(name, desc)](...a))(...args));
+}
+/** java_lang_Character.cpp: each native is one ICU4C property call, answered by UCharacter. ASCII,
+ *  whose properties are fixed, is answered without it for the predicates text loops call. */
 function characterNatives(): Record<string, (...args: never[]) => unknown> {
-  const U = "android/icu/lang/UCharacter";
-  const uchar = (name: string, desc: string) => {
-    let fn: ((...a: unknown[]) => unknown) | null = null;
-    return (...args: unknown[]) => fn ? fn(...args) : after(icuClass(U), (ctor) => (fn = (...a: unknown[]) => (ctor as Record<string, (...a: unknown[]) => unknown>)[mangleMethod(name, desc)](...a))(...args));
-  };
   const upper = (c: number) => c >= 65 && c <= 90, lower = (c: number) => c >= 97 && c <= 122, digit = (c: number) => c >= 48 && c <= 57;
   const ascii = (test: (c: number) => boolean, name: string) => {
     const icu = uchar(name, "(I)Z");
