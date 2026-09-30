@@ -18,7 +18,6 @@ import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
-import { mkExecutor } from "../jvm/natives/jconc";
 import { newFile, pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
@@ -1624,8 +1623,10 @@ const runAsyncTask = driven(function* runAsyncTask(this: JAsyncTask, executor: u
   this.done = new Promise(resolve => { finish = resolve; });
   const pre = () => vcall(this, "onPreExecute", "()V");
   if (curThread === mainThread && inMainJob()) yield pre(); else yield onMain(pre);
-  const runnable = new JObj();
-  Object.assign(runnable, { [mangleMethod("run", "()V")]: async () => {
+  // a real Runnable: an executor's worker casts what it takes from its queue
+  rt.link("webdroid/FnRunnable");
+  const runnable = new JFnRunnable();
+  runnable.fn = async () => {
     this.worker = curThread;
     try {
       if (!this.cancelled) this.result = await vcall(this, "doInBackground", "([Ljava/lang/Object;)Ljava/lang/Object;", params ?? []);
@@ -1636,18 +1637,19 @@ const runAsyncTask = driven(function* runAsyncTask(this: JAsyncTask, executor: u
         if (!this.error) await vcall(this, this.cancelled ? "onCancelled" : "onPostExecute", "(Ljava/lang/Object;)V", this.result);
       } finally { this.status = 2; }
     }).catch(reportUncaught);
-  } });
+  };
   yield vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
   return this;
 });
 rt.register({
   name: "android/os/AsyncTask", ctor: JAsyncTask,
   statics: { THREAD_POOL_EXECUTOR: null, SERIAL_EXECUTOR: null },
-  clinit: () => {
+  clinit: async () => {
     rt.link("android/os/AsyncTask$Status");
-    const c = rt.link("android/os/AsyncTask").ctor as Record<string, unknown>;
-    c.s$THREAD_POOL_EXECUTOR = mkExecutor(Math.max(2, Math.min(globalThis.navigator?.hardwareConcurrency ?? 2, 4)));
-    c.s$SERIAL_EXECUTOR = mkExecutor(1);
+    const c = rt.link("android/os/AsyncTask").ctor as Record<string, unknown>, service = "Ljava/util/concurrent/ExecutorService;";
+    c.s$THREAD_POOL_EXECUTOR = await scall("java/util/concurrent/Executors", "newFixedThreadPool", `(I)${service}`,
+      Math.max(2, Math.min(globalThis.navigator?.hardwareConcurrency ?? 2, 4)));
+    c.s$SERIAL_EXECUTOR = await scall("java/util/concurrent/Executors", "newSingleThreadExecutor", `()${service}`);
   },
   methods: {
     "execute([Ljava/lang/Object;)Landroid/os/AsyncTask;": function (this: JAsyncTask, params: unknown[]) {

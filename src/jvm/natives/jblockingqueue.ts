@@ -1,5 +1,5 @@
 import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../runtime";
-import { vcall } from "./jlang";
+import { vcall, park, curThread } from "./jlang";
 import { JList, mkIter, listMethods, toJsArray, LIST_ONLY, IDENTITY_EQUALITY, INDEX_OF, DEQUE_ONLY, SEQUENCED, CAPACITY } from "./jutil";
 import type { JTimeUnit } from "./jconc";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock";
@@ -45,14 +45,13 @@ class JBlockingQueue extends JList {
     const value = this.poll();
     if (value !== null) return value;
     if (timeout !== undefined && timeout <= 0) return null;
-    return new Promise(resolve => {
-      let timer: GuestTimer | undefined;
-      const taker = (value: unknown) => { if (timer) clearGuestTimeout(timer); resolve(value); };
+    // an interrupt ends the wait with InterruptedException, which libcore's pool workers rely on
+    let taken: unknown = null;
+    return park(curThread, (wake) => {
+      const taker = (value: unknown) => { taken = value; wake(); };
       this.takers.push(taker);
-      if (timeout !== undefined) timer = setGuestTimeout(() => {
-        this.takers.splice(this.takers.indexOf(taker), 1); taker(null);
-      }, timeout);
-    });
+      return () => { const i = this.takers.indexOf(taker); if (i >= 0) this.takers.splice(i, 1); };
+    }, timeout).then(() => taken);
   }
 }
 const queueAdd = function (this: JBlockingQueue, value: unknown): number {

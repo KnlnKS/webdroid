@@ -1,6 +1,5 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
-import { mkExecutor } from "../jvm/natives/jconc";
+import { vcall, scall } from "../jvm/natives/jlang";
 import { JService } from "./app";
 import type { JIntent } from "./intent";
 
@@ -14,7 +13,9 @@ rt.register({ name: "webdroid/IntentServiceTask", ctor: JIntentTask, ifaces: ["j
 } });
 rt.register({ name: "android/app/IntentService", ctor: JIntentService, sup: "android/app/Service", methods: {
   "<init>(Ljava/lang/String;)V": function () {},
-  "onCreate()V": function (this: JIntentService) { this.executor = mkExecutor(); },
+  "onCreate()V": driven(function* (this: JIntentService): Gen {
+    this.executor = yield scall("java/util/concurrent/Executors", "newSingleThreadExecutor", "()Ljava/util/concurrent/ExecutorService;");
+  }),
   "onStart(Landroid/content/Intent;I)V": driven(function* (this: JIntentService, intent: JIntent | null, startId: number): Gen {
     rt.link("webdroid/IntentServiceTask");
     const task = new JIntentTask(); task.service = this; task.intent = intent; task.startId = startId;
