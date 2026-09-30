@@ -3,7 +3,7 @@ import { contentResolver, openPfd } from "../android/contentresolver";
 import { mkUri } from "../android/net";
 import { vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
-import { csText } from "../android/text";
+import { csText } from "../jvm/natives/jchars";
 
 async function sharedFiles(intent: JIntent): Promise<File[]> {
   const stream = intent.extras.map.get("android.intent.extra.STREAM");

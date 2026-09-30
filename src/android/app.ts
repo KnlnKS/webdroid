@@ -13,14 +13,14 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj, scall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj, scall, after } from "../jvm/natives/jlang";
 import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
-import { spannedString } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
@@ -292,12 +292,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     void showMenuPopup(barAnchor(bar), overflow.length ? overflow : bar.menuItems);
   },
   "setTitle(Ljava/lang/CharSequence;)V": function (this: JActivity, t: unknown) {
-    this.titleStr = spannedString(t);
-    return vcall(this, "onTitleChanged", "(Ljava/lang/CharSequence;I)V", t, 0);
+    return after(csText(t), (s) => { this.titleStr = s; return vcall(this, "onTitleChanged", "(Ljava/lang/CharSequence;I)V", t, 0); });
   },
   // AppCompatActivity overrides this to title its toolbar
   "onTitleChanged(Ljava/lang/CharSequence;I)V": function (this: JActivity, t: unknown) {
-    if (this.window.actionBarView) { this.window.actionBarView.titleStr = spannedString(t); invalidate(); }
+    const bar = this.window.actionBarView;
+    if (bar) return after(csText(t), (s) => { bar.titleStr = s; invalidate(); });
   },
   "setTitle(I)V": function (this: JActivity, id: number) {
     return vcall(this, "setTitle", "(Ljava/lang/CharSequence;)V", resString(this.$host.res, id));

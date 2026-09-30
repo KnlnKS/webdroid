@@ -7,7 +7,7 @@ import { JImageView } from "./imageview";
 import { loadDrawableRV } from "./drawable";
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, after } from "../jvm/natives/jlang";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 
 // ── SearchView. AOSP inflates layout/search_view.xml and toggles the parts of it that a
 // collapsed or expanded search shows, so this does too rather than describing the row again.

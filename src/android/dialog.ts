@@ -20,7 +20,7 @@ import { AID, resString, rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { applyWindowTheme, windowDim, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 import { JMotionEvent } from "./motionevent";

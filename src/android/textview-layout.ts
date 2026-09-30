@@ -1,29 +1,24 @@
 // A TextView's text as AOSP lays it out: StaticLayout over the minikin boundary, built as
 // TextView.makeSingleLayout builds it, measured as TextView.onMeasure measures it, drawn by
 // Layout.draw. The view keeps up to two layouts, by width and alignment.
-import { JSpanned, JSpannable } from "./text";
-import { type JObj, driven, type Gen } from "../jvm/runtime";
+import { type JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { mangleStaticField } from "../jvm/abi";
-import { callOn, curThread, linkInit, scall, vcall } from "../jvm/natives/jlang";
+import { after, callOn, curThread, linkInit, scall, vcall } from "../jvm/natives/jlang";
+import { csLength } from "../jvm/natives/jchars";
 import { perf } from "../perf";
 import type { JTextView } from "./textview";
 
-/** a copy of `source` with each character mapped, keeping its spans where they were */
-function mapChars(source: string | JSpanned, map: (text: string) => string): string | JSpanned {
-  if (typeof source === "string") return map(source);
-  const result = new JSpannable(), offsets = new Uint32Array(source.text.length + 1);
-  let at = 0;
-  for (const char of source.text) {
-    offsets[at] = result.text.length;
-    if (char.length === 2) offsets[at + 1] = result.text.length + 1;
-    result.text += map(char); at += char.length;
-  }
-  offsets[at] = result.text.length;
-  result.spans = source.spans.map(s => ({ ...s, start: offsets[s.start], end: offsets[s.end] }));
-  return result;
-}
 /** SingleLineTransformationMethod */
 const singleLine = (s: string) => s.replace(/\n/g, " ").replace(/\r/g, "﻿");
+/** a CharSequence as AllCapsTransformationMethod and SingleLineTransformationMethod make it, spans kept */
+const transformSpanned = driven(function* transformSpanned(tv: JTextView, source: unknown): Gen {
+  let text = source;
+  if (tv.allCaps) text = yield scall("android/text/TextUtils", "toUpperCase", "(Ljava/util/Locale;Ljava/lang/CharSequence;Z)Ljava/lang/CharSequence;",
+    yield vcall(tv.paintT, "getTextLocale", "()Ljava/util/Locale;"), text, +rt.iof(text, "android/text/Spanned"));
+  if (tv.singleLine) text = yield vcall(yield scall("android/text/method/SingleLineTransformationMethod", "getInstance", "()Landroid/text/method/SingleLineTransformationMethod;"),
+    "getTransformation", "(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;", text, tv);
+  return text;
+});
 
 const LAYOUT = "android/text/Layout", SL = "Landroid/text/StaticLayout$Builder;";
 /** Layout.Alignment's constants, by horizontal gravity: left, center, right */
@@ -37,45 +32,45 @@ const enumConstant = driven(function* enumConstant(cls: string, name: string): G
 export interface TextViewLayout { java: JObj; width: number; align: Align; lines: number; height: number }
 
 export class TextViewLayouts {
-  private source: string | JSpanned | null = null;
-  private display: string | JSpanned = "";
+  private source: unknown = null;
+  private display: unknown = "";
   private key = "";
   private layouts: TextViewLayout[] = [];
   /** the text as laid out: after allCaps and single-line transformation */
-  private prepare(tv: JTextView, source: string | JSpanned): string | JSpanned {
+  private prepare(tv: JTextView, source: unknown): unknown {
     const key = [tv.paintT.font(), tv.paintT.letterSpacingEm, tv.allCaps, tv.maxLinesV, tv.singleLine, tv.ellipsizeEnd, tv.lineSpacingMult,
       tv.lineSpacingExtra, tv.includePad, tv.breakStrategy, tv.hyphenation, tv.fallbackLineSpacing].join();
-    if (source !== this.source || key !== this.key) {
-      this.source = source; this.key = key; this.layouts = [];
-      let display = tv.allCaps ? mapChars(source, (s) => s.toUpperCase()) : source;
-      if (tv.singleLine) display = mapChars(display, singleLine);
-      this.display = display;
+    if (source === this.source && key === this.key) return this.display;
+    this.source = source; this.key = key; this.layouts = [];
+    if (typeof source === "string") {
+      const upper = tv.allCaps ? source.toUpperCase() : source;
+      return this.display = tv.singleLine ? singleLine(upper) : upper;
     }
-    return this.display;
+    if (!tv.allCaps && !tv.singleLine) return this.display = source;
+    return after(transformSpanned(tv, source), (display) => this.source === source ? this.display = display : display);
   }
   /** Layout.getDesiredWidth: the widest paragraph, unwrapped, rounded up as TextView.desired does */
-  desiredWidth(tv: JTextView, source: string | JSpanned): number | Promise<number> {
-    const text = this.prepare(tv, source);
-    const w = callOn(curThread, () => scall(LAYOUT, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", text, tv.paintT));
-    return w instanceof Promise ? w.then(Math.ceil) : Math.ceil(w as number);
+  desiredWidth(tv: JTextView, source: unknown): number | Promise<number> {
+    return after(this.prepare(tv, source), (text) => after(callOn(curThread, () =>
+      scall(LAYOUT, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", text, tv.paintT)), Math.ceil));
   }
-  get(tv: JTextView, source: string | JSpanned, width: number, align: Align): TextViewLayout | Promise<TextViewLayout> {
+  get(tv: JTextView, source: unknown, width: number, align: Align): TextViewLayout | Promise<TextViewLayout> {
     width = Math.max(0, width);
-    const text = this.prepare(tv, source), cached = this.layouts.find(l => l.width === width && l.align === align);
-    if (cached) { perf.wrapHits++; return cached; }
-    perf.wraps++;
-    const built = build(tv, text, width, align);
-    const keep = (layout: TextViewLayout) => {
-      this.layouts.unshift(layout); this.layouts.length = Math.min(2, this.layouts.length);
-      return layout;
-    };
-    return built instanceof Promise ? built.then(keep) : keep(built);
+    return after(this.prepare(tv, source), (text) => {
+      const cached = this.layouts.find(l => l.width === width && l.align === align);
+      if (cached) { perf.wrapHits++; return cached; }
+      perf.wraps++;
+      return after(build(tv, text, width, align), (layout) => {
+        this.layouts.unshift(layout); this.layouts.length = Math.min(2, this.layouts.length);
+        return layout;
+      });
+    });
   }
 }
 
 /** TextView.makeSingleLayout's StaticLayout */
-const build = driven(function* build(tv: JTextView, text: string | JSpanned, width: number, align: Align): Gen<TextViewLayout> {
-  const length = typeof text === "string" ? text.length : text.text.length;
+const build = driven(function* build(tv: JTextView, text: unknown, width: number, align: Align): Gen<TextViewLayout> {
+  const length: number = yield csLength(text);
   // a single line without ellipsis is laid out as wide as it needs, as horizontal scrolling does
   const wide = tv.singleLine && !tv.ellipsizeEnd ? Math.max(width, Math.ceil(yield scall(LAYOUT, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", text, tv.paintT))) : width;
   let b = yield scall("android/text/StaticLayout$Builder", "obtain", `(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)${SL}`, text, 0, length, tv.paintT, wide);

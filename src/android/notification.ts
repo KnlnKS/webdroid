@@ -15,7 +15,7 @@ import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";
 import { preferenceStore } from "./sharedprefs";
 import { appHost } from "./apphost";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 
 type Impl = (...a: never[]) => unknown;
 const mkBundle = () => new (rt.link("android/os/Bundle").ctor as new () => JBundle)();

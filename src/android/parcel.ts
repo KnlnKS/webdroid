@@ -7,7 +7,7 @@ import { newObj, vcall, defineException, callOn, curThread, vcallOn } from "../j
 import { box, boxDesc, unbox, type BoxDesc } from "../jvm/natives/jbox";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 
 const enum V { NULL = -1, STRING = 0, INTEGER = 1, MAP = 2, BUNDLE = 3, PARCELABLE = 4, SHORT = 5, LONG = 6, FLOAT = 7, DOUBLE = 8, BOOLEAN = 9,
   CHARSEQUENCE = 10, LIST = 11, BYTEARRAY = 13, STRINGARRAY = 14, IBINDER = 15, PARCELABLEARRAY = 16, OBJECTARRAY = 17, INTARRAY = 18, LONGARRAY = 19,

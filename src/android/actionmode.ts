@@ -1,11 +1,11 @@
 import { rt, JObj, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, after } from "../jvm/natives/jlang";
 import { JActionBarView, JMenu } from "./menu";
 import { addOverlay, removeOverlay, FLAG_NOT_FOCUSABLE, FLAG_NOT_TOUCH_MODAL } from "./popup";
 import { initViewFromCtx, invalidate, type JView } from "./view";
 import { rvString, type Resources } from "./res";
-import { spannedString } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { device } from "../shell/config";
 import type { JActivity } from "./app";
 
@@ -36,9 +36,9 @@ rt.register({
       inf.jctx = this.jctx;
       return inf;
     },
-    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, title: unknown) { this.title = spannedString(title); invalidate(); },
+    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, title: unknown) { return after(csText(title), (s) => { this.title = s; invalidate(); }); },
     "setTitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_setTitle)!.call(this, resourceString(this, id)); },
-    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, title: unknown) { this.subtitle = spannedString(title); invalidate(); },
+    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, title: unknown) { return after(csText(title), (s) => { this.subtitle = s; invalidate(); }); },
     "setSubtitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_setSubtitle)!.call(this, resourceString(this, id)); },
     "setCustomView(Landroid/view/View;)V": function (this: JActionMode, view: JView | null) { this.customView = view; invalidate(); },
     ...fieldGetters({ "getMenu()Landroid/view/Menu;": "menu", "getTitle()Ljava/lang/CharSequence;": "title",

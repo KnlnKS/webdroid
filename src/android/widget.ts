@@ -6,7 +6,8 @@ import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDim
 import { TV } from "./axml";
 import { type JCanvas, type JInsets, JRect, insetsOf, measureText, fontAscent, fontDescent } from "./graphics";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
-import { JTextPaint, spannedString } from "./text";
+import { JTextPaint } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { G, absGravity } from "./gravity";
 import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JMotionEvent } from "./motionevent";
@@ -17,6 +18,9 @@ import { device } from "../shell/config";
 
 const relayoutSetters = (t: Record<string, string>): NativeSpec["methods"] => Object.fromEntries(Object.entries(t).map(([sig, f]) =>
   [sig, function (this: Record<string, unknown> & JView, v: unknown) { if (this[f] !== v) { this[f] = v; requestLayout(this); } }]));
+/** CharSequence setters kept as the text they read */
+const textSetters = (t: Record<string, string>): NativeSpec["methods"] => Object.fromEntries(Object.entries(t).map(([sig, f]) =>
+  [sig, function (this: Record<string, unknown> & JView, v: unknown) { return after(csText(v), (s) => { if (this[f] !== s) { this[f] = s; requestLayout(this); } }); }]));
 const PROGRESS_ID = 0x0102000d, SECONDARY_ID = 0x0102000f;
 /** AOSP ProgressBar: determinate progress is its progressDrawable at the progress level; an
  *  indeterminate drawable animates itself when Animatable, else its level cycles. */
@@ -459,7 +463,7 @@ class JSwitch extends JCompoundButton {
   thumbTint: JColorStateList | null = null; trackTint: JColorStateList | null = null;
   thumbTintMode: JSimpleEnum | null = null; trackTintMode: JSimpleEnum | null = null;
   hasThumbTint = false; hasTrackTint = false;
-  textOn: unknown = ""; textOff: unknown = "";
+  textOn = ""; textOff = "";
   showText = true; splitTrack = false;
   thumbTextPadding = 0; switchMinWidth = 0; switchPadding = 0;
   switchPaint: JTextPaint | null = null;
@@ -490,7 +494,7 @@ class JSwitch extends JCompoundButton {
     else this.pad.left = this.pad.top = this.pad.right = this.pad.bottom = 0;
     return this.thumb ? yield vcallOn(thread, this.thumb, "getOpticalInsets", "()Landroid/graphics/Insets;") : NO_INSETS;
   }
-  switchText(on: boolean): string { return spannedString(on ? this.textOn : this.textOff); }
+  switchText(on: boolean): string { return on ? this.textOn : this.textOff; }
 }
 const NO_INSETS = insetsOf(0, 0, 0, 0);
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
@@ -596,7 +600,8 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     "getThumbTintMode()Landroid/graphics/PorterDuff$Mode;": "thumbTintMode", "getTrackTintMode()Landroid/graphics/PorterDuff$Mode;": "trackTintMode",
     "getThumbTextPadding()I": "thumbTextPadding", "getSwitchMinWidth()I": "switchMinWidth", "getSwitchPadding()I": "switchPadding" }),
   ...flagGetters({ "getShowText()Z": "showText", "getSplitTrack()Z": "splitTrack" }),
-  ...relayoutSetters({ "setTextOn(Ljava/lang/CharSequence;)V": "textOn", "setTextOff(Ljava/lang/CharSequence;)V": "textOff",
+  ...textSetters({ "setTextOn(Ljava/lang/CharSequence;)V": "textOn", "setTextOff(Ljava/lang/CharSequence;)V": "textOff" }),
+  ...relayoutSetters({
     "setThumbTextPadding(I)V": "thumbTextPadding", "setSwitchMinWidth(I)V": "switchMinWidth", "setSwitchPadding(I)V": "switchPadding" }),
   "setShowText(Z)V": function (this: JSwitch, on: number) { if (this.showText !== !!on) { this.showText = !!on; requestLayout(this); } },
   "setSplitTrack(Z)V": function (this: JSwitch, on: number) { this.splitTrack = !!on; invalidate(this); },

@@ -12,7 +12,7 @@ import { parseAXML, TV } from "./axml";
 import { AID, rvString } from "./res";
 import type { JActivity } from "./app";
 import type { JActionMode } from "./actionmode";
-import { csText, spannedString } from "./text";
+import { csText } from "../jvm/natives/jchars";
 
 function firstText(v: JView | null): string | null {
   if (!v) return null;
@@ -259,8 +259,7 @@ function mkMenuItem(id: number, title: string): JMenuItem {
 }
 const menuItemMethods: NativeSpec["methods"] = {
   "setTitle(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenuItem, t: unknown) {
-    this.title = spannedString(t);
-    return this;
+    return after(csText(t), (s) => { this.title = s; return this; });
   },
   "setTitle(I)Landroid/view/MenuItem;": function (this: JMenuItem, id: number) {
     this.title = appString(id);
@@ -448,9 +447,9 @@ class JActionBar extends JObj {
 rt.register({
   name: "webdroid/ActionBar", ctor: JActionBar, sup: "android/app/ActionBar",
   methods: {
-    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.titleStr = spannedString(t); }); },
+    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { return after(csText(t), (s) => { this.bar((b) => { b.titleStr = s; }); }); },
     "setTitle(I)V": function (this: JActionBar, id: number) { this.bar((b) => { b.titleStr = appString(id); }); },
-    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.subtitleStr = t ? spannedString(t) : null; }); },
+    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { return after(csText(t), (s) => { this.bar((b) => { b.subtitleStr = t ? s : null; }); }); },
     "getTitle()Ljava/lang/CharSequence;": function (this: JActionBar) { return this.act?.window.actionBarView?.titleStr ?? ""; },
     "setDisplayHomeAsUpEnabled(Z)V": function (this: JActionBar, v: number) { this.bar((b) => { b.showUp = !!v; }); },
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JActionBar, d: JDrawable | null) {

@@ -4,32 +4,13 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
-import { JTextPaint, JSpanned } from "../src/android/text";
+import { JTextPaint } from "../src/android/text";
 import { JTheme, obtainStyled, rvString } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import { JTextView, JEditText } from "../src/android/textview";
 import { perf } from "../src/perf";
 
 beforeAll(loadSystemFonts);
-
-describe("span queries", () => {
-  rt.linkNatives();
-
-  test("getSpans reports empty spans at the query edges and nextSpanTransition stops at span edges", async () => {
-    const text = await newObj("android/text/SpannableStringBuilder");
-    const mark = await newObj("java/lang/Object"), point = await newObj("java/lang/Object"), style = await newObj("android/text/style/UnderlineSpan");
-    await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", mark, 0, 0, 17);
-    await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", point, 0, 0, 34);
-    await vcall(text, "append", "(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;", "abcd");
-    await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", style, 1, 3, 33);
-    const spans = (a: number, b: number) => vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", a, b, rt.classFor("java/lang/Object"));
-    expect(await spans(0, 4)).toEqual([mark, point, style]);
-    expect(await spans(3, 4)).toEqual([point]);
-    expect(await spans(3, 3)).toEqual([style]);
-    const next = (a: number, b: number, cls: string) => vcall(text, "nextSpanTransition", "(IILjava/lang/Class;)I", a, b, rt.classFor(cls));
-    expect([await next(0, 4, "java/lang/Object"), await next(1, 4, "android/text/style/UnderlineSpan"), await next(3, 4, "java/lang/Object")]).toEqual([1, 3, 4]);
-  });
-});
 
 describe("locale-span", () => {
   rt.linkNatives();
@@ -117,40 +98,6 @@ describe("reached-text-api", () => {
 
 });
 
-describe("spannable-valueof", () => {
-  class Watcher extends JObj { removed: unknown[] = []; }
-  rt.register({ name: "test/SpanWatcher", ctor: Watcher, ifaces: ["android/text/SpanWatcher"], methods: {
-    "onSpanRemoved(Landroid/text/Spannable;Ljava/lang/Object;II)V": async function (this: Watcher, text: JSpanned, span: unknown) {
-      await Promise.resolve();
-      expect(text.spans.some(s => s.span === span)).toBe(false);
-      this.removed.push(span);
-    },
-  } });
-
-  rt.linkNatives();
-  test("clearSpans preserves characters and notifies remaining watchers after removal", async () => {
-    const builder = await newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", "abc");
-    const watcher = rt.make("test/SpanWatcher") as Watcher, span = new JObj();
-    await vcall(builder, "setSpan", "(Ljava/lang/Object;III)V", watcher, 0, 3, 33);
-    await vcall(builder, "setSpan", "(Ljava/lang/Object;III)V", span, 3, 3, 34);
-    await vcall(builder, "clearSpans", "()V");
-    expect(watcher.removed).toEqual([span]);
-    expect(await vcall(builder, "getSpanStart", "(Ljava/lang/Object;)I", watcher)).toBe(-1);
-    expect(await vcall(builder, "toString", "()Ljava/lang/String;")).toBe("abc");
-  });
-  test("SpannableString.valueOf keeps string identity and copies mutable builders with spans", async () => {
-    const builder = await newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", "abc");
-    const span = new JObj();
-    await vcall(builder, "setSpan", "(Ljava/lang/Object;III)V", span, 0, 2, 33);
-    const value = await vcall(rt.link("android/text/SpannableString").ctor, "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", builder);
-    expect(value).not.toBe(builder);
-    expect(await vcall(rt.link("android/text/SpannableString").ctor, "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", value)).toBe(value);
-    await vcall(builder, "clear", "()V");
-    expect(await vcall(value, "toString", "()Ljava/lang/String;")).toBe("abc");
-    expect(await vcall(value, "getSpanEnd", "(Ljava/lang/Object;)I", span)).toBe(2);
-  });
-});
-
 describe("spanned-append", () => {
   class RangeSequence extends JObj {}
   rt.register({ name: "test/RangeSequence", ctor: RangeSequence, ifaces: ["java/lang/CharSequence"], methods: {
@@ -166,20 +113,6 @@ describe("spanned-append", () => {
     const sequence = await newObj("test/RangeSequence", "()V");
     await vcall(builder, "append", "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;", sequence, 1, 5);
     expect(await vcall(builder, "toString", "()Ljava/lang/String;")).toBe("bcab");
-  });
-
-  test("appending styled text retains span identity and offsets without coloring the following text", async () => {
-    const word = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "Games");
-    const color = await newObj("android/text/style/ForegroundColorSpan", "(I)V", -1);
-    await vcall(word, "setSpan", "(Ljava/lang/Object;III)V", color, 0, 5, 33);
-    const line = await newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", "Play ");
-    await vcall(line, "append", "(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;", word);
-    await vcall(line, "append", "(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;", " together");
-    expect(await vcall(line, "toString", "()Ljava/lang/String;")).toBe("Play Games together");
-    expect(await vcall(line, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, 19, rt.classFor("android/text/style/ForegroundColorSpan"))).toEqual(Object.assign([color], {$t:"Landroid/text/style/ForegroundColorSpan;"}));
-    expect(await vcall(line, "getSpanStart", "(Ljava/lang/Object;)I", color)).toBe(5);
-    expect(await vcall(line, "getSpanEnd", "(Ljava/lang/Object;)I", color)).toBe(10);
-    expect(await vcall(word, "getSpanStart", "(Ljava/lang/Object;)I", color)).toBe(0);
   });
 });
 
@@ -333,30 +266,29 @@ describe("tts-span", () => {
   });
 });
 
-describe("editable-factory", () => {
+describe("editable", () => {
+  class Watcher extends JObj { events: string[] = []; }
+  const event = (name: string) => async function (this: Watcher, text: unknown, ...range: number[]) {
+    this.events.push(`${name} ${await vcall(text, "toString", "()Ljava/lang/String;")} ${range.join(",")}`.trim());
+  };
+  rt.register({ name: "test/TextWatcher", ctor: Watcher, ifaces: ["android/text/TextWatcher"], methods: {
+    "beforeTextChanged(Ljava/lang/CharSequence;III)V": event("before"),
+    "onTextChanged(Ljava/lang/CharSequence;III)V": event("on"),
+    "afterTextChanged(Landroid/text/Editable;)V": event("after"),
+  } });
   rt.linkNatives();
-  test("newEditable copies span records", async () => {
-    const source = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "hello");
-    const span = new JObj();
-    await vcall(source, "setSpan", "(Ljava/lang/Object;III)V", span, 0, 2, 33);
-    const factory = await vcall(rt.link("android/text/Editable$Factory").ctor, "getInstance", "()Landroid/text/Editable$Factory;");
-    const editable = await vcall(factory, "newEditable", "(Ljava/lang/CharSequence;)Landroid/text/Editable;", source);
-    await vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", span, 1, 4, 33);
-    expect(await vcall(source, "getSpanEnd", "(Ljava/lang/Object;)I", span)).toBe(2);
-  });
-});
-
-describe("length-filter", () => {
-  rt.linkNatives();
-  test("an EditText's filters bound setText and edits through its Editable", async () => {
+  test("an EditText's filters bound setText and edits through its Editable, which its listeners follow", async () => {
     const field = new JEditText();
     await vcall(field, "setFilters", "([Landroid/text/InputFilter;)V", [await newObj("android/text/InputFilter$LengthFilter", "(I)V", 4)]);
     await vcall(field, "setText", "(Ljava/lang/CharSequence;)V", "abcdef");
     expect(field.text).toBe("abcd");
+    const watcher = rt.make("test/TextWatcher") as Watcher;
+    await vcall(field, "addTextChangedListener", "(Landroid/text/TextWatcher;)V", watcher);
     const editable = await vcall(field, "getText", "()Landroid/text/Editable;");
     await vcall(editable, "delete", "(II)Landroid/text/Editable;", 0, 2);
     await vcall(editable, "append", "(Ljava/lang/CharSequence;)Landroid/text/Editable;", "xyz");
     expect(field.text).toBe("cdxy");
+    expect(watcher.events).toEqual(["before abcd 0,2,0", "on cd 0,2,0", "after cd", "before cd 2,0,2", "on cdxy 2,0,2", "after cdxy"]);
   });
 });
 

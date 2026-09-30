@@ -136,7 +136,7 @@ async function probe() {
   await vcall(mixedLayout, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(directCanvas, 80, 60));
   const directPixels = directCanvas.getImageData(0, 0, 80, 60).data;
   const combined = { width: await vcall(mixedLayout, "getLineWidth", "(I)F", 0),
-    ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0), original: mixedText.text,
+    ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0), original: await vcall(mixedText, "toString", "()Ljava/lang/String;"),
     same: mixedLayout === mixed.layout!.java, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
   const selectionView = rt.make("android/widget/TextView");
   await vcall(selectionView, "setText", "(Ljava/lang/CharSequence;)V", "ab\ncd");

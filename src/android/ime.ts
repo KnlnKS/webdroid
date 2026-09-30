@@ -1,5 +1,4 @@
-// android.view.inputmethod.* — the editor/IME contract, plus the two editable-text pieces
-// that hang off it (android.text.Editable$Factory, android.widget.AutoCompleteTextView).
+// android.view.inputmethod.* — the editor/IME contract, plus android.widget.AutoCompleteTextView.
 //
 // EditorInfo and ExtractedText are public-FIELD APIs, not getter APIs: an editor fills
 // `inputType`/`imeOptions`/`initialSelStart` in place and the IME reads them back, so the
@@ -10,16 +9,16 @@
 // auto-stub it — which poisons every class that names it.
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj, after } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
-import { JEditable, csText, textSelection, setTextSelection } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { JView, invalidate, rootOf } from "./view";
 import { matrixOf, javaMatrix, identity, type Mat } from "./graphics";
 import { AID, type JAttrSet, obtainStyled } from "./res";
 import { hostStub } from "./binder";
 import { loadDrawableRV } from "./drawable";
-import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, textDiff, fireEditorAction, editorAction } from "./textview";
+import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, textDiff, fireEditorAction, editorAction, selectionStart, selectionEnd, setSelection } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
 import { JService } from "./app";
@@ -173,16 +172,19 @@ rt.register({
   },
 });
 
-const composing = new JObj();
+/** BaseInputConnection.COMPOSING: the span marking the composing region, SPAN_EXCLUSIVE_EXCLUSIVE | SPAN_COMPOSING */
+let composing: unknown = null;
+const COMPOSING_FLAGS = 0x121;
 class JBaseInputConnection extends JObj {
-  view: JView | null = null; full = 0; own: JEditable | null = null; batch = 0;
-  editable(): JEditable {
+  view: JView | null = null; full = 0; own: unknown = null; batch = 0;
+  editable(): unknown {
     if (this.full && this.view instanceof JTextView) return this.view.getEditable();
-    return this.own ??= rt.make("webdroid/Editable") as JEditable;
+    return this.own ?? after(newObj("android/text/SpannableStringBuilder", "()V"), (own) => this.own = own);
   }
   async content() {
+    composing ??= await newObj("android/view/inputmethod/ComposingText", "()V");
     const editable = await vcall(this, "getEditable", "()Landroid/text/Editable;");
-    const text = await csText(editable), [start, end] = await textSelection(editable);
+    const text = await csText(editable), start = await selectionStart(editable), end = await selectionEnd(editable);
     return { editable, text, start: Math.max(0, start), end: Math.max(0, end) };
   }
 }
@@ -197,9 +199,8 @@ const replaceAt = driven(function* replaceAt(ic: JBaseInputConnection, ins: stri
     yield vcall(editable, "removeSpan", "(Ljava/lang/Object;)V", composing);
     yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, ins, 0, ins.length);
     const cursor = Math.max(0, Math.min(text.length - (b - a) + ins.length, newCursor > 0 ? a + ins.length + newCursor - 1 : a + newCursor));
-    yield setTextSelection(editable, cursor, cursor);
-    if (compose) yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, 0x121);
-    if (ic.full && ic.view instanceof JTextView) yield vcall(ic.view, "setText", "(Ljava/lang/CharSequence;)V", yield csText(editable));
+    yield setSelection(editable, cursor, cursor);
+    if (compose) yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, COMPOSING_FLAGS);
     invalidate();
   } finally { yield vcall(ic, "endBatchEdit", "()Z"); }
   return 1;
@@ -238,7 +239,7 @@ rt.register({
     }),
     "setComposingRegion(II)Z": driven(function* (this: JBaseInputConnection, a: number, b: number): Gen {
       const { editable, text } = yield this.content();
-      yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, Math.max(0, Math.min(text.length, a, b)), Math.max(0, Math.min(text.length, Math.max(a, b))), 0x121);
+      yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, Math.max(0, Math.min(text.length, a, b)), Math.max(0, Math.min(text.length, Math.max(a, b))), COMPOSING_FLAGS);
       return 1;
     }),
     "finishComposingText()Z": driven(function* (this: JBaseInputConnection): Gen {
@@ -251,8 +252,7 @@ rt.register({
       try {
         if (right > b) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", b, right, "", 0, 0);
         if (a > left) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", left, a, "", 0, 0);
-        yield setTextSelection(editable, start - (a - left), end - (a - left));
-        if (this.full && this.view instanceof JTextView) yield vcall(this.view, "setText", "(Ljava/lang/CharSequence;)V", yield csText(editable));
+        yield setSelection(editable, start - (a - left), end - (a - left));
         invalidate();
       } finally { yield vcall(this, "endBatchEdit", "()Z"); }
       return 1;
@@ -266,7 +266,7 @@ rt.register({
     "setSelection(II)Z": driven(function* (this: JBaseInputConnection, a: number, b: number): Gen {
       const { editable, text } = yield this.content();
       if (a < 0 || b < 0 || a > text.length || b > text.length) return 0;
-      yield setTextSelection(editable, a, b); return 1;
+      yield setSelection(editable, a, b); return 1;
     }),
     "sendKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JBaseInputConnection, ev: unknown): Gen {
       if (this.view) yield vcall(this.view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev);
@@ -348,20 +348,6 @@ for (const n of ["android/view/inputmethod/CorrectionInfo", "android/view/inputm
   "android/view/inputmethod/PreviewableHandwritingGesture"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }
-
-// ── android.text.Editable$Factory — TextView's hook for swapping in a different Editable
-// implementation (androidx emoji2 subclasses it). AOSP hands back a SpannableStringBuilder.
-class JEditableFactory extends JObj {}
-let editableFactory: JEditableFactory | null = null;
-rt.register({
-  name: "android/text/Editable$Factory", ctor: JEditableFactory,
-  methods: {
-    "<init>()V": function () {},
-    "static getInstance()Landroid/text/Editable$Factory;": () => editableFactory ?? (editableFactory = new JEditableFactory()),
-    "newEditable(Ljava/lang/CharSequence;)Landroid/text/Editable;": (cs: unknown) =>
-      newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", cs),
-  },
-});
 
 // ── CursorAnchorInfo: an editor's report of where its cursor and text sit, assembled through a
 // Builder. No IME reads it here, but the editor drives collect/build/reset, and build() keeps
@@ -660,7 +646,7 @@ rt.register({
     }),
     "replaceText(Ljava/lang/CharSequence;)V": driven(function* (this: JAutoComplete, cs: unknown): Gen {
       yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
-      yield setTextSelection(this.getEditable(), this.text.length, this.text.length);
+      yield setSelection(yield this.getEditable(), this.text.length, this.text.length);
     }),
     ...noops("setCompletionHint(Ljava/lang/CharSequence;)V",
       "clearListSelection()V", "performCompletion()V"),

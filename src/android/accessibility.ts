@@ -2,7 +2,7 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { currentResources } from "./res";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 
 class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
 rt.register({ name: "android/view/accessibility/AccessibilityNodeInfo", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"] });

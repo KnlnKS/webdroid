@@ -15,7 +15,7 @@ import { device } from "../shell/config";
 import { JContextWrapper, type JContext } from "./context";
 import { JCanvas, JRect, measureCtx, castShadow } from "./graphics";
 import { JWindowLayoutParams, addWindow, removeWindow } from "./window";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { onMain } from "./mainloop";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 

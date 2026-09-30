@@ -12,7 +12,7 @@ import { type JBuffer, limit, position, remainingBytes, setPosition } from "../j
 import { onMain } from "./mainloop";
 import { JBundle, reportUncaught } from "./os";
 import { mkUri, uriParts, type JUri } from "./net";
-import { csText } from "./text";
+import { csText } from "../jvm/natives/jchars";
 import { scannedMediaUri } from "./mediastore";
 import { presentSurface, surfaceTarget } from "./glview";
 

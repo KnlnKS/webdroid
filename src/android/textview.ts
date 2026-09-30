@@ -6,7 +6,8 @@ import {
   drawChild, drawableSize,
   cslBoundary,
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, spannedString, csText, textSelection, setTextSelection, applyInputFilters } from "./text";
+import { JTextPaint } from "./text";
+import { csText, csLength } from "../jvm/natives/jchars";
 import { G, gravityV, gravityH } from "./gravity";
 import { firstStrongRtl } from "../jvm/bidi";
 import { device } from "../shell/config";
@@ -31,7 +32,7 @@ export class JTextView extends JView {
   lineBreakStyle = 0; lineBreakWordStyle = 0;
   transformation: unknown = null;
   /** AOSP mTransformed: what the TransformationMethod made of the text, laid out in its place */
-  transformed: string | JSpanned | null = null;
+  transformed: unknown = null;
   keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
   insertionActionMode: unknown = null;
   drawableTint: JColorStateList | null = null;
@@ -40,8 +41,10 @@ export class JTextView extends JView {
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
   maxH = Infinity;
+  /** mText's characters, refreshed on every change */
   text = "";
-  rawText: unknown = "";       // original CharSequence (may be Spannable)
+  /** AOSP mText: a String, SpannedString, Spannable or (for an editable buffer) Editable */
+  rawText: unknown = "";
   hint = "";
   paintT = new JTextPaint();
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
@@ -65,9 +68,12 @@ export class JTextView extends JView {
   drawableR: JDrawable | null = null;
   drawableB: JDrawable | null = null;
   drawablePad = 0;
+  /** AOSP mListeners */
   watchers: unknown[] = [];
+  /** an EditText: its text is always an Editable */
   editable = false;
-  editObj: JEditable | null = null;
+  changeWatcher: JObj | null = null;
+  editableFactory: unknown = null; spannableFactory: unknown = null;
   cursorVisible = true;
   cursorDrawable: JDrawable | null = null;
   cursorDrawableRes = 0;
@@ -101,20 +107,12 @@ export class JTextView extends JView {
     const rtl = firstStrongRtl(text);
     return (alignment === 3 || alignment === 1 && gravity === G.END) !== rtl ? 5 : 3;
   }
-  private upperOf = ""; private upper = "";
-  displayText(): string {
-    const text = this.transformed === null ? this.text : spannedString(this.transformed);
-    if (!this.allCaps) return text;
-    if (this.upperOf !== text) { this.upperOf = text; this.upper = text.toUpperCase(); }
-    return this.upper;
-  }
   retransform(): unknown { return rt.drive(this.retransform$()); }
   *retransform$(): Gen {
     const method = this.transformation;
     if (!method) { this.transformed = null; return; }
-    const src = this.editable ? this.getEditable() : this.rawText ?? this.text;
-    const out = yield vcall(method, "getTransformation", "(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;", src, this);
-    this.transformed = out === src || out == null ? null : typeof out === "string" || out instanceof JSpanned ? out : yield csText(out);
+    const out = yield vcall(method, "getTransformation", "(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;", this.rawText, this);
+    this.transformed = out === this.rawText ? null : out;
   }
   lineHeight(): number {
     const height = Math.round(fontDescent(this.paintT)) - Math.round(fontAscent(this.paintT));
@@ -126,42 +124,83 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
-  /** the text changed: relayout, mirror a focused field into the page's input and tell watchers */
-  *textChanged$(text: string): Gen {
-    this.text = text;
+  /** mText changed, by setText or an edit its ChangeWatcher reports: relayout and mirror a focused
+   *  field into the page's input */
+  *textChanged$(text?: string): Gen {
+    this.text = text ?? (yield csText(this.rawText));
     this.layoutWidthFor = -1;
+    if (typeof this.rawText !== "string") this.textLayouts = null;
     this.blinkStart = guestNow();
-    if (this === focusedEdit && inputEl && inputEl.value !== text) inputEl.value = text;
+    if (this === focusedEdit && inputEl && inputEl.value !== this.text) inputEl.value = this.text;
     if (this.transformation) yield this.retransform();
     requestLayout(this);
-    yield this.notifyWatchers();
   }
-  notifyWatchers(): unknown { return rt.drive(this.notifyWatchers$()); }
-  *notifyWatchers$(): Gen {
-    for (const w of this.watchers) {
-      try {
-        yield vcall(w, "beforeTextChanged", "(Ljava/lang/CharSequence;III)V", this.text, 0, 0, this.text.length);
-        yield vcall(w, "onTextChanged", "(Ljava/lang/CharSequence;III)V", this.text, 0, 0, this.text.length);
-        yield vcall(w, "afterTextChanged", "(Landroid/text/Editable;)V", this.getEditable());
-      } catch (e) { console.error("[watcher]", e); }
-    }
+  /** sendBeforeTextChanged and sendOnTextChanged: each listener in turn */
+  *sendTextEvent$(event: "beforeTextChanged" | "onTextChanged", text: unknown, start: number, before: number, after: number): Gen {
+    const listeners = this.watchers, count = listeners.length;
+    for (let i = 0; i < count; i++) yield vcall(listeners[i], event, "(Ljava/lang/CharSequence;III)V", text, start, before, after);
   }
-  /** mText for an editable view: its edits (typed, InputConnection or app code) update the view */
-  getEditable(): JEditable {
-    if (!this.editObj) {
-      const editable = this.editObj = rt.make("webdroid/Editable") as JEditable;
-      editable.edited = () => editable.text === this.text ? undefined : rt.drive(this.textChanged$((this.rawText = editable.text)));
-    }
-    this.editObj.text = this.text;
-    this.editObj.filters = this.filters;
-    return this.editObj;
+  *sendAfterTextChanged$(text: unknown): Gen {
+    const listeners = this.watchers, count = listeners.length;
+    for (let i = 0; i < count; i++) yield vcall(listeners[i], "afterTextChanged", "(Landroid/text/Editable;)V", text);
   }
-  shownText(): string | JSpanned { return this.transformed ?? (this.rawText instanceof JSpanned ? this.rawText : this.text); }
+  /** mText as an Editable, made one as setText(mText, EDITABLE) makes it if it is not yet */
+  getEditable(): unknown {
+    return isEditable(this.rawText) ? this.rawText
+      : after(vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", this.rawText, bufferTypes[2]), () => this.rawText);
+  }
+  shownText(): unknown { return this.transformed ?? this.rawText; }
   measuredLines(avail: number, align = this.align): TextViewLayout | Promise<TextViewLayout> {
     return (this.textLayouts ??= new TextViewLayouts()).get(this, this.shownText(), avail, align);
   }
-
 }
+const isEditable = (cs: unknown) => cs != null && typeof cs !== "string" && rt.iof(cs, "android/text/Editable");
+const isSpannable = (cs: unknown) => cs != null && typeof cs !== "string" && rt.iof(cs, "android/text/Spannable");
+const SELECTION = "android/text/Selection";
+export const selectionStart = (text: unknown): number | Promise<number> =>
+  text == null ? -1 : scall(SELECTION, "getSelectionStart", "(Ljava/lang/CharSequence;)I", text);
+export const selectionEnd = (text: unknown): number | Promise<number> =>
+  text == null ? -1 : scall(SELECTION, "getSelectionEnd", "(Ljava/lang/CharSequence;)I", text);
+export const setSelection = (text: unknown, start: number, end: number): unknown =>
+  scall(SELECTION, "setSelection", "(Landroid/text/Spannable;II)V", text, start, end);
+
+/** TextView.ChangeWatcher: a span over the whole of a Spannable mText through which its edits
+ *  reach the view and its listeners */
+const CHANGE_WATCHER = "webdroid/TextViewChangeWatcher";
+class JChangeWatcher extends JObj { tv!: JTextView; }
+const spanChange = function (this: JChangeWatcher, _text: unknown, what: unknown) {
+  const tv = this.tv;
+  if (rt.iof(what, "android/text/style/CharacterStyle") || rt.iof(what, "android/text/style/ParagraphStyle") || rt.iof(what, "android/text/style/UpdateAppearance")) {
+    tv.textLayouts = null; tv.layoutWidthFor = -1;
+    requestLayout(tv);
+  }
+  invalidate(tv);
+};
+rt.register({
+  name: CHANGE_WATCHER, ctor: JChangeWatcher, ifaces: ["android/text/TextWatcher", "android/text/SpanWatcher"],
+  methods: {
+    "beforeTextChanged(Ljava/lang/CharSequence;III)V": function (this: JChangeWatcher, text: unknown, start: number, before: number, after: number) {
+      return rt.drive(this.tv.sendTextEvent$("beforeTextChanged", text, start, before, after));
+    },
+    "onTextChanged(Ljava/lang/CharSequence;III)V": driven(function* (this: JChangeWatcher, text: unknown, start: number, before: number, after: number): Gen {
+      yield* this.tv.textChanged$();
+      yield* this.tv.sendTextEvent$("onTextChanged", text, start, before, after);
+    }),
+    "afterTextChanged(Landroid/text/Editable;)V": function (this: JChangeWatcher, text: unknown) { return rt.drive(this.tv.sendAfterTextChanged$(text)); },
+    "onSpanAdded(Landroid/text/Spannable;Ljava/lang/Object;II)V": spanChange,
+    "onSpanRemoved(Landroid/text/Spannable;Ljava/lang/Object;II)V": spanChange,
+    "onSpanChanged(Landroid/text/Spannable;Ljava/lang/Object;IIII)V": spanChange,
+  },
+});
+/** setText's last step for Spannable text: its ChangeWatcher, replacing those other views left in it */
+const watchText = driven(function* watchText(tv: JTextView, text: unknown): Gen {
+  const length: number = yield csLength(text);
+  for (const old of yield vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, length, rt.classFor(CHANGE_WATCHER)))
+    yield vcall(text, "removeSpan", "(Ljava/lang/Object;)V", old);
+  tv.changeWatcher ??= Object.assign(rt.make(CHANGE_WATCHER), { tv });
+  // SPAN_INCLUSIVE_INCLUSIVE at CHANGE_WATCHER_PRIORITY
+  yield vcall(text, "setSpan", "(Ljava/lang/Object;III)V", tv.changeWatcher, 0, length, 0x12 | 100 << 16);
+});
 const tvAttr = attrTable(
   "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
@@ -237,7 +276,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(0)) {
     const v = g(0)!;
     const text = v.t === TV.REFERENCE ? rvString(res, res.resolveRefs(v)) ?? "" : rvString(res, v) ?? "";
-    tv.text = tv.rawText = maxLength >= 0 ? spannedString((yield filterText(tv, text))) : text;
+    tv.text = tv.rawText = maxLength >= 0 ? yield csText(yield filterText(tv, text)) : text;
   }
   if (g(5)) {
     const v = g(5)!;
@@ -337,6 +376,8 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     const style = dsa || (dsr || !styleAttr ? 0 : AID(styleAttr));
     await initViewFromCtx(v, c, set, style, dsr);
     await applyTvStyle(v, set, style, dsr);
+    // AOSP's constructor ends with setText(text, bufferType): an editor's text becomes its Editable
+    if (v.editable) await vcall(v, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", v.rawText, bufferTypes[2]);
     await then?.(v, set, style, dsr);
   };
   return {
@@ -406,50 +447,58 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     return vcall(this, "setTextKeepState", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
   },
   "setTextKeepState(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": driven(function* (this: JTextView, cs: unknown, type: unknown): Gen {
-    const [start, end] = yield textSelection(this.editable ? this.getEditable() : this.rawText);
+    const start: number = yield selectionStart(this.rawText), end: number = yield selectionEnd(this.rawText), length: number = yield csLength(cs ?? "");
     yield vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, type);
-    if (start >= 0 || end >= 0) {
-      const text = this.editable ? this.getEditable() : this.rawText;
-      if (text && typeof text !== "string" && rt.iof(text, "android/text/Spannable")) {
-        yield setTextSelection(text, Math.max(0, Math.min(start, this.text.length)), Math.max(0, Math.min(end, this.text.length)));
-      }
-    }
+    if ((start >= 0 || end >= 0) && isSpannable(this.rawText))
+      yield setSelection(this.rawText, Math.max(0, Math.min(start, length)), Math.max(0, Math.min(end, length)));
   }),
   "setText(I)V": driven(function* (this: JTextView, id: number): Gen {
     const s = this.jres ? resString(this.jres, id) : "";
     yield guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
   }),
+  // AOSP: the filters, then the buffer the type asks for (an Editable for an editor, a key listener
+  // or listeners to tell, a Spannable for SPANNABLE or a movement method, else a String or
+  // SpannedString copy), a ChangeWatcher on Spannable text, and the listeners told around it
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": driven(function* (this: JTextView, cs: unknown, type: unknown): Gen {
-    if (this.filters.length) cs = yield filterText(this, cs ?? "");
-    if ((type === bufferTypes[1] || this.movementMethod) && cs != null && !this.editable && !rt.iof(cs, "android/text/Spannable"))
-      cs = yield newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs);
-    const changedSpans = cs instanceof JSpanned || this.rawText instanceof JSpanned;
+    if (cs == null) cs = "";
+    if (this.filters.length) cs = yield filterText(this, cs);
+    const notify = this.watchers.length > 0, oldLength = this.text.length;
+    if (notify) yield* this.sendTextEvent$("beforeTextChanged", this.rawText, 0, oldLength, yield csLength(cs));
+    if (type === bufferTypes[2] || this.editable || this.keyListener || notify) {
+      cs = yield this.editableFactory ? vcall(this.editableFactory, "newEditable", "(Ljava/lang/CharSequence;)Landroid/text/Editable;", cs)
+        : newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", cs);
+      if (this.filters.length) yield vcall(cs, "setFilters", "([Landroid/text/InputFilter;)V", jarray([...this.filters], "Landroid/text/InputFilter;"));
+    } else if (type === bufferTypes[1] || this.movementMethod) {
+      cs = yield this.spannableFactory ? vcall(this.spannableFactory, "newSpannable", "(Ljava/lang/CharSequence;)Landroid/text/Spannable;", cs)
+        : newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs);
+    } else if (typeof cs !== "string") cs = yield scall("android/text/TextUtils", "stringOrSpannedString", "(Ljava/lang/CharSequence;)Ljava/lang/CharSequence;", cs);
+    const spanned = typeof cs !== "string" || typeof this.rawText !== "string";
     this.rawText = cs;
+    if (isSpannable(cs)) yield watchText(this, cs);
     invalidate(this);
-    if (changedSpans) this.textLayouts = null;
-    const t = spannedString(cs);
-    if (t !== this.text || changedSpans) yield* this.textChanged$(t);
+    const text: string = yield csText(cs);
+    if (text !== this.text || spanned) yield* this.textChanged$(text);
+    if (notify) {
+      yield* this.sendTextEvent$("onTextChanged", cs, 0, oldLength, text.length);
+      yield* this.sendAfterTextChanged$(cs);
+    }
   }),
   "append(Ljava/lang/CharSequence;)V": driven(function* (this: JTextView, cs: unknown): Gen {
-    yield vcall(this, "append", "(Ljava/lang/CharSequence;II)V", cs, 0, (yield csText(cs)).length);
+    yield vcall(this, "append", "(Ljava/lang/CharSequence;II)V", cs, 0, yield csLength(cs));
   }),
   // AOSP turns the text into an Editable and appends to it in place
   "append(Ljava/lang/CharSequence;II)V": driven(function* (this: JTextView, cs: unknown, start: number, end: number): Gen {
-    if (!this.editable) {
-      const text = yield newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", this.rawText ?? this.text);
-      yield vcall(text, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", this.text.length, this.text.length, cs, start, end);
-      yield vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", text, bufferTypes[2]);
-      return;
-    }
-    const text = this.getEditable();
-    yield vcall(text, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", this.text.length, this.text.length, cs, start, end);
+    if (!isEditable(this.rawText)) yield vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", this.rawText, bufferTypes[2]);
+    yield vcall(this.rawText, "append", "(Ljava/lang/CharSequence;II)Landroid/text/Editable;", cs, start, end);
   }),
   "getText()Ljava/lang/CharSequence;": function (this: JTextView) {
-    return this.editable ? this.getEditable() : (this.rawText ?? this.text);
+    return this.editable ? this.getEditable() : this.rawText;
   },
   "length()I": function (this: JTextView) { return this.text.length; },
   // AOSP's checkForRelayout: an empty view measures its hint, so a new one can change the size
-  "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) { this.hint = spannedString(cs); requestLayout(this); },
+  "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) {
+    return after(csText(cs), (hint) => { this.hint = hint; requestLayout(this); });
+  },
   "setHint(I)V": function (this: JTextView, id: number) {
     this.hint = this.jres ? resString(this.jres, id) : "";
     requestLayout(this);
@@ -551,10 +600,15 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "getCompoundPaddingBottom()I": compoundPadB,
   "getCompoundPaddingStart()I": function (this: JTextView) { return compoundPadRelative(this, true); },
   "getCompoundPaddingEnd()I": function (this: JTextView) { return compoundPadRelative(this, false); },
-  // the factories only matter to a TextView that hands its buffer to the app (emoji2 wraps
-  // them to intercept the Editable), and TextView has no getters for them
-  "setEditableFactory(Landroid/text/Editable$Factory;)V": function () {},
-  "setSpannableFactory(Landroid/text/Spannable$Factory;)V": function () {},
+  // AOSP: the text is set again through the new factory
+  "setEditableFactory(Landroid/text/Editable$Factory;)V": function (this: JTextView, factory: unknown) {
+    this.editableFactory = factory;
+    return vcall(this, "setText", "(Ljava/lang/CharSequence;)V", this.rawText);
+  },
+  "setSpannableFactory(Landroid/text/Spannable$Factory;)V": function (this: JTextView, factory: unknown) {
+    this.spannableFactory = factory;
+    return vcall(this, "setText", "(Ljava/lang/CharSequence;)V", this.rawText);
+  },
   "addTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) { this.watchers.push(w); },
   "removeTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) {
     removeFrom(this.watchers, w);
@@ -596,8 +650,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   // AOSP: the view's own handling first, then the movement method's over the Spannable text
   "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JTextView, ev: unknown): Gen {
     const handled = yield (JView.prototype as unknown as Record<string, (e: unknown) => unknown>)[M_onTouchEvent].call(this, ev);
-    const text = this.editable ? this.getEditable() : this.rawText;
-    if (this.movementMethod && this.enabled && this.layout && text != null && rt.iof(text, "android/text/Spannable")
+    const text = this.rawText;
+    if (this.movementMethod && this.enabled && this.layout && isSpannable(text)
       && (yield vcall(this.movementMethod, "onTouchEvent", "(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z", this, text, ev))) return 1;
     return handled;
   }),
@@ -688,8 +742,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "getTextCursorDrawable()Landroid/graphics/drawable/Drawable;": function (this: JTextView) { return textCursorDrawable(this); },
   "setCursorVisible(Z)V": function (this: JTextView, v: number) { this.cursorVisible = !!v; },
   "setOnEditorActionListener(Landroid/widget/TextView$OnEditorActionListener;)V": function (this: JTextView, l: unknown) { this.editorActionL = l; },
-  "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[]) {
+  "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[] | null) {
     this.filters = arr ?? [];
+    if (isEditable(this.rawText)) return vcall(this.rawText, "setFilters", "([Landroid/text/InputFilter;)V", jarray([...this.filters], "Landroid/text/InputFilter;"));
   },
   "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { return jarray(this.filters ?? [], "Landroid/text/InputFilter;"); },
   "setMaxWidth(I)V": function (this: JTextView, w: number) { this.maxW = w; return relayout(this); },
@@ -734,8 +789,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "isHorizontallyScrollable()Z": function (this: JTextView) { return this.horizontallyScrolling ? 1 : 0; },
   // AOSP makes the text Spannable so the selection can live in it
   "setSelectAllOnFocus(Z)V": function (this: JTextView, on: number) {
-    const text = this.editable ? this.getEditable() : this.rawText ?? this.text;
-    if (on && (typeof text === "string" || !rt.iof(text, "android/text/Spannable")))
+    const text = this.rawText;
+    if (on && !isSpannable(text))
       return vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", text, bufferTypes[1]);
   },
   // AOSP also makes the focus FOCUSABLE_AUTO and installs ArrowKeyMovementMethod, which have no counterpart here
@@ -745,7 +800,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     yield vcall(this, "setFocusableInTouchMode", "(Z)V", on);
     yield vcall(this, "setClickable", "(Z)V", on);
     yield vcall(this, "setLongClickable", "(Z)V", on);
-    const text = this.editable ? this.getEditable() : this.rawText ?? this.text;
+    const text = this.rawText;
     yield vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", text, bufferTypes[on ? 1 : 0]);
   }),
   "isTextSelectable()Z": function (this: JTextView) { return this.textSelectable ? 1 : 0; },
@@ -767,7 +822,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "getBaseline()I": function (this: JTextView) {
     return this.layout ? after(vcall(this.layout.java, "getLineBaseline", "(I)I", 0), (b: number) => this.padT + b) : this.padT + this.ascent();
   },
-  "getEditableText()Landroid/text/Editable;": function (this: JTextView) { return this.getEditable(); },
+  "getEditableText()Landroid/text/Editable;": function (this: JTextView) { return isEditable(this.rawText) ? this.rawText : null; },
   "setEnabled(Z)V": function (this: JTextView, e: number) { this.enabled = !!e; void this.refreshDrawableState(); },
   // TextView.onMeasure: a wrapping width is the text's desired width, the layout is built at the
   // width the view gets, and its height is that layout's, at least minLines tall
@@ -782,7 +837,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     else {
       const layouts = this.textLayouts ??= new TextViewLayouts();
       let desired: number = yield layouts.desiredWidth(this, this.shownText());
-      if (!this.displayText() && this.hint) desired = Math.max(desired, yield (this.hintLayouts ??= new TextViewLayouts()).desiredWidth(this, this.hint));
+      if (!this.text && this.hint) desired = Math.max(desired, yield (this.hintLayouts ??= new TextViewLayouts()).desiredWidth(this, this.hint));
       w = Math.max(desired, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + hPad;
       const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
       w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? yield min : min));
@@ -807,7 +862,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JTextView, cv: JCanvas): Gen {
     if (this.width() <= 0 || this.height() <= 0) return;
     const thread = curThread, ctx = cv.ctx;
-    const display = this.displayText();
+    const display = this.text;
     const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
     const alignment = Number(resolved instanceof Promise ? yield resolved : resolved);
     const direction = alignment === 5 || alignment === 6 ? vcallOn(thread, this, "getLayoutDirection", "()I") : 0;
@@ -909,16 +964,17 @@ rt.register({
     ...textViewCtors<JEditText>("editTextStyle"),
     "getText()Landroid/text/Editable;": function (this: JEditText) { return this.getEditable(); },
     "getText()Ljava/lang/CharSequence;": function (this: JEditText) { return vcall(this, "getText", "()Landroid/text/Editable;"); },
-    "getSelectionStart()I": driven(function* (this: JEditText): Gen { const [start] = yield textSelection(this.getEditable()); return start >= 0 ? start : this.text.length; }),
-    "getSelectionEnd()I": driven(function* (this: JEditText): Gen { const [, end] = yield textSelection(this.getEditable()); return end >= 0 ? end : this.text.length; }),
+    // no selection reads as the end, where this editor's caret is
+    "getSelectionStart()I": driven(function* (this: JEditText): Gen { const start: number = yield selectionStart(yield this.getEditable()); return start >= 0 ? start : this.text.length; }),
+    "getSelectionEnd()I": driven(function* (this: JEditText): Gen { const end: number = yield selectionEnd(yield this.getEditable()); return end >= 0 ? end : this.text.length; }),
     "setSelection(I)V": function (this: JEditText, index: number) {
-      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => setTextSelection(text, index, index));
+      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => setSelection(text, index, index));
     },
     "setSelection(II)V": function (this: JEditText, start: number, end: number) {
-      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => setTextSelection(text, start, end));
+      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => setSelection(text, start, end));
     },
     "selectAll()V": function (this: JEditText) {
-      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => after(csText(text), (s) => setTextSelection(text, 0, s.length)));
+      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => scall(SELECTION, "selectAll", "(Landroid/text/Spannable;)V", text));
     },
     "performClick()Z": driven(function* (this: JEditText): Gen {
       yield vcall(this, "requestFocus", "()Z");
@@ -979,20 +1035,24 @@ export function textDiff(previous: string, text: string): [number, number, numbe
 export const editInput = driven(function* editInput(text: string, start: number = text.length, end: number = start): Gen {
   const et = focusedEdit;
   if (!et) return;
-  const previous = et.text, [a, b, c] = textDiff(previous, text), editable = et.getEditable();
+  const previous = et.text, [a, b, c] = textDiff(previous, text), editable = yield et.getEditable();
   if (b > a || c > a) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, text, a, c);
   if (et.text !== text) {
     start = end = Math.max(a, et.text.length - (previous.length - b));
     inputEl?.setSelectionRange(start, end);
   }
-  yield setTextSelection(editable, start, end);
+  yield setSelection(editable, start, end);
 });
 
-/** TextView.setText's filter pass: each filter sees the whole text against an empty destination */
-let emptySpanned: JObj | null = null;
+/** TextView.setText's filter pass: each filter sees the whole text against EMPTY_SPANNED */
+let emptySpanned: unknown = null;
 const filterText = driven(function* filterText(tv: JTextView, cs: unknown): Gen {
-  emptySpanned ??= rt.make("android/text/SpannedString");
-  return (yield applyInputFilters(tv.filters, cs, 0, (yield csText(cs)).length, emptySpanned, 0, 0))[0];
+  emptySpanned ??= yield newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", "");
+  for (const filter of tv.filters) {
+    const out = yield vcall(filter, "filter", "(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;", cs, 0, yield csLength(cs), emptySpanned, 0, 0);
+    if (out != null) cs = out;
+  }
+  return cs;
 });
 
 rt.markers("android/widget/Checkable");

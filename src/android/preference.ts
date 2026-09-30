@@ -22,7 +22,7 @@ import { getPrefs } from "./sharedprefs";
 import { JFragment, fragMethods } from "./fragment";
 import { type JContext } from "./context";
 import { device } from "../shell/config";
-import { csText, spannedString } from "./text";
+import { csText } from "../jvm/natives/jchars";
 
 // ── attribute resolution: mirrors res.ts's own value-resolution helpers (obtainStyled etc.),
 // just driven off a raw AXML attribute instead of a styleable index. ──
@@ -121,9 +121,9 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JPreference, c: unknown, set: JAttrSet | null) {
     initPrefCommon(this, c, set);
   },
-  "setTitle(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.titleStr = spannedString(t); notifyChanged(this); },
+  "setTitle(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { return after(csText(t), (s) => { this.titleStr = s; notifyChanged(this); }); },
   "setTitle(I)V": function (this: JPreference, id: number) { this.titleStr = ctxString(this.jctx, id); notifyChanged(this); },
-  "setSummary(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.summaryStr = spannedString(t); notifyChanged(this); },
+  "setSummary(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { return after(csText(t), (s) => { this.summaryStr = s; notifyChanged(this); }); },
   "setSummary(I)V": function (this: JPreference, id: number) { this.summaryStr = ctxString(this.jctx, id); notifyChanged(this); },
   "setEnabled(Z)V": function (this: JPreference, e: number) { this.enabled = !!e; notifyChanged(this); },
   "getPreferenceManager()Landroid/preference/PreferenceManager;": function (this: JPreference) {
