@@ -1175,48 +1175,43 @@ export class Runtime {
     if (off < 0 || len < 0 || off > chars.length - len) throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
     return charsToString(chars, off, len);
   }
-  /** String.<init> replacement (see compiler special-case), its arguments in order */
-  newStr(desc: string, a?: unknown, b?: unknown, c?: unknown, d?: unknown): string {
-    switch (desc) {
-      case "()V": return "";
-      case "(Ljava/lang/String;)V": return a as string;
-      case "(Ljava/lang/StringBuilder;)V": case "(Ljava/lang/StringBuffer;)V":
-        return String(a);
-      case "([C)V": return charsToString(a as Uint16Array, 0, (a as Uint16Array).length);
-      case "([CII)V": return this.strChars(a as Uint16Array, b as number, c as number);
-      // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
-      case "([BB)V": {
-        const bytes = a as Int8Array, n = b ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
-        if (b) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
-        else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
-        return charsToString(chars, 0, n);
-      }
-      case "([BI)V": case "([BIII)V": {
-        const bytes = a as Int8Array;
-        if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");
-        const high = (b as number) << 8;
-        const off = desc === "([BI)V" ? 0 : c as number;
-        const count = desc === "([BI)V" ? bytes.length : d as number;
-        this.byteRange(bytes, off, count);
-        const chars = new Uint16Array(count);
-        for (let i = 0; i < count; i++) chars[i] = high | (bytes[off + i] & 255);
-        return charsToString(chars, 0, count);
-      }
-      case "([B)V": return decodeString(a as Int8Array, "UTF-8");
-      case "([BII)V": return decodeString(a as Int8Array, "UTF-8", this.byteRange(a as Int8Array, b as number, c as number), c as number);
-      case "([BLjava/lang/String;)V": case "([BLjava/nio/charset/Charset;)V":
-        return decodeString(a as Int8Array, b);
-      case "([BIILjava/lang/String;)V": case "([BIILjava/nio/charset/Charset;)V":
-        return decodeString(a as Int8Array, d, this.byteRange(a as Int8Array, b as number, c as number), c as number);
-      // code points, not chars: each element is a whole Unicode scalar
-      case "([III)V": {
-        const cp = a as Int32Array, off = b as number, n = c as number;
-        let out = "";
-        for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
-        return out;
-      }
-      default: throw this.unimplemented("String.<init>" + desc);
-    }
+  /** String's constructors by descriptor: what the compiler emits for String.<init>, and JNI's NewObject */
+  readonly newStr = {
+    "()V": () => "",
+    "(Ljava/lang/String;)V": (s: string) => s,
+    "(Ljava/lang/StringBuilder;)V": (sb: object) => String(sb),
+    "(Ljava/lang/StringBuffer;)V": (sb: object) => String(sb),
+    "([C)V": (chars: Uint16Array) => charsToString(chars, 0, chars.length),
+    "([CII)V": (chars: Uint16Array, off: number, n: number) => this.strChars(chars, off, n),
+    // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
+    "([BB)V": (bytes: Int8Array, coder: number) => {
+      const n = coder ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
+      if (coder) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
+      else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
+      return charsToString(chars, 0, n);
+    },
+    "([BI)V": (bytes: Int8Array, high: number) => this.hibyteStr(bytes, high, 0, bytes?.length),
+    "([BIII)V": (bytes: Int8Array, high: number, off: number, n: number) => this.hibyteStr(bytes, high, off, n),
+    "([B)V": (bytes: Int8Array) => decodeString(bytes, "UTF-8"),
+    "([BII)V": (bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", this.byteRange(bytes, off, n), n),
+    "([BLjava/lang/String;)V": (bytes: Int8Array, cs: string) => decodeString(bytes, cs),
+    "([BLjava/nio/charset/Charset;)V": (bytes: Int8Array, cs: object) => decodeString(bytes, cs),
+    "([BIILjava/lang/String;)V": (bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, this.byteRange(bytes, off, n), n),
+    "([BIILjava/nio/charset/Charset;)V": (bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, this.byteRange(bytes, off, n), n),
+    // code points, not chars: each element is a whole Unicode scalar
+    "([III)V": (cp: Int32Array, off: number, n: number) => {
+      let out = "";
+      for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
+      return out;
+    },
+  } satisfies Record<string, (...args: never[]) => string>;
+  /** the deprecated String(byte[] ascii, int hibyte, ...): each char is hibyte over a byte */
+  private hibyteStr(bytes: Int8Array | null, high: number, off: number, n: number): string {
+    if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");
+    this.byteRange(bytes, off, n);
+    const chars = new Uint16Array(n), hi = high << 8;
+    for (let i = 0; i < n; i++) chars[i] = hi | (bytes[off + i] & 255);
+    return charsToString(chars, 0, n);
   }
   /** String's checkBoundsOffCount over a byte array: the offset */
   private byteRange(bytes: Int8Array, off: number, count: number): number {

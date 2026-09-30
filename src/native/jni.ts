@@ -366,7 +366,12 @@ export function jniInit(): void {
     const args = read(m, a);
     try {
       const p = (i.owner ?? rt).initClass(i); if (p) await p;
-      if (i.name === "java/lang/String") return toRef(rt.newStr(m.desc, ...args), cpu);   // a Java string is a JS string, built by the runtime's own constructor table
+      // a Java string is a JS string, built by the runtime's own constructor table
+      if (i.name === "java/lang/String") {
+        const make = (rt.newStr as Record<string, (...a: unknown[]) => string>)[m.desc];
+        if (!make) throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
+        return toRef(make(...args), cpu);
+      }
       const o = callOn(cpu.jthread, () => new i.ctor());
       const fn = o[m.mangled];
       if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
