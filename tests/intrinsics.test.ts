@@ -227,3 +227,25 @@ test("typed views' element and bulk intrinsics match their AOSP bodies", async (
     }
   }
 });
+
+test("Matcher.usePattern's kept MatcherNatives answer as new ones do", async () => {
+  const [use, useBase] = await pair("java/util/regex/Matcher", "usePattern(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;");
+  const patterns = await Promise.all(["[ ]+", "[0-9]+", "(a+)(b*)", "$", "x?", "[0-9]+$"].map((p) => scall("java/util/regex/Pattern", "compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;", p)));
+  const text = "12 aab ab  7x a 99", matchers = await Promise.all([0, 1].map(() => vcall(patterns[0], "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", text)));
+  const ops: [string, string, () => unknown[]][] = [
+    ["find", "()Z", () => []], ["lookingAt", "()Z", () => []], ["matches", "()Z", () => []], ["hitEnd", "()Z", () => []], ["requireEnd", "()Z", () => []],
+    ["group", "()Ljava/lang/String;", () => []], ["group", "(I)Ljava/lang/String;", () => [random(4) - 1]], ["start", "()I", () => []], ["end", "()I", () => []],
+    ["groupCount", "()I", () => []], ["reset", "()Ljava/util/regex/Matcher;", () => []],
+    ["region", "(II)Ljava/util/regex/Matcher;", () => { const a = random(text.length + 1); return [a, a + random(text.length + 1 - a)]; }],
+  ];
+  for (let s = 0; s < 500; s++) {
+    if (random(3) === 0) {
+      const p = patterns[random(patterns.length)];
+      expect(await step(use, matchers[0], [p])).toEqual(await step(useBase, matchers[1], [p]));
+      continue;
+    }
+    const [name, desc, args] = ops[random(ops.length)], a = args(), results: unknown[] = [];
+    for (const m of matchers) results.push([name, desc, await step((...x: unknown[]) => vcall(m, name, desc, ...x), m, a)]);
+    expect(results[0]).toEqual(results[1]);
+  }
+});
