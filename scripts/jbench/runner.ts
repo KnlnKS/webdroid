@@ -20,6 +20,7 @@ console.warn = () => {};
 const bench = rt.link("Bench");
 await rt.initClass(bench);
 await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0); // as ActivityThread.main leaves an app process
+await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "java.io.tmpdir", "/data/local/tmp");
 const [workload, repsArg] = process.argv.slice(2), reps = Number(repsArg);
 const call = () => vcallAsync(bench.ctor, "run", "(Ljava/lang/String;)I", workload);
 let t = performance.now();
