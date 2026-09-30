@@ -1,7 +1,7 @@
 // android.text.* — TextPaint and Spannable/Editable (spans stored; AOSP's Layout draws them).
 import { type JParcel, writeInt, readInt, writeString8, readString8 } from "./parcel";
 
-import { rt, JObj, type NativeSpec, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { JPaint, copyPaint } from "./graphics";
 import { jarray } from "../jvm/abi";
@@ -384,73 +384,5 @@ rt.register({
     TYPE_NUMBER_FLAG_DECIMAL: 8192, TYPE_NUMBER_FLAG_SIGNED: 4096,
     TYPE_TEXT_FLAG_CAP_SENTENCES: 16384, TYPE_TEXT_FLAG_MULTI_LINE: 131072,
     TYPE_TEXT_VARIATION_PASSWORD: 128,
-  },
-});
-
-// ── android.text.method: the interfaces app classes implement (AllCaps/Password transformations,
-// custom movement methods) and the framework movement singletons. Our TextView lays text out
-// itself and does not yet map a touch to a character offset, so the link-following part of
-// LinkMovementMethod.onTouchEvent honestly reports "not handled".
-rt.markers("android/text/method/TransformationMethod", "android/text/method/MovementMethod");
-class JReplacementTransformation extends JObj {}
-rt.register({ name: "android/text/method/ReplacementTransformationMethod", ctor: JReplacementTransformation,
-  ifaces: ["android/text/method/TransformationMethod"], methods: {
-    "<init>()V": () => {},
-    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": driven(function* (this: JReplacementTransformation, source: unknown): Gen {
-      if (source == null) return null;
-      const original = (yield vcall(this, "getOriginal", "()[C")) as Uint16Array;
-      const replacement = (yield vcall(this, "getReplacement", "()[C")) as Uint16Array;
-      const text = yield csText(source);
-      let changed = false, result = "";
-      for (let i = 0; i < text.length; i++) {
-        const at = original.indexOf(text.charCodeAt(i));
-        changed ||= at >= 0;
-        result += at < 0 ? text[i] : String.fromCharCode(replacement[at]);
-      }
-      return changed ? result : source;
-    }),
-    "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
-  },
-});
-class JSingleLineTransformation extends JReplacementTransformation {}
-const singleLineTM = new JSingleLineTransformation();
-rt.register({ name: "android/text/method/SingleLineTransformationMethod", ctor: JSingleLineTransformation,
-  sup: "android/text/method/ReplacementTransformationMethod", methods: {
-    "<init>()V": () => {},
-    "static getInstance()Landroid/text/method/SingleLineTransformationMethod;": () => singleLineTM,
-    "getOriginal()[C": () => Uint16Array.of(10, 13),
-    "getReplacement()[C": () => Uint16Array.of(32, 0xfeff),
-  },
-});
-class JBaseMovementMethod extends JObj {}
-const movementMethods: NonNullable<NativeSpec["methods"]> = {
-  ...noops("<init>()V"),
-  ...stubs(0, "onKeyDown(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z",
-    "onKeyOther(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/KeyEvent;)Z",
-    "onGenericMotionEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
-    "canSelectArbitrarily()Z"),
-};
-rt.register({ name: "android/text/method/BaseMovementMethod", ctor: JBaseMovementMethod, ifaces: ["android/text/method/MovementMethod"], methods: movementMethods });
-class JScrollingMovementMethod extends JBaseMovementMethod {}
-const scrollingMM = new JScrollingMovementMethod();
-rt.register({
-  name: "android/text/method/ScrollingMovementMethod", ctor: JScrollingMovementMethod, sup: "android/text/method/BaseMovementMethod",
-  methods: { "<init>()V": function () {}, "static getInstance()Landroid/text/method/MovementMethod;": () => scrollingMM },
-});
-class JLinkMovementMethod extends JScrollingMovementMethod {}
-const linkMM = new JLinkMovementMethod();
-rt.register({
-  name: "android/text/method/LinkMovementMethod", ctor: JLinkMovementMethod, sup: "android/text/method/ScrollingMovementMethod",
-  methods: { "<init>()V": function () {}, "static getInstance()Landroid/text/method/MovementMethod;": () => linkMM, "canSelectArbitrarily()Z": () => 1 },
-});
-class JPasswordTransformation extends JObj {}
-export const passwordTransformation = new JPasswordTransformation();
-rt.register({
-  name: "android/text/method/PasswordTransformationMethod", ctor: JPasswordTransformation, ifaces: ["android/text/method/TransformationMethod"],
-  methods: {
-    "<init>()V": function () {},
-    "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTransformation,
-    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": driven(function* (s: unknown): Gen { return "\u2022".repeat((yield csText(s)).length); }),
-    "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
   },
 });

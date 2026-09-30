@@ -6,7 +6,7 @@ import {
   drawChild, drawableSize,
   cslBoundary,
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, spannedString, csText, textSelection, setTextSelection, passwordTransformation, applyInputFilters } from "./text";
+import { JTextPaint, JEditable, JSpanned, spannedString, csText, textSelection, setTextSelection, applyInputFilters } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { firstStrongRtl } from "../jvm/bidi";
 import { device } from "../shell/config";
@@ -23,6 +23,8 @@ import { tfMedium, typefaceOf } from "./fonts";
 import { type NativeSpec, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod, jmethod } from "../jvm/abi";
 import { TextViewLayouts, Align, type TextViewLayout } from "./textview-layout";
+
+const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 
 export class JTextView extends JView {
   fallbackLineSpacing = true;
@@ -260,7 +262,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
   if (g(17)) tv.hintColors = yield rvCsl(res, g(17)!, tv.theme, 1627389952);
   if (g(18)) tv.inputTypeV = rvInt(res, g(18), 1);
-  if (isPasswordType(tv.inputTypeV) || rvInt(res, g(36), 0)) yield setTransformation(tv, passwordTransformation);
+  if (isPasswordType(tv.inputTypeV) || rvInt(res, g(36), 0)) yield setTransformation(tv, yield passwordMethod());
   if (g(19)) tv.lineSpacingExtra = rvDimen(res, g(19), 0);
   if (g(20)) tv.lineSpacingMult = g(20)!.t === TV.FLOAT ? g(20)!.d : 1;
   if (g(28)) tv.includePad = !!rvInt(res, g(28), 1);
@@ -344,6 +346,7 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return init(this, c, set, dsa, dsr); },
   };
 }
+const passwordMethod = () => scall("android/text/method/PasswordTransformationMethod", "getInstance", "()Landroid/text/method/PasswordTransformationMethod;");
 /** TextView.isPasswordInputType: text password, web password or number password */
 const isPasswordType = (t: number) => { const v = t & 0xfff; return v === 0x81 || v === 0xe1 || v === 0x12; };
 /** AOSP setTransformationMethod: a new method re-lays the text out through it */
@@ -416,8 +419,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     const s = this.jres ? resString(this.jres, id) : "";
     yield guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
   }),
-  "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": driven(function* (this: JTextView, cs: unknown): Gen {
+  "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": driven(function* (this: JTextView, cs: unknown, type: unknown): Gen {
     if (this.filters.length) cs = yield filterText(this, cs ?? "");
+    if ((type === bufferTypes[1] || this.movementMethod) && cs != null && !this.editable && !rt.iof(cs, "android/text/Spannable"))
+      cs = yield newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs);
     const changedSpans = cs instanceof JSpanned || this.rawText instanceof JSpanned;
     this.rawText = cs;
     invalidate(this);
@@ -555,11 +560,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
     removeFrom(this.watchers, w);
   },
   // AOSP: a password type masks through PasswordTransformationMethod, leaving one unmasks
-  "setInputType(I)V": function (this: JTextView, t: number) {
+  "setInputType(I)V": driven(function* (this: JTextView, t: number): Gen {
     this.inputTypeV = t;
-    if (isPasswordType(t)) return setTransformation(this, passwordTransformation);
-    if (this.transformation === passwordTransformation) return setTransformation(this, null);
-  },
+    if (isPasswordType(t)) return setTransformation(this, yield passwordMethod());
+    if (this.transformation && rt.iof(this.transformation, "android/text/method/PasswordTransformationMethod")) return setTransformation(this, null);
+  }),
   "getInputType()I": function (this: JTextView) { return this.inputTypeV; },
   "setImeOptions(I)V": function (this: JTextView, o: number) { this.imeOptions = o; },
   "setShowSoftInputOnFocus(Z)V": function (this: JTextView, enabled: number) {
@@ -574,7 +579,28 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = cslBoundary({
   "getPrivateImeOptions()Ljava/lang/String;": function (this: JTextView) { return this.privateImeOptions; },
   "setKeyListener(Landroid/text/method/KeyListener;)V": function (this: JTextView, l: unknown) { this.keyListener = l; },
   "getKeyListener()Landroid/text/method/KeyListener;": function (this: JTextView) { return this.keyListener; },
-  "setMovementMethod(Landroid/text/method/MovementMethod;)V": function (this: JTextView, m: unknown) { this.movementMethod = m; },
+  // AOSP: the text becomes Spannable for the method, and the view focusable and clickable
+  // (fixFocusableAndClickableSettings)
+  "setMovementMethod(Landroid/text/method/MovementMethod;)V": driven(function* (this: JTextView, m: unknown): Gen {
+    if (this.movementMethod === m) return;
+    this.movementMethod = m;
+    if (!m) return;
+    if (!this.editable && this.rawText != null && !rt.iof(this.rawText, "android/text/Spannable"))
+      yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", this.rawText);
+    yield vcall(this, "setFocusable", "(Z)V", 1);
+    yield vcall(this, "setClickable", "(Z)V", 1);
+    yield vcall(this, "setLongClickable", "(Z)V", 1);
+  }),
+  // LinkMovementMethod hides the selection toolbar; this TextView shows none
+  "hideFloatingToolbar(I)V": () => {},
+  // AOSP: the view's own handling first, then the movement method's over the Spannable text
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JTextView, ev: unknown): Gen {
+    const handled = yield (JView.prototype as unknown as Record<string, (e: unknown) => unknown>)[M_onTouchEvent].call(this, ev);
+    const text = this.editable ? this.getEditable() : this.rawText;
+    if (this.movementMethod && this.enabled && this.layout && text != null && rt.iof(text, "android/text/Spannable")
+      && (yield vcall(this.movementMethod, "onTouchEvent", "(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z", this, text, ev))) return 1;
+    return handled;
+  }),
   "getMovementMethod()Landroid/text/method/MovementMethod;": function (this: JTextView) { return this.movementMethod; },
   "getDefaultMovementMethod()Landroid/text/method/MovementMethod;": () => null,
   "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
