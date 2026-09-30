@@ -15,6 +15,8 @@ export interface PreparedInstruction {
   readonly wideLit: bigint;
   readonly constKind?: "F" | "D";
   readonly nullRecv?: boolean;
+  /** a compareTo whose result only zero tests read */
+  readonly signOnly?: boolean;
 }
 
 export interface PreparedMethod {
@@ -382,6 +384,64 @@ function typeConstants(
   }
 }
 
+/** the registers an instruction names; a written one comes first */
+function registersOf({ fmt, a, b, c, regs }: MutableInstruction): readonly number[] {
+  switch (fmt) {
+    case "10x": case "10t": case "20t": case "30t": return NO_REGS;
+    case "35c": case "3rc": case "45cc": case "4rcc": return regs;
+    case "23x": return [a, b, c];
+    case "12x": case "22x": case "32x": case "22b": case "22t": case "22s": case "22c": return [a, b];
+    default: return [a];
+  }
+}
+
+/** Does every path read the int written by the move-result at `from` only with zero tests, directly
+ *  or through moves? Then only its sign matters. Any other read, a handler's included, needs it exact. */
+function readAsSign(code: CodeItem, instructions: readonly MutableInstruction[], index: Int32Array, from: number): boolean {
+  const seen = new Set<string>(), work: [number, number[]][] = [[from + 1, [instructions[from].a]]];
+  for (let item = work.pop(); item; item = work.pop()) {
+    let [k, live] = item;
+    while (live.length && k >= 0 && k < instructions.length) {
+      const key = `${k} ${live}`;
+      if (seen.has(key)) break;
+      seen.add(key);
+      const ins = instructions[k], { op, pc, a } = ins;
+      for (const t of code.tries) if (pc >= t.start && pc < t.end) {
+        for (const [, handler] of t.handlers) work.push([index[handler], live]);
+        if (t.catchAllAddr >= 0) work.push([index[t.catchAllAddr], live]);
+      }
+      const named = registersOf(ins);
+      if (op >= 0x01 && op <= 0x03) live = !live.includes(ins.b) ? live.filter((r) => r !== a) : live.includes(a) ? live : [...live, a];
+      else if (!(op >= 0x38 && op <= 0x3d) && named.some((r) => live.includes(r))) {
+        // only overwritten: a destination the instruction does not also read
+        if (!writesRegister(op) || named === ins.regs || (op >= 0xb0 && op <= 0xcf) || named.slice(1).some((r) => live.includes(r))) return false;
+        live = live.filter((r) => r !== a);
+      }
+      if ((op >= 0x0e && op <= 0x11) || op === 0x27) break;
+      const targets = branchTargets(code, ins);
+      if (op >= 0x28 && op <= 0x2a) { k = index[targets[0]]; continue; }
+      for (const target of targets) work.push([index[target], live]);
+      k++;
+    }
+  }
+  return true;
+}
+
+/** Marks the compareTo calls whose results are only tested against zero: a String receiver then
+ *  compares natively, in one step instead of a char loop. */
+function markSignOnly(dex: DexFile, code: CodeItem, instructions: MutableInstruction[]): void {
+  let index: Int32Array | undefined;
+  for (let k = 0; k + 1 < instructions.length; k++) {
+    const ins = instructions[k], op = ins.op;
+    if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78 || ins.regs.length !== 2 || instructions[k + 1].op !== 0x0a) continue;
+    if (dex.method(ins.b).name !== "compareTo") continue;
+    const desc = dex.methodDesc(ins.b);
+    if (desc !== "(Ljava/lang/Object;)I" && desc !== "(Ljava/lang/String;)I") continue;
+    if (!index) { index = new Int32Array(code.insns.length).fill(-1); instructions.forEach((x, i) => { index![x.pc] = i; }); }
+    if (readAsSign(code, instructions, index, k + 1)) ins.signOnly = true;
+  }
+}
+
 export function prepareMethod(
   dex: DexFile,
   code: CodeItem,
@@ -413,6 +473,7 @@ export function prepareMethod(
   const signature = parseMethodDesc(desc);
   const carriers = constantCarriers(instructions);
   annotateConstants(dex, code, signature, isStatic, instructions, leaders, carriers);
+  markSignOnly(dex, code, instructions);
   if (observe) observe("type", performance.now() - started);
 
   return {

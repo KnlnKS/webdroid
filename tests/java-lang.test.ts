@@ -515,6 +515,15 @@ describe("string-case", () => {
     const cmp = (rt.link("java/lang/String").ctor as Record<string, unknown>)[mangleStaticField("CASE_INSENSITIVE_ORDER")];
     expect(await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "b", "A")).toBe(1);
   });
+
+  test("compareTo keeps its value where it is returned and orders by UTF-16 units where only its sign is read", async () => {
+    const natural = await scall("java/util/Comparator", "naturalOrder", "()Ljava/util/Comparator;");
+    expect(await vcall(natural, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "apple", "apricot")).toBe(-2);
+    const keys = ["b", "a\uffff", "a", "\ud83d\ude00", "\uff61", "ab", ""];
+    const set = await newObj("java/util/TreeSet", "()V");
+    for (const k of keys) await vcall(set, "add", "(Ljava/lang/Object;)Z", k);
+    expect(await vcall(set, "toString", "()Ljava/lang/String;")).toBe(`[${[...keys].sort().join(", ")}]`);
+  });
 });
 
 describe("string-trim", () => {

@@ -820,9 +820,14 @@ ${profileEnd}
       return;
     }
     switch (kind) {
-      case "invoke-virtual": case "invoke-interface":
-        this.guard(`${recv}${this.prop(mangled)}(${argStr})`, out);
+      case "invoke-virtual": case "invoke-interface": {
+        const call = `${recv}${this.prop(mangled)}(${argStr})`;
+        if (!i.signOnly) { this.guard(call, out); break; }
+        // a String's order is its UTF-16 units', as JS compares strings
+        const [r, o] = i.regs.map((x) => this.reg(x));
+        this.guard(`typeof ${r}==="string"&&typeof ${o}==="string"?${r}===${o}?0:${r}<${o}?-1:1:${call}`, out);
         break;
+      }
       case "invoke-super": {
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
