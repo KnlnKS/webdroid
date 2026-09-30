@@ -142,7 +142,7 @@ const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
     return BigInt(lastError(javaSeekFd(fd, Number(n), 1), "Seek error") - cur);
   },
 };
-for (const [sig, fn] of Object.entries(fisNatives)) rt.registerJni("java/io/FileInputStream", sig, fn);
+rt.registerJnis("java/io/FileInputStream", fisNatives);
 
 
 // BufferedReader stays TS over libcore's Reader: compiled bytecode scans a line at about 3.5 ns a

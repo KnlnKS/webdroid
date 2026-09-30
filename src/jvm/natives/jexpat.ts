@@ -215,7 +215,7 @@ const parserNatives: Record<string, (...args: never[]) => unknown> = {
   "release(J)V": (pointer: bigint) => { contexts.delete(pointer); },
   "releaseParser(J)V": (pointer: bigint) => { contexts.delete(pointer); },
 };
-for (const [sig, fn] of Object.entries(parserNatives)) rt.registerJni("org/apache/harmony/xml/ExpatParser", sig, fn);
+rt.registerJnis("org/apache/harmony/xml/ExpatParser", parserNatives);
 
 const at = (pointer: bigint) => attributeSets.get(pointer) ?? [];
 const attributeNatives: Record<string, (...args: never[]) => unknown> = {
@@ -230,4 +230,4 @@ const attributeNatives: Record<string, (...args: never[]) => unknown> = {
   "getValueForQName(JLjava/lang/String;)Ljava/lang/String;": (pointer: bigint, qName: string) => at(pointer).find((a) => a.qName === qName)?.value ?? null,
   "freeAttributes(J)V": (pointer: bigint) => { attributeSets.delete(pointer); },
 };
-for (const [sig, fn] of Object.entries(attributeNatives)) rt.registerJni("org/apache/harmony/xml/ExpatAttributes", sig, fn);
+rt.registerJnis("org/apache/harmony/xml/ExpatAttributes", attributeNatives);

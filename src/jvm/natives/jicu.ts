@@ -132,4 +132,4 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "com/android/icu/util/UResourceBundleNative": { "cacheTimeZoneBundles()V": () => {} },
   "java/lang/Character": characterNatives(),
 };
-for (const [cls, methods] of Object.entries(natives)) for (const [sig, fn] of Object.entries(methods)) rt.registerJni(cls, sig, fn);
+for (const [cls, methods] of Object.entries(natives)) rt.registerJnis(cls, methods);

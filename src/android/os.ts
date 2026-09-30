@@ -1459,7 +1459,7 @@ function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, 
     return ioResult(fn, n);
   });
 }
-for (const [sig, fn] of Object.entries(linux)) rt.registerJni("libcore/io/Linux", sig, fn);
+rt.registerJnis("libcore/io/Linux", linux);
 // Android interrupts threads blocked on the descriptor; a reader parked on a pipe here stays parked
 rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD})V`, () => {});
 
@@ -1500,7 +1500,7 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   }),
   "getNameMax0(Ljava/lang/String;)J": () => 255n,
 };
-for (const [sig, fn] of Object.entries(unixFileSystem)) rt.registerJni("java/io/UnixFileSystem", sig, fn);
+rt.registerJnis("java/io/UnixFileSystem", unixFileSystem);
 
 // sun.nio.fs.UnixNativeDispatcher (UnixNativeDispatcher.c): java.nio.file's syscalls over the VFS.
 // Paths arrive as NUL-terminated strings in native memory; failures throw UnixException(errno).
@@ -1636,7 +1636,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
     a[f("f_frsize")] = s.f_frsize; a[f("f_blocks")] = s.f_blocks; a[f("f_bfree")] = s.f_bfree; a[f("f_bavail")] = s.f_bavail;
   }),
 };
-for (const [sig, fn] of Object.entries(unixNativeDispatcher)) rt.registerJni("sun/nio/fs/UnixNativeDispatcher", sig, fn);
+rt.registerJnis("sun/nio/fs/UnixNativeDispatcher", unixNativeDispatcher);
 // LinuxNativeDispatcher.c: the VFS stores no extended attributes, and its only mount table would be
 // a file some app wrote (there is no /proc/mounts)
 const mountTables = new Map<bigint, string[][]>();
@@ -1662,7 +1662,7 @@ const linuxNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   },
   "endmntent(J)V": (table: bigint) => { mountTables.delete(table); },
 };
-for (const [sig, fn] of Object.entries(linuxNativeDispatcher)) rt.registerJni("sun/nio/fs/LinuxNativeDispatcher", sig, fn);
+rt.registerJnis("sun/nio/fs/LinuxNativeDispatcher", linuxNativeDispatcher);
 // UnixCopyFile.c: read(2) and write(2) until the source's end, checking the cancel flag between reads
 rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (dst: number, src: number, cancel: bigint): Gen {
   const buffer = new Uint8Array(1 << 16);

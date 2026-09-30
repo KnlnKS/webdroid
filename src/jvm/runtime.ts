@@ -461,6 +461,10 @@ export class Runtime {
     const key = cls + "|" + sig;
     this.jni.set(key, this.trackPlaceholder(`${cls}.${sig}`, fn, (f) => { if (this.jni.get(key) === f) this.jni.set(key, fn); }));
   }
+  /** register the native halves of one class, by their exact descriptors */
+  registerJnis(cls: string, table: Record<string, unknown>) {
+    for (const [sig, fn] of Object.entries(table)) this.registerJni(cls, sig, fn as (...a: never[]) => unknown);
+  }
   jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null { return this.jni.get(cls + "|" + sig) ?? this.jniResolver?.(cls, sig) ?? null; }
   /** set by the native tier: resolve a native by its JNI short-name export (`Java_pkg_Cls_m`) in a loaded library */
   jniResolver: ((cls: string, sig: string) => ((...a: never[]) => unknown) | null) | null = null;

@@ -19,10 +19,7 @@ import { packages } from "./packages";
 import { mkPfd } from "./os";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 
-type Fn = (...a: never[]) => unknown;
-function delegate(cls: string, table: Record<string, unknown>) {
-  for (const [sig, fn] of Object.entries(table)) rt.registerJni(cls, sig, fn as Fn);
-}
+const delegate = rt.registerJnis.bind(rt);
 
 // ── ApkAssets ───────────────────────────────────────────────────────────────────────────
 // An apk is one the package registry installed: the framework's at its device path, an app's at

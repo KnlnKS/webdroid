@@ -545,7 +545,7 @@ const patternNatives: Record<string, (...args: never[]) => unknown> = {
     evaluated: 0, evalFrom: 0, hitEnd: false, requireEnd: false, found: null, probe: null } satisfies MatcherState),
   "getNativeFinalizer()J": () => FREE,
 };
-for (const [sig, fn] of Object.entries(patternNatives)) rt.registerJni("com/android/icu/util/regex/PatternNative", sig, fn);
+rt.registerJnis("com/android/icu/util/regex/PatternNative", patternNatives);
 
 const matcherNatives: Record<string, (...args: never[]) => unknown> = {
   "setInputImpl(JLjava/lang/String;II)V": (address: bigint, input: string, start: number, end: number) => {
@@ -587,7 +587,7 @@ const matcherNatives: Record<string, (...args: never[]) => unknown> = {
   "useTransparentBoundsImpl(JZ)V": (address: bigint, value: number) => { const m = matcher(address); m.transparent = !!value; m.probe = null; },
   "getNativeFinalizer()J": () => FREE,
 };
-for (const [sig, fn] of Object.entries(matcherNatives)) rt.registerJni("com/android/icu/util/regex/MatcherNative", sig, fn);
+rt.registerJnis("com/android/icu/util/regex/MatcherNative", matcherNatives);
 
 function* syntaxError(e: unknown, source: string): Gen<never> {
   throw yield newObj("java/util/regex/PatternSyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", (e as Error).message, source, -1);

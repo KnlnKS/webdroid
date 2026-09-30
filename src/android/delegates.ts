@@ -40,11 +40,7 @@ import {
   createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies,
 } from "./fonts";
 
-type Fn = (...a: never[]) => unknown;
-/** register the native halves of one class, by their exact AOSP descriptors */
-function delegate(cls: string, table: Record<string, unknown>) {
-  for (const [sig, fn] of Object.entries(table)) rt.registerJni(cls, sig, fn as Fn);
-}
+const delegate = rt.registerJnis.bind(rt);
 
 
 // ── the libcore plumbing framework bytecode stands on ──────────────────────────────────

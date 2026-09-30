@@ -788,13 +788,13 @@ rt.register({
   },
 });
 // libcore's Charset.availableCharsets asks ICU's converter registry, which holds the charsets served here
-for (const [sig, fn] of Object.entries({
+rt.registerJnis("com/android/icu/charset/NativeConverter", {
   "getNativeFinalizer()J": () => NO_FINALIZER,
   "getAvailableCharsetNames()[Ljava/lang/String;": () => jarray(CHARSETS.map((cs) => cs.name), "Ljava/lang/String;"),
   "charsetForName(Ljava/lang/String;)Ljava/nio/charset/Charset;": (name: string) => {
     try { return charset(charsetInfo(name).name); } catch { return null; }
   },
-})) rt.registerJni("com/android/icu/charset/NativeConverter", sig, fn);
+});
 rt.register({
   name: "java/nio/charset/spi/CharsetProvider", ctor: class extends JObj {},
   methods: { "<init>()V": function () {} },
