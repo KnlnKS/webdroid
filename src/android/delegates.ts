@@ -309,6 +309,8 @@ delegate("android/graphics/RuntimeShader", {
     shaderBuilder(b).set(name, [x, y, z, w].slice(0, n), false, true),
   "nativeUpdateUniforms(JLjava/lang/String;[FZ)V": (b: bigint, name: string, values: Float32Array, isColor: number) =>
     shaderBuilder(b).set(name, values, !!isColor),
+  "nativeUpdateShader(JLjava/lang/String;J)V": (b: bigint, name: string, shader: bigint) =>
+    shaderBuilder(b).setChild(name, shader ? deref<NativeShader>(shader) : null),
   "nativeUpdateUniforms(JLjava/lang/String;[I)V": (b: bigint, name: string, values: Int32Array) =>
     shaderBuilder(b).set(name, values, false, true),
 });

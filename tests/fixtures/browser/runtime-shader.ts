@@ -53,6 +53,16 @@ async function probe() {
   try { await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "color", 1); }
   catch (error) { invalid = !!rt.iof(error, "java/lang/IllegalArgumentException"); }
   const text = locateDrawnText(owner, "label", 64, 64);
-  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)] };
+  // the framework's ripple: SkSL with a child shader, integer literals in float context, saturate()
+  const ripple = await newObj("android/graphics/drawable/RippleShader", "()V");
+  for (const [name, desc, ...args] of [["setOrigin", "(FF)V", 50, 50], ["setTouch", "(FF)V", 50, 50], ["setRadius", "(F)V", 40],
+    ["setProgress", "(F)V", 0.3], ["setNoisePhase", "(F)V", 10], ["setColor", "(II)V", 0x80ff0000 | 0, -1], ["setResolution", "(FF)V", 100, 100]] as const)
+    await vcall(ripple, name, desc, ...args);
+  const ripplePaint = newPaint();
+  await vcall(ripplePaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", ripple);
+  const rippleCtx = new OffscreenCanvas(100, 100).getContext("2d")!;
+  await vcall(canvasOver(rippleCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 50, 50, 40, ripplePaint);
+  const rippleCenter = Array.from(rippleCtx.getImageData(50, 50, 1, 1).data);
+  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)], rippleCenter };
 }
 export default probe;

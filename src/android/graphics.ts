@@ -178,7 +178,7 @@ export class NativeBitmapShader extends NativeShader {
   }
 }
 /** fills everything `c` can show with `s`; a pattern shader applies its own local matrix */
-function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: NativeShader) {
+export function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: NativeShader) {
   const style = s.pattern(c);
   if (!style) return;
   if (s.local && style instanceof CanvasGradient) c.transform(...s.local);
