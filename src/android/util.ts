@@ -25,6 +25,11 @@ const logFn = (lvl: string) => (tag: string, msg: string, tr?: unknown) => {
   return 0;
 };
 const logAt = (priority: number) => logFn(["", "", "V", "D", "I", "W", "E", "A"][priority] ?? "P");
+// libcore's System.logI/W/E: tag "System", priority from the type char, as its native logs them
+rt.registerJnis("java/lang/System", {
+  "log(CLjava/lang/String;Ljava/lang/Throwable;)V": (type: number, msg: string, tr: unknown) =>
+    logFn(({ D: "D", W: "W", E: "E" } as Record<string, string>)[String.fromCharCode(type)] ?? "I")("System", msg, tr ?? undefined),
+});
 rt.register({
   name: "android/util/Log", ctor: JLog,
   statics: { VERBOSE: 2, DEBUG: 3, INFO: 4, WARN: 5, ERROR: 6, ASSERT: 7 },
