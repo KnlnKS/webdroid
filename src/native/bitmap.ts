@@ -1,5 +1,5 @@
 import { rt } from "../jvm/runtime";
-import { NativeBitmap, bitmapOf, HARDWARE, ALPHA_8, RGB_565, ARGB_4444, RGBA_F16, RGBA_1010102, encodePixels, decodePixels } from "../android/bitmap";
+import { NativeBitmap, bitmapOf, HARDWARE, ALPHA_8, RGB_565, ARGB_4444, RGBA_F16, RGBA_1010102, memoryOf, setMemory } from "../android/bitmap";
 import type { Cpu } from "./cpu";
 import { deref } from "./jni";
 import { hostLib, stp, type ArgReader } from "./host";
@@ -37,7 +37,7 @@ export function bitmapInit(): void {
         const size = b.rowBytes * b.h, pointer = mem.malloc(size);
         if (!pointer) return -3;
         lock = { pointer, count: 0 };
-        encodePixels(b, mem.bytes(pointer, size));
+        memoryOf(b, mem.bytes(pointer, size));
         locks.set(b, lock);
       }
       lock.count++;
@@ -51,7 +51,7 @@ export function bitmapInit(): void {
       if (!lock) return -1;
       try {
         if (b.recycled) return -2;
-        decodePixels(b, mem.bytes(lock.pointer, b.rowBytes * b.h));
+        setMemory(b, mem.bytes(lock.pointer, b.rowBytes * b.h));
         return 0;
       } finally {
         if (--lock.count === 0) { locks.delete(b); mem.free(lock.pointer); }

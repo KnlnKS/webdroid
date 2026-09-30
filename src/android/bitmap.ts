@@ -139,9 +139,9 @@ export class NativeBitmap {
   setAlphaType(alphaType: number): void {
     if (this.config === RGB_565 || this.config === ALPHA_8 || alphaType === this.alphaType) return;
     if (this.px || this.cx || this.img) {
-      const memory = encodePixels(this);
+      const memory = memoryOf(this);
       this.alphaType = alphaType;
-      decodePixels(this, memory);
+      setMemory(this, memory);
     } else this.alphaType = alphaType;
   }
 }
@@ -251,7 +251,7 @@ function copyBitmapPixels(src: ArrayLike<number>, dst: Uint8Array | Uint8Clamped
 }
 const is8888 = (b: NativeBitmap) => b.config === ARGB_8888 || b.config === HARDWARE;
 /** the bitmap's memory, rowBytes per row, as computeByteSize counts it */
-export function encodePixels(b: NativeBitmap, out: Uint8Array = new Uint8Array(b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config))): Uint8Array {
+export function memoryOf(b: NativeBitmap, out: Uint8Array = new Uint8Array(b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config))): Uint8Array {
   const px = b.pixels(), bpp = bytesPerPixel(b.config);
   if (is8888(b) && b.rowBytes === b.w * 4) { copyBitmapPixels(px, out.subarray(0, px.length), b.premultiplied, false); return out; }
   const m = new DataView(out.buffer, out.byteOffset, out.byteLength);
@@ -261,8 +261,8 @@ export function encodePixels(b: NativeBitmap, out: Uint8Array = new Uint8Array(b
   }
   return out;
 }
-/** memory laid out as encodePixels gives it, as the new contents */
-export function decodePixels(b: NativeBitmap, memory: Uint8Array): void {
+/** memory laid out as memoryOf gives it, as the new contents */
+export function setMemory(b: NativeBitmap, memory: Uint8Array): void {
   const px = b.pixels(), bpp = bytesPerPixel(b.config);
   if (is8888(b) && b.rowBytes === b.w * 4) copyBitmapPixels(memory.subarray(0, px.length), px, b.premultiplied, true);
   else {
@@ -442,19 +442,19 @@ rt.registerJnis(BITMAP, {
   "nativeSetPixels(J[IIIIIII)V": (h: bigint, colors: Int32Array, off: number, stride: number, x: number, y: number, w: number, ht: number) =>
     setPixels(bmp(h), colors, off, stride, x, y, w, ht),
   "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
-    const memory = encodePixels(bmp(h));
+    const memory = memoryOf(bmp(h));
     remainingBytes(buffer).set(memory);
   }),
   "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
     const b = bmp(h);
-    decodePixels(b, remainingBytes(buffer).slice(0, b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config)));
+    setMemory(b, remainingBytes(buffer).slice(0, b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config)));
   }),
   "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
   "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, p: object) => {
     const b = bmp(h);
     for (const v of [b.immutable ? 0 : 1, b.config, b.alphaType, b.w, b.h, b.rowBytes, density]) vcall(p, "writeInt", "(I)V", v);
-    const memory = encodePixels(b);
+    const memory = memoryOf(b);
     vcall(p, "writeByteArray", "([B)V", new Int8Array(memory.buffer, memory.byteOffset, memory.length));
     return 1;
   },
@@ -462,7 +462,7 @@ rt.registerJnis(BITMAP, {
     const [mutable, config, alphaType, w, h, rowBytes, density] = Array.from({ length: 7 }, () => vcall(p, "readInt", "()I") as number);
     const b = new NativeBitmap(w, h, config, alphaType, rowBytes);
     const memory = vcall(p, "createByteArray", "()[B") as Int8Array | null;
-    if (memory) decodePixels(b, u8(memory));
+    if (memory) setMemory(b, u8(memory));
     b.immutable = !mutable;
     return javaBitmap(b, density);
   },

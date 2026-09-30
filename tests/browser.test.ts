@@ -21,7 +21,7 @@ beforeAll(async () => {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
     if (path === "/harfbuzz.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/harfbuzzjs/dist/harfbuzz.wasm`));
-    if (path.startsWith("/vendor/aosp/") || path.startsWith("/vendor/fonts/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
+    if (path.startsWith("/vendor/aosp/") || path.startsWith("/vendor/fonts/") || path.startsWith("/tests/fixtures/images/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
 }, PAGE_TIMEOUT);
@@ -155,4 +155,21 @@ test.concurrent("drawGlyphs draws HarfBuzz outlines where the browser draws the 
   drawn.forEach((edge, i) => expect(Math.abs(edge - reference[i])).toBeLessThanOrEqual(1));
   expect(differing).toBeLessThan(inked * 0.05);
   expect(emoji).toBeGreaterThan(200);
+}, PAGE_TIMEOUT);
+
+// The pixels are what the reference AVD's BitmapFactory decoded from the same files (a JPEG within
+// 2 per channel, as decoders' IDCTs may differ).
+const DEVICE_PNG = "ff0000c8 ff1900be ff3200b4 ff4b00aa ff6400a0 3c7b0095 3c95008c 3cae0084 3cc80077 3ce1006e ff0028c8 ff1928be ff3228b4 ff4b28aa ff6428a0 5a7d2896 5a96288b 5ab02882 5ac92877 5ae0286e ff0050c8 ff1950be ff3250b4 ff4b50aa ff6450a0 787d5197 7897518c 78ae5182 78c85177 78e1516e ff0078c8 ff1978be ff3278b4 ff4b78aa ff6478a0 967e7996 9696798b 96af7981 96c97979 96e0796e ff00a0c8 ff19a0be ff32a0b4 ff4ba0aa ff64a0a0 b47da096 b496a08c b4b0a082 b4c8a078 b4e1a06e ff00c8c8 ff19c8be ff32c8b4 ff4bc8aa ff64c8a0 d27dc897 d297c88c d2afc882 d2c8c878 d2e1c86e";
+const DEVICE_JPEG = "ff00066f ff0c0972 ff260977 ff400875 ff590775 ff710871 ff880972 ffa00970 ffbd0976 ffcb0b78 ff08267c ff182a80 ff322881 ff4b2781 ff662780 ff7c287e ff95297e ffad297d ffc72980 ffd82b85 ff074e7c ff185081 ff344f84 ff4c4f84 ff664f83 ff7e5081 ff965180 ffae5180 ffc95083 ffd85486 ff08757c ff17787f ff327681 ff4b7581 ff647680 ff7d787f ff95777f ffad7880 ffc87881 ffd67b84 ff089e79 ff17a17d ff33a080 ff4ca07f ff65a080 ff7da07f ff96a27e ffaea17e ffc6a27e ffd7a582 ff12be82 ff23c186 ff3dc08a ff57bf8a ff71c089 ff89c087 ffa0c188 ffb8c286 ffd2c189 ffe2c58d";
+test.concurrent("decoded bitmaps, ImageDecoder post-processing and animated frames match the device", async () => {
+  const result = await probe("bitmapDecode");
+  expect(result.png.map((v) => v.toString(16)).join(" ")).toBe(DEVICE_PNG);
+  const channels = (v: number) => [v >>> 24, v >>> 16 & 255, v >>> 8 & 255, v & 255];
+  DEVICE_JPEG.split(" ").map((v) => parseInt(v, 16)).forEach((want, i) => {
+    for (const [k, c] of channels(want).entries()) expect(Math.abs(channels(result.jpeg[i])[k] - c)).toBeLessThanOrEqual(2);
+  });
+  expect(result.rotated).toEqual(result.jpeg);
+  expect(result).toMatchObject({ truncated: [64, 64], upright: [6, 10], processed: [0xff0000ff, 0],
+    invalid: "java.lang.IllegalArgumentException: invalid return from postProcess: -2",
+    gif: { still: [255, 0, 0, 255], first: [255, 0, 0, 255], second: [0, 0, 255, 255], running: 1 } });
 }, PAGE_TIMEOUT);

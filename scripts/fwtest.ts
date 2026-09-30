@@ -1072,6 +1072,74 @@ await exercise("Linkify.addLinks (device values)", async () => {
   const tel = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "Call +1 650-253-0000 or 555.");
   sameText("phone", [await scall(L, "addLinks", "(Landroid/text/Spannable;I)Z", tel, 4), await spanList(tel, url)], [1, "url:tel:+16502530000[5,20,21]"]);
 });
+await exercise("ImageDecoder: headers, targets, allocators, partial input, drawables (device values)", async () => {
+  const ID = "android/graphics/ImageDecoder", SRC = "Landroid/graphics/ImageDecoder$Source;";
+  const source = (bytes: Int8Array) => scall(ID, "createSource", `([B)${SRC}`, bytes);
+  /** a listener object answering `name` with `fn` */
+  const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => Object.assign(rt.make("java/lang/Object"), { [mangleMethod(name, desc)]: fn });
+  const onHeader = (fn: (decoder: unknown) => unknown) => listener("onHeaderDecoded", `(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;${SRC})V`, fn);
+  const bitmap = async (bytes: Int8Array, fn?: (decoder: unknown) => unknown) =>
+    fn ? scall(ID, "decodeBitmap", `(${SRC}Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/Bitmap;`, await source(bytes), onHeader(fn))
+      : scall(ID, "decodeBitmap", `(${SRC})Landroid/graphics/Bitmap;`, await source(bytes));
+  const withDensity = async (b: unknown) => `${await info(b)} dens=${await vcall(b, "getDensity", "()I")}`;
+  const headers: Record<string, string> = {
+    "alpha.png": "10x6 image/png false", "opaque.jpg": "10x6 image/jpeg false", "rotated.jpg": "6x10 image/jpeg false",
+    "lossless.webp": "10x6 image/webp false", "anim.gif": "3x2 image/gif true", "patch.9.png": "48x48 image/png false",
+  };
+  for (const [name, want] of Object.entries(headers)) {
+    const i = await scall(ID, "decodeHeader", `(${SRC})Landroid/graphics/ImageDecoder$ImageInfo;`, await source(await image(name)));
+    const size = await vcall(i, "getSize", "()Landroid/util/Size;");
+    same(`${name} header`, `${await vcall(size, "getWidth", "()I")}x${await vcall(size, "getHeight", "()I")} ${await vcall(i, "getMimeType", "()Ljava/lang/String;")} ${!!await vcall(i, "isAnimated", "()Z")}`, want);
+  }
+  const png = await image("alpha.png"), jpg = await image("opaque.jpg");
+  same("default allocator", await withDensity(await bitmap(png)), "10x6 HARDWARE rb=40 bc=240 abc=240 alpha=true premul=true mut=false dens=0");
+  same("EXIF orientation", await withDensity(await bitmap(await image("rotated.jpg"))), "6x10 HARDWARE rb=24 bc=240 abc=240 alpha=false premul=false mut=false dens=0");
+  const crop = await newObj("android/graphics/Rect", "(IIII)V", 1, 1, 4, 3);
+  same("target, crop, mutable", await info(await bitmap(png, async (d) => {
+    await vcall(d, "setTargetSize", "(II)V", 5, 3); await vcall(d, "setCrop", "(Landroid/graphics/Rect;)V", crop);
+    await vcall(d, "setMutableRequired", "(Z)V", 1); await vcall(d, "setAllocator", "(I)V", 1);
+  })), "3x2 ARGB_8888 rb=12 bc=24 abc=24 alpha=true premul=true mut=true");
+  same("sample size", await info(await bitmap(png, (d) => vcall(d, "setTargetSampleSize", "(I)V", 3))), "3x2 HARDWARE rb=12 bc=24 abc=24 alpha=true premul=true mut=false");
+  same("alpha mask of colour", (await info(await bitmap(png, async (d) => { await vcall(d, "setDecodeAsAlphaMaskEnabled", "(Z)V", 1); await vcall(d, "setAllocator", "(I)V", 1); }))).split(" ")[1], "ARGB_8888");
+  same("low RAM", await info(await bitmap(jpg, async (d) => { await vcall(d, "setMemorySizePolicy", "(I)V", 0); await vcall(d, "setAllocator", "(I)V", 1); })),
+    "10x6 RGB_565 rb=20 bc=120 abc=120 alpha=false premul=false mut=false");
+  const pad = await newObj("android/graphics/Rect", "()V") as Record<string, number>;
+  await bitmap(await image("patch.9.png"), (d) => vcall(d, "setOutPaddingRect", "(Landroid/graphics/Rect;)V", pad));
+  same("nine-patch padding", [pad.left, pad.top, pad.right, pad.bottom].join(","), "0,0,0,0");
+  let seen = "";
+  const partial = listener("onPartialImage", "(Landroid/graphics/ImageDecoder$DecodeException;)Z", async (e: unknown) => {
+    seen = `${await vcall(e, "getError", "()I")} ${await vcall(e, "getMessage", "()Ljava/lang/String;")} ${await vcall(e, "getCause", "()Ljava/lang/Throwable;")}`;
+    return 1;
+  });
+  const truncated = await image("truncated.png");
+  same("partial image", `${await info(await bitmap(truncated, (d) => vcall(d, "setOnPartialImageListener", "(Landroid/graphics/ImageDecoder$OnPartialImageListener;)V", partial)))} seen ${seen}`,
+    "64x64 HARDWARE rb=256 bc=16384 abc=16384 alpha=false premul=false mut=false seen 2 Input was incomplete. null");
+  same("incomplete", await thrown(() => bitmap(truncated)), "android.graphics.ImageDecoder$DecodeException: Input was incomplete.");
+  same("garbage", await thrown(() => bitmap(Int8Array.of(1, 2, 3, 4, 5, 6, 7, 8))),
+    "android.graphics.ImageDecoder$DecodeException: Failed to create image decoder with message 'unimplemented'Input contained an error.");
+  const buffer = await scall("java/nio/ByteBuffer", "wrap", "([B)Ljava/nio/ByteBuffer;", png);
+  same("ByteBuffer source", await info(await scall(ID, "decodeBitmap", `(${SRC})Landroid/graphics/Bitmap;`, await scall(ID, "createSource", `(Ljava/nio/ByteBuffer;)${SRC}`, buffer))),
+    "10x6 HARDWARE rb=40 bc=240 abc=240 alpha=true premul=true mut=false");
+  const drawable = async (bytes: Int8Array) => {
+    const d = await scall(ID, "decodeDrawable", `(${SRC})Landroid/graphics/drawable/Drawable;`, await source(bytes));
+    const name = await vcall(await vcall(d, "getClass", "()Ljava/lang/Class;"), "getSimpleName", "()Ljava/lang/String;");
+    return `${name} ${await vcall(d, "getIntrinsicWidth", "()I")}x${await vcall(d, "getIntrinsicHeight", "()I")}`;
+  };
+  same("drawables", [await drawable(png), await drawable(await image("patch.9.png")), await drawable(await image("anim.gif"))].join(", "),
+    "BitmapDrawable 10x6, NinePatchDrawable 48x48, AnimatedImageDrawable 3x2");
+});
+
+// post-processing: the invalid answer is the device's; TRANSLUCENT's result is ImageDecoder.cpp's
+await exercise("ImageDecoder post-processing", async () => {
+  const ID = "android/graphics/ImageDecoder", SRC = "Landroid/graphics/ImageDecoder$Source;";
+  const processor = (format: number) => Object.assign(rt.make("java/lang/Object"), { [mangleMethod("onPostProcess", "(Landroid/graphics/Canvas;)I")]: () => format });
+  const decode = async (format: number) => scall(ID, "decodeBitmap", `(${SRC}Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/Bitmap;`,
+    await scall(ID, "createSource", `([B)${SRC}`, await image("opaque.jpg")),
+    Object.assign(rt.make("java/lang/Object"), { [mangleMethod("onHeaderDecoded", `(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;${SRC})V`)]:
+      (d: unknown) => vcall(d, "setPostProcessor", "(Landroid/graphics/PostProcessor;)V", processor(format)) }));
+  same("post-processed", await info(await decode(-3)), "10x6 HARDWARE rb=40 bc=240 abc=240 alpha=true premul=true mut=false");
+  same("invalid format", await thrown(() => decode(-2)), "java.lang.IllegalArgumentException: invalid return from postProcess: -2");
+}, true);
 
 // The resource natives, under AOSP's own Resources: the framework and an app installed as the
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read

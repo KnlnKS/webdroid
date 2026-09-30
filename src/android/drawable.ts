@@ -370,7 +370,7 @@ export class JBitmapDrawable extends JDrawable {
   size(vertical: boolean): number {
     if (!this.bmp) return -1;
     const b = bitmapOf(this.bmp);
-    return Math.round((vertical ? b.h : b.w) * this.targetDensity / densityOf(this.bmp));
+    return scaleFromDensity(vertical ? b.h : b.w, densityOf(this.bmp), this.targetDensity);
   }
 }
 function setTargetDensity(this: JBitmapDrawable, density: number) {
@@ -455,7 +455,7 @@ rt.register({
 });
 /** AOSP Drawable.drawableFromBitmap: a decoded 9-patch chunk, not the file name, makes a
  *  NinePatchDrawable, padded as the chunk says */
-export function drawableFromBitmap(bmp: object, targetDensity: number): JDrawable {
+function drawableFromBitmap(bmp: object, targetDensity: number): JDrawable {
   const np = ninePatchChunkOf(bmp);
   if (isNinePatchChunk(np)) {
     const d = new JNinePatchDrawable(), pad = new JRect();

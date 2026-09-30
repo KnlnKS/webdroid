@@ -1570,6 +1570,8 @@ export const canvasMethods: NativeSpec["methods"] = {
   "isHardwareAccelerated()Z": function (this: JCanvas) { return +(this instanceof JRecordingCanvas); },
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": setJavaBitmap,
+  // ImageDecoder's post-processing canvas is released after use: it draws nowhere after that
+  "release()V": function (this: JCanvas) { setCanvasBitmap(this, null); },
 };
 function setJavaBitmap(this: JCanvas, b: object | null) {
   setCanvasBitmap(this, b && bitmapOf(b));

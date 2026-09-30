@@ -1,5 +1,5 @@
-// The native halves of BitmapFactory and BitmapRegionDecoder (hwui's BitmapFactory.cpp and
-// BitmapRegionDecoder.cpp) over the browser's image decoders.
+// The native halves of BitmapFactory, BitmapRegionDecoder and ImageDecoder (hwui's
+// BitmapFactory.cpp, BitmapRegionDecoder.cpp and ImageDecoder.cpp) over the browser's decoders.
 //
 // What SkCodec learns from a header (format, size, alpha, frames, EXIF orientation and a
 // nine-patch's npTc/npLb/npOl chunks) is read here, so a bounds-only decode reads no pixels. The
@@ -7,8 +7,9 @@
 // them, and become a NativeBitmap without an intermediate raster.
 
 import { rt, declaredField, driven, type Gen } from "../jvm/runtime";
-import { ownedHandle, deref, release } from "./handles";
-import { vcall, scall, construct } from "../jvm/natives/jlang";
+import { handle, ownedHandle, deref, release } from "./handles";
+import { vcall, scall, construct, after } from "../jvm/natives/jlang";
+import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat } from "../jvm/abi";
 import { javaFdBytes, javaSeekFd } from "../native/stdio";
@@ -16,6 +17,7 @@ import { assetBytes } from "./assetmanager";
 import { NativeBitmap, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { decodeHeif } from "./heif";
 import type { JRect } from "./graphics";
+import { bitmapCanvas } from "./delegates";
 
 // ── headers
 export interface ImageHeader {
@@ -36,7 +38,7 @@ export interface ImageHeader {
   layout: number[] | null; outline: number[] | null;
 }
 /** the input ends before the header does (SkCodec's kIncompleteInput) */
-export const INCOMPLETE = "incomplete";
+const INCOMPLETE = "incomplete";
 type Header = ImageHeader | typeof INCOMPLETE | null;
 const header = (mime: string, width: number, height: number, sampling: ImageHeader["sampling"], opaque: boolean): ImageHeader =>
   ({ mime, width, height, sampling, opaque, gray: false, frames: 1, orientation: 1, orientationAt: 0, orientationLE: false, complete: true, patch: null, layout: null, outline: null });
@@ -171,8 +173,10 @@ function bmff(b: Uint8Array, v: DataView): Header {
   return w ? header(avif ? "image/avif" : "image/heif", w, ht, "round", !alpha) : INCOMPLETE;
 }
 /** SkCodec::MakeFromStream's sniffing: null for a format none of the codecs claims */
-export function readHeader(b: Uint8Array): Header {
-  if (b.length < 4) return b.length ? INCOMPLETE : null;
+function readHeader(b: Uint8Array): Header {
+  // an empty input, or the start of a signature, is SkCodec's kIncompleteInput
+  if (b.length < 4) return !b.length || [[0x89, 0x50, 0x4e], [0xff, 0xd8, 0xff], [0x47, 0x49, 0x46], [0x52, 0x49, 0x46], [0x42, 0x4d], [0, 0, 1]]
+    .some((sig) => b.every((v, i) => i >= sig.length || v === sig[i])) ? INCOMPLETE : null;
   const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
   if (b[0] === 0x89 && tag(b, 1).startsWith("PNG")) return png(b, v);
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return jpeg(b, v);
@@ -209,7 +213,7 @@ function outputConfig(h: ImageHeader, preferred: number): number {
 /** The pixels of `region` (image coordinates, the whole image when null) at w x h, or null when
  *  the browser cannot decode them. `orient` applies EXIF orientation, as ImageDecoder does and
  *  BitmapFactory does not. */
-export async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean): Promise<ImageBitmap | null> {
+async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean): Promise<ImageBitmap | null> {
   if (typeof createImageBitmap === "undefined") return null;
   let heif: ImageBitmap | null = null;
   try {
@@ -418,5 +422,92 @@ rt.registerJnis("android/graphics/BitmapRegionDecoder", {
       }
       if (reuse) { yield reinitJava(options![o.inBitmap], reuse, !unpremul); return options![o.inBitmap]; }
       return javaBitmap(b, -1, null, null, !unpremul);
+    }),
+});
+
+// ── ImageDecoder: the encoded image and its header behind mNativePtr, decoded by nDecodeBitmap
+export interface NativeImageDecoder { bytes: Uint8Array; header: ImageHeader }
+const DECODER = "android/graphics/ImageDecoder";
+/** ImageDecoder.DecodeException's errors */
+const SOURCE_EXCEPTION = 1, SOURCE_INCOMPLETE = 2, SOURCE_MALFORMED_DATA = 3;
+/** ImageDecoder.cpp's throw_exception: a DecodeException for the source */
+const decodeException = (error: number, message: string, cause: unknown, source: unknown) =>
+  construct(`${DECODER}$DecodeException`, "(ILjava/lang/String;Ljava/lang/Throwable;Landroid/graphics/ImageDecoder$Source;)V", error, message, cause, source);
+/** ImageDecoder.cpp's native_create: the decoder, sized as EXIF orientation leaves the image */
+const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Promise<Uint8Array>, source: unknown): Gen {
+  let bytes: Uint8Array;
+  try { bytes = yield read(); }
+  catch (e) {
+    if (!rt.iof(e, "java/lang/Throwable")) throw e;
+    throw yield decodeException(SOURCE_EXCEPTION, "", e, source);
+  }
+  const h = readHeader(bytes);
+  if (h === INCOMPLETE) throw yield decodeException(SOURCE_INCOMPLETE, "", null, source);
+  if (!h) throw yield decodeException(SOURCE_MALFORMED_DATA, "Failed to create image decoder with message 'unimplemented'", null, source);
+  const [w, ht] = oriented(h, h.width, h.height);
+  return construct(DECODER, "(JIIZZ)V", ownedHandle({ bytes, header: h } satisfies NativeImageDecoder), w, ht, +(h.frames > 1), +!!h.patch);
+});
+/** width and height as SkAndroidCodec reports them once EXIF orientation is applied */
+const oriented = (h: ImageHeader, w: number, ht: number): [number, number] => h.orientation >= 5 ? [ht, w] : [w, ht];
+const imageDecoder = (h: bigint) => deref<NativeImageDecoder>(h);
+/** ImageDecoder's allocators */
+const ALLOCATOR_DEFAULT = 0, ALLOCATOR_HARDWARE = 3;
+/** PixelFormat's answers a PostProcessor gives */
+const UNKNOWN = 0, TRANSLUCENT = -3, OPAQUE_FORMAT = -1;
+rt.registerJnis(DECODER, {
+  "nCreate(JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (asset: bigint, _animation: number, source: unknown) =>
+    createDecoder(() => assetBytes(asset), source),
+  "nCreate(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;":
+    (buffer: JBuffer, position: number, limit: number, _animation: number, source: unknown) =>
+      createDecoder(() => after(resident(buffer), () => bufferBytes(buffer).slice(position << elementShift(buffer), limit << elementShift(buffer))), source),
+  "nCreate([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (bytes: Int8Array, off: number, len: number, _animation: number, source: unknown) =>
+    createDecoder(() => u8(bytes, off, len).slice(), source),
+  "nCreate(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (stream: unknown, _storage: Int8Array, _animation: number, source: unknown) =>
+    createDecoder(() => readStreamFully(stream), source),
+  // from the descriptor's position, `length` bytes of it (-1: to the end)
+  "nCreate(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (fd: object | null, length: bigint, _animation: number, source: unknown) =>
+    createDecoder(async () => { const b = await fdBytes(fd); return length < 0n ? b : b.subarray(0, Number(length)); }, source),
+  "nGetSampledSize(JI)Landroid/util/Size;": (h: bigint, sample: number) => {
+    const { header } = imageDecoder(h);
+    return construct("android/util/Size", "(II)V", ...oriented(header, ...sampledSize(header, sample)));
+  },
+  "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: JRect) => setPadding(pad, imageDecoder(h).header.patch),
+  "nGetMimeType(J)Ljava/lang/String;": (h: bigint) => imageDecoder(h).header.mime,
+  "nGetColorSpace(J)Landroid/graphics/ColorSpace;": () => srgbSpace(),
+  "nClose(J)V": (h: bigint) => release(h),
+  // ImageDecoder.cpp's nDecodeBitmap: the whole image scaled to the desired size, then cropped
+  "nDecodeBitmap(JLandroid/graphics/ImageDecoder;ZIILandroid/graphics/Rect;ZIZZZJZ)Landroid/graphics/Bitmap;":
+    driven(function* (h: bigint, jdecoder: object, postProcess: number, w: number, ht: number, crop: JRect | null, mutable: number, allocator: number,
+      unpremul: number, conserveMemory: number, alphaMask: number, _cs: bigint, extended: number): Gen {
+      const { bytes, header } = imageDecoder(h);
+      let config = ARGB_8888;
+      if (alphaMask && header.gray) config = ALPHA_8;
+      // 565 saves nothing once uploaded as a hardware bitmap, and a post-process may add alpha
+      else if (conserveMemory) { if (header.opaque && !postProcess && allocator !== ALLOCATOR_HARDWARE && (allocator !== ALLOCATOR_DEFAULT || mutable)) config = RGB_565; }
+      else if (extended) config = RGBA_F16;
+      const hardware = !mutable && (allocator === ALLOCATOR_DEFAULT || allocator === ALLOCATOR_HARDWARE) && config !== ALPHA_8;
+      const [nw, nh] = oriented(header, header.width, header.height);
+      if (unpremul && !header.opaque && (w !== nw || ht !== nh)) {
+        const s = Math.max(1, Math.floor(nw / w)), [sw, sh] = oriented(header, ...sampledSize(header, s));
+        if (sw !== w || sh !== ht) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot scale unpremultiplied pixels!");
+      }
+      let img: ImageBitmap | null = yield decodePixels(bytes, header, ...oriented(header, w, ht), null, true);
+      const [bw, bh] = crop ? [crop.right - crop.left, crop.bottom - crop.top] : [w, ht];
+      if (img && crop) { const whole = img; img = yield createImageBitmap(whole, crop.left, crop.top, bw, bh); whole.close(); }
+      // SkCodec::kIncompleteInput or kErrorInInput: the listener may take what was decoded
+      const partial = !header.complete ? SOURCE_INCOMPLETE : !img ? SOURCE_MALFORMED_DATA : 0;
+      if (partial) yield vcall(jdecoder, "onPartialImage", "(ILjava/lang/Throwable;)V", partial, null);
+      const b = new NativeBitmap(bw, bh, hardware && config === ARGB_8888 ? HARDWARE : config, header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL);
+      if (img) b.setImage(img);
+      if (config === ALPHA_8) grayToAlpha(b);
+      if (postProcess) {
+        const format: number = yield vcall(jdecoder, "postProcessAndRelease", "(Landroid/graphics/Canvas;)I",
+          yield construct("android/graphics/Canvas", "(J)V", handle(bitmapCanvas(b))));
+        if (format === TRANSLUCENT) b.alphaType = PREMUL;
+        else if (format === OPAQUE_FORMAT) b.alphaType = OPAQUE;
+        else if (format !== UNKNOWN) throw rt.mkThrowable("java/lang/IllegalArgumentException", `invalid return from postProcess: ${format}`);
+      }
+      b.immutable = !mutable;
+      return javaBitmap(b, -1, postProcess ? null : header.patch, postProcess ? null : yield insetsOf(header, 1), !unpremul);
     }),
 });
