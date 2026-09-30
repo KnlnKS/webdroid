@@ -498,7 +498,7 @@ function animationDescription(res: Resources, node: XmlNode, name: string, fallb
   return value?.t === TV.FRACTION ? [complexToFraction(value.d, 1, 1), 1 + (value.d & 0xf)]
     : [rvFloat(res, value, fallback), ABSOLUTE];
 }
-const animationFromXml = driven(function* animationFromXml(res: Resources, theme: JTheme | null, node: XmlNode): Gen<JAnimation> {
+const animationFromXml = driven(function* animationFromXml$(res: Resources, theme: JTheme | null, node: XmlNode): Gen<JAnimation> {
   const kinds: Record<string, string> = { set: "AnimationSet", alpha: "AlphaAnimation", scale: "ScaleAnimation",
     translate: "TranslateAnimation", rotate: "RotateAnimation" };
   const kind = kinds[node.name];

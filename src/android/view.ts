@@ -237,7 +237,7 @@ const setBackground = driven(function* setBackground(this: JView, d: JDrawable |
   yield invalidateVirtual(this);
 });
 /** AOSP dispatchVisibilityAggregated: a subtree's visibility, as each view sees it */
-const dispatchVisibilityAggregated = driven(function* dispatchVisibilityAggregated(v: JView, visible: boolean): Gen {
+const dispatchVisibilityAggregated = driven(function* dispatchVisibilityAggregated$(v: JView, visible: boolean): Gen {
   yield vcall(v, "onVisibilityAggregated", "(Z)V", +visible);
   if (v instanceof JViewGroup) for (const c of [...v.children]) yield dispatchVisibilityAggregated(c, visible && c.visibility === 0);
 });

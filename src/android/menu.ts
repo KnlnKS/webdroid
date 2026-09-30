@@ -381,7 +381,7 @@ rt.register({
       if (!f) { rt.noteMissing("menu 0x" + id.toString(16)); return; }
       const root = parseAXML(f.bytes);
       const A_id = 0x010100d0, A_title = AID("title"), A_icon = AID("icon"), A_showAsAction = AID("showAsAction");
-      const walk = driven(function* walk(node: typeof root, target: JMenu): Gen {
+      const walk = driven(function* walk$(node: typeof root, target: JMenu): Gen {
         for (const c of node.children) {
           if (c.name !== "item") { if (c.name === "group") yield walk(c, target); continue; }
           const item = mkMenuItem(0, "");
