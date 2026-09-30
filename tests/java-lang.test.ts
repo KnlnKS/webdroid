@@ -6,10 +6,11 @@ import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { boxDouble, boxFloat, boxInt } from "../src/jvm/natives/jbox";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
-import { scall, loadLibcore } from "./java";
+import { scall, loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
 await loadLibcore();
+await mountApexData();
 
 describe("annotation-enum-init", () => {
   test("explicit enum annotation elements wait for class initialization", async () => {
@@ -471,6 +472,19 @@ describe("java-math-boundary", () => {
     const qr = await vcall(await big(x.toString()), "divideAndRemainder", "(Ljava/math/BigInteger;)[Ljava/math/BigInteger;", await big(y.toString())) as unknown[];
     expect(await text(qr[0])).toBe((x / y).toString());
     expect(await text(qr[1])).toBe((x % y).toString());
+  });
+});
+
+describe("string-case", () => {
+  test("case-insensitive comparison folds char by char, as libcore does", async () => {
+    const call = (self: string, name: string, desc: string, o: string) => vcall(self, name, desc, o);
+    expect(await call("apple", "compareToIgnoreCase", "(Ljava/lang/String;)I", "APRICOT")).toBe(-2);
+    expect(await call("hello", "compareToIgnoreCase", "(Ljava/lang/String;)I", "HELLO world")).toBe(-6);
+    expect(await call("İ", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "i")).toBe(1);
+    expect(await call("Straße", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "STRASSE")).toBe(0);
+    expect(await call("MiXeD", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "mixed")).toBe(1);
+    const cmp = (rt.link("java/lang/String").ctor as Record<string, unknown>)[mangleStaticField("CASE_INSENSITIVE_ORDER")];
+    expect(await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "b", "A")).toBe(1);
   });
 });
 

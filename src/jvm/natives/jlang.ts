@@ -709,8 +709,13 @@ sm("codePointAt(I)I", function (i: number) { return cpAt(this, i); });
 sm("codePointBefore(I)I", function (i: number) { return cpBefore(this, i); });
 sm("hashCode()I", function () { return stringHash(this as string); });
 sm("equals(Ljava/lang/Object;)Z", function (o: unknown) { return (this as string) === o ? 1 : 0; });
+// Case-insensitive comparison is libcore's (Character.toUpperCase, then toLowerCase, per char); two
+// ASCII strings, the usual case, compare here
+const NOT_ASCII = /[^\x00-\x7f]/;
 sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
-  return o !== null && this.toLowerCase() === o.toLowerCase() ? 1 : 0;
+  if (o === null || o.length !== this.length) return 0;
+  if (!NOT_ASCII.test(this) && !NOT_ASCII.test(o)) return this.toLowerCase() === o.toLowerCase() ? 1 : 0;
+  return vcall(this, "regionMatches", "(ZILjava/lang/String;II)Z", 1, 0, o, 0, this.length);
 });
 function stringCompare(a: string, b: string): number {
   const n = Math.min(a.length, b.length);
@@ -723,10 +728,6 @@ function stringCompare(a: string, b: string): number {
 const compareStrings = function (this: string, o: string) { return stringCompare(this, o); };
 sm("compareTo(Ljava/lang/String;)I", compareStrings);
 sm("compareTo(Ljava/lang/Object;)I", compareStrings);
-sm("compareToIgnoreCase(Ljava/lang/String;)I", function (o: string) {
-  const a = this.toLowerCase(), b = o.toLowerCase();
-  return a < b ? -1 : a > b ? 1 : 0;
-});
 /** String.indexOf(int): a char, a surrogate pair for a supplementary code point, never an invalid one.
  *  Short strings (URI and parser delimiter sets) are scanned without allocating the needle. */
 function charIndex(s: string, c: number, from: number): number {
@@ -830,11 +831,6 @@ sm("intern()Ljava/lang/String;", function () { return this as string; });
 sm("regionMatches(ILjava/lang/String;II)Z", function (toff: number, o: string, ooff: number, len: number) {
   if (toff < 0 || ooff < 0 || toff + len > this.length || ooff + len > o.length) return 0;
   return this.substr(toff, len) === o.substr(ooff, len) ? 1 : 0;
-});
-sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: number, o: string, ooff: number, len: number) {
-  if (toff < 0 || ooff < 0 || toff + len > this.length || ooff + len > o.length) return 0;
-  const a = this.substr(toff, len), b = o.substr(ooff, len);
-  return (ignore ? a.toLowerCase() === b.toLowerCase() : a === b) ? 1 : 0;
 });
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
 sm("codePointCount(II)I", function (a: number, b: number) { return cpCount(this, a, b); });
@@ -953,20 +949,9 @@ rt.register({
     "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": joinIterable,
 
   },
-  // A getter, because java.util.Comparator is not registered yet when this spec is built.
-  statics: { get CASE_INSENSITIVE_ORDER() { return mkCmp(caseInsensitive); } },
+  // String's <clinit> does not run for the spec: its comparator is made on first read
+  statics: { get CASE_INSENSITIVE_ORDER() { return rt.make("java/lang/String$CaseInsensitiveComparator"); } },
 });
-/** A Comparator is a plain JObj carrying `compare` — all a vcall from a sort needs. */
-const COMPARE = mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I");
-export const mkCmp = (compare: (a: unknown, b: unknown) => unknown) => {
-  const o = new (rt.link("java/util/Comparator").ctor as new () => JObj)();
-  (o as unknown as Record<string, unknown>)[COMPARE] = compare;
-  return o;
-};
-const caseInsensitive = (a: unknown, b: unknown) => {
-  const x = String(a).toUpperCase().toLowerCase(), y = String(b).toUpperCase().toLowerCase();
-  return x < y ? -1 : x > y ? 1 : 0;
-};
 // §4.7: StringBuilder and StringBuffer over a JS string, which V8 concatenates as a rope: libcore's
 // builders fill a byte[] char by char and measured 8x-15x slower on appends. Every method follows
 // libcore's AbstractStringBuilder, its capacity policy and messages included (tests/intrinsics.test.ts
