@@ -1061,7 +1061,8 @@ function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
     throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `src.length=${src.length} srcPos=${sp} dst.length=${dst.length} dstPos=${dp} length=${len}`);
   }
   if (len === 0) return;
-  if (ArrayBuffer.isView(src)) {
+  // a short copy loops: a subarray view costs more than its elements
+  if (len > 16 && ArrayBuffer.isView(src)) {
     (dst as { set(a: unknown, o: number): void }).set((src as Uint8Array).subarray(sp, sp + len), dp);
   } else if (src === dst && dp > sp) {
     for (let i = len - 1; i >= 0; i--) dst[dp + i] = src[sp + i];
