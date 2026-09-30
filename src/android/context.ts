@@ -10,7 +10,7 @@ import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermission } from "./contentresolver";
 import type { JUri } from "./net";
-import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
+import { mainLooper, mainExecutor, mainHandler, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { dbPath, openDatabase } from "./sqlite";
 import { javaTheme, newTheme, loadResources, configuredResources, javaConfiguration } from "./resources";
@@ -116,7 +116,6 @@ const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
   input_method: "android/view/inputmethod/InputMethodManager",
   connectivity: "android/net/ConnectivityManager",
-  activity: "android/app/ActivityManager",
   device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
   usagestats: "android/app/usage/UsageStatsManager",
@@ -169,13 +168,24 @@ const SERVICE_CLASS: Record<string, string> = {
   nfc: "android/nfc/NfcManager",
   crossprofileapps: "android/content/pm/CrossProfileApps",
 };
-const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
+/** managers AOSP's bytecode serves over the services hosted behind binder, constructed as
+ *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
+const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promise<unknown>]> = {
+  activity: ["android/app/ActivityManager", (ctx) => newObj("android/app/ActivityManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
+};
+const SERVICE_NAME = new Map([...Object.entries(SERVICE_CLASS), ...Object.entries(AOSP_MANAGERS).map(([n, [c]]) => [n, c] as const)].map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
   if (name === "performance_hint") return null;
   let s = services.get(name);
   if (s) return s;
+  const manager = AOSP_MANAGERS[name];
+  if (manager) {
+    const made = manager[1](appHost?.application ?? jctx);
+    services.set(name, made);
+    return made.then((m) => { services.set(name, m); return m; });
+  }
   const cls = SERVICE_CLASS[name];
   // A service we do not model is one this device does not have: AOSP returns null, and callers
   // handle that. Handing back a stand-in object instead only moved the failure to their cast.

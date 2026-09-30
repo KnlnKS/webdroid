@@ -1089,7 +1089,11 @@ function rect(l: number, t: number, r: number, b: number): JRect {
 // difference between "this device does not do that" and a made-up answer a library will branch
 // on. An app process may not set properties, and a change report runs the registered callbacks,
 // as the property service's own notification does.
-const deviceProperties: Record<string, () => string> = { "persist.sys.timezone": () => device.timezone };
+const deviceProperties: Record<string, () => string> = {
+  "persist.sys.timezone": () => device.timezone,
+  // the reference AVD's heap limits, which ActivityManager reports as the memory classes
+  "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
+};
 delegate("android/os/SystemProperties", {
   "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (key: string, def: string | null) => deviceProperties[key]?.() ?? def ?? "",
   "native_get_boolean(Ljava/lang/String;Z)Z": (_k: string, def: number) => def,

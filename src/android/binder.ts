@@ -161,12 +161,18 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
 // ── servicemanager: the context object BinderInternal hands AOSP's ServiceManager. It answers
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
 // returns for an absent service, and is reported as a boundary gap.
-const binderServices = new Map<string, JObj>();
+const binderServices = new Map<string, JObj | Promise<JObj> | (() => Promise<JObj>)>();
+/** host a system service, made when first asked for */
+export function hostService(name: string, make: () => Promise<JObj>): void { binderServices.set(name, make); }
 class JServiceManager extends JObj { binder: JBinder | null = null; }
-function hostedService(name: string): JObj | null {
+function hostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);
-  if (!service) rt.noteMissing(`service ${name} [binder]`);
-  return service ?? null;
+  if (!service) { rt.noteMissing(`service ${name} [binder]`); return null; }
+  if (typeof service !== "function") return service;
+  const made = service();
+  binderServices.set(name, made);
+  void made.then((binder: JObj) => binderServices.set(name, binder));
+  return made;
 }
 rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["android/os/IServiceManager"], methods: {
   "asBinder()Landroid/os/IBinder;": function (this: JServiceManager) { return this.binder; },

@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
 import { backKeyMethods, dispatchWindowKey, type JKeyEvent } from "./keyevent";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
@@ -23,13 +23,12 @@ import { getPrefs } from "./sharedprefs";
 import { spannedString } from "./text";
 import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
-import { runningServices, svcStop, svcFg } from "./runningservices";
+import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import type { JBitmap } from "./graphics";
-import { JConfigurationInfo, getPM } from "./pm";
-import { deviceConfiguration } from "./resnative";
+import { getPM } from "./pm";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
@@ -657,37 +656,6 @@ registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", 
   return rt.make("android/content/Intent");
 });
 for (const [name, methods, statics] of [
-  ["android/app/ActivityManager", {
-    "static isUserAMonkey()Z": () => 0,
-    "static isRunningInTestHarness()Z": () => 0,
-    "static isRunningInUserTestHarness()Z": () => 0,
-    "getMemoryClass()I": () => 256,
-    "getLargeMemoryClass()I": () => 512,
-    "isLowRamDevice()Z": () => 0,
-    "isBackgroundRestricted()Z": () => 0,
-    "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
-    "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
-    "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
-    // API 35: no start records are kept for this process
-    "getHistoricalProcessStartReasons(I)Ljava/util/List;": () => newArrayList(),
-    "getAppTasks()Ljava/util/List;": () => newArrayList(appTasks()),
-    "getRunningServices(I)Ljava/util/List;": (max: number) => {
-      const all = [...runningServices.values()];
-      return newArrayList(max < all.length ? all.slice(0, max) : all);
-    },
-    "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: any) => {
-      if (mi) { mi.totalMem = 4n * 1024n * 1024n * 1024n; mi.availMem = 2n * 1024n * 1024n * 1024n; mi.lowMemory = 0; mi.threshold = 128n * 1024n * 1024n; }
-    },
-    "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": () => {
-      rt.link("android/content/pm/ConfigurationInfo");
-      const info = new JConfigurationInfo(), config = deviceConfiguration();
-      info.reqTouchScreen = config.touchscreen; info.reqKeyboardType = config.keyboard; info.reqNavigation = config.navigation;
-      info.reqGlEsVersion = 0x30000; return info;
-    },
-    "static getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JRunningAppProcessInfo) => {
-      if (info) fillProc(info);
-    },
-  }],
   ["android/os/PowerManager", {
     "getLocationPowerSaveMode()I": () => 0,
     "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": (_levels: number, tag: string) => {
@@ -1024,79 +992,10 @@ for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChang
 }
 rt.register({
   name: "android/app/ActivityManager$MemoryInfo",
-  ctor: class extends JObj { totalMem = 4n * 1024n ** 3n; availMem = 2n * 1024n ** 3n; lowMemory = 0; threshold = 128n * 1024n * 1024n; },
+  ctor: class extends JObj { totalMem = 0n; availMem = 0n; lowMemory = 0; threshold = 0n; },
   fields: ["totalMem", "availMem", "lowMemory", "threshold"],
   methods: { "<init>()V": function () {} },
 });
-class JRunningAppProcessInfo extends JObj {
-  processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];
-  importance = 100; lru = 0; lastTrimLevel = 0;
-  importanceReasonCode = 0; importanceReasonPid = 0;
-  importanceReasonComponent: JComponentName | null = null;
-}
-// A task the recents list would carry. Nothing produces one — this device has no recents —
-// but a class an app names as a type has to exist, or the auto-stub poisons everything that
-// touches it (see "Four gaps that turned a handled failure into a fatal one").
-class JRecentTaskInfo extends JObj {
-  id = -1; persistentId = -1; taskId = -1; numActivities = 0; isRunning = 0;
-  baseIntent: JIntent | null = null;
-  baseActivity: JComponentName | null = null; topActivity: JComponentName | null = null;
-  origActivity: JComponentName | null = null; description: string | null = null;
-}
-rt.register({
-  name: "android/app/ActivityManager$RecentTaskInfo", ctor: JRecentTaskInfo, ifaces: ["android/os/Parcelable"],
-  fields: ["id", "persistentId", "taskId", "numActivities", "isRunning", "baseIntent", "baseActivity", "topActivity",
-    "origActivity", "description"],
-  methods: { "<init>()V": function () {} },
-});
-/** one of the caller's tasks: the activities that share a task id, as the shell stacks them */
-class JAppTask extends JObj { taskId = 0; }
-function taskInfo(taskId: number): JRecentTaskInfo {
-  const activities = (appHost?.activities() ?? []).filter((a) => a.taskId === taskId);
-  const info = new JRecentTaskInfo(), component = (a: JActivity | undefined) => a ? mkComponentName(appHost?.pkg ?? "", jclsNameOf(a)) : null;
-  info.id = info.persistentId = info.taskId = taskId;
-  info.numActivities = activities.length;
-  info.isRunning = activities.length ? 1 : 0;
-  info.baseIntent = activities[0]?.intent ?? null;
-  info.baseActivity = component(activities[0]);
-  info.topActivity = component(activities.at(-1));
-  return info;
-}
-function appTasks(): JAppTask[] {
-  rt.link("android/app/ActivityManager$AppTask");
-  const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
-  return ids.map((taskId) => Object.assign(new JAppTask(), { taskId }));
-}
-rt.register({
-  name: "android/app/ActivityManager$AppTask", ctor: JAppTask,
-  methods: {
-    "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": function (this: JAppTask) { return taskInfo(this.taskId); },
-    "finishAndRemoveTask()V": function (this: JAppTask) { appHost?.finishTask(this.taskId); },
-    "moveToFront()V": function () {},
-    "setExcludeFromRecents(Z)V": function () {},
-  },
-});
-rt.register({
-  name: "android/app/ActivityManager$RunningAppProcessInfo", ctor: JRunningAppProcessInfo, ifaces: ["android/os/Parcelable"],
-  statics: {
-    IMPORTANCE_FOREGROUND: 100, IMPORTANCE_FOREGROUND_SERVICE: 125, IMPORTANCE_VISIBLE: 200,
-    IMPORTANCE_PERCEPTIBLE: 230, IMPORTANCE_SERVICE: 300, IMPORTANCE_TOP_SLEEPING: 325,
-    IMPORTANCE_CANT_SAVE_STATE: 350, IMPORTANCE_CACHED: 400, IMPORTANCE_BACKGROUND: 400,
-    IMPORTANCE_EMPTY: 500, IMPORTANCE_GONE: 1000,
-    REASON_UNKNOWN: 0, REASON_PROVIDER_IN_USE: 1, REASON_SERVICE_IN_USE: 2,
-  },
-  fields: ["processName", "pid", "uid", "pkgList", "importance", "lru", "lastTrimLevel", "importanceReasonCode",
-    "importanceReasonPid", "importanceReasonComponent"],
-  methods: { "<init>()V": function () {} },
-});
-let procInfo: JRunningAppProcessInfo | null = null;
-function fillProc<T extends JRunningAppProcessInfo>(p: T): T {
-  const pkg = appHost?.pkg ?? "";
-  p.processName = PROCESS_NAME || pkg; p.pkgList = [pkg];
-  p.importance = appHost?.currentActivity() ? 100 : runningServices.size ? 300 : 400;
-  return p;
-}
-const myProcess = () => fillProc(procInfo ??= new JRunningAppProcessInfo());
 // Back itself is still delivered through Activity.onBackPressed (the pre-33 route androidx's
 // OnBackPressedDispatcher also serves), so the registry only has to hold the callbacks.
 class JBackDispatcher extends JObj { cbs: { p: number; cb: unknown }[] = []; }
