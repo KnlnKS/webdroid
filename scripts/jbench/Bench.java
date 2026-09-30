@@ -51,7 +51,17 @@ public class Bench {
     java.security.cert.X509Certificate c = (java.security.cert.X509Certificate) java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(new java.io.ByteArrayInputStream(PEM.getBytes()));
     return c.getSubjectX500Principal().getName().length() + c.getEncoded().length;
   }
-  public static int run(String w) {
+  static java.io.File ZIP;
+  static java.io.File zip() throws java.io.IOException {
+    if (ZIP != null) return ZIP;
+    java.io.File f = new java.io.File(System.getProperty("java.io.tmpdir"), "bench.zip");
+    try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(f))) {
+      for (String k : KEYS) { z.putNextEntry(new java.util.zip.ZipEntry("res/drawable/" + k + ".png")); z.write(k.getBytes()); z.closeEntry(); }
+    }
+    return ZIP = f;
+  }
+
+  public static int run(String w) throws Exception {
     switch (w) {
       case "sha256": case "ecdsaVerify": case "certParse": try { return crypto(w); } catch (Exception e) { throw new RuntimeException(e); }
       case "listAddGet": { ArrayList<Integer> l = new ArrayList<>(); for (int i = 0; i < 2000; i++) l.add(i); int s = 0; for (int r = 0; r < 5; r++) for (int i = 0; i < l.size(); i++) s += l.get(i); return s; }
@@ -80,6 +90,8 @@ public class Bench {
       case "dbInts": { java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocateDirect(4 * 4096); int s = 0; for (int r = 0; r < 5; r++) { bb.clear(); for (int i = 0; i < 4096; i++) bb.putInt(i); bb.flip(); while (bb.hasRemaining()) s += bb.getInt(); } return s; }
       case "random": { Random r = new Random(42); int s = 0; for (int i = 0; i < 20000; i++) s += r.nextInt(1000); double d = 0; for (int i = 0; i < 5000; i++) d += r.nextDouble(); return s + (int) d; }
       case "strConcat": { StringBuilder sb = new StringBuilder(); for (int i = 0; i < 2000; i++) { sb.append("item").append(i).append(','); } return sb.toString().length(); }
+      case "zipOpen": { try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(zip())) { int s = z.size(); for (int i = 0; i < KEYS.length; i += 4) s += (int) z.getEntry("res/drawable/" + KEYS[i] + ".png").getSize(); return s; } }
+      case "inetCached": { int s = 0; for (int i = 0; i < 1000; i++) s += java.net.InetAddress.getByName("localhost").getAddress().length; return s; }
     }
     throw new IllegalArgumentException(w);
   }

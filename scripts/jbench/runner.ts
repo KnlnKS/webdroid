@@ -5,7 +5,7 @@ import "../../src/natives";
 import { dexesIn } from "../../src/jvm/dex";
 import { loadPlatformJar } from "../../src/android/framework";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { vcallAsync } from "../../src/jvm/natives/jlang";
+import { scall, vcallAsync } from "../../src/jvm/natives/jlang";
 import { mountPlatformData } from "../../src/shell/apex";
 
 const keep = setInterval(() => {}, 1 << 30); // the yield channel is unref'd
@@ -19,6 +19,7 @@ rt.linkNatives();
 console.warn = () => {};
 const bench = rt.link("Bench");
 await rt.initClass(bench);
+await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0); // as ActivityThread.main leaves an app process
 const [workload, repsArg] = process.argv.slice(2), reps = Number(repsArg);
 const call = () => vcallAsync(bench.ctor, "run", "(Ljava/lang/String;)I", workload);
 let t = performance.now();
