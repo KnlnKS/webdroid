@@ -1,35 +1,59 @@
+// IAlarmManager, the TS half of AOSP's AlarmManager: PendingIntent alarms belong to the shell's
+// scheduler (the broker's, across processes), and an OnAlarmListener's alarm fires in this process
+// by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
 import { JObj, rt } from "../jvm/runtime";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { JPendingIntent, pendingId, localPendingIntents } from "./pendingintent";
 import { Alarms } from "../shell/alarms";
 import { reportUncaught, uptimeMillis } from "./os";
+import { packages } from "./packages";
+import { usesSdk } from "./pm";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 const localAlarms = new Alarms(localPendingIntents, uptimeMillis, reportUncaught);
 export const alarmTransport = {
   schedule: (id: number, type: number, at: number, interval: number) => localAlarms.schedule(id, type, at, interval),
   cancel: (id: number) => localAlarms.cancel(id),
 };
-function schedule(type: number, at: bigint, operation: JPendingIntent, interval = 0) {
-  if (type < 0 || type > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid alarm type");
-  if (!operation) throw rt.mkThrowable("java/lang/NullPointerException", "operation");
-  alarmTransport.schedule(pendingId(operation), type, Math.max(0, Number(at)), interval);
+
+/** AlarmManagerService.hasScheduleExactAlarmInternal and the REQUIRE_EXACT_ALARM_PERMISSION change:
+ *  an app targeting S or later needs USE_EXACT_ALARM (T or later) or SCHEDULE_EXACT_ALARM, which is
+ *  denied by default from U */
+function canScheduleExact(pkg: string): boolean {
+  const record = packages.get(pkg);
+  if (!record) return false;
+  const target = usesSdk(record.root).target;
+  return target < 31 || target >= 33 && record.permissions.has("android.permission.USE_EXACT_ALARM")
+    || target < 34 && record.permissions.has("android.permission.SCHEDULE_EXACT_ALARM");
 }
-function repeating(type: number, at: bigint, interval: bigint, operation: JPendingIntent) {
-  if (interval <= 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Non-positive alarm interval");
-  schedule(type, at, operation, Number(interval));
-}
-rt.register({ name: "android/app/AlarmManager", ctor: class extends JObj {},
-  statics: { RTC_WAKEUP: 0, RTC: 1, ELAPSED_REALTIME_WAKEUP: 2, ELAPSED_REALTIME: 3 }, methods: {
-    "set(IJLandroid/app/PendingIntent;)V": schedule,
-    "setExact(IJLandroid/app/PendingIntent;)V": schedule,
-    "setAndAllowWhileIdle(IJLandroid/app/PendingIntent;)V": schedule,
-    "setExactAndAllowWhileIdle(IJLandroid/app/PendingIntent;)V": schedule,
-    "setWindow(IJJLandroid/app/PendingIntent;)V": (type: number, at: bigint, _window: bigint, operation: JPendingIntent) => schedule(type, at, operation),
-    "setRepeating(IJJLandroid/app/PendingIntent;)V": repeating,
-    "setInexactRepeating(IJJLandroid/app/PendingIntent;)V": repeating,
-    "cancel(Landroid/app/PendingIntent;)V": (operation: JPendingIntent) => {
-      if (!operation) throw rt.mkThrowable("java/lang/NullPointerException", "operation");
-      alarmTransport.cancel(pendingId(operation));
+const listenerAlarms = new Map<unknown, GuestTimer>();
+const WINDOW_EXACT = 0n;
+rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {}, sup: "android/app/IAlarmManager$Stub", methods: {
+  "set(Ljava/lang/String;IJJJILandroid/app/PendingIntent;Landroid/app/IAlarmListener;Ljava/lang/String;Landroid/os/WorkSource;Landroid/app/AlarmManager$AlarmClockInfo;)V":
+    (pkg: string, type: number, at: bigint, window: bigint, interval: bigint, _flags: number, operation: JPendingIntent | null, listener: unknown) => {
+      if (type < 0 || type > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid alarm type " + type);
+      if (window === WINDOW_EXACT && !canScheduleExact(pkg))
+        throw rt.mkThrowable("java/lang/SecurityException", `Caller ${pkg} needs to hold android.permission.SCHEDULE_EXACT_ALARM or android.permission.USE_EXACT_ALARM to set exact alarms.`);
+      const trigger = Math.max(0, Number(at));
+      if (operation) return alarmTransport.schedule(pendingId(operation), type, trigger, Number(interval));
+      clearGuestTimeout(listenerAlarms.get(listener));
+      const delay = trigger - (type < 2 ? Date.now() : uptimeMillis());
+      listenerAlarms.set(listener, setGuestTimeout(() => {
+        listenerAlarms.delete(listener);
+        void newObj("webdroid/AlarmCompleteListener").then((done) =>
+          vcall(listener, "doAlarm", "(Landroid/app/IAlarmCompleteListener;)V", done)).catch(reportUncaught);
+      }, Math.max(0, Math.min(delay, 0x7fffffff))));
     },
-    "canScheduleExactAlarms()Z": () => 1,
+  "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": (operation: JPendingIntent | null, listener: unknown) => {
+    if (operation) alarmTransport.cancel(pendingId(operation));
+    if (listener) { clearGuestTimeout(listenerAlarms.get(listener)); listenerAlarms.delete(listener); }
   },
-});
+  "canScheduleExactAlarms(Ljava/lang/String;)Z": (pkg: string) => +canScheduleExact(pkg),
+  "hasScheduleExactAlarm(Ljava/lang/String;I)Z": (pkg: string) => +canScheduleExact(pkg),
+  // no alarm clock is set on this device
+  "getNextAlarmClock(I)Landroid/app/AlarmManager$AlarmClockInfo;": () => null,
+} });
+// a listener alarm's completion: nothing waits on it here, as no wake lock is held for delivery
+rt.register({ name: "webdroid/AlarmCompleteListener", ctor: class extends JObj {}, sup: "android/app/IAlarmCompleteListener$Stub", methods: {
+  "alarmComplete(Landroid/os/IBinder;)V": () => {},
+} });

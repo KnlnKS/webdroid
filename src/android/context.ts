@@ -130,7 +130,6 @@ const SERVICE_CLASS: Record<string, string> = {
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
   notification: "android/app/NotificationManager",
-  alarm: "android/app/AlarmManager",
   clipboard: "android/content/ClipboardManager",
   accessibility: "android/view/accessibility/AccessibilityManager",
   captioning: "android/view/accessibility/CaptioningManager",
@@ -178,6 +177,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   user: ["android/os/UserManager", async (ctx) =>
     newObj("android/os/UserManager", "(Landroid/content/Context;Landroid/os/IUserManager;)V", ctx, await hostedService("user"))],
   uimode: ["android/app/UiModeManager", (ctx) => newObj("android/app/UiModeManager", "(Landroid/content/Context;)V", ctx)],
+  alarm: ["android/app/AlarmManager", async (ctx) =>
+    newObj("android/app/AlarmManager", "(Landroid/app/IAlarmManager;Landroid/content/Context;)V", await hostedService("alarm"), ctx)],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };
