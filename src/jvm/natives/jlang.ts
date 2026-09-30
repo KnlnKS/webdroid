@@ -322,27 +322,6 @@ const loadClass = driven(function* (this: JClassLoader, n: string): Gen<JClass> 
   } catch (e) { if (!rt.iof(e, "java/lang/ClassNotFoundException")) throw e; }
   return rememberLoaded(this, n, (yield vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)) as JClass);
 });
-// libcore opens a class path archive with verify=true, and for a v1-signed apk JarVerifier parses
-// the signature block through sun.security.util.DerInputBuffer, a bytecode ByteArrayInputStream
-// that reads the TS stream's missing buf/count fields. Until that stream moves to libcore the
-// archive opens unverified; the rest of the handler is libcore's.
-class JClassPathHandler extends JObj { jarFile: unknown = null; fileUri: string | null = null; }
-const CLASS_PATH_CONNECTION = "libcore/io/ClassPathURLStreamHandler$ClassPathURLConnection";
-rt.register({
-  name: "libcore/io/ClassPathURLStreamHandler", ctor: JClassPathHandler, sup: "sun/net/www/protocol/jar/Handler",
-  fields: { jarFile: "jarFile", fileUri: "fileUri" },
-  methods: {
-    "<init>(Ljava/lang/String;Z)V": driven(function* (this: JClassPathHandler, name: string, validate: number): Gen {
-      this.jarFile = yield newObj("java/util/jar/JarFile", "(Ljava/lang/String;ZZ)V", name, validate, 0);
-      const uri = yield vcall(yield newObj("java/io/File", "(Ljava/lang/String;)V", name), "toURI", "()Ljava/net/URI;");
-      this.fileUri = yield vcall(uri, "toString", "()Ljava/lang/String;");
-    }),
-    // its own override: fallthrough would keep the jar Handler's, which the prototype chain reaches first
-    "openConnection(Ljava/net/URL;)Ljava/net/URLConnection;": function (this: JClassPathHandler, url: unknown) {
-      return newObj(CLASS_PATH_CONNECTION, "(Llibcore/io/ClassPathURLStreamHandler;Ljava/net/URL;)V", this, url);
-    },
-  },
-});
 const classPathHandlers = new Map<string, unknown>();
 /** the URL handler a device keeps per class path archive (DexPathList.Element, VMClassLoader);
  *  an archive that does not open as a jar has none */
