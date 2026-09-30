@@ -24,6 +24,7 @@ const { loadPlatformJar } = await import("../src/android/framework");
 const { PLATFORM_JARS } = await import("../src/jvm/provenance");
 if (!existsSync("vendor/aosp/framework.jar")) throw new Error("no vendor/aosp/framework.jar — run `bun run gen-framework` with the reference AVD booted");
 for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), i);
+await (await import("../tests/java")).mountApexData();
 rt.linkNatives();
 // the device's languages, which a booted page has before any app code runs
 await (await import("../src/android/resnative")).initDeviceLocales();
