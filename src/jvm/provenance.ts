@@ -28,4 +28,38 @@ export function isBytecode(name: string): boolean {
   return false;
 }
 
+/** §2: the only classes in libcore's namespaces a TS spec may implement, by exact name or package
+ *  prefix (ending in `/`), each with why AOSP's bytecode cannot answer for it */
+export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${string}`> = {
+  "java/lang/Object": "vm: object model",
+  "java/lang/Class": "vm: class objects over the JVM's link state",
+  "java/lang/ClassLoader": "vm: defining loaders",
+  "java/lang/String": "vm: Java strings are JS strings",
+  "java/lang/Thread": "vm: threads over cooperative suspension",
+  "java/lang/Throwable": "vm: stack capture from JS frames",
+  "java/lang/System": "vm: arraycopy, clocks, identity hashes, properties",
+  "java/lang/Runtime": "vm: memory limits, library loading",
+  "java/lang/StringBuilder": "intrinsic: libcore's appends are 8-15x slower (§4.7, tests/intrinsics.test.ts)",
+  "java/lang/StringBuffer": "intrinsic: as StringBuilder",
+  "java/lang/reflect/": "vm: reflection over the JVM's link state",
+  "java/lang/invoke/": "vm: method handles and var handles",
+  "java/lang/ref/": "vm: references over JS weak references",
+  "jdk/internal/misc/Unsafe": "vm: field and array access",
+  "sun/misc/Unsafe": "vm: field and array access",
+  "dalvik/system/": "vm: dex files, class loaders, VMRuntime and VMStack",
+  "dalvik/annotation/Signature": "vm: generic signatures",
+  "libcore/util/NativeAllocationRegistry": "vm: native allocations released with their owner",
+  "libcore/io/ClassPathURLStreamHandler": "vm: class-path resources",
+  "java/net/HttpURLConnection": "boundary: HTTP over the fetch proxy",
+  "javax/net/ssl/": "boundary: TLS at the relay",
+  "com/android/okhttp/HttpHandler": "boundary: HTTP over the fetch proxy",
+  "com/android/okhttp/HttpsHandler": "boundary: HTTPS over the fetch proxy",
+  "com/android/org/conscrypt/SSLParametersImpl": "boundary: TLS at the relay",
+  "javax/microedition/khronos/": "boundary: GL over the browser's WebGL",
+};
+
+/** the TS_SPECS key that allows `name`, if any */
+export const tsSpecAllowance = (name: string): string | undefined =>
+  name in TS_SPECS ? name : Object.keys(TS_SPECS).find((k) => k.endsWith("/") && name.startsWith(k));
+
 export { PLATFORM_JARS } from "./bootclasspath";
