@@ -125,8 +125,6 @@ const SERVICE_CLASS: Record<string, string> = {
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   media_metrics: "android/media/metrics/MediaMetricsManager",
-  vibrator: "android/os/Vibrator",
-  vibrator_manager: "android/os/VibratorManager",
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
   notification: "android/app/NotificationManager",
@@ -179,6 +177,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   alarm: ["android/app/AlarmManager", async (ctx) =>
     newObj("android/app/AlarmManager", "(Landroid/app/IAlarmManager;Landroid/content/Context;)V", await hostedService("alarm"), ctx)],
   clipboard: ["android/content/ClipboardManager", (ctx) => newObj("android/content/ClipboardManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
+  vibrator_manager: ["android/os/VibratorManager", (ctx) => newObj("android/os/SystemVibratorManager", "(Landroid/content/Context;)V", ctx)],
+  vibrator: ["android/os/Vibrator", (ctx) => newObj("android/os/SystemVibrator", "(Landroid/content/Context;)V", ctx)],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };

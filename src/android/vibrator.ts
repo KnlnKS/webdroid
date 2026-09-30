@@ -1,61 +1,65 @@
-// android.os.Vibrator on navigator.vibrate, and the VibrationEffect patterns it plays.
+// IVibratorManagerService, the TS half of AOSP's SystemVibratorManager and SystemVibrator: one
+// vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
+// no capabilities (no amplitude or frequency control) and supports no effects or primitives.
+import { JObj, rt } from "../jvm/runtime";
+import { newObj, vcall } from "../jvm/natives/jlang";
+import { toJsArray } from "../jvm/natives/jutil";
+import { reportUncaught } from "./os";
 
-import { rt, JObj } from "../jvm/runtime";
-import { systemService } from "./context";
-
-// A vibration is Android's alternating off/on durations (starting with off) and the index it
-// repeats from; navigator.vibrate is an on/off motor that takes on/off durations and never loops.
-class JVibrationEffect extends JObj { timings: number[] = []; repeat = -1; }
-function waveform(timings: ArrayLike<bigint>, repeat: number, amplitudes?: ArrayLike<number>): JVibrationEffect {
-  if (repeat < -1 || repeat >= timings.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "repeat " + repeat);
-  const effect: JVibrationEffect = rt.make("android/os/VibrationEffect");
-  for (let i = 0; i < timings.length; i++) {
-    // a segment of the other kind than the pattern expects next is preceded by an empty one
-    if ((effect.timings.length % 2 === 1) !== (amplitudes ? amplitudes[i] !== 0 : i % 2 === 1)) effect.timings.push(0);
-    if (i === repeat) effect.repeat = effect.timings.length;
-    effect.timings.push(Number(timings[i]));
-  }
-  return effect;
-}
+const VIBRATOR_ID = 1;
+/** a prebaked effect (EFFECT_CLICK, TICK, ...) plays as a short pulse on a motor with no effects */
+const PREBAKED_MS = 30;
 let vibration: ReturnType<typeof setTimeout> | undefined;
-function vibrate(effect: JVibrationEffect): void {
+/** Android's alternating off/on durations, from the composed effect's segments, played from `repeat` */
+function play(timings: number[], repeat: number): void {
   clearTimeout(vibration);
-  const play = (from: number) => {
-    const part = effect.timings.slice(from), total = part.reduce((a, b) => a + b, 0);
+  const run = (from: number) => {
+    const part = timings.slice(from), total = part.reduce((a, b) => a + b, 0);
     globalThis.navigator?.vibrate?.(from % 2 ? part : [0, ...part]);
-    if (effect.repeat >= 0 && total > 0) vibration = setTimeout(() => play(effect.repeat), total);
+    if (repeat >= 0 && total > 0) vibration = setTimeout(() => run(repeat), total);
   };
-  play(0);
+  run(0);
 }
-rt.register({
-  name: "android/os/VibrationEffect", ctor: JVibrationEffect, ifaces: ["android/os/Parcelable"],
-  statics: { DEFAULT_AMPLITUDE: -1 },
-  methods: {
-    "static createPredefined(I)Landroid/os/VibrationEffect;": () => waveform([0n, 30n], -1),
-    "static createOneShot(JI)Landroid/os/VibrationEffect;": (ms: bigint) => waveform([0n, ms], -1),
-    "static createWaveform([JI)Landroid/os/VibrationEffect;": (timings: BigInt64Array, repeat: number) => waveform(timings, repeat),
-    "static createWaveform([J[II)Landroid/os/VibrationEffect;": (timings: BigInt64Array, amplitudes: Int32Array, repeat: number) => {
-      if (timings.length !== amplitudes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timing and amplitude arrays must be of equal length");
-      return waveform(timings, repeat, amplitudes);
-    },
+/** a composed effect's segments as off/on durations (off first), and the index its repeat starts at */
+async function timingsOf(effect: JObj): Promise<[number[], number]> {
+  const segments = await toJsArray(await vcall(effect, "getSegments", "()Ljava/util/List;")) as JObj[];
+  const repeatSegment: number = await vcall(effect, "getRepeatIndex", "()I");
+  const timings: number[] = [];
+  let repeat = -1;
+  for (const [i, segment] of segments.entries()) {
+    let on: boolean, ms: number;
+    if (rt.iof(segment, "android/os/vibrator/StepSegment")) {
+      on = await vcall(segment, "getAmplitude", "()F") !== 0; ms = Number(await vcall(segment, "getDuration", "()J"));
+    } else if (rt.iof(segment, "android/os/vibrator/RampSegment")) {
+      on = await vcall(segment, "getStartAmplitude", "()F") !== 0 || await vcall(segment, "getEndAmplitude", "()F") !== 0;
+      ms = Number(await vcall(segment, "getDuration", "()J"));
+    } else { on = true; ms = PREBAKED_MS; }
+    if ((timings.length % 2 === 1) !== on) timings.push(0);
+    if (i === repeatSegment) repeat = timings.length;
+    timings.push(ms);
+  }
+  return [timings, repeat];
+}
+/** one vibrator: a stereo vibration plays the effect meant for it */
+async function playCombined(combined: JObj): Promise<void> {
+  const effect: JObj | null = rt.iof(combined, "android/os/CombinedVibration$Mono")
+    ? await vcall(combined, "getEffect", "()Landroid/os/VibrationEffect;")
+    : await vcall(await vcall(combined, "getEffects", "()Landroid/util/SparseArray;"), "get", "(I)Ljava/lang/Object;", VIBRATOR_ID);
+  if (effect) play(...await timingsOf(effect));
+}
+rt.register({ name: "webdroid/VibratorManagerService", ctor: class extends JObj {}, sup: "android/os/IVibratorManagerService$Stub", methods: {
+  "getVibratorIds()[I": () => Int32Array.of(VIBRATOR_ID),
+  "getVibratorInfo(I)Landroid/os/VibratorInfo;": async (id: number) => {
+    if (id !== VIBRATOR_ID) return null;
+    const builder = await newObj("android/os/VibratorInfo$Builder", "(I)V", id);
+    await vcall(builder, "setSupportedEffects", "([I)Landroid/os/VibratorInfo$Builder;", new Int32Array(0));
+    return vcall(builder, "build", "()Landroid/os/VibratorInfo;");
   },
-});
-rt.register({ name: "android/os/VibratorManager", ctor: class extends JObj {}, methods: {
-  "getDefaultVibrator()Landroid/os/Vibrator;": () => systemService(null, "vibrator"),
-} });
-rt.register({ name: "android/os/Vibrator", ctor: class extends JObj {}, methods: {
-  ...Object.fromEntries(["", "Landroid/media/AudioAttributes;"].flatMap((attrs) => [
-    [`vibrate(J${attrs})V`, (ms: bigint) => vibrate(waveform([0n, ms], -1))],
-    [`vibrate([JI${attrs})V`, (pattern: BigInt64Array, repeat: number) => vibrate(waveform(pattern, repeat))],
-    [`vibrate(Landroid/os/VibrationEffect;${attrs})V`, vibrate],
-  ])),
-  "vibrate(Landroid/os/VibrationEffect;Landroid/os/VibrationAttributes;)V": vibrate,
-  "hasVibrator()Z": () => 1,
-  "cancel()V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
-  // navigator.vibrate is a bare on/off motor: no amplitude, no composed primitives
-  "hasAmplitudeControl()Z": () => 0,
-  "areAllPrimitivesSupported([I)Z": () => 0,
-  "arePrimitivesSupported([I)[Z": (ids: Int32Array) => new Uint8Array(ids.length),
-  "areAllEffectsSupported([I)I": () => 2,
-  "areEffectsSupported([I)[I": (ids: Int32Array) => new Int32Array(ids.length).fill(2),
+  "vibrate(IILjava/lang/String;Landroid/os/CombinedVibration;Landroid/os/VibrationAttributes;Ljava/lang/String;Landroid/os/IBinder;)V":
+    (_uid: number, _device: number, _pkg: string, combined: JObj) => { void playCombined(combined).catch(reportUncaught); },
+  "cancelVibrate(ILandroid/os/IBinder;)V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
+  "isVibrating(I)Z": () => 0,
+  // no state changes are reported, as none can be observed
+  "registerVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,
+  "unregisterVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,
 } });
