@@ -8,7 +8,7 @@ import {
 } from "./drawable";
 import { JTextPaint, JEditable, JSpanned, spannedString, csText, textSelection, setTextSelection, passwordTransformation, applyInputFilters } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
-import { isRtl } from "./bidiformatter";
+import { firstStrongRtl } from "../jvm/bidi";
 import { device } from "../shell/config";
 import {
   fontDescent, fontAscent, fontTop, fontBottom, JRect, type JCanvas,
@@ -96,7 +96,7 @@ export class JTextView extends JView {
     if (alignment === 5 || alignment === 6) return (alignment === 5) !== !!layoutDirection ? 3 : 5;
     const gravity = this.gravityT & 0x800007;
     if (alignment === 1 && gravity !== G.START && gravity !== G.END) return gravityH(gravity);
-    const rtl = !!isRtl(text, 0, text.length, "firstLtr");
+    const rtl = firstStrongRtl(text);
     return (alignment === 3 || alignment === 1 && gravity === G.END) !== rtl ? 5 : 3;
   }
   private upperOf = ""; private upper = "";

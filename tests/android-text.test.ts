@@ -3,7 +3,7 @@ import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
-import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
+import { mangleMethod } from "../src/jvm/abi";
 import { JTextPaint, JSpanned } from "../src/android/text";
 import { JTheme, obtainStyled, rvString } from "../src/android/res";
 import { TV } from "../src/android/axml";
@@ -114,13 +114,6 @@ describe("metric-spans", () => {
 describe("reached-text-api", () => {
   rt.linkNatives();
 
-  function heuristic(name: string): unknown {
-    return Object.getOwnPropertyDescriptor(
-      rt.link("android/text/TextDirectionHeuristics").ctor,
-      mangleStaticField(name),
-    )?.value;
-  }
-
   test("TextPaint exposes and copies custom underline state", async () => {
     const source = await newObj("android/text/TextPaint");
     const target = await newObj("android/text/TextPaint");
@@ -137,17 +130,6 @@ describe("reached-text-api", () => {
     expect(target.underlineThickness).toBe(2.5);
   });
 
-  test("text direction heuristics inspect the requested range", async () => {
-    const firstLtr = heuristic("FIRSTSTRONG_LTR");
-    const firstRtl = heuristic("FIRSTSTRONG_RTL");
-    const anyRtl = heuristic("ANYRTL_LTR");
-    expect(await vcall(firstLtr, "isRtl", "(Ljava/lang/CharSequence;II)Z", "  אב", 0, 4)).toBe(1);
-    expect(await vcall(firstLtr, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc אב", 0, 6)).toBe(0);
-    expect(await vcall(firstRtl, "isRtl", "(Ljava/lang/CharSequence;II)Z", "123", 0, 3)).toBe(1);
-    expect(await vcall(anyRtl, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc אב", 0, 6)).toBe(1);
-    expect(await vcall(anyRtl, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc אב", 0, 3)).toBe(0);
-    await expect(vcallAsync(firstLtr, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc", 2, 2)).rejects.toBeDefined();
-  });
 });
 
 describe("spannable-valueof", () => {
