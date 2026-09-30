@@ -7,6 +7,7 @@
 import { rt, JObj, declaredField } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { newObj, scall } from "../jvm/natives/jlang";
+import { unbox } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
 import { PROCESS_UID } from "./os";
 import { device } from "../shell/config";
@@ -59,8 +60,8 @@ const setf = (o: JObj, cls: string, values: Record<string, unknown>) => { for (c
 const KP = "android/hardware/security/keymint/KeyParameter", KPV = "android/hardware/security/keymint/KeyParameterValue";
 function readParams(arr: unknown[] | null): Param[] {
   return (arr ?? []).map((p) => {
-    const value = f(p, KP, "value"), kind = f(value, KPV, "_tag") as number, boxed = f(value, KPV, "_value") as { v?: unknown } | Int8Array;
-    const v = boxed instanceof Int8Array ? new Uint8Array(boxed) : typeof boxed?.v === "number" && kind === KIND.boolValue ? !!boxed.v : boxed?.v as Value;
+    const value = f(p, KP, "value"), kind = f(value, KPV, "_tag") as number, boxed = f(value, KPV, "_value");
+    const v = boxed instanceof Int8Array ? new Uint8Array(boxed) : kind === KIND.boolValue ? !!unbox(boxed) : unbox(boxed) as Value;
     return { tag: f(p, KP, "tag") as number, kind, v };
   });
 }

@@ -329,7 +329,7 @@ async function result(fn: Function, self: unknown, args: unknown[]): Promise<unk
   return r.threw === "java/lang/NullPointerException" ? { threw: r.threw } : r;
 }
 const INTS = [0, 1, -1, 127, 128, -128, -129, 255, 256, 1000, -32768, 32767, 65535, 2147483647, -2147483648,
-  ...Array.from({ length: 40 }, () => (random(0x7fffffff) - 0x3fffffff) * (random(3) ? 1 : 97) | 0)];
+  ...Array.from({ length: 40 }, (_, i) => Math.imul(i + 1, 0x9e3779b1) >> (i % 24))];
 const LONGS = [...INTS.map(BigInt), 9007199254740993n, -9223372036854775808n, 9223372036854775807n, 1n << 40n, -(1n << 53n) - 1n];
 const BOX_VALUES: Record<string, unknown[]> = {
   I: INTS, J: LONGS, S: INTS.map((v) => (v << 16) >> 16), B: INTS.map((v) => (v << 24) >> 24), C: INTS.map((v) => v & 0xffff),
@@ -344,9 +344,9 @@ test("boxing and unboxing intrinsics match their AOSP bodies, cache identity inc
     const getter = ({ I: "intValue()I", J: "longValue()J", C: "charValue()C", F: "floatValue()F", D: "doubleValue()D", Z: "booleanValue()Z" } as Record<string, string>)[d];
     const get = getter ? await pair(cls, getter) : null;
     for (const v of BOX_VALUES[d]) {
-      const mine = valueOf(v), theirs = base(v);
+      const mine = await valueOf(v), theirs = await base(v);
       expect(mine.constructor).toBe(theirs.constructor);
-      expect(mine === theirs).toBe(theirs === base(v));
+      expect(mine === theirs).toBe(theirs === await base(v));
       if (get) expect(Object.is(get[0].call(mine), get[1].call(theirs))).toBe(true);
     }
   }

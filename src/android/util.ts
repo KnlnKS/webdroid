@@ -4,6 +4,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
 import { vcall, linkInit } from "../jvm/natives/jlang";
+import { unbox as boxedValue } from "../jvm/natives/jbox";
 import { PATTERNS } from "./pattern-data";
 
 rt.register({
@@ -137,8 +138,8 @@ rt.register({
   },
 });
 for (const [name, desc, cls, unbox] of [
-  ["android/util/IntProperty", "(Ljava/lang/Object;I)V", "java/lang/Integer", (v: any) => v?.v | 0],
-  ["android/util/FloatProperty", "(Ljava/lang/Object;F)V", "java/lang/Float", (v: any) => Math.fround(v?.v ?? 0)],
+  ["android/util/IntProperty", "(Ljava/lang/Object;I)V", "java/lang/Integer", (v: unknown) => Number(boxedValue(v) ?? 0) | 0],
+  ["android/util/FloatProperty", "(Ljava/lang/Object;F)V", "java/lang/Float", (v: unknown) => Math.fround(Number(boxedValue(v) ?? 0))],
 ] as const) {
   rt.register({
     name, ctor: class extends JProperty {}, sup: "android/util/Property",

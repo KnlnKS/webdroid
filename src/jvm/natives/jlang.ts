@@ -181,6 +181,12 @@ function arrayOwner(runtime: Runtime, desc: string): Runtime {
     runtime = runtime.parent;
   }
 }
+let classLinked = false;
+/** a Class object, java.lang.Class linked first so it has its methods */
+function newClass(): JClass {
+  if (!classLinked) { classLinked = true; rt.link("java/lang/Class"); }
+  return new JClass();
+}
 rt.classFor = function (this: Runtime, name: string): JClass {
   if (name[0] === "[") {
     // an array's getClass is hot (Arrays.copyOf asks for every grown collection): once its element
@@ -193,7 +199,7 @@ rt.classFor = function (this: Runtime, name: string): JClass {
     let cache = arrayClasses.get(owner);
     if (!cache) arrayClasses.set(owner, cache = new Map());
     cls = cache.get(name);
-    if (!cls) { cls = new JClass(); cls.arrDesc = name; cls.componentOwner = owner; cache.set(name, cls); }
+    if (!cls) { cls = newClass(); cls.arrDesc = name; cls.componentOwner = owner; cache.set(name, cls); }
     const element = name.replace(/^\[+/, "");
     if (element[0] !== "L" || this.classes.has(descToName(element))) known.set(name, cls);
     return cls;
@@ -202,7 +208,7 @@ rt.classFor = function (this: Runtime, name: string): JClass {
   const ci = primitive ? null : this.link(name);
   let c: JClass | undefined = ci ? ci.jclass : classCache.get(name);
   if (c) return c;
-  c = new JClass();
+  c = newClass();
   if (primitive) c.primName = name;
   else c.ci = ci;
   if (ci) ci.jclass = c;
