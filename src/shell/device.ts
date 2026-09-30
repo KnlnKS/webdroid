@@ -138,6 +138,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   applyOrientationRequest(launcherOrientation(manifest));
   const code = loadCode(processName ?? pkg);
   await Promise.all([startZygote(), restoreRoots()]);
+  // ActivityThread.main: an app process does not track unclosed resources
+  await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.

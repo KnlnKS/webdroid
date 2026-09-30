@@ -908,16 +908,6 @@ rt.register({
   },
 });
 
-for (const n of ["android/util/CloseGuard", "dalvik/system/CloseGuard"]) {
-  rt.register({
-    name: n, ctor: class extends JObj {},
-    methods: {
-      [`static get()L${n};`]: () => rt.make(n),
-      ...noops("open(Ljava/lang/String;)V", "close()V", "warnIfOpen()V"),
-    },
-  });
-}
-
 // statvfs answers the browser's storage estimate for whichever path is asked about (one
 // filesystem backs everything here), in 4K blocks.
 const BLK = 4096n;
