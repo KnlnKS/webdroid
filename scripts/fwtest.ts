@@ -1531,6 +1531,38 @@ await exercise("PathParser: parsing, errors, SkPath resolution (device values)",
   if (mid !== "0,1,1,1,12.5,7.5") throw new Error(`interpolated: ${mid}`);
 });
 
+// SurfaceTexture outside a GL context, against StProbe on the reference AVD (the in-context latch is
+// the browser egl-thread probe's)
+await exercise("SurfaceTexture: states, errors and frame delivery without a context (device values)", async () => {
+  const ST = "android/graphics/SurfaceTexture", { presentSurface, surfaceTextureOf } = await import("../src/android/glview");
+  const matrix = async (st: unknown) => { const m = new Float32Array(16); await vcall(st, "getTransformMatrix", "([F)V", m); return m.join(","); };
+  const st = await newObj(ST, "(I)V", 5);
+  same("fresh", [await matrix(st), await vcall(st, "getTimestamp", "()J"), await vcall(st, "getDataSpace", "()I"), await vcall(st, "isReleased", "()Z")],
+    ["1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1", 0n, 0, 0]);
+  same("update", await thrown(() => vcall(st, "updateTexImage", "()V")), "java.lang.IllegalStateException: Unable to update texture contents (see logcat for details)");
+  same("releaseTexImage", await thrown(() => vcall(st, "releaseTexImage", "()V")), "java.lang.IllegalStateException: Unable to release texture contents (see logcat for details)");
+  same("detach", await thrown(() => vcall(st, "detachFromGLContext", "()V")), "ok");
+  same("attach", await thrown(() => vcall(st, "attachToGLContext", "(I)V", 3)), "java.lang.RuntimeException: Error during attachToGLContext (see logcat for details)");
+  same("empty buffer size", await thrown(() => vcall(st, "setDefaultBufferSize", "(II)V", 0, 0)), "ok");
+  const detached = await newObj(ST, "(Z)V", 0);
+  same("detached detach", await thrown(() => vcall(detached, "detachFromGLContext", "()V")), "java.lang.RuntimeException: Error during detachFromGLContext (see logcat for details)");
+  same("detached releaseTexImage", await thrown(() => vcall(detached, "releaseTexImage", "()V")), "ok");
+  // a queued frame reaches the listener through postEventFromNative and the listener's Handler
+  let heard: unknown = null;
+  const listener = Object.assign(rt.make("java/lang/Object"), { [mangleMethod("onFrameAvailable", `(L${ST};)V`)]: (s: unknown) => { heard = s; } });
+  await vcall(detached, "setOnFrameAvailableListener", `(L${ST}$OnFrameAvailableListener;)V`, listener);
+  presentSurface(surfaceTextureOf(detached)!.surface, { close() {} } as ImageBitmap);
+  for (let i = 0; i < 50 && !heard; i++) await new Promise((r) => setTimeout(r, 10));
+  same("onFrameAvailable", heard === detached, true);
+  await vcall(detached, "release", "()V");
+  same("released", [await vcall(detached, "isReleased", "()Z"), await thrown(() => vcall(detached, "updateTexImage", "()V")),
+    await thrown(() => vcall(detached, "releaseTexImage", "()V")), await thrown(() => vcall(detached, "attachToGLContext", "(I)V", 1))],
+  [1, "java.lang.RuntimeException: Error during updateTexImage (see logcat for details)", "java.lang.RuntimeException: Error during updateTexImage (see logcat for details)",
+    "java.lang.RuntimeException: Error during attachToGLContext (see logcat for details)"]);
+  await vcall(detached, "finalize", "()V");
+  same("finalized", surfaceTextureOf(detached), null);
+});
+
 if (gaps.length) {
   console.log(`\n${gaps.length} declared natives with no delegate, first 30:`);
   for (const g of gaps.slice(0, 30)) console.log("  " + g);

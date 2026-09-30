@@ -137,6 +137,8 @@ test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and er
     bufferBindings: { outsideKept: true, inVaoKept: true, error: 0 },
     nativeClientArrays: { pixels: [[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255]], drawError: 0, kept: true, vaoError: 0x502 },
     externalTexture: { bound: true, error: 0 },
+    surfaceTexture: { latched: { matrix: [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1], stamped: true, texel: [255, 0, 0, 255] },
+      otherContext: "java/lang/IllegalStateException", deleted: true, attached: [255, 0, 0, 255], released: [1, "java/lang/RuntimeException"] },
     nativeWindow: { locked: 0, dimensions: [2, 1, 2, 1], duplicate: -16, posted: 0, pixels: [255, 0, 0, 255, 0, 255, 0, 255], yv12: true, released: -22, sameHandle: true, reset: true, frames: 2 },
     windowCopy: { before: { code: 0, pixel: [0, 255, 0, 255] }, after: { code: 0, pixel: [255, 0, 0, 255] } } });
 }, PAGE_TIMEOUT);

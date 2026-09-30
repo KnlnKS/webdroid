@@ -29,7 +29,6 @@
  "android/graphics/Canvas.setBitmap(Landroid/graphics/Bitmap;)V → isHardwareAccelerated()Z",
  "android/graphics/Canvas.setBitmap(Landroid/graphics/Bitmap;)V → setMatrix(Landroid/graphics/Matrix;)V",
  "android/graphics/Paint.reset()V → setTextLocales(Landroid/os/LocaleList;)V",
- "android/graphics/SurfaceTexture.setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;)V → setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;Landroid/os/Handler;)V",
  "android/graphics/drawable/Drawable.setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V → getColorFilter()Landroid/graphics/ColorFilter;",
  "android/graphics/drawable/StateListDrawable.onStateChange([I)Z → selectDrawable(I)Z",
  "android/os/Binder.onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z → getInterfaceDescriptor()Ljava/lang/String;",

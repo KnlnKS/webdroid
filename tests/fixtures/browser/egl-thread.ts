@@ -5,10 +5,10 @@ import { NativeBitmap, javaBitmap } from "../../../src/android/bitmap";
 import { dispatchAttached, dispatchDetached } from "../../../src/android/view";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn } from "../../../src/jvm/natives/jlang";
-import { gl, tables } from "../../../src/android/gl";
+import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
+import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
-import { EglContext, getHolder, latchSurfaces, type GlSurface } from "../../../src/android/glview";
+import { EglContext, getHolder, latchSurfaces, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glview";
 import { mem } from "../../../src/native/mem";
 import { Cpu, setA64 } from "../../../src/native/cpu";
 import { jitStats, JIT_HEAT } from "../../../src/native/core";
@@ -284,7 +284,7 @@ async function probe() {
   return { callbacks, bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
     lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents(),
-    clientArrays: clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture() };
+    clientArrays: clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture(), surfaceTexture: await surfaceTexture() };
 }
 async function nativeWindow() {
   ndkInit();
@@ -342,6 +342,43 @@ async function windowCopy() {
   const before = await copy();
   present();
   return { before, after: await copy() };
+}
+/** SurfaceTexture in GL contexts, against StProbe on the reference AVD: a latch fills the texture and
+ *  takes GLConsumer's flipped matrix, another context cannot update it, a detach deletes the texture
+ *  and an attach binds the current image to a new one */
+async function surfaceTexture() {
+  const a = new EglContext(), b = new EglContext(), pbuffer = (): GlSurface => ({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const texel = (name: number) => {
+    const g = gl!, fbo = g.createFramebuffer(), px = new Uint8Array(4);
+    g.bindFramebuffer(g.FRAMEBUFFER, fbo);
+    g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, tables().textures[name], 0);
+    g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+    g.bindFramebuffer(g.FRAMEBUFFER, null); g.deleteFramebuffer(fbo);
+    return [...px];
+  };
+  const thrown = (f: () => unknown) => { try { f(); return "ok"; } catch (e) { return Reflect.get(e as object, "constructor").$i.name; } };
+  a.makeCurrent(pbuffer());
+  const name = put(tables().textures, gl!.createTexture());
+  const st = await newObj("android/graphics/SurfaceTexture", "(I)V", name), matrix = new Float32Array(16);
+  const red = new OffscreenCanvas(1, 1), g2 = red.getContext("2d")!;
+  g2.fillStyle = "red"; g2.fillRect(0, 0, 1, 1);
+  presentSurface(surfaceTextureOf(st)!.surface, red.transferToImageBitmap());
+  vcall(st, "updateTexImage", "()V");
+  vcall(st, "getTransformMatrix", "([F)V", matrix);
+  const latched = { matrix: [...matrix], stamped: vcall(st, "getTimestamp", "()J") > 0n, texel: texel(name) };
+  b.makeCurrent(pbuffer());
+  const otherContext = thrown(() => vcall(st, "updateTexImage", "()V"));
+  a.makeCurrent(pbuffer());
+  vcall(st, "detachFromGLContext", "()V");
+  const deleted = tables().textures[name] === null;
+  b.makeCurrent(pbuffer());
+  const moved = put(tables().textures, gl!.createTexture());
+  vcall(st, "attachToGLContext", "(I)V", moved);
+  const attached = texel(moved);
+  vcall(st, "release", "()V");
+  const released = [vcall(st, "isReleased", "()Z"), thrown(() => vcall(st, "updateTexImage", "()V"))];
+  b.makeCurrent(null);
+  return { latched, otherContext, deleted, attached, released };
 }
 /** GLThread: surface callbacks and resume wake it, a frame waits for the display to show the last one,
  *  WHEN_DIRTY draws only on request, and detaching ends the thread */
