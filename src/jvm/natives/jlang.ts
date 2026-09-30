@@ -1784,6 +1784,11 @@ rt.register({
     }),
     // deleting first replaces a getter-only property (user.name) rather than assigning through it
     "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; delete sysProps[k]; sysProps[k] = v; return o; },
+    "static clearProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => {
+      if (k === null) rt.npe();
+      if (k === "") throw rt.mkThrowable("java/lang/IllegalArgumentException", "key can't be empty");
+      const o = sysProps[k] ?? null; delete sysProps[k]; return o;
+    },
     "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string | null) => {
       if (key === null) rt.npe();
       return sysEnv[key!] ?? null;

@@ -272,34 +272,6 @@ describe("localsocket", () => {
   });
 });
 
-describe("network-request", () => {
-  const builder = () => newObj("android/net/NetworkRequest$Builder", "()V");
-  const build = (target: unknown) => vcall(target, "build", "()Landroid/net/NetworkRequest;");
-
-  test("NetworkRequest builders chain fluently and expose the network specifier", async () => {
-    const target = await builder(), specifier = rt.make("android/net/NetworkSpecifier");
-    expect(await vcall(target, "setIncludeOtherUidNetworks", "(Z)Landroid/net/NetworkRequest$Builder;", 1)).toBe(target);
-    expect(await vcall(target, "setNetworkSpecifier", "(Landroid/net/NetworkSpecifier;)Landroid/net/NetworkRequest$Builder;", specifier)).toBe(target);
-    expect(await vcall(await build(target), "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBe(specifier);
-    expect(await vcall(await build(await builder()), "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBeNull();
-  });
-
-  test("NetworkRequest exposes sorted, deduplicated defensive arrays of transports and capabilities", async () => {
-    for (const [add, get, values, expected] of [
-      ["addTransportType", "getTransportTypes", [3, 1, 3], [1, 3]],
-      ["addCapability", "getCapabilities", [12, 5, 12], [5, 12]],
-    ] as const) {
-      const target = await builder();
-      for (const value of values) await vcall(target, add, "(I)Landroid/net/NetworkRequest$Builder;", value);
-      const request = await build(target);
-      const array = await vcall(request, get, "()[I") as Int32Array;
-      expect([...array]).toEqual([...expected]);
-      array[0] = 7;
-      expect([...(await vcall(request, get, "()[I") as Int32Array)]).toEqual([...expected]);
-    }
-  });
-});
-
 describe("network-stats", () => {
   test("network stats expose an empty supported query", async () => {
     const context = rt.make("android/content/Context");

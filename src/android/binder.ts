@@ -165,7 +165,8 @@ const binderServices = new Map<string, JObj | Promise<JObj> | (() => Promise<JOb
 /** host a system service, made when first asked for */
 export function hostService(name: string, make: () => Promise<JObj>): void { binderServices.set(name, make); }
 class JServiceManager extends JObj { binder: JBinder | null = null; }
-function hostedService(name: string): JObj | Promise<JObj> | null {
+/** a hosted service's binder, made when first asked for */
+export function hostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);
   if (!service) { rt.noteMissing(`service ${name} [binder]`); return null; }
   if (typeof service !== "function") return service;

@@ -640,9 +640,3 @@ test("Wi-Fi locks expose their held state", async () => {
   expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
 });
 
-test("the connected browser network is validated", async () => {
-  const manager = rt.make("android/net/ConnectivityManager");
-  const network = await vcall(manager, "getActiveNetwork", "()Landroid/net/Network;");
-  const capabilities = await vcall(manager, "getNetworkCapabilities", "(Landroid/net/Network;)Landroid/net/NetworkCapabilities;", network);
-  expect(await vcall(capabilities, "hasCapability", "(I)Z", 16)).toBe(1);
-});

@@ -174,6 +174,8 @@ rt.register({
     "static getByAddress(Ljava/lang/String;[B)Ljava/net/InetAddress;": (h: string | null, b: Int8Array) => inetBytes(b, h),
     "static getLoopbackAddress()Ljava/net/InetAddress;": localhostAddress,
     "static getLocalHost()Ljava/net/InetAddress;": localhostAddress,
+    // lookups are not cached here: each asks the relay's resolver
+    "static clearDnsCache()V": () => {},
     "getHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getCanonicalHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return addressText(this.bytes); },

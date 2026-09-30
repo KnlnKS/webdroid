@@ -1,13 +1,10 @@
-// android.net: Uri, plus ConnectivityManager and the network-callback plumbing. Network state is
-// read back out of ConnectivityManager's own NetworkInfo so the two cannot disagree; nothing here
-// simulates the network going away.
+// android.net: Uri, UrlQuerySanitizer and Wi-Fi. The network itself is the connectivity service's
+// (services.ts), under AOSP's ConnectivityManager.
 
-import { rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, curThread, stringHash, mkEnumSet } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet } from "../jvm/natives/jutil";
-import { jarray } from "../jvm/abi";
 import { pathOf } from "../jvm/natives/jio";
-import { reportUncaught } from "./os";
 import { type JParcel, parcelCreator } from "./parcel";
 
 // android.net.Uri: one string, split lazily the way AOSP's StringUri does (scheme, then
@@ -327,71 +324,7 @@ rt.register({
   },
 });
 
-/** the transport the one modelled network runs on: ConnectivityManager.TYPE_WIFI */
-const NET_TYPE = 1;
-export const netUp = async (): Promise<number> =>
-  (await vcall(rt.make("android/net/NetworkInfo"), "isConnected", "()Z")) ? 1 : 0;
-class JNetwork extends JObj { id = 1; }
-let theNetwork: JNetwork | null = null;
-let boundNetwork: JNetwork | null = null;
-const network = (): JNetwork => (theNetwork ??= rt.make("android/net/Network") as JNetwork);
-const knownNetwork = (n: unknown): n is JNetwork => n instanceof JNetwork && n.id === network().id;
-const netCaps = () => rt.make("android/net/NetworkCapabilities");
-const netCallbacks = new Set<unknown>();
-async function fireNetAvailable(cb: unknown) {
-  if (!netCallbacks.has(cb) || !(await netUp())) return;
-  await vcall(cb, "onAvailable", "(Landroid/net/Network;)V", network());
-  await vcall(cb, "onCapabilitiesChanged", "(Landroid/net/Network;Landroid/net/NetworkCapabilities;)V", network(), netCaps());
-  await vcall(cb, "onLinkPropertiesChanged", "(Landroid/net/Network;Landroid/net/LinkProperties;)V", network(), new JLinkProperties());
-}
-// The network's configuration as a resolver reads it. Its DNS server is one any guest resolver
-// can use: port-53 datagrams are answered over DNS-over-HTTPS (shell/relay.ts).
-class JLinkProperties extends JObj {}
-rt.register({
-  name: "android/net/LinkProperties", ctor: JLinkProperties,
-  methods: {
-    "<init>()V": function () {},
-    "getInterfaceName()Ljava/lang/String;": () => "wlan0",
-    "getDnsServers()Ljava/util/List;": driven(function* (): Gen {
-      return newArrayList([yield vcall(rt.link("java/net/InetAddress").ctor, "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "8.8.8.8")]);
-    }),
-    "getLinkAddresses()Ljava/util/List;": () => newArrayList(),
-    "getRoutes()Ljava/util/List;": () => newArrayList(),
-    "getMtu()I": () => 1500,
-    "isPrivateDnsActive()Z": () => 0,
-    ...stubs(null, "getDomains()Ljava/lang/String;", "getPrivateDnsServerName()Ljava/lang/String;", "getHttpProxy()Landroid/net/ProxyInfo;"),
-  },
-});
-rt.register({
-  name: "android/net/Network", ctor: JNetwork, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "getNetworkHandle()J": function (this: JNetwork) { return this.id ? (BigInt(this.id) << 32n) | 0xcafed00dn : 0n; },
-    "static fromNetworkHandle(J)Landroid/net/Network;": (handle: bigint) => {
-      if (handle <= 0n || (handle & 0xffffffffn) !== 0xcafed00dn) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid network handle");
-      const n = new JNetwork(); n.id = Number(handle >> 32n); return n;
-    },
-    "equals(Ljava/lang/Object;)Z": function (this: JNetwork, other: unknown) { return other instanceof JNetwork && this.id === other.id ? 1 : 0; },
-    "hashCode()I": function (this: JNetwork) { return Math.imul(this.id, 11); },
-    "toString()Ljava/lang/String;": function (this: JNetwork) { return String(this.id); },
-  },
-});
-const networkCapabilities = new Set([11, 12, 13, 14, 15, 16, 18, 20, 21]);
-rt.register({
-  name: "android/net/NetworkCapabilities", ctor: class extends JObj {},
-  statics: {
-    TRANSPORT_CELLULAR: 0, TRANSPORT_WIFI: 1, TRANSPORT_ETHERNET: 3, TRANSPORT_VPN: 4,
-    NET_CAPABILITY_NOT_METERED: 11, NET_CAPABILITY_INTERNET: 12, NET_CAPABILITY_NOT_RESTRICTED: 13,
-    NET_CAPABILITY_TRUSTED: 14, NET_CAPABILITY_NOT_VPN: 15, NET_CAPABILITY_VALIDATED: 16,
-    NET_CAPABILITY_NOT_ROAMING: 18, NET_CAPABILITY_NOT_CONGESTED: 20, NET_CAPABILITY_NOT_SUSPENDED: 21,
-    NET_CAPABILITY_TEMPORARILY_NOT_METERED: 25,
-  },
-  methods: { "hasCapability(I)Z": function (c: number) { return networkCapabilities.has(c) ? netUp() : 0; }, "hasTransport(I)Z": (t: number) => (t === NET_TYPE ? 1 : 0),
-    // no bandwidth estimate: the platform's "unspecified"
-    "getLinkDownstreamBandwidthKbps()I": () => 0, "getLinkUpstreamBandwidthKbps()I": () => 0, "getSignalStrength()I": () => -2147483648,
-    // the relay's network carries no transport-specific info (no WifiInfo for it to be)
-    "getTransportInfo()Landroid/net/TransportInfo;": () => null },
-});
-rt.markers("android/net/TransportInfo");
+
 // ── Wi-Fi: the relay's network is the one Wi-Fi network, and everything a location permission
 // would gate (SSID, BSSID, address) reads as the platform's redacted values
 class JWifiInfo extends JObj {}
@@ -466,8 +399,9 @@ rt.register({
       const scaled = Math.fround(Math.fround(Math.fround(rssi + 100) * Math.fround(top)) / 45);
       return Math.trunc(scaled) | 0;
     },
-    "isWifiEnabled()Z": () => NET_TYPE === 1 ? 1 : 0,
-    "getWifiState()I": () => NET_TYPE === 1 ? 3 : 1,
+    // the one network is Wi-Fi: WIFI_STATE_ENABLED
+    "isWifiEnabled()Z": () => 1,
+    "getWifiState()I": () => 3,
     "setWifiEnabled(Z)Z": () => 0,
     "getConnectionInfo()Landroid/net/wifi/WifiInfo;": () => new JWifiInfo(),
     "getDhcpInfo()Landroid/net/DhcpInfo;": () => new JDhcpInfo(),
@@ -482,134 +416,6 @@ rt.register({
     "isP2pSupported()Z": () => 0,
   },
 });
-class JNetworkRequest extends JObj {
-  caps: number[] = [];
-  transports: number[] = [];
-  includeOtherUidNetworks = false;
-  networkSpecifier: unknown = null;
-}
-class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }
-rt.markers("android/net/NetworkSpecifier");
-rt.register({
-  name: "android/net/NetworkRequest", ctor: JNetworkRequest,
-  methods: {
-    "hasCapability(I)Z": function (this: JNetworkRequest, c: number) { return this.caps.includes(c) ? 1 : 0; },
-    "hasTransport(I)Z": function (this: JNetworkRequest, t: number) { return this.transports.includes(t) ? 1 : 0; },
-    "getCapabilities()[I": function (this: JNetworkRequest) { return Int32Array.from(this.caps).sort(); },
-    "getTransportTypes()[I": function (this: JNetworkRequest) { return Int32Array.from(this.transports).sort(); },
-    "getNetworkSpecifier()Landroid/net/NetworkSpecifier;": function (this: JNetworkRequest) { return this.networkSpecifier; },
-  },
-});
-rt.register({
-  name: "android/net/NetworkRequest$Builder", ctor: JNetworkRequestBuilder,
-  methods: {
-    "<init>()V": function () {},
-    "addCapability(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, c: number) {
-      if (!this.r.caps.includes(c)) this.r.caps.push(c);
-      return this;
-    },
-    "removeCapability(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, c: number) {
-      this.r.caps = this.r.caps.filter((x) => x !== c); return this;
-    },
-    "addTransportType(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, t: number) {
-      if (!this.r.transports.includes(t)) this.r.transports.push(t);
-      return this;
-    },
-    "setIncludeOtherUidNetworks(Z)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, include: number) {
-      this.r.includeOtherUidNetworks = include !== 0;
-      return this;
-    },
-    "setNetworkSpecifier(Landroid/net/NetworkSpecifier;)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, specifier: unknown) {
-      this.r.networkSpecifier = specifier;
-      return this;
-    },
-    "build()Landroid/net/NetworkRequest;": function (this: JNetworkRequestBuilder) {
-      const r = new JNetworkRequest();
-      r.caps = this.r.caps.slice().sort((a, b) => a - b); r.transports = this.r.transports.slice().sort((a, b) => a - b); r.includeOtherUidNetworks = this.r.includeOtherUidNetworks;
-      r.networkSpecifier = this.r.networkSpecifier;
-      return r;
-    },
-  },
-});
-rt.register({
-  name: "android/net/ConnectivityManager$NetworkCallback", ctor: class extends JObj {},
-  methods: {
-    "<init>()V": function () {}, "<init>(I)V": function () {},
-  },
-});
-
-rt.markers("android/net/ConnectivityManager$OnNetworkActiveListener");
-const activeListeners = new Set<unknown>();
-const registerCallback = (cb: unknown) => {
-  if (!cb) return;
-  netCallbacks.add(cb);
-  setTimeout(() => void fireNetAvailable(cb).catch(reportUncaught), 0);
-};
-const registerOnHandler = async (cb: unknown, handler: unknown) => {
-  if (!cb || !handler) throw rt.mkThrowable("java/lang/NullPointerException", "callback and handler are required");
-  netCallbacks.add(cb);
-  const task = rt.make("webdroid/FnRunnable");
-  task.fn = () => fireNetAvailable(cb);
-  await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", task);
-};
-rt.register({
-  name: "android/net/ConnectivityManager", ctor: class extends JObj {},
-  statics: { TYPE_MOBILE: 0, TYPE_WIFI: 1, TYPE_ETHERNET: 9, TYPE_VPN: 17, RESTRICT_BACKGROUND_STATUS_DISABLED: 1 },
-  methods: {
-    "getActiveNetworkInfo()Landroid/net/NetworkInfo;": () => rt.make("android/net/NetworkInfo"),
-    // the one Network, present exactly when NetworkInfo says connected (a null here with a
-    // connected NetworkInfo reads as "no internet" to every modern connectivity check)
-    "getActiveNetwork()Landroid/net/Network;": driven(function* (): Gen { return (yield netUp()) ? network() : null; }),
-    "getAllNetworks()[Landroid/net/Network;": driven(function* (): Gen { return jarray((yield netUp()) ? [network()] : [], "Landroid/net/Network;"); }),
-    "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => knownNetwork(n) ? rt.make("android/net/NetworkInfo") : null,
-    // by network type (TYPE_WIFI/TYPE_MOBILE...): the one network we model is the active one,
-    // so its own type answers and every other type has no info, as on a device without it
-    "getNetworkInfo(I)Landroid/net/NetworkInfo;": driven(function* (t: number): Gen {
-      return (yield netUp()) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null;
-    }),
-    "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": (n: unknown) => knownNetwork(n) ? new JLinkProperties() : null,
-    "bindProcessToNetwork(Landroid/net/Network;)Z": (n: unknown) => {
-      if (n != null && !knownNetwork(n)) return 0;
-      boundNetwork = n ?? null; return 1;
-    },
-    "getBoundNetworkForProcess()Landroid/net/Network;": () => boundNetwork,
-    "getRestrictBackgroundStatus()I": () => 1,
-    "getBackgroundDataSetting()Z": () => 1,
-    "getDefaultProxy()Landroid/net/ProxyInfo;": () => null,
-    "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
-    "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": function (_r: unknown, cb: unknown, handler: unknown) { return registerOnHandler(cb, handler); },
-    "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": registerCallback,
-    "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": registerOnHandler,
-    "requestNetwork(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
-    "unregisterNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": (cb: unknown) => { netCallbacks.delete(cb); },
-    "getNetworkCapabilities(Landroid/net/Network;)Landroid/net/NetworkCapabilities;": (n: unknown) => knownNetwork(n) ? netCaps() : null,
-    // The sole network is already modeled as validated; revalidation is only a hint.
-    ...noops("reportNetworkConnectivity(Landroid/net/Network;Z)V"),
-    "isActiveNetworkMetered()Z": () => 0,
-    // The relay has no radio power-saving transitions while its network is available.
-    "isDefaultNetworkActive()Z": driven(function* (): Gen { return (yield netUp()) ? 1 : 0; }),
-    "addDefaultNetworkActiveListener(Landroid/net/ConnectivityManager$OnNetworkActiveListener;)V": (listener: unknown) => { activeListeners.add(listener); },
-    "removeDefaultNetworkActiveListener(Landroid/net/ConnectivityManager$OnNetworkActiveListener;)V": (listener: unknown) => {
-      if (!activeListeners.delete(listener)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Listener not registered");
-    },
-  },
-});
-const states = mkEnumSet("android/net/NetworkInfo$State", ["CONNECTING", "CONNECTED", "SUSPENDED", "DISCONNECTING", "DISCONNECTED", "UNKNOWN"]);
-const detailedStates = mkEnumSet("android/net/NetworkInfo$DetailedState", ["IDLE", "SCANNING", "CONNECTING", "AUTHENTICATING", "OBTAINING_IPADDR", "CONNECTED", "SUSPENDED", "DISCONNECTING", "DISCONNECTED", "FAILED", "BLOCKED", "VERIFYING_POOR_LINK", "CAPTIVE_PORTAL_CHECK"]);
-rt.register({
-  name: "android/net/NetworkInfo", ctor: class extends JObj {},
-  methods: {
-    "getType()I": () => NET_TYPE,
-    "getTypeName()Ljava/lang/String;": () => "WIFI",
-    "getState()Landroid/net/NetworkInfo$State;": () => { rt.link("android/net/NetworkInfo$State"); return states[1]; },
-    "getDetailedState()Landroid/net/NetworkInfo$DetailedState;": () => { rt.link("android/net/NetworkInfo$DetailedState"); return detailedStates[5]; },
-    ...stubs(1, "isConnected()Z", "isConnectedOrConnecting()Z", "isAvailable()Z"),
-    ...stubs(0, "getSubtype()I", "isRoaming()Z"),
-    ...stubs("", "getSubtypeName()Ljava/lang/String;"),
-    ...stubs(null, "getExtraInfo()Ljava/lang/String;", "getReason()Ljava/lang/String;"),
-  },
-});
-
 // ── UrlQuerySanitizer: AOSP's parser with its IllegalCharacterValueSanitizer flag set
 const SAN = { SPACE_OK: 1, OTHER_WHITESPACE_OK: 2, SCRIPT_URL_OK: 4, AMP_OK: 8, AMP_AND_SPACE_OK: 9, DQUOTE_OK: 16, SQUOTE_OK: 32, LT_OK: 64, GT_OK: 128, PCT_OK: 256, NUL_OK: 512, NON_7_BIT_ASCII_OK: 1024,
   ALL_OK: 2047, URL_LEGAL: 4 | 8 | 256 | 1024, ALL_BUT_NUL_LEGAL: 2047 & ~512, ALL_BUT_WHITESPACE_LEGAL: 2047 & ~3, ALL_BUT_NUL_AND_ANGLE_BRACKETS_LEGAL: 2047 & ~(512 | 64 | 128) };

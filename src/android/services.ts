@@ -4,13 +4,13 @@
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
 import { JObj, rt, noops, declaredField, type NativeSpec } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
+import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { appHost, jclsNameOf } from "./apphost";
 import { type JComponentName, mkComponentName } from "./intent";
 import type { JActivity } from "./app";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
 import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
@@ -150,3 +150,121 @@ rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}
 const withEnforcer = async (cls: string) => newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer"));
 hostService("audio", () => withEnforcer("webdroid/AudioService"));
 hostService("window", () => withEnforcer("webdroid/WindowManagerService"));
+
+// IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
+// through, up while the page is online. Its capabilities and link properties are the reference
+// AVD's Wi-Fi network as an app sees it (no transport info, owner or admin uids); its DNS server is
+// one any resolver can use, as port-53 datagrams are answered over DNS-over-HTTPS (shell/relay.ts).
+// Callbacks reach ConnectivityManager's CallbackHandler as CALLBACK_* messages through the
+// Messenger each request carries, as ConnectivityService sends them.
+const NET_ID = 100, TYPE_WIFI = 1, TRANSPORT_WIFI = 1;
+/** NET_CAPABILITY_*: NOT_METERED, INTERNET, NOT_RESTRICTED, TRUSTED, NOT_VPN, VALIDATED, NOT_ROAMING,
+ *  FOREGROUND, NOT_CONGESTED, NOT_SUSPENDED, NOT_VCN_MANAGED, NOT_BANDWIDTH_CONSTRAINED */
+const CAPABILITIES = [11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 28, 37];
+export const netUp = (): boolean => typeof navigator === "undefined" || navigator.onLine !== false;
+const NC = "android/net/NetworkCapabilities", NCB = "Landroid/net/NetworkCapabilities$Builder;";
+const networkState = {
+  network: null as Promise<JObj> | null,
+  caps: null as Promise<JObj> | null,
+  link: null as Promise<JObj> | null,
+};
+const theNetwork = () => networkState.network ??= newObj("android/net/Network", "(I)V", NET_ID);
+const capabilities = () => networkState.caps ??= (async () => {
+  let b = await newObj(`${NC}$Builder`);
+  b = await vcall(b, "addTransportType", `(I)${NCB}`, TRANSPORT_WIFI);
+  for (const c of CAPABILITIES) b = await vcall(b, "addCapability", `(I)${NCB}`, c);
+  b = await vcall(b, "setLinkUpstreamBandwidthKbps", `(I)${NCB}`, 12000);
+  b = await vcall(b, "setLinkDownstreamBandwidthKbps", `(I)${NCB}`, 30000);
+  b = await vcall(b, "setSignalStrength", `(I)${NCB}`, -50);
+  return vcall(b, "build", `()L${NC};`);
+})();
+const linkProperties = () => networkState.link ??= (async () => {
+  const lp = await newObj("android/net/LinkProperties");
+  await vcall(lp, "setInterfaceName", "(Ljava/lang/String;)V", "wlan0");
+  const dns = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "8.8.8.8");
+  await vcall(lp, "addDnsServer", "(Ljava/net/InetAddress;)Z", dns);
+  return lp;
+})();
+const isOurs = async (n: unknown) => n != null && await vcall(n, "equals", "(Ljava/lang/Object;)Z", await theNetwork()) === 1;
+async function networkInfo(): Promise<JObj> {
+  const info = await newObj("android/net/NetworkInfo", "(IILjava/lang/String;Ljava/lang/String;)V", TYPE_WIFI, 0, "WIFI", "");
+  const connected = (await linkInit("android/net/NetworkInfo$DetailedState")).ctor[mangleStaticField(netUp() ? "CONNECTED" : "DISCONNECTED")];
+  await vcall(info, "setDetailedState", "(Landroid/net/NetworkInfo$DetailedState;Ljava/lang/String;Ljava/lang/String;)V", connected, null, "");
+  await vcall(info, "setIsAvailable", "(Z)V", 1);
+  return info;
+}
+/** ConnectivityManager's CALLBACK_* message codes */
+const callbackCode = async (name: string): Promise<number> => (await linkInit("android/net/ConnectivityManager")).ctor[mangleStaticField(name)];
+type Registration = { request: JObj; messenger: JObj };
+const registrations = new Map<JObj, Registration>();
+let nextRequestId = 1;
+/** ConnectivityService.callCallbackForRequest: the request, the network and what the code carries */
+async function sendCallback(r: Registration, name: string): Promise<void> {
+  const data = await newObj("android/os/Bundle"), put = (cls: string, value: unknown) =>
+    vcall(data, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", cls, value);
+  await put("NetworkRequest", r.request);
+  await put("Network", await theNetwork());
+  if (name === "CALLBACK_AVAILABLE") {
+    await put("NetworkCapabilities", await capabilities());
+    await put("LinkProperties", await linkProperties());
+  }
+  const msg = await scall("android/os/Message", "obtain", "()Landroid/os/Message;");
+  msg[declaredField("android/os/Message", "what")] = await callbackCode(name);
+  await vcall(msg, "setData", "(Landroid/os/Bundle;)V", data);
+  await vcall(r.messenger, "send", "(Landroid/os/Message;)V", msg);
+}
+/** a request's NetworkRequest, registered for callbacks; one the network satisfies hears of it */
+async function register(caps: unknown, legacyType: number, messenger: JObj, type: number): Promise<JObj> {
+  const types = (await linkInit("android/net/NetworkRequest$Type")).ctor[mangleMethod("values", "()[Landroid/net/NetworkRequest$Type;")]() as JObj[];
+  const request: JObj = await newObj("android/net/NetworkRequest", "(Landroid/net/NetworkCapabilities;IILandroid/net/NetworkRequest$Type;)V",
+    caps ?? await newObj(NC), legacyType, nextRequestId++, types[type]);
+  const r = { request, messenger };
+  registrations.set(request, r);
+  if (netUp() && await vcall(caps ?? await capabilities(), "satisfiedByNetworkCapabilities", `(L${NC};)Z`, await capabilities()))
+    await sendCallback(r, "CALLBACK_AVAILABLE");
+  return request;
+}
+rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {}, sup: "android/net/IConnectivityManager$Stub", methods: {
+  "getActiveNetwork()Landroid/net/Network;": () => netUp() ? theNetwork() : null,
+  "getActiveNetworkForUid(IZ)Landroid/net/Network;": () => netUp() ? theNetwork() : null,
+  "getAllNetworks()[Landroid/net/Network;": async () => jarray(netUp() ? [await theNetwork()] : [], "Landroid/net/Network;"),
+  "getActiveNetworkInfo()Landroid/net/NetworkInfo;": networkInfo,
+  "getActiveNetworkInfoForUid(IZ)Landroid/net/NetworkInfo;": networkInfo,
+  // the one network's own type answers; this device has no other
+  "getNetworkInfo(I)Landroid/net/NetworkInfo;": (type: number) => type === TYPE_WIFI ? networkInfo() : null,
+  "getNetworkInfoForUid(Landroid/net/Network;IZ)Landroid/net/NetworkInfo;": async (n: unknown) => await isOurs(n) ? networkInfo() : null,
+  "getNetworkCapabilities(Landroid/net/Network;Ljava/lang/String;Ljava/lang/String;)Landroid/net/NetworkCapabilities;": async (n: unknown) =>
+    await isOurs(n) ? capabilities() : null,
+  "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": async (n: unknown) => await isOurs(n) ? linkProperties() : null,
+  "isActiveNetworkMetered()Z": () => 0,
+  "isDefaultNetworkActive()Z": () => +netUp(),
+  // RESTRICT_BACKGROUND_STATUS_DISABLED: data saver is off
+  "getRestrictBackgroundStatusByCaller()I": () => 1,
+  "getProxyForNetwork(Landroid/net/Network;)Landroid/net/ProxyInfo;": () => null,
+  "requestNetwork(ILandroid/net/NetworkCapabilities;ILandroid/os/Messenger;ILandroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;)Landroid/net/NetworkRequest;":
+    (_uid: number, caps: unknown, type: number, messenger: JObj, _timeout: number, _binder: unknown, legacyType: number) => register(caps, legacyType, messenger, type),
+  "listenForNetwork(Landroid/net/NetworkCapabilities;Landroid/os/Messenger;Landroid/os/IBinder;ILjava/lang/String;Ljava/lang/String;)Landroid/net/NetworkRequest;":
+    async (caps: unknown, messenger: JObj) => register(caps, -1, messenger, 1),
+  "releaseNetworkRequest(Landroid/net/NetworkRequest;)V": (request: JObj) => { registrations.delete(request); },
+  // the network is already validated; revalidation is only a hint
+  ...noops("reportNetworkConnectivity(Landroid/net/Network;Z)V",
+    "registerNetworkActivityListener(Landroid/net/INetworkActivityListener;)V",
+    "unregisterNetworkActivityListener(Landroid/net/INetworkActivityListener;)V"),
+} });
+if (typeof addEventListener !== "undefined") for (const event of ["online", "offline"])
+  addEventListener(event, () => void (async () => {
+    for (const r of registrations.values()) await sendCallback(r, event === "online" ? "CALLBACK_AVAILABLE" : "CALLBACK_LOST");
+  })().catch(reportUncaught));
+
+hostService("connectivity", () => newObj("webdroid/ConnectivityService"));
+
+// NetworkUtils (libframework-connectivity-jni): binding to the one network, which every socket
+// already uses
+rt.claimNativeLib("framework-connectivity-jni");
+let boundNetwork = 0n;
+rt.registerJnis("android/net/NetworkUtils", {
+  "bindProcessToNetworkHandle(J)Z": (handle: bigint) => { boundNetwork = handle; return 1; },
+  "getBoundNetworkHandleForProcess()J": () => boundNetwork,
+  "bindProcessToNetworkForHostResolution(I)Z": () => 1,
+  "bindSocketToNetworkHandle(Ljava/io/FileDescriptor;J)I": () => 0,
+});

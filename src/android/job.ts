@@ -6,7 +6,7 @@ import { JList } from "../jvm/natives/jutil";
 import { JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import { onMain } from "./mainloop";
 import { bindAsSystem } from "./runningservices";
-import { netUp } from "./net";
+import { netUp } from "./services";
 import { device } from "../shell/config";
 import { JBinder } from "./binder";
 import { JService } from "./app";
@@ -68,7 +68,7 @@ function jobParameters(job: ScheduledJob, callback: JJobCallback | null, stopRea
 async function startJob(job: ScheduledJob): Promise<void> {
   if (pendingJobs.get(job.info.id) !== job || job.run) return;
   const p = job.info;
-  if (p.charging && device.battery.status !== 2 || p.idle || p.batteryNotLow && device.battery.level < 15 || p.network && !(await netUp())) {
+  if (p.charging && device.battery.status !== 2 || p.idle || p.batteryNotLow && device.battery.level < 15 || p.network && !netUp()) {
     armJob(job, 30000); return;
   }
   const callback: JJobCallback = rt.make("webdroid/JobCallback");

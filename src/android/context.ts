@@ -20,6 +20,7 @@ import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages } from "./packages";
+import { hostedService } from "./binder";
 
 const privDir = (p: string) => { vfs.mkdir(p); return newFile(p); };
 
@@ -115,7 +116,6 @@ export function grantPermissions(names: string[]): Int32Array {
 const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
   input_method: "android/view/inputmethod/InputMethodManager",
-  connectivity: "android/net/ConnectivityManager",
   device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
   usagestats: "android/app/usage/UsageStatsManager",
@@ -172,6 +172,8 @@ const SERVICE_CLASS: Record<string, string> = {
  *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
 const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promise<unknown>]> = {
   activity: ["android/app/ActivityManager", (ctx) => newObj("android/app/ActivityManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
+  connectivity: ["android/net/ConnectivityManager", async (ctx) =>
+    newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };
 const SERVICE_NAME = new Map([...Object.entries(SERVICE_CLASS), ...Object.entries(AOSP_MANAGERS).map(([n, [c]]) => [n, c] as const)].map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
