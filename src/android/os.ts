@@ -1177,7 +1177,7 @@ rt.register({
     "rethrowAsSocketException()Ljava/net/SocketException;": rethrowAs("java/net/SocketException"),
   },
 });
-const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
+export const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
 /** a path's file stat, null for a directory; ENOENT for neither */
 const existing = (fn: string, path: string) => { const st = vfs.stat(path); if (!st && !vfs.isDir(path)) throw errno(fn, 2); return st; };
 class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
@@ -1203,7 +1203,7 @@ rt.register({
       },
   },
 });
-const FD = "Ljava/io/FileDescriptor;";
+export const FD = "Ljava/io/FileDescriptor;";
 function statOf(size: number, mode: number, mtimeMs: number): JStructStat {
   const s = new JStructStat();
   s.st_mode = mode;
@@ -1358,13 +1358,13 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     },
 };
 /** a -errno result as the ErrnoException libcore's Os methods throw */
-function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
-const ioResult = (fn: string, result: number): number => { sys(fn, result); return result; };
+export function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
+export const ioResult = (fn: string, result: number): number => { sys(fn, result); return result; };
 /** sendfile moves at most this much a call, which its callers loop over as Linux allows */
 const SENDFILE_CHUNK = 1 << 20;
 /** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
-type IoBuffer = Int8Array | JBuffer | null;
-function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
+export type IoBuffer = Int8Array | JBuffer | null;
+export function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
   if (buffer === null) return rt.npe();
   const view = buffer instanceof JBuffer ? buffer.dv : buffer;
   checkFromIndexSize(offset, count, view.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
@@ -1372,7 +1372,7 @@ function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
 }
 /** A direct buffer may live in guest memory, which can move while a read waits: it takes the
  *  bytes once they have arrived. */
-function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
+export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
   const target = ioRegion(buffer, offset, count);
   if (!(buffer instanceof JBuffer)) return after(read(target), (n) => ioResult(fn, n));
   const scratch = new Uint8Array(count);

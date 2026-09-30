@@ -105,16 +105,41 @@ interface RelayEndpoint {
   port: number;
 }
 
+/** received bytes in arrival order, drained from the front without copying the rest */
+export class ByteQueue {
+  private q: Uint8Array[] = [];
+  private head = 0;
+  length = 0;
+  push(bytes: Uint8Array): void { this.q.push(bytes); this.length += bytes.length; }
+  /** moves up to `len` bytes into `out` at `off`; `peek` leaves them queued */
+  take(out: Uint8Array, off: number, len: number, peek = false): number {
+    let n = 0, i = this.head;
+    while (n < len && i < this.q.length) {
+      const chunk = this.q[i], take = Math.min(len - n, chunk.length);
+      out.set(take === chunk.length ? chunk : chunk.subarray(0, take), off + n);
+      n += take;
+      if (peek) i++;
+      else if (take === chunk.length) this.q[i++] = EMPTY_CHUNK;
+      else this.q[i] = chunk.subarray(take);
+    }
+    if (peek) return n;
+    this.length -= n; this.head = i;
+    if (this.head === this.q.length) { this.q.length = 0; this.head = 0; }
+    else if (this.head >= 1024 && this.head * 2 >= this.q.length) { this.q = this.q.slice(this.head); this.head = 0; }
+    return n;
+  }
+}
+
 /** One WebSocket carries one TCP byte stream through server.ts's /tcp relay. */
 export class Relay {
   private readonly transport: WebSocket;
-  private q: Uint8Array[] = [];
-  private qHead = 0;
-  private qLen = 0;
+  private readonly q = new ByteQueue();
   private readonly waiters = new Set<() => void>();
   connected = false;
   applicationProtocol: string | null = null;
   eof = false;
+  /** why the relay could not connect: its close frame's reason */
+  failure = "";
   localEndpoint: RelayEndpoint | null = null;
   readonly ready: Promise<void>;
 
@@ -142,12 +167,11 @@ export class Relay {
           }
           return;
         }
-        const bytes = new Uint8Array(event.data as ArrayBuffer);
-        this.q.push(bytes);
-        this.qLen += bytes.length;
+        this.q.push(new Uint8Array(event.data as ArrayBuffer));
         wake();
       };
-      const failed = () => {
+      const failed = (event: Event) => {
+        if (!settled) this.failure = (event as CloseEvent).reason ?? "";
         done();
         if (!settled) { settled = true; reject(new Error("connect failed")); }
       };
@@ -157,22 +181,21 @@ export class Relay {
     this.ready.then(() => { transport.onclose = done; transport.onerror = done; }, () => { /* caller reports connect failure */ });
   }
 
-  available(): number { return this.qLen; }
+  available(): number { return this.q.length; }
 
-  waitForChange(): Promise<void> {
-    return new Promise<void>((resolve) => this.waiters.add(resolve));
-  }
+  /** the bytes that have arrived, without waiting (0 when none have) */
+  take(out: Uint8Array, off: number, len: number, peek = false): number { return this.q.take(out, off, len, peek); }
 
   /** wait until a read can complete without blocking, or `ms` elapses — SO_TIMEOUT's contract,
    *  which a caller probing an idle connection depends on to not wait forever */
   async waitReadable(ms: number): Promise<boolean> {
-    if (this.qLen || this.eof) return true;
+    if (this.q.length || this.eof) return true;
     await new Promise<void>((resolve) => {
       const fire = () => { clearTimeout(timer); resolve(); };
       const timer = setTimeout(() => { this.waiters.delete(fire); resolve(); }, ms);
       this.waiters.add(fire);
     });
-    return this.qLen > 0 || this.eof;
+    return this.q.length > 0 || this.eof;
   }
 
   subscribe(waiter: () => void): () => void {
@@ -182,32 +205,19 @@ export class Relay {
 
   async read(out: Uint8Array, off: number, len: number): Promise<number> {
     if (len === 0) return 0;
-    while (this.qLen === 0 && !this.eof) await this.waitForChange();
-    if (this.qLen === 0) return -1;
-    let n = 0;
-    while (n < len && this.qLen) {
-      const chunk = this.q[this.qHead];
-      const take = Math.min(len - n, chunk.length);
-      out.set(chunk.subarray(0, take), off + n);
-      n += take;
-      this.qLen -= take;
-      if (take === chunk.length) this.q[this.qHead++] = EMPTY_CHUNK;
-      else this.q[this.qHead] = chunk.subarray(take);
-    }
-    if (this.qHead === this.q.length) {
-      this.q.length = 0;
-      this.qHead = 0;
-    } else if (this.qHead >= 1024 && this.qHead * 2 >= this.q.length) {
-      this.q = this.q.slice(this.qHead);
-      this.qHead = 0;
-    }
-    return n;
+    while (this.q.length === 0 && !this.eof) await new Promise<void>((resolve) => this.waiters.add(resolve));
+    return this.q.length ? this.q.take(out, off, len) : -1;
   }
 
   write(bytes: Uint8Array): boolean {
     if (this.transport.readyState !== 1) return false;
     this.transport.send(bytes);
     return true;
+  }
+
+  /** shutdown(SHUT_WR): the relay ends its side of the TCP stream once what was written has gone */
+  shutdownWrite(): void {
+    if (this.transport.readyState === 1) this.transport.send("shutdown");
   }
 
   close(): void {

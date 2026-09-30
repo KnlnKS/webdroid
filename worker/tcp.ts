@@ -25,7 +25,10 @@ export async function tcpRelay(request: Request, context: ExecutionContext): Pro
   void socket.closed.then(close, close);
   let writes = Promise.resolve();
   server.addEventListener("message", (event) => {
-    if (typeof event.data === "string") return;
+    if (typeof event.data === "string") {
+      if (event.data === "shutdown") writes = writes.then(() => writer.close()).catch(close);
+      return;
+    }
     writes = writes.then(async () => {
       const bytes = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : new Uint8Array(event.data);
       await writer.write(bytes);

@@ -45,8 +45,9 @@ export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;
 // errno values (bionic/Linux ARM)
 export const E = {
   PERM: 1, NOENT: 2, SRCH: 3, INTR: 4, IO: 5, BADF: 9, CHILD: 10, AGAIN: 11, NOMEM: 12, ACCES: 13, FAULT: 14, BUSY: 16, EXIST: 17,
-  NOTDIR: 20, ISDIR: 21, INVAL: 22, MFILE: 24, NOTTY: 25, NOSPC: 28, SPIPE: 29, RANGE: 34, DEADLK: 35, NOSYS: 38, NOTSUP: 95,
-  NOTEMPTY: 39, NOTSOCK: 88, PROTONOSUPPORT: 93, SOCKTNOSUPPORT: 94, AFNOSUPPORT: 97, NETUNREACH: 101,
+  NODEV: 19, NOTDIR: 20, ISDIR: 21, INVAL: 22, MFILE: 24, NOTTY: 25, NOSPC: 28, SPIPE: 29, PIPE: 32, RANGE: 34, DEADLK: 35, NOSYS: 38, NOTSUP: 95,
+  NOTEMPTY: 39, NOTSOCK: 88, DESTADDRREQ: 89, MSGSIZE: 90, NOPROTOOPT: 92, PROTONOSUPPORT: 93, SOCKTNOSUPPORT: 94, AFNOSUPPORT: 97,
+  ADDRINUSE: 98, ADDRNOTAVAIL: 99, NETUNREACH: 101, CONNRESET: 104,
   ISCONN: 106, NOTCONN: 107, TIMEDOUT: 110, CONNREFUSED: 111, HOSTUNREACH: 113, ALREADY: 114, INPROGRESS: 115,
 } as const;
 
@@ -55,4 +56,10 @@ export const ERRSTR: Record<number, string> = {
   11: "Try again", 12: "Out of memory", 13: "Permission denied", 16: "Device or resource busy", 17: "File exists", 20: "Not a directory",
   21: "Is a directory", 22: "Invalid argument", 24: "Too many open files", 25: "Inappropriate ioctl for device", 28: "No space left on device", 29: "Illegal seek", 34: "Numerical result out of range",
   35: "Resource deadlock would occur", 38: "Function not implemented", 39: "Directory not empty", 101: "Network is unreachable", 110: "Connection timed out",
+  14: "Bad address", 19: "No such device", 32: "Broken pipe", 88: "Socket operation on non-socket", 89: "Destination address required",
+  90: "Message too long", 92: "Protocol not available", 93: "Protocol not supported", 94: "Socket type not supported",
+  95: "Operation not supported on transport endpoint", 97: "Address family not supported by protocol", 98: "Address already in use",
+  99: "Cannot assign requested address", 104: "Connection reset by peer", 106: "Transport endpoint is already connected",
+  107: "Transport endpoint is not connected", 111: "Connection refused", 113: "No route to host", 114: "Operation already in progress",
+  115: "Operation now in progress",
 };

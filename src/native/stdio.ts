@@ -11,7 +11,7 @@ import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
 import { procIdentity, procMemory, procText } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
-import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketAvailable, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
+import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketAvailable, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd, socketReceive, socketSend } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 import { armClockTimer, disarmClockTimer, timerState, validTime, type ClockTimer } from "./timers";
 const dec = new TextDecoder();
@@ -211,8 +211,15 @@ export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, 
 export const javaCloseFd = (fd: number): number => fdClose(null, fd);
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number): number => fdDup(null, fd);
-/** socketpair's ends are the only sockets this table holds */
-export const javaIsSocketFd = (fd: number): boolean => fds.get(fd)?.path === "socketpair";
+export const javaDup2Fd = (fd: number, to: number): number => fdDup2(null, fd, to);
+/** socketpair's ends are the only sockets this table holds; net.ts keeps the rest */
+export const javaIsSocketFd = (fd: number): boolean => isNativeSocket(fd) || fds.get(fd)?.path === "socketpair";
+/** socketpair(2): two connected descriptors, each reading what the other writes */
+export function javaSocketPair(type: number): [number, number] {
+  const ab = newPipe(1), ba = newPipe(1), nb = !!(type & O_NONBLOCK);
+  const end = (rpipe: Pipe, wpipe: Pipe) => put({ ...fdBase("socketpair"), rpipe, wpipe, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC));
+  return [end(ab, ba), end(ba, ab)];
+}
 /** the bytes behind a descriptor read at offsets: not a stream, a directory or /dev/random */
 const regularContent = (f: Fd | undefined): VfsFile | null =>
   !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify ? null : f.content;
@@ -229,6 +236,7 @@ export function javaFdSource(fd: number): FileSource | null {
   };
 }
 export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
+  if (isNativeSocket(fd)) return socketReceive(fd, target);
   const f = fds.get(fd);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return f.dir ? -E.ISDIR : -E.BADF;
   if (f && !f.content.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
@@ -257,7 +265,7 @@ export function javaPreadFd(fd: number, target: Uint8Array, off: number): number
   const done = (bytes: Uint8Array) => { target.set(bytes); return bytes.length; };
   return value instanceof Promise ? value.then(done, () => -E.IO) : done(value);
 }
-export const javaWriteFd = (fd: number, bytes: Uint8Array): number => writeBytes(null, fds.get(fd), bytes);
+export const javaWriteFd = (fd: number, bytes: Uint8Array): number => isNativeSocket(fd) ? socketSend(fd, bytes) : writeBytes(null, fds.get(fd), bytes);
 export const javaPwriteFd = (fd: number, bytes: Uint8Array, off: number): number => pwriteBytes(null, fd, bytes, off);
 export const javaTruncateFd = (fd: number, length: number): number => truncateFd(null, fd, length);
 export const javaSyncFd = (fd: number): number => syncFd(null, fd);
@@ -458,7 +466,7 @@ function fdDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
   f.references++;
   return put(f, cloexec, min);
 }
-function fdDup2(cpu: Cpu, fd: number, to: number, cloexec = false): number {
+function fdDup2(cpu: Cpu | null, fd: number, to: number, cloexec = false): number {
   if (to < 0) return fail(cpu, E.BADF);
   if (fd === to) return isNativeSocket(fd) || fds.has(fd) ? fd : fail(cpu, E.BADF);
   if (isNativeSocket(fd)) {
@@ -981,9 +989,8 @@ export function stdioInit(): void {
     },
     socketpair: (_c, a) => {
       a.i(); const type = a.i(); a.i(); const sv = a.p();
-      const ab = newPipe(1), ba = newPipe(1), nb = !!(type & 0x800);
-      mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC)));
-      mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC)));
+      const [first, second] = javaSocketPair(type);
+      mem.st32(sv, first); mem.st32(sv + 4, second);
       return 0;
     },
     timerfd_create: (cpu, a) => {

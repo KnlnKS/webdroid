@@ -25,7 +25,7 @@ function proxyTarget(requested: string): string {
   return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
 }
 
-type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; closed: boolean; pending: Uint8Array[]; pendingBytes: number };
+type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; closed: boolean; pending: Uint8Array[]; pendingBytes: number; shut?: boolean };
 type UdpData = { kind: "udp"; sock: { send(data: Uint8Array, port: number, address: string): boolean; close(): void } | null; closed: boolean; addresses: Map<string, Promise<string>> };
 type SocketData = TcpData | UdpData | WebRelayData;
 const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
@@ -44,6 +44,8 @@ function flushTcp(ws: import("bun").ServerWebSocket<SocketData>, data: TcpData):
     }
     data.pending.shift();
   }
+  // the client's shutdown(SHUT_WR), once what it wrote before has gone
+  if (data.shut) socket.shutdown(true);
 }
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -243,7 +245,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
         if (d.closed) socket.end();
         else if (!d.tls) ready(socket);
       } catch (e) {
-        ws.close(4000, String(e).slice(0, 100));
+        // the errno code leads, for the guest's connect(2) to report
+        ws.close(4000, `${(e as { code?: string }).code ?? ""} ${String(e)}`.trim().slice(0, 100));
       }
     },
     async message(ws, msg) {
@@ -266,7 +269,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
         } catch { ws.data.addresses.delete(host); }
         return;
       }
-      if (typeof msg === "string") return;
+      if (typeof msg === "string") { if (msg === "shutdown") { ws.data.shut = true; flushTcp(ws, ws.data); } return; }
+      if (ws.data.shut) return;
       if (ws.data.ready && ws.data.pendingBytes === 0 && ws.data.sock) {
         const written = ws.data.sock.write(msg);
         if (written < 0) { ws.close(); return; }
