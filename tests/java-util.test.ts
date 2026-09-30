@@ -476,7 +476,7 @@ describe("map-equality", () => {
   test("copy constructors do not share mutable mapping entries", async () => {
     for (const name of ["java/util/HashMap", "java/util/EnumMap"]) {
       const source = await map(name);
-      const key = name.endsWith("EnumMap") ? Reflect.get(rt.link("java/util/concurrent/TimeUnit").ctor, "s$SECONDS") : "key";
+      const key = name.endsWith("EnumMap") ? await scall("java/util/concurrent/TimeUnit", "valueOf", "(Ljava/lang/String;)Ljava/util/concurrent/TimeUnit;", "SECONDS") : "key";
       await put(source, key, "before");
       const copy = await newObj(name, name.endsWith("EnumMap") ? "(Ljava/util/EnumMap;)V" : "(Ljava/util/Map;)V", source);
       await put(copy, key, "after");

@@ -1,8 +1,9 @@
 import { rt, JObj, type NativeSpec, driven, without, type Gen } from "../runtime";
-import { vcall, park, curThread } from "./jlang";
+import { vcall, after, park, curThread } from "./jlang";
 import { JList, mkIter, listMethods, toJsArray, LIST_ONLY, IDENTITY_EQUALITY, INDEX_OF, DEQUE_ONLY, SEQUENCED, CAPACITY } from "./jutil";
-import type { JTimeUnit } from "./jconc";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock";
+
+const toNanos = (unit: unknown, d: bigint) => vcall(unit, "toNanos", "(J)J", d);
 
 class JBlockingQueue extends JList {
   capacity = 0x7fffffff;
@@ -92,7 +93,7 @@ const queueMethods: NonNullable<NativeSpec["methods"]> = {
   }),
   "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, value: unknown) { return this.put(value); },
   "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, value: unknown) { return this.enqueue(value); },
-  "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, value: unknown, duration: bigint, unit: JTimeUnit) { return this.put(value, Number(duration) * unit.ms); },
+  "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, value: unknown, duration: bigint, unit: unknown) { return after(toNanos(unit, duration), (ns: bigint) => this.put(value, Number(ns) / 1e6)); },
   "add(Ljava/lang/Object;)Z": queueAdd,
   "addAll(Ljava/util/Collection;)Z": driven(function* (this: JBlockingQueue, collection: unknown): Gen {
     if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
@@ -103,7 +104,7 @@ const queueMethods: NonNullable<NativeSpec["methods"]> = {
   "remainingCapacity()I": function (this: JBlockingQueue) { return this.capacity - this.a.length - this.reserved; },
   "take()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.take(); },
   "poll()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.poll(); },
-  "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JBlockingQueue, duration: bigint, unit: JTimeUnit) { return this.take(Number(duration) * unit.ms); },
+  "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JBlockingQueue, duration: bigint, unit: unknown) { return after(toNanos(unit, duration), (ns: bigint) => this.take(Number(ns) / 1e6)); },
   "remove()Ljava/lang/Object;": function (this: JBlockingQueue) {
     const value = this.poll(); if (value === null) throw rt.mkThrowable("java/util/NoSuchElementException", null); return value;
   },

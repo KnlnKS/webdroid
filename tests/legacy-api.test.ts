@@ -534,11 +534,11 @@ test("concrete maps, EnumSet factories, and primitive streams preserve Java disp
   expect(await vcall(map, "putIfAbsent", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "key", "second")).toBe("first");
   expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key")).toBe("first");
 
-  const units = rt.link("java/util/concurrent/TimeUnit").ctor;
+  const units = rt.link("java/util/concurrent/TimeUnit"); await rt.initClass(units);
   const enumSet = await scall("java/util/EnumSet", "of",
     "(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;",
-    Reflect.get(units, "s$NANOSECONDS"), Reflect.get(units, "s$MICROSECONDS"),
-    Reflect.get(units, "s$MILLISECONDS"), Reflect.get(units, "s$SECONDS"));
+    Reflect.get(units.ctor, "s$NANOSECONDS"), Reflect.get(units.ctor, "s$MICROSECONDS"),
+    Reflect.get(units.ctor, "s$MILLISECONDS"), Reflect.get(units.ctor, "s$SECONDS"));
   expect(await vcall(enumSet, "size", "()I")).toBe(4);
 
   const source = await scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;",

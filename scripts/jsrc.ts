@@ -10,7 +10,6 @@ import "../src/jvm/natives/jstream";
 import "../src/jvm/natives/jio";
 import "../src/jvm/natives/jblockingqueue";
 import "../src/jvm/natives/jsync";
-import "../src/jvm/natives/jconc";
 import { compileClassSource } from "../src/jvm/compiler";
 
 const [apk, cls, from, to] = process.argv.slice(2);
