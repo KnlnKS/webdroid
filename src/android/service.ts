@@ -1,9 +1,11 @@
 // System services and binder-ish plumbing: UserHandle, FileObserver,
 // and the callback/marker interfaces apps implement (ServiceConnection, IInterface).
 
-import { rt, JObj, stubs, noops } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
-import { JBundle, JUserHandle, PARCELABLE, reportUncaught, userHandleForUid } from "./os";
+import { rt, JObj, noops } from "../jvm/runtime";
+import { newObj, vcall } from "../jvm/natives/jlang";
+import { newArrayList } from "../jvm/natives/jutil";
+import { hostStub } from "./binder";
+import { JUserHandle, PARCELABLE, reportUncaught, userHandleForUid } from "./os";
 import { onMain } from "./mainloop";
 
 // ── UserHandle: handles are canonical per Android user id.
@@ -21,10 +23,18 @@ rt.register({
   },
 });
 
-rt.register({ name: "android/content/RestrictionsManager", ctor: class extends JObj {}, methods: {
-  "getApplicationRestrictions()Landroid/os/Bundle;": () => new JBundle(),
+// IRestrictionsManager, under AOSP's RestrictionsManager: no device or profile owner manages this
+// device, so there are no restrictions and no provider to ask
+rt.register({ name: "webdroid/RestrictionsManagerService", ctor: class extends JObj {}, sup: "android/content/IRestrictionsManager$Stub", methods: {
+  "getApplicationRestrictions(Ljava/lang/String;)Landroid/os/Bundle;": () => newObj("android/os/Bundle"),
+  "getApplicationRestrictionsPerAdminForUser(ILjava/lang/String;)Ljava/util/List;": () => newArrayList(),
   "hasRestrictionsProvider()Z": () => 0,
+  "createLocalApprovalIntent()Landroid/content/Intent;": () => null,
+  "requestPermission(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/os/PersistableBundle;)V": () => {
+    throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot request permission without a restrictions provider registered");
+  },
 } });
+hostStub("restrictions", "webdroid/RestrictionsManagerService");
 
 // The browser cannot join the local multicast groups required by DNS-SD. Keep the Android
 // service present, but report that discovery could not start instead of inventing devices.
@@ -46,15 +56,14 @@ rt.register({
   },
 });
 
-// DropBox: there is no system log sink here, so every tag is disabled and entries are dropped.
-rt.register({
-  name: "android/os/DropBoxManager", ctor: class extends JObj {},
-  methods: {
-    ...noops("addText(Ljava/lang/String;Ljava/lang/String;)V", "addData(Ljava/lang/String;[BI)V", "addFile(Ljava/lang/String;Ljava/io/File;I)V"),
-    ...stubs(0, "isTagEnabled(Ljava/lang/String;)Z"),
-    "getNextEntry(Ljava/lang/String;J)Landroid/os/DropBoxManager$Entry;": () => null,
-  },
-});
+// IDropBoxManagerService, under AOSP's DropBoxManager: tags are enabled, as by default on a device,
+// and entries are accepted; reading them back needs READ_LOGS, which no app holds, so there are none
+rt.register({ name: "webdroid/DropBoxManagerService", ctor: class extends JObj {}, sup: "com/android/internal/os/IDropBoxManagerService$Stub", methods: {
+  "isTagEnabled(Ljava/lang/String;)Z": () => 1,
+  ...noops("addData(Ljava/lang/String;[BI)V", "addFile(Ljava/lang/String;Landroid/os/ParcelFileDescriptor;I)V"),
+  "getNextEntryWithAttribution(Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;)Landroid/os/DropBoxManager$Entry;": () => null,
+} });
+hostStub("dropbox", "webdroid/DropBoxManagerService");
 
 // getSystemService("permission_controller"). Nothing calls through it; the class only has
 // to exist so the lookup doesn't fall through to a Binder stub.

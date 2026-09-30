@@ -134,11 +134,9 @@ const SERVICE_CLASS: Record<string, string> = {
   usb: "android/hardware/usb/UsbManager",
   display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
-  restrictions: "android/content/RestrictionsManager",
   appwidget: "android/appwidget/AppWidgetManager",
   systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
-  dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
   netstats: "android/app/usage/NetworkStatsManager",
   storagestats: "android/app/usage/StorageStatsManager",
@@ -184,6 +182,10 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   textservices: ["android/view/textservice/TextServicesManager", async (ctx) => scall("android/view/textservice/TextServicesManager",
     "createInstance", "(Landroid/content/Context;)Landroid/view/textservice/TextServicesManager;", ctx)],
   game: ["android/app/GameManager", (ctx) => newObj("android/app/GameManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
+  dropbox: ["android/os/DropBoxManager", async (ctx) => newObj("android/os/DropBoxManager",
+    "(Landroid/content/Context;Lcom/android/internal/os/IDropBoxManagerService;)V", ctx, await hostedService("dropbox"))],
+  restrictions: ["android/content/RestrictionsManager", async (ctx) =>
+    newObj("android/content/RestrictionsManager", "(Landroid/content/Context;Landroid/content/IRestrictionsManager;)V", ctx, await hostedService("restrictions"))],
   appops: ["android/app/AppOpsManager", async (ctx) =>
     newObj("android/app/AppOpsManager", "(Landroid/content/Context;Lcom/android/internal/app/IAppOpsService;)V", ctx, await hostedService("appops"))],
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
