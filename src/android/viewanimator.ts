@@ -1,7 +1,7 @@
 import { type JView, uiState, invalidate } from "./view";
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { onMain } from "./mainloop";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { guestNow } from "../guest-clock";
 import { accelDecel } from "./interpolator";
@@ -54,7 +54,7 @@ async function vpaStart(this: JVPA) {
   this.running = true;
   this.startT = guestNow();
   if (this.startAction) { const r = this.startAction; this.startAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
-  if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;Z)V", vpaAnim(this), 0); } catch (e) { reportUncaught(e); }
+  if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;Z)V", await vpaAnim(this), 0); } catch (e) { reportUncaught(e); }
   const self = this;
   // the tick is a main-looper job of its own: two animations ending in one frame must not
   // interleave their end callbacks (RecyclerView's item animator re-enters on that)
@@ -72,7 +72,7 @@ async function vpaTick(this: JVPA) {
   const t = el <= 0 ? 0 : this.durationMs <= 0 ? 1 : Math.min(1, el / this.durationMs);
   const it = this.interp ? Math.fround(await vcall(this.interp, "getInterpolation", "(F)F", Math.fround(t))) : accelDecel(t);
   for (const [p, to] of this.to) v[p] = this.from.get(p)! + (to - this.from.get(p)!) * it;
-  if (this.updateL) try { await vcall(this.updateL, "onAnimationUpdate", "(Landroid/animation/ValueAnimator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
+  if (this.updateL) try { await vcall(this.updateL, "onAnimationUpdate", "(Landroid/animation/ValueAnimator;)V", await vpaAnim(this)); } catch (e) { reportUncaught(e); }
   invalidate();
   if (t >= 1) await vpaEnd.call(this, false);
 }
@@ -84,17 +84,18 @@ async function vpaEnd(this: JVPA, cancelled: boolean) {
   invalidate();
   if (this.listener) {
     try {
-      if (cancelled) await vcall(this.listener, "onAnimationCancel", "(Landroid/animation/Animator;)V", vpaAnim(this));
-      await vcall(this.listener, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", vpaAnim(this), 0);
+      if (cancelled) await vcall(this.listener, "onAnimationCancel", "(Landroid/animation/Animator;)V", await vpaAnim(this));
+      await vcall(this.listener, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", await vpaAnim(this), 0);
     } catch (e) { reportUncaught(e); }
   }
   if (this.endAction && !cancelled) { const r = this.endAction; this.endAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
   else if (cancelled) this.endAction = null;
 }
-function vpaAnim(a: JVPA): unknown {
+async function vpaAnim(a: JVPA): Promise<unknown> {
   if (!a.anim) {
-    const o = rt.make("android/animation/ValueAnimator");
-    o.durationMs = a.durationMs; o.delayMs = a.delayMs;
+    const o = await newObj("android/animation/ValueAnimator", "()V");
+    await vcall(o, "setDuration", "(J)Landroid/animation/ValueAnimator;", BigInt(a.durationMs));
+    await vcall(o, "setStartDelay", "(J)V", BigInt(a.delayMs));
     a.anim = o;
   }
   return a.anim;
