@@ -25,6 +25,7 @@ import { perf } from "./perf";
 import { mainDbg } from "./android/mainloop";
 import { guestClockControl } from "./guest-clock";
 import { nativeRequirements } from "./shell/diagnostics";
+import { native } from "./native/debug";
 import { SYSTEM_FAMILIES, fetchSystemFonts, mountSystemFonts } from "./android/fonts";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
@@ -62,7 +63,7 @@ processPresentation.changed = (visible) => {
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
 // the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
-(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements,
+(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements, native,
   get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? testFrame() : Promise.resolve(),
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => {

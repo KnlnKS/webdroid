@@ -9,6 +9,12 @@ type Zip = Record<string, Uint8Array>;
 
 /** an apk or a split install, as the one merged tree the shell boots — entries materialise on
  *  read, so there is nothing for a caller to filter down to */
+/** the reference build's files (ICU, tz, bionic) at their device paths, read from vendor/aosp */
+export async function mountLocalPlatformData(): Promise<void> {
+  const { mountPlatformData } = await import("../src/shell/apex");
+  mountPlatformData((path, size) => ({ size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp${path}`).slice(at, at + length).arrayBuffer()) }));
+}
+
 export async function openApk(path: string): Promise<Zip> {
   return openInstall(new Uint8Array(await Bun.file(path).arrayBuffer())).zip;
 }

@@ -29,6 +29,14 @@ export interface Module {
   phnum: number;
   tls: { image: Uint8Array; size: number; align: number } | null;
   tlsDescriptors: { addr: number; offset: number }[];
+  /** the TLS segment's offset from the thread pointer, when the linker placed it in static TLS */
+  tpOffset: number | null;
+  /** STT_GNU_IFUNC exports by name: their resolvers, run by the loader before relocation */
+  ifuncs: Map<string, number>;
+  /** .symtab's definitions that are not exports (hidden functions and objects), when not stripped */
+  locals: Map<string, number>;
+  /** where the image lives on the device, when it is not the app's own */
+  path?: string;
 }
 
 type Resolver = (sym: string, weak: boolean, from: Module) => number;
@@ -41,7 +49,8 @@ interface Fmt {
   dynEnt: number;
   symEnt: number; symValue: number; symInfo: number; symShndx: number;
   relEnt: number; rela: boolean;
-  RELATIVE: number; ABS: number; GLOB_DAT: number; JUMP_SLOT: number; REL32: number; TLSDESC: number;
+  RELATIVE: number; ABS: number; GLOB_DAT: number; JUMP_SLOT: number; REL32: number; TLSDESC: number; TPREL: number;
+  shOff: number; shEntOff: number; shType: number; shOffset: number; shSize: number; shLink: number;
 }
 const ELF32: Fmt = {
   machine: 0x28, ptr: 4,
@@ -49,7 +58,8 @@ const ELF32: Fmt = {
   dynEnt: 8,
   symEnt: 16, symValue: 4, symInfo: 12, symShndx: 14,
   relEnt: 8, rela: false,
-  RELATIVE: 23, ABS: 2, GLOB_DAT: 21, JUMP_SLOT: 22, REL32: 3, TLSDESC: -1,
+  RELATIVE: 23, ABS: 2, GLOB_DAT: 21, JUMP_SLOT: 22, REL32: 3, TLSDESC: -1, TPREL: -1,
+  shOff: 32, shEntOff: 46, shType: 4, shOffset: 16, shSize: 20, shLink: 24,
 };
 const ELF64: Fmt = {
   machine: 0xb7, ptr: 8,
@@ -59,8 +69,11 @@ const ELF64: Fmt = {
   relEnt: 24, rela: true,
   // AArch64 emits exactly these four across every .so in the corpus; R_AARCH64_REL32 exists but
   // is not one of them, and -1 matches no type
-  RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1, TLSDESC: 1031,
+  RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1, TLSDESC: 1031, TPREL: 1030,
+  shOff: 40, shEntOff: 58, shType: 4, shOffset: 24, shSize: 32, shLink: 40,
 };
+const STT_GNU_IFUNC = 10;
+const utf8 = new TextDecoder();
 
 type PackedRelocation = { off: number; info: bigint; addend: number };
 
@@ -184,7 +197,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   const mod: Module = {
     name, base, end: base + hi, w64: cls === 2, exports: new Map(), initArray: [], init: 0, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
-    refs: 1, inited: false, phdr, phnum, tls, tlsDescriptors: [],
+    refs: 1, inited: false, phdr, phnum, tls, tlsDescriptors: [], tpOffset: null, ifuncs: new Map(), locals: new Map(),
   };
   if (!dynOff) return { mod, relocate: () => {} };
 
@@ -231,13 +244,16 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     const bind = info >> 4, type = info & 15;
     if (shndx === 0) continue;
     const nm = str(nameOff);
+    // an IFUNC's value is its resolver: references bind through the scope, to what it resolves to
+    if (type === STT_GNU_IFUNC) { mod.ifuncs.set(nm, base + value); continue; }
     symName[i] = nm;
     symAddr[i] = base + value;
     if (bind === 1 || bind === 2) mod.exports.set(nm, base + value);
     // a Thumb function's st_value carries the interworking bit: keep it in exports (callers need
     // it), strip it for pc symbolisation. A64 has no such bit and the mask is a no-op there.
-    if (type === 2 || type === 0) { symAddrs.push((base + value) & ~1); symNames.push(nm); }
+    if (type === 2 || type === 0) { symAddrs.push(((base + value) & ~1) >>> 0); symNames.push(nm); }
   }
+  readSymtab(bytes, dv, f, base, mod, symAddrs, symNames);
   const order = symAddrs.map((_, i) => i).sort((a, b) => symAddrs[a] - symAddrs[b]);
   mod.symbols = { addr: Uint32Array.from(order.map((i) => symAddrs[i])), names: order.map((i) => symNames[i]) };
 
@@ -270,6 +286,9 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
         if (addend < 0 || addend >= mod.tls.size) throw new Error(`${name}: TLS descriptor offset is out of range`);
         mod.tlsDescriptors.push({ addr: base + off, offset: addend });
         return;
+      case f.TPREL:
+        if (mod.tpOffset === null || sym) throw new Error(`${name}: initial-exec TLS outside static TLS`);
+        value = mod.tpOffset + addend; break;
       case 0: return;
       default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
     }
@@ -317,6 +336,28 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   for (let i = 0; i < initArrSz; i += f.ptr) mod.initArray.push(mem.u32[(base + initArr + i) >>> 2]);
   };
   return { mod, relocate };
+}
+
+/** .symtab, which an unstripped image keeps beside .dynsym: its other functions and objects
+ *  become locals (what a linker may call by name) and symbolize pcs */
+function readSymtab(bytes: Uint8Array, dv: DataView, f: Fmt, base: number, mod: Module, addrs: number[], names: string[]): void {
+  const shoff = dv.getUint32(f.shOff, true), shentsize = dv.getUint16(f.shEntOff, true), shnum = dv.getUint16(f.shEntOff + 2, true);
+  if (!shoff || shoff + shnum * shentsize > bytes.length) return;
+  const sh = (i: number, at: number) => dv.getUint32(shoff + i * shentsize + at, true);
+  for (let i = 0; i < shnum; i++) {
+    if (sh(i, f.shType) !== 2) continue;                                     // SHT_SYMTAB
+    const off = sh(i, f.shOffset), size = sh(i, f.shSize), strOff = sh(sh(i, f.shLink), f.shOffset);
+    if (off + size > bytes.length) return;
+    for (let s = off; s < off + size; s += f.symEnt) {
+      const type = bytes[s + f.symInfo] & 15, value = dv.getUint32(s + f.symValue, true);
+      if ((type !== 1 && type !== 2) || !dv.getUint16(s + f.symShndx, true)) continue;
+      const at = strOff + dv.getUint32(s, true), nm = utf8.decode(bytes.subarray(at, bytes.indexOf(0, at)));
+      if (!nm || mod.exports.has(nm)) continue;
+      mod.locals.set(nm, base + value);
+      if (type === 2) { addrs.push(base + value); names.push(nm); }
+    }
+    return;
+  }
 }
 
 /** the nearest symbol at or before `pc` in `m`, or null */

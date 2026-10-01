@@ -9,6 +9,7 @@ import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } f
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
+import { vfs } from "../shell/vfs";
 
 export const modules: Module[] = [];
 const byName = new Map<string, Module>();
@@ -22,13 +23,25 @@ let dlerrorBuf = 0;
 const inflight = new Map<string, Promise<Module>>();
 const tlsDescriptors = new Map<number, { mod: Module; offset: number }>();
 let tlsDescResolver = 0;
+/** names the host serves in place of any image's own definition */
+export const interposed = new Map<string, number>();
+/** the linker's static TLS placement for a module mapped while it is set (bionic's initial set) */
+/** the linker's process-specific parts: static TLS placement for a module mapped while it is set
+ *  (bionic's initial set), AT_HWCAP for IFUNC resolvers, and the device libraries dlopen may name */
+export const linkerHooks: {
+  placeTls: ((mod: Module) => void) | null; hwcap: bigint; deviceLib: (name: string) => string | null;
+  /** a module is linked and about to be initialized */
+  linked: (mod: Module, cpu: Cpu) => Promise<void> | void;
+} = { placeTls: null, hwcap: 0n, deviceLib: () => null, linked: () => {} };
 
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
-/** the bytes of lib<name>.so shipped in the booted apk, for any ABI the tier runs */
-function apkLibPath(name: string, owner: Runtime = rt): string | null {
-  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (owner.hasClasspath(path)) return path; }
-  return null;
+/** where lib<name>.so comes from: the booted apk's lib/<abi>/, for any ABI the tier runs, else a
+ *  device library at its path in the VFS */
+function libSource(name: string, owner: Runtime = rt): { device?: string; read: () => Promise<Uint8Array | null> } | null {
+  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (owner.hasClasspath(path)) return { read: async () => owner.readClasspath(path) }; }
+  const device = linkerHooks.deviceLib(name);
+  return device ? { device, read: async () => (await vfs.readFile(device)) ?? null } : null;
 }
 
 /** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
@@ -40,23 +53,41 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   const p = inflight.get(name);
   if (p) return p;
   const q = (async () => {
-    const path = apkLibPath(name, owner), b = bytes ?? (path ? await owner.readClasspath(path) : null);
+    const source = bytes ? null : libSource(name, owner), b = bytes ?? (source ? await source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
+    mod.path = source?.device;
     // a process is one ABI: the first image decides which emitter its code compiles with
     if (!modules.length) setA64(mod.w64);
     else if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
     byName.set(name, mod);
-    // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
-    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n, owner)) await loadModule(n, undefined, link, owner, cpu);
+    // dependencies that are real modules load (and initialise) first; host libs need nothing
+    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && libSource(n, owner)) await loadModule(n, undefined, link, owner, cpu);
+    await resolveIfuncs(mod, cpu);
+    if (mod.tls) linkerHooks.placeTls?.(mod);
     relocate(resolveGlobal);
     installTlsDescriptors(mod);
+    await linkerHooks.linked(mod, cpu);
     if (!link) await runInit(mod, cpu);
     return mod;
   })();
   inflight.set(name, q);
   try { return await q; } finally { inflight.delete(name); }
+}
+
+/** The host's interposed names replace the image's own; an IFUNC export's resolver picks the
+ *  implementation for this CPU, run with AT_HWCAP and the __ifunc_arg_t AArch64 passes beside it. */
+async function resolveIfuncs(mod: Module, cpu: Cpu): Promise<void> {
+  for (const [name, addr] of interposed) if (mod.exports.has(name) || mod.ifuncs.delete(name)) mod.exports.set(name, addr);
+  if (!mod.ifuncs.size) return;
+  const arg = mem.malloc(24);
+  try {
+    mem.st64(arg, 24n); mem.st64(arg + 8, linkerHooks.hwcap); mem.st64(arg + 16, 0n);
+    for (const [name, resolver] of mod.ifuncs) {
+      mod.exports.set(name, await cpu.call(resolver, [linkerHooks.hwcap | 1n << 62n, arg]) >>> 0);
+    }
+  } finally { mem.free(arg); }
 }
 
 function installTlsDescriptors(mod: Module): void {
@@ -66,6 +97,7 @@ function installTlsDescriptors(mod: Module): void {
     if (!entry) return cpu.fault("invalid TLS descriptor");
     const tls = entry.mod.tls;
     if (!tls) return cpu.fault("TLS descriptor without a TLS segment");
+    if (entry.mod.tpOffset !== null) return entry.mod.tpOffset + entry.offset;
     return cpu.staticTls(entry.mod, tls.image, tls.size, tls.align) + entry.offset - cpu.tlsBase;
   });
   for (const entry of mod.tlsDescriptors) {
@@ -75,7 +107,7 @@ function installTlsDescriptors(mod: Module): void {
   }
 }
 
-async function runInit(mod: Module, cpu: Cpu): Promise<void> {
+export async function runInit(mod: Module, cpu: Cpu): Promise<void> {
   if (mod.inited) return;
   mod.inited = true;
   if (mod.init) await cpu.call(mod.init);
@@ -122,19 +154,25 @@ function handleOf(h: Handle): number {
 export function dlInit(): void {
   setSymbolizeHook(symbolizePc);
   dlerrorBuf = mem.hostAlloc(256);
-  const findExidx: HostFn = (_cpu, a) => {
-    const pc = a.p(), pcount = a.p(), m = moduleOf(pc);
-    mem.st32(pcount, m?.exidx.count ?? 0);
-    return m?.exidx.addr ?? 0;
-  };
-  hostLib("libdl.so", {
+  hostLib("libdl.so", libdl);
+}
+
+/** libdl's bodies, which bionic's libdl.so reaches as ld-android.so's __loader_* (their extra
+ *  caller-address argument is unread) */
+export const hostLibDl = (): Record<string, HostFn> => libdl;
+const findExidx: HostFn = (_cpu, a) => {
+  const pc = a.p(), pcount = a.p(), m = moduleOf(pc);
+  mem.st32(pcount, m?.exidx.count ?? 0);
+  return m?.exidx.addr ?? 0;
+};
+const libdl: Record<string, HostFn> = {
     dlopen: async (cpu, a) => {
       const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
       if (!name) return 1; // the main program
       if (hostLibNames().includes(name)) return handleOf({ lib: name });
       const have = byName.get(name);
       if (have) { have.refs++; return handleOf({ mod: have }); }
-      if (!apkLibPath(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
+      if (!libSource(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
       try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu) }); }
       catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
     },
@@ -190,11 +228,10 @@ export function dlInit(): void {
     },
     __gnu_Unwind_Find_exidx: findExidx,
     dl_unwind_find_exidx: findExidx,
-  });
-}
+};
 
 const nameStrs = new Map<Module, number>();
-function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(`/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`))); return p; }
+function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`))); return p; }
 
 export function resolveGlobalOrNull(sym: string, needed: readonly string[] = []): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }

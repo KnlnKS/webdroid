@@ -252,6 +252,10 @@ export function cstr(s: string): number { let p = strAddrs.get(s); if (p === und
 const libs = new Map<string, Map<string, HostFn | number>>();
 const addrs = new Map<string, number>();  // "lib!sym" → address
 const closedLibs = new Set<string>();
+/** host libraries a guest image replaced (bionic's): no longer in the guest's scope, though their
+ *  bodies still serve the syscall layer through hostFn */
+const replacedLibs = new Set<string>();
+export function replaceHostLib(lib: string): void { replacedLibs.add(lib); }
 /** names an image asked a closed library for and did not get ("lib!sym") */
 export const probed = new Set<string>();
 function libOf(lib: string): Map<string, HostFn | number> { let m = libs.get(lib); if (!m) libs.set(lib, (m = new Map())); return m; }
@@ -270,10 +274,10 @@ export function probeHost(sym: string, lib: string): number {
 }
 export function hostData(lib: string, sym: string, addr: number): void { libOf(lib).set(sym, addr); }
 export function hostFn(lib: string, sym: string): HostFn | undefined { const v = libs.get(lib)?.get(sym); return typeof v === "function" ? v : undefined; }
-export function hostLibNames(): string[] { return [...libs.keys()]; }
+export function hostLibNames(): string[] { return [...libs.keys()].filter((l) => !replacedLibs.has(l)); }
 export function lookupHost(sym: string, lib?: string): number | undefined {
   for (const [ln, m] of libs) {
-    if (lib !== undefined && ln !== lib) continue;
+    if ((lib !== undefined && ln !== lib) || replacedLibs.has(ln)) continue;
     const v = m.get(sym);
     if (v === undefined) continue;
     if (typeof v === "number") return v;

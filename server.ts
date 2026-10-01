@@ -53,6 +53,11 @@ function serveFile(dir: string, name: string, headers?: Record<string, string>):
   if (!name || /[/\\]|\.\./.test(name)) return new Response("nope", { status: 400 });
   return new Response(Bun.file(`${dir}/${name}`), { headers });
 }
+/** a reference-build file mirrored under vendor/aosp at its device path (PLATFORM_DATA) */
+function devicePath(req: Request): Response {
+  const path = new URL(req.url).pathname.slice(1);
+  return path.includes("..") ? new Response("nope", { status: 400 }) : new Response(Bun.file(path), { headers: { "cache-control": IMMUTABLE } });
+}
 
 const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
@@ -137,10 +142,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
     "/vendor/fonts/:file": (req) => serveFile("vendor/fonts", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/boot/:file": (req) => serveFile("vendor/aosp/boot", req.params.file, { "cache-control": IMMUTABLE }),
-    "/vendor/aosp/apex/*": (req) => {
-      const path = new URL(req.url).pathname.slice(1);
-      return path.includes("..") ? new Response("nope", { status: 400 }) : new Response(Bun.file(path), { headers: { "cache-control": IMMUTABLE } });
-    },
+    "/vendor/aosp/apex/*": devicePath,
+    "/vendor/aosp/system/*": devicePath,
     "/vendor/microg/:file": (req) => {
       const file = req.params.file;
       const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };

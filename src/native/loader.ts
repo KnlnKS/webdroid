@@ -12,7 +12,8 @@ import { aaudioInit } from "./aaudio";
 import { mediaInit } from "./media";
 import { ndkInit } from "./libandroid";
 import { bitmapInit } from "./bitmap";
-import { cpuFor, setA64, isA64 } from "./cpu";
+import { cpuFor, setA64, isA64, type Cpu } from "./cpu";
+import { bionicRequested, bootBionic } from "./bionic";
 
 let inited = false;
 function nativeInit(abi: string): void {
@@ -49,10 +50,18 @@ setNativeMemorySizer(() => {
   return true;
 });
 
+let bionic: Promise<void> | null = null;
+/** the process's libc: bionic's libraries load and initialize before the first image that needs them */
+function libcReady(cpu: Cpu): Promise<void> | null {
+  if (!bionicRequested || !isA64()) return null;
+  return (bionic ??= bootBionic(cpu));
+}
+
 /** Load and relocate an image without executing a single instruction of it. An ABI whose
  *  emitter does not exist yet can still prove its loader: scripts/nrun.ts --load-only. */
 export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): Promise<Module> {
   nativeInit(abi);
+  await libcReady(cpuFor(curThread));
   return loadModule(name, bytes, true);
 }
 
@@ -67,6 +76,7 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   // that called dlopen. After an await the current thread may be another one (the main Cpu,
   // parked mid-static-initialiser, where libc++'s guard reports a recursive initialisation).
   const cpu = cpuFor(thread);
+  await libcReady(cpu);
   const mod = await loadModule(name, bytes, false, owner, cpu);
   const onload = mod.exports.get("JNI_OnLoad");
   if (onload) {

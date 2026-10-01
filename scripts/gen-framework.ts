@@ -18,7 +18,7 @@
 import { existsSync } from "node:fs";
 import { unzipSync } from "fflate";
 import { rt } from "../src/jvm/runtime";
-import { loadJarDexes, openDexes } from "./lib";
+import { loadJarDexes, mountLocalPlatformData, openDexes } from "./lib";
 import "../src/natives";
 import { mangleStaticField } from "../src/jvm/abi";
 import { insnLen } from "../src/jvm/opcodes";
@@ -70,9 +70,10 @@ if (!process.argv.includes("--verify")) {
   sh("shell", `/apex/com.android.art/bin/profman --profile-file=/system/etc/boot-image.prof ${bootJars.map((j) => `--apk=${j} --dex-location=${j}`).join(" ")}` +
     " --dump-classes-and-methods > /data/local/tmp/boot-image-profile.txt");
   pull("/data/local/tmp/boot-image-profile.txt", "boot-image-profile.txt");
-  // ICU data and the time zone module's files, at their device paths under apex/
+  // ICU data, the time zone module's files and bionic's libraries, at their device paths
   const data: Record<string, number> = {};
-  for (const src of sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "-type", "f").split(/\s+/)) {
+  const { DEVICE_LIBS } = await import("../src/native/bionic");
+  for (const src of [...sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "-type", "f").split(/\s+/), ...DEVICE_LIBS]) {
     await Bun.$`mkdir -p ${`${OUT}${src.slice(0, src.lastIndexOf("/"))}`}`.quiet();
     pull(src, src.slice(1));
     data[src] = Bun.file(`${OUT}${src}`).size;
@@ -87,7 +88,7 @@ if (!process.argv.includes("--verify")) {
     `export const PLATFORM_JARS = ${JSON.stringify(jars, null, 1).replace(/\n\s*/g, " ")};\n` +
     `/** where each of those jars lives on the device */\n` +
     `export const BOOT_JAR_PATHS = ${JSON.stringify(bootJars, null, 1).replace(/\n\s*/g, " ")};\n` +
-    `/** the ICU and time zone files, by device path (mirrored under vendor/aosp), with their sizes */\n` +
+    `/** the ICU and time zone files and bionic's libraries, by device path (mirrored under vendor/aosp), with their sizes */\n` +
     `export const PLATFORM_DATA: Record<string, number> = ${JSON.stringify(data)};\n`);
   // its own process: it boots the class path just written, which the verification below loads apart
   if (Bun.spawnSync(["bun", "scripts/gen-framework.ts", "--settings"], { stdout: "inherit", stderr: "inherit" }).exitCode) throw new Error("recording settings failed");
@@ -154,8 +155,7 @@ async function recordCharsets() {
  *  Settings.Config names, which is what an app process can ask for. */
 async function recordSettings() {
   for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`${OUT}/${jar}`).arrayBuffer()), i);
-  const { mountPlatformData } = await import("../src/shell/apex");
-  await mountPlatformData((path, size) => ({ size, read: async (at, length) => new Uint8Array(await Bun.file(`${OUT}${path}`).slice(at, at + length).arrayBuffer()) }));
+  await mountLocalPlatformData();
   rt.linkNatives();
   const { publicSettings } = await import("../src/android/settings");
   const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))

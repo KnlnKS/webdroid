@@ -5,7 +5,7 @@
 //
 // An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
-import { openApk, dexesOf } from "./lib";
+import { openApk, dexesOf, mountLocalPlatformData } from "./lib";
 import { rt } from "../src/jvm/runtime";
 import "../src/jvm/natives/jlang";
 import "../src/jvm/natives/jcoll";
@@ -14,7 +14,7 @@ import "../src/jvm/natives/jio";
 import { loadNativeLib, linkNativeLib } from "../src/native/loader";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host";
 import { jniMissing, registered } from "../src/native/jni";
-import { codeStats, NativeFault } from "../src/native/cpu";
+import { codeStats, NativeFault, lastFault } from "../src/native/cpu";
 import { perf } from "../src/perf";
 
 const args = process.argv.slice(2);
@@ -23,6 +23,7 @@ const zip = await openApk(apk);
 for (const dex of dexesOf(zip)) rt.loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
+await mountLocalPlatformData();
 
 // the ABIs this apk actually ships this library for, in the order the tree lists them
 const abis = Object.keys(rt.classpath).flatMap((k) => {
@@ -50,6 +51,7 @@ try {
   }
 } catch (e) {
   console.error("FAULT", e instanceof NativeFault ? e.message : e);
+  if (process.env.TRACE) console.error((e as Error).stack, "\n  " + (lastFault.regs?.bt.join("\n  ") ?? ""));
   if (hostTrace.on) console.error("host trace:\n  " + hostTrace.ring.slice(-40).join("\n  "));
 }
 console.log("registered natives:", registered.map((r) => `${r.cls.split("/").pop()}.${r.name}${r.sig}`).join(" "));

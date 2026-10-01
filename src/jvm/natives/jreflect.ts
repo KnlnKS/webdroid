@@ -456,6 +456,7 @@ export const is64BitProcess = (): boolean =>
 /** the app's targetSdkVersion as ActivityThread binds it; ART's default is the development SDK */
 let targetSdk = 10000;
 export const setTargetSdkVersion = (version: number) => { targetSdk = version; };
+export const targetSdkVersion = (): number => targetSdk;
 rt.register({
   name: "dalvik/system/VMRuntime", ctor: JVMRuntime,
   methods: {

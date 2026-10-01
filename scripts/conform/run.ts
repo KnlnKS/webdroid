@@ -85,9 +85,7 @@ if (one) {
   const { loadPlatformJar } = await import("../../src/android/framework");
   const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
   const { vcallAsync, stackTraceText, scall } = await import("../../src/jvm/natives/jlang");
-  (await import("../../src/shell/apex")).mountPlatformData((path, size) => ({
-    size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp${path}`).slice(at, at + length).arrayBuffer()),
-  }));
+  await (await import("../lib")).mountLocalPlatformData();
   for (const f of readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort())
     for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);
   for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`vendor/aosp/${jar}`).arrayBuffer()), i);
