@@ -126,7 +126,6 @@ export class JTextView extends JView {
     const rtl = firstStrongRtl(text);
     return (alignment === 3 || alignment === 1 && gravity === G.END) !== rtl ? 5 : 3;
   }
-  retransform(): unknown { return rt.drive(this.retransform$()); }
   *retransform$(): Gen {
     const method = this.transformation;
     if (!method) { this.transformed = null; return; }
@@ -151,7 +150,7 @@ export class JTextView extends JView {
     if (typeof this.rawText !== "string") this.textLayouts = null;
     this.blinkStart = guestNow();
     if (this === focusedEdit && inputEl && inputEl.value !== this.text) inputEl.value = this.text;
-    if (this.transformation) yield this.retransform();
+    if (this.transformation) yield* this.retransform$();
     requestLayout(this);
   }
   /** sendBeforeTextChanged and sendOnTextChanged: each listener in turn */
@@ -373,7 +372,7 @@ const isPasswordType = (t: number) => { const v = t & 0xfff; return v === 0x81 |
 const setTransformation = driven(function* setTransformation(tv: JTextView, m: unknown): Gen {
   if (tv.transformation === m) return;
   tv.transformation = m;
-  yield tv.retransform();
+  yield* tv.retransform$();
   tv.layoutWidthFor = -1;
   requestLayout(tv); invalidate(tv);
 });
