@@ -19,7 +19,7 @@ import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
 import { pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";

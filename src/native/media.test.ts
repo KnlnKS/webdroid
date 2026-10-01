@@ -4,7 +4,7 @@ import { JThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { mem } from "./mem";
-import { javaBytesFd, javaCloseFd } from "./stdio";
+import { javaBytesFd, javaCloseFd } from "./fs";
 import { mediaInit } from "./media";
 
 // 0.3 seconds of 32x32 red H.264 (10 fps, key interval 2, no B frames) and 8 kHz AAC.

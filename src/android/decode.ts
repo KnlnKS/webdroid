@@ -12,7 +12,7 @@ import { vcall, scall, construct, after } from "../jvm/natives/jlang";
 import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat } from "../jvm/abi";
-import { javaFdBytes, javaSeekFd } from "../native/stdio";
+import { javaFdBytes, javaSeekFd } from "../native/fs";
 import { assetBytes } from "./assetmanager";
 import { NativeBitmap, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { decodeHeif } from "./heif";

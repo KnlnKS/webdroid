@@ -9,7 +9,7 @@ import { hostFn, calledMissing, type HostFn, type HostRet, type ArgReader, PTR }
 import { E, PAGE_SIZE } from "./abi";
 import { cpuByOsTid, markProcessExited, type Cpu } from "./cpu";
 import { fail, fillRandom, fillSysinfo, readTs } from "./libc";
-import { faccessatPath, fdFallocate, getdents64 } from "./stdio";
+import { faccessatPath, fdFallocate, getdents64 } from "./fs";
 import { futex, cloneThread } from "./pthread";
 import { nativePoll, nativeSelect } from "./net";
 import { device } from "../shell/config";

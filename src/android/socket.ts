@@ -6,7 +6,7 @@ import { jarray } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd } from "../native/stdio";
+import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd } from "../native/fs";
 import {
   AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
   socketCreate, socketConnect, socketBind, socketListen, socketAccept, socketShutdown, socketSend, socketReceive, socketName,

@@ -5,7 +5,8 @@ import { Cpu, setA64 } from "./cpu";
 import { lookupHost, stp } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
-import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath, stdioInit } from "./stdio";
+import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath } from "./fs";
+import { stdioInit } from "./stdio";
 
 test("printf renders unmapped guest pointer values without dereferencing them", async () => {
   setA64(false); libcInit();

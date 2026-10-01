@@ -27,7 +27,7 @@ import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentip
 import { PendingIntents } from "../src/shell/pendingintents";
 import { mkPfd } from "../src/android/os";
 import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
-import { javaReadFd } from "../src/native/stdio";
+import { javaReadFd } from "../src/native/fs";
 import { Arsc } from "../src/android/arsc";
 import { getInflater } from "../src/android/inflate";
 import { JFrameLayout } from "../src/android/layouts";

@@ -7,7 +7,7 @@ import { mem } from "./mem";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, logLine } from "./libc";
-import { attachUnixPeer, isUnixSocket } from "./stdio";
+import { attachUnixPeer, isUnixSocket } from "./fs";
 import { AF_INET, resolveHost, hostOf } from "./net";
 import { parseIpv4 } from "../shell/relay";
 

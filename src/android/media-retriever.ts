@@ -4,7 +4,7 @@ import { vcall } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { isBuffer, remainingBytes } from "../jvm/natives/jnio";
-import { javaFdSource } from "../native/stdio";
+import { javaFdSource } from "../native/fs";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { NativeBitmap, javaBitmap } from "./bitmap";
 import { MediaExtractor } from "./media-extractor";

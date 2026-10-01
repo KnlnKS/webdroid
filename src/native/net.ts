@@ -11,7 +11,7 @@ import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem, guestAt } from "./mem";
 import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
-import { unixSocket, isUnixSocket } from "./stdio";
+import { unixSocket, isUnixSocket } from "./fs";
 import { unixConnect } from "./unix";
 const enc = new TextEncoder();
 

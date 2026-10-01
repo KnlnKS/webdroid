@@ -5,7 +5,7 @@ import { JBufferInfo } from "../android/media";
 import { capacity, directAddress, directCopy, directReady, isBuffer } from "../jvm/natives/jnio";
 import { after } from "../jvm/natives/jlang";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
-import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./stdio";
+import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./fs";
 import { windowOf } from "./libandroid";
 import { mem } from "./mem";
 import { cstr, hostData, hostLib, PTR, ptr, stp, stpVa, stLong, type HostFn } from "./host";

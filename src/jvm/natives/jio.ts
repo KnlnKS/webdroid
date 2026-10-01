@@ -9,7 +9,7 @@ import { vfs } from "../../shell/vfs";
 import { isExternal, mapExternal, memoryAt, unmapExternal } from "./jmemory";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
-import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/stdio";
+import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/fs";
 
 
 

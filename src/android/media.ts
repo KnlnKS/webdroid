@@ -6,7 +6,7 @@ import { vcall, scall, newObj, staticField, vcallUncaught } from "../jvm/natives
 import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
-import { javaFdSource } from "../native/stdio";
+import { javaFdSource } from "../native/fs";
 import { readFully } from "../shell/lazyfile";
 import { type JBuffer, limit, position, remainingBytes, setPosition } from "../jvm/natives/jnio";
 import { onMain } from "./mainloop";
