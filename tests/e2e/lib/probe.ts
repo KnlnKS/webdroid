@@ -239,7 +239,7 @@ function installProbe(cfg: ProbeConfig): void {
     const samplePresentation = async (): Promise<boolean> => {
       const before = presentation;
       wantSample = true;
-      g.wd.uiState.needsDraw = true;
+      g.wd.redraw();
       if (controlled) await g.wd.testFrame();
       else if (!await nextPresent(500)) { wantSample = false; return false; }
       captured = sampled.get(lastHash) ?? null;

@@ -17,7 +17,7 @@ import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
-import { bootApk, startZygote, testFrame, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -295,6 +295,7 @@ const wd = {
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
+  redraw,
   testFrame: async () => {
     if (processPresentation.visible) await testFrame();
     for (const frame of document.querySelectorAll("iframe")) {

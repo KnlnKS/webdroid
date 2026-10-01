@@ -60,7 +60,7 @@ import { appArchives } from "../jvm/natives/jdex";
 import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server/wm";
 import { startActivityThread } from "../android/server/am";
 import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
-import { setDisplayTarget } from "../android/surfaceflinger";
+import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
@@ -436,12 +436,18 @@ async function runTraversal(): Promise<void> {
 }
 /** the frame time Choreographer.doFrame hands every callback of this frame */
 const choreographerFrameTime = (): Promise<bigint> => after(mainChoreographer(), (c) => vcall(c, "getFrameTimeNanos", "()J")) as Promise<bigint>;
-/** one frame now, on a vsync outside the display's pacing: a harness stepping a controlled clock */
+/** one frame now, on a vsync outside the display's pacing: a harness stepping a controlled clock.
+ *  The display presents after it whether or not a window drew. */
 export function testFrame(): Promise<void> {
   const done = new Promise<void>((resolve) => frameWaiters.push(resolve));
   scheduleTraversal();
   deliverVsync();
-  return done;
+  return stageD() ? done.then(redraw) : done;
+}
+/** present the screen again, for a harness sampling it */
+export function redraw(): void {
+  if (stageD()) scheduleComposite();
+  else uiState.needsDraw = true;
 }
 const tick0 = driven(function* tick0(frameTime: Promise<bigint>): Gen {
   const ctx = frame;
