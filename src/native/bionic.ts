@@ -15,6 +15,8 @@ import { abortMessageSource } from "./proc";
 import type { Module } from "./elf";
 import { processEnv } from "../shell/environment";
 import { procIdentity } from "../shell/procfs";
+import { PROPERTY_AREA_PATH, propertyArea } from "../shell/properties";
+import { vfs } from "../shell/vfs";
 import { targetSdkVersion } from "../jvm/natives/jreflect";
 
 /** device paths, in the order the linker initializes them (dependencies first) */
@@ -60,6 +62,8 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   linkerHooks.deviceLib = (name) => DEVICE_LIBS.find((path) => path.endsWith("/" + name)) ?? null;
   globals = mem.calloc(1, G_SIZE);
   writeGlobals();
+  // what init leaves for libc's __system_properties_init
+  vfs.write(PROPERTY_AREA_PATH, propertyArea(), false);
   let cursor = TCB_SIZE;
   linkerHooks.placeTls = (mod) => {
     const tls = mod.tls!, align = Math.max(tls.align, 8);

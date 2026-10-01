@@ -26,11 +26,11 @@ import { glyphBounds } from "./shaping";
 import { NativeBitmap } from "./bitmap";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
+import { hasProperty, propertyValue as propValue } from "../shell/properties";
 import { lambda } from "../jvm/natives/jlambda";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
 import { Recorder, recordOrRun, replay, replayWithSemantics, type DisplayList } from "./recording";
-import { device } from "../shell/config";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
   type Axis, NativeFont, NativeFamily, NativeTypeface, mkFamily, systemFonts, sfntTables, T_CMAP,
@@ -651,23 +651,9 @@ delegate("android/graphics/Picture", {
 });
 
 // ── android.os.SystemProperties ────────────────────────────────────────────────────────
-// A property is ABSENT unless the device profile (src/shell/config.ts) answers it, so other reads
-// get the caller's own default — which is what a device that has not set one reports, and is the
-// difference between "this device does not do that" and a made-up answer a library will branch
-// on. An app process may not set properties, and a change report runs the registered callbacks,
-// as the property service's own notification does.
-const deviceProperties: Record<string, () => string> = {
-  "persist.sys.timezone": () => device.timezone,
-  // the reference AVD's heap limits, which ActivityManager reports as the memory classes
-  "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
-  // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
-  // mode) rather than over a FileBridge socket, which needs a server thread there is none of
-  "fw.revocable_fd": () => "true",
-  // a product without a camera disables cameraserver, so CameraManager lists no camera
-  "config.disable_cameraservice": () => "true",
-};
+// An app process may not set properties, and a change report runs the registered callbacks, as the
+// property service's own notification does.
 /** android_os_SystemProperties.cpp's readers: an absent or unparsable value is the default */
-const propValue = (key: string) => deviceProperties[key]?.() ?? null;
 const propInt = (v: string | null, def: number) => v !== null && /^-?\d+$/.test(v.trim()) ? Number(BigInt.asIntN(32, BigInt(v.trim()))) : def;
 const propLong = (v: string | null, def: bigint) => v !== null && /^-?\d+$/.test(v.trim()) ? BigInt.asIntN(64, BigInt(v.trim())) : def;
 const propBool = (v: string | null, def: number) => v === null ? def : /^(1|y|yes|on|true)$/.test(v) ? 1 : /^(0|n|no|off|false)$/.test(v) ? 0 : def;
@@ -678,7 +664,7 @@ delegate("android/os/SystemProperties", {
   "native_get_boolean(Ljava/lang/String;Z)Z": (key: string, def: number) => propBool(propValue(key), def),
   "native_get_int(Ljava/lang/String;I)I": (key: string, def: number) => propInt(propValue(key), def),
   "native_get_long(Ljava/lang/String;J)J": (key: string, def: bigint) => propLong(propValue(key), def),
-  "native_find(Ljava/lang/String;)J": (key: string) => key in deviceProperties ? handle({ key }) : 0n,
+  "native_find(Ljava/lang/String;)J": (key: string) => hasProperty(key) ? handle({ key }) : 0n,
   "native_get(J)Ljava/lang/String;": (h: bigint) => propAt(h) ?? "",
   "native_get_boolean(JZ)Z": (h: bigint, def: number) => propBool(propAt(h), def),
   "native_get_int(JI)I": (h: bigint, def: number) => propInt(propAt(h), def),
@@ -702,7 +688,7 @@ export async function zygoteInit(): Promise<void> {
   await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
   await rt.initClass(hooks);
-  await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", deviceProperties["persist.sys.timezone"]));
+  await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", () => propValue("persist.sys.timezone")));
   await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
   await newObj("com/android/internal/logging/AndroidConfig", "()V");
   await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http.agent",
