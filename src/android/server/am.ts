@@ -89,8 +89,18 @@ export const activityManagerMethods = {
  *  for another's component runs just that. The main looper is already running. */
 export async function startActivityThread(launched: boolean): Promise<void> {
   launcher = launched;
-  const thread = await newObj("android/app/ActivityThread", "()V");
+  const AT = "android/app/ActivityThread";
+  await scall(AT + "$AndroidOs", "install", "()V");
+  await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
+  await scall("android/os/Environment", "initForCurrentUser", "()V");
+  await scall("com/android/org/conscrypt/TrustedCertificateStore", "setDefaultUserDirectory", "(Ljava/io/File;)V",
+    await scall("android/os/Environment", "getUserConfigDirectory", "(I)Ljava/io/File;", await scall("android/os/UserHandle", "myUserId", "()I")));
+  await scall(AT, "initializeMainlineModules", "()V");
+  await scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", "<pre-initialized>");
+  const thread = await newObj(AT, "()V");
   await vcall(thread, "attach", "(ZJ)V", 0, 0n);
+  const statics = (await linkInit(AT)).ctor as Record<string, unknown>;
+  statics[mangleStaticField("sMainThreadHandler")] ??= await vcall(thread, "getHandler", "()Landroid/os/Handler;");
 }
 
 // ActivityThread's natives: heapprofd never profiles this process, and the renderer holds no
