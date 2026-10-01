@@ -8,7 +8,7 @@ import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
-import { procIdentity, procMemory, procText, procWritable, procWrite } from "../shell/procfs";
+import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketAvailable, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd, socketReceive, socketSend } from "./net";
@@ -563,14 +563,12 @@ function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): numbe
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-/** the platform's own files are root's, as on a device; bionic maps the property area only if they are */
-const ownerOf = (path: string) => /^\/(?:system|apex|vendor|product|dev)\//.test(path) ? 0 : procIdentity.uid;
 function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path)): void {
   mem.memset(buf, 0, LAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
   mem.st32(buf + LAYOUT.ST_MODE, isDir ? S_IFDIR | 0o755 : file && fifos.has(file) ? S_IFIFO | 0o600 : S_IFREG | 0o644);
   mem.st32(buf + LAYOUT.ST_NLINK, 1);
-  const owner = ownerOf(path);
+  const owner = vfs.owner(path);
   mem.st32(buf + LAYOUT.ST_UID, owner); mem.st32(buf + LAYOUT.ST_GID, owner);
   mem.st32(buf + LAYOUT.ST_SIZE, size); mem.st32(buf + LAYOUT.ST_SIZE + 4, 0);
   mem.st32(buf + LAYOUT.ST_BLKSIZE, 4096);

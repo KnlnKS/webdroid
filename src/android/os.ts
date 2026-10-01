@@ -762,9 +762,10 @@ rt.register({
   },
 });
 export const FD = "Ljava/io/FileDescriptor;";
-function statOf(size: number, mode: number, mtimeMs: number): JStructStat {
+function statOf(path: string | null, size: number, mode: number, mtimeMs: number): JStructStat {
   const s = new JStructStat();
   s.st_mode = mode;
+  s.st_uid = s.st_gid = vfs.owner(path);
   s.st_size = BigInt(size);
   s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(mtimeMs / 1000));
   s.st_mtim = s.st_atim = s.st_ctim = timespec(mtimeMs);
@@ -792,7 +793,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`fstat(${FD})Landroid/system/StructStat;`]: (d: JObj | null) => {
       const st = javaFdStat(fdInt(d));
       if (!st) throw errno("fstat", E.BADF);
-      return statOf(st.size, st.mode, st.path ? vfs.mtime(st.path) : 0);
+      return statOf(st.path, st.size, st.mode, st.path ? vfs.mtime(st.path) : 0);
     },
     [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
       readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target)),
@@ -907,7 +908,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = existing("stat", path);
-      return statOf(st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
+      return statOf(path, st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
     },
     // the VFS keeps no permission bits or owners: an existing file takes any mode, and the groups an app may own
     "chmod(Ljava/lang/String;I)V": (path: string) => {

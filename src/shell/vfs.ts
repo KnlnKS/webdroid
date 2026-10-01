@@ -1,7 +1,7 @@
 // The file tree every realm sees: in-memory bytes, lazy sources (apks, assets, disk-backed app
 // files) and directories. Java streams, native descriptors and the shell all read and write it.
 import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
-import { procList, procText } from "./procfs";
+import { procIdentity, procList, procText } from "./procfs";
 import type { SharedMaps } from "../native/mappings";
 import { utf8 } from "../jvm/abi";
 
@@ -36,6 +36,9 @@ export const vfs = {
   /** each path's last modification, epoch ms: when its bytes last changed or it appeared */
   mtimes: new Map<string, number>(),
   mtime(p: string): number { return this.mtimes.get(this.norm(p)) ?? 0; },
+  /** a file's owning uid and gid: the platform's files are root's, as on a device (bionic maps the
+   *  property area only if it is), the rest the app's */
+  owner(p: string | null): number { return p !== null && /^\/(?:system|apex|vendor|product|dev)\//.test(this.norm(p)) ? 0 : procIdentity.uid; },
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
