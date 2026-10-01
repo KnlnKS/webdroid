@@ -3,7 +3,7 @@
 // trailing locale_t unread.
 
 import { wrote, mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, PTR, stp, ldp, ARG0, ptr, vaList } from "./host";
+import { hostLib, type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "./host";
 import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc";
 import { format } from "./printf";
 
@@ -60,7 +60,7 @@ export function localeInit(): void {
     wcspbrk: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); for (let i = p; mem.ld32(i); i += 4) if (set.includes(mem.ld32(i))) return ptr(i); return 0; },
     wcsspn: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); let i = 0; while (mem.ld32(p + 4 * i) && set.includes(mem.ld32(p + 4 * i))) i++; return i; },
     wcscspn: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); let i = 0; while (mem.ld32(p + 4 * i) && !set.includes(mem.ld32(p + 4 * i))) i++; return i; },
-    wcstol: wint(PTR === 8 ? 64 : 32, false), wcstoul: wint(PTR === 8 ? 64 : 32, true), wcstoll: wint(64, false), wcstoull: wint(64, true),
+    wcstol: wint(32, false), wcstoul: wint(32, true), wcstoll: wint(64, false), wcstoull: wint(64, true),
     wcstod: wfloat, wcstold: wfloat,
     wcstof: (c, a) => { const p = a.p(), endp = a.p(); const s = wstr(p), m = /^\s*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(s); if (endp) stp(endp, p + 4 * (m ? m[0].length : 0)); return retF(c, m ? parseFloat(m[0]) : 0); },
     swprintf: (_c, a) => { const d = a.p(), n = a.u(), f = wstr(a.p()); const s = format(f, a); if ([...s].length >= n) return -1; return wput(d, s); },

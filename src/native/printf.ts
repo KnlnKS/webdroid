@@ -1,6 +1,6 @@
 // C99 printf/scanf formatting over an ArgReader (registers+stack, a va_list, or a JS array in tests).
 
-import { PTR, type ArgReader } from "./host";
+import type { ArgReader } from "./host";
 
 function pad(s: string, width: number, left: boolean, zero: boolean): string {
   if (s.length >= width) return s;
@@ -36,8 +36,8 @@ function fmtFloat(v: number, conv: string, prec: number, alt: boolean): string {
   return conv === conv.toUpperCase() ? s.toUpperCase() : s;
 }
 
-/** a length modifier whose integer is 64-bit: ll/L/q/j, and l/z/t on LP64 */
-const wide = (len: string): boolean => len === "ll" || len === "L" || len === "q" || len === "j" || (PTR === 8 && (len === "l" || len === "z" || len === "t"));
+/** a length modifier whose integer is 64-bit on ARM32: ll/L/q/j */
+const wide = (len: string): boolean => len === "ll" || len === "L" || len === "q" || len === "j";
 /** format `fmt` pulling arguments from `args` (long/long long via l(), doubles via d()) */
 export function format(fmt: string, args: ArgReader): string {
   let out = "";
@@ -99,7 +99,7 @@ export function format(fmt: string, args: ArgReader): string {
         if (prec >= 0) s = s.slice(0, prec);
         break;
       }
-      case "p": { const v = BigInt.asUintN(PTR * 8, args.va()); s = v ? "0x" + v.toString(16) : "(nil)"; break; }
+      case "p": { const v = BigInt.asUintN(32, args.va()); s = v ? "0x" + v.toString(16) : "(nil)"; break; }
       case "f": case "F": case "e": case "E": case "g": case "G": case "a": case "A": {
         const v = args.d();
         let body = fmtFloat(Math.abs(v), conv, prec < 0 ? 6 : prec, alt);

@@ -8,12 +8,12 @@ import { mem } from "./mem";
 import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath, stdioInit } from "./stdio";
 
 test("printf renders unmapped guest pointer values without dereferencing them", async () => {
-  setA64(true); libcInit();
+  setA64(false); libcInit();
   const cpu = new Cpu(mainThread, "printf-pointer-test"), out = mem.hostAlloc(80), fmt = mem.strdup("%p %p");
   try {
-    await cpu.call(lookupHost("snprintf", "libc.so")!, [out, 80, fmt, 0x1107420ecn, 0xffffffffffffffffn]);
-    expect(mem.cstr(out)).toBe("0x1107420ec 0xffffffffffffffff");
-  } finally { cpu.dispose(); setA64(false); }
+    await cpu.call(lookupHost("snprintf", "libc.so")!, [out, 80, fmt, 0xf107420c, 0xffffffff]);
+    expect(mem.cstr(out)).toBe("0xf107420c 0xffffffff");
+  } finally { cpu.dispose(); }
 });
 
 test("fixed file remapping preserves dirty shared bytes before replacing pages", async () => {
