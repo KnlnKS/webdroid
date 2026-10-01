@@ -624,14 +624,7 @@ rt.register({
 // No Bluetooth or NFC radio: SystemServer starts neither service, so AOSP's BluetoothManager and
 // NfcManager, which every device registers, report no adapter
 absentService("bluetooth_manager", "nfc");
-for (const [name, methods, statics] of [
-  ["android/os/ext/SdkExtensions", {
-    "static getExtensionVersion(I)I": () => 0,
-  }],
-] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
-  rt.register({ name, ctor: class extends JObj {}, methods, statics });
-}
-rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
+rt.register({ name: "android/os/ext/SdkExtensions", ctor: class extends JObj {}, methods: { "static getExtensionVersion(I)I": () => 0 } });
 // libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber
 // regroups anything: the digits a caller typed are the digits it reads back.
 rt.register({
