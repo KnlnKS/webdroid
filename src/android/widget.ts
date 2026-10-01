@@ -201,8 +201,8 @@ class JSeekBar extends JAbsSeekBar {
   *setThumb$(d: JDrawable | null): Gen {
     if (this.thumb) yield setDrawableCallback(this.thumb, null);
     this.thumb = d;
-    this.thumbW = d ? Math.max(0, Number(yield drawableSize(d, false))) : 0;
-    this.thumbH = d ? Math.max(0, Number(yield drawableSize(d, true))) : 0;
+    this.thumbW = d ? Math.max(0, yield drawableSize(d, false)) : 0;
+    this.thumbH = d ? Math.max(0, yield drawableSize(d, true)) : 0;
     this.thumbOffset = Math.trunc(this.thumbW / 2);
     if (d) { yield setDrawableCallback(d, this); yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
     requestLayout(this); invalidate(this);
@@ -246,8 +246,8 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   }),
   "onMeasure(II)V": driven(function* (this: JSeekBar, ws: number, hs: number): Gen {
     const d = this.progressD;
-    const w = d ? Math.max(0, Number(yield drawableSize(d, false))) : 0;
-    const h = d ? Math.max(0, Number(yield drawableSize(d, true))) : 0;
+    const w = d ? Math.max(0, yield drawableSize(d, false)) : 0;
+    const h = d ? Math.max(0, yield drawableSize(d, true)) : 0;
     this.measuredW = resolveSize(Math.max(this.minW, w + this.padL + this.padR), ws);
     this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
   }),

@@ -37,9 +37,8 @@ export function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | nul
   return v.r ? loadDrawable(res, v.r, theme) : null;
 }
 
-export function drawableSize(d: JDrawable, vertical: boolean, thread = curThread): Maybe<number> {
-  return after(vcallOn(thread, d, vertical ? "getIntrinsicHeight" : "getIntrinsicWidth", "()I"), Number);
-}
+export const drawableSize = (d: JDrawable, vertical: boolean, thread = curThread): Maybe<number> =>
+  vcallOn(thread, d, vertical ? "getIntrinsicHeight" : "getIntrinsicWidth", "()I") as Maybe<number>;
 type Methods = Record<string, (...a: unknown[]) => unknown>;
 const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V"), M_setBounds = mangleMethod("setBounds", "(IIII)V");
 /** Drawable.draw(Canvas), virtually: an app's own Drawable subclass is what gets drawn */
@@ -77,4 +76,4 @@ export function rvColors(res: Resources, v: RV, theme: JTheme | null, dflt = 0):
 }
 /** the same as a ColorStateList, which is what a tint takes */
 export const rvCsl = (res: Resources, v: RV, theme: JTheme | null): Maybe<JColorStateList> =>
-  after(rvColors(res, v, theme), (c) => colorList(c) as Maybe<JColorStateList>);
+  after(rvColors(res, v, theme), (c) => typeof c === "number" ? mkCsl(c) : c);
