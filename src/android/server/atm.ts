@@ -278,6 +278,15 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
   // the task's affinity is its root activity's
   "shouldUpRecreateTask(Landroid/os/IBinder;Ljava/lang/String;)Z": (token: JObj, affinity: string | null) =>
     +(!!byToken(token) && field<string | null>(stack[0].info, AI, "taskAffinity") !== affinity),
+  // Task.finishActivityAffinity: it and the activities directly below it that share its affinity
+  "finishActivityAffinity(Landroid/os/IBinder;)Z": (token: JObj) => {
+    const r = byToken(token);
+    if (!r) return 0;
+    const affinity = field<string | null>(r.info, AI, "taskAffinity"), doomed: ActivityRecord[] = [];
+    for (let i = stack.indexOf(r); i >= 0 && field<string | null>(stack[i].info, AI, "taskAffinity") === affinity; i--) doomed.push(stack[i]);
+    void (async () => { for (const d of doomed.reverse()) await finish(d, RESULT_CANCELED, null); })().catch(reportUncaught);
+    return 1;
+  },
   // back on a root activity: AOSP moves a launcher-started task back; one task, so it finishes
   "onBackPressed(Landroid/os/IBinder;Landroid/app/IRequestFinishCallback;)V": (_token: JObj, callback: JObj) =>
     vcall(callback, "requestFinish", "()V"),
