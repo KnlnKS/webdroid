@@ -101,13 +101,17 @@ export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number,
   path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
   nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)));
 }
-function drawDoubleRoundRect(nc: NativeCanvas, ol: number, ot: number, or: number, ob: number, orx: number, ory: number,
-  il: number, it: number, ir: number, ib: number, irx: number, iry: number, p: NativePaint) {
+/** the ring between two round rects, each with one radius pair or one per corner (as a 2D
+ *  context's roundRect takes them) */
+function drawDoubleRoundRect(nc: NativeCanvas, ol: number, ot: number, or: number, ob: number, outer: DOMPointInit | DOMPointInit[],
+  il: number, it: number, ir: number, ib: number, inner: DOMPointInit | DOMPointInit[], p: NativePaint) {
   const ring = new Path2D();
-  ring.roundRect(ol, ot, or - ol, ob - ot, { x: Math.max(orx, 0), y: Math.max(ory, 0) });
-  ring.roundRect(il, it, ir - il, ib - it, { x: Math.max(irx, 0), y: Math.max(iry, 0) });
+  ring.roundRect(ol, ot, or - ol, ob - ot, outer);
+  ring.roundRect(il, it, ir - il, ib - it, inner);
   nc.drawShape(p, (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
 }
+const radii = (rx: number, ry: number) => ({ x: Math.max(rx, 0), y: Math.max(ry, 0) });
+const cornerRadii = (r: Float32Array) => [radii(r[0], r[1]), radii(r[2], r[3]), radii(r[4], r[5]), radii(r[6], r[7])];
 /** android_graphics_Canvas: an offset/count pair outside the array draws nothing and throws */
 function checkPts(pts: Float32Array, off: number, n: number) {
   if (!pts) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -312,15 +316,11 @@ const DRAWS: Record<string, unknown> = {
   },
   "nDrawDoubleRoundRect(JFFFFFFFFFFFFJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orx: number, ory: number,
     il: number, it: number, ir: number, ib: number, irx: number, iry: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawDoubleRoundRect(nc, ol, ot, or, ob, orx, ory, il, it, ir, ib, irx, iry, nc.paint(p));
+    const nc = drawingCanvas(h); drawDoubleRoundRect(nc, ol, ot, or, ob, radii(orx, ory), il, it, ir, ib, radii(irx, iry), nc.paint(p));
   },
-  // per-corner radii; a 2D context's round rect takes one radius pair per corner as well
   "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array,
     il: number, it: number, ir: number, ib: number, irad: Float32Array, p: bigint) => {
-    const nc = drawingCanvas(h), ring = new Path2D(), corners = (r: Float32Array) => [0, 2, 4, 6].map((i) => ({ x: Math.max(r[i], 0), y: Math.max(r[i + 1], 0) }));
-    ring.roundRect(ol, ot, or - ol, ob - ot, corners(orad));
-    ring.roundRect(il, it, ir - il, ib - it, corners(irad));
-    nc.drawShape(nc.paint(p), (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
+    const nc = drawingCanvas(h); drawDoubleRoundRect(nc, ol, ot, or, ob, cornerRadii(orad), il, it, ir, ib, cornerRadii(irad), nc.paint(p));
   },
   "nDrawCircle(JFFFJ)V": (h: bigint, x: number, y: number, r: number, p: bigint) => { const nc = drawingCanvas(h); drawCircle(nc, x, y, r, nc.paint(p)); },
   "nDrawOval(JFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => { const nc = drawingCanvas(h); drawOval(nc, l, t, r, b, nc.paint(p)); },

@@ -24,7 +24,9 @@ type DrawnTextOwner = { drawnText: string[] | null; drawnTextPoints: Float32Arra
 type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
 type RectLike = { left: number; top: number; right: number; bottom: number };
 /** an open layer: the save count its restore closes, the context drawn into before it, and the close */
-type Layer = { count: number; parent: Ctx2D; close: () => void };
+type Layer = { count: number; parent: Ctx2D; close: () => void; behind?: Behind };
+/** what a save-behind set aside: the target's pixels under its bounds, in device space */
+type Behind = { image: OffscreenCanvas | null; x: number; y: number };
 
 /** setLineDash copies its argument, so every undashed stroke can pass the same empty list */
 const NO_DASH: number[] = [];
@@ -693,7 +695,7 @@ export function saveLayer(nc: NativeCanvas, bounds: RectLike | null, paint: Nati
 /** SkAndroidFrameworkUtils::SaveBehind: the target's pixels under the bounds are set aside and
  *  cleared, and the restore draws them back behind what was drawn since (DST_OVER) */
 function saveBehind(nc: NativeCanvas, l: number, t: number, r: number, b: number): number {
-  const count = nc.save(), parent = nc.ctx, behind: { image: OffscreenCanvas | null; x: number; y: number } = { image: null, x: 0, y: 0 };
+  const count = nc.save(), parent = nc.ctx, behind: Behind = { image: null, x: 0, y: 0 };
   recordOrRun(parent, (ctx) => {
     const d = deviceBounds(ctx.getTransform(), l, t, r, b);
     const x0 = Math.max(0, Math.floor(d[0])), y0 = Math.max(0, Math.floor(d[1]));
@@ -714,14 +716,14 @@ function saveBehind(nc: NativeCanvas, l: number, t: number, r: number, b: number
     ctx.drawImage(image, behind.x, behind.y);
     ctx.restore();
   });
-  (nc.layers ??= []).push({ count, parent, close, behind } as Layer);
+  (nc.layers ??= []).push({ count, parent, close, behind });
   return count;
 }
 /** SkCanvasPriv::DrawBehind: the paint over the area a save-behind cleared, then its restore */
 function restoreBehind(nc: NativeCanvas, count: number, paint: NativePaint) {
   while (nc.saveCount > count + 1) nc.restore();
   if (nc.saveCount !== count + 1) return;
-  const behind = (nc.layers?.at(-1) as { behind?: { image: OffscreenCanvas | null; x: number; y: number } } | undefined)?.behind;
+  const behind = nc.layers?.at(-1)?.behind;
   if (behind) {
     recordOrRun(nc.ctx, (ctx) => {
       const image = behind.image;

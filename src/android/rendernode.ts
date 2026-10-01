@@ -15,7 +15,7 @@ import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
 import { Camera3D, type Mat, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./matrix";
-import { NativeCanvas, drawInLayer, clipRoundRect } from "./canvas";
+import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect, unsupported } from "./canvas";
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
 import { type RuntimeShaderBuilder } from "./runtime-shader";
@@ -197,15 +197,14 @@ const set = <K extends keyof NativeRenderNode>(key: K) => (h: bigint, v: NativeR
 };
 const get = <K extends keyof NativeRenderNode>(key: K) => (h: bigint) => nodeAt(h)[key];
 const bool = <K extends keyof NativeRenderNode>(key: K) => (h: bigint) => +!!nodeAt(h)[key];
-const setBool = <K extends keyof NativeRenderNode>(key: K) => (h: bigint, v: number) => {
-  const n = nodeAt(h) as unknown as Record<string, boolean>;
-  if (n[key as string] === !!v) return 0;
-  n[key as string] = !!v;
+const setBool = (key: "overlapping" | "forceDark" | "projectBackwards" | "projectionReceiver") => (h: bigint, v: number) => {
+  const n = nodeAt(h);
+  if (n[key] === !!v) return 0;
+  n[key] = !!v;
   return 1;
 };
 const transformSetter = (key: "tx" | "ty" | "rotation" | "rotationX" | "rotationY" | "scaleX" | "scaleY") => (h: bigint, v: number) => nodeAt(h).setTransform(key, v);
 const sideSetter = (key: "left" | "top" | "right" | "bottom") => (h: bigint, v: number) => nodeAt(h).setSide(key, v);
-const unsupported = (what: string) => () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", what); };
 
 rt.registerJnis("android/graphics/RenderNode", {
   "nCreate(Ljava/lang/String;)J": (name: string | null) => handle(new NativeRenderNode(name)),
@@ -379,7 +378,6 @@ function beginRecording(nc: NativeCanvas, w: number, h: number) {
   nc.setTarget(rec.ctx, w, h, null);
   nc.semanticOwner = nc.semanticBase = null;
 }
-const nat = (h: bigint) => deref<NativeCanvas>(h);
 /** AnimatedRippleDrawable: the ripple's circle through its RuntimeShader, with the uniforms the
  *  animated properties drive set as drawn (the turbulence as RippleShader.setNoisePhase sets it) */
 const RIPPLE_SCALE = 1.5, PI = Math.PI, PI_ROTATE_RIGHT = PI * 0.0078125, PI_ROTATE_LEFT = -PI_ROTATE_RIGHT;
@@ -409,7 +407,7 @@ function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: Nat
   const shaded = new NativePaint();
   copyPaint(paint, shaded);
   shaded.shader = b.shader(null, [x0, y0, x1 - x0, y1 - y0]);
-  drawCircle(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), x, y, radius, shaded);
+  drawCircle(NativeCanvas.over(ctx), x, y, radius, shaded);
 }
 /** CanvasProperty's containers: a float, or a paint an animator changes, read when replayed */
 type Property<T> = { value: T };
@@ -421,15 +419,15 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
     beginRecording(nc, w, h);
     return handle(nc);
   },
-  "nResetDisplayListCanvas(JJII)V": (h: bigint, _node: bigint, w: number, ht: number) => beginRecording(nat(h), w, ht),
+  "nResetDisplayListCanvas(JJII)V": (h: bigint, _node: bigint, w: number, ht: number) => beginRecording(canvasAt(h), w, ht),
   // SkiaRecordingCanvas::finishRecording closes what is still open before the node takes the list
   "nFinishRecording(JJ)V": (h: bigint, node: bigint) => {
-    const nc = nat(h);
+    const nc = canvasAt(h);
     nc.restoreToCount(1);
     nodeAt(node).setDisplayList(nc.recorder!.take());
   },
   "nDrawRenderNode(JJ)V": (h: bigint, node: bigint) => {
-    const nc = nat(h), n = nodeAt(node);
+    const nc = canvasAt(h), n = nodeAt(node);
     replayWithSemantics(nc, () => recordOrRun(nc.ctx, (ctx) => drawNodeInto(ctx, n)));
   },
   // A reorder barrier draws its children by Z; without shadows to cast, they draw in order here.
@@ -437,15 +435,15 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
   // DeviceInfo::maxTextureSize on the reference device
   "nGetMaximumTextureWidth()I": () => 8192,
   "nGetMaximumTextureHeight()I": () => 8192,
-  "nDrawCircle(JJJJJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint) => recordOrRun(nat(h).ctx, (ctx) =>
-    drawCircle(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p))),
-  "nDrawRoundRect(JJJJJJJJ)V": (h: bigint, l: bigint, t: bigint, r: bigint, b: bigint, rx: bigint, ry: bigint, p: bigint) => recordOrRun(nat(h).ctx, (ctx) =>
-    drawRoundRect(NativeCanvas.over(ctx, ctx.canvas.width, ctx.canvas.height), prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b),
+  "nDrawCircle(JJJJJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint) => recordOrRun(canvasAt(h).ctx, (ctx) =>
+    drawCircle(NativeCanvas.over(ctx), prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p))),
+  "nDrawRoundRect(JJJJJJJJ)V": (h: bigint, l: bigint, t: bigint, r: bigint, b: bigint, rx: bigint, ry: bigint, p: bigint) => recordOrRun(canvasAt(h).ctx, (ctx) =>
+    drawRoundRect(NativeCanvas.over(ctx), prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b),
       prop<number>(rx), prop<number>(ry), prop<NativePaint>(p))),
   // the ripple is a RuntimeShader animated on the RenderThread; texture layers and WebView
   // functors are the compositor's
   "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) =>
-    recordOrRun(nat(h).ctx, (ctx) => drawRipple(ctx, prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p),
+    recordOrRun(canvasAt(h).ctx, (ctx) => drawRipple(ctx, prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p),
       prop<number>(progress), prop<number>(phase), color, deref<RuntimeShaderBuilder>(builder))),
   "nDrawTextureLayer(JJ)V": unsupported("RecordingCanvas.drawTextureLayer"),
   "nDrawWebViewFunctor(JI)V": unsupported("RecordingCanvas.drawWebViewFunctor"),
