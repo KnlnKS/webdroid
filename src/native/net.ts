@@ -779,17 +779,19 @@ function putSockaddr(endpoint: Endpoint, address: number, length: number, capaci
   mem.st32(length, 16);
 }
 
+/** the ARM32 struct ifaddrs: its size and the offsets of what getifaddrs fills */
+const IFADDRS = { size: 28, name: 4, flags: 8, addr: 12, netmask: 16 };
 function nativeGetifaddrs(cpu: Cpu, result: number): number {
   if (!result) return fail(cpu, E.FAULT);
-  const size = 28;
+  const size = IFADDRS.size;
   const entry = mem.malloc(size + 35);
   if (!entry) return fail(cpu, E.NOMEM);
   mem.memset(entry, 0, size + 35);
   const lo = INTERFACES[0], address = entry + size, netmask = address + 16, name = netmask + 16;
-  stp(entry + 4, name);
-  mem.st32(entry + 8, lo.flags);
-  stp(entry + 12, address);
-  stp(entry + 16, netmask);
+  stp(entry + IFADDRS.name, name);
+  mem.st32(entry + IFADDRS.flags, lo.flags);
+  stp(entry + IFADDRS.addr, address);
+  stp(entry + IFADDRS.netmask, netmask);
   mem.st16(address, AF_INET); mem.u8.set(V4_LOOPBACK, address + 4);
   mem.st16(netmask, AF_INET); mem.u8.set([255, 0, 0, 0], netmask + 4);
   mem.u8.set([...enc.encode(lo.name), 0], name);
@@ -797,15 +799,15 @@ function nativeGetifaddrs(cpu: Cpu, result: number): number {
   return 0;
 }
 
-/** struct addrinfo: its size and the offsets of its pointers */
-const ADDRINFO = { size: 32, canon: 20, addr: 24, next: 28 };
+/** the ARM32 struct addrinfo: its size and the offsets of its fields */
+const ADDRINFO = { size: 32, flags: 0, family: 4, socktype: 8, protocol: 12, addrlen: 16, canon: 20, addr: 24, next: 28 };
 
 function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number | Promise<number> {
   if (!result) { fail(cpu, E.FAULT); return EAI_SYSTEM; }
-  const flags = hints ? mem.ld32(hints) : 0;
-  const family = hints ? mem.ld32(hints + 4) : AF_UNSPEC;
-  const socktype = hints ? mem.ld32(hints + 8) : 0;
-  const protocol = hints ? mem.ld32(hints + 12) : 0;
+  const flags = hints ? mem.ld32(hints + ADDRINFO.flags) : 0;
+  const family = hints ? mem.ld32(hints + ADDRINFO.family) : AF_UNSPEC;
+  const socktype = hints ? mem.ld32(hints + ADDRINFO.socktype) : 0;
+  const protocol = hints ? mem.ld32(hints + ADDRINFO.protocol) : 0;
   const node = nodePtr ? mem.cstr(nodePtr) : flags & AI_PASSIVE ? "0.0.0.0" : "127.0.0.1";
   const service = servicePtr ? mem.cstr(servicePtr) : "0";
   record(`getaddrinfo ${node}:${service} flags=${flags.toString(16)} family=${family} type=${socktype} protocol=${protocol}`);
@@ -828,11 +830,11 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
     const allocation = mem.malloc(size);
     if (!allocation) { fail(cpu, E.NOMEM); return EAI_SYSTEM; }
     mem.memset(allocation, 0, size);
-    mem.st32(allocation, flags);
-    mem.st32(allocation + 4, AF_INET);
-    mem.st32(allocation + 8, resultType);
-    mem.st32(allocation + 12, resultProtocol);
-    mem.st32(allocation + 16, 16);
+    mem.st32(allocation + ADDRINFO.flags, flags);
+    mem.st32(allocation + ADDRINFO.family, AF_INET);
+    mem.st32(allocation + ADDRINFO.socktype, resultType);
+    mem.st32(allocation + ADDRINFO.protocol, resultProtocol);
+    mem.st32(allocation + ADDRINFO.addrlen, 16);
     stp(allocation + ADDRINFO.addr, allocation + sockaddr);
     stp(allocation + ADDRINFO.next, 0);
     mem.st16(allocation + sockaddr, AF_INET);
@@ -1057,7 +1059,7 @@ export function netInit(): void {
     select: (cpu, args) => {
       const count = args.i(), r = args.p(), w = args.p(), x = args.p(), timeout = args.p();
       if (!timeout) return nativeSelect(cpu, count, r, w, x, -1);
-      const seconds = mem.ld32(timeout), micros = mem.ld32(timeout + 4);
+      const seconds = mem.ld32(timeout), micros = mem.ld32(timeout + PTR);
       if (seconds < 0 || micros < 0 || micros >= 1_000_000) return fail(cpu, E.INVAL);
       return nativeSelect(cpu, count, r, w, x, seconds * 1000 + micros / 1000);
     },

@@ -27,15 +27,14 @@ export const MONTHS = ["January", "February", "March", "April", "May", "June", "
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /** bionic struct offsets/sizes; LAYOUT is the process's, chosen in libcInit. LAYOUT64 overrides
- *  only the structs the kernel layer fills (stat, timespec, statfs): FILE, dirent, tm and bionic's
- *  sigaction are only an ARM32 process's. */
+ *  only the structs the kernel layer fills (stat, timespec, statfs): FILE, dirent and tm are only
+ *  an ARM32 process's. */
 const LAYOUT32 = {
   FILE_SIZE: 84, F_P: 0, F_R: 4, F_W: 8, F_FLAGS: 12, F_FILE: 14, F_BF_BASE: 16, F_BF_SIZE: 20, F_LBFSIZE: 24, F_COOKIE: 28,
   STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
   ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96,
   DIRENT_SIZE: 276, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
-  TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65,
-  SIGACTION_SIZE: 16, SA_HANDLER: 0, SA_FLAGS: 8, STATFS_SIZE: 88,
+  TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65, STATFS_SIZE: 88,
 };
 const LAYOUT64: typeof LAYOUT32 = {
   ...LAYOUT32,

@@ -892,8 +892,8 @@ async function sortFts(cpu: Cpu, node: FtsNode, compar: number, cell: number): P
     for (let i = 1; i < node.children.length; i++) {
       const value = node.children[i]; let j = i;
       while (j > 0) {
-        stp(cell, node.children[j - 1].pre); stp(cell + 4, value.pre);
-        if ((await cpu.call(compar, [cell, cell + 4])) <= 0) break;
+        stp(cell, node.children[j - 1].pre); stp(cell + PTR, value.pre);
+        if ((await cpu.call(compar, [cell, cell + PTR])) <= 0) break;
         node.children[j] = node.children[j - 1]; j--;
       }
       node.children[j] = value;
@@ -915,9 +915,9 @@ async function ftsOpen(cpu: Cpu, argv: number, options: number, compar: number):
   if (!argv || options & ~0xff) { fail(cpu, E.INVAL); return 0; }
   const handle = mem.malloc(4), walk: FtsWalk = { entries: [], nodes: new Map(), allocations: [handle], index: 0, current: 0 };
   const roots: FtsNode[] = [];
-  for (let p = argv, pathp; (pathp = ldp(p)); p += 4) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
+  for (let p = argv, pathp; (pathp = ldp(p)); p += PTR) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
   if (!roots.length) { closeFts(handle); fail(cpu, E.INVAL); return 0; }
-  const cell = mem.malloc(8); walk.allocations.push(cell);
+  const cell = mem.malloc(2 * PTR); walk.allocations.push(cell);
   for (const root of roots) { await sortFts(cpu, root, compar, cell); flattenFts(walk, root); }
   ftsWalks.set(handle, walk);
   return ptr(handle);
@@ -1177,7 +1177,7 @@ export function stdioInit(): void {
         kept.push(de);
       }
       if (compar && kept.length > 1) {
-        const cell = mem.malloc(8), cmp = async (x: number, y: number) => { stp(cell, x); stp(cell + 4, y); return (await cpu.call(compar, [cell, cell + 4])) | 0; };
+        const cell = mem.malloc(2 * PTR), cmp = async (x: number, y: number) => { stp(cell, x); stp(cell + PTR, y); return (await cpu.call(compar, [cell, cell + PTR])) | 0; };
         try {
           // insertion sort: stable, and each comparison is a guest call
           for (let i = 1; i < kept.length; i++) {
@@ -1188,8 +1188,8 @@ export function stdioInit(): void {
           }
         } finally { mem.free(cell); }
       }
-      const list = mem.malloc(Math.max(1, kept.length) * 4);
-      for (let i = 0; i < kept.length; i++) stp(list + i * 4, kept[i]);
+      const list = mem.malloc(Math.max(1, kept.length) * PTR);
+      for (let i = 0; i < kept.length; i++) stp(list + i * PTR, kept[i]);
       stp(out, list);
       return kept.length;
     },

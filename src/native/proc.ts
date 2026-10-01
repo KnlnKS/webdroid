@@ -8,7 +8,7 @@ import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, 
 import { E } from "./abi";
 import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
 import { tidOf } from "./pthread";
-import { fail, fillSysinfo, logLine, LAYOUT, strncpy, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
+import { fail, fillSysinfo, logLine, strncpy, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
 import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties";
@@ -84,8 +84,12 @@ export function signalThread(cpu: Cpu, target: Cpu, sig: number): void {
   target.kill(sig);
 }
 
-/** one signal's handler exchanged through a struct sigaction laid out at the given offsets */
-function exchangeAction(a: ArgReader, size: number, handlerAt: number, flagsAt: number, maskAt: number, wideMask: boolean): number {
+interface SigactionLayout { size: number; handler: number; mask: number; flags: number; wideMask: boolean }
+/** bionic's ARM32 struct sigaction, and sigaction64's, whose mask widens to 8 bytes and pushes sa_flags on */
+const SIGACTION: SigactionLayout = { size: 16, handler: 0, mask: 4, flags: 8, wideMask: false };
+const SIGACTION64: SigactionLayout = { size: 20, handler: 0, mask: 4, flags: 12, wideMask: true };
+/** one signal's handler exchanged through a struct sigaction laid out as given */
+function exchangeAction(a: ArgReader, { size, handler: handlerAt, flags: flagsAt, mask: maskAt, wideMask }: SigactionLayout): number {
   const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
   if (old) {
     mem.memset(old, 0, size);
@@ -101,12 +105,9 @@ function exchangeAction(a: ArgReader, size: number, handlerAt: number, flagsAt: 
   }
   return 0;
 }
-function sigaction(a: ArgReader, wide: boolean): number {
-  return exchangeAction(a, wide ? 20 : LAYOUT.SIGACTION_SIZE, LAYOUT.SA_HANDLER, wide ? 12 : LAYOUT.SA_FLAGS, 4, wide);
-}
 /** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
  *  mask), which is not bionic's */
-const rtSigaction = (a: ArgReader): number => exchangeAction(a, 3 * PTR + 8, 0, PTR, 3 * PTR, true);
+const rtSigaction = (a: ArgReader): number => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true });
 export function procInit(): void {
   resourceLimits.clear();
   const guard = mem.hostAlloc(8);
@@ -155,10 +156,9 @@ export function procInit(): void {
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
     // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
     __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
-    sigaction: (_c, a) => sigaction(a, false),
+    sigaction: (_c, a) => exchangeAction(a, SIGACTION),
     rt_sigaction: (_c, a) => rtSigaction(a),
-    // bionic's 64-bit-mask variant: the mask widens to 8 bytes at +4 and pushes sa_flags to +12
-    sigaction64: (_c, a) => sigaction(a, true),
+    sigaction64: (_c, a) => exchangeAction(a, SIGACTION64),
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
     pthread_kill: (c, a) => {

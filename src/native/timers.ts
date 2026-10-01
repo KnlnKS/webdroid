@@ -10,6 +10,8 @@ import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-cl
 export type ClockTimer = { clock: number; next: number; interval: number; timeout?: GuestTimer };
 type Timer = ClockTimer & { overrun: number; notify: () => void };
 const timers = new Map<number, Timer>();
+/** the ARM32 struct sigevent: sigval, signo, notify, then SIGEV_THREAD's function and attributes */
+const SIGEVENT = { value: 0, notify: 8, function: 12, attributes: 16 };
 /** fire(expirations) once the clock passes the next expiry, then wait for the one after */
 export function armClockTimer(timer: ClockTimer, fire: (count: number) => void): void {
   disarmClockTimer(timer);
@@ -41,14 +43,14 @@ export function timersInit(): void {
     timer_create: (cpu, a) => {
       const clock = a.i(), event = a.p(), out = a.p();
       if (![0, 1, 7].includes(clock) || !out) return fail(cpu, E.INVAL);
-      const mode = event ? mem.ld32(event + 8) : 0;
+      const mode = event ? mem.ld32(event + SIGEVENT.notify) : 0;
       if (mode !== 1 && mode !== 2) return fail(cpu, E.NOTSUP);
       let notify = () => {};
       if (mode === 2) {
-        const fn = ldp(event + 12), attributes = ldp(event + 16);
+        const fn = ldp(event + SIGEVENT.function), attributes = ldp(event + SIGEVENT.attributes);
         if (!fn) return fail(cpu, E.INVAL);
         if (attributes) return fail(cpu, E.NOTSUP);
-        const arg = BigInt(mem.ld32(event) >>> 0);
+        const arg = BigInt(mem.ld32(event + SIGEVENT.value) >>> 0);
         notify = () => { startThread(cpu, fn, arg, true); };
       }
       const id = mem.malloc(4); if (!id) return fail(cpu, E.NOMEM);

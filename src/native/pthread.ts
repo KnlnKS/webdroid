@@ -2,7 +2,7 @@
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem, AddrMap, NativeFault, guestAt } from "./mem";
-import { hostLib, NORET, SERVED, type HostFn, ldp, stp } from "./host";
+import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
@@ -66,8 +66,8 @@ const attrGuards = new AddrMap<number>();
 async function runCleanupHandlers(cpu: Cpu): Promise<void> {
   for (let head; (head = cleanupHeads.get(cpu.tid) ?? 0);) {
     cleanupHeads.set(cpu.tid, ldp(head));
-    const routine = ldp(head + 4);
-    if (routine) { cpu.finished = false; await cpu.call(routine, [ldp(head + 8)], "pthread cleanup"); }
+    const routine = ldp(head + PTR);
+    if (routine) { cpu.finished = false; await cpu.call(routine, [ldp(head + 2 * PTR)], "pthread cleanup"); }
   }
   cleanupHeads.delete(cpu.tid);
 }
@@ -361,15 +361,15 @@ export function pthreadInit(): void {
     __pthread_cleanup_push: (cpu, a) => {
       const entry = a.p(), routine = a.p(), arg = a.p();
       stp(entry, cleanupHeads.get(cpu.tid) ?? 0);
-      stp(entry + 4, routine); stp(entry + 8, arg);
+      stp(entry + PTR, routine); stp(entry + 2 * PTR, arg);
       cleanupHeads.set(cpu.tid, entry);
     },
     __pthread_cleanup_pop: (cpu, a) => {
       const entry = a.p(), execute = a.i();
       const previous = ldp(entry);
       if (previous) cleanupHeads.set(cpu.tid, previous); else cleanupHeads.delete(cpu.tid);
-      const routine = ldp(entry + 4);
-      return execute && routine ? cpu.call(routine, [ldp(entry + 8)], "pthread cleanup").then(() => undefined) : undefined;
+      const routine = ldp(entry + PTR);
+      return execute && routine ? cpu.call(routine, [ldp(entry + 2 * PTR)], "pthread cleanup").then(() => undefined) : undefined;
     },
     pthread_mutex_init: (_c, a) => {
       const mutex = a.p(), attr = a.p();
