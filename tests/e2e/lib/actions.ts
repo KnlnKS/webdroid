@@ -50,7 +50,7 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   switch (a.type) {
     case "boot": await run(wd.boot(a.apk)); return;
     case "tapText": {
-      const hit = wd.locateText(a.text) as { x: number; y: number } | null;
+      const hit = await wd.locateText(a.text) as { x: number; y: number } | null;
       if (hit) await run(wd.tap(hit.x, hit.y));
       else if (a.fallback) await run(wd.tap(a.fallback.x * s.width, a.fallback.y * s.height));
       return !!hit;
@@ -65,7 +65,7 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
         const end = performance.now() + Math.max(1500, maxTaps * interval + 800);
         let taps = 0, absentAt = 0;
         while (performance.now() < end) {
-          if (!wd.locateText(a.whileText)) {
+          if (!await wd.locateText(a.whileText)) {
             absentAt ||= performance.now();
             if (performance.now() - absentAt >= 400) break;
             await sleep(50);

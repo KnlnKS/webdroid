@@ -213,10 +213,15 @@ const wd = {
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
   // the space wd.tap takes). Overlays first, topmost first. Synchronous on purpose: the e2e
   // harness needs a value it can await from outside the page without holding an in-page promise.
-  locateText: (s: string): { x: number; y: number } | null => {
+  locateText: (s: string): { x: number; y: number } | null | Promise<{ x: number; y: number } | null> => {
     const normalized = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     const want = normalized(s);
     const matches = (candidate: string) => candidate === want || candidate.startsWith(want);
+    if (stageD()) return onMain(dumpWindows).then((nodes) => {
+      // topmost window first, as a tap reaches it
+      const hit = nodes.reverse().find((n) => (matches(normalized(n.text)) || matches(normalized(n.desc))) && n.bounds[2] > n.bounds[0]);
+      return hit ? { x: (hit.bounds[0] + hit.bounds[2]) / 2, y: (hit.bounds[1] + hit.bounds[3]) / 2 } : null;
+    });
     const decor = topDecor();
     // An overlay's own left/top already carry its position — the layout pass lays it out AT
     // o.x/o.y — so seeding the walk with them again doubles the offset.
@@ -242,7 +247,7 @@ const wd = {
   },
   tap,
   tapText: async (s: string) => {
-    const hit = wd.locateText(s);
+    const hit = await wd.locateText(s);
     if (!hit) return "not found: " + s;
     await tap(hit.x, hit.y);
     return `tapped ${s} @ ${hit.x},${hit.y}`;

@@ -5,6 +5,7 @@ import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
 import { newObj, vcall, scall } from "../../jvm/natives/jlang";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
+import { uptimeMillis } from "../../guest-clock";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger";
 import { type Channel, channelOf, sendFocus, publish } from "../inputchannel";
 import { javaConfiguration } from "../resources";
@@ -196,7 +197,18 @@ function touchedWindow(x: number, y: number): WindowState | null {
   }
   return null;
 }
-const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002;
+const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
+/** a key from the virtual keyboard (device -1) to the focused window: DOWN, then UP */
+export async function dispatchKey(keyCode: number): Promise<void> {
+  const ws = focused;
+  if (!ws?.channel) return;
+  const down = BigInt(Math.floor(uptimeMillis()));
+  for (const action of [ACTION_DOWN, ACTION_UP]) {
+    const now = action === ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
+    const event = await newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, -1, 0, 0x8, SOURCE_KEYBOARD);
+    await publish(ws.channel, event);
+  }
+}
 /** a touchscreen event at display (x, y): the window touched at DOWN gets the gesture, in its own
  *  coordinates. Resolves whether it handled the event. */
 export async function dispatchTouch(action: number, x: number, y: number, downTime: bigint, eventTime: bigint): Promise<boolean> {

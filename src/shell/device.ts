@@ -56,7 +56,7 @@ import { notePresent } from "../native/cpu";
 import { noteInput } from "../jvm/yield";
 import { stageD } from "../jvm/provenance";
 import { appArchives } from "../jvm/natives/jdex";
-import { hostWindowManager, dispatchTouch } from "../android/server/wm";
+import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server/wm";
 import { startActivityThread } from "../android/server/am";
 import { setDisplayTarget } from "../android/surfaceflinger";
 
@@ -359,8 +359,9 @@ globalThis.matchMedia?.("(prefers-color-scheme: dark)")
 // last set curThread.
 export function pressBack(): Promise<void> {
   noteInput();
-  return onMain(pressBack0);
+  return stageD() ? dispatchKey(KEYCODE_BACK) : onMain(pressBack0);
 }
+const KEYCODE_BACK = 4;
 const pressBack0 = driven(function* pressBack0(): Gen<void> {
   // the focused window takes the key: the topmost focusable one, else the activity under them.
   // ViewRootImpl hands it to the root view, which a decor passes to its window's callback.
