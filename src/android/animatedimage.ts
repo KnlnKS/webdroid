@@ -6,10 +6,10 @@
 
 import { rt } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeColorFilter, tintedBmp } from "./graphics";
+import { type NativeColorFilter, type JRect, tintedBmp } from "./graphics";
 import { type NativeCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
-import type { NativeImageDecoder } from "./decode";
+import type { EncodedImage } from "./decode";
 import { uptimeMillis } from "./os";
 
 const REPEAT_INFINITE = -1, FINISHED = -1n, RETRY_MS = 16n;
@@ -80,8 +80,8 @@ class AnimatedImage {
 const anim = (h: bigint) => deref<AnimatedImage>(h);
 rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   "nCreate(JLandroid/graphics/ImageDecoder;IIJZLandroid/graphics/Rect;)J":
-    (decoder: bigint, _jdecoder: unknown, w: number, h: number, _cs: bigint, _extended: number, crop: { left: number; top: number; right: number; bottom: number } | null) => {
-      const { bytes, header } = deref<NativeImageDecoder>(decoder), a = new AnimatedImage(crop ? crop.right - crop.left : w, crop ? crop.bottom - crop.top : h);
+    (decoder: bigint, _jdecoder: unknown, w: number, h: number, _cs: bigint, _extended: number, crop: JRect | null) => {
+      const { bytes, header } = deref<EncodedImage>(decoder), a = new AnimatedImage(crop ? crop.right - crop.left : w, crop ? crop.bottom - crop.top : h);
       a.bounds = [0, 0, a.w, a.h];
       // the crop is in the scaled image's coordinates: frames are decoded whole, then cut
       const scale = crop && [header.width / w, header.height / h];
@@ -114,7 +114,7 @@ rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   // hardware rendering's end callback; in software the drawable posts its own from FINISHED
   "nSetOnAnimationEndListener(JLjava/lang/ref/WeakReference;)V": () => {},
   "nSetMirrored(JZ)V": (h: bigint, mirrored: number) => { anim(h).mirrored = !!mirrored; },
-  "nSetBounds(JLandroid/graphics/Rect;)V": (h: bigint, r: { left: number; top: number; right: number; bottom: number }) => {
+  "nSetBounds(JLandroid/graphics/Rect;)V": (h: bigint, r: JRect) => {
     anim(h).bounds = [r.left, r.top, r.right, r.bottom];
   },
 });

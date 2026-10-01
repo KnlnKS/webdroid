@@ -266,13 +266,35 @@ function setPadding(pad: JRect, chunk: Int8Array | null) {
 const insetsOf = (h: ImageHeader, scale: number) => !h.layout && !h.outline ? null
   : construct("android/graphics/NinePatch$InsetStruct", "(IIIIIIIIFIF)V", ...(h.layout ?? [0, 0, 0, 0]), ...(h.outline ?? [0, 0, 0, 0, 0, 0]), scale);
 
-// ── BitmapFactory
+// ── BitmapFactory.Options, as BitmapFactory and BitmapRegionDecoder read and answer it
 const OPTIONS = "android/graphics/BitmapFactory$Options";
 const OPTION_FIELDS = ["inJustDecodeBounds", "inSampleSize", "inPreferredConfig", "inMutable", "inPremultiplied", "inScaled", "inDensity",
   "inTargetDensity", "inScreenDensity", "inBitmap", "outWidth", "outHeight", "outMimeType", "outConfig", "outColorSpace"] as const;
 let O: Record<(typeof OPTION_FIELDS)[number], string> | null = null;
 const opt = () => O ??= Object.fromEntries(OPTION_FIELDS.map((n) => [n, declaredField(OPTIONS, n)])) as NonNullable<typeof O>;
-type Options = Record<string, any>;
+type Options = Record<string, unknown>;
+interface Request { sample: number; preferred: number; mutable: boolean; premultiplied: boolean; justBounds: boolean; scale: number }
+const DEFAULT_REQUEST: Request = { sample: 1, preferred: ARGB_8888, mutable: false, premultiplied: true, justBounds: false, scale: 1 };
+function request(options: Options | null): Request {
+  if (!options) return DEFAULT_REQUEST;
+  const o = opt(), density = options[o.inDensity] as number, target = options[o.inTargetDensity] as number;
+  return {
+    sample: Math.max(1, options[o.inSampleSize] as number), preferred: nativeConfig(options[o.inPreferredConfig] as object | null) || ARGB_8888,
+    mutable: !!options[o.inMutable], premultiplied: !!options[o.inPremultiplied], justBounds: !!options[o.inJustDecodeBounds],
+    scale: options[o.inScaled] && density && target && density !== options[o.inScreenDensity] ? Math.fround(target / density) : 1,
+  };
+}
+function clearOuts(options: Options | null) {
+  const o = opt();
+  if (options) { options[o.outWidth] = options[o.outHeight] = -1; options[o.outMimeType] = options[o.outConfig] = options[o.outColorSpace] = null; }
+}
+/** the decoded size, MIME type, config (HARDWARE when that was asked for) and color space */
+const setOuts = driven(function* setOuts(options: Options, w: number, h: number, mime: string, config: number): Gen<void> {
+  const o = opt();
+  options[o.outWidth] = w; options[o.outHeight] = h; options[o.outMimeType] = mime;
+  options[o.outConfig] = yield javaConfig(config);
+  options[o.outColorSpace] = config === ALPHA_8 ? null : yield srgbSpace();
+});
 let configInt = "";
 /** GraphicsJNI::getNativeBitmapColorType: a Bitmap.Config's legacy number, 0 for none */
 const nativeConfig = (config: object | null): number =>
@@ -280,46 +302,46 @@ const nativeConfig = (config: object | null): number =>
 const javaConfig = (config: number) => scall("android/graphics/Bitmap$Config", "nativeToConfig", "(I)Landroid/graphics/Bitmap$Config;", config);
 const srgbSpace = () => scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 0);
 
+/** The decoded pixels as a bitmap: the reused one reconfigured to hold them, or a new one (HARDWARE
+ *  for a hardware 8888 decode). Pixels the browser could not decode leave it empty. */
+function placePixels(img: ImageBitmap | null, w: number, h: number, config: number, alphaType: number, hardware: boolean, reuse: NativeBitmap | null = null): NativeBitmap {
+  const b = reuse ?? new NativeBitmap(w, h, hardware && config === ARGB_8888 ? HARDWARE : config, alphaType);
+  if (reuse) reuse.reconfigure(w, h, config, alphaType);
+  if (img) b.setImage(img);
+  if (config === ALPHA_8) grayToAlpha(b);
+  return b;
+}
+/** the Java Bitmap a decode answers: the reused inBitmap, reinitialized, or a new one around `b` */
+const javaResult = (b: NativeBitmap, reused: object | null, premultiplied: boolean, chunk: Int8Array | null = null, insets: unknown = null) =>
+  reused ? after(reinitJava(reused, b, premultiplied), () => reused) : javaBitmap(b, -1, chunk, insets, premultiplied);
+
+// ── BitmapFactory
 /** BitmapFactory.cpp's doDecode */
 const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
-  const o = opt();
-  if (options) { options[o.outWidth] = options[o.outHeight] = -1; options[o.outMimeType] = options[o.outConfig] = options[o.outColorSpace] = null; }
+  clearOuts(options);
   const h = readHeader(bytes);
   if (!h || h === INCOMPLETE) return null;
-  let sample = 1, preferred = ARGB_8888, mutable = false, unpremul = false, scale = 1;
-  if (options) {
-    sample = Math.max(1, options[o.inSampleSize]); preferred = nativeConfig(options[o.inPreferredConfig]) || ARGB_8888;
-    mutable = !!options[o.inMutable]; unpremul = !options[o.inPremultiplied];
-    const density = options[o.inDensity], target = options[o.inTargetDensity];
-    if (options[o.inScaled] && density && target && density !== options[o.inScreenDensity]) scale = Math.fround(target / density);
-  }
+  const { sample, preferred, mutable, premultiplied, justBounds, scale } = request(options);
   const hardware = preferred === HARDWARE, config = outputConfig(h, preferred);
   const [w, ht] = sampledSize(h, sample);
   if (options) {
-    options[o.outWidth] = w; options[o.outHeight] = ht; options[o.outMimeType] = h.mime;
-    options[o.outConfig] = yield javaConfig(hardware ? HARDWARE : config);
-    options[o.outColorSpace] = config === ALPHA_8 ? null : yield srgbSpace();
-    if (options[o.inJustDecodeBounds]) return null;
+    yield setOuts(options, w, ht, h.mime, hardware ? HARDWARE : config);
+    if (justBounds) return null;
   }
   const sw = scale === 1 ? w : Math.trunc(Math.fround(Math.fround(w * scale) + 0.5)), sh = scale === 1 ? ht : Math.trunc(Math.fround(Math.fround(ht * scale) + 0.5));
-  const alphaType = h.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL;
   let reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null;
   if (reuse?.immutable) reuse = null;
   if (reuse && sw * sh * bytesPerPixel(config) > reuse.allocation) return null;
   const img: ImageBitmap | null = yield decodePixels(bytes, h, sw, sh, null, false);
   // an incomplete input decodes as far as it goes (here: not at all), a corrupt one fails
   if (!img && h.complete) return null;
-  const b = reuse ?? new NativeBitmap(sw, sh, hardware ? HARDWARE : config, alphaType);
-  if (reuse) reuse.reconfigure(sw, sh, config, alphaType);
-  if (img) b.setImage(img);
-  if (config === ALPHA_8) grayToAlpha(b);
+  const b = placePixels(img, sw, sh, config, h.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
   b.immutable = !mutable || hardware;
   const chunk = h.patch && h.patch.slice();
   if (chunk && scale !== 1) scalePatch(chunk, sw / w, sh / ht, sw, sh);
   if (padding) setPadding(padding, chunk);
   const insets = yield insetsOf(h, scale);
-  if (reuse) { yield reinitJava(options![o.inBitmap], reuse, !unpremul); return options![o.inBitmap]; }
-  return javaBitmap(b, -1, chunk, insets, !unpremul);
+  return javaResult(b, reuse && options![opt().inBitmap] as object, premultiplied, chunk, insets);
 });
 /** The header's worth of a stream, for a bounds-only decode: as a device's front-buffered stream,
  *  it leaves the rest unread for the caller to reset over. */
@@ -333,12 +355,11 @@ const streamHeader = driven(function* streamHeader(stream: unknown, storage: Int
     if (readHeader(bytes) !== INCOMPLETE) return bytes;
   }
 });
-const justBounds = (options: Options | null) => !!options?.[opt().inJustDecodeBounds];
 const fdBytes = async (fd: object | null) => await javaFdBytes(fdInt(fd as never)) ?? new Uint8Array(0);
 rt.registerJnis("android/graphics/BitmapFactory", {
   "nativeDecodeStream(Ljava/io/InputStream;[BLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
     driven(function* (stream: unknown, storage: Int8Array, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
-      return doDecode(yield justBounds(options) ? streamHeader(stream, storage) : readStreamFully(stream), padding, options, inBitmap);
+      return doDecode(yield request(options).justBounds ? streamHeader(stream, storage) : readStreamFully(stream), padding, options, inBitmap);
     }),
   // decodes from the descriptor's position and leaves it there, as AutoFDSeek restores it
   "nativeDecodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
@@ -354,29 +375,17 @@ rt.registerJnis("android/graphics/BitmapFactory", {
   "nativeIsSeekable(Ljava/io/FileDescriptor;)Z": (fd: object | null) => +(javaSeekFd(fdInt(fd as never), 0, 1) >= 0),
 });
 
-/** Decoded for TS callers that need a Java Bitmap from bytes (a drawable file): BitmapFactory's
- *  defaults at `density`, with the nine-patch chunk and insets the file carries; null when the
- *  bytes are not an image. */
-export const decodeBitmap = driven(function* decodeBitmap(bytes: Uint8Array, density: number): Gen<object | null> {
-  const h = readHeader(bytes);
-  if (!h || h === INCOMPLETE) return null;
-  const img: ImageBitmap | null = yield decodePixels(bytes, h, h.width, h.height, null, false);
-  if (!img && h.complete) return null;
-  const b = new NativeBitmap(h.width, h.height, ARGB_8888, h.opaque ? OPAQUE : PREMUL);
-  if (img) b.setImage(img);
-  b.immutable = true;
-  return javaBitmap(b, density, h.patch, yield insetsOf(h, 1));
-});
+/** the encoded image and its header behind a BitmapRegionDecoder's or an ImageDecoder's mNativePtr */
+export interface EncodedImage { bytes: Uint8Array; header: ImageHeader }
+const encodedAt = (h: bigint) => deref<EncodedImage>(h);
 
 // ── BitmapRegionDecoder: the encoded bytes, decoded a region at a time
-interface RegionSource { bytes: Uint8Array; header: ImageHeader }
 const REGION_FORMATS = ["image/jpeg", "image/png", "image/webp", "image/heif", "image/avif"];
 function regionDecoder(bytes: Uint8Array) {
   const h = readHeader(bytes);
   if (!h || h === INCOMPLETE || !REGION_FORMATS.includes(h.mime)) throw rt.mkThrowable("java/io/IOException", "Image format not supported");
-  return construct("android/graphics/BitmapRegionDecoder", "(J)V", ownedHandle({ bytes, header: h } satisfies RegionSource));
+  return construct("android/graphics/BitmapRegionDecoder", "(J)V", ownedHandle({ bytes, header: h } satisfies EncodedImage));
 }
-const region = (h: bigint) => deref<RegionSource>(h);
 rt.registerJnis("android/graphics/BitmapRegionDecoder", {
   "nativeNewInstance([BII)Landroid/graphics/BitmapRegionDecoder;": (bytes: Int8Array, off: number, len: number) => regionDecoder(u8(bytes, off, len).slice()),
   "nativeNewInstance(Ljava/io/FileDescriptor;)Landroid/graphics/BitmapRegionDecoder;":
@@ -384,49 +393,34 @@ rt.registerJnis("android/graphics/BitmapRegionDecoder", {
   "nativeNewInstance(Ljava/io/InputStream;[B)Landroid/graphics/BitmapRegionDecoder;":
     driven(function* (stream: unknown): Gen { return regionDecoder(yield readStreamFully(stream)); }),
   "nativeNewInstance(J)Landroid/graphics/BitmapRegionDecoder;": driven(function* (asset: bigint): Gen { return regionDecoder(yield assetBytes(asset)); }),
-  "nativeGetWidth(J)I": (h: bigint) => region(h).header.width,
-  "nativeGetHeight(J)I": (h: bigint) => region(h).header.height,
+  "nativeGetWidth(J)I": (h: bigint) => encodedAt(h).header.width,
+  "nativeGetHeight(J)I": (h: bigint) => encodedAt(h).header.height,
   "nativeClean(J)V": (h: bigint) => release(h),
   // SkBitmapRegionDecoder::decodeRegion: the output is the requested rectangle, sampled; the
   // part outside the image stays transparent
   "nativeDecodeRegion(JIIIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
     driven(function* (h: bigint, x: number, y: number, w: number, ht: number, options: Options | null, inBitmap: bigint): Gen {
-      const { bytes, header } = region(h), o = opt();
-      let sample = 1, preferred = ARGB_8888, unpremul = false;
-      if (options) {
-        sample = Math.max(1, options[o.inSampleSize]); preferred = nativeConfig(options[o.inPreferredConfig]) || ARGB_8888;
-        unpremul = !options[o.inPremultiplied];
-        options[o.outWidth] = options[o.outHeight] = -1; options[o.outMimeType] = options[o.outConfig] = options[o.outColorSpace] = null;
-      }
+      const { bytes, header } = encodedAt(h), { sample, preferred, premultiplied } = request(options);
+      clearOuts(options);
       const left = Math.max(0, x), top = Math.max(0, y), right = Math.min(header.width, x + w), bottom = Math.min(header.height, y + ht);
       if (right <= left || bottom <= top) return null;
       const reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null, hardware = preferred === HARDWARE;
-      const config = reuse ? reuse.config : outputConfig(header, hardware ? ARGB_8888 : preferred);
+      const config = reuse ? reuse.config : outputConfig(header, preferred);
       const [iw, ih] = sampledSize(header, sample, right - left, bottom - top);
       const bw = iw + Math.trunc((left - x) / sample) + Math.trunc((x + w - right) / sample);
       const bh = ih + Math.trunc((top - y) / sample) + Math.trunc((y + ht - bottom) / sample);
       if (reuse && bw * bh * bytesPerPixel(config) > reuse.allocation) return null;
-      const alphaType = header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL;
       // a crop reaching outside the image is transparent there, as the zero-initialized output is
       const img: ImageBitmap | null = yield decodePixels(bytes, header, bw, bh, [x, y, w, ht], false);
       if (!img && header.complete) return null;
-      const b = reuse ?? new NativeBitmap(bw, bh, hardware ? HARDWARE : config, alphaType);
-      if (reuse) reuse.reconfigure(bw, bh, config, alphaType);
-      if (img) b.setImage(img);
-      if (config === ALPHA_8) grayToAlpha(b);
+      const b = placePixels(img, bw, bh, config, header.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
       if (!reuse) b.immutable = true;
-      if (options) {
-        options[o.outWidth] = bw; options[o.outHeight] = bh; options[o.outMimeType] = header.mime;
-        options[o.outConfig] = yield javaConfig(hardware ? HARDWARE : config);
-        options[o.outColorSpace] = config === ALPHA_8 ? null : yield srgbSpace();
-      }
-      if (reuse) { yield reinitJava(options![o.inBitmap], reuse, !unpremul); return options![o.inBitmap]; }
-      return javaBitmap(b, -1, null, null, !unpremul);
+      if (options) yield setOuts(options, bw, bh, header.mime, hardware ? HARDWARE : config);
+      return javaResult(b, reuse && options![opt().inBitmap] as object, premultiplied);
     }),
 });
 
-// ── ImageDecoder: the encoded image and its header behind mNativePtr, decoded by nDecodeBitmap
-export interface NativeImageDecoder { bytes: Uint8Array; header: ImageHeader }
+// ── ImageDecoder: the encoded image behind mNativePtr, decoded by nDecodeBitmap
 const DECODER = "android/graphics/ImageDecoder";
 /** ImageDecoder.DecodeException's errors */
 const SOURCE_EXCEPTION = 1, SOURCE_INCOMPLETE = 2, SOURCE_MALFORMED_DATA = 3;
@@ -445,11 +439,10 @@ const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Pr
   if (h === INCOMPLETE) throw yield decodeException(SOURCE_INCOMPLETE, "", null, source);
   if (!h) throw yield decodeException(SOURCE_MALFORMED_DATA, "Failed to create image decoder with message 'unimplemented'", null, source);
   const [w, ht] = oriented(h, h.width, h.height);
-  return construct(DECODER, "(JIIZZ)V", ownedHandle({ bytes, header: h } satisfies NativeImageDecoder), w, ht, +(h.frames > 1), +!!h.patch);
+  return construct(DECODER, "(JIIZZ)V", ownedHandle({ bytes, header: h } satisfies EncodedImage), w, ht, +(h.frames > 1), +!!h.patch);
 });
 /** width and height as SkAndroidCodec reports them once EXIF orientation is applied */
 const oriented = (h: ImageHeader, w: number, ht: number): [number, number] => h.orientation >= 5 ? [ht, w] : [w, ht];
-const imageDecoder = (h: bigint) => deref<NativeImageDecoder>(h);
 /** ImageDecoder's allocators */
 const ALLOCATOR_DEFAULT = 0, ALLOCATOR_HARDWARE = 3;
 /** PixelFormat's answers a PostProcessor gives */
@@ -468,18 +461,18 @@ rt.registerJnis(DECODER, {
   "nCreate(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (fd: object | null, length: bigint, _animation: number, source: unknown) =>
     createDecoder(async () => { const b = await fdBytes(fd); return length < 0n ? b : b.subarray(0, Number(length)); }, source),
   "nGetSampledSize(JI)Landroid/util/Size;": (h: bigint, sample: number) => {
-    const { header } = imageDecoder(h);
+    const { header } = encodedAt(h);
     return construct("android/util/Size", "(II)V", ...oriented(header, ...sampledSize(header, sample)));
   },
-  "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: JRect) => setPadding(pad, imageDecoder(h).header.patch),
-  "nGetMimeType(J)Ljava/lang/String;": (h: bigint) => imageDecoder(h).header.mime,
+  "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: JRect) => setPadding(pad, encodedAt(h).header.patch),
+  "nGetMimeType(J)Ljava/lang/String;": (h: bigint) => encodedAt(h).header.mime,
   "nGetColorSpace(J)Landroid/graphics/ColorSpace;": () => srgbSpace(),
   "nClose(J)V": (h: bigint) => release(h),
   // ImageDecoder.cpp's nDecodeBitmap: the whole image scaled to the desired size, then cropped
   "nDecodeBitmap(JLandroid/graphics/ImageDecoder;ZIILandroid/graphics/Rect;ZIZZZJZ)Landroid/graphics/Bitmap;":
     driven(function* (h: bigint, jdecoder: object, postProcess: number, w: number, ht: number, crop: JRect | null, mutable: number, allocator: number,
       unpremul: number, conserveMemory: number, alphaMask: number, _cs: bigint, extended: number): Gen {
-      const { bytes, header } = imageDecoder(h);
+      const { bytes, header } = encodedAt(h);
       let config = ARGB_8888;
       if (alphaMask && header.gray) config = ALPHA_8;
       // 565 saves nothing once uploaded as a hardware bitmap, and a post-process may add alpha
@@ -497,9 +490,7 @@ rt.registerJnis(DECODER, {
       // SkCodec::kIncompleteInput or kErrorInInput: the listener may take what was decoded
       const partial = !header.complete ? SOURCE_INCOMPLETE : !img ? SOURCE_MALFORMED_DATA : 0;
       if (partial) yield vcall(jdecoder, "onPartialImage", "(ILjava/lang/Throwable;)V", partial, null);
-      const b = new NativeBitmap(bw, bh, hardware && config === ARGB_8888 ? HARDWARE : config, header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL);
-      if (img) b.setImage(img);
-      if (config === ALPHA_8) grayToAlpha(b);
+      const b = placePixels(img, bw, bh, config, header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL, hardware);
       if (postProcess) {
         const format: number = yield vcall(jdecoder, "postProcessAndRelease", "(Landroid/graphics/Canvas;)I",
           yield construct("android/graphics/Canvas", "(J)V", handle(bitmapCanvas(b))));
