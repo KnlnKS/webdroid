@@ -438,11 +438,18 @@ async function runTraversal(): Promise<void> {
 const choreographerFrameTime = (): Promise<bigint> => after(mainChoreographer(), (c) => vcall(c, "getFrameTimeNanos", "()J")) as Promise<bigint>;
 /** one frame now, on a vsync outside the display's pacing: a harness stepping a controlled clock.
  *  The display presents after it whether or not a window drew. */
-export function testFrame(): Promise<void> {
+export async function testFrame(): Promise<void> {
+  if (stageD()) {
+    // the vsync's dispatch, then the Choreographer frame it posts, run on the main looper first
+    deliverVsync();
+    await onMain(() => {});
+    await onMain(() => {});
+    return redraw();
+  }
   const done = new Promise<void>((resolve) => frameWaiters.push(resolve));
   scheduleTraversal();
   deliverVsync();
-  return stageD() ? done.then(redraw) : done;
+  return done;
 }
 /** present the screen again, for a harness sampling it */
 export function redraw(): void {
