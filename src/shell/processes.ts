@@ -5,13 +5,13 @@ import { AccountStore } from "./accounts";
 import { useAccountStore } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
-import { encodeIntent, decodeIntent, type IntentData } from "../android/intentipc";
+import { encodeIntent, decodeIntent, intentCodec, type IntentData } from "../android/intentipc";
 import { PermissionStore, usePermissionStore } from "../android/context";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { JParcel } from "../android/parcel";
-import { JIntent, activityTransport, deliverActivityResult, type ActivityResultTarget } from "../android/intent";
+import { type JIntent, activityTransport, componentParts, deliverActivityResult, newIntent, type ActivityResultTarget } from "../android/intent";
 import { onMain } from "../android/mainloop";
 import { PROCESS_PID, reportUncaught } from "../android/os";
 import { uptimeMillis } from "../guest-clock";
@@ -71,13 +71,13 @@ class ProcessBroker {
   readonly files = new PrivateFiles();
   readonly tasks = new ActivityTasks();
   readonly accounts = new AccountStore();
-  readonly intents = new PendingIntents(async (operation, fill, alarmCount) => {
+  readonly intents = new PendingIntents(intentCodec, async (operation, fill, alarmCount) => {
     if (packages.get(operation.pkg)?.uid !== operation.uid)
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
     await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
   readonly alarms = new Alarms(this.intents, uptimeMillis, reportUncaught);
-  createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, intents?: IntentData[]): number | null {
+  async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, intents?: IntentData[]): Promise<number | null> {
     const caller = this.entry(pid), owner = packages.get(pkg);
     if (!owner || owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "PendingIntent creator does not match caller");
     return this.intents.create({ pkg, kind, code, flags, intent, intents, uid: caller.uid, process: caller.process });
@@ -118,8 +118,7 @@ class ProcessBroker {
   async boot(): Promise<void> {
     if (this.booted) return;
     this.booted = true;
-    const intent = new JIntent(); intent.action = "android.intent.action.BOOT_COMPLETED";
-    await this.broadcast(null, await encodeIntent(intent), "android.permission.RECEIVE_BOOT_COMPLETED", false);
+    await this.broadcast(null, await encodeIntent(await newIntent("android.intent.action.BOOT_COMPLETED")), "android.permission.RECEIVE_BOOT_COMPLETED", false);
   }
 
   foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
@@ -375,7 +374,7 @@ class ProcessBroker {
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
   }
   async broadcast(pid: number | null, data: IntentData, permission: string | null, ordered: boolean): Promise<void> {
-    const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data, false);
+    const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data);
     const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
     for (const receiver of await queryReceivers(intent)) {
       const pkg = receiver.owner.pkg, permission = componentPermission(receiver);
@@ -442,8 +441,8 @@ export function connectProcess(): ProcessEndpoint {
   activityTransport.launch = async (pkg, process, component, intent, result) => {
     const request = nextRequest++, data = await encodeIntent(intent);
     if (result && result.code >= 0) requests.set(request, result);
-    const caller = result && result.code >= 0 ? await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;") : null;
-    const taskId = intent.flags & 0x10000000 ? 0 : (result?.act ?? appHost?.currentActivity())?.taskId ?? 0;
+    const caller = result && result.code >= 0 ? await componentParts(await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;")) : null;
+    const taskId = await vcall(intent, "getFlags", "()I") & 0x10000000 ? 0 : (result?.act ?? appHost?.currentActivity())?.taskId ?? 0;
     void broker.launchActivity(PROCESS_PID, pkg, process, component, data, request, caller?.cls ?? null, taskId);
   };
   activityTransport.attach = (act, task, affinity) => {
@@ -482,9 +481,7 @@ export function connectProcess(): ProcessEndpoint {
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
-  pendingTransport.create = (pkg, kind, code, flags, intent, intents) => {
-    try { return broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents); } catch (error) { return remoteError(error); }
-  };
+  pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents));
   pendingTransport.cancel = id => {
     try { broker.cancelPending(PROCESS_PID, id); } catch (error) { remoteError(error); }
   };
@@ -531,8 +528,9 @@ export function connectProcess(): ProcessEndpoint {
     provider: receiveProvider,
     broadcast: async (intent, component, ordered, data) => {
       if (!appHost?.application) throw new Error("Process has no application");
-      if (!component && !hasBroadcastReceiver(await decodeIntent(intent, false))) return data;
-      const result = await deliverBroadcast(appHost.application, await decodeIntent(intent), component, ordered,
+      const received = await decodeIntent(intent);
+      if (!component && !await hasBroadcastReceiver(received)) return data;
+      const result = await deliverBroadcast(appHost.application, received, component, ordered,
         { ...data, extras: await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
       const extras = new JParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
       return { ...result, extras: exportParcel(extras) };
@@ -544,7 +542,7 @@ export function connectProcess(): ProcessEndpoint {
       if (!context) throw new Error("Process has no application");
       const intent = await decodeIntent(request.intent);
       if (request.kind === "bind") return exportBinder(await bindLocalService(context, intent, request.key));
-      svcStart(context, intent, request.foreground); return null;
+      await svcStart(context, intent, request.foreground); return null;
     },
   };
 }

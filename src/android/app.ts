@@ -1,7 +1,7 @@
 import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
-  JIntent, activityTransport, launchIntent, mkComponentName,
+  type JIntent, activityTransport, launchIntent, mkComponentName, newIntent,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -22,7 +22,7 @@ import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { csText } from "../jvm/natives/jchars";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { type JIntentSender, startIntentSender } from "./pendingintent";
+import { startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { packageManagerService, permissionManagerService, packageResources } from "./pm";
@@ -61,6 +61,8 @@ class JActivityOptions extends JObj {
   packageName: string | null = null;
   bounds: number[] | null = null;
   shareIdentity = false;
+  /** ComponentOptions.mPendingIntentBalAllowed: MODE_BACKGROUND_ACTIVITY_START_SYSTEM_DEFINED */
+  pendingIntentBal = 0;
 }
 const boundsAnimation = (type: 2 | 11) => async (view: JView, x: number, y: number, width: number, height: number) => {
   const options = new JActivityOptions();
@@ -92,8 +94,14 @@ rt.register({
       if (this.bounds) for (const [i, key] of ["animStartX", "animStartY", "animWidth", "animHeight"].entries())
         bundle.map.set("android:activity." + key, this.bounds[i]);
       if (this.shareIdentity) bundle.map.set("android:activity.shareIdentity", 1);
+      if (this.pendingIntentBal) bundle.map.set("android.pendingIntent.backgroundActivityAllowed", this.pendingIntentBal);
       return bundle;
     },
+    // ComponentOptions': COMPAT, SYSTEM_DEFINED, ALLOWED and DENIED as given, ALLOW_ALWAYS and ALLOW_IF_VISIBLE as ALLOWED
+    "setPendingIntentBackgroundActivityStartMode(I)Landroid/app/ActivityOptions;": function (this: JActivityOptions, mode: number) {
+      this.pendingIntentBal = mode >= -1 && mode <= 2 ? mode : 1; return this;
+    },
+    "getPendingIntentBackgroundActivityStartMode()I": function (this: JActivityOptions) { return this.pendingIntentBal; },
     "setShareIdentityEnabled(Z)Landroid/app/ActivityOptions;": function (this: JActivityOptions, on: number) { this.shareIdentity = !!on; return this; },
     "isShareIdentityEnabled()Z": function (this: JActivityOptions) { return this.shareIdentity ? 1 : 0; },
   },
@@ -158,7 +166,7 @@ rt.register({
     [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
 });
 function activityActionMode(this: JActivity, cb: unknown) { return startActionMode(this, cb); }
-function senderForResult(this: JActivity, s: JIntentSender, code: number, fill: JIntent | null) {
+function senderForResult(this: JActivity, s: JObj, code: number, fill: JIntent | null) {
   return startIntentSender(this, s, fill, code >= 0 ? { act: this, code } : undefined);
 }
 function invalidateOptionsMenu(this: JActivity) { appHost?.invalidateOptionsMenu(this); }
@@ -182,7 +190,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "setTaskDescription(Landroid/app/ActivityManager$TaskDescription;)V": function (this: JActivity, d: JTaskDescription | null) { this.taskDescription = d; },
   ...lifecycleCallbackMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
-  "getIntent()Landroid/content/Intent;": function (this: JActivity) { return this.intent ?? (this.intent = new JIntent()); },
+  "getIntent()Landroid/content/Intent;": function (this: JActivity) { return this.intent ?? newIntent().then((intent) => this.intent ??= intent); },
   "getLayoutInflater()Landroid/view/LayoutInflater;": function (this: JActivity) { return getInflater(this); },
   "getMenuInflater()Landroid/view/MenuInflater;": function (this: JActivity) {
     const m = new JMenuInflater();
@@ -267,16 +275,15 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getParentActivityIntent()Landroid/content/Intent;": driven(function* (this: JActivity): Gen {
     const pm = yield vcall(this, "getPackageManager", "()Landroid/content/pm/PackageManager;"), info = "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;";
     const parentOf = (activity: Record<string, string | null>) => activity[declaredField("android/content/pm/ActivityInfo", "parentActivityName")];
-    const parent = parentOf(yield vcall(pm, "getActivityInfo", info, mkComponentName(this.$host.pkg, jclsNameOf(this)), 0));
+    const parent = parentOf(yield vcall(pm, "getActivityInfo", info, yield mkComponentName(this.$host.pkg, jclsNameOf(this)), 0));
     if (!parent) return null;
-    const target = mkComponentName(this.$host.pkg, parent);
+    const target: JComponentName = yield mkComponentName(this.$host.pkg, parent);
     let grandparent: string | null;
     try { grandparent = parentOf(yield vcall(pm, "getActivityInfo", info, target, 0)); }
     catch (error) { if (rt.iof(error, "android/content/pm/PackageManager$NameNotFoundException")) return null; throw error; }
-    if (!grandparent) return vcall(rt.link("android/content/Intent").ctor, "makeMainActivity", "(Landroid/content/ComponentName;)Landroid/content/Intent;", target);
-    const intent: JIntent = rt.make("android/content/Intent");
-    intent.component = target.cls; intent.componentPkg = target.pkg;
-    return intent;
+    if (!grandparent) return scall("android/content/Intent", "makeMainActivity", "(Landroid/content/ComponentName;)Landroid/content/Intent;", target);
+    const intent: JIntent = yield newIntent();
+    return vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", target);
   }),
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
   "onConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JActivity, cfg: unknown) {
@@ -372,7 +379,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     return mkComponentName(this.$host.pkg, jclsNameOf(this));
   },
   "getLocalClassName()Ljava/lang/String;": function (this: JActivity) { return jclsNameOf(this); },
-  "getCallingPackage()Ljava/lang/String;": function (this: JActivity) { return this.callingActivity?.pkg ?? null; },
+  "getCallingPackage()Ljava/lang/String;": function (this: JActivity) { return this.callingActivity && vcall(this.callingActivity, "getPackageName", "()Ljava/lang/String;"); },
   "getPreferences(I)Landroid/content/SharedPreferences;": function (this: JActivity) {
     return getPrefs(this.$host.pkg, jclsNameOf(this));
   },
@@ -976,20 +983,21 @@ rt.register({
   name: "android/appwidget/AppWidgetProvider", ctor: class extends JObj {}, sup: "android/content/BroadcastReceiver",
   methods: {
     "onReceive(Landroid/content/Context;Landroid/content/Intent;)V": driven(function* (this: JObj, context: JContext, intent: JIntent): Gen {
-      const action = intent.action;
+      const action: string | null = yield vcall(intent, "getAction", "()Ljava/lang/String;");
       if (!action?.startsWith("android.appwidget.action.APPWIDGET_")) return;
       const suffix = action.slice("android.appwidget.action.APPWIDGET_".length);
-      const ids = intent.extras.map.get("appWidgetIds") as Int32Array | null ?? null;
+      const ids: Int32Array | null = yield vcall(intent, "getIntArrayExtra", "(Ljava/lang/String;)[I", "appWidgetIds");
       const manager = systemService(context, "appwidget");
       if (suffix === "UPDATE" && ids?.length) yield vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids);
       else if (suffix === "DELETED" && ids?.length) yield vcall(this, "onDeleted", "(Landroid/content/Context;[I)V", context, ids);
       else if (suffix === "ENABLED") yield vcall(this, "onEnabled", "(Landroid/content/Context;)V", context);
       else if (suffix === "DISABLED") yield vcall(this, "onDisabled", "(Landroid/content/Context;)V", context);
       else if (suffix === "OPTIONS_CHANGED") {
-        const id = Number(intent.extras.map.get("appWidgetId") ?? -1);
-        if (id !== -1) yield vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, intent.extras.map.get("appWidgetOptions") ?? null);
+        const id: number = yield vcall(intent, "getIntExtra", "(Ljava/lang/String;I)I", "appWidgetId", -1);
+        const options = yield vcall(intent, "getBundleExtra", "(Ljava/lang/String;)Landroid/os/Bundle;", "appWidgetOptions");
+        if (id !== -1) yield vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, options);
       } else if (suffix === "RESTORED") {
-        const oldIds = intent.extras.map.get("appWidgetOldIds") as Int32Array | null ?? null;
+        const oldIds: Int32Array | null = yield vcall(intent, "getIntArrayExtra", "(Ljava/lang/String;)[I", "appWidgetOldIds");
         if (oldIds && ids) yield vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids);
       }
     }),

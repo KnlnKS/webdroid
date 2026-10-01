@@ -1,50 +1,60 @@
 import { mangleMethod } from "../jvm/abi";
-import { JObj, rt, callSelf, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, callSelf, driven, type NativeSpec, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
-import { JIntent } from "./intent";
+import type { JIntent } from "./intent";
 import { onMain } from "./mainloop";
 import { reportUncaught, JBundle } from "./os";
-import type { JIntentFilter } from "./intent-filter";
-import { mkUri, uriParts } from "./net";
 
 type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
 export const broadcastTransport: { send: ((intent: JIntent, permission: string | null, ordered: boolean) => Promise<void>) | null } = { send: null };
-const receivers = new Map<JObj, { context: JContext; filter: JIntentFilter; handler: unknown }>();
+/** an IntentFilter, AOSP's own */
+type JIntentFilter = JObj;
+type Registration = { context: JContext; filter: JIntentFilter; handler: unknown };
+const receivers = new Map<JObj, Registration>();
 /** broadcasts the system keeps current (BatteryService's BATTERY_CHANGED), by action. As in
  *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */
-export const stickyBroadcasts = new Map<string, () => JIntent>();
-export function registerReceiver(context: JContext, receiver: JObj | null, filter: JIntentFilter, handler: unknown = null): JIntent | null {
+export const stickyBroadcasts = new Map<string, () => JIntent | Promise<JIntent>>();
+/** IntentFilter.match(ContentResolver, Intent, boolean, String), as the broadcast queue matches a registration */
+function* matches$(filter: JIntentFilter, intent: JIntent): Gen<boolean> {
+  return (yield vcall(filter, "match", "(Landroid/content/ContentResolver;Landroid/content/Intent;ZLjava/lang/String;)I", null, intent, 0, "ActivityManager")) >= 0;
+}
+export const registerReceiver = driven(function* registerReceiver$(context: JContext, receiver: JObj | null, filter: JIntentFilter, handler: unknown = null): Gen<JIntent | null> {
   if (receiver) receivers.set(receiver, { context, filter, handler });
   let first: JIntent | null = null;
   for (const [action, make] of stickyBroadcasts) {
-    if (filter.match(action, null, null, null, []) < 0) continue;
-    const sticky = make();
+    if (!(yield vcall(filter, "hasAction", "(Ljava/lang/String;)Z", action))) continue;
+    const sticky: JIntent = yield make();
+    if (!(yield* matches$(filter, sticky))) continue;
     first ??= sticky;
     if (receiver) void deliver(receiver, context, sticky, handler, false, { code: 0, data: null, extras: null, aborted: false }).catch(reportUncaught);
   }
   return first;
-}
+});
 export function unregisterReceiver(receiver: JObj): void { receivers.delete(receiver); }
-/** a registered receiver is found through its filter's actions, so an intent without one reaches none */
-function receiverTargets(intent: JIntent) {
-  const data = intent.dataUri === null ? null : mkUri(intent.dataUri), scheme = data && uriParts(data).scheme;
-  return [...receivers].filter(([, { context, filter }]) => (!intent.pkg || intent.pkg === context.$host?.pkg)
-    && intent.action !== null && filter.match(intent.action, intent.typeStr, scheme, data, intent.categories) >= 0);
-}
-export const hasBroadcastReceiver = (intent: JIntent): boolean => receiverTargets(intent).length > 0;
+/** a registered receiver is found through its filter's actions, so an intent without one reaches
+ *  none; the highest priority first */
+const receiverTargets = driven(function* receiverTargets$(intent: JIntent): Gen<[JObj, Registration][]> {
+  if ((yield vcall(intent, "getAction", "()Ljava/lang/String;")) === null) return [];
+  const pkg: string | null = yield vcall(intent, "getPackage", "()Ljava/lang/String;");
+  const targets: [JObj, Registration, number][] = [];
+  for (const [receiver, registration] of receivers) {
+    if (pkg && pkg !== registration.context.$host?.pkg || !(yield* matches$(registration.filter, intent))) continue;
+    targets.push([receiver, registration, yield vcall(registration.filter, "getPriority", "()I")]);
+  }
+  return targets.sort((a, b) => b[2] - a[2]).map(([receiver, registration]) => [receiver, registration]);
+});
+export const hasBroadcastReceiver = async (intent: JIntent): Promise<boolean> => (await receiverTargets(intent)).length > 0;
 export function sendBroadcast(context: JContext, intent: JIntent, permission: string | null = null, ordered = false): void {
   if (broadcastTransport.send) { void broadcastTransport.send(intent, permission, ordered).catch(reportUncaught); return; }
   void deliverBroadcast(context, intent, null, ordered).catch(reportUncaught);
 }
 export async function deliverBroadcast(context: JContext, intent: JIntent, component: string | null, ordered: boolean, result: BroadcastResult = { code: 0, data: null, extras: null, aborted: false }): Promise<BroadcastResult> {
   if (component) {
-    const receiver: JObj = await onMain(() => newObj(component.replace(/\./g, "/")));
+    const receiver: JObj = await onMain(() => newObj(component.replaceAll(".", "/")));
     await deliver(receiver, context, intent, null, ordered, result); return result;
   }
-  const targets = receiverTargets(intent);
-  targets.sort((a, b) => b[1].filter.priority - a[1].filter.priority);
-  for (const [receiver, registration] of targets) {
+  for (const [receiver, registration] of await receiverTargets(intent)) {
     if (result.aborted) break;
     await deliver(receiver, registration.context ?? context, intent, registration.handler, ordered, result);
   }

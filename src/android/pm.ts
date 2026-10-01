@@ -17,8 +17,8 @@ import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
 import { DOCS_AUTHORITY } from "./documents";
-import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
-import { systemActivity, SYSTEM_ACTIVITY } from "./intent";
+import { newArrayList } from "../jvm/natives/jcoll";
+import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
@@ -383,25 +383,6 @@ export const servicesMatching = (action: string) => [...packages.values()].flatM
   [...owner.components.service.values()].filter((n) => handlesAction(n, action)).map((node) => ({ node, owner })));
 
 // ── intent resolution, as ComputerEngine's queryIntent*Internal
-/** what resolution reads of an Intent, through its Java API */
-export interface IntentQuery {
-  action: string | null; categories: string[]; dataUri: string | null; typeStr: string | null;
-  pkg: string | null; component: string | null; componentPkg: string | null;
-}
-function* intentQuery$(intent: JObj, resolvedType?: string | null): Gen<IntentQuery> {
-  const component: JObj | null = yield vcall(intent, "getComponent", "()Landroid/content/ComponentName;");
-  const categories: JObj | null = yield vcall(intent, "getCategories", "()Ljava/util/Set;");
-  const data: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
-  return {
-    action: yield vcall(intent, "getAction", "()Ljava/lang/String;"),
-    categories: categories ? (yield toJsArray(categories)) as string[] : [],
-    dataUri: data && (yield vcall(data, "toString", "()Ljava/lang/String;")),
-    typeStr: resolvedType !== undefined ? resolvedType : yield vcall(intent, "getType", "()Ljava/lang/String;"),
-    pkg: yield vcall(intent, "getPackage", "()Ljava/lang/String;"),
-    component: component && (yield vcall(component, "getClassName", "()Ljava/lang/String;")),
-    componentPkg: component && (yield vcall(component, "getPackageName", "()Ljava/lang/String;")),
-  };
-}
 const isDefaultFilter = (filter: XmlNode) => filter.children.some((n) => n.name === "category" && attrStr(n, "name") === "android.intent.category.DEFAULT");
 /** the components answering `q`, best first; an explicit component is looked up without its filters */
 export function queryComponents(q: IntentQuery, flags: number, kind: ComponentKind): Match[] {

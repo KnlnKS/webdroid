@@ -2,10 +2,10 @@
 // relaunches for configuration changes, finishing, and the task's place behind the home screen.
 
 import { rt, type Gen, driven } from "../jvm/runtime";
-import { vcall, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { vcall, scall, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode, manifestTaskAffinity } from "../android/pm";
-import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
+import { type JIntent, deliverActivityResult, activityTransport, mkComponentName, componentParts } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle } from "../android/app";
@@ -53,15 +53,13 @@ export function dropStartingWindow(): void { startWin = null; }
 /** what the launcher sends when the app's icon is tapped */
 export function launchMain(): Promise<void> {
   if (!booted?.mainActivityCls) return Promise.resolve();
-  const intent = new JIntent();
-  intent.action = "android.intent.action.MAIN";
-  intent.categories.add("android.intent.category.LAUNCHER");
-  intent.component = booted.mainActivityCls.replaceAll("/", ".");
-  intent.componentPkg = booted.host.pkg;
-  intent.flags = 0x10000000;
   const cls = booted.mainActivityCls, pkg = booted.host.pkg;
   // PermissionPolicyService prompts an older app for its notification permission over a launcher task
   const run = () => callOn(mainThread, async () => {
+    // Intent.makeMainActivity with FLAG_ACTIVITY_NEW_TASK, as the launcher starts an app
+    const intent: JIntent = await scall("android/content/Intent", "makeMainActivity", "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+      await mkComponentName(pkg, cls.replaceAll("/", ".")));
+    await vcall(intent, "addFlags", "(I)Landroid/content/Intent;", FLAG_ACTIVITY_NEW_TASK);
     const prompt = notificationPromptOnLaunch(pkg);
     await launchActivity(cls, intent);
     await prompt();
@@ -82,7 +80,7 @@ const LAUNCH_SINGLE_TOP = 1, LAUNCH_SINGLE_TASK = 2;
  *  existing instance through onNewIntent. True when no new instance should be created. */
 const reuseActivity = driven(function* reuseActivity(component: string, intent: JIntent | null, options?: ActivityLaunch): Gen<boolean> {
   if (!booted || options?.remoteId || options?.result) return false;
-  const stack = booted.stack, flags = intent?.flags ?? 0;
+  const stack = booted.stack, flags: number = intent ? yield vcall(intent, "getFlags", "()I") : 0;
   // an <activity-alias> launches in its target's launch mode, as the package parser copies it
   const cls = aliasTargets.get(component) ?? component, mode = manifestLaunchMode(cls);
   const top = stack.at(-1);
@@ -137,13 +135,14 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
     return;
   }
   act.$host = host;
-  act.callingActivity = options?.caller ? mkComponentName(options.caller.pkg, options.caller.cls) : null;
+  act.callingActivity = options?.caller ? yield mkComponentName(options.caller.pkg, options.caller.cls) : null;
   act.resultTo = options?.result ?? null;
   act.remoteId = options?.remoteId ?? 0;
   act.activityId = options?.activityId ?? 0; act.taskId = options?.taskId ?? 0;
   if (!act.activityId) {
     const previous = booted.stack.at(-1);
-    activityTransport.attach?.(act, options?.taskId ?? (intent && intent.flags & 0x10000000 ? 0 : previous?.taskId ?? 0), manifestTaskAffinity(cls));
+    const newTask = intent && (yield vcall(intent, "getFlags", "()I")) & FLAG_ACTIVITY_NEW_TASK;
+    activityTransport.attach?.(act, options?.taskId ?? (newTask ? 0 : previous?.taskId ?? 0), manifestTaskAffinity(cls));
   }
   act.requestedOrientation = requestedOrientation;
   act.lastNonConfig = relaunch?.nonConfig ?? null;
@@ -218,7 +217,7 @@ export function recreateActivity(act: JActivity): void {
       } catch (e) { reportUncaught(e); }
       await detachContextOverlays(act);
       booted.stack.splice(i, 1);
-      const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
+      const options = { caller: await componentParts(act.callingActivity), result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
       act.remoteId = 0;
       await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation }, options);
       requestLayoutAll();

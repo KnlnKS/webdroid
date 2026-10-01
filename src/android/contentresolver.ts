@@ -369,21 +369,10 @@ const resolverMethods: NativeSpec["methods"] = {
       return flags & 3 ? [{ ...grant, flags }] : [];
     }));
   },
-  "getPersistedUriPermissions()Ljava/util/List;": () =>
-    newArrayList(uriGrants.all().map((grant) => Object.assign(new JUriPermission(), { uriStr: grant.uri, flags: grant.flags, time: grant.time }))),
+  "getPersistedUriPermissions()Ljava/util/List;": async () => newArrayList(await Promise.all(uriGrants.all().map((grant) =>
+    newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", mkUri(grant.uri), grant.flags, BigInt(grant.time))))),
 };
 rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
-class JUriPermission extends JObj { uriStr = ""; flags = 0; time = 0; }
-rt.register({
-  name: "android/content/UriPermission", ctor: JUriPermission,
-  methods: {
-    "getUri()Landroid/net/Uri;": function (this: JUriPermission) { return mkUri(this.uriStr); },
-    "isReadPermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 1)); },
-    "isWritePermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 2)); },
-    "getPersistedTime()J": function (this: JUriPermission) { return BigInt(this.time); },
-  },
-});
-
 // android.provider.Settings — a read-only device with everything at its documented default.
 // Reads go through a ContentResolver on a real device; nothing here is writable, so every
 // getter simply hands back the caller's own default. AOSP splits the same table three ways.

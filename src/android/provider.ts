@@ -7,7 +7,10 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { isDocumentsProvider, field } from "./pm";
-import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, type JIntent } from "./intent";
+import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
+
+const S = "Ljava/lang/String;";
+const typeOf = (intent: JIntent): Promise<string | null> => vcall(intent, "getType", `()${S}`);
 import { csText } from "../jvm/natives/jchars";
 import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
@@ -23,46 +26,48 @@ const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE",
   async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri, 3 | 0x40 | 0x80) : null; });
 registerSystemActivity("android.intent.action.PICK", async (intent) => {
-  const mime = intent.typeStr;
-  if (!mime || !/^(image|video|audio)\//.test(mime)) throw rt.unimplemented("PICK for " + (mime ?? intent.dataUri));
+  const mime = await typeOf(intent);
+  if (!mime || !/^(image|video|audio)\//.test(mime)) throw rt.unimplemented("PICK for " + (mime ?? await vcall(intent, "getDataString", `()${S}`)));
   const uri = await pickDocument({ mime });
   return uri ? mkResultIntent(uri, 1) : null;
 });
 // MediaStore.ACTION_PICK_IMAGES, the photo picker: one item as the data, or up to
 // EXTRA_PICK_IMAGES_MAX as ClipData, readable and persistable
 registerSystemActivity("android.provider.action.PICK_IMAGES", async (intent) => {
-  const mime = intent.typeStr, multiple = Number(intent.extras.map.get("android.provider.extra.PICK_IMAGES_MAX") ?? 1) > 1;
+  const mime = await typeOf(intent), multiple = await vcall(intent, "getIntExtra", `(${S}I)I`, "android.provider.extra.PICK_IMAGES_MAX", 1) > 1;
   if (mime && !/^(image|video)\//.test(mime)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid picker MIME type " + mime);
   const uris = await pickDocuments({ mime, multiple });
   if (!uris.length) return null;
-  const result = mkResultIntent(multiple ? null : uris[0], 1 | 0x40);
+  const result = await mkResultIntent(multiple ? null : uris[0], 1 | 0x40);
   if (multiple) {
     const [first, ...rest] = uris.map(mkUri);
     const clip = await scall("android/content/ClipData", "newRawUri", "(Ljava/lang/CharSequence;Landroid/net/Uri;)Landroid/content/ClipData;", null, first);
     for (const uri of rest) await vcall(clip, "addItem", "(Landroid/content/ClipData$Item;)V", await newObj("android/content/ClipData$Item", "(Landroid/net/Uri;)V", uri));
-    result.clipData = clip;
+    await vcall(result, "setClipData", "(Landroid/content/ClipData;)V", clip);
   }
   return result;
 });
 for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.action.GET_CONTENT",
   "android.intent.action.CREATE_DOCUMENT"] as const) {
   registerSystemActivity(action, async (intent) => {
+    const title: string | null = await vcall(intent, "getStringExtra", `(${S})${S}`, "android.intent.extra.TITLE"), mime = await typeOf(intent);
     const uri = await pickDocument({
-      save: action.endsWith("CREATE_DOCUMENT") ? String(intent.extras.map.get("android.intent.extra.TITLE") ?? "file") : undefined,
-      mime: intent.typeStr && intent.typeStr !== "*/*" ? intent.typeStr : null,
+      save: action.endsWith("CREATE_DOCUMENT") ? title ?? "file" : undefined,
+      mime: mime && mime !== "*/*" ? mime : null,
     });
     return uri ? mkResultIntent(uri, action === "android.intent.action.GET_CONTENT" ? 1 : 3 | 0x40) : null;
   });
 }
-registerSystemActivity("android.intent.action.VIEW", async (intent) => (await import("../shell/share")).openInBrowser(intent.dataUri!), ["http", "https", "market"]);
+registerSystemActivity("android.intent.action.VIEW", async (intent) => (await import("../shell/share")).openInBrowser((await vcall(intent, "getDataString", `()${S}`))!), ["http", "https", "market"]);
 for (const action of ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"])
   registerSystemActivity(action, async (intent) => (await import("../shell/share")).shareIntent(intent));
 registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
-  const target = intent.extras.map.get("android.intent.extra.INTENT") as JIntent | null;
+  const target: JIntent | null = await vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.INTENT");
   if (!target) throw rt.mkThrowable("java/lang/NullPointerException", "Chooser target");
-  if (target.action === "android.intent.action.SEND" || target.action === "android.intent.action.SEND_MULTIPLE")
+  const q = await intentQuery(target);
+  if (q.action === "android.intent.action.SEND" || q.action === "android.intent.action.SEND_MULTIPLE")
     return (await import("../shell/share")).shareIntent(intent);
-  const handler = systemActivity(target);
+  const handler = systemActivity(q);
   if (handler) return handler(target);
   // AOSP's chooser lists the activities that handle the target; with none it only says so, and
   // the user dismissing it is RESULT_CANCELED
@@ -70,15 +75,15 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   const matches = await toJsArray(await vcall(pm, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", target, 0x10000));
   if (!matches.length) return null;
   const labels = await Promise.all(matches.map(async (m) => csText(await vcall(m, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm))));
-  const title = intent.extras.map.get("android.intent.extra.TITLE");
+  const title = await vcall(intent, "getCharSequenceExtra", `(${S})Ljava/lang/CharSequence;`, "android.intent.extra.TITLE");
   const choice = await (await import("../shell/share")).chooseActivity(title == null ? frameworkString("chooseActivity") ?? "" : await csText(title), labels);
   if (choice === null) return null;
   const chosen: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", target);
   const activity = field<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
-  chosen.component = field<string>(activity, "android/content/pm/PackageItemInfo", "name");
-  chosen.componentPkg = field<string>(activity, "android/content/pm/PackageItemInfo", "packageName");
+  await vcall(chosen, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(
+    field<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), field<string>(activity, "android/content/pm/PackageItemInfo", "name")));
   await launchIntent(appHost!, chosen);
-  return rt.make("android/content/Intent");
+  return newIntent();
 });
 
 const enc = encodeURIComponent;
@@ -200,18 +205,20 @@ for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "v
 const MEDIA_REQUEST = "webdroid.provider.action.MEDIA_REQUEST";
 let mediaRequests = 0;
 registerSystemActivity(MEDIA_REQUEST, async (intent) => {
-  const op = intent.extras.map.get("op"), uris = await toJsArray(intent.extras.map.get("uris")) as JUri[];
+  const op: string | null = await vcall(intent, "getStringExtra", `(${S})${S}`, "op");
+  const uris = await toJsArray(await vcall(intent, "getParcelableArrayListExtra", `(${S})Ljava/util/ArrayList;`, "uris")) as JUri[];
   if (op === "delete") for (const uri of uris) await mediaDelete(uri, null, null);
-  else if (op === "trash" || op === "favorite") await mediaFlag(uris, op === "trash" ? "is_trashed" : "is_favorite", !!intent.extras.map.get("value"));
-  return rt.make("android/content/Intent");
+  else if (op === "trash" || op === "favorite") await mediaFlag(uris, op === "trash" ? "is_trashed" : "is_favorite", !!await vcall(intent, "getIntExtra", `(${S}I)I`, "value", 0));
+  return newIntent();
 });
 const mediaRequest = (op: string) => driven(function* (resolver: unknown, uris: unknown, value: number = 0): Gen {
   if (!resolver || !uris) rt.npe();
   const items = (yield toJsArray(uris)) as JUri[];
   if (items.some((uri) => !isMediaUri(uri) || !/\/\d+$/.test(uri.uri))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "All requested items must be referenced by specific ID");
-  const intent: JIntent = rt.make("android/content/Intent");
-  intent.action = MEDIA_REQUEST; intent.identifier = String(++mediaRequests);
-  intent.extras.map.set("uris", newArrayList(items)); intent.extras.map.set("op", op); intent.extras.map.set("value", value);
+  const intent: JIntent = yield newIntent(MEDIA_REQUEST);
+  yield vcall(intent, "setIdentifier", `(${S})Landroid/content/Intent;`, String(++mediaRequests));
+  yield vcall(intent, "putParcelableArrayListExtra", `(${S}Ljava/util/ArrayList;)Landroid/content/Intent;`, "uris", yield newArrayList(items));
+  yield putExtra(intent, "op", op, S); yield putExtra(intent, "value", value, "I");
   return vcall(rt.link("android/app/PendingIntent").ctor, "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
     appHost?.application, 0, intent, 0x4000000); // FLAG_IMMUTABLE
 });

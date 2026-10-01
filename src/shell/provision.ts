@@ -6,9 +6,9 @@ import { attr, attrStr, TV } from "../android/axml";
 import { resString } from "../android/res";
 import { vfs } from "./vfs";
 import { packages, signaturePermissions, componentState } from "../android/packages";
-import { JIntent } from "../android/intent";
+import { mkComponentName, newIntent, putExtra } from "../android/intent";
+import { vcall } from "../jvm/natives/jlang";
 import { serviceTransport } from "../android/runningservices";
-import { boxBool } from "../jvm/natives/jbox";
 import { hexBytes } from "../jvm/abi";
 
 let ready: Promise<void> | null = null;
@@ -47,10 +47,11 @@ export async function provisionServices(options: { attestationEnabled: boolean }
     if (!spec.provision) continue;
     const owner = packages.get(spec.pkg)!, component = owner.components.service.get(spec.provision.component);
     if (!component) throw new Error("Provisioning service unavailable: " + spec.pkg);
-    const intent = new JIntent(); intent.component = spec.provision.component; intent.componentPkg = spec.pkg;
+    const intent = await newIntent();
+    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(spec.pkg, spec.provision.component));
     const extras = { ...spec.provision.extras,
       ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
-    for (const [key, value] of Object.entries(extras)) intent.extras.map.set(key, boxBool(value));
+    for (const [key, value] of Object.entries(extras)) await putExtra(intent, key, +value, "Z");
     await serviceTransport.start(owner, owner.process(component), intent, false);
   }
 }

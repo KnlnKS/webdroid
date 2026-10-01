@@ -1,5 +1,5 @@
-import { JObj, rt } from "../jvm/runtime";
-import { type JComponentName, type JIntent, mkComponentName, filterKey } from "./intent";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { type JComponentName, type JIntent, componentParts, intentQuery, intentQuery$, mkComponentName, newIntent } from "./intent";
 import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
 import { newObj, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
@@ -10,8 +10,11 @@ import { resolveService, exported, componentPermission, componentProcess, checkP
 import { binderTransport, exportBinder } from "./binder";
 import { startForegroundNotification, stopForegroundNotification } from "./notification";
 
+type Binding = { intent: JIntent; binder: unknown; clients: Set<string>; rebind: boolean };
 class JRunningServiceInfo extends JObj {
   service: JComponentName | null = null;
+  /** the service's dotted class name */
+  cls = "";
   pid = PROCESS_PID; uid = PROCESS_UID; process = ""; foreground = 0; started = 0; flags = 0;
   activeSince = 0n; lastActivityTime = 0n; restarting = 0n;
   activeCount = 0; clientCount = 0; crashCount = 0;
@@ -19,7 +22,8 @@ class JRunningServiceInfo extends JObj {
   startId = 0;
   /** the id its foreground notification posted under, until removed or detached */
   foregroundId = 0;
-  bindings = new Map<string, { intent: JIntent; binder: unknown; clients: Set<string>; rebind: boolean }>();
+  /** IntentBindRecords: one per intent distinct under filterEquals */
+  bindings: Binding[] = [];
 }
 export const serviceTransport: {
   bind: (owner: PackageRecord, process: string, intent: JIntent, key: string) => Promise<unknown>;
@@ -40,13 +44,14 @@ rt.register({
 
 /** started-and-not-stopped services, keyed by dotted class name (matches Class.getName()) */
 export const runningServices = new Map<string, JRunningServiceInfo>();
-function serviceRecord(ctx: JContext, cls: string): JRunningServiceInfo {
+async function serviceRecord(ctx: JContext, cls: string): Promise<JRunningServiceInfo> {
   let si = runningServices.get(cls);
   if (!si) {
     const pkg = ctx.$host?.pkg ?? appHost?.pkg ?? "";
     si = rt.make("android/app/ActivityManager$RunningServiceInfo") as JRunningServiceInfo;
-    si.service = mkComponentName(pkg, cls); si.process = PROCESS_NAME || pkg;
+    si.cls = cls; si.process = PROCESS_NAME || pkg;
     si.activeSince = BigInt(Date.now()); runningServices.set(cls, si);
+    si.service = await mkComponentName(pkg, cls);
   }
   return si;
 }
@@ -54,8 +59,8 @@ function serviceRecord(ctx: JContext, cls: string): JRunningServiceInfo {
 // thread's identity, so each call names the main thread
 async function createService(service: JRunningServiceInfo, ctx: JContext): Promise<JContextWrapper> {
   if (!service.instance) {
-    const instance: unknown = await callOn(mainThread, () => newObj(service.service!.cls.replace(/\./g, "/")));
-    if (!(instance instanceof JContextWrapper) || !rt.iof(instance, "android/app/Service")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a service: " + service.service!.cls);
+    const instance: unknown = await callOn(mainThread, () => newObj(service.cls.replaceAll(".", "/")));
+    if (!(instance instanceof JContextWrapper) || !rt.iof(instance, "android/app/Service")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a service: " + service.cls);
     service.instance = instance;
     await vcallOn(mainThread, instance, "attachBaseContext", "(Landroid/content/Context;)V", ctx.$host?.application ?? ctx);
     await vcallOn(mainThread, instance, "onCreate", "()V");
@@ -71,17 +76,17 @@ async function destroyService({ instance, foregroundId }: JRunningServiceInfo): 
   await vcallOn(mainThread, instance, "onDestroy", "()V");
   void onMain(() => instance);
 }
-export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): JComponentName | null {
-  const cls = intent?.component;
-  if (!cls) return null;
-  const owner = packages.get(intent.componentPkg ?? intent.pkg ?? ctx.$host?.pkg ?? "");
+export const svcStart = driven(function* svcStart$(ctx: JContext, intent: JIntent | null, _fg: boolean): Gen<JComponentName | null> {
+  const q = intent && (yield* intentQuery$(intent)), cls = q?.component;
+  if (!intent || !q || !cls) return null;
+  const owner = packages.get(q.componentPkg ?? q.pkg ?? ctx.$host?.pkg ?? "");
   const node = owner?.components.service.get(qualifyComponent(cls, owner.pkg));
   if (owner && node && (owner.pkg !== ctx.$host?.pkg || owner.process(node) !== (PROCESS_NAME || ctx.$host?.pkg))) {
     void serviceTransport.start(owner, owner.process(node), intent, _fg)
       .then(() => activatePending(owner.pkg + "/" + qualifyComponent(cls, owner.pkg))).catch(reportUncaught);
-    return mkComponentName(owner.pkg, qualifyComponent(cls, owner.pkg));
+    return yield mkComponentName(owner.pkg, qualifyComponent(cls, owner.pkg));
   }
-  const si = serviceRecord(ctx, cls);
+  const si: JRunningServiceInfo = yield serviceRecord(ctx, cls);
   si.started = 1; si.flags |= 1;
   si.lastActivityTime = BigInt(Date.now());
   const service = si, startId = ++si.startId;
@@ -93,7 +98,7 @@ export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): J
   });
   activatePending((owner?.pkg ?? ctx.$host?.pkg ?? "") + "/" + qualifyComponent(cls, owner?.pkg ?? ctx.$host?.pkg ?? ""));
   return si.service;
-}
+});
 export function svcStop(cls: string | null | undefined, startId = -1): number {
   const service = cls ? runningServices.get(cls) : null;
   if (!service || (startId !== -1 && startId !== service.startId)) return 0;
@@ -103,19 +108,21 @@ export function svcStop(cls: string | null | undefined, startId = -1): number {
   void onMain(() => destroyService(service)).catch(reportUncaught);
   return 1;
 }
-const localConnections = new Map<string, { service: JRunningServiceInfo; filter: string }>();
+const localConnections = new Map<string, { service: JRunningServiceInfo; binding: Binding }>();
 export function bindLocalService(ctx: JContext, intent: JIntent, key: string): Promise<unknown> {
   const run = async () => {
-    const service = serviceRecord(ctx, intent.component!), instance = await createService(service, ctx), filter = filterKey(intent);
-    let binding = service.bindings.get(filter);
+    const { component } = await intentQuery(intent);
+    const service = await serviceRecord(ctx, component!), instance = await createService(service, ctx);
+    let binding: Binding | undefined;
+    for (const b of service.bindings) if (await vcall(b.intent, "filterEquals", "(Landroid/content/Intent;)Z", intent)) { binding = b; break; }
     if (!binding) {
       binding = { intent, binder: await vcallOn(mainThread, instance, "onBind", "(Landroid/content/Intent;)Landroid/os/IBinder;", intent), clients: new Set(), rebind: false };
-      service.bindings.set(filter, binding);
+      service.bindings.push(binding);
     } else if (!binding.clients.size && binding.rebind) {
       await vcallOn(mainThread, instance, "onRebind", "(Landroid/content/Intent;)V", intent); binding.rebind = false;
     }
     if (!binding.clients.has(key)) { binding.clients.add(key); service.clientCount++; }
-    localConnections.set(key, { service, filter });
+    localConnections.set(key, { service, binding });
     return binding.binder;
   };
   return inMainJob() ? run() : onMain(run);
@@ -125,11 +132,11 @@ export function unbindLocalService(key: string): Promise<void> {
     const connection = localConnections.get(key);
     if (!connection) return;
     localConnections.delete(key);
-    const { service, filter } = connection, binding = service.bindings.get(filter)!;
+    const { service, binding } = connection;
     if (binding.clients.delete(key)) service.clientCount--;
     if (!binding.clients.size) binding.rebind = !!await vcallOn(mainThread, service.instance, "onUnbind", "(Landroid/content/Intent;)Z", binding.intent);
     if (!service.started && !service.clientCount) {
-      runningServices.delete(service.service!.cls);
+      runningServices.delete(service.cls);
       await destroyService(service);
     }
   };
@@ -169,12 +176,13 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
   const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || processName !== (PROCESS_NAME || ctx.$host.pkg);
   const info = { name: resolved.name, processName };
   const bound: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
-  bound.component = info.name; bound.componentPkg = owner.pkg;
+  const component = await mkComponentName(owner.pkg, info.name);
+  await vcall(bound, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", component);
   const connect = () => {
     const ready = remote ? serviceTransport.bind(owner, info.processName, bound, key) : onMain(() => bindLocalService(ctx, bound, key));
     void ready.then(binder => {
       if (connections.get(connection) !== record) return;
-      const component = mkComponentName(owner.pkg, info.name), handle = remote ? exportBinder(binder) : null;
+      const handle = remote ? exportBinder(binder) : null;
       if (handle) record.cancelDeath = binderTransport.watch(handle.pid, () => {
         record.cancelDeath = null;
         void deliver(async () => {
@@ -190,7 +198,7 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
       });
     }).catch(error => {
       if (connections.get(connection) !== record) return;
-      void deliver(() => vcall(connection, "onBindingDied", "(Landroid/content/ComponentName;)V", mkComponentName(owner.pkg, info.name))).catch(reportUncaught);
+      void deliver(() => vcall(connection, "onBindingDied", "(Landroid/content/ComponentName;)V", component)).catch(reportUncaught);
       reportUncaught(error);
     });
   };
@@ -235,11 +243,12 @@ export async function svcFg(svc: unknown, fg: boolean, id = 0, notification: JOb
 const STOP_FOREGROUND_REMOVE = 1, STOP_FOREGROUND_DETACH = 2;
 /** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
 export async function bindAsSystem(component: JComponentName, key: string, action: string | null = null): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
-  const owner = packages.get(component.pkg), cls = qualifyComponent(component.cls, component.pkg);
+  const parts = (await componentParts(component))!;
+  const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
   const node = owner?.components.service.get(cls), ctx = appHost?.application;
-  if (!owner || !node || !ctx) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + component.pkg + "/" + cls + "}");
-  const intent: JIntent = rt.make("android/content/Intent");
-  intent.component = cls; intent.componentPkg = owner.pkg; intent.action = action;
+  if (!owner || !node || !ctx) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
+  const intent = await newIntent(action);
+  await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(owner.pkg, cls));
   const process = owner.process(node);
   if (owner.pkg === ctx.$host.pkg && process === (PROCESS_NAME || owner.pkg)) return { binder: await bindLocalService(ctx, intent, key) as JObj, unbind: () => unbindLocalService(key) };
   return { binder: await serviceTransport.bind(owner, process, intent, key) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };

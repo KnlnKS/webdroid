@@ -3,15 +3,16 @@
 // ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
-import { JObj, rt, noops, stubs, declaredField, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, noops, stubs, declaredField, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost, jclsNameOf } from "./apphost";
-import { type JComponentName, type JIntent, mkComponentName, registerSystemActivity } from "./intent";
+import { type JComponentName, mkComponentName, newIntent, putExtra, registerSystemActivity } from "./intent";
+import { intentSenderMethods } from "./pendingintent";
 import type { JActivity } from "./app";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught, bundleBox } from "./os";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
 import { GL_ES_VERSION, protectionLevel } from "./pm";
 import { deviceConfiguration } from "./resnative";
@@ -84,23 +85,24 @@ const activityManager: NativeSpec["methods"] = {
   "isUserAMonkey()Z": () => 0,
   // the render thread's tid, for scheduling: everything here shares the page's one thread
   "setRenderThread(I)V": () => {},
+  ...intentSenderMethods,
 };
 rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub", methods: { ...activityManager, ...activityManagerMethods } });
 
 // IAppTask: one of the caller's tasks, the activities the shell stacks under a task id
 class JAppTask extends JObj { taskId = 0; }
 rt.register({ name: "webdroid/AppTask", ctor: JAppTask, sup: "android/app/IAppTask$Stub", methods: {
-  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": function (this: JAppTask) {
+  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": driven(function* (this: JAppTask): Gen {
     const activities = (appHost?.activities() ?? []).filter((a) => a.taskId === this.taskId);
     const info = new JRecentTaskInfo(), component = (a: JActivity | undefined) => a ? mkComponentName(appHost?.pkg ?? "", jclsNameOf(a)) : null;
     info.id = info.persistentId = info.taskId = this.taskId;
     info.numActivities = activities.length;
     info.isRunning = activities.length ? 1 : 0;
     info.baseIntent = activities[0]?.intent ?? null;
-    info.baseActivity = component(activities[0]);
-    info.topActivity = component(activities.at(-1));
+    info.baseActivity = yield component(activities[0]);
+    info.topActivity = yield component(activities.at(-1));
     return info;
-  },
+  }),
   "finishAndRemoveTask()V": function (this: JAppTask) { appHost?.finishTask(this.taskId); },
   // one task is shown at a time, and there are no recents to exclude it from
   "moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V": () => {},
@@ -318,11 +320,12 @@ rt.register({ name: "webdroid/ThermalService", ctor: class extends JObj {}, sup:
 // permission to ask, which reads as the user declining.
 const DOZE_EXEMPTION = "__system_power";
 registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
-  const pkg = intent.dataUri?.startsWith("package:") ? intent.dataUri.slice(8) : null;
+  const data: JObj | null = await vcall(intent, "getData", "()Landroid/net/Uri;");
+  const pkg = data && await vcall(data, "getScheme", "()Ljava/lang/String;") === "package" ? await vcall(data, "getSchemeSpecificPart", "()Ljava/lang/String;") as string : null;
   if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
   const prefs = getPrefs(pkg, DOZE_EXEMPTION);
   prefs.map.set("exempt", 1); prefs.persist();
-  return rt.make("android/content/Intent");
+  return newIntent();
 });
 const exempt = (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1);
 rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}, sup: "android/os/IDeviceIdleController$Stub", methods: {
@@ -439,16 +442,15 @@ const pluggedIn = () => device.battery.status === 2 || device.battery.status ===
 /** BatteryService's low level: unplugged at or under config_lowBatteryWarningLevel (20) */
 export const batteryLow = (): boolean => !pluggedIn() && device.battery.level <= 20;
 // the extras BatteryService puts on BATTERY_CHANGED that the battery model determines
-stickyBroadcasts.set("android.intent.action.BATTERY_CHANGED", () => {
-  const intent: JIntent = rt.make("android/content/Intent");
-  intent.action = "android.intent.action.BATTERY_CHANGED";
-  intent.flags = 0x60000010;   // as recorded on the reference AVD: REGISTERED_ONLY, REPLACE_PENDING, EXCLUDE_STOPPED_PACKAGES
-  for (const [key, value] of Object.entries({
-    status: device.battery.status, health: 2, present: bundleBox(1, "Z"), level: device.battery.level, scale: 100,
-    plugged: pluggedIn() ? 1 : 0, battery_low: bundleBox(+batteryLow(), "Z"),
-  })) intent.extras.map.set(key, value);
+stickyBroadcasts.set("android.intent.action.BATTERY_CHANGED", driven(function* (): Gen<JObj> {
+  const intent: JObj = yield newIntent("android.intent.action.BATTERY_CHANGED");
+  // as recorded on the reference AVD: REGISTERED_ONLY, REPLACE_PENDING, EXCLUDE_STOPPED_PACKAGES
+  yield vcall(intent, "setFlags", "(I)Landroid/content/Intent;", 0x60000010);
+  for (const [key, value, desc] of [["status", device.battery.status, "I"], ["health", 2, "I"], ["present", 1, "Z"],
+    ["level", device.battery.level, "I"], ["scale", 100, "I"], ["plugged", pluggedIn() ? 1 : 0, "I"], ["battery_low", +batteryLow(), "Z"]] as const)
+    yield putExtra(intent, key, value, desc);
   return intent;
-});
+}));
 rt.register({ name: "webdroid/BatteryStatsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IBatteryStats$Stub", methods: {
   "isCharging()Z": () => +pluggedIn(),
   "computeChargeTimeRemaining()J": () => -1n,

@@ -9,7 +9,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
 import { sendBroadcast } from "./broadcast";
-import { sendIntent, type JIntentSender } from "./pendingintent";
+import { sendIntent } from "./pendingintent";
 import { appHost } from "./apphost";
 import { reportUncaught } from "./os";
 import { newStub } from "./binder";
@@ -38,7 +38,7 @@ function finish(s: Session, success: boolean): void {
 }
 
 /** PackageInstallerSession.commit: install the staged APK, then report to the status receiver */
-function* commit$(s: Session, sender: JIntentSender): Gen<void> {
+function* commit$(s: Session, sender: JObj): Gen<void> {
   const result: JIntent = yield construct("android/content/Intent", "()V");
   const extra = (key: string, value: unknown, desc: string) => vcall(result, "putExtra", `(${S}${desc})Landroid/content/Intent;`, key, value);
   yield extra("android.content.pm.extra.SESSION_ID", s.id, "I");
@@ -88,7 +88,7 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
   }),
   "getNames()[Ljava/lang/String;": function (this: JSessionService) { return jarray(own(this).names.slice(), S); },
   "seal()V": function (this: JSessionService) { own(this).sealed = true; },
-  "commit(Landroid/content/IntentSender;Z)V": function (this: JSessionService, sender: JIntentSender | null) {
+  "commit(Landroid/content/IntentSender;Z)V": function (this: JSessionService, sender: JObj | null) {
     const s = unsealed(this);
     if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
     s.sealed = true;

@@ -248,37 +248,34 @@ export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
-export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
+function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
   if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
   return unboxAs(value, descriptor as BoxDesc, fallback);
 }
 /** What put<Type> stores: I and J stay bare (their JS type names them); the other primitives
  *  keep their declared width in a box, as a Parcel round trip will too. */
-export function bundleBox(value: unknown, descriptor: string): unknown {
+function bundleBox(value: unknown, descriptor: string): unknown {
   return typeof value === "number" && descriptor !== "I" && descriptor.length === 1 ? box(descriptor as BoxDesc, value) : value;
 }
-export function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallback: unknown): unknown {
+function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallback: unknown): unknown {
   const v = b.map.get(k);
   return descriptor.length === 1 ? bundlePrimitive(v, descriptor, fallback) : v ?? fallback;
 }
-/** The typed values an Intent's extras carry, by accessor stem: Bundle get/put<stem>, and Intent's
- *  get<stem>Extra with putExtra (put<stem>Extra for the ArrayLists). */
-export const INTENT_TYPES: readonly (readonly [string, string])[] = [
+/** The typed values a Bundle carries, by accessor stem: get/put<stem> */
+const BUNDLE_TYPES = [
   ...["Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"].flatMap((t, i) => [[t, "ZBCSIJFD"[i]], [t + "Array", "[" + "ZBCSIJFD"[i]]] as const),
   ["String", "Ljava/lang/String;"], ["CharSequence", "Ljava/lang/CharSequence;"], ["Parcelable", "Landroid/os/Parcelable;"],
   ["Serializable", "Ljava/io/Serializable;"], ["Bundle", "Landroid/os/Bundle;"], ["IBinder", "Landroid/os/IBinder;"],
   ["StringArray", "[Ljava/lang/String;"], ["CharSequenceArray", "[Ljava/lang/CharSequence;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
   ...["Integer", "String", "CharSequence", "Parcelable"].map((t) => [t + "ArrayList", "Ljava/util/ArrayList;"] as const),
-];
-const BUNDLE_TYPES = [...INTENT_TYPES, ["Binder", "Landroid/os/IBinder;"], ["PersistableBundle", "Landroid/os/PersistableBundle;"],
+  ["Binder", "Landroid/os/IBinder;"], ["PersistableBundle", "Landroid/os/PersistableBundle;"],
   ["Size", "Landroid/util/Size;"], ["SizeF", "Landroid/util/SizeF;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
-/** API 33's class-checked getters, [stem, return]: Intent's get<stem>Extra, and Bundle's get<stem>. */
-export const INTENT_TYPED = [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/io/Serializable;"],
-  ["ParcelableArray", "[Ljava/lang/Object;"], ["ParcelableArrayList", "Ljava/util/ArrayList;"]] as const;
-const BUNDLE_TYPED = [...INTENT_TYPED, ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
+/** API 33's class-checked getters, [stem, return] */
+const BUNDLE_TYPED = [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/io/Serializable;"],
+  ["ParcelableArray", "[Ljava/lang/Object;"], ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
 /** A class-checked getter's value. The class narrows a single value, which a mismatch reads as
  *  null; arrays and lists hold what was put. */
-export function bundleTyped(b: JBaseBundle, k: string, cls: unknown, ret: string): unknown {
+function bundleTyped(b: JBaseBundle, k: string, cls: unknown, ret: string): unknown {
   const v = boxObject(b.map.get(k) ?? null), single = ret === "Ljava/lang/Object;" || ret === "Ljava/io/Serializable;";
   return single && v !== null && !vcall(cls, "isInstance", "(Ljava/lang/Object;)Z", v) ? null : v;
 }
@@ -300,7 +297,10 @@ function copyBundle(this: JBaseBundle, b: JBaseBundle | null) {
   if (b.parcelled) this.parcelled = b.parcelled;
   else this.map = new Map(b.map);
 }
-function putAll(this: JBaseBundle, b: JBaseBundle) { for (const [k, v] of b.map) this.map.set(k, v); }
+const putAll = driven(function* (this: JBaseBundle, b: JBaseBundle): Gen {
+  yield unparcel(b);
+  for (const [k, v] of b.map) this.map.set(k, v);
+});
 /** BaseBundle's deep copy: nested bundles and arrays are copied too, other values are shared; a
  *  parcelled bundle copies its wire form */
 function deepCopy(this: JBaseBundle): JBaseBundle {

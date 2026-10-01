@@ -4,22 +4,39 @@ export type PendingOperation = {
   pkg: string; process: string; uid: number; kind: "activity" | "broadcast" | "service" | "foreground-service";
   code: number; flags: number; intent: IntentData; intents?: IntentData[];
 };
+/** what the registry asks of the intents it holds: AOSP's Intent.filterEquals, and replaceExtras
+ *  for FLAG_UPDATE_CURRENT, run where a JVM can read them */
+export type IntentCodec = {
+  filterEquals: (a: IntentData, b: IntentData) => Promise<boolean>;
+  replaceExtras: (target: IntentData, source: IntentData) => Promise<IntentData>;
+};
 type Record = { key: string; operation: PendingOperation; cancellations: Set<() => void> };
+/** PendingIntentController's records, keyed as PendingIntentRecord.Key: creator, kind, request code,
+ *  flags and an intent equal under filterEquals */
 export class PendingIntents {
   private records = new Map<number, Record>();
-  private keys = new Map<string, number>();
   private nextId = 1;
-  constructor(private dispatch: (operation: PendingOperation, fill: IntentData | null, alarmCount: number) => Promise<void>) {}
-  create(operation: PendingOperation): number | null {
+  constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: IntentData | null, alarmCount: number) => Promise<void>) {}
+  private async find(key: string, intent: IntentData): Promise<number | undefined> {
+    for (const [id, record] of this.records) if (record.key === key && await this.codec.filterEquals(record.operation.intent, intent)) return id;
+    return undefined;
+  }
+  private creating: Promise<unknown> = Promise.resolve();
+  /** one at a time, so two equal requests find one record */
+  create(operation: PendingOperation): Promise<number | null> {
+    const created = this.creating.then(() => this.create0(operation));
+    this.creating = created.catch(() => {});
+    return created;
+  }
+  private async create0(operation: PendingOperation): Promise<number | null> {
     const { pkg, uid, kind, code, intent } = operation, flags = operation.flags & ~0x38000000;
-    const key = JSON.stringify([pkg, uid, kind, code, flags, intent.action, intent.dataUri, intent.typeStr, intent.identifier,
-      intent.pkg, intent.componentPkg, intent.component, [...intent.categories].sort()]);
-    let id = this.keys.get(key);
+    const key = JSON.stringify([pkg, uid, kind, code, flags]);
+    let id = await this.find(key, intent);
     if (id !== undefined && operation.flags & 0x10000000) { this.cancel(id); id = undefined; }
     if (id !== undefined) {
-      if (operation.flags & 0x8000000) {
-        const current = this.records.get(id)!.operation;
-        current.intent.extras = structuredClone(intent.extras);
+      const current = this.records.get(id)?.operation;
+      if (current && operation.flags & 0x8000000) {
+        current.intent = await this.codec.replaceExtras(current.intent, intent);
         current.intents = operation.intents && structuredClone(operation.intents);
       }
       return id;
@@ -27,14 +44,14 @@ export class PendingIntents {
     if (operation.flags & 0x20000000) return null;
     id = this.nextId++;
     this.records.set(id, { key, operation: { ...operation, flags, intent: structuredClone(intent), intents: operation.intents && structuredClone(operation.intents) }, cancellations: new Set() });
-    this.keys.set(key, id); return id;
+    return id;
   }
   known(id: number): boolean { return Number.isInteger(id) && id > 0 && id < this.nextId; }
   get(id: number): PendingOperation | null { return this.records.get(id)?.operation ?? null; }
   cancel(id: number): void {
     const record = this.records.get(id);
     if (!record) return;
-    this.records.delete(id); this.keys.delete(record.key);
+    this.records.delete(id);
     for (const notify of record.cancellations) notify();
     record.cancellations.clear();
   }

@@ -1,4 +1,3 @@
-import type { JIntentFilter } from "./intent-filter";
 import { newFile } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, without, type Gen } from "../jvm/runtime";
@@ -17,8 +16,8 @@ import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { dbPath, openDatabase } from "./sqlite";
 import { javaTheme, newTheme, loadResources, configuredResources, javaConfiguration } from "./resources";
 import { deviceConfiguration } from "./resnative";
-import { type JIntent, launchIntent } from "./intent";
-import { type JIntentSender, startIntentSender } from "./pendingintent";
+import { type JIntent, componentParts$, launchIntent } from "./intent";
+import { startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages, usesSdk } from "./packages";
@@ -250,8 +249,8 @@ export const attributionSource = (uid: number, pid: number, pkg: string | null):
   newObj("android/content/AttributionSource", ATTRIBUTION, uid, pid, pkg, null);
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
-function contextRegisterReceiver(this: JContext, receiver: JObj | null, filter: JIntentFilter) { return registerReceiver(this, receiver, filter); }
-function contextRegisterReceiverOn(this: JContext, receiver: JObj | null, filter: JIntentFilter, _permission: string, handler: unknown) {
+function contextRegisterReceiver(this: JContext, receiver: JObj | null, filter: JObj) { return registerReceiver(this, receiver, filter); }
+function contextRegisterReceiverOn(this: JContext, receiver: JObj | null, filter: JObj, _permission: string, handler: unknown) {
   return registerReceiver(this, receiver, filter, handler);
 }
 function contextStartActivity(this: JContext, intent: JIntent) { return launchIntent(this.$host, intent); }
@@ -260,7 +259,7 @@ async function contextStartActivities(this: JContext, intents: JIntent[] | null)
   if (!intents) return rt.npe();
   for (const intent of intents) await launchIntent(this.$host, intent);
 }
-function contextSender(this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); }
+function contextSender(this: JContext, sender: JObj, fill: JIntent | null) { return startIntentSender(this, sender, fill); }
 /** AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application theme
  *  instead loses every ThemeOverlay — which is how Material passes a widget its shape and
  *  colours — and resolves `?attr` references against the wrong stack. */
@@ -461,7 +460,9 @@ const contextMethods: NativeSpec["methods"] = {
   "startForegroundService(Landroid/content/Intent;)Landroid/content/ComponentName;": function (this: JContext, intent: JIntent) {
     return svcStart(this, intent, true);
   },
-  "stopService(Landroid/content/Intent;)Z": (intent: JIntent) => svcStop(intent?.component),
+  "stopService(Landroid/content/Intent;)Z": driven(function* (intent: JIntent): Gen {
+    return svcStop(intent && (yield* componentParts$(yield vcall(intent, "getComponent", "()Landroid/content/ComponentName;")))?.cls);
+  }),
   "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": function (this: JContext, intent: JIntent, connection: unknown, flags: number) { return svcBind(this, intent, connection, flags); },
   "bindService(Landroid/content/Intent;ILjava/util/concurrent/Executor;Landroid/content/ServiceConnection;)Z": function (this: JContext, intent: JIntent, flags: number, executor: unknown, connection: unknown) {
     if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", "executor");

@@ -22,8 +22,8 @@ import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
 import { Resources, JTheme, themeOf, rvString, newSV, nativeRes, AID } from "../src/android/res";
 import { newTheme } from "../src/android/resources";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
-import { JIntent } from "../src/android/intent";
-import { encodeIntent } from "../src/android/intentipc";
+import { mkComponentName, newIntent } from "../src/android/intent";
+import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
 import { PendingIntents } from "../src/shell/pendingintents";
 import { mkPfd } from "../src/android/os";
 import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
@@ -97,25 +97,6 @@ describe("clip-data", () => {
     const intent = await vcall(item, "getIntent", "()Landroid/content/Intent;");
     expect(await vcall(intent, "getAction", "()Ljava/lang/String;")).toBe("test.action");
     expect(await vcall(parcel, "dataAvail", "()I")).toBe(0);
-  });
-});
-
-describe("content-uris", () => {
-  rt.linkNatives();
-
-  test("ContentUris appends and parses signed and full-width long IDs", async () => {
-    const base = scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "content://media/items?sort=new");
-    const appended = await scall("android/content/ContentUris", "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", base, -42n);
-    expect(await vcall(appended, "toString", "()Ljava/lang/String;")).toBe("content://media/items/-42?sort=new");
-    expect(await scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", appended)).toBe(-42n);
-    const max = await scall("android/content/ContentUris", "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", base, 9223372036854775807n);
-    expect(await scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", max)).toBe(9223372036854775807n);
-  });
-
-  test("ContentUris rejects a path without a decimal long ID", async () => {
-    const uri = scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "content://media/items/not-an-id");
-    await expect((async () => Promise.resolve().then(() => scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", uri)))())
-      .rejects.toMatchObject({ constructor: { $i: { name: "java/lang/NumberFormatException" } } });
   });
 });
 
@@ -204,19 +185,6 @@ describe("install-merge", () => {
   });
 });
 
-describe("intent-chooser", () => {
-  rt.linkNatives();
-  test("createChooser retains the send intent behind ACTION_CHOOSER", async () => {
-    const send = await newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.SEND_MULTIPLE");
-    await vcall(send, "addFlags", "(I)Landroid/content/Intent;", 1);
-    const chooser = await vcall(rt.link("android/content/Intent").ctor, "createChooser",
-      "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;", send, "Share track");
-    expect(await vcall(chooser, "getAction", "()Ljava/lang/String;")).toBe("android.intent.action.CHOOSER");
-    expect(await vcall(chooser, "getParcelableExtra", "(Ljava/lang/String;)Landroid/os/Parcelable;", "android.intent.extra.INTENT")).toBe(send);
-    expect(await vcall(chooser, "getFlags", "()I")).toBe(1);
-  });
-});
-
 describe("intent-typed-extras", () => {
   rt.linkNatives();
   test("typed extras keep their type through a Parcel and reach Bundle.readFromParcel", async () => {
@@ -250,42 +218,6 @@ describe("intent-typed-extras", () => {
     await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "p", component);
     expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "p", rt.classFor("android/content/ComponentName"))).toBe(component);
     expect(await vcall(bundle, "getSerializable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;", "p", rt.classFor("java/lang/String"))).toBeNull();
-  });
-});
-
-describe("intent-filter-path", () => {
-  rt.linkNatives();
-
-  test("IntentFilter requires a matching authority before applying decoded path patterns", async () => {
-    const filter = await newObj("android/content/IntentFilter");
-    await vcall(filter, "addDataScheme", "(Ljava/lang/String;)V", "https");
-    await vcall(filter, "addDataAuthority", "(Ljava/lang/String;Ljava/lang/String;)V", "*.example.com", "443");
-    await vcall(filter, "addDataPath", "(Ljava/lang/String;I)V", "/place/.*", 2);
-    const match = (uri: string) => vcall(filter, "matchData", "(Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;)I", null, "https", mkUri(uri));
-    expect(await match("https://a.example.com:443/place/a%20b")).toBe(0x508000);
-    expect(await match("https://a.example.com:442/place/a")).toBe(-2);
-    expect(await match("https://elsewhere.test:443/place/a")).toBe(-2);
-    expect(await match("https://a.example.com:443/other")).toBe(-2);
-  });
-
-  test("IntentFilter parcels retain data matching and Android field order", async () => {
-    const filter = await newObj("android/content/IntentFilter", "(Ljava/lang/String;)V", "test.action");
-    await vcall(filter, "addCategory", "(Ljava/lang/String;)V", "test.category");
-    await vcall(filter, "addDataScheme", "(Ljava/lang/String;)V", "https");
-    await vcall(filter, "addDataAuthority", "(Ljava/lang/String;Ljava/lang/String;)V", "*.example.com", null);
-    await vcall(filter, "addDataPath", "(Ljava/lang/String;I)V", "/place/", 1);
-    await vcall(filter, "setPriority", "(I)V", 17);
-    const parcel = await newObj("android/os/Parcel");
-    await vcall(filter, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-    await vcall(parcel, "setDataPosition", "(I)V", 0);
-    expect(await vcall(parcel, "createStringArray", "()[Ljava/lang/String;")).toEqual(["test.action"]);
-    expect(await vcall(parcel, "readInt", "()I")).toBe(1);
-    expect(await vcall(parcel, "createStringArray", "()[Ljava/lang/String;")).toEqual(["test.category"]);
-    await vcall(parcel, "setDataPosition", "(I)V", 0);
-    const restored = await vcall(rt.link("android/content/IntentFilter").ctor.s$CREATOR, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);
-    expect(await vcall(restored, "getPriority", "()I")).toBe(17);
-    expect(await vcall(restored, "matchData", "(Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;)I", null, "https", mkUri("https://a.example.com/place/a"))).toBe(0x508000);
-    expect(await vcall(parcel, "dataAvail", "()I")).toBe(0);
   });
 });
 
@@ -416,24 +348,36 @@ describe("pending-intents", () => {
   rt.linkNatives();
 
   test("activity-stack pending intents match on the final intent and retain the preceding stack", async () => {
-    const root = new JIntent(); root.component = "RootActivity";
-    const detail = new JIntent(); detail.component = "DetailActivity";
-    const rootData = await encodeIntent(root), detailData = await encodeIntent(detail);
+    const explicit = async (cls: string, extra: string) => {
+      const intent = await newIntent();
+      await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName("example", cls));
+      await vcall(intent, "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", "extra", extra);
+      return encodeIntent(intent);
+    };
+    const rootData = await explicit("RootActivity", "root"), detailData = await explicit("DetailActivity", "first");
     const sent: string[][] = [];
-    const store = new PendingIntents(async operation => {
-      sent.push([...(operation.intents ?? []).slice(0, -1).map(intent => intent.component ?? ""), operation.intent.component ?? ""]);
+    const describe = async (data: typeof rootData) => {
+      const intent = await decodeIntent(data);
+      const component = await vcall(await vcall(intent, "getComponent", "()Landroid/content/ComponentName;"), "getClassName", "()Ljava/lang/String;");
+      return component + ":" + await vcall(intent, "getStringExtra", "(Ljava/lang/String;)Ljava/lang/String;", "extra");
+    };
+    const store = new PendingIntents(intentCodec, async operation => {
+      sent.push([...await Promise.all((operation.intents ?? []).slice(0, -1).map(describe)), await describe(operation.intent)]);
     });
     const operation = { pkg: "example", process: "example", uid: 10000, kind: "activity" as const,
       code: 7, flags: 0, intent: detailData, intents: [rootData, detailData] };
-    const first = store.create(operation);
+    const first = await store.create(operation);
     expect(first).not.toBeNull();
-    expect(store.create({ ...operation, intents: [detailData] })).toBe(first);
+    // equal under filterEquals despite the extras; FLAG_UPDATE_CURRENT replaces them
+    const updated = await explicit("DetailActivity", "second");
+    expect(await store.create({ ...operation, flags: 0x8000000, intent: updated, intents: [rootData, updated] })).toBe(first);
+    expect(await store.create({ ...operation, intent: rootData, intents: [rootData] })).not.toBe(first);
     expect(await store.send(first ?? 0)).toBe(true);
-    expect(sent).toEqual([["RootActivity", "DetailActivity"]]);
+    expect(sent).toEqual([["RootActivity:root", "DetailActivity:second"]]);
   });
 
   test("PendingIntent reports its stored operation type", async () => {
-    const context = new JContext(), intent = new JIntent();
+    const context = new JContext(), intent = await newIntent();
     const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
     const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
     const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
@@ -687,9 +631,8 @@ describe("service-bind", () => {
   test("a failed service binding still requires one unbind", async () => {
     const context = rt.make("android/content/Context") as JContext;
     context.$host = { pkg: "service-bind-test" } as JContext["$host"];
-    const intent = new JIntent();
-    intent.componentPkg = "service-bind-test";
-    intent.component = "service-bind-test.MissingService";
+    const intent = await newIntent();
+    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName("service-bind-test", "service-bind-test.MissingService"));
     const connection = new JObj();
     expect(await vcall(context, "bindService", "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z", intent, connection, 0)).toBe(0);
     await vcall(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection);

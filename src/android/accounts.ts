@@ -152,7 +152,7 @@ async function session(type: string, response: JObj, call: (authenticator: JObj,
   const s: JAccountSession = await newObj("webdroid/AccountSession");
   s.response = response; s.options = options;
   try {
-    const { binder, unbind } = await bindAsSystem(mkComponentName(owner.pkg, owner.cls), `account:${PROCESS_PID}:${nextSession++}`, "android.accounts.AccountAuthenticator");
+    const { binder, unbind } = await bindAsSystem(await mkComponentName(owner.pkg, owner.cls), `account:${PROCESS_PID}:${nextSession++}`, "android.accounts.AccountAuthenticator");
     s.unbind = unbind;
     await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", s, 0);
     const authenticator = await scall("android/accounts/IAccountAuthenticator$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/accounts/IAccountAuthenticator;", binder);

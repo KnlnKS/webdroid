@@ -168,7 +168,7 @@ describe("job-scheduler", () => {
       sup: "android/app/job/JobServiceEngine", methods: {
         "onStartJob(Landroid/app/job/JobParameters;)Z": async (params: JObj) => {
           for (let item; (item = await vcall(params, "dequeueWork", "()Landroid/app/job/JobWorkItem;"));) {
-            events.push((await vcall(item, "getIntent", "()Landroid/content/Intent;")).action);
+            events.push(await vcall(await vcall(item, "getIntent", "()Landroid/content/Intent;"), "getAction", "()Ljava/lang/String;"));
             await vcall(params, "completeWork", "(Landroid/app/job/JobWorkItem;)V", item);
           }
           return 1;

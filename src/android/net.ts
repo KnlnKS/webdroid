@@ -41,36 +41,6 @@ const rawSegments = (p: UriParts) => p.hier ? p.path.split("/").filter(Boolean) 
 /** an authority's host[:port], past any userinfo */
 export const hostPort = (authority: string) => authority.slice(authority.lastIndexOf("@") + 1);
 const compareUri = function (this: JUri, o: JUri) { return this.uri < o.uri ? -1 : this.uri > o.uri ? 1 : 0; };
-class UriNode { code = -1; exact = new Map<string, UriNode>(); num: UriNode | null = null; text: UriNode | null = null; }
-class JUriMatcher extends JObj { root = new UriNode(); }
-rt.register({
-  name: "android/content/UriMatcher", ctor: JUriMatcher,
-  statics: { NO_MATCH: -1 },
-  methods: {
-    "<init>(I)V": function (this: JUriMatcher, code: number) { this.root.code = code; },
-    "addURI(Ljava/lang/String;Ljava/lang/String;I)V": function (this: JUriMatcher, authority: string, path: string | null, code: number) {
-      const segs = [authority, ...(path ?? "").split("/").filter(Boolean)];
-      let n = this.root;
-      for (const s of segs) {
-        if (s === "#") n = n.num ??= new UriNode();
-        else if (s === "*") n = n.text ??= new UriNode();
-        else { let c = n.exact.get(s); if (!c) n.exact.set(s, (c = new UriNode())); n = c; }
-      }
-      n.code = code;
-    },
-    "match(Landroid/net/Uri;)I": function (this: JUriMatcher, u: JUri | null) {
-      const p = u ? uriParts(u) : null;
-      if (!p || p.authority === null) return this.root.code;
-      const segs = [uriDecode(p.authority)!, ...p.path.split("/").filter(Boolean).map((x) => uriDecode(x)!)];
-      let n: UriNode | null = this.root;
-      for (const s of segs) {
-        n = n.exact.get(s) ?? (n.num && /^\d+$/.test(s) ? n.num : n.text);
-        if (!n) return -1;
-      }
-      return n.code;
-    },
-  },
-});
 const URI_ALLOWED = /[A-Za-z0-9_\-!.~'()*]/;
 function uriEncode(s: string | null, allow = ""): string | null {
   if (s === null) return null;
@@ -230,32 +200,6 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JUri, o: unknown) { return o instanceof JUri && o.uri === this.uri ? 1 : 0; },
     "hashCode()I": function (this: JUri) { return stringHash(this.uri); },
     "describeContents()I": () => 0,
-  },
-});
-function contentId(u: JUri | null): bigint {
-  if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
-  const seg = rawSegments(uriParts(u)).at(-1);
-  if (!seg || !/^[+-]?\d+$/.test(seg)) throw rt.mkThrowable("java/lang/NumberFormatException", seg ?? "null");
-  const id = BigInt(seg);
-  if (id < -9223372036854775808n || id > 9223372036854775807n) {
-    throw rt.mkThrowable("java/lang/NumberFormatException", seg);
-  }
-  return id;
-}
-rt.register({
-  name: "android/content/ContentUris", ctor: class extends JObj {},
-  methods: {
-    "static parseId(Landroid/net/Uri;)J": contentId,
-    "static appendId(Landroid/net/Uri$Builder;J)Landroid/net/Uri$Builder;": function (builder: unknown, id: bigint) {
-      if (builder === null) throw rt.mkThrowable("java/lang/NullPointerException", "builder");
-      return vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
-    },
-    "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": driven(function* (u: JUri | null, id: bigint): Gen {
-      if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
-      const builder = yield vcall(u, "buildUpon", "()Landroid/net/Uri$Builder;");
-      yield vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
-      return vcall(builder, "build", "()Landroid/net/Uri;");
-    }),
   },
 });
 // Uri.Builder keeps every part already ENCODED, as AOSP does, so build() is a join.
