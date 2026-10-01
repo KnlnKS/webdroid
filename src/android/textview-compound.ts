@@ -23,10 +23,9 @@ const setCompoundDrawables = driven(function* setCompoundDrawables(this: JTextVi
 });
 /** AOSP applyCompoundDrawableTint: each compound drawable mutated and given the tint list */
 const applyCompoundTint = driven(function* applyCompoundTint(tv: JTextView): Gen {
-  const thread = curThread;
   for (const d of [tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB]) if (d) {
-    yield vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;");
-    yield vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tv.drawableTint);
+    yield vcall(d, "mutate", "()Landroid/graphics/drawable/Drawable;");
+    yield vcall(d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tv.drawableTint);
   }
   yield syncCompoundStates(tv);
   invalidate(tv);
@@ -36,17 +35,16 @@ const applyCompoundTint = driven(function* applyCompoundTint(tv: JTextView): Gen
  *  it invalidates each drawable the new state changed. */
 export const syncCompoundStates = driven(function* syncCompoundStates(tv: JTextView, changed = false): Gen {
   if (!tv.drawableL && !tv.drawableT && !tv.drawableR && !tv.drawableB) return;
-  const thread = curThread, state = Int32Array.from(tv.drawableState());
+  const state = Int32Array.from(tv.drawableState());
   for (const d of [tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB]) {
-    if (d && (yield vcallOn(thread, d, "setState", "([I)Z", state)) && changed)
-      yield vcallOn(thread, tv, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+    if (d && (yield vcall(d, "setState", "([I)Z", state)) && changed)
+      yield vcall(tv, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
   }
 });
 const intrinsicBounds = driven(function* intrinsicBounds(drawables: (JDrawable | null)[]): Gen {
-  const thread = curThread;
   for (const d of drawables) if (d) {
-    const width = yield drawableSize(d, false, thread), height = yield drawableSize(d, true, thread);
-    yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, width, height);
+    const width = yield drawableSize(d, false), height = yield drawableSize(d, true);
+    yield vcall(d, "setBounds", "(IIII)V", 0, 0, width, height);
   }
 });
 export const setIntrinsicDrawables = driven(function* setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {

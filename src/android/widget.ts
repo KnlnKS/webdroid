@@ -5,7 +5,7 @@ import { rt, type JObj, type NativeSpec, callSelf, fieldGetters, flagGetters, fi
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue, themeOf } from "./res";
 import { TV } from "./axml";
 import { type JInsets, JRect, insetsOf } from "./graphics";
-import { newPaint, paintOf, paintTypeface, setPaintTypeface, measureText, fontAscent, fontDescent } from "./paint";
+import { type NativePaint, newPaint, paintOf, paintTypeface, setPaintTypeface, measureText, fontAscent, fontDescent } from "./paint";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { JTextView, textViewMethods, textViewCtors, JButton } from "./textview";
 import { compoundPadL, compoundPadR, syncCompoundPads } from "./textview-compound";
@@ -471,8 +471,13 @@ class JSwitch extends JCompoundButton {
   textOn = ""; textOff = "";
   showText = true; splitTrack = false;
   thumbTextPadding = 0; switchMinWidth = 0; switchPadding = 0;
-  /** the TextPaint the switch's own text is drawn with, once it has its own appearance */
-  switchPaint: JObj | null = null;
+  /** the TextPaint the switch's own text is drawn with, once it has its own appearance, and its
+   *  native paint, which measurement reads */
+  switchPaint: JObj | null = null; switchNative: NativePaint | null = null;
+  ownSwitchPaint(): NativePaint {
+    if (!this.switchNative) (this.switchNative = paintOf(this.switchPaint = newPaint("android/text/TextPaint"))).textSize = this.tp.textSize;
+    return this.switchNative;
+  }
   /** 0 off .. 1 on; while `animStart` is set it runs from `animFrom` to the checked edge */
   thumbPos = 0;
   animFrom = 0; animStart = -1;
@@ -521,7 +526,7 @@ const applySwitchTints = driven(function* applySwitchTints(v: JSwitch): Gen {
 const setSwitchTextAppearance = driven(function* setSwitchTextAppearance(v: JSwitch, id: number): Gen {
   const res = v.jres;
   if (!res || !id) return;
-  const p = v.switchPaint ??= newPaint("android/text/TextPaint"), np = paintOf(p);
+  const np = v.ownSwitchPaint(), p = v.switchPaint!;
   np.textSize = v.tp.textSize;
   yield setPaintTypeface(p, paintTypeface(v.paintT));
   const size = res.styleLookup(id, AID("textSize")), color = res.styleLookup(id, AID("textColor"));
@@ -622,8 +627,8 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
   "setTrackTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JSwitch, m: JSimpleEnum | null) { this.trackTintMode = m; return applySwitchTints(this); },
   "setSwitchTextAppearance(Landroid/content/Context;I)V": function (this: JSwitch, _c: unknown, id: number) { return setSwitchTextAppearance(this, id); },
   "setSwitchTypeface(Landroid/graphics/Typeface;)V": function (this: JSwitch, tf: object | null) {
-    if (!this.switchPaint) paintOf(this.switchPaint = newPaint("android/text/TextPaint")).textSize = this.tp.textSize;
-    return after(setPaintTypeface(this.switchPaint, tf), () => requestLayout(this));
+    this.ownSwitchPaint();
+    return after(setPaintTypeface(this.switchPaint!, tf), () => requestLayout(this));
   },
   "setSwitchTypeface(Landroid/graphics/Typeface;I)V": function (this: JSwitch, tf: object | null) {
     return vcall(this, "setSwitchTypeface", "(Landroid/graphics/Typeface;)V", tf);
@@ -642,7 +647,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
       thumbW = (yield drawableSize(thumb, false)) - pad.left - pad.right;
       thumbH = yield drawableSize(thumb, true);
     }
-    const paint = paintOf(this.switchPaint ?? this.paintT);
+    const paint = this.switchNative ?? this.tp;
     const textW = this.showText ? Math.ceil(Math.max(measureText(paint, this.switchText(true)), measureText(paint, this.switchText(false)))) + this.thumbTextPadding * 2 : 0;
     this.thumbW = Math.max(textW, thumbW);
     const insets: JInsets = yield* this.insets$();
@@ -683,7 +688,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     if (thumb) yield drawChild(thumb, cv);
     const text = this.showText ? this.switchText(this.checked) : "";
     if (!text) return;
-    const jpaint = this.switchPaint ?? this.paintT, paint = paintOf(jpaint), b = thumb && drawableBounds(thumb);
+    const jpaint = this.switchPaint ?? this.paintT, paint = this.switchNative ?? this.tp, b = thumb && drawableBounds(thumb);
     const cx = b ? (b.left + b.right) / 2 : this.width() / 2;
     const cy = (this.switchT + (track ? pad.top : 0) + this.switchB - (track ? pad.bottom : 0)) / 2;
     yield vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,

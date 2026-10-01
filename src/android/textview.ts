@@ -12,7 +12,7 @@ import { firstStrongRtl } from "../jvm/bidi";
 import { device } from "../shell/config";
 import { JRect } from "./graphics";
 import { canvasOf, type JavaCanvas } from "./canvas";
-import { vcall, vcallOn, curThread, after, mkEnumSet, newObj, scall, enumOrdinal } from "../jvm/natives/jlang";
+import { vcall, after, mkEnumSet, newObj, scall, enumOrdinal } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
@@ -51,7 +51,10 @@ export class JTextView extends JView {
   rawText: unknown = "";
   hint = "";
   /** mTextPaint, a Java TextPaint */
-  paintT = newPaint("android/text/TextPaint");
+  readonly paintT = newPaint("android/text/TextPaint");
+  /** its native paint, which layout and measurement read: the handle is the paint's for life, and
+   *  what getNativeInstance() syncs on each call (shader, color filter) only drawing needs */
+  readonly tp: NativePaint = paintOf(this.paintT);
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   colors: Colors = -16777216;
   hintColors: Colors | null = 1627389952;
@@ -100,8 +103,15 @@ export class JTextView extends JView {
     this.tp.textSize = device.dp(14); // AOSP TextView default, 14sp
     textPaintField(this.paintT)[densityKey ||= declaredField("android/text/TextPaint", "density")] = device.density;
   }
-  /** the text paint's native state, which layout and measurement read */
-  get tp(): NativePaint { return paintOf(this.paintT); }
+  /** AOSP mCurTextColor and mCurHintTextColor: a color list's color for the drawable state, resolved
+   *  again only when the list or the state changes */
+  private shownColors: Colors | null = null; private shownState: number[] | null = null; private shownColor = 0;
+  currentColor(colors: Colors): number | Promise<number> {
+    if (typeof colors === "number") return colors;
+    const state = this.drawableState();
+    if (colors === this.shownColors && state === this.shownState) return this.shownColor;
+    return after(colorFor(colors, state), (color) => { this.shownColors = colors; this.shownState = state; return this.shownColor = color; });
+  }
   updateLinkColor(): unknown {
     if (this.linkColors === null) return;
     return after(colorFor(this.linkColors, this.drawableState()), (color) => {
@@ -465,7 +475,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getLinkTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return colorList(this.linkColors); },
   "drawableStateChanged()V": function (this: JTextView) { return after(this.updateLinkColor(), () => syncCompoundStates(this, true)); },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return colorList(this.colors); },
-  "getCurrentTextColor()I": function (this: JTextView) { return colorFor(this.colors, this.drawableState()); },
+  "getCurrentTextColor()I": function (this: JTextView) { return this.currentColor(this.colors); },
   "setHintTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList | null) { this.hintColors = c; invalidate(this); },
   "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = c; invalidate(this); },
   "setGravity(I)V": function (this: JTextView, g: number) {
@@ -727,7 +737,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   // TextView.onMeasure: a wrapping width is the text's desired width, the layout is built at the
   // width the view gets, and its height is that layout's, at least minLines tall
   "onMeasure(II)V": driven(function* (this: JTextView, wSpec: number, hSpec: number): Gen {
-    const thread = curThread;
     const wMode = specMode(wSpec), wSize = specSize(wSpec);
     const pads = compoundPads(this);
     const [padL, padT, padR, padB] = pads instanceof Promise ? yield pads : pads;
@@ -739,8 +748,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       let desired: number = yield layouts.desiredWidth(this, this.shownText());
       if (!this.text && this.hint) desired = Math.max(desired, yield (this.hintLayouts ??= new TextViewLayouts()).desiredWidth(this, this.hint));
       w = Math.max(desired, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + hPad;
-      const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
-      w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? yield min : min));
+      w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), yield vcall(this, "getSuggestedMinimumWidth", "()I"));
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
     }
     const measured = this.measuredLines(w - hPad);
@@ -751,22 +759,16 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     h = Math.min(h, this.maxH);
     const sidePad = this.padT + this.padB;
     h = Math.max(h, this.minH, compoundHeight(this.drawableL) + sidePad, compoundHeight(this.drawableR) + sidePad);
-    if (specMode(hSpec) !== MS_EXACTLY) {
-      const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
-      h = Math.max(h, Number(min instanceof Promise ? yield min : min));
-    }
+    if (specMode(hSpec) !== MS_EXACTLY) h = Math.max(h, yield vcall(this, "getSuggestedMinimumHeight", "()I"));
     this.measuredW = w;
     this.measuredH = resolveSize(h, hSpec);
     this.layoutWidthFor = w;
   }),
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JTextView, cv: JavaCanvas): Gen {
     if (this.width() <= 0 || this.height() <= 0) return;
-    const thread = curThread, ctx = canvasOf(cv).ctx;
-    const display = this.text;
-    const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
-    const alignment = Number(resolved instanceof Promise ? yield resolved : resolved);
-    const direction = alignment === 5 || alignment === 6 ? vcallOn(thread, this, "getLayoutDirection", "()I") : 0;
-    const layoutDirection = Number(direction instanceof Promise ? yield direction : direction);
+    const ctx = canvasOf(cv).ctx, display = this.text;
+    const alignment: number = yield vcall(this, "getTextAlignment", "()I");
+    const layoutDirection: number = alignment === 5 || alignment === 6 ? yield vcall(this, "getLayoutDirection", "()I") : 0;
     const hg = this.horizontalGravity(display || this.hint, alignment, layoutDirection);
     const showHint = !display && this.hint;
     const pads = compoundPads(this);
@@ -786,26 +788,26 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     // TextView.getVerticalOffset
     const vg = gravityV(this.gravityT);
     const y = vg === 16 ? (contentB - contentT - layout.height) / 2 + contentT : vg === 80 ? contentB - layout.height : contentT;
-    yield vcall(this.paintT, "setColor", "(I)V", yield colorFor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
+    yield vcall(this.paintT, "setColor", "(I)V", yield this.currentColor(showHint ? this.hintColors ?? this.colors : this.colors));
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, this.width(), this.height()); ctx.clip();
     ctx.translate(contentL, y);
-    try { yield vcallOn(thread, layout.java, "draw", "(Landroid/graphics/Canvas;)V", cv); }
+    try { yield vcall(layout.java, "draw", "(Landroid/graphics/Canvas;)V", cv); }
     finally { ctx.restore(); }
     // Editor places the caret by the text's own layout (mLayout), even while the hint shows
     const caret = this.layout;
     if (caret && this.editable && this.focused && this.cursorVisible && Math.floor((guestNow() - this.blinkStart) / 500) % 2 === 0) {
-      const end = this.text.length, line: number = yield vcallOn(thread, caret.java, "getLineForOffset", "(I)I", end);
-      const cx: number = yield vcallOn(thread, caret.java, "getPrimaryHorizontal", "(I)F", end);
+      const end = this.text.length, line: number = yield vcall(caret.java, "getLineForOffset", "(I)I", end);
+      const cx: number = yield vcall(caret.java, "getPrimaryHorizontal", "(I)F", end);
       const top = vg === 16 ? (contentB - contentT - caret.height) / 2 + contentT : vg === 80 ? contentB - caret.height : contentT;
-      const cy = top + (yield vcallOn(thread, caret.java, "getLineBaseline", "(I)I", line));
+      const cy = top + (yield vcall(caret.java, "getLineBaseline", "(I)I", line));
       const cursor = yield textCursorDrawable(this);
       if (!cursor) return;
       const padding = new JRect();
-      yield vcallOn(thread, cursor, "getPadding", "(Landroid/graphics/Rect;)Z", padding);
-      const width = yield drawableSize(cursor, false, thread);
+      yield vcall(cursor, "getPadding", "(Landroid/graphics/Rect;)Z", padding);
+      const width = yield drawableSize(cursor, false);
       const left = Math.min(Math.max(0, Math.trunc(cx - 0.5)) - padding.left, avail - width + padding.right);
-      yield vcallOn(thread, cursor, "setBounds", "(IIII)V", 0, 0, width, this.lineHeight() + padding.top + padding.bottom);
+      yield vcall(cursor, "setBounds", "(IIII)V", 0, 0, width, this.lineHeight() + padding.top + padding.bottom);
       yield* drawAt$(cv, cursor, contentL + left, cy - this.ascent() - padding.top);
     }
   }),
