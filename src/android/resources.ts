@@ -7,6 +7,7 @@ import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { type Resources, type JTheme, nativeTheme } from "./res";
 import { JDisplayMetrics } from "./util";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration } from "./resnative";
+import { device } from "../shell/config";
 import { registerApk } from "./assetmanager";
 
 /** An installed apk's Resources, as ResourcesManager builds them: its ApkAssets over the system
@@ -79,5 +80,13 @@ export const javaConfiguration = driven(function* javaConfiguration(c: JConfigur
   yield vcall(config, "setToDefaults", "()V");
   for (const k of CONFIG_FIELDS) (config as Record<string, number>)[rt.fieldProp("android/content/res/Configuration", k)!] = c[k];
   yield vcall(config, "setLocales", "(Landroid/os/LocaleList;)V", c.locales);
+  // the display's window configuration, which the global configuration carries on a device
+  const windowConfig = (config as Record<string, unknown>)[rt.fieldProp("android/content/res/Configuration", "windowConfiguration")!];
+  const bounds = yield newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height);
+  for (const set of ["setBounds", "setAppBounds", "setMaxBounds"]) yield vcall(windowConfig, set, "(Landroid/graphics/Rect;)V", bounds);
+  yield vcall(windowConfig, "setWindowingMode", "(I)V", 1);
+  const rotation = device.width > device.height ? 1 : 0;
+  yield vcall(windowConfig, "setRotation", "(I)V", rotation);
+  yield vcall(windowConfig, "setDisplayRotation", "(I)V", rotation);
   return config;
 });

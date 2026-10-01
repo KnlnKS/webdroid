@@ -46,13 +46,17 @@ import { overlays, drawToasts, FLAG_NOT_FOCUSABLE, FLAG_NOT_TOUCHABLE, FLAG_NOT_
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
-import { guestNow } from "../guest-clock";
+import { guestNow, uptimeMillis } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { resolveSystemBars, drawSystemBarBackgrounds } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame, latchSurfaces } from "../android/glview";
 import { notePresent } from "../native/cpu";
 import { noteInput } from "../jvm/yield";
+import { stageD } from "../jvm/provenance";
+import { hostWindowManager, dispatchTouch } from "../android/server/wm";
+import { startActivityThread } from "../android/server/am";
+import { setDisplayTarget } from "../android/surfaceflinger";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
@@ -230,6 +234,15 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setTargetSdkVersion(target);
   prepared?.();
 
+  if (stageD()) {
+    hostWindowManager();
+    setDisplayTarget(frame, present);
+    const app: BootedApp = { host, mainActivityCls: "", stack: [], label, background: false };
+    setBootedApp(app);
+    onStatus("Starting app…");
+    await onMain(startActivityThread);
+    return app;
+  }
   return onMain(async () => {
     onStatus("Starting app…");
     const baseCtx = newContextImpl(host);
@@ -384,7 +397,7 @@ const frameWaiters: (() => void)[] = [];
 /** ViewRootImpl.scheduleTraversals: the windows lay out and draw in the next vsync's frame, after
  *  that frame's input and animation callbacks */
 export function scheduleTraversal(): void {
-  if (traversalPending || !mainLooper) return;
+  if (traversalPending || !mainLooper || stageD()) return;
   traversalPending = true;
   traversal ??= fnRunnable(runTraversal);
   void after(mainChoreographer(), (c) => vcall(c, "postCallback", "(ILjava/lang/Runnable;Ljava/lang/Object;)V", CALLBACK_TRAVERSAL, traversal, null));
@@ -579,8 +592,14 @@ export function dispatchPointer(action: number, x: number, y: number, at = guest
   // charged to perf.inputMs: the wall time a tap costs is otherwise in no counter at all.
   const t0 = performance.now();
   noteInput();
+  if (stageD()) {
+    const now = BigInt(Math.floor(uptimeMillis()));
+    if (action === 0) touchDown = now;
+    return dispatchTouch(action, x, y, touchDown, now).then(() => {}, reportUncaught).finally(() => { perf.inputMs += performance.now() - t0; });
+  }
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
+let touchDown = 0n;
 const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: number, y: number, t: number): Gen<void> {
   // a tap on the home screen is a tap on the app's icon
   if (atHome()) { if (action === 1) yield activityVisibility0("resume"); return; }

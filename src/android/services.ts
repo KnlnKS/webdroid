@@ -20,6 +20,8 @@ import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
 import { isRuntimePermission, permissionGranted, uidPermissionState } from "./context";
 import { stickyBroadcasts } from "./broadcast";
+import { activityManagerMethods } from "./server/am";
+import { activityTaskMethods } from "./server/atm";
 
 class JRunningAppProcessInfo extends JObj {
   processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];
@@ -83,7 +85,7 @@ const activityManager: NativeSpec["methods"] = {
   // the render thread's tid, for scheduling: everything here shares the page's one thread
   "setRenderThread(I)V": () => {},
 };
-rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub", methods: activityManager });
+rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub", methods: { ...activityManager, ...activityManagerMethods } });
 
 // IAppTask: one of the caller's tasks, the activities the shell stacks under a task id
 class JAppTask extends JObj { taskId = 0; }
@@ -108,6 +110,7 @@ const appTasks = new Map<number, Promise<JAppTask>>();
 
 // IActivityTaskManager
 rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityTaskManager$Stub", methods: {
+  ...activityTaskMethods,
   "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => {
     const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
     for (const id of appTasks.keys()) if (!ids.includes(id)) appTasks.delete(id);

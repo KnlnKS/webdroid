@@ -6,8 +6,7 @@ import { newObj, vcall, scall } from "../../jvm/natives/jlang";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger";
-import { type Channel } from "../inputchannel";
-import { deref } from "../handles";
+import { type Channel, channelOf, sendFocus, publish } from "../inputchannel";
 import { javaConfiguration } from "../resources";
 import { deviceConfiguration } from "../resnative";
 
@@ -38,6 +37,7 @@ const isSubWindow = (type: number) => type >= 1000 && type <= 1999;
 
 class WindowState {
   layer: Layer;
+  frame = { left: 0, top: 0, right: 0, bottom: 0 };
   channel: Channel | null = null;
   visibility = 8;
   requestedVisibleTypes = 0;
@@ -81,18 +81,17 @@ async function insetsState(): Promise<JObj> {
   return state;
 }
 
-/** the configuration a window is laid out against: the device's, in a full-screen window */
-async function mergedConfiguration(out: JObj): Promise<void> {
-  const global = await javaConfiguration(deviceConfiguration());
+/** the device's configuration, and a full-screen task's override of it: what activities and
+ *  windows are laid out against */
+export async function configurations(): Promise<{ global: JObj; override: JObj }> {
+  const global = await javaConfiguration(deviceConfiguration()) as JObj;
   const override = await newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
   const windowConfig = (override as unknown as Record<string, JObj>)[declaredField("android/content/res/Configuration", "windowConfiguration")];
-  const bounds = await displayRect();
-  for (const set of ["setBounds", "setAppBounds", "setMaxBounds"]) await vcall(windowConfig, set, "(Landroid/graphics/Rect;)V", bounds);
-  await vcall(windowConfig, "setWindowingMode", "(I)V", WINDOWING_MODE_FULLSCREEN);
   await vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);
-  const rotation = device.width > device.height ? 1 : 0;
-  await vcall(windowConfig, "setRotation", "(I)V", rotation);
-  await vcall(windowConfig, "setDisplayRotation", "(I)V", rotation);
+  return { global, override };
+}
+async function mergedConfiguration(out: JObj): Promise<void> {
+  const { global, override } = await configurations();
   await vcall(out, "setConfiguration", "(Landroid/content/res/Configuration;Landroid/content/res/Configuration;)V", global, override);
 }
 
@@ -106,9 +105,10 @@ async function addWindow(window: JObj, attrs: JObj, visibility: number, outChann
   ws.visibility = visibility;
   ws.requestedVisibleTypes = await insetsType("defaultVisible");
   windows.set(window, ws);
+  updateFocus();
   if (outChannel) {
     const pair: JObj[] = await scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
-    ws.channel = deref<Channel>((pair[0] as unknown as Record<string, bigint>)[declaredField("android/view/InputChannel", "mPtr")]);
+    ws.channel = channelOf(pair[0]);
     await vcall(pair[1], "copyTo", "(Landroid/view/InputChannel;)V", outChannel);
   }
   if (outState) await vcall(outState, "set", "(Landroid/view/InsetsState;)V", await insetsState());
@@ -140,8 +140,10 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   } else {
     await vcall(R("surfaceControl"), "release", "()V");
   }
+  ws.frame = { left: frame.left, top: frame.top, right: frame.right, bottom: frame.bottom };
   ws.layer.hidden = visibility !== VISIBLE;
   scheduleComposite();
+  updateFocus();
   return res | (firstTime ? RELAYOUT_RES_FIRST_TIME : 0);
 }
 
@@ -150,6 +152,51 @@ function removeWindow(window: JObj): void {
   if (!ws) return;
   windows.delete(window);
   removeLayer(ws.layer);
+  if (touchTarget === ws) touchTarget = null;
+  updateFocus();
+}
+
+// ── input: InputDispatcher's focus and touch-target rules over the windows, top first
+const FLAG_NOT_FOCUSABLE = 0x8, FLAG_NOT_TOUCHABLE = 0x10, FLAG_NOT_TOUCH_MODAL = 0x20;
+const flags = (ws: WindowState) => lp<number>(ws.attrs, "flags");
+/** visible windows, the topmost first: by display band and order added, a sub-window by its sublayer over its parent */
+function topFirst(): WindowState[] {
+  const key = (ws: WindowState): [number, number] => ws.parent ? [ws.parent.layer.z, ws.layer.z] : [ws.layer.z, 0];
+  return [...windows.values()].filter((ws) => ws.visibility === VISIBLE && !ws.layer.removed)
+    .sort((a, b) => { const [a0, a1] = key(a), [b0, b1] = key(b); return b0 - a0 || b1 - a1; });
+}
+let focused: WindowState | null = null;
+function updateFocus(): void {
+  const next = topFirst().find((ws) => !(flags(ws) & FLAG_NOT_FOCUSABLE)) ?? null;
+  if (next === focused) return;
+  if (focused?.channel) sendFocus(focused.channel, false);
+  focused = next;
+  if (next?.channel) sendFocus(next.channel, true);
+}
+let touchTarget: WindowState | null = null;
+function touchedWindow(x: number, y: number): WindowState | null {
+  for (const ws of topFirst()) {
+    const f = flags(ws);
+    if (f & FLAG_NOT_TOUCHABLE) continue;
+    const { left, top, right, bottom } = ws.frame;
+    if (x >= left && x < right && y >= top && y < bottom) return ws;
+    // a touch-modal window takes the touches outside it too
+    if (!(f & (FLAG_NOT_TOUCH_MODAL | FLAG_NOT_FOCUSABLE))) return ws;
+  }
+  return null;
+}
+const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002;
+/** a touchscreen event at display (x, y): the window touched at DOWN gets the gesture, in its own
+ *  coordinates. Resolves whether it handled the event. */
+export async function dispatchTouch(action: number, x: number, y: number, downTime: bigint, eventTime: bigint): Promise<boolean> {
+  if (action === ACTION_DOWN) touchTarget = touchedWindow(x, y);
+  const ws = touchTarget;
+  if (action === ACTION_UP || action === ACTION_CANCEL) touchTarget = null;
+  if (!ws?.channel) return false;
+  const event = await scall("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", downTime, eventTime, action, x, y, 0);
+  await vcall(event, "setSource", "(I)V", SOURCE_TOUCHSCREEN);
+  await vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
+  return publish(ws.channel, event);
 }
 
 const SESSION = "Landroid/view/IWindow;";
