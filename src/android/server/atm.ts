@@ -113,29 +113,36 @@ async function destroy(r: ActivityRecord): Promise<void> {
   await schedule(r.app, null, await item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
 }
 
+/** activity starts and finishes still waiting on their clients' lifecycle reports */
+let transitions = 0;
+export const pendingTransitions = (): number => transitions;
+
 /** ActivityStarter: a resolved activity on top of this process's task */
 export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number, remoteId = 0): Promise<void> {
-  const token = await newObj("android/os/Binder", "()V");
-  const prev = stack.at(-1);
-  const orientation = field<number>(info, AI, "screenOrientation");
-  if (prev) await pause(prev);
-  // the display turns for an activity that fixes its orientation before it launches
-  if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
-  const { global, override } = await configurations();
-  const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-    translucent: false, paused: null, remoteId, config: global, orientation };
-  stack.push(r);
-  const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
-  const launch = await item("LaunchActivityItem",
-    "Landroid/os/IBinder;Landroid/content/Intent;ILandroid/content/pm/ActivityInfo;Landroid/content/res/Configuration;Landroid/content/res/Configuration;" +
-    "ILjava/lang/String;Lcom/android/internal/app/IVoiceInteractor;ILandroid/os/Bundle;Landroid/os/PersistableBundle;Ljava/util/List;Ljava/util/List;" +
-    "Landroid/app/ActivityOptions$SceneTransitionInfo;ZLandroid/app/ProfilerInfo;Landroid/os/IBinder;Landroid/app/IActivityClientController;" +
-    "Landroid/os/IBinder;ZLandroid/os/IBinder;Landroid/os/IBinder;Landroid/window/ActivityWindowInfo;",
-    token, intent, stack.length, info, global, override, 0, null, null, PROCESS_STATE_TOP, null, null, null, null, null, 1, null,
-    await newObj("android/os/Binder", "()V"), await activityClientController(), await newObj("android/os/Binder", "()V"), 0, null,
-    await newObj("android/os/Binder", "()V"), windowInfo);
-  r.state = "resumed";
-  await schedule(app, launch, await item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", token, 1, 0));
+  transitions++;
+  try {
+    const token = await newObj("android/os/Binder", "()V");
+    const prev = stack.at(-1);
+    const orientation = field<number>(info, AI, "screenOrientation");
+    if (prev) await pause(prev);
+    // the display turns for an activity that fixes its orientation before it launches
+    if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
+    const { global, override } = await configurations();
+    const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
+      translucent: false, paused: null, remoteId, config: global, orientation };
+    stack.push(r);
+    const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
+    const launch = await item("LaunchActivityItem",
+      "Landroid/os/IBinder;Landroid/content/Intent;ILandroid/content/pm/ActivityInfo;Landroid/content/res/Configuration;Landroid/content/res/Configuration;" +
+      "ILjava/lang/String;Lcom/android/internal/app/IVoiceInteractor;ILandroid/os/Bundle;Landroid/os/PersistableBundle;Ljava/util/List;Ljava/util/List;" +
+      "Landroid/app/ActivityOptions$SceneTransitionInfo;ZLandroid/app/ProfilerInfo;Landroid/os/IBinder;Landroid/app/IActivityClientController;" +
+      "Landroid/os/IBinder;ZLandroid/os/IBinder;Landroid/os/IBinder;Landroid/window/ActivityWindowInfo;",
+      token, intent, stack.length, info, global, override, 0, null, null, PROCESS_STATE_TOP, null, null, null, null, null, 1, null,
+      await newObj("android/os/Binder", "()V"), await activityClientController(), await newObj("android/os/Binder", "()V"), 0, null,
+      await newObj("android/os/Binder", "()V"), windowInfo);
+    r.state = "resumed";
+    await schedule(app, launch, await item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", token, 1, 0));
+  } finally { transitions--; }
 }
 
 /** the launcher activity of `pkg`, as the home screen starts it */
@@ -155,22 +162,25 @@ export async function startMainActivity(app: JObj, pkg: string): Promise<void> {
 const AI = "android/content/pm/ActivityInfo";
 /** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
 export async function startActivityFor(app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode = -1): Promise<number> {
-  const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
-    intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
-  const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
-  const q = await intentQuery(intent), system = systemActivity(q, false) ??
-    (info && field<string>(info, AI, "packageName") === "android" && field<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
-  if (system) { void runSystemActivity(system, intent, byToken(resultTo), resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
-  if (!info) return START_INTENT_NOT_RESOLVED;
-  const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
-  await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
-  const pkg = field<string>(info, AI, "packageName"), process = field<string>(info, AI, "processName");
-  // the pause a local start waits for runs on the caller's main thread, so the call returns once it
-  // is under way, as ActivityStarter returns once the pause is scheduled
-  if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode).catch(reportUncaught);
-  else if (activityTransport.launch) await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy);
-  else return START_INTENT_NOT_RESOLVED;
-  return START_SUCCESS;
+  transitions++;
+  try {
+    const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
+      intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
+    const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
+    const q = await intentQuery(intent), system = systemActivity(q, false) ??
+      (info && field<string>(info, AI, "packageName") === "android" && field<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
+    if (system) { void runSystemActivity(system, intent, byToken(resultTo), resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
+    if (!info) return START_INTENT_NOT_RESOLVED;
+    const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
+    await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+    const pkg = field<string>(info, AI, "packageName"), process = field<string>(info, AI, "processName");
+    // the pause a local start waits for runs on the caller's main thread, so the call returns once it
+    // is under way, as ActivityStarter returns once the pause is scheduled
+    if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode).catch(reportUncaught);
+    else if (activityTransport.launch) await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy);
+    else return START_INTENT_NOT_RESOLVED;
+    return START_SUCCESS;
+  } finally { transitions--; }
 }
 const RESULT_OK = -1;
 /** an activity the platform package answers over the browser (DocumentsUI's pickers, share, the
@@ -203,18 +213,21 @@ export async function taskVisibility(phase: "pause" | "stop" | "resume" | "visib
 }
 
 async function finish(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<boolean> {
-  if (r.finishing) return true;
-  r.finishing = true;
-  if (r.resultTo && r.requestCode >= 0) {
-    r.resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
-  }
-  const wasTop = stack.at(-1) === r;
-  await pause(r);
-  const below = stack[stack.indexOf(r) - 1];
-  if (wasTop && below) await resume(below);
-  await destroy(r);
-  if (r.remoteId) activityTransport.finished?.(r.remoteId, resultCode, data);
-  return true;
+  transitions++;
+  try {
+    if (r.finishing) return true;
+    r.finishing = true;
+    if (r.resultTo && r.requestCode >= 0) {
+      r.resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
+    }
+    const wasTop = stack.at(-1) === r;
+    await pause(r);
+    const below = stack[stack.indexOf(r) - 1];
+    if (wasTop && below) await resume(below);
+    await destroy(r);
+    if (r.remoteId) activityTransport.finished?.(r.remoteId, resultCode, data);
+    return true;
+  } finally { transitions--; }
 }
 
 const LAUNCH_MULTIPLE = 0, FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, RESULT_CANCELED = 0;

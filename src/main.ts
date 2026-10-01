@@ -3,6 +3,7 @@ import { codeStats } from "./jvm/codecache";
 import "./natives";
 import { PROCESS_PID } from "./android/os";
 import { recordVsync, vsyncScheduled } from "./android/vsync";
+import { pendingTransitions } from "./android/server/atm";
 import { stageD } from "./jvm/provenance";
 import { dumpWindows } from "./shell/uiautomator";
 import { mountSystemCertificates } from "./shell/cacerts";
@@ -150,7 +151,7 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, vfs, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
+  rt, vfs, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
   nativeRequirements,
   layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed

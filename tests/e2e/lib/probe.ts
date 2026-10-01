@@ -195,6 +195,7 @@ function installProbe(cfg: ProbeConfig): void {
       if (u.needsInsets) r.push("insets");
     }
     if (wd.vsyncScheduled?.()) r.push("vsync");
+    if (wd.pendingTransitions?.()) r.push("transition");
     if (u.animHooks.size) r.push("animators");
     if (wd.yields.pending()) r.push("yields");
     if (inflight) r.push("inflight");
@@ -286,12 +287,14 @@ function installProbe(cfg: ProbeConfig): void {
     }
     const horizonMs = policy.kind === "quiescent" ? policy.maxVirtualMs : policy.horizonMs;
     const timeoutMs = policy.kind === "quiescent" ? policy.maxRealMs : policy.timeoutMs;
-    if (controlled) await g.wd.guestClock.advanceBy(horizonMs);
-    const horizonAt = t0 + (controlled ? 0 : horizonMs);
     // the pixel rule needs stableFrames + 1 samples past the horizon before it can settle, so
     // anything scheduled inside that window was always waited for: a toast timing out, a
-    // snackbar dismissing. The fast path keeps that contract.
-    const dueBefore = horizonAt + (q.stableFrames + 1) * q.intervalMs;
+    // snackbar dismissing, a list's click after its pressed state. The fast path keeps that
+    // contract, and a controlled clock runs through the window as a real one would.
+    const windowMs = (q.stableFrames + 1) * q.intervalMs;
+    if (controlled) await g.wd.guestClock.advanceBy(horizonMs + windowMs);
+    const horizonAt = t0 + (controlled ? 0 : horizonMs);
+    const dueBefore = horizonAt + windowMs;
     // the pixel rule samples only past the horizon, as the recorder does past its dwell
     const hashes: number[] = [];
     const seen: Record<string, number> = {};
@@ -308,7 +311,8 @@ function installProbe(cfg: ProbeConfig): void {
       const b = busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
-      const h = stableFrame(hashes, q.stableFrames);
+      // an activity start or finish in flight changes the screen however still it looks now
+      const h = b.includes("transition") ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
       if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
       await sleep(25);
