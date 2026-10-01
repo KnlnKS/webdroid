@@ -880,6 +880,9 @@ rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JOb
   }),
   // no device policy is installed to revoke anything
   [`isPermissionRevokedByPolicy(${S}${S}II)Z`]: () => 0,
+  // PermissionManagerServiceImpl answers FLAG_PERMISSION_USER_SET for a permission not held; a
+  // request is never denied here, so no permission carries it
+  [`shouldShowRequestPermissionRationale(${S}${S}II)Z`]: () => 0,
   "getSplitPermissions()Ljava/util/List;": driven(function* getSplitPermissions$(): Gen {
     return newArrayList(yield* all$(SPLIT_PERMISSIONS, function* split$([name, target, added]): Gen<JObj> {
       return yield make("android/content/pm/permission/SplitPermissionInfoParcelable", `(${S}Ljava/util/List;I)V`, permissionName(name), newArrayList([permissionName(added)]), target);
