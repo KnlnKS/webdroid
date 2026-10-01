@@ -434,7 +434,7 @@ function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: Nat
 }
 /** CanvasProperty's containers: a float, or a paint an animator changes, read when replayed */
 type Property<T> = { value: T };
-const prop = <T>(h: bigint) => deref<Property<T>>(h).value;
+const prop = <T>(h: bigint) => deref<Property<T>>(h);
 rt.registerJnis("android/graphics/RecordingCanvas", {
   "nCreateDisplayListCanvas(JII)J": (_node: bigint, w: number, h: number) => {
     const nc = new NativeCanvas();
@@ -458,16 +458,23 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
   // DeviceInfo::maxTextureSize on the reference device
   "nGetMaximumTextureWidth()I": () => 8192,
   "nGetMaximumTextureHeight()I": () => 8192,
-  "nDrawCircle(JJJJJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint) => recordOrRun(canvasAt(h).ctx, (ctx) =>
-    drawCircle(NativeCanvas.over(ctx), prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p))),
-  "nDrawRoundRect(JJJJJJJJ)V": (h: bigint, l: bigint, t: bigint, r: bigint, b: bigint, rx: bigint, ry: bigint, p: bigint) => recordOrRun(canvasAt(h).ctx, (ctx) =>
-    drawRoundRect(NativeCanvas.over(ctx), prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b),
-      prop<number>(rx), prop<number>(ry), prop<NativePaint>(p))),
+  // a display list holds its properties, as hwui's does, and reads their values (which render-thread
+  // animators move) when it replays
+  "nDrawCircle(JJJJJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint) => {
+    const [px, py, pr, pp] = [prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p)];
+    recordOrRun(canvasAt(h).ctx, (ctx) => drawCircle(NativeCanvas.over(ctx), px.value, py.value, pr.value, pp.value));
+  },
+  "nDrawRoundRect(JJJJJJJJ)V": (h: bigint, l: bigint, t: bigint, r: bigint, b: bigint, rx: bigint, ry: bigint, p: bigint) => {
+    const [pl, pt, pr, pb, prx, pry, pp] = [prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b), prop<number>(rx), prop<number>(ry), prop<NativePaint>(p)];
+    recordOrRun(canvasAt(h).ctx, (ctx) => drawRoundRect(NativeCanvas.over(ctx), pl.value, pt.value, pr.value, pb.value, prx.value, pry.value, pp.value));
+  },
   // the ripple is a RuntimeShader animated on the RenderThread; texture layers and WebView
   // functors are the compositor's
-  "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) =>
-    recordOrRun(canvasAt(h).ctx, (ctx) => drawRipple(ctx, prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p),
-      prop<number>(progress), prop<number>(phase), color, deref<RuntimeShaderBuilder>(builder))),
+  "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) => {
+    const [px, py, pr, pp, pg, ph] = [prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p), prop<number>(progress), prop<number>(phase)];
+    const shader = deref<RuntimeShaderBuilder>(builder);
+    recordOrRun(canvasAt(h).ctx, (ctx) => drawRipple(ctx, px.value, py.value, pr.value, pp.value, pg.value, ph.value, color, shader));
+  },
   "nDrawTextureLayer(JJ)V": unsupported("RecordingCanvas.drawTextureLayer"),
   "nDrawWebViewFunctor(JI)V": unsupported("RecordingCanvas.drawWebViewFunctor"),
 });
