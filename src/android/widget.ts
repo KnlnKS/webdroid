@@ -5,7 +5,8 @@ import { rt, type JObj, type NativeSpec, callSelf, fieldGetters, flagGetters, fi
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue, themeOf } from "./res";
 import { TV } from "./axml";
 import { type JInsets, JRect, insetsOf } from "./graphics";
-import { type NativePaint, newPaint, paintOf, paintTypeface, setPaintTypeface, measureText, fontAscent, fontDescent } from "./paint";
+import { type NativePaint, newPaint, paintOf, paintTypeface, setPaintTypeface, fontAscent, fontDescent } from "./paint";
+import { paintAdvance } from "./minikin";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { JTextView, textViewMethods, textViewCtors, JButton } from "./textview";
 import { compoundPadL, compoundPadR, syncCompoundPads } from "./textview-compound";
@@ -648,7 +649,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
       thumbH = yield drawableSize(thumb, true);
     }
     const paint = this.switchNative ?? this.tp;
-    const textW = this.showText ? Math.ceil(Math.max(measureText(paint, this.switchText(true)), measureText(paint, this.switchText(false)))) + this.thumbTextPadding * 2 : 0;
+    const textW = this.showText ? Math.ceil(Math.max(paintAdvance(paint, this.switchText(true)), paintAdvance(paint, this.switchText(false)))) + this.thumbTextPadding * 2 : 0;
     this.thumbW = Math.max(textW, thumbW);
     const insets: JInsets = yield* this.insets$();
     const trackH = this.track ? yield drawableSize(this.track, true) : 0;
@@ -692,7 +693,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     const cx = b ? (b.left + b.right) / 2 : this.width() / 2;
     const cy = (this.switchT + (track ? pad.top : 0) + this.switchB - (track ? pad.bottom : 0)) / 2;
     yield vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,
-      cx - measureText(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, jpaint);
+      cx - paintAdvance(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, jpaint);
   }),
 } });
 class JRadioGroup extends JLinearLayout {

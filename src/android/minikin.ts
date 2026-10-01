@@ -14,6 +14,7 @@ import { rt, driven, type Gen } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
 import { scall, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
+import { perf } from "../perf";
 import { type NativePaint, paintAt, rawWidth, measureCtx, fontAscent, fontDescent } from "./paint";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +107,11 @@ export function advances(style: TextStyle, text: string, start: number, end: num
     i = e;
   }
   return total;
+}
+/** the advance of `text` under `p`: what Paint.measureText answers and hwui draws the run across */
+export function paintAdvance(p: NativePaint, text: string): number {
+  perf.measureText++;
+  return advances(styleOf(p), text, 0, text.length);
 }
 
 // ── grapheme breaks ───────────────────────────────────────────────────────────────────────

@@ -213,10 +213,6 @@ export function rawWidth(f: string, s: string, language: string): number {
   byFont.set(s, w);
   return w;
 }
-export function measureText(p: NativePaint, s: string): number {
-  perf.measureText++;
-  return Math.fround((rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length) * p.textScaleX);
-}
 /** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds; the
  *  metrics are the drawn face's. Browser bounding-box metrics round to pixels even with FontFace
  *  metric overrides. */

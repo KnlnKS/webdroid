@@ -12,7 +12,8 @@ import { NativePath, PathMeasure, inversePath } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
 import { drawGlyphs } from "./shaping";
-import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, measureText, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
+import { paintAdvance } from "./minikin";
+import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import { cssColor, canvasLocalBounds, tintedBmp, argbOfColorLong, BLEND_MODES, COMPOSITE } from "./graphics";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch";
 import { type Mat, applyMatrix } from "./matrix";
@@ -268,7 +269,7 @@ function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePa
     if (warped) ctx.restore();
     // Canvas::drawTextDecorations: rects at least a pixel thick across the run's advance
     if (p.underline || p.strikeThru) {
-      const w = measureText(p, s);
+      const w = paintAdvance(p, s);
       const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
       nc.prep(p, false);
       if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));
@@ -286,14 +287,14 @@ const onPath = new PathMeasure(), posTan = new Float32Array(4), graphemes = type
  *  the whole run against the contour's length */
 function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: number, vOffset: number, p: NativePaint) {
   onPath.setPath(path, false);
-  const advance = measureText(p, s), align = p.textAlignN;
+  const advance = paintAdvance(p, s), align = p.textAlignN;
   if (align) hOffset += (align === 1 ? -0.5 : -1) * (advance - onPath.length());
   const left = p.textAlignN;
   p.textAlignN = 0;
   try {
     let x = 0;
     for (const { segment } of graphemes ? graphemes.segment(s) : Array.from(s, (segment) => ({ segment }))) {
-      const w = measureText(p, segment), half = w / 2, at = hOffset + x + half;
+      const w = paintAdvance(p, segment), half = w / 2, at = hOffset + x + half;
       let px = at, py = vOffset, tx = 1, ty = 0;
       if (onPath.getPosTan(at, posTan, posTan.subarray(2))) { px = posTan[0]; py = posTan[1]; tx = posTan[2]; ty = posTan[3]; }
       nc.ctx.save();

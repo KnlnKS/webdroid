@@ -3,7 +3,8 @@ import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JTextView } from "../../../src/android/textview";
-import { measureText, setFontMetrics, paintOf } from "../../../src/android/paint";
+import { setFontMetrics, paintOf } from "../../../src/android/paint";
+import { paintAdvance } from "../../../src/android/minikin";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { bootWithFonts } from "./boot";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
@@ -61,7 +62,7 @@ async function probe() {
   }
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
-  const width = measureText(view.tp, "A long title…"), wrapped = await view.measuredLines(width);
+  const width = paintAdvance(view.tp, "A long title…"), wrapped = await view.measuredLines(width);
   const ellipsized = await vcall(wrapped.java, "getEllipsisCount", "(I)I", 0) > 0;
   const desired = await vcall(rt.link("android/text/Layout").ctor, "getDesiredWidth", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F", view.text, view.paintT);
   const fitting = (await view.measuredLines(Math.ceil(desired))).java;
