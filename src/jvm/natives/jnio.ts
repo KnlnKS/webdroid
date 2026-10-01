@@ -328,7 +328,7 @@ rt.intrinsic(DBB, Object.assign({}, ...directTables));
 rt.intrinsic(HBB, Object.assign({}, ...[BYTE, ...KINDS].map((k) => accessors(k, heap, heapLoad(k), heapStore(k), true))));
 
 // a typed view's element is its ByteBuffer's, through that buffer's unchecked accessor at the
-// element's byte offset
+// element's byte offset; a read from an external mapping waits for its pages
 for (const k of KINDS) {
   const view = `java/nio/ByteBufferAs${k.name}Buffer`, ret = `Ljava/nio/${k.name}Buffer;`;
   const fields = { ...FIELDS, bb: mangleField(view, "bb"), byteOffset: mangleField(view, "byteOffset"), isReadOnly: mangleField(`java/nio/${k.name}Buffer`, "isReadOnly"),
@@ -344,7 +344,8 @@ for (const k of KINDS) {
       this.$position = at + 1; this.$bb.$putU(${ix}, v); return this;`, fields),
     [`put(I${k.d})${ret}`]: compile("at, v", `if (this.$isReadOnly || at < 0 || at >= this.$limit) return base.call(this, at, v); this.$bb.$putU(${ix}, v); return this;`, fields),
     [`get([${k.d}II)${ret}`]: compile("array, offset, length", `if (${bulkGuard}) return base.call(this, array, offset, length);
-      const at = this.$position; this.$bb.$getA(${ix}, array, offset, length); this.$position += length; return this;`, fields),
+      const at = this.$position, read = this.$bb.$getA(${ix}, array, offset, length); this.$position += length;
+      return read instanceof Promise ? read.then(() => this) : this;`, fields),
     [`put([${k.d}II)${ret}`]: compile("array, offset, length", `if (this.$isReadOnly || ${bulkGuard}) return base.call(this, array, offset, length);
       const at = this.$position; this.$bb.$putA(${ix}, array, offset, length); this.$position += length; return this;`, fields),
   });
