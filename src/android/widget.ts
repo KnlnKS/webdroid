@@ -10,7 +10,7 @@ import { canvasOf, type JavaCanvas } from "./canvas";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
 import { csText } from "../jvm/natives/jchars";
 import { G, absGravity } from "./gravity";
-import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/natives/jlang";
+import { vcall, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JMotionEvent } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
 import { accelDecel, loadInterpolator } from "./interpolator";
@@ -54,26 +54,26 @@ class JProgressBar extends JView {
  *  its aspect ratio, centred; an Animatable starts on its first draw, anything else is drawn at
  *  the level of a linear AlphaAnimation over the duration */
 const drawIndeterminate = driven(function* drawIndeterminate(pb: JProgressBar, cv: JavaCanvas, d: JDrawable): Gen {
-  const thread = curThread, w = pb.width() - pb.padL - pb.padR, h = pb.height() - pb.padT - pb.padB;
+  const w = pb.width() - pb.padL - pb.padR, h = pb.height() - pb.padT - pb.padB;
   let left = 0, top = 0, right = w, bottom = h;
   if (pb.onlyIndeterminate && !rt.iof(d, "android/graphics/drawable/AnimationDrawable")) {
-    const aspect = (yield drawableSize(d, false, thread)) / (yield drawableSize(d, true, thread));
+    const aspect = (yield drawableSize(d, false)) / (yield drawableSize(d, true));
     if (aspect > 0 && aspect !== w / h) {
       if (w / h > aspect) { const width = Math.trunc(h * aspect); left = Math.trunc((w - width) / 2); right = left + width; }
       else { const height = Math.trunc(w / aspect); top = Math.trunc((h - height) / 2); bottom = top + height; }
     }
   }
-  yield vcallOn(thread, d, "setBounds", "(IIII)V", left, top, right, bottom);
+  yield vcall(d, "setBounds", "(IIII)V", left, top, right, bottom);
   if (rt.iof(d, "android/graphics/drawable/Animatable")) {
-    if (!(yield vcallOn(thread, d, "isRunning", "()Z"))) yield vcallOn(thread, d, "start", "()V");
+    if (!(yield vcall(d, "isRunning", "()Z"))) yield vcall(d, "start", "()V");
   } else {
     const cycles = guestNow() / pb.duration, phase = cycles % 1;
-    yield vcallOn(thread, d, "setLevel", "(I)Z", Math.trunc((pb.behavior === 2 && Math.floor(cycles) % 2 ? 1 - phase : phase) * 10000));
+    yield vcall(d, "setLevel", "(I)Z", Math.trunc((pb.behavior === 2 && Math.floor(cycles) % 2 ? 1 - phase : phase) * 10000));
     invalidate(pb);
   }
   const ctx = canvasOf(cv).ctx;
   ctx.save(); ctx.translate(pb.padL, pb.padT);
-  try { yield drawChild(d, cv, thread); } finally { ctx.restore(); }
+  try { yield drawChild(d, cv); } finally { ctx.restore(); }
 });
 /** applyPrimaryProgressTint: the progress layer, or the whole drawable when it has none */
 const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): Gen {
@@ -84,16 +84,15 @@ const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): 
 });
 /** ProgressBar.onDraw's drawTrack: the progress and secondary layers at their levels, inside the padding */
 const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JavaCanvas, d: JDrawable): Gen {
-  const thread = curThread;
-  yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, pb.width() - pb.padL - pb.padR, pb.height() - pb.padT - pb.padB);
+  yield vcall(d, "setBounds", "(IIII)V", 0, 0, pb.width() - pb.padL - pb.padR, pb.height() - pb.padT - pb.padB);
   for (let primary = 0; primary < 2; primary++) {
     const id = primary ? PROGRESS_ID : SECONDARY_ID, v = primary ? pb.progress : pb.secondary;
-    const layer = rt.iof(d, LAYERS) ? yield vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
-    yield vcallOn(thread, layer ?? d, "setLevel", "(I)Z", Math.trunc(pb.fraction(v) * 10000));
+    const layer = rt.iof(d, LAYERS) ? yield vcall(d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
+    yield vcall(layer ?? d, "setLevel", "(I)Z", Math.trunc(pb.fraction(v) * 10000));
   }
   const ctx = canvasOf(cv).ctx;
   ctx.save(); ctx.translate(pb.padL, pb.padT);
-  try { yield drawChild(d, cv, thread); } finally { ctx.restore(); }
+  try { yield drawChild(d, cv); } finally { ctx.restore(); }
 });
 const initProgressBar = driven(function* initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style: number = AID("progressBarStyle"), def: number = 0): Gen {
   yield initViewFromCtx(this, c, set, style, def);
@@ -191,41 +190,40 @@ class JSeekBar extends JAbsSeekBar {
   thumbW = 0; thumbH = 0; thumbOffset = 0;
   override drawables(): (JDrawable | null)[] { return [...super.drawables(), this.thumb]; }
   changeListener: unknown = null;
-  setTrack(d: JDrawable | null, thread = curThread): unknown { return rt.drive(this.setTrack$(d, thread)); }
-  *setTrack$(d: JDrawable | null, thread = curThread): Gen {
+  setTrack(d: JDrawable | null): unknown { return rt.drive(this.setTrack$(d)); }
+  *setTrack$(d: JDrawable | null): Gen {
     if (this.progressD) yield setDrawableCallback(this.progressD, null);
     this.progressD = d;
-    if (d) { yield setDrawableCallback(d, this); yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    if (d) { yield setDrawableCallback(d, this); yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
     requestLayout(this); invalidate(this);
   }
-  setThumb(d: JDrawable | null, thread = curThread): unknown { return rt.drive(this.setThumb$(d, thread)); }
-  *setThumb$(d: JDrawable | null, thread = curThread): Gen {
+  setThumb(d: JDrawable | null): unknown { return rt.drive(this.setThumb$(d)); }
+  *setThumb$(d: JDrawable | null): Gen {
     if (this.thumb) yield setDrawableCallback(this.thumb, null);
     this.thumb = d;
-    this.thumbW = d ? Math.max(0, Number(yield drawableSize(d, false, thread))) : 0;
-    this.thumbH = d ? Math.max(0, Number(yield drawableSize(d, true, thread))) : 0;
+    this.thumbW = d ? Math.max(0, Number(yield drawableSize(d, false))) : 0;
+    this.thumbH = d ? Math.max(0, Number(yield drawableSize(d, true))) : 0;
     this.thumbOffset = Math.trunc(this.thumbW / 2);
-    if (d) { yield setDrawableCallback(d, this); yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    if (d) { yield setDrawableCallback(d, this); yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
     requestLayout(this); invalidate(this);
   }
-  updateProgress(value: number, fromUser = false, thread = curThread): unknown { return rt.drive(this.updateProgress$(value, fromUser, thread)); }
-  *updateProgress$(value: number, fromUser = false, thread = curThread): Gen {
+  updateProgress(value: number, fromUser = false): unknown { return rt.drive(this.updateProgress$(value, fromUser)); }
+  *updateProgress$(value: number, fromUser = false): Gen {
     const progress = this.clamp(Math.round(value));
     if (this.progress === progress) return;
     this.progress = progress; invalidate(this);
-    if (this.changeListener) yield vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
+    if (this.changeListener) yield vcall(this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
   }
 }
 const initSeekBar = driven(function* initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style: number = AID("seekBarStyle"), def: number = 0): Gen {
-  const thread = curThread;
   yield initViewFromCtx(this, c, attrs, style);
   if (!this.jres) return;
   const a = obtainStyled(this.jres, this.theme, attrs, ["progressDrawable", "thumb", "thumbOffset", "min", "max", "progress", "secondaryProgress"].map(AID), style, def);
   this.min = rvInt(this.jres, a.vals[3], 0); this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], 100));
   this.progress = this.clamp(rvInt(this.jres, a.vals[5], 0));
   this.secondary = rvInt(this.jres, a.vals[6], 0);
-  if (a.vals[0]) yield this.setTrack(yield loadDrawableRV(this.jres, a.vals[0], this.theme), thread);
-  if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
+  if (a.vals[0]) yield this.setTrack(yield loadDrawableRV(this.jres, a.vals[0], this.theme));
+  if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme));
   if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
 });
 const seekProgress = function (this: JSeekBar, value: number) { return this.updateProgress(value); };
@@ -243,41 +241,41 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   "setProgress(I)V": seekProgress,
   "setProgress(IZ)V": seekProgress,
   "drawableStateChanged()V": driven(function* (this: JSeekBar): Gen {
-    const thread = curThread, state = Int32Array.from(this.drawableState());
-    for (const d of [this.progressD, this.thumb]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
+    const state = Int32Array.from(this.drawableState());
+    for (const d of [this.progressD, this.thumb]) if (d) yield vcall(d, "setState", "([I)Z", state);
   }),
   "onMeasure(II)V": driven(function* (this: JSeekBar, ws: number, hs: number): Gen {
-    const thread = curThread, d = this.progressD;
-    const w = d ? Math.max(0, Number(yield drawableSize(d, false, thread))) : 0;
-    const h = d ? Math.max(0, Number(yield drawableSize(d, true, thread))) : 0;
+    const d = this.progressD;
+    const w = d ? Math.max(0, Number(yield drawableSize(d, false))) : 0;
+    const h = d ? Math.max(0, Number(yield drawableSize(d, true))) : 0;
     this.measuredW = resolveSize(Math.max(this.minW, w + this.padL + this.padR), ws);
     this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
   }),
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSeekBar, canvas: JavaCanvas): Gen {
-    const thread = curThread, ctx = canvasOf(canvas).ctx;
+    const ctx = canvasOf(canvas).ctx;
     if (this.progressD) yield drawTrack(this, canvas, this.progressD);
     if (!this.thumb) return;
     const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
     const x = Math.round(this.fraction(this.progress) * (w - this.thumbW + this.thumbOffset * 2)) - this.thumbOffset;
     const y = Math.trunc((h - this.thumbH) / 2);
     ctx.save(); ctx.translate(this.padL, this.padT);
-    try { yield drawAt(this.thumb, canvas, x, y, x + this.thumbW, y + this.thumbH, thread); } finally { ctx.restore(); }
+    try { yield drawAt(this.thumb, canvas, x, y, x + this.thumbW, y + this.thumbH); } finally { ctx.restore(); }
   }),
   "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSeekBar, event: JMotionEvent): Gen {
     if (!this.enabled) return 0;
-    const thread = curThread, action = event.action & 255;
+    const action = event.action & 255;
     if (action === 0) {
-      yield vcallOn(thread, this, "setPressed", "(Z)V", 1);
-      if (this.parent) yield vcallOn(thread, this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
-      if (this.changeListener) yield vcallOn(thread, this.changeListener, "onStartTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
+      yield vcall(this, "setPressed", "(Z)V", 1);
+      if (this.parent) yield vcall(this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
+      if (this.changeListener) yield vcall(this.changeListener, "onStartTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
     }
     if (action === 0 || action === 1 || action === 2) {
       const width = this.width() - this.padL - this.padR;
-      yield this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (event.x - this.padL) / width : 0)), true, thread);
+      yield this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (event.x - this.padL) / width : 0)), true);
     }
     if (action === 1 || action === 3) {
-      yield vcallOn(thread, this, "setPressed", "(Z)V", 0);
-      if (this.changeListener) yield vcallOn(thread, this.changeListener, "onStopTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
+      yield vcall(this, "setPressed", "(Z)V", 0);
+      if (this.changeListener) yield vcall(this.changeListener, "onStopTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
     }
     return 1;
   }),
@@ -308,17 +306,15 @@ const adopt = driven(function* adopt(v: JView, old: JDrawable | null, d: JDrawab
   if (old && old !== d) yield setDrawableCallback(old, null);
   if (!d) return;
   yield setDrawableCallback(d, v);
-  const thread = curThread;
-  if (yield vcallOn(thread, d, "isStateful", "()Z")) yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
+  if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
 });
 const drawableRes = (v: JView, id: number) => id ? vcall(v.ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
 /** AOSP applies an explicit tint list to a mutated copy and re-states it */
 const applyTint = driven(function* applyTint(v: JView, d: JDrawable | null, tint: JColorStateList | null, hasTint: boolean, mode: JSimpleEnum | null): Gen {
   if (!d || (!hasTint && !mode)) return;
-  const thread = curThread;
-  if (hasTint) yield vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tint);
-  if (mode) yield vcallOn(thread, d, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
-  if (yield vcallOn(thread, d, "isStateful", "()Z")) yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
+  if (hasTint) yield vcall(d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tint);
+  if (mode) yield vcall(d, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
+  if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
   invalidate(v);
 });
 /** CompoundButton and CheckedTextView place their indicator by the text's vertical gravity */
@@ -342,12 +338,11 @@ class JCompoundButton extends JButton {
   setButton(d: JDrawable | null): unknown { return rt.drive(this.setButton$(d)); }
   *setButton$(d: JDrawable | null): Gen {
     if (d === this.buttonD) return;
-    const thread = curThread;
     yield adopt(this, this.buttonD, d);
     this.buttonD = d;
-    this.buttonW = d ? Math.max(0, yield drawableSize(d, false, thread)) : 0;
+    this.buttonW = d ? Math.max(0, yield drawableSize(d, false)) : 0;
     // AOSP sizes the view to its button: setMinHeight(getIntrinsicHeight())
-    if (d) yield vcallOn(thread, this, "setMinHeight", "(I)V", yield drawableSize(d, true, thread));
+    if (d) yield vcall(this, "setMinHeight", "(I)V", yield drawableSize(d, true));
     yield this.applyButtonTint();
     requestLayout(this);
   }
@@ -388,10 +383,10 @@ function compoundCtors<T extends JCompoundButton>(styleAttr: string, then?: (v: 
 function compoundPadLeft(this: JCompoundButton) { return compoundPadL.call(this) + this.buttonW; }
 syncCompoundPads.add(compoundPadLeft);
 const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv: JavaCanvas): Gen {
-  const d = this.buttonD, thread = curThread;
+  const d = this.buttonD;
   if (d) {
-    const h = yield drawableSize(d, true, thread), top = indicatorTop(this, h);
-    yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, top, this.buttonW, top + h);
+    const h = yield drawableSize(d, true), top = indicatorTop(this, h);
+    yield vcall(d, "setBounds", "(IIII)V", 0, top, this.buttonW, top + h);
   }
   yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
   if (!d) return;
@@ -399,7 +394,7 @@ const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv
   const sx = this.scrollX, sy = this.scrollY;
   const ctx = canvasOf(cv).ctx;
   if (sx || sy) ctx.translate(sx, sy);
-  try { yield drawChild(d, cv, thread); } finally { if (sx || sy) ctx.translate(-sx, -sy); }
+  try { yield drawChild(d, cv); } finally { if (sx || sy) ctx.translate(-sx, -sy); }
 });
 const compoundMethods: NativeSpec["methods"] = {
   ...textViewMethods,
@@ -429,8 +424,8 @@ const compoundMethods: NativeSpec["methods"] = {
   },
   "drawableStateChanged()V": driven(function* (this: JCompoundButton): Gen {
     yield callSelf(textViewMethods, "drawableStateChanged()V", this);
-    const d = this.buttonD, thread = curThread;
-    if (d && (yield vcallOn(thread, d, "isStateful", "()Z")) && (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())))) invalidate(this);
+    const d = this.buttonD;
+    if (d && (yield vcall(d, "isStateful", "()Z")) && (yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())))) invalidate(this);
   }),
   "getCompoundPaddingLeft()I": compoundPadLeft,
   "onDraw(Landroid/graphics/Canvas;)V": compoundOnDraw,
@@ -499,10 +494,10 @@ class JSwitch extends JCompoundButton {
     return true;
   }
   /** the track's padding into `pad`, and the thumb's optical insets */
-  *insets$(thread = curThread): Gen<JInsets> {
-    if (this.track) yield vcallOn(thread, this.track, "getPadding", "(Landroid/graphics/Rect;)Z", this.pad);
+  *insets$(): Gen<JInsets> {
+    if (this.track) yield vcall(this.track, "getPadding", "(Landroid/graphics/Rect;)Z", this.pad);
     else this.pad.left = this.pad.top = this.pad.right = this.pad.bottom = 0;
-    return this.thumb ? yield vcallOn(thread, this.thumb, "getOpticalInsets", "()Landroid/graphics/Insets;") : NO_INSETS;
+    return this.thumb ? yield vcall(this.thumb, "getOpticalInsets", "()Landroid/graphics/Insets;") : NO_INSETS;
   }
   switchText(on: boolean): string { return on ? this.textOn : this.textOff; }
 }
@@ -568,13 +563,13 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
   // AOSP Switch.onTouchEvent: a press on the thumb that moves past the slop drags it; letting go
   // flings by velocity or settles on the nearer side, and the base view sees a cancel instead
   "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSwitch, ev: JMotionEvent): Gen {
-    const thread = curThread, action = ev.action & 255, slop = device.touchSlop;
+    const action = ev.action & 255, slop = device.touchSlop;
     if (action === 0 || action === 2) {
       if (action === 2 && ev.eventTime > this.lastT) this.velocity = (ev.x - this.lastX) * 1000 / (ev.eventTime - this.lastT);
       this.lastX = ev.x; this.lastT = ev.eventTime;
     }
     if (action === 0) {
-      const insets: JInsets = yield* this.insets$(thread);
+      const insets: JInsets = yield* this.insets$();
       const left = this.switchL + this.thumbOffset(this.thumbRange(insets)) - slop, right = left + this.thumbW + this.pad.left + this.pad.right + slop;
       if (this.enabled && this.thumb && ev.x > left && ev.x < right && ev.y > this.switchT - slop && ev.y < this.switchB + slop) {
         this.touchMode = 1; this.touchX = ev.x; this.touchY = ev.y; this.velocity = 0;
@@ -582,12 +577,12 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     } else if (action === 2 && this.touchMode === 1) {
       if (Math.abs(ev.x - this.touchX) > slop || Math.abs(ev.y - this.touchY) > slop) {
         this.touchMode = 2; this.animStart = -1;
-        if (this.parent) yield vcallOn(thread, this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
+        if (this.parent) yield vcall(this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
         this.touchX = ev.x; this.touchY = ev.y;
         return 1;
       }
     } else if (action === 2 && this.touchMode === 2) {
-      const range = this.thumbRange(yield* this.insets$(thread)), d = range ? (ev.x - this.touchX) / range : ev.x > this.touchX ? 1 : -1;
+      const range = this.thumbRange(yield* this.insets$()), d = range ? (ev.x - this.touchX) / range : ev.x > this.touchX ? 1 : -1;
       const pos = Math.max(0, Math.min(1, this.thumbPos + d));
       if (pos !== this.thumbPos) { this.touchX = ev.x; this.thumbPos = pos; invalidate(this); }
       return 1;
@@ -595,7 +590,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
       if (this.touchMode === 2) {
         this.touchMode = 0;
         const on = action === 1 && this.enabled ? (Math.abs(this.velocity) > device.dp(50) ? this.velocity > 0 : this.thumbPos > 0.5) : this.checked;
-        yield vcallOn(thread, this, "setChecked", "(Z)V", +on);
+        yield vcall(this, "setChecked", "(Z)V", +on);
         const cancel = copyEvent(ev); cancel.action = 3;
         yield viewTouch(this, cancel);
         return 1;
@@ -634,23 +629,23 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
   },
   "drawableStateChanged()V": driven(function* (this: JSwitch): Gen {
     yield callSelf(compoundMethods, "drawableStateChanged()V", this);
-    const thread = curThread, state = Int32Array.from(this.drawableState());
-    for (const d of [this.thumb, this.track]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
+    const state = Int32Array.from(this.drawableState());
+    for (const d of [this.thumb, this.track]) if (d) yield vcall(d, "setState", "([I)Z", state);
     invalidate(this);
   }),
   "onMeasure(II)V": driven(function* (this: JSwitch, wSpec: number, hSpec: number): Gen {
-    const thread = curThread, pad = this.pad, thumb = this.thumb;
+    const pad = this.pad, thumb = this.thumb;
     let thumbW = 0, thumbH = 0;
     if (thumb) {
-      yield vcallOn(thread, thumb, "getPadding", "(Landroid/graphics/Rect;)Z", pad);
-      thumbW = (yield drawableSize(thumb, false, thread)) - pad.left - pad.right;
-      thumbH = yield drawableSize(thumb, true, thread);
+      yield vcall(thumb, "getPadding", "(Landroid/graphics/Rect;)Z", pad);
+      thumbW = (yield drawableSize(thumb, false)) - pad.left - pad.right;
+      thumbH = yield drawableSize(thumb, true);
     }
     const paint = paintOf(this.switchPaint ?? this.paintT);
     const textW = this.showText ? Math.ceil(Math.max(measureText(paint, this.switchText(true)), measureText(paint, this.switchText(false)))) + this.thumbTextPadding * 2 : 0;
     this.thumbW = Math.max(textW, thumbW);
-    const insets: JInsets = yield* this.insets$(thread);
-    const trackH = this.track ? yield drawableSize(this.track, true, thread) : 0;
+    const insets: JInsets = yield* this.insets$();
+    const trackH = this.track ? yield drawableSize(this.track, true) : 0;
     this.switchW = Math.max(this.switchMinWidth, 2 * this.thumbW + Math.max(pad.left, insets.left) + Math.max(pad.right, insets.right));
     this.switchH = Math.max(trackH, thumbH);
     yield callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
@@ -667,30 +662,30 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     this.switchB = this.switchT + this.switchH;
   }),
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSwitch, cv: JavaCanvas): Gen {
-    const thread = curThread, pad = this.pad, { thumb, track } = this;
+    const pad = this.pad, { thumb, track } = this;
     if (this.animateThumb()) invalidate(this);
     // AOSP Switch.draw: the track spans the switch, the thumb sits along the scroll range
-    const insets: JInsets = yield* this.insets$(thread);
+    const insets: JInsets = yield* this.insets$();
     let thumbLeft = this.switchL + this.thumbOffset(this.thumbRange(insets));
     if (track) {
       thumbLeft += pad.left;
-      yield vcallOn(thread, track, "setBounds", "(IIII)V",
+      yield vcall(track, "setBounds", "(IIII)V",
         this.switchL + Math.max(0, insets.left - pad.left), this.switchT + Math.max(0, insets.top - pad.top),
         this.switchR - Math.max(0, insets.right - pad.right), this.switchB - Math.max(0, insets.bottom - pad.bottom));
     }
     if (thumb) {
-      yield vcallOn(thread, thumb, "getPadding", "(Landroid/graphics/Rect;)Z", pad);
-      yield vcallOn(thread, thumb, "setBounds", "(IIII)V", thumbLeft - pad.left, this.switchT, thumbLeft + this.thumbW + pad.right, this.switchB);
+      yield vcall(thumb, "getPadding", "(Landroid/graphics/Rect;)Z", pad);
+      yield vcall(thumb, "setBounds", "(IIII)V", thumbLeft - pad.left, this.switchT, thumbLeft + this.thumbW + pad.right, this.switchB);
     }
     yield compoundOnDraw.call(this, cv);
-    if (track) yield drawChild(track, cv, thread);
-    if (thumb) yield drawChild(thumb, cv, thread);
+    if (track) yield drawChild(track, cv);
+    if (thumb) yield drawChild(thumb, cv);
     const text = this.showText ? this.switchText(this.checked) : "";
     if (!text) return;
     const jpaint = this.switchPaint ?? this.paintT, paint = paintOf(jpaint), b = thumb && drawableBounds(thumb);
     const cx = b ? (b.left + b.right) / 2 : this.width() / 2;
     const cy = (this.switchT + (track ? pad.top : 0) + this.switchB - (track ? pad.bottom : 0)) / 2;
-    yield vcallOn(thread, cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,
+    yield vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,
       cx - measureText(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, jpaint);
   }),
 } });
@@ -806,17 +801,16 @@ class JCheckedTextView extends JTextView {
   applyTint(): unknown { return applyTint(this, this.checkMark, this.checkMarkTint, this.hasCheckMarkTint, this.checkMarkTintMode); }
   setCheckMark(d: JDrawable | null): unknown { return rt.drive(this.setCheckMark$(d)); }
   *setCheckMark$(d: JDrawable | null): Gen {
-    const thread = curThread;
     if (this.checkMark && this.checkMark !== d) yield setDrawableCallback(this.checkMark, null);
     this.checkMark = d;
     this.checkMarkW = 0;
     if (d) {
       yield setDrawableCallback(d, this);
       // AOSP records the mark's size in its checked state
-      yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.of(ST.checked));
-      yield vcallOn(thread, this, "setMinHeight", "(I)V", yield drawableSize(d, true, thread));
-      this.checkMarkW = Math.max(0, yield drawableSize(d, false, thread));
-      yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
+      yield vcall(d, "setState", "([I)Z", Int32Array.of(ST.checked));
+      yield vcall(this, "setMinHeight", "(I)V", yield drawableSize(d, true));
+      this.checkMarkW = Math.max(0, yield drawableSize(d, false));
+      yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
     }
     yield this.applyTint();
     this.updatePadding();
@@ -871,11 +865,11 @@ rt.register({
     }),
     "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JCheckedTextView, cv: JavaCanvas): Gen {
       yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
-      const d = this.checkMark, thread = curThread;
+      const d = this.checkMark;
       if (!d) return;
-      const h = yield drawableSize(d, true, thread), top = indicatorTop(this, h);
+      const h = yield drawableSize(d, true), top = indicatorTop(this, h);
       const left = this.atStart() ? this.basePad : this.width() - this.basePad - this.checkMarkW;
-      yield drawAt(d, cv, this.scrollX + left, top, this.scrollX + left + this.checkMarkW, top + h, thread);
+      yield drawAt(d, cv, this.scrollX + left, top, this.scrollX + left + this.checkMarkW, top + h);
     }),
   },
 });

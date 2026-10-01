@@ -3,7 +3,7 @@ import { type JDrawable, loadDrawable, loadDrawableRV, drawAt } from "./drawable
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium, typefaceOf } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, curThread, after, vcallOn } from "../jvm/natives/jlang";
+import { vcall, after } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
 import { reportUncaught } from "./os";
@@ -50,7 +50,6 @@ export class JActionBarView extends JViewGroup {
     return { action, overflow, slots: action.length + (overflow.length ? 1 : 0) };
   }
   *onDrawSelf$(cv: JavaCanvas): Gen {
-    const thread = curThread;
     const ctx = canvasOf(cv).ctx;
     const h = this.height();
     if (this.mode) { ctx.fillStyle = "#303030"; ctx.fillRect(0, 0, this.width(), h); }
@@ -62,10 +61,10 @@ export class JActionBarView extends JViewGroup {
       ctx.fillText("×", x, h / 2);
       x += 72;
     } else if (this.showUp && this.upDrawable) {
-      yield drawAt(this.upDrawable, cv, 2, h / 2 - 24, 50, h / 2 + 24, thread);
+      yield drawAt(this.upDrawable, cv, 2, h / 2 - 24, 50, h / 2 + 24);
     }
     if (this.icon) {
-      yield drawAt(this.icon, cv, x, h / 2 - 30, x + 60, h / 2 + 30, thread);
+      yield drawAt(this.icon, cv, x, h / 2 - 30, x + 60, h / 2 + 30);
       x += 72;
     }
     const { action: shown, overflow, slots } = this.layoutMenu();
@@ -108,8 +107,8 @@ export class JActionBarView extends JViewGroup {
       const cx = this.slotX(i, slots);
       if (item.icon) {
         // the bar's icons draw white, on a copy of the drawable's state
-        yield vcallOn(thread, yield vcallOn(thread, item.icon, "mutate", "()Landroid/graphics/drawable/Drawable;"), "setTint", "(I)V", -1);
-        yield drawAt(item.icon, cv, cx - 24, h / 2 - 24, cx + 24, h / 2 + 24, thread);
+        yield vcall(yield vcall(item.icon, "mutate", "()Landroid/graphics/drawable/Drawable;"), "setTint", "(I)V", -1);
+        yield drawAt(item.icon, cv, cx - 24, h / 2 - 24, cx + 24, h / 2 + 24);
       } else {
         ctx.font = "26px Roboto";
         ctx.textAlign = "center";

@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates, isShown } from "./view";
 import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, drawAt, setDrawableCallback, rvCsl } from "./drawable";
-import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
+import { curThread, vcall, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt } from "./res";
 import { modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat } from "./graphics";
@@ -15,20 +15,20 @@ export class JImageView extends JView {
    *  passes `invalidateView` false */
   setDrawable(d: JDrawable | null, invalidateView = true): unknown { return rt.drive(this.setDrawable$(d, invalidateView)); }
   private *setDrawable$(d: JDrawable | null, invalidateView: boolean): Gen {
-    const thread = curThread, old = this.dr, same = old === d;
-    if (old) yield callOn(thread, () => setDrawableCallback(old, null));
+    const old = this.dr, same = old === d;
+    if (old) yield setDrawableCallback(old, null);
     this.dr = d;
     if (invalidateView) invalidate(this);
     if (!d) { this.drawableW = this.drawableH = -1; return; }
-    yield callOn(thread, () => setDrawableCallback(d, this));
-    if (yield vcallOn(thread, d, "isStateful", "()Z")) yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
-    if (!same) yield vcallOn(thread, d, "setVisible", "(ZZ)Z", +(this.attached && isShown(this)), 1);
-    yield vcallOn(thread, d, "setLevel", "(I)Z", this.level);
-    this.drawableW = yield drawableSize(d, false, thread);
-    this.drawableH = yield drawableSize(d, true, thread);
-    yield callOn(thread, () => this.applyTint());
-    yield callOn(thread, () => this.applyColorFilter());
-    yield callOn(thread, () => this.applyImageAlpha());
+    yield setDrawableCallback(d, this);
+    if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
+    if (!same) yield vcall(d, "setVisible", "(ZZ)Z", +(this.attached && isShown(this)), 1);
+    yield vcall(d, "setLevel", "(I)Z", this.level);
+    this.drawableW = yield drawableSize(d, false);
+    this.drawableH = yield drawableSize(d, true);
+    yield this.applyTint();
+    yield this.applyColorFilter();
+    yield this.applyImageAlpha();
   }
   level = 0;
   override drawables(): (JDrawable | null)[] { return [...super.drawables(), this.dr]; }
@@ -61,7 +61,7 @@ export class JImageView extends JView {
   applyTint(): unknown {
     const d = this.dr, thread = curThread;
     if (!d) return;
-    return after(this.tintCsl ? vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.tintCsl) : undefined,
+    return after(this.tintCsl ? vcall(d, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.tintCsl) : undefined,
       () => this.tintMode ? vcallOn(thread, d, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", this.tintMode) : undefined);
   }
   colorFilter: unknown = null;
@@ -70,12 +70,12 @@ export class JImageView extends JView {
   hasImageAlpha = false;
   applyImageAlpha(): unknown {
     const d = this.dr, thread = curThread;
-    if (d && this.hasImageAlpha) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
+    if (d && this.hasImageAlpha) return after(vcall(d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
       () => vcallOn(thread, d, "setAlpha", "(I)V", this.imageAlpha));
   }
   applyColorFilter(): unknown {
     const d = this.dr, thread = curThread;
-    if (d && this.hasColorFilter) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
+    if (d && this.hasColorFilter) return after(vcall(d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
       () => vcallOn(thread, d, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", this.colorFilter));
   }
   /** stored for the getters; onMeasure does not apply them (AOSP does, with adjustViewBounds) */
@@ -98,7 +98,7 @@ const initImageView = driven(function* initImageView(view: JImageView, c: unknow
   }
 });
 /** this.invalidate(), which an app's view may override */
-const invalidateV = (v: JView): unknown => vcallOn(curThread, v, "invalidate", "()V");
+const invalidateV = (v: JView): unknown => vcall(v, "invalidate", "()V");
 const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": function (this: JImageView, c: unknown) { return initImageView(this, c, null, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JImageView, c: unknown, set: JAttrSet | null) { return initImageView(this, c, set, 0); },
@@ -122,7 +122,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
   "getImageAlpha()I": function (this: JImageView) { return this.imageAlpha; },
   "setImageAlpha(I)V": function (this: JImageView, alpha: number) {
-    return vcallOn(curThread, this, "setAlpha", "(I)V", alpha);
+    return vcall(this, "setAlpha", "(I)V", alpha);
   },
   "setAlpha(I)V": function (this: JImageView, alpha: number) {
     alpha &= 255;
@@ -139,7 +139,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   },
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) {
     this.adjustBounds = !!v;
-    if (v) return vcallOn(curThread, this, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", scaleTypes[3]);
+    if (v) return vcall(this, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", scaleTypes[3]);
   },
   "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
@@ -151,22 +151,21 @@ const imageViewMethods: NativeSpec["methods"] = {
       (mode) => vcallOn(thread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode));
   },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": driven(function* (this: JImageView, c: number, mode: unknown): Gen {
-    const thread = curThread;
     const f = yield newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
-    return vcallOn(thread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
+    return vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
   }),
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
     if (this.colorFilter === f) return;
     this.colorFilter = f; this.hasColorFilter = true;
     return after(this.applyColorFilter(), () => invalidateV(this));
   },
-  "clearColorFilter()V": function (this: JImageView) { return vcallOn(curThread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
+  "clearColorFilter()V": function (this: JImageView) { return vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
   "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JImageView) { return this.colorFilter; },
   "getImageTintList()Landroid/content/res/ColorStateList;": function (this: JImageView) { return this.tintCsl; },
   "setImageTintList(Landroid/content/res/ColorStateList;)V": function (this: JImageView, csl: JColorStateList | null) {
     this.tintCsl = csl;
     invalidate(this);
-    if (this.drawable) return vcallOn(curThread, this.drawable, "setTintList", "(Landroid/content/res/ColorStateList;)V", csl);
+    if (this.drawable) return vcall(this.drawable, "setTintList", "(Landroid/content/res/ColorStateList;)V", csl);
   },
   "getImageTintMode()Landroid/graphics/PorterDuff$Mode;": function (this: JImageView) {
     return this.tintMode ?? modeConstant("android/graphics/PorterDuff$Mode", "SRC_IN");
@@ -174,11 +173,11 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setImageTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, mode: JSimpleEnum | null) {
     this.tintMode = mode;
     invalidate(this);
-    if (this.drawable) return vcallOn(curThread, this.drawable, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
+    if (this.drawable) return vcall(this.drawable, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
   },
   "setImageLevel(I)V": function (this: JImageView, l: number) {
     this.level = l;
-    if (this.drawable) return vcallOn(curThread, this.drawable, "setLevel", "(I)Z", l);
+    if (this.drawable) return vcall(this.drawable, "setLevel", "(I)Z", l);
   },
   "setImageState([IZ)V": function (this: JImageView, state: Int32Array | null, merge: number) {
     this.imageState = state; this.mergeImageState = !!merge;
@@ -191,8 +190,8 @@ const imageViewMethods: NativeSpec["methods"] = {
   },
   "drawableStateChanged()V": function (this: JImageView) {
     const d = this.drawable;
-    if (d) return after(vcallOn(curThread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())),
-      (changed) => changed ? vcallOn(curThread, this, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d) : undefined);
+    if (d) return after(vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())),
+      (changed) => changed ? vcall(this, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d) : undefined);
   },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },
   "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) {
@@ -210,9 +209,9 @@ const imageViewMethods: NativeSpec["methods"] = {
   ...noops("setImageURI(Landroid/net/Uri;)V"),
   "onMeasure(II)V": driven(function* (this: JImageView, wSpec: number, hSpec: number): Gen {
     if (this.drawable) {
-      const thread = curThread, w = drawableSize(this.drawable, false, thread);
+      const w = drawableSize(this.drawable, false);
       this.drawableW = w instanceof Promise ? yield w : w;
-      const h = drawableSize(this.drawable, true, thread);
+      const h = drawableSize(this.drawable, true);
       this.drawableH = h instanceof Promise ? yield h : h;
     }
     const dw = Math.max(0, this.drawableW), dh = Math.max(0, this.drawableH);
@@ -232,7 +231,6 @@ const imageViewMethods: NativeSpec["methods"] = {
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JImageView, cv: JavaCanvas): Gen {
     const d = this.drawable;
     if (!d) return;
-    const thread = curThread;
     const aw = this.width() - this.padL - this.padR, ah = this.height() - this.padT - this.padB;
     if (aw <= 0 || ah <= 0) return;
     if (this.drawableW === 0 || this.drawableH === 0) return;
@@ -248,7 +246,7 @@ const imageViewMethods: NativeSpec["methods"] = {
       }
       ctx.translate(this.padL, this.padT);
       if (matrix) applyMatrix(ctx, matrix);
-      const drawn = drawAt(d, cv, 0, 0, dw, dh, thread);
+      const drawn = drawAt(d, cv, 0, 0, dw, dh);
       if (drawn instanceof Promise) yield drawn;
     } finally { nc.restoreToCount(saveCount); }
   }),

@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, callSelf, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { newObj, vcall, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, after, vcallUncaught } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom, setViewBackground } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources, attrSet } from "./res";
@@ -536,11 +536,11 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.finishLayout();
   }),
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JListView, cv: JavaCanvas): Gen {
-    const d = this.divDraw, thread = curThread;
+    const d = this.divDraw;
     if (!d || this.divH <= 0) return;
     const vs = this.allViews();
     for (let i = 0; i < vs.length - 1; i++) {
-      const pending = drawAt(d, cv, this.padL, vs[i].bottom, this.width() - this.padR, vs[i].bottom + this.divH, thread);
+      const pending = drawAt(d, cv, this.padL, vs[i].bottom, this.width() - this.padR, vs[i].bottom + this.divH);
       if (pending instanceof Promise) yield pending;
     }
   }),

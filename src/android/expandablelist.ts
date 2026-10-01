@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec, fieldSetters, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import { type JView, vgMethods } from "./view";
 import { AID, type JAttrSet, obtainStyled, rvDimen } from "./res";
 import { type JDrawable, ST, loadDrawableRV, drawableSize, drawAt } from "./drawable";
@@ -32,17 +32,17 @@ class JExpandableListConnector extends JBaseAdapter {
   /** the rows the adapter's groups and the expanded set make, then the list's own rebuild */
   refresh(): unknown { return rt.drive(this.refresh$()); }
   *refresh$(): Gen {
-    const a = this.adapter, thread = curThread, rows: Row[] = [];
-    const n = Number(yield vcallOn(thread, a, "getGroupCount", "()I"));
+    const a = this.adapter, rows: Row[] = [];
+    const n = Number(yield vcall(a, "getGroupCount", "()I"));
     for (const g of this.expanded) if (g >= n) this.expanded.delete(g);
     for (let g = 0; g < n; g++) {
       rows.push({ g, c: -1, last: false });
       if (!this.expanded.has(g)) continue;
-      const k = Number(yield vcallOn(thread, a, "getChildrenCount", "(I)I", g));
+      const k = Number(yield vcall(a, "getChildrenCount", "(I)I", g));
       for (let c = 0; c < k; c++) rows.push({ g, c, last: c === k - 1 });
     }
     this.rows = rows;
-    yield vcallOn(thread, this, "notifyDataSetChanged", "()V");
+    yield vcall(this, "notifyDataSetChanged", "()V");
   }
   /** ExpandableListConnector.expandGroup/collapseGroup: false when nothing changed */
   toggle(g: number, open: boolean): unknown { return rt.drive(this.toggle$(g, open)); }
@@ -197,7 +197,7 @@ rt.register({
     "dispatchDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JExpandableListView, cv: JavaCanvas): Gen {
       yield callSelf(vgMethods, "dispatchDraw(Landroid/graphics/Canvas;)V", this, cv);
       if (!this.connector || (!this.groupIndicator && !this.childIndicator)) return;
-      const thread = curThread, { rows, expanded } = this.connector, vs = this.allViews(), top = this.scrollY, bottom = top + this.height();
+      const { rows, expanded } = this.connector, vs = this.allViews(), top = this.scrollY, bottom = top + this.height();
       for (let i = this.headers.length; i < vs.length - this.footers.length; i++) {
         const v = vs[i], r = this.rowAt(i);
         if (!r || v.bottom < top || v.top > bottom) continue;
@@ -205,13 +205,13 @@ rt.register({
         const left = child && this.childIndicatorLeft !== -1 ? this.childIndicatorLeft : this.indicatorLeft;
         const right = child && this.childIndicatorRight !== -1 ? this.childIndicatorRight : this.indicatorRight;
         if (!d || left === right) continue;
-        if (yield vcallOn(thread, d, "isStateful", "()Z")) {
+        if (yield vcall(d, "isStateful", "()Z")) {
           // AOSP counts a collapsed group as empty: only an expanded one has children to ask about
           const open = expanded.has(r.g), next = rows[i - this.headers.length + 1];
           const empty = !open || !next || next.c < 0;
-          yield vcallOn(thread, d, "setState", "([I)Z", child ? (r.last ? CHILD_LAST : NO_STATE) : GROUP_STATES[(open ? 1 : 0) | (empty ? 2 : 0)]);
+          yield vcall(d, "setState", "([I)Z", child ? (r.last ? CHILD_LAST : NO_STATE) : GROUP_STATES[(open ? 1 : 0) | (empty ? 2 : 0)]);
         }
-        yield drawAt(d, cv, left + this.padL, v.top, right + this.padL, v.bottom, thread);
+        yield drawAt(d, cv, left + this.padL, v.top, right + this.padL, v.bottom);
       }
     }),
   },
