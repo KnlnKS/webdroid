@@ -1,3 +1,4 @@
+import { hostStub } from "./binder";
 import { services, attributionSource, type JContext } from "./context";
 import { rt, type NativeSpec, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
@@ -206,6 +207,42 @@ export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: nu
   }
   return -1;
 }
+/** UriGrantsManagerService.takePersistableUriPermission for this app: a grant it was offered as
+ *  persistable, or one it already persisted */
+function takePersistable(u: JUri, modes: number): void {
+  if (!u) rt.npe();
+  const requested = modes & 3;
+  if (!requested) return;
+  const all = uriGrants.all();
+  const old = all.find((grant) => grant.uri === u.uri);
+  const offered = transientFlags(appHost?.pkg ?? "", u);
+  if ((offered & (requested | PERSISTABLE_GRANT)) !== (requested | PERSISTABLE_GRANT) &&
+    (!old || (old.flags & requested) !== requested))
+    throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u.uri);
+  const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
+  uriGrants.set([...all.filter((grant) => grant.uri !== u.uri), { uri: u.uri, flags, time: Date.now() }]);
+}
+function releasePersistable(u: JUri, modes: number): void {
+  if (!u) rt.npe();
+  uriGrants.set(uriGrants.all().flatMap((grant) => {
+    if (grant.uri !== u.uri) return [grant];
+    const flags = grant.flags & ~(modes & 3);
+    return flags & 3 ? [{ ...grant, flags }] : [];
+  }));
+}
+const persistedPermissions = async (): Promise<JObj> => newArrayList(await Promise.all(uriGrants.all().map((grant) =>
+  newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", mkUri(grant.uri), grant.flags, BigInt(grant.time)))));
+
+// IUriGrantsManager, under AOSP's ContentResolver: this app's persisted grants. Grants it made to
+// others are not recorded, so it has no outgoing ones.
+rt.register({ name: "webdroid/UriGrantsManagerService", ctor: class extends JObj {}, sup: "android/app/IUriGrantsManager$Stub", methods: {
+  "takePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri, modes: number) => takePersistable(u, modes),
+  "releasePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri, modes: number) => releasePersistable(u, modes),
+  "getUriPermissions(Ljava/lang/String;ZZ)Landroid/content/pm/ParceledListSlice;": async (_pkg: string, incoming: number) =>
+    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? await persistedPermissions() : newArrayList()),
+} });
+hostStub("uri_grants", "webdroid/UriGrantsManagerService");
+
 /** ContentResolver.getResourceId: android.resource://pkg/id or android.resource://pkg/type/name */
 function resourceBytes(u: JUri): Uint8Array {
   const { authority, path } = uriParts(u), res = authority === appHost?.pkg ? appHost.res : null;
@@ -402,28 +439,8 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = yield contentProvider(u);
     return provider ? vcall(provider, "delete", providerOperations.delete, u, where, args) : 0;
   }),
-  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
-    if (!u) rt.npe();
-    const requested = modes & 3;
-    if (!requested) return;
-    const all = uriGrants.all();
-    const old = all.find((grant) => grant.uri === u.uri);
-    const offered = transientFlags(appHost?.pkg ?? "", u);
-    if ((offered & (requested | PERSISTABLE_GRANT)) !== (requested | PERSISTABLE_GRANT) &&
-      (!old || (old.flags & requested) !== requested))
-      throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u.uri);
-    const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
-    uriGrants.set([...all.filter((grant) => grant.uri !== u.uri), { uri: u.uri, flags, time: Date.now() }]);
-  },
-  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
-    if (!u) rt.npe();
-    uriGrants.set(uriGrants.all().flatMap((grant) => {
-      if (grant.uri !== u.uri) return [grant];
-      const flags = grant.flags & ~(modes & 3);
-      return flags & 3 ? [{ ...grant, flags }] : [];
-    }));
-  },
-  "getPersistedUriPermissions()Ljava/util/List;": async () => newArrayList(await Promise.all(uriGrants.all().map((grant) =>
-    newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", mkUri(grant.uri), grant.flags, BigInt(grant.time))))),
+  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => takePersistable(u, modes),
+  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => releasePersistable(u, modes),
+  "getPersistedUriPermissions()Ljava/util/List;": persistedPermissions,
 };
 rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
