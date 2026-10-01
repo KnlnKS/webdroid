@@ -25,7 +25,7 @@ const SAME64: Record<number, string> = {
   68: "pwrite64", 71: "sendfile", 78: "readlinkat", 79: "fstatat", 80: "fstat", 82: "fsync", 83: "fdatasync",
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime", 88: "utimensat", 90: "capget", 101: "nanosleep",
   113: "clock_gettime", 114: "clock_getres", 115: "clock_nanosleep", 120: "sched_getscheduler", 124: "sched_yield",
-  129: "kill", 131: "tgkill", 132: "sigaltstack", 134: "rt_sigaction", 140: "setpriority", 141: "getpriority", 155: "getpgid",
+  129: "kill", 133: "sigsuspend", 131: "tgkill", 132: "sigaltstack", 134: "rt_sigaction", 140: "setpriority", 141: "getpriority", 155: "getpgid",
   160: "uname", 163: "getrlimit", 164: "setrlimit", 166: "umask", 167: "prctl", 169: "gettimeofday", 173: "getppid",
   174: "getuid", 175: "geteuid", 176: "getgid", 177: "getegid", 198: "socket", 199: "socketpair", 200: "bind", 201: "listen",
   202: "accept", 203: "connect", 204: "getsockname", 205: "getpeername", 206: "sendto", 207: "recvfrom", 208: "setsockopt",
@@ -60,6 +60,7 @@ const A64: Record<number, HostFn> = {
   98: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); return futex(cpu, addr, op, val, ts); },
   99: () => 0,                                                                   // set_robust_list: no process-shared robust mutexes to recover
   121: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },                     // sched_getparam: SCHED_OTHER's priority
+  119: (cpu, a) => { a.i(); const policy = a.i() & ~0x40000000; return policy === 0 || policy === 3 || policy === 5 ? 0 : fail(cpu, E.PERM); }, // sched_setscheduler: the normal policies; real-time needs CAP_SYS_NICE
   122: () => 0,                                                                  // sched_setaffinity: one core, nothing to pin
   123: (cpu, a) => {                                                             // sched_getaffinity
     const pid = a.i(), n = a.u(), set = a.p();
@@ -106,6 +107,25 @@ const A64: Record<number, HostFn> = {
     if (pid !== cpu.pid || !t || t.finished) return fail(cpu, E.SRCH);
     signalThread(cpu, t, sig);
     return 0;
+  },
+  270: (cpu, a) => {                                                             // process_vm_readv, of this process: a crash reporter's safe read
+    const pid = a.i(), local = a.p(), nLocal = a.u(), remote = a.p(), nRemote = a.u();
+    if (pid !== cpu.pid) return fail(cpu, E.SRCH);
+    const iov = (at: number, n: number) => Array.from({ length: n }, (_, i) => ({ va: mem.ld64(at + i * 16), len: Number(mem.ld64(at + i * 16 + 8)) }));
+    const chunks: Uint8Array[] = [];
+    for (const { va, len } of iov(remote, nRemote)) {
+      try { if (len) chunks.push(mem.bytes(mem.txVa(va & 0x00ffffffffffffffn), len).slice()); } catch { if (!chunks.length) return fail(cpu, E.FAULT); break; }
+    }
+    let moved = 0, at = 0, chunk = 0;
+    for (const { va, len } of iov(local, nLocal)) {
+      for (let done = 0; done < len && chunk < chunks.length;) {
+        const n = Math.min(len - done, chunks[chunk].length - at);
+        mem.write(mem.txVa(va + BigInt(done)), chunks[chunk].subarray(at, at + n));
+        done += n; at += n; moved += n;
+        if (at === chunks[chunk].length) { chunk++; at = 0; }
+      }
+    }
+    return moved;
   },
   276: (cpu, a) => hostFn("libc.so", "renameat")!(cpu, a),                       // renameat2, its flags unread
   278: (_c, a) => { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; }, // getrandom
