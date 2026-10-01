@@ -105,7 +105,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     let [x, y] = s.tap ?? [];
     if (s.text) {
       let at = null;
-      for (let tries = 0; !at && tries < 30; tries++) { at = w.wd.locateText(s.text); if (!at) await sleep(100); }
+      for (let tries = 0; !at && tries < 30; tries++) { at = await w.wd.locateText(s.text); if (!at) await sleep(100); }
       if (!at) throw new Error(`no text "${s.text}" on screen`);
       ({ x, y } = at);
     }
