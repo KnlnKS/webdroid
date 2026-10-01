@@ -50,6 +50,7 @@ import "./android/bitmap";
 import "./android/decode";
 import "./android/animatedimage";
 import "./android/canvas";
+import "./android/canvas-draw";
 import "./android/rendernode";
 import "./android/pathparser";
 import "./android/vectordrawable";

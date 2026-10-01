@@ -15,7 +15,8 @@ import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
 import { Camera3D, type Mat, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./matrix";
-import { NativeCanvas, drawInLayer, drawCircle, drawRoundRect, clipRoundRect } from "./canvas";
+import { NativeCanvas, drawInLayer, clipRoundRect } from "./canvas";
+import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
 import { type RuntimeShaderBuilder } from "./runtime-shader";
 
