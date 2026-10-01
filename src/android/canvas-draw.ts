@@ -16,7 +16,7 @@ import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, measureText, un
 import { cssColor, canvasLocalBounds, tintedBmp, argbOfColorLong, BLEND_MODES, COMPOSITE } from "./graphics";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch";
 import { type Mat, applyMatrix } from "./matrix";
-import { type NativeCanvas, canvasAt, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas";
+import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas";
 
 function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
   if (tryBitmapPath(nc, p, path)) return;
@@ -303,70 +303,70 @@ const optPaint = (nc: NativeCanvas, h: bigint) => (h ? nc.paint(h) : null);
 const matrixAt = (h: bigint) => deref<Mat>(h);
 const pathAt = (h: bigint) => deref<NativePath>(h);
 const DRAWS: Record<string, unknown> = {
-  "nDrawColor(JII)V": (h: bigint, c: number, mode: number) => drawColor(canvasAt(h), c, mode),
-  "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint, mode: number) => drawColor(canvasAt(h), argbOfColorLong(c), mode),
-  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => { const nc = canvasAt(h); nc.drawPaint(nc.paint(p)); },
-  "nDrawRect(JFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => { const nc = canvasAt(h); drawRect(nc, l, t, r, b, nc.paint(p)); },
+  "nDrawColor(JII)V": (h: bigint, c: number, mode: number) => drawColor(drawingCanvas(h), c, mode),
+  "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint, mode: number) => drawColor(drawingCanvas(h), argbOfColorLong(c), mode),
+  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => { const nc = drawingCanvas(h); nc.drawPaint(nc.paint(p)); },
+  "nDrawRect(JFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => { const nc = drawingCanvas(h); drawRect(nc, l, t, r, b, nc.paint(p)); },
   "nDrawRoundRect(JFFFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, p: bigint) => {
-    const nc = canvasAt(h); drawRoundRect(nc, l, t, r, b, rx, ry, nc.paint(p));
+    const nc = drawingCanvas(h); drawRoundRect(nc, l, t, r, b, rx, ry, nc.paint(p));
   },
   "nDrawDoubleRoundRect(JFFFFFFFFFFFFJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orx: number, ory: number,
     il: number, it: number, ir: number, ib: number, irx: number, iry: number, p: bigint) => {
-    const nc = canvasAt(h); drawDoubleRoundRect(nc, ol, ot, or, ob, orx, ory, il, it, ir, ib, irx, iry, nc.paint(p));
+    const nc = drawingCanvas(h); drawDoubleRoundRect(nc, ol, ot, or, ob, orx, ory, il, it, ir, ib, irx, iry, nc.paint(p));
   },
   // per-corner radii; a 2D context's round rect takes one radius pair per corner as well
   "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array,
     il: number, it: number, ir: number, ib: number, irad: Float32Array, p: bigint) => {
-    const nc = canvasAt(h), ring = new Path2D(), corners = (r: Float32Array) => [0, 2, 4, 6].map((i) => ({ x: Math.max(r[i], 0), y: Math.max(r[i + 1], 0) }));
+    const nc = drawingCanvas(h), ring = new Path2D(), corners = (r: Float32Array) => [0, 2, 4, 6].map((i) => ({ x: Math.max(r[i], 0), y: Math.max(r[i + 1], 0) }));
     ring.roundRect(ol, ot, or - ol, ob - ot, corners(orad));
     ring.roundRect(il, it, ir - il, ib - it, corners(irad));
     nc.drawShape(nc.paint(p), (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
   },
-  "nDrawCircle(JFFFJ)V": (h: bigint, x: number, y: number, r: number, p: bigint) => { const nc = canvasAt(h); drawCircle(nc, x, y, r, nc.paint(p)); },
-  "nDrawOval(JFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => { const nc = canvasAt(h); drawOval(nc, l, t, r, b, nc.paint(p)); },
+  "nDrawCircle(JFFFJ)V": (h: bigint, x: number, y: number, r: number, p: bigint) => { const nc = drawingCanvas(h); drawCircle(nc, x, y, r, nc.paint(p)); },
+  "nDrawOval(JFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => { const nc = drawingCanvas(h); drawOval(nc, l, t, r, b, nc.paint(p)); },
   "nDrawArc(JFFFFFFZJ)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number, center: number, p: bigint) => {
-    const nc = canvasAt(h); drawArc(nc, l, t, r, b, start, sweep, center, nc.paint(p));
+    const nc = drawingCanvas(h); drawArc(nc, l, t, r, b, start, sweep, center, nc.paint(p));
   },
-  "nDrawLine(JFFFFJ)V": (h: bigint, x0: number, y0: number, x1: number, y1: number, p: bigint) => { const nc = canvasAt(h); drawLine(nc, x0, y0, x1, y1, nc.paint(p)); },
-  "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = canvasAt(h); drawLines(nc, pts, off, n, nc.paint(p)); },
+  "nDrawLine(JFFFFJ)V": (h: bigint, x0: number, y0: number, x1: number, y1: number, p: bigint) => { const nc = drawingCanvas(h); drawLine(nc, x0, y0, x1, y1, nc.paint(p)); },
+  "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawLines(nc, pts, off, n, nc.paint(p)); },
   "nDrawPoint(JFFJ)V": (h: bigint, x: number, y: number, p: bigint) => {
-    const nc = canvasAt(h), paint = nc.paint(p);
+    const nc = drawingCanvas(h), paint = nc.paint(p);
     nc.prep(paint, false);
     nc.ctx.beginPath();
     pointPath(nc.ctx, x, y, paint);
     nc.ctx.fill();
   },
-  "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = canvasAt(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
-  "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = canvasAt(h); drawPath(nc, pathAt(path), nc.paint(p)); },
-  "nDrawRegion(JJJ)V": (h: bigint, r: bigint, p: bigint) => { const nc = canvasAt(h); drawRegion(nc, deref<NativeRegion>(r), nc.paint(p)); },
+  "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
+  "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); drawPath(nc, pathAt(path), nc.paint(p)); },
+  "nDrawRegion(JJJ)V": (h: bigint, r: bigint, p: bigint) => { const nc = drawingCanvas(h); drawRegion(nc, deref<NativeRegion>(r), nc.paint(p)); },
   "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _bidi: number, p: bigint) => {
-    const nc = canvasAt(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
+    const nc = drawingCanvas(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
   },
   "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _bidi: number, p: bigint) => {
-    const nc = canvasAt(h); drawText(nc, charsToString(c, i, n), x, y, nc.paint(p));
+    const nc = drawingCanvas(h); drawText(nc, charsToString(c, i, n), x, y, nc.paint(p));
   },
   // a run is shaped in its context and drawn from start to end; one direction and one font here
   "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, p: bigint) => {
-    const nc = canvasAt(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
+    const nc = drawingCanvas(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
   },
   "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, p: bigint) => {
-    const nc = canvasAt(h); drawText(nc, charsToString(c, i, n), x, y, nc.paint(p));
+    const nc = drawingCanvas(h); drawText(nc, charsToString(c, i, n), x, y, nc.paint(p));
   },
   "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V": (h: bigint, s: string, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) => {
-    const nc = canvasAt(h); drawTextOnPath(nc, s, pathAt(path), ho, vo, nc.paint(p));
+    const nc = drawingCanvas(h); drawTextOnPath(nc, s, pathAt(path), ho, vo, nc.paint(p));
   },
   "nDrawTextOnPath(J[CIIJFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) => {
-    const nc = canvasAt(h); drawTextOnPath(nc, charsToString(c, i, n), pathAt(path), ho, vo, nc.paint(p));
+    const nc = drawingCanvas(h); drawTextOnPath(nc, charsToString(c, i, n), pathAt(path), ho, vo, nc.paint(p));
   },
   "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, p: bigint, canvasDensity: number, _screen: number, bitmapDensity: number) => {
-    const nc = canvasAt(h); drawBitmapAt(nc, bitmapAt(b), x, y, optPaint(nc, p), canvasDensity, bitmapDensity);
+    const nc = drawingCanvas(h); drawBitmapAt(nc, bitmapAt(b), x, y, optPaint(nc, p), canvasDensity, bitmapDensity);
   },
   "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, p: bigint) => {
-    const nc = canvasAt(h);
+    const nc = drawingCanvas(h);
     drawBitmap(nc, bitmapAt(b), optPaint(nc, p), (ctx, image) => ctx.drawImage(image, sl, st, sr - sl, sb - st, dl, dt, dr - dl, db - dt));
   },
   "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, p: bigint) => {
-    const nc = canvasAt(h);
+    const nc = drawingCanvas(h);
     nc.ctx.save();
     try {
       applyMatrix(nc.ctx, matrixAt(m));
@@ -375,19 +375,19 @@ const DRAWS: Record<string, unknown> = {
   },
   // colours rather than a Bitmap: put the pixels in one and draw that
   "nDrawBitmap(J[IIIFFIIZJ)V": (h: bigint, colors: Int32Array, offset: number, stride: number, x: number, y: number, w: number, ih: number, alpha: number, p: bigint) => {
-    const nc = canvasAt(h), b = new NativeBitmap(w, ih, ARGB_8888, alpha ? PREMUL : OPAQUE);
+    const nc = drawingCanvas(h), b = new NativeBitmap(w, ih, ARGB_8888, alpha ? PREMUL : OPAQUE);
     setPixels(b, colors, offset, stride, 0, 0, w, ih);
     drawBitmap(nc, b, optPaint(nc, p), (ctx, image) => ctx.drawImage(image, x, y));
   },
   "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, chunk: bigint, l: number, t: number, r: number, bo: number, p: bigint, dstDensity: number, srcDensity: number) => {
-    const nc = canvasAt(h); drawPatch(nc, bitmapAt(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(nc, p), dstDensity, srcDensity);
+    const nc = drawingCanvas(h); drawPatch(nc, bitmapAt(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(nc, p), dstDensity, srcDensity);
   },
-  "nPunchHole(JFFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, alpha: number) => punchHole(canvasAt(h), l, t, r, b, rx, ry, alpha),
+  "nPunchHole(JFFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, alpha: number) => punchHole(drawingCanvas(h), l, t, r, b, rx, ry, alpha),
   // meshes, vertices with per-vertex colours and bitmap meshes need triangle rasterization a 2D
   // context does not have
   // glyph runs from a font's outlines, which HarfBuzz reads (shaping.ts)
   "nDrawGlyphs(J[I[FIIIJJ)V": (h: bigint, ids: Int32Array, positions: Float32Array, idOffset: number, posOffset: number, count: number, font: bigint, p: bigint) => {
-    const nc = canvasAt(h), paint = nc.paint(p);
+    const nc = drawingCanvas(h), paint = nc.paint(p);
     return drawGlyphs((fill, stroke) => nc.drawShape(paint, fill, stroke), ids, idOffset, positions, posOffset, count, font, paint);
   },
   "nDrawMesh(JJIJ)V": unsupported("Canvas.drawMesh"),

@@ -20,7 +20,7 @@ import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { paintAt, measureCtx, preloadPaint, setFontMetrics } from "./paint";
 import { initDeviceLocales } from "./resnative";
-import { NativeCanvas } from "./canvas";
+import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
 import { NativeBitmap } from "./bitmap";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
@@ -637,7 +637,7 @@ delegate("android/graphics/Picture", {
   "nativeGetWidth(J)I": (h: bigint) => picture(h).w,
   "nativeGetHeight(J)I": (h: bigint) => picture(h).h,
   "nativeDraw(JJ)V": (c: bigint, h: bigint) => {
-    const p = picture(h), cv = deref<NativeCanvas>(c);
+    const p = picture(h), cv = drawingCanvas(c);
     p.endRecording();
     const ops = p.ops;
     if (!ops) return;

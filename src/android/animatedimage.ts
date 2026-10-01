@@ -7,7 +7,7 @@
 import { rt } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
 import { type NativeColorFilter, type JRect, tintedBmp } from "./graphics";
-import { type NativeCanvas } from "./canvas";
+import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import type { EncodedImage } from "./decode";
 import { uptimeMillis } from "./os";
@@ -92,7 +92,7 @@ rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   "nNativeByteSize(J)J": (h: bigint) => BigInt(anim(h).w * anim(h).h * 4),
   "nDraw(JJ)J": (h: bigint, canvas: bigint) => {
     const a = anim(h), next = a.advance(uptimeMillis());
-    a.draw(deref<NativeCanvas>(canvas));
+    a.draw(drawingCanvas(canvas));
     return next;
   },
   "nSetAlpha(JI)V": (h: bigint, alpha: number) => { anim(h).alpha = alpha; },

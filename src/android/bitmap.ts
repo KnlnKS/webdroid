@@ -46,7 +46,6 @@ export class NativeBitmap {
   space: NativeColorSpace | null = null;
   private cv: OffscreenCanvas | null = null;
   private cx: OffscreenCanvasRenderingContext2D | null = null;
-  private drawingCtx: OffscreenCanvasRenderingContext2D | null = null;
   private px: RGBA | null = null;
   /** a decoded image not yet drawn into a raster: drawing it needs no copy */
   private img: ImageBitmap | null = null;
@@ -72,39 +71,29 @@ export class NativeBitmap {
   }
   /** what to draw this bitmap from: the decoded image while nothing has written to it */
   get image(): CanvasImageSource { return this.img ?? this.raster(); }
-  /** A context drawing into the raster, made on demand: a bitmap that is only written and read as
-   *  pixels never needs one, and outside a browser there is no OffscreenCanvas to make. Handing it
-   *  out drops the pixel memo, because whoever took it may draw. */
+  /** The raster's context, made on demand: a bitmap that is only written and read as pixels never
+   *  needs one, and outside a browser there is no OffscreenCanvas to make. Taking it is for a draw
+   *  now, so the bitmap counts as written. */
   get ctx(): OffscreenCanvasRenderingContext2D {
+    const cx = this.context();
+    this.wrote();
+    return cx;
+  }
+  /** the raster's context for a Canvas that keeps it, which marks each of its draws (wrote) */
+  context(): OffscreenCanvasRenderingContext2D {
     this.raster();
+    return this.cx!;
+  }
+  /** a draw changed the pixels: the pixel memo is stale and the generation moves on */
+  wrote(): void {
     this.px = null;
-    if (!this.drawingCtx) {
-      // Canvas retains this context across draws, after pixel readbacks and shader snapshots.
-      const methods = new Map<PropertyKey, unknown>();
-      this.drawingCtx = new Proxy(this.cx!, {
-        get: (ctx, key) => {
-          const value = Reflect.get(ctx, key, ctx);
-          if (typeof value !== "function") return value;
-          let method = methods.get(key);
-          if (method === undefined) {
-            const writes = /^(?:draw|fill|stroke|clearRect|putImageData|reset$)/.test(String(key));
-            methods.set(key, method = (...args: unknown[]) => {
-              if (writes) { this.px = null; this.genId = nextGeneration(); }
-              return Reflect.apply(value, ctx, args);
-            });
-          }
-          return method;
-        },
-        set: (ctx, key, value) => Reflect.set(ctx, key, value, ctx),
-      });
-    }
-    return this.drawingCtx;
+    this.genId = nextGeneration();
   }
   /** a decoded image as the whole contents */
   setImage(img: ImageBitmap): void { this.dropPixels(); this.img = img; this.genId = nextGeneration(); }
   private dropPixels(): void {
     this.img?.close();
-    this.cv = this.cx = this.drawingCtx = this.px = this.img = null;
+    this.cv = this.cx = this.px = this.img = null;
   }
   /** Bitmap::reconfigure: the same allocation with new dimensions and undefined contents */
   reconfigure(w: number, h: number, config: number, alphaType: number): void {

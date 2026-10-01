@@ -292,6 +292,7 @@ export class NativeCanvas {
       this.layers!.pop();
       this.ctx = layer.parent;
       layer.close();
+      this.bmp?.wrote();
     }
     const flags = this.flags.pop()!, count = this.saveCount - 1;
     const m = flags & 1 ? null : this.ctx.getTransform();
@@ -541,8 +542,12 @@ const recordingField = () => recordingFields ??= {
   width: declaredField("android/graphics/RecordingCanvas", "mWidth"), height: declaredField("android/graphics/RecordingCanvas", "mHeight"),
   node: declaredField("android/graphics/RecordingCanvas", "mNode"),
 };
-/** the native state behind a Java canvas */
-export const canvasOf = (c: object): NativeCanvas => deref<NativeCanvas>((c as Record<string, bigint>)[wrapper()]);
+/** the native state behind a Java canvas, which TS takes to draw through */
+export function canvasOf(c: object): NativeCanvas {
+  const nc = deref<NativeCanvas>((c as Record<string, bigint>)[wrapper()]);
+  nc.bmp?.wrote();
+  return nc;
+}
 const peers = new FinalizationRegistry<bigint>(release);
 /** A Java Canvas over `nc` — a RecordingCanvas of its size when `recording`, which is what a
  *  hardware window hands its views — made without running a constructor, so it never suspends.
@@ -750,6 +755,12 @@ export function unsupported(what: string) { return () => { throw rt.mkThrowable(
 
 // ── natives ──
 export const canvasAt = (h: bigint) => deref<NativeCanvas>(h);
+/** the canvas a native draws through: a bitmap it draws into is written (NativeBitmap.wrote) */
+export function drawingCanvas(h: bigint): NativeCanvas {
+  const nc = deref<NativeCanvas>(h);
+  nc.bmp?.wrote();
+  return nc;
+}
 const matrixAt = (h: bigint) => deref<Mat>(h);
 const pathAt = (h: bigint) => deref<NativePath>(h);
 /** SkClipOp and Region.Op's nativeInt: 0 difference, 1 intersect; hwui ignores the ops that would
@@ -759,7 +770,7 @@ const clipOp = (nc: NativeCanvas, op: number, intersect: () => boolean, differen
 rt.registerJnis("android/graphics/Canvas", {
   "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(b ? deref<NativeBitmap>(b) : null)),
   "nGetNativeFinalizer()J": () => FINALIZER,
-  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { const bmp = b ? deref<NativeBitmap>(b) : null; if (bmp) canvasAt(h).setTarget(bmp.ctx, bmp.w, bmp.h, bmp); else canvasAt(h).setTarget(emptyCtx(), 0, 0, null); },
+  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { const bmp = b ? deref<NativeBitmap>(b) : null; if (bmp) canvasAt(h).setTarget(bmp.context(), bmp.w, bmp.h, bmp); else canvasAt(h).setTarget(emptyCtx(), 0, 0, null); },
   "nIsOpaque(J)Z": (h: bigint) => { const b = canvasAt(h).bmp; return +(!!b && (!b.hasAlpha || b.config === 3)); },
   "nGetWidth(J)I": (h: bigint) => canvasAt(h).w,
   "nGetHeight(J)I": (h: bigint) => canvasAt(h).h,
@@ -774,8 +785,8 @@ rt.registerJnis("android/graphics/Canvas", {
   },
   "nSaveLayerAlpha(JFFFFI)I": (h: bigint, l: number, t: number, r: number, b: number, alpha: number) =>
     saveLayer(canvasAt(h), { left: l, top: t, right: r, bottom: b }, null, alpha & 255),
-  "nSaveUnclippedLayer(JIIII)I": (h: bigint, l: number, t: number, r: number, b: number) => saveBehind(canvasAt(h), l, t, r, b),
-  "nRestoreUnclippedLayer(JIJ)V": (h: bigint, count: number, p: bigint) => { const nc = canvasAt(h); restoreBehind(nc, count, nc.paint(p)); },
+  "nSaveUnclippedLayer(JIIII)I": (h: bigint, l: number, t: number, r: number, b: number) => saveBehind(drawingCanvas(h), l, t, r, b),
+  "nRestoreUnclippedLayer(JIJ)V": (h: bigint, count: number, p: bigint) => { const nc = drawingCanvas(h); restoreBehind(nc, count, nc.paint(p)); },
 
   "nTranslate(JFF)V": (h: bigint, x: number, y: number) => {
     const ctx = canvasAt(h).ctx, m = ctx.getTransform();
@@ -831,7 +842,7 @@ rt.registerJnis("android/graphics/DrawFilter", { "nativeDestructor(J)V": release
  *  is still its own */
 const emptyCtx = () => new OffscreenCanvas(1, 1).getContext("2d")!;
 /** SkiaCanvas over a bitmap's raster, or over none */
-export const bitmapCanvas = (b: NativeBitmap | null): NativeCanvas => b ? NativeCanvas.over(b.ctx, b.w, b.h, b) : NativeCanvas.over(emptyCtx(), 0, 0);
+export const bitmapCanvas = (b: NativeBitmap | null): NativeCanvas => b ? NativeCanvas.over(b.context(), b.w, b.h, b) : NativeCanvas.over(emptyCtx(), 0, 0);
 
 // ── drawn text: where each run landed, which the harness looks text up by ──
 export function locateDrawnText(owner: DrawnTextOwner, text: string, width: number, height: number): { x: number; y: number } | null {
