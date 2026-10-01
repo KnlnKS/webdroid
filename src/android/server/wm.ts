@@ -243,9 +243,13 @@ function touchedWindow(x: number, y: number): WindowState | null {
   return null;
 }
 const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
-/** a key from the virtual keyboard (device -1) to the focused window: DOWN, then UP */
 /** the display Z of a ViewRootImpl's window (its IWindow), or -Infinity when not added */
-export const windowZOf = (client: JObj): number => windows.get(client)?.layer.z ?? -Infinity;
+export function windowZOf(client: JObj): number {
+  const ws = windows.get(client);
+  // a sub-window's Z is relative to its parent's, and within the steps between its parent's siblings
+  return !ws ? -Infinity : ws.parent ? ws.parent.layer.z + ws.layer.z / 10 : ws.layer.z;
+}
+/** a key from the virtual keyboard (device -1) to the focused window: DOWN, then UP */
 export async function dispatchKey(keyCode: number): Promise<void> {
   const ws = focused;
   if (!ws?.channel) return;

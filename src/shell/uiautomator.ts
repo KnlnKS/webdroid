@@ -61,7 +61,9 @@ export async function dumpWindows(): Promise<UiNode[]> {
   for (let i = 0; i < count; i++) {
     const view: JObj = await vcall(views, "get", "(I)Ljava/lang/Object;", i);
     const root = await vcall(view, "getViewRootImpl", "()Landroid/view/ViewRootImpl;") as Record<string, JObj> | null;
-    roots.push({ view, z: root ? windowZOf(root[declaredField("android/view/ViewRootImpl", "mWindow")]) : -Infinity });
+    const z = root ? windowZOf(root[declaredField("android/view/ViewRootImpl", "mWindow")]) : -Infinity;
+    // only windows the window manager holds are on screen
+    if (z > -Infinity) roots.push({ view, z });
   }
   const rect = await newObj("android/graphics/Rect", "()V"), out: UiNode[] = [];
   for (const { view } of roots.sort((a, b) => a.z - b.z)) await walkView(view, rect, out);
