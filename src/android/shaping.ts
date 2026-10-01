@@ -12,7 +12,8 @@ import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { after } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeFont, type NativeFamily, typefaceOf, fakery, FAKE_BOLD, FAKE_ITALIC, fontOf, wrapFont, cssFamily } from "./fonts";
+import { type NativeFont, type NativeFamily, type FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, cssFamily } from "./fonts";
+import { type NativePaint, paintAt } from "./paint";
 import { pieceEnd, JOINING } from "./minikin";
 import { type HarfBuzz, type Font, harfBuzz, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
 import type { Ctx2D } from "./recording";
@@ -20,20 +21,6 @@ import type { NativePath } from "./path";
 
 const f32 = Math.fround;
 
-/** what shaping and glyph drawing read of a paint */
-export interface ShapePaint {
-  tf: object | null; textSize: number; textScaleX: number; textSkewX: number; letterSpacingEm: number;
-  linearText: boolean; language: string; fontFeatureSettings: string | null;
-}
-
-const tag = (s: string) => (s.charCodeAt(0) << 24 | s.charCodeAt(1) << 16 | s.charCodeAt(2) << 8 | s.charCodeAt(3)) >>> 0;
-const WGHT = tag("wght"), ITAL = tag("ital");
-
-/** minikin's FakedFont: a font, its fakery bits, and the wght/ital values a variable font is set
- *  to in place of faking (-1 where the font has no such axis) */
-class FakedFont {
-  constructor(readonly font: NativeFont, readonly fakery: number, readonly weight: number, readonly italic: number) {}
-}
 const fontCache = new WeakMap<NativeFont, Font>();
 /** the HarfBuzz font drawing `f`: its own axes, then the fakery's */
 function hbFont(hb: HarfBuzz, f: NativeFont, weight = -1, italic = -1): Font {
@@ -47,15 +34,10 @@ function hbFont(hb: HarfBuzz, f: NativeFont, weight = -1, italic = -1): Font {
   if (italic >= 0) axes.push([ITAL, italic]);
   return hb.font(hb.face(f.bytes, f.ttcIndex), axes);
 }
-/** FontFamily::getClosestMatch */
-function closest(family: NativeFamily, weight: number, italic: boolean): FakedFont {
-  const font = family.closest(weight, italic), axes = font.supportedAxes;
-  return new FakedFont(font, fakery(font, weight, italic), axes.includes(WGHT) ? weight : -1, axes.includes(ITAL) ? +italic : -1);
-}
 
 /** whether Skia hints the glyphs, so their advances are whole pixels: an outline font, without
  *  linear metrics and not skewed (a fake italic is a skew) */
-const hints = (p: ShapePaint, font: NativeFont, faked = 0) => !p.linearText && p.textSkewX === 0 && !(faked & FAKE_ITALIC) && font.scalable;
+const hints = (p: NativePaint, font: NativeFont, faked = 0) => !p.linearText && p.textSkewX === 0 && !(faked & FAKE_ITALIC) && font.scalable;
 
 // ── itemization: FontCollection::itemize
 const isEmojiFamily = (f: NativeFamily) => /(^|[ ,-])Zsye\b/.test(f.langTags);
@@ -120,11 +102,11 @@ const colorText = new WeakMap<Font, Map<number, string>>();
 
 /** Layout for text[start, start + count) in one direction, context around it (TextShaper's
  *  shapeTextRun) */
-export function shapeTextRun(text: string, start: number, count: number, ctxStart: number, ctxCount: number, rtl: boolean, p: ShapePaint): Layout | Promise<Layout> {
+export function shapeTextRun(text: string, start: number, count: number, ctxStart: number, ctxCount: number, rtl: boolean, p: NativePaint): Layout | Promise<Layout> {
   return after(harfBuzz(), (hb) => layout(hb, text, start, start + count, ctxStart, ctxStart + ctxCount, rtl, p));
 }
-function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart: number, ctxEnd: number, rtl: boolean, p: ShapePaint): Layout {
-  const t = typefaceOf(p.tf), families = t.collection.families, size = p.textSize, scaleX = p.textScaleX;
+function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart: number, ctxEnd: number, rtl: boolean, p: NativePaint): Layout {
+  const t = resolveDefault(p.tf), families = t.collection.families, size = p.textSize, scaleX = p.textScaleX;
   const ids: number[] = [], xs: number[] = [], ys: number[] = [], fonts: FakedFont[] = [];
   // optional ligatures are off under letter spacing, as CSS asks
   const features = Math.abs(p.letterSpacingEm) > 0.03 ? "liga=0,clig=0" + (p.fontFeatureSettings ? "," + p.fontFeatureSettings : "") : p.fontFeatureSettings;
@@ -139,7 +121,7 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
     const nRuns = (runs.length - 1) / 2;
     for (let r = 0; r < nRuns; r++) {
       const at = (rtl ? nRuns - 1 - r : r) * 2, a = runs[at] as number, b = runs[at + 2] as number;
-      const faked = closest(runs[at + 1] as NativeFamily, t.weight, t.italic), font = hbFont(hb, faked.font, faked.weight, faked.italic);
+      const faked = (runs[at + 1] as NativeFamily).match(t.weight, t.italic), font = hbFont(hb, faked.font, faked.weight, faked.italic);
       const s = size / font.face.upem, sx = s * scaleX;
       const hinted = hints(p, faked.font, faked.fakery);
       const ls = p.letterSpacingEm && !JOINING.test(text.slice(a, b)) ? f32(f32(p.letterSpacingEm * size) * scaleX) : 0;
@@ -178,7 +160,7 @@ function clusterText(text: string, ctxStart: number, w: Int32Array, info: number
  *  bounds are the transformed outline's control box rounded out to pixels, as FreeType's are for an
  *  unhinted glyph (the device's hinted outlines can differ by a pixel at small sizes); a glyph
  *  without an outline (a color or bitmap glyph) has its font's extents. */
-export function glyphBounds(font: NativeFont, glyph: number, p: ShapePaint, rect: { left: number; top: number; right: number; bottom: number } | null): number | Promise<number> {
+export function glyphBounds(font: NativeFont, glyph: number, p: NativePaint, rect: { left: number; top: number; right: number; bottom: number } | null): number | Promise<number> {
   return after(harfBuzz(), (hb) => {
     const f = hbFont(hb, font), s = p.textSize / f.face.upem, sx = s * p.textScaleX;
     if (rect) {
@@ -195,9 +177,9 @@ export function glyphBounds(font: NativeFont, glyph: number, p: ShapePaint, rect
 const isSurrogate = (c: number) => c >= 0xd800 && c <= 0xdfff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
 /** android_graphics_Paint's hasGlyph: well-formed UTF-16 whose variation sequences a family supports,
  *  laid out without .notdef and, for more than one character, as one glyph (a ligature) */
-export function hasGlyph(text: string, rtl: boolean, p: ShapePaint): boolean | Promise<boolean> {
+export function hasGlyph(text: string, rtl: boolean, p: NativePaint): boolean | Promise<boolean> {
   return after(harfBuzz(), (hb) => {
-    const families = typefaceOf(p.tf).collection.families;
+    const families = resolveDefault(p.tf).collection.families;
     let chars = 0, prev = -1;
     for (let i = 0; i < text.length; i++) {
       let c = text.charCodeAt(i);
@@ -235,7 +217,7 @@ class PathSink {
 }
 /** SkFont::getPaths over a layout's glyphs, each at (x, y) plus its position, appended to `dst`: the
  *  paint's size, scale and skew, a fake italic's skew added (fake bold's emboldening is not) */
-export function layoutOutlines(l: Layout, p: ShapePaint, x: number, y: number, dst: NativePath): void | Promise<void> {
+export function layoutOutlines(l: Layout, p: NativePaint, x: number, y: number, dst: NativePath): void | Promise<void> {
   return after(harfBuzz(), (hb) => {
     const sink = new PathSink(dst);
     for (let i = 0; i < l.ids.length; i++) {
@@ -254,7 +236,7 @@ let glyphMatrix: DOMMatrix | null = null;
  *  shape; outlines become one Path2D, and color glyphs (which have none) draw the text they were
  *  shaped from in the font. */
 export function drawGlyphs(draw: (fill: (c: Ctx2D) => void, stroke: (c: Ctx2D) => void) => void, ids: Int32Array, idOffset: number,
-  positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: ShapePaint): void | Promise<void> {
+  positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: NativePaint): void | Promise<void> {
   if (count <= 0) return;
   const font = fontOf(fontHandle);
   return after(harfBuzz(), (hb) => {
@@ -287,10 +269,9 @@ export function drawGlyphs(draw: (fill: (c: Ctx2D) => void, stroke: (c: Ctx2D) =
 
 // ── natives
 const layoutOf = (h: bigint) => deref<Layout>(h);
-const paintOf = (h: bigint) => deref<ShapePaint>(h);
 /** TextShaper.cpp's shapeTextRun: FORCE_RTL or FORCE_LTR over the paint's typeface */
 const shapeNative = (text: string, start: number, count: number, ctxStart: number, ctxCount: number, rtl: number, paint: bigint) =>
-  after(shapeTextRun(text, start, count, ctxStart, ctxCount, !!rtl, paintOf(paint)), handle);
+  after(shapeTextRun(text, start, count, ctxStart, ctxCount, !!rtl, paintAt(paint)), handle);
 rt.registerJnis("android/graphics/text/TextRunShaper", {
   "nativeShapeTextRun(Ljava/lang/String;IIIIZJ)J": shapeNative,
   "nativeShapeTextRun([CIIIIZJ)J": (chars: Uint16Array, start: number, count: number, ctxStart: number, ctxCount: number, rtl: number, paint: bigint) =>

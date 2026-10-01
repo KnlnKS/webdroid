@@ -193,11 +193,14 @@ export class NativeFont {
 class FontWrapper { constructor(readonly font: NativeFont) {} }
 export const fontOf = (h: bigint) => deref<FontWrapper>(h).font;
 export const wrapFont = (f: NativeFont) => handle(new FontWrapper(f));
-/** minikin's FontFakery bits for drawing `face` at a wanted weight and slant: bold faked two grades
- *  short of a semi-bold or heavier weight, italic on an upright face */
+/** minikin's FontFakery bits */
 export const FAKE_BOLD = 1, FAKE_ITALIC = 2;
-export const fakery = (face: NativeFont, weight: number, italic: boolean) =>
-  (weight >= 600 && weight - face.weight >= 200 ? FAKE_BOLD : 0) | (italic && !face.italic ? FAKE_ITALIC : 0);
+export const WGHT = 0x77676874, ITAL = 0x6974616c;
+/** minikin's FakedFont: a font, its fakery bits, and the wght/ital values a variable font is set
+ *  to in place of faking (-1 where the font has no such axis) */
+export class FakedFont {
+  constructor(readonly font: NativeFont, readonly fakery: number, readonly weight: number, readonly italic: number) {}
+}
 
 const availableFaces = new Map<string, NativeFont>();
 /** the system collection's fonts (Font.getAvailableFonts), as installed under /system/fonts */
@@ -230,6 +233,13 @@ export class NativeFamily {
     let best = this.fonts[0];
     for (const f of this.fonts) if (score(f) < score(best)) best = f;
     return best;
+  }
+  /** the closest member as minikin draws it at a wanted style: bold faked two grades short of a
+   *  semi-bold or heavier weight, italic on an upright face, a variable face set to the style */
+  match(weight: number, italic: boolean): FakedFont {
+    const font = this.closest(weight, italic), axes = font.supportedAxes;
+    const fakery = (weight >= 600 && weight - font.weight >= 200 ? FAKE_BOLD : 0) | (italic && !font.italic ? FAKE_ITALIC : 0);
+    return new FakedFont(font, fakery, axes.includes(WGHT) ? weight : -1, axes.includes(ITAL) ? +italic : -1);
   }
   get supportedAxes(): readonly number[] { return this.axisTags ??= [...new Set(this.fonts.flatMap((f) => f.supportedAxes))]; }
 }
@@ -344,14 +354,12 @@ export function createWithVariation(src: NativeTypeface, list: object): NativeTy
 let systemDefault: NativeTypeface | undefined;
 /** Typeface::setDefault */
 export const setDefaultTypeface = (t: NativeTypeface) => { systemDefault = t; };
+/** Typeface::resolveDefault: null is the default */
+export const resolveDefault = (t: NativeTypeface | null): NativeTypeface => t ?? systemDefault!;
 let nativeInstance = "";
-/** The native typeface behind a Java Typeface, the default for null as hwui resolves it. Under a
- *  bytecode Paint the native paint is handed the native typeface itself. */
-export function typefaceOf(t: object | null): NativeTypeface {
-  if (!t) return systemDefault!;
-  if (t instanceof NativeTypeface) return t;
-  return deref<NativeTypeface>((t as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Typeface", "native_instance")]);
-}
+/** the native typeface behind a Java Typeface, the default for null */
+export const typefaceOf = (t: object | null): NativeTypeface =>
+  resolveDefault(t && deref<NativeTypeface>((t as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Typeface", "native_instance")]));
 
 /** Typeface.create("sans-serif-medium", NORMAL), the face framework chrome uses (dialog buttons,
  *  picker values, the action bar title), once the system font map is loaded */

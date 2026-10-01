@@ -9,7 +9,7 @@ import { after, construct, newObj, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { device } from "../shell/config";
 import { perf } from "../perf";
-import { type FaceMetrics, type NativeTypeface, SYSTEM_FONT, typefaceOf, fakery, FAKE_BOLD } from "./fonts";
+import { type FaceMetrics, type NativeTypeface, type FakedFont, SYSTEM_FONT, resolveDefault, FAKE_BOLD } from "./fonts";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
 import { NativeBitmap, ALPHA_8, PREMUL, colorLongArgb, type NativeColorSpace } from "./bitmap";
 import { NativePath, PathMeasure, VerbIterator, walkPath } from "./path";
@@ -98,24 +98,20 @@ export class NativePaint {
   private fTf: NativeTypeface | null | undefined = undefined;
   private fSize = -1;
   private fBold = false;
-  private fFace: import("./fonts").NativeFont | null = null;
-  private fFaked = false;
+  private fFace: FakedFont | null = null;
   font(): string {
     const bold = this.fakeBold;
     if (this.fTf === this.tf && this.fSize === this.textSize && this.fBold === bold) return this.fCache;
-    const t = typefaceOf(this.tf), w = bold ? Math.max(700, t.weight) : t.weight;
-    // minikin draws from the primary family's closest face, faking bold two grades short of the
-    // wanted weight and italic on an upright face; the face's own weight makes CSS pick that face
-    const face = t.collection.families[0]?.closest(w, t.italic) ?? null;
-    const faked = face ? fakery(face, w, t.italic) : 0;
+    const t = resolveDefault(this.tf), w = bold ? Math.max(700, t.weight) : t.weight;
+    // minikin draws from the primary family's closest face; the face's own weight makes CSS pick it
+    const face = this.fFace = t.collection.families[0]?.match(w, t.italic) ?? null;
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = bold;
-    this.fFace = face; this.fFaked = faked !== 0;
-    const weight = !face ? w : faked & FAKE_BOLD ? 700 : face.weight;
+    const weight = !face ? w : face.fakery & FAKE_BOLD ? 700 : face.font.weight;
     return (this.fCache = `${t.italic ? "italic " : ""}${weight} ${this.textSize}px ${t.collection.css}, sans-serif`);
   }
   /** the face font() draws from, and whether it draws it with fake bold or italic */
-  face() { this.font(); return this.fFace; }
-  faked(): boolean { this.font(); return this.fFaked; }
+  face() { this.font(); return this.fFace?.font ?? null; }
+  faked(): boolean { this.font(); return !!this.fFace?.fakery; }
   fillStyle(ctx: Ctx2D): string | CanvasGradient | CanvasPattern {
     return this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
   }
@@ -871,7 +867,7 @@ rt.registerJnis(PAINT, {
     return +(x === y || x.textSize === y.textSize && x.textScaleX === y.textScaleX && x.textSkewX === y.textSkewX
       && x.letterSpacingEm === y.letterSpacingEm && x.wordSpacing === y.wordSpacing && x.hinting === y.hinting
       && (x.flags & FONT_FLAGS) === (y.flags & FONT_FLAGS) && x.fontFeatureSettings === y.fontFeatureSettings
-      && x.localeListId === y.localeListId && typefaceOf(x.tf) === typefaceOf(y.tf));
+      && x.localeListId === y.localeListId && resolveDefault(x.tf) === resolveDefault(y.tf));
   },
   "nHasGlyph(JILjava/lang/String;)Z": (h: bigint, bidi: number, s: string) => after(hasGlyph(s, isRtl(bidi, s), paintAt(h)), (has) => +has),
   "nGetTextPath(JI[CIIFFJ)V": (h: bigint, bidi: number, c: Uint16Array, index: number, count: number, x: number, y: number, path: bigint) =>

@@ -1,5 +1,6 @@
 import { NativeFont, NativeTypeface, FontCollection, mkFamily, wrapFont } from "../../../src/android/fonts";
 import { drawGlyphs, shapeTextRun } from "../../../src/android/shaping";
+import { NativePaint } from "../../../src/android/paint";
 import type { Ctx2D } from "../../../src/android/recording";
 
 const W = 120, H = 80;
@@ -23,8 +24,8 @@ export default async function glyphs() {
   const bytes = async (file: string) => new Uint8Array(await (await fetch(`/vendor/fonts/${file}`)).arrayBuffer());
   const roboto = new NativeFont(await bytes("Roboto-Regular.ttf"), 0, 400, false), emoji = new NativeFont(await bytes("NotoColorEmoji.ttf"), 0, 400, false);
   const families = [await mkFamily([roboto]), await mkFamily([emoji], "und-Zsye")];
-  const paint = { tf: new NativeTypeface(new FontCollection(families), 400, 0, 400, false), textSize: 40, textScaleX: 1, textSkewX: 0,
-    letterSpacingEm: 0, linearText: false, language: "en-US", fontFeatureSettings: null };
+  const paint = new NativePaint();
+  paint.tf = new NativeTypeface(new FontCollection(families), 400, 0, 400, false); paint.textSize = 40; paint.language = "en-US";
   const draw = async (text: string, ctx: Ctx2D) => {
     const run = await shapeTextRun(text, 0, text.length, 0, text.length, false, paint);
     const positions = Float32Array.from({ length: run.ids.length * 2 }, (_, i) => i & 1 ? 50 : 10 + run.x[i >> 1]);

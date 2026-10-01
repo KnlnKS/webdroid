@@ -37,7 +37,7 @@ import { device } from "../shell/config";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
   type Axis, NativeFont, NativeFamily, NativeTypeface, mkFamily, systemFonts, sfntTables, T_CMAP,
-  fontRevision, postScriptName, isPostScriptType1, typefaceOf, setDefaultTypeface, loadSystemFontMap,
+  fontRevision, postScriptName, isPostScriptType1, resolveDefault, setDefaultTypeface, loadSystemFontMap,
   createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies, fontOf, wrapFont,
 } from "./fonts";
 
@@ -317,7 +317,7 @@ delegate("android/graphics/RuntimeShader", {
 
 // ── android.graphics.Typeface ──────────────────────────────────────────────────────────
 // hwui's Typeface over fonts.ts' collections; a null handle is the default, as resolveDefault has it
-const typefaceAt = (h: bigint) => h ? deref<NativeTypeface>(h) : typefaceOf(null);
+const typefaceAt = (h: bigint) => resolveDefault(h ? deref<NativeTypeface>(h) : null);
 delegate("android/graphics/Typeface", {
   "nativeGetReleaseFunc()J": () => FINALIZER,
   "nativeCreateFromTypeface(JI)J": (h: bigint, style: number) => handle(createRelative(typefaceAt(h), style)),
