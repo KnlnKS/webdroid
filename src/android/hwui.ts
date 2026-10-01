@@ -3,7 +3,7 @@
 // before the queue (ViewRootImpl arms its BLAST sync there), the commit and complete callbacks
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
-import { rt, type JObj } from "../jvm/runtime";
+import { rt, JObj } from "../jvm/runtime";
 import { vcall, scall } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
 import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
@@ -11,11 +11,12 @@ import { textureLayerNatives } from "./texturelayer";
 import { animateRenderThread } from "./rtanimator";
 import { nativeSurface, surfaceBuffer, queueBuffer } from "./surfaceflinger";
 import { onNextVsync, frameDrawn } from "./vsync";
-import { reportUncaught } from "./os";
+import { reportUncaught, mkPfd } from "./os";
 import { uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
 import { resetDrawn } from "./webfunctor";
 import type { NativeBitmap } from "./bitmap";
+import { hostStub } from "./binder";
 
 const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
 
@@ -61,6 +62,13 @@ function animate(p: Proxy): void {
     drawFrame(p).catch(reportUncaught);
   });
 }
+
+// IGraphicsStats: GraphicsStatsService hands each process a buffer for hwui's jank statistics; no
+// frame here records hwui's per-stage timings, so the buffer stays empty
+rt.register({ name: "webdroid/GraphicsStatsService", ctor: class extends JObj {}, sup: "android/view/IGraphicsStats$Stub", methods: {
+  "requestBufferForProcess(Ljava/lang/String;Landroid/view/IGraphicsStatsCallback;)Landroid/os/ParcelFileDescriptor;": () => mkPfd(new Uint8Array(0), null),
+} });
+hostStub("graphicsstats", "webdroid/GraphicsStatsService");
 
 // a frame-metrics observer: no frame here reports hwui's per-stage timings, so none is ever delivered
 rt.registerJnis("android/graphics/HardwareRendererObserver", {
