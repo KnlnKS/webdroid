@@ -297,7 +297,7 @@ function installProbe(cfg: ProbeConfig): void {
     const dueBefore = horizonAt + windowMs;
     // the pixel rule samples only past the horizon, as the recorder does past its dwell
     const hashes: number[] = [];
-    let vsyncSince = 0;
+    let activeSince = 0;
     const seen: Record<string, number> = {};
     let lastSample = horizonAt - q.intervalMs;
     lastHash = -1;
@@ -313,13 +313,14 @@ function installProbe(cfg: ProbeConfig): void {
       if (!b.length) return done("idle", seen);
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
       // a still screen settles past timers and network, not past work under way: a main-thread job
-      // or its queue (its result is not drawn yet), an activity start or finish, or on a real clock
-      // up to a second of frames scheduled (a fling's overscroll stretch, which draws nothing); a
-      // controlled clock has already run through the window, and a loop that keeps scheduling
-      // frames without changing the screen (a paused game) is still
-      vsyncSince = b.includes("vsync") ? vsyncSince || now : 0;
+      // or its queue (its result is not drawn yet) or an activity start or finish, nor on a real
+      // clock during the first 1.5 s of frames scheduled or threads running (a fling's overscroll
+      // stretch changes no pixels; a background thread's result is not shown yet). A controlled
+      // clock has already run through the window, and a loop that keeps going without changing
+      // the screen (a paused game) is still.
+      activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
       const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition") ||
-        (!controlled && vsyncSince > 0 && now - vsyncSince < 1000);
+        (!controlled && activeSince > 0 && now - activeSince < 1500);
       const h = working ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
       if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);

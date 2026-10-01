@@ -221,8 +221,9 @@ const wd = {
     const want = normalized(s);
     const matches = (candidate: string) => candidate === want || candidate.startsWith(want);
     if (stageD()) return onMain(dumpWindows).then((nodes) => {
-      // topmost window first, as a tap reaches it
-      const hit = nodes.reverse().find((n) => (matches(normalized(n.text)) || matches(normalized(n.desc))) && n.bounds[2] > n.bounds[0]);
+      // topmost window first, as a tap reaches it; an exact match before a prefix, as the device driver ranks them
+      const shown = nodes.reverse().filter((n) => n.bounds[2] > n.bounds[0]), texts = (n: typeof shown[number]) => [normalized(n.text), normalized(n.desc)];
+      const hit = shown.find((n) => texts(n).includes(want)) ?? shown.find((n) => texts(n).some(matches));
       return hit ? { x: (hit.bounds[0] + hit.bounds[2]) / 2, y: (hit.bounds[1] + hit.bounds[3]) / 2 } : null;
     });
     const decor = topDecor();

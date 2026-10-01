@@ -120,7 +120,9 @@ export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act 
 export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
   const evidence = evidenceOf(step);
   const capture = mode === "full" || evidence.kind !== "semantic";
-  const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent"
+  // the fast lane drops a semantic step's horizon, except a launch's: startup (a splash screen's
+  // minimum duration) is what it covers
+  const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent" && step.action.type !== "launch"
     ? { ...step.wait, maxVirtualMs: 0 }
     : step.wait;
   const quiescence = mode === "fast" && evidence.kind === "semantic"
