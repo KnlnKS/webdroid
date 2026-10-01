@@ -95,21 +95,20 @@ export class NativeCanvas {
   }
 
   prep(p: NativePaint, stroke: boolean) {
-    const ctx = this.ctx;
-    const pattern = p.shader?.deferredPattern();
-    if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
+    const ctx = this.ctx, shader = p.shader, replayed = shader?.atReplay ? shader : null;
+    if (replayed) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = replayed.pattern(c)!; });
     if (stroke) {
-      if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
+      if (!replayed) ctx.strokeStyle = p.fillStyle(ctx);
       ctx.lineWidth = Math.max(p.strokeWidth, 1);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
       // Skia dashes a stroke only, not a stroke-and-fill
       if (p.dash && p.style === 1) { ctx.setLineDash(p.dash); ctx.lineDashOffset = p.dashPhase; } else ctx.setLineDash(NO_DASH);
     } else {
-      if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
+      if (!replayed) ctx.fillStyle = p.fillStyle(ctx);
     }
     if (p.blendName === "CLEAR") ctx[stroke ? "strokeStyle" : "fillStyle"] = "#000";
-    return !!pattern || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
+    return !!replayed || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
   private blurLayer: { source: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: NativePaint } | null = null;
   drawMask(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke?: (ctx: Ctx2D) => void) {

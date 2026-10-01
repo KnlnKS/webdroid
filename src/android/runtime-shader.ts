@@ -229,6 +229,6 @@ export class RuntimeShaderBuilder {
 }
 class NativeRuntimeShader extends NativeShader {
   constructor(local: Affine | null, private readonly draw: (ctx: Ctx2D) => CanvasPattern) { super(local); }
-  override deferredPattern(): (ctx: Ctx2D) => CanvasPattern { return this.draw; }
+  override get atReplay(): boolean { return true; }
   override pattern(ctx: Ctx2D): CanvasPattern { return this.draw(ctx); }
 }

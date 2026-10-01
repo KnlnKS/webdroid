@@ -104,7 +104,8 @@ export class NativeColorFilter {
 export abstract class NativeShader {
   constructor(readonly local: Affine | null) {}
   abstract pattern(ctx: Ctx2D): CanvasGradient | CanvasPattern | null;
-  deferredPattern(): ((ctx: Ctx2D) => CanvasPattern) | null { return null; }
+  /** the pattern is made for the target a draw lands on, so a display list makes it at replay */
+  get atReplay(): boolean { return false; }
 }
 export const shaderIdentity: Affine = [1, 0, 0, 1, 0, 0];
 const bitmapShaderTiles = new WeakMap<NativeBitmap, { generation: number; tiles: Map<string, CanvasPattern> }>();
