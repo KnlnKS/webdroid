@@ -1,15 +1,14 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jlang";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { systemFonts } from "./fonts";
+import { bootWithFonts } from "./boot";
+import { deref } from "../../../src/android/handles";
+import { NativeShader, NativeGradient, NativeBitmapShader, NativeComposeShader } from "../../../src/android/graphics";
 
 /** AOSP's Canvas over our natives: clip bounds, quick rejects, save flags, layers and bitmap
  *  densities, for comparison with values recorded on the reference AVD */
 async function probe() {
-  await loadPlatformDex();
-  rt.linkNatives();
-  await systemFonts();
+  await bootWithFonts();
   const S = "Ljava/lang/String;", R = "Landroid/graphics/Rect;", P = "Landroid/graphics/Paint;";
   const argb = await vcall((await linkInit("android/graphics/Bitmap$Config")).ctor, "valueOf", `(${S})Landroid/graphics/Bitmap$Config;`, "ARGB_8888");
   const bitmap = (w: number, h: number) => scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", w, h, argb);
@@ -131,6 +130,21 @@ async function probe() {
   await vcall(node, "endRecording", "()V");
   out.recorded = [await vcall(node, "hasDisplayList", "()Z"), await thrown(() => vcall(node, "endRecording", "()V")),
     await thrown(() => vcall(c, "drawRenderNode", "(Landroid/graphics/RenderNode;)V", node))];
+
+  // a shader's native instance: setLocalMatrix replaces it, and a ComposeShader composes the current one
+  const statics = async (cls: string) => (await linkInit(cls)).ctor as Record<string, unknown>;
+  const clamp = (await statics("android/graphics/Shader$TileMode")).s$CLAMP, srcOver = (await statics("android/graphics/PorterDuff$Mode")).s$SRC_OVER;
+  const native = async (shader: unknown) => deref<NativeShader>(await vcall(shader, "getNativeInstance", "()J"));
+  const linear = await newObj("android/graphics/LinearGradient", "(FFFFIILandroid/graphics/Shader$TileMode;)V", 0, 0, 10, 0, -65536, -16776961, clamp);
+  const first = await native(linear), local = await newObj("android/graphics/Matrix", "()V");
+  await vcall(local, "setTranslate", "(FF)V", 5, 0);
+  await vcall(linear, "setLocalMatrix", "(Landroid/graphics/Matrix;)V", local);
+  const second = await native(linear);
+  const bitmapShader = await newObj("android/graphics/BitmapShader", "(Landroid/graphics/Bitmap;Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", await bitmap(2, 2), clamp, clamp);
+  const compose = await newObj("android/graphics/ComposeShader", "(Landroid/graphics/Shader;Landroid/graphics/Shader;Landroid/graphics/PorterDuff$Mode;)V", linear, bitmapShader, srcOver);
+  const composed = await native(compose) as NativeComposeShader;
+  out.shaders = { gradient: first instanceof NativeGradient && !first.local, replaced: second !== first && String(second.local),
+    bitmap: await native(bitmapShader) instanceof NativeBitmapShader, composed: composed.dst === second && composed.op };
   return out;
 }
 export default probe;

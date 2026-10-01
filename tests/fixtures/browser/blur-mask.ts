@@ -5,14 +5,11 @@ import { tintedBmp } from "../../../src/android/graphics";
 import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
 import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { systemFonts } from "./fonts";
+import { bootWithFonts } from "./boot";
 import { loadSkiaText } from "../../../src/android/skia-text";
 
 async function probe() {
-  await loadPlatformDex();
-  rt.linkNatives();
-  await systemFonts();
+  await bootWithFonts();
   const results = [];
   const enums = (await linkInit("android/graphics/BlurMaskFilter$Blur")).ctor;
   for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {

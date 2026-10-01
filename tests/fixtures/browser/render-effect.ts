@@ -1,10 +1,8 @@
 import "../../../src/natives";
-import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, scall } from "../../../src/jvm/natives/jlang";
 import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { systemFonts } from "./fonts";
+import { bootWithFonts } from "./boot";
 
 const E = "android/graphics/RenderEffect", LE = `L${E};`;
 /** the red channel along the middle row of a 60x20 node, white with its left half black, drawn under `effect` */
@@ -25,9 +23,7 @@ async function row(effect: unknown): Promise<number[]> {
 }
 
 export default async function probe() {
-  await loadPlatformDex();
-  rt.linkNatives();
-  await systemFonts();
+  await bootWithFonts();
   const clamp = await scall("android/graphics/Shader$TileMode", "valueOf", "(Ljava/lang/String;)Landroid/graphics/Shader$TileMode;", "CLAMP");
   const blur = await scall(E, "createBlurEffect", `(FFLandroid/graphics/Shader$TileMode;)${LE}`, 10, 10, clamp);
   const offset = await scall(E, "createOffsetEffect", `(FF)${LE}`, 5, 0);

@@ -5,10 +5,9 @@ import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { JTextView } from "../../../src/android/textview";
 import { measureText, setFontMetrics, paintOf } from "../../../src/android/paint";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
-import { systemFonts } from "./fonts";
+import { bootWithFonts } from "./boot";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
 import { nativePathOf } from "../../../src/android/path";
-import { loadPlatformDex } from "../../../src/android/framework";
 import { JApplication } from "../../../src/android/app";
 import { setAppHost } from "../../../src/android/apphost";
 
@@ -20,10 +19,8 @@ function installApplication() {
 }
 
 async function probe() {
-  await loadPlatformDex();
-  rt.linkNatives();
+  await bootWithFonts();
   installApplication();
-  await systemFonts();
   const view = rt.make("android/widget/TextView");
   if (!(view instanceof JTextView)) throw new Error("Invalid TextView");
   view.tp.textSize = 12;

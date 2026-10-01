@@ -100,6 +100,7 @@ test.concurrent("AOSP's Canvas reports the reference device's clips, saves, laye
     unclipped: [1, 2, "0", "ffff0000", 1, "ff807f00", "ff00ff00"], punch: ["7fffffff", "ffffffff"],
     recording: [100, 1, 8192, 0, "[0,0][100,50]", 0, 1],
     recorded: [1, "No recording in progress, forgot to call #beginRecording()?", "Software rendering doesn't support drawRenderNode"],
+    shaders: { gradient: true, replaced: "1,0,0,1,5,0", bitmap: true, composed: "source-over" },
   });
   [12, 25, 55, 39].forEach((v, i) => expect(Math.abs((textOnPath as number[])[i] - v)).toBeLessThanOrEqual(1));
 }, PAGE_TIMEOUT);

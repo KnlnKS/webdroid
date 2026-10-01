@@ -3,13 +3,10 @@ import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, scall } from "../../../src/jvm/natives/jlang";
 import { newPaint } from "../../../src/android/paint";
 import { locateDrawnText, canvasOver, canvasOf } from "../../../src/android/canvas";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { systemFonts } from "./fonts";
+import { bootWithFonts } from "./boot";
 
 async function probe() {
-  await loadPlatformDex();
-  rt.linkNatives();
-  await systemFonts();
+  await bootWithFonts();
   const shader = await newObj("android/graphics/RuntimeShader", "(Ljava/lang/String;)V", `
     layout(color) uniform half4 color;
     uniform float boundary, green;

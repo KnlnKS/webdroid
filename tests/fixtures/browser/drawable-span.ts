@@ -6,13 +6,10 @@ import { newPaint, setFontMetrics } from "../../../src/android/paint";
 import { declaredField } from "../../../src/jvm/runtime";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
 import { JTextView } from "../../../src/android/textview";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { systemFonts } from "./fonts";
+import { bootWithFonts } from "./boot";
 
 async function probe() {
-  await loadPlatformDex();
-  rt.linkNatives();
-  await systemFonts();
+  await bootWithFonts();
   const paint = newPaint();
   await vcall(paint, "setTextSize", "(F)V", 12);
   /** a FontMetricsInt's top, bottom, ascent and descent */
