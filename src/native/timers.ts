@@ -41,17 +41,17 @@ export function timersInit(): void {
     timer_create: (cpu, a) => {
       const clock = a.i(), event = a.p(), out = a.p();
       if (![0, 1, 7].includes(clock) || !out) return fail(cpu, E.INVAL);
-      const mode = event ? mem.ld32(event + PTR + 4) : 0;
+      const mode = event ? mem.ld32(event + 8) : 0;
       if (mode !== 1 && mode !== 2) return fail(cpu, E.NOTSUP);
       let notify = () => {};
       if (mode === 2) {
-        const fn = ldp(event + PTR + 8), attributes = ldp(event + PTR * 2 + 8);
+        const fn = ldp(event + 12), attributes = ldp(event + 16);
         if (!fn) return fail(cpu, E.INVAL);
         if (attributes) return fail(cpu, E.NOTSUP);
-        const arg = PTR === 8 ? mem.ld64(event) : BigInt(mem.ld32(event) >>> 0);
+        const arg = BigInt(mem.ld32(event) >>> 0);
         notify = () => { startThread(cpu, fn, arg, true); };
       }
-      const id = mem.malloc(PTR); if (!id) return fail(cpu, E.NOMEM);
+      const id = mem.malloc(4); if (!id) return fail(cpu, E.NOMEM);
       timers.set(id, { clock, next: 0, interval: 0, overrun: 0, notify }); stp(out, id); return 0;
     },
     timer_settime: (cpu, a) => {

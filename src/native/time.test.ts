@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
-import { defineHost, lookupHost, PTR, ldp, stp } from "./host";
+import { defineHost, lookupHost, ldp, stp } from "./host";
 import { libcInit, LAYOUT, readTs, writeTs } from "./libc";
 import { mem } from "./mem";
 
@@ -37,29 +37,25 @@ test("native time fields preserve signed longs and the process ABI width", async
 });
 
 test("POSIX thread timers pass sigval and disarm after a one-shot expiry", async () => {
+  setA64(false); libcInit();
+  const cpu = new Cpu(mainThread, "timer-test"), event = mem.hostAlloc(64), out = mem.hostAlloc(4), value = mem.hostAlloc(2 * LAYOUT.TS_SIZE);
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const delivered = Promise.withResolvers<number>();
+  let callback: Cpu | undefined, timer = 0;
   try {
-    for (const a64 of [false, true]) {
-      setA64(a64); libcInit();
-      const cpu = new Cpu(mainThread, "timer-test"), event = mem.hostAlloc(64), out = mem.hostAlloc(PTR), value = mem.hostAlloc(2 * LAYOUT.TS_SIZE);
-      const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
-      const delivered = Promise.withResolvers<number>();
-      let callback: Cpu | undefined, timer = 0;
-      try {
-        mem.bytes(event, 64).fill(0);
-        stp(event, 1234); mem.st32(event + PTR + 4, 2);
-        stp(event + PTR + 8, defineHost("test:timer:" + a64, (thread, args) => { callback = thread; delivered.resolve(args.i()); return 0; }));
-        expect(await call("timer_create", 1, event, out)).toBe(0);
-        timer = ldp(out);
-        writeTs(value, 0); writeTs(value + LAYOUT.TS_SIZE, -1);
-        expect(await call("timer_settime", timer, 0, value, 0)).toBe(-1);
-        writeTs(value + LAYOUT.TS_SIZE, 10);
-        expect(await call("timer_settime", timer, 0, value, 0)).toBe(0);
-        expect(await delivered.promise).toBe(1234);
-        while (!callback?.finished) await new Promise(resolve => setTimeout(resolve, 0));
-        expect(await call("timer_gettime", timer, value)).toBe(0);
-        expect(readTs(value + LAYOUT.TS_SIZE)).toBe(0);
-        expect(await call("timer_getoverrun", timer)).toBe(0);
-      } finally { if (timer) await call("timer_delete", timer); cpu.dispose(); }
-    }
-  } finally { setA64(false); }
+    mem.bytes(event, 64).fill(0);
+    stp(event, 1234); mem.st32(event + 8, 2);
+    stp(event + 12, defineHost("test:timer", (thread, args) => { callback = thread; delivered.resolve(args.i()); return 0; }));
+    expect(await call("timer_create", 1, event, out)).toBe(0);
+    timer = ldp(out);
+    writeTs(value, 0); writeTs(value + LAYOUT.TS_SIZE, -1);
+    expect(await call("timer_settime", timer, 0, value, 0)).toBe(-1);
+    writeTs(value + LAYOUT.TS_SIZE, 10);
+    expect(await call("timer_settime", timer, 0, value, 0)).toBe(0);
+    expect(await delivered.promise).toBe(1234);
+    while (!callback?.finished) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(await call("timer_gettime", timer, value)).toBe(0);
+    expect(readTs(value + LAYOUT.TS_SIZE)).toBe(0);
+    expect(await call("timer_getoverrun", timer)).toBe(0);
+  } finally { if (timer) await call("timer_delete", timer); cpu.dispose(); }
 });

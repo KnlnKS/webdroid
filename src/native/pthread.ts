@@ -2,7 +2,7 @@
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem, AddrMap, NativeFault, guestAt } from "./mem";
-import { hostLib, NORET, SERVED, type HostFn, ldp, stp, stpVa, PTR } from "./host";
+import { hostLib, NORET, SERVED, type HostFn, ldp, stp } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
@@ -66,8 +66,8 @@ const attrGuards = new AddrMap<number>();
 async function runCleanupHandlers(cpu: Cpu): Promise<void> {
   for (let head; (head = cleanupHeads.get(cpu.tid) ?? 0);) {
     cleanupHeads.set(cpu.tid, ldp(head));
-    const routine = ldp(head + PTR);
-    if (routine) { cpu.finished = false; await cpu.call(routine, [ldp(head + 2 * PTR)], "pthread cleanup"); }
+    const routine = ldp(head + 4);
+    if (routine) { cpu.finished = false; await cpu.call(routine, [ldp(head + 8)], "pthread cleanup"); }
   }
   cleanupHeads.delete(cpu.tid);
 }
@@ -237,13 +237,13 @@ function launch(cpu: Cpu, body: () => Promise<void>, exit: () => void): Promise<
 export function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
   const cpu = newThread(parent);
   try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
-  cpu.w[0] = Number(arg & 0xffffffffn) | 0; cpu.w[1] = Number(arg >> 32n) | 0;
-  cpu.w[2 * cpu.lrx] = RET_SENTINEL; cpu.w[2 * cpu.lrx + 1] = 0;
+  cpu.w[0] = Number(arg & 0xffffffffn) | 0;
+  cpu.w[2 * cpu.lrx] = RET_SENTINEL;
   cpu.setPc(start);
   const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false, storage: 0 };
   rec.done = launch(cpu, async () => {
     await cpu.run();
-    if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);
+    if (!cpu.finished) rec.retval = BigInt(cpu.w[0] >>> 0);
     await runCleanupHandlers(cpu);
     await runKeyDestructors(cpu);
   }, () => {
@@ -295,10 +295,7 @@ export function pthreadInit(): void {
       if (t.detached || t.joined) return E.INVAL;
       t.joined = true;
       await t.done;
-      if (retp) {
-        if (cpu.a64) stpVa(mem.txVa(retp), t.retval);
-        else mem.st32(mem.txVa(retp), Number(t.retval));
-      }
+      if (retp) mem.st32(mem.txVa(retp), Number(t.retval));
       if (t.storage) mem.free(t.storage);
       threads.delete(tid); handles.delete(handle);
       return 0;
@@ -321,7 +318,7 @@ export function pthreadInit(): void {
     },
     pthread_self: SERVED,
     pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
-    pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), cpu.a64 ? 8 : 4),
+    pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 4),
     pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
     pthread_setname_np: (_c, a) => {
       const handle = a.p(), name = a.str();
@@ -364,15 +361,15 @@ export function pthreadInit(): void {
     __pthread_cleanup_push: (cpu, a) => {
       const entry = a.p(), routine = a.p(), arg = a.p();
       stp(entry, cleanupHeads.get(cpu.tid) ?? 0);
-      stp(entry + PTR, routine); stp(entry + 2 * PTR, arg);
+      stp(entry + 4, routine); stp(entry + 8, arg);
       cleanupHeads.set(cpu.tid, entry);
     },
     __pthread_cleanup_pop: (cpu, a) => {
       const entry = a.p(), execute = a.i();
       const previous = ldp(entry);
       if (previous) cleanupHeads.set(cpu.tid, previous); else cleanupHeads.delete(cpu.tid);
-      const routine = ldp(entry + PTR);
-      return execute && routine ? cpu.call(routine, [ldp(entry + 2 * PTR)], "pthread cleanup").then(() => undefined) : undefined;
+      const routine = ldp(entry + 4);
+      return execute && routine ? cpu.call(routine, [ldp(entry + 8)], "pthread cleanup").then(() => undefined) : undefined;
     },
     pthread_mutex_init: (_c, a) => {
       const mutex = a.p(), attr = a.p();
