@@ -85,8 +85,25 @@ function pendingActivities(context: JContext, code: number, intents: JIntent[] |
   return pending("activity", context, code, intents[intents.length - 1], flags, intents);
 }
 const KINDS: Record<PendingOperation["kind"], number> = { broadcast: 1, activity: 2, service: 4, "foreground-service": 5 };
+const KIND_OF: Record<number, PendingOperation["kind"]> = { 1: "broadcast", 2: "activity", 4: "service", 5: "foreground-service" };
+/** an IIntentSender over a record of the shell's registry, as AOSP's PendingIntent holds one */
+const intentSender = (id: number) => vcall(rt.link("android/content/IIntentSender$Stub").ctor, "asInterface",
+  "(Landroid/os/IBinder;)Landroid/content/IIntentSender;", importBinder({ pid: 0, id }));
 /** IActivityManager's IntentSender calls, over the shell's records */
 export const intentSenderMethods = {
+  // ActivityManagerService.getIntentSenderWithFeature: a record per creator, kind, request code,
+  // flags and filterEquals-equal intent (the last of an activity list is the one launched)
+  "getIntentSenderWithFeature(ILjava/lang/String;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;I[Landroid/content/Intent;[Ljava/lang/String;ILandroid/os/Bundle;I)Landroid/content/IIntentSender;":
+    driven(function* (type: number, pkg: string, _feature: string | null, _token: unknown, _who: string | null, code: number, intents: JIntent[] | null, _types: unknown, flags: number): Gen {
+      const kind = KIND_OF[type];
+      if (!kind) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad PendingIntent type: " + type);
+      if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
+      const encoded: IntentData[] = [];
+      for (const intent of intents) encoded.push(yield encodeIntent(intent));
+      const id: number | null = yield pendingTransport.create(pkg, kind, code, flags, encoded.at(-1)!, kind === "activity" && encoded.length > 1 ? encoded : undefined);
+      return id === null ? null : intentSender(id);
+    }),
+  "cancelIntentSender(Landroid/content/IIntentSender;)V": driven(function* (sender: JObj): Gen { pendingTransport.cancel(yield* senderId$(sender)); }),
   "getInfoForIntentSender(Landroid/content/IIntentSender;)Landroid/app/ActivityManager$PendingIntentInfo;": driven(function* (sender: JObj): Gen {
     const id = yield* senderId$(sender), creator = pendingTransport.creator(id), kind = pendingTransport.kind(id);
     return newObj("android/app/ActivityManager$PendingIntentInfo", "(Ljava/lang/String;IZI)V", creator?.pkg ?? null, creator?.uid ?? -1,
