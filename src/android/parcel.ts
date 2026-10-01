@@ -24,8 +24,15 @@ export class JParcel extends JObj {
   pos = 0;
   size = 0;
   objects = new Map<number, unknown>();
+  /** mClassCookies: what a Parcelable class leaves for its nested writes (Notification's pending intents) */
+  cookies: JObj | null = null;
+  /** squashing: a parcelable written again is written as the offset back to its first copy */
+  squashing = false;
+  written: Map<unknown, number> | null = null;
+  read: Map<number, unknown> | null = null;
 }
 export { parcelCreator } from "./parcelable";
+const classCookies = async (p: JParcel): Promise<JObj> => p.cookies ??= await newObj("android/util/ArrayMap");
 function reserve(p: JParcel, n: number) {
   if (p.pos + n <= p.buf.length) return;
   const b = new Uint8Array(Math.max(p.buf.length * 2, p.pos + n));
@@ -325,7 +332,44 @@ rt.register({
     [`static obtain()${P}`]: () => new JParcel(),
     // one wire format serves every binder, so a parcel needs no marking for its target's
     [`static obtain(Landroid/os/IBinder;)${P}`]: () => new JParcel(),
-    "recycle()V": function (this: JParcel) { this.pos = this.size = 0; this.objects.clear(); },
+    "recycle()V": function (this: JParcel) { this.pos = this.size = 0; this.objects.clear(); this.cookies = null; this.squashing = false; this.written = this.read = null; },
+    "setClassCookie(Ljava/lang/Class;Ljava/lang/Object;)V": async function (this: JParcel, cls: unknown, cookie: unknown) {
+      await vcall(await classCookies(this), "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", cls, cookie);
+    },
+    "getClassCookie(Ljava/lang/Class;)Ljava/lang/Object;": function (this: JParcel, cls: unknown) {
+      return this.cookies ? vcall(this.cookies, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", cls) : null;
+    },
+    "hasClassCookie(Ljava/lang/Class;)Z": function (this: JParcel, cls: unknown) {
+      return this.cookies ? vcall(this.cookies, "containsKey", "(Ljava/lang/Object;)Z", cls) : 0;
+    },
+    "removeClassCookie(Ljava/lang/Class;Ljava/lang/Object;)V": async function (this: JParcel, cls: unknown) {
+      if (this.cookies) await vcall(this.cookies, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", cls);
+    },
+    "copyClassCookies()Ljava/util/Map;": function (this: JParcel) { return newObj("android/util/ArrayMap", "(Landroid/util/ArrayMap;)V", this.cookies); },
+    "putClassCookies(Ljava/util/Map;)V": async function (this: JParcel, cookies: unknown) {
+      if (cookies) await vcall(await classCookies(this), "putAll", "(Ljava/util/Map;)V", cookies);
+    },
+    "adoptClassCookies(Landroid/os/Parcel;)V": function (this: JParcel, from: JParcel) { this.cookies = from.cookies; },
+    "allowSquashing()Z": function (this: JParcel) { const previous = this.squashing; this.squashing = true; return +previous; },
+    "restoreAllowSquashing(Z)V": function (this: JParcel, previous: number) { this.squashing = !!previous; if (!previous) this.written = null; },
+    "maybeWriteSquashed(Landroid/os/Parcelable;)Z": function (this: JParcel, p: unknown) {
+      const first = this.squashing ? (this.written ??= new Map()).get(p) : undefined;
+      if (first !== undefined) { writeInt(this, this.pos - first + 4); return 1; }
+      writeInt(this, 0);
+      if (this.squashing) this.written!.set(p, this.pos);
+      return 0;
+    },
+    "readSquashed(Landroid/os/Parcel$SquashReadHelper;)Landroid/os/Parcelable;": async function (this: JParcel, reader: unknown) {
+      const offset = readInt(this), at = this.pos;
+      if (offset === 0) {
+        const p = await vcall(reader, "readRawParceled", "(Landroid/os/Parcel;)Landroid/os/Parcelable;", this);
+        (this.read ??= new Map()).set(at, p);
+        return p;
+      }
+      const p = this.read?.get(at - offset);
+      if (p === undefined) throw rt.mkThrowable("android/os/BadParcelableException", `Map doesn't contain offset ${at - offset} : contains=${[...this.read?.keys() ?? []]}`);
+      return p;
+    },
     "dataSize()I": function (this: JParcel) { return this.size; },
     "dataPosition()I": function (this: JParcel) { return this.pos; },
     "dataAvail()I": function (this: JParcel) { return this.size - this.pos; },

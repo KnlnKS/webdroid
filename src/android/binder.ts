@@ -119,6 +119,8 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "static setThreadStrictModePolicy(I)V": (mask: number) => { strictModePolicies.set(curThread, mask); },
   "static getThreadStrictModePolicy()I": () => strictModePolicies.get(curThread) ?? 0,
   "static getCallingPid()I": () => callingIdentity().pid,
+  // a binder thread is in onTransact for its caller (Parcel bounds what a transaction may allocate)
+  "static isDirectlyHandlingTransaction()Z": () => +(transactionCaller() !== undefined),
   // IPCThreadState packs the caller into the token, so clearing twice gives the same one
   "static clearCallingIdentity()J": () => {
     const { pid, uid } = callingIdentity();

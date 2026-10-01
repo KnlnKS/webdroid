@@ -20,6 +20,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JUserHandle) { return "UserHandle{" + this.id + "}"; },
     ...PARCELABLE,
     "static getUserHandleForUid(I)Landroid/os/UserHandle;": userHandleForUid,
+    "static of(I)Landroid/os/UserHandle;": (userId: number) => userHandleForUid(userId * 100000),
   },
 });
 

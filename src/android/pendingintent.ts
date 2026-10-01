@@ -1,5 +1,5 @@
 import { JObj, rt } from "../jvm/runtime";
-import { defineException, idHash, newObj, vcall } from "../jvm/natives/jlang";
+import { defineException, idHash, newObj, vcall, vcallOn, curThread, type JThread } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
 import type { ActivityResultTarget } from "./intent";
 import { appHost } from "./apphost";
@@ -90,6 +90,15 @@ rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces:
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JIntentSender, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.target); },
   },
 });
+/** PendingIntent.sOnMarshaledListener: per thread, those told of each PendingIntent written to a parcel */
+const marshaledListeners = new WeakMap<JThread, unknown[]>();
+const listenersHere = () => { let l = marshaledListeners.get(curThread); if (!l) marshaledListeners.set(curThread, l = []); return l; };
+async function writePendingIntent(this: JPendingIntent, p: JParcel, flags: number) {
+  const thread = curThread;
+  await vcallOn(thread, p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target);
+  for (const listener of [...marshaledListeners.get(thread) ?? []])
+    await vcallOn(thread, listener, "onMarshaled", "(Landroid/app/PendingIntent;Landroid/os/Parcel;I)V", this, p, flags);
+}
 rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/app/PendingIntent", async p => {
     const target = await vcall(p, "readStrongBinder", "()Landroid/os/IBinder;");
@@ -104,7 +113,12 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     "static getForegroundService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("foreground-service", context, code, intent, flags),
     "getIntentSender()Landroid/content/IntentSender;": function (this: JPendingIntent) { return this.sender; },
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); },
+    "writeToParcel(Landroid/os/Parcel;I)V": writePendingIntent,
+    "static addOnMarshaledListener(Landroid/app/PendingIntent$OnMarshaledListener;)V": (listener: unknown) => { listenersHere().push(listener); },
+    "static removeOnMarshaledListener(Landroid/app/PendingIntent$OnMarshaledListener;)V": (listener: unknown) => {
+      const l = listenersHere(), i = l.indexOf(listener);
+      if (i >= 0) l.splice(i, 1);
+    },
     "equals(Ljava/lang/Object;)Z": function (this: JPendingIntent, other: unknown) { return +(other instanceof JPendingIntent && this.sender.target === other.sender.target); },
     "hashCode()I": function (this: JPendingIntent) { return idHash(this.sender.target); },
     "cancel()V": function (this: JPendingIntent) { pendingTransport.cancel(pendingId(this)); },

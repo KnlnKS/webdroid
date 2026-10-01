@@ -35,6 +35,21 @@ rt.register({
     "static println_native(IILjava/lang/String;Ljava/lang/String;)I": (_buffer: number, p: number, tag: string, msg: string) => logAt(p)(tag, msg),
   },
 });
+// EventLog: the binary events buffer, written to the one log here. Each write answers the bytes
+// liblog's android_log_event_list encodes: the tag, then each value as its type byte and payload
+// (a list adds its type byte and count).
+const eventSize = (value: unknown): number => typeof value === "string" ? 5 + new TextEncoder().encode(value).length
+  : typeof value === "bigint" ? 9 : Array.isArray(value) ? 2 + value.reduce((n: number, v) => n + eventSize(boxedValue(v) ?? v), 0) : 5;
+const writeEvent = (tag: number, value: unknown) => {
+  const shown = Array.isArray(value) ? value.map((v) => String(boxedValue(v) ?? v)).join(",") : String(value);
+  console.log("[I/EventLog]", tag, `[${shown}]`);
+  return 4 + eventSize(value);
+};
+rt.registerJnis("android/util/EventLog", {
+  "writeEvent(II)I": writeEvent, "writeEvent(IJ)I": writeEvent, "writeEvent(IF)I": writeEvent,
+  "writeEvent(ILjava/lang/String;)I": (tag: number, value: string | null) => writeEvent(tag, value ?? "NULL"),
+  "writeEvent(I[Ljava/lang/Object;)I": (tag: number, values: unknown[] | null) => writeEvent(tag, values ? [...values] : "NULL"),
+});
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
 export class JProperty extends JObj { type: unknown = null; name = ""; }

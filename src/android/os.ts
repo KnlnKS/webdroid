@@ -227,6 +227,8 @@ rt.register({
 export class JBaseBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;
+  /** FLAG_DEFUSABLE: values here are read as they are unparcelled, so a bad one has already thrown */
+  defusable = false;
 }
 export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
@@ -331,7 +333,8 @@ rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: without
   ["<init>(Landroid/os/Bundle;)V", "<init>(Landroid/os/PersistableBundle;)V", "describeContents()I", "writeToParcel(Landroid/os/Parcel;I)V"]) });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } },
-  methods: { ...without(bundleMethods, persistableOnly), "deepCopy()Landroid/os/Bundle;": deepCopy } });
+  methods: { ...without(bundleMethods, persistableOnly), "deepCopy()Landroid/os/Bundle;": deepCopy,
+    "setDefusable(Z)V": function (this: JBundle, defusable: number) { this.defusable = !!defusable; } } });
 rt.register({ name: "android/os/PersistableBundle", ctor: JPersistableBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JPersistableBundle(); } },
   methods: { ...without(bundleMethods, bundleOnly, ["<init>(Ljava/lang/ClassLoader;)V"]), "deepCopy()Landroid/os/PersistableBundle;": deepCopy } });
