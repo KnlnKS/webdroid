@@ -1429,9 +1429,34 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - The device has no PermissionController module: getPermissionControllerPackageName is null and
     AOSP's PermissionControllerManager reports it (Log.wtf, IllegalStateException), which
     LeakCanary's getSystemService catches; the empty TS marker class had hidden this.
-  Limits: cross-process content providers, the IME, WebView, cross-process activity results,
-  service timeouts and restarts, app-sent sticky broadcasts and audio devices/ports are not done in
-  D-mode; `media.ts` resolves a SurfaceHolder display synchronously, so D-mode video shows nothing.
+  Limits: cross-process activity results, service timeouts and restarts, app-sent sticky
+  broadcasts and audio devices/ports are not done in D-mode.
+- 2026-10-03, Stage D: providers, WebView, the IME and the harness. FitNotes, CalculatorM and
+  DoodleJump pass their whole fast flows under `?bytecode=stage-d`; Mihon, Komikku and FlappyBird
+  stop at TelephonyManager's constructor (a TS manager under bytecode).
+  - Cross-process providers: getContentProvider resolves the authority and imports the provider
+    process's binder behind ContentProviderNative.asInterface; a local holder needs `mLocal`, or
+    ActivityThread (API 31+) waits 20 s for a publish notice inside its own provider install.
+    ParcelFileDescriptors cross as their bytes plus a writer binder; IPermissionChecker answers
+    attribution-chain checks; IUriGrantsManager holds persisted grants.
+  - WebView runs from bytecode over a TS WebViewFactoryProvider (both modes; the TS WebView spec is
+    gone). Its position comes from the draw functor replayed each frame, not onDraw, since hwui
+    reuses unchanged display lists; Chromium's `setWillNotDraw(false)` is needed for any draw. A TS
+    view spec on the bytecode view stack breaks (WebView, GestureOverlayView): such classes move to
+    bytecode or behind AOSP's extension points.
+  - The IME: API 36 sets `useZeroJankProxy`, so InputMethodManager waits on
+    startInputOrWindowGainedFocusAsync's onStartInputResult; RemoteInputConnectionImpl drops
+    commands whose session id is stale; a new ime InsetsSource starts invisible.
+  - Window order: an activity's windows stack by token with its base window below its dialogs (a
+    dialog shown in onCreate is added first); a sub-window's Z is relative to its parent.
+  - Harness timing. A tap held for a real 60 ms let a controlled clock pass the 400 ms long-press
+    deadline; it is now 60 guest ms. Under Stage D a start or finish completes only after the client
+    reports its pause, and AbsListView clicks 64 ms after UP (pressed-state duration) through a
+    delayed message, which the fast lane's controlled clock never reached because it advanced only
+    during actions: the next step's tap then landed on the old window and started the activity
+    twice. The pixel rule now waits while ATM counts a transition, and a controlled clock runs
+    through the pixel rule's sampling window as a real clock does. Text toasts queue as
+    NotificationManagerService does and draw through ToastPresenter, as SystemUI's ToastUI does.
 
 ## Java, storage and framework semantics
 
