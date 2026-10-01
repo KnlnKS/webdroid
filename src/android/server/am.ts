@@ -157,6 +157,8 @@ export async function startActivityThread(launched: boolean): Promise<void> {
 
 // ActivityThread's natives: heapprofd never profiles this process, and the renderer holds no
 // resources a trim could purge
+// Activity.getDlWarning: the linker records no warning for a library an app loads
+rt.registerJni("android/app/Activity", "getDlWarning()Ljava/lang/String;", () => null);
 rt.registerJnis("android/app/ActivityThread", {
   "nInitZygoteChildHeapProfiling()V": () => {},
   "nPurgePendingResources()V": () => {},

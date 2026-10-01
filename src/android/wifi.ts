@@ -66,6 +66,8 @@ rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "a
   // an app sees no saved networks from Q, and the page's network is not one it can change
   [`getConfiguredNetworks(${S}${S}Z)L${SLICE};`]: async () => { await enforceAccess(); return emptySlice(); },
   [`setWifiEnabled(${S}Z)Z`]: async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; },
+  ...Object.fromEntries(["reconnect", "reassociate", "disconnect"].map((name) =>
+    [`${name}(${S})Z`, async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; }])),
   "isScanAlwaysAvailable()Z": () => 0,
   "getVerboseLoggingLevel()I": () => 0,
   // the AVD's 2.4 GHz-only radio, with none of the optional features (p2p, aware, rtt...) this device lacks
