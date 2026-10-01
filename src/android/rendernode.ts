@@ -418,7 +418,6 @@ const prop = <T>(h: bigint) => deref<Property<T>>(h).value;
 rt.registerJnis("android/graphics/RecordingCanvas", {
   "nCreateDisplayListCanvas(JII)J": (_node: bigint, w: number, h: number) => {
     const nc = new NativeCanvas(), ops: DisplayList = [];
-    nc.accelerated = true;
     // the mirror answers reads made while recording (the matrix, text metrics): replay never reads
     // it, so one pixel is enough
     nc.recording = { ctx: recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, ops), ops };

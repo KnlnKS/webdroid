@@ -36,8 +36,6 @@ export class NativeCanvas {
   ctx!: Ctx2D;
   w = 0; h = 0;
   bmp: NativeBitmap | null = null;
-  /** a RecordingCanvas's: what Java's isHardwareAccelerated answers */
-  accelerated = false;
   /** a RenderNode's RecordingCanvas: its recording context and the list it appends to */
   recording: { ctx: Ctx2D; ops: DisplayList } | null = null;
   saveCount = 1;
@@ -483,7 +481,7 @@ export class NativeCanvas {
   /** the Java Canvas over this one's target that a software layer draws through under a hardware
    *  window: made once, and given this canvas's state each time */
   softwareTwin(): JavaCanvas {
-    const peer = this.twin ??= canvasPeer(new NativeCanvas());
+    const peer = this.twin ??= canvasPeer(new NativeCanvas(), false);
     const twin = canvasOf(peer);
     twin.setTarget(this.ctx, this.w, this.h, null);
     twin.cl = this.cl; twin.ct = this.ct; twin.cr = this.cr; twin.cb = this.cb; twin.poly = this.poly;
@@ -537,48 +535,42 @@ function deviceBounds(m: DOMMatrix, l: number, t: number, r: number, b: number):
 }
 
 // ── the Java side: one bridge, and the peers TS makes ──
-let wrapperField = "", widthField = "", heightField = "", nodeField = "";
+let wrapperField = "", recordingFields: { width: string; height: string; node: string } | null = null;
 const wrapper = () => wrapperField ||= declaredField("android/graphics/Canvas", "mNativeCanvasWrapper");
+const recordingField = () => recordingFields ??= {
+  width: declaredField("android/graphics/RecordingCanvas", "mWidth"), height: declaredField("android/graphics/RecordingCanvas", "mHeight"),
+  node: declaredField("android/graphics/RecordingCanvas", "mNode"),
+};
 /** the native state behind a Java canvas */
 export const canvasOf = (c: object): NativeCanvas => deref<NativeCanvas>((c as Record<string, bigint>)[wrapper()]);
 const peers = new FinalizationRegistry<bigint>(release);
-/** A Java Canvas over `nc` — a RecordingCanvas when it is accelerated, which is what a hardware
- *  window hands its views — made without running a constructor, so it never suspends. The
- *  handle is released with the peer. */
-export function canvasPeer(nc: NativeCanvas): JavaCanvas {
-  const c = rt.make(nc.accelerated ? "android/graphics/RecordingCanvas" : "android/graphics/Canvas") as JavaCanvas & Record<string, unknown>;
+/** A Java Canvas over `nc` — a RecordingCanvas of its size when `recording`, which is what a
+ *  hardware window hands its views — made without running a constructor, so it never suspends.
+ *  The handle is released with the peer. */
+function canvasPeer(nc: NativeCanvas, recording: boolean): JavaCanvas {
+  const c = rt.make(recording ? "android/graphics/RecordingCanvas" : "android/graphics/Canvas") as JavaCanvas & Record<string, unknown>;
   const h = handle(nc);
   c[wrapper()] = h;
-  if (nc.accelerated) {
-    c[widthField ||= declaredField("android/graphics/RecordingCanvas", "mWidth")] = nc.w;
-    c[heightField ||= declaredField("android/graphics/RecordingCanvas", "mHeight")] = nc.h;
-  }
+  if (recording) { const f = recordingField(); c[f.width] = nc.w; c[f.height] = nc.h; }
   peers.register(c, h);
   return c;
 }
 /** a Java Canvas drawing straight into `ctx`, a RecordingCanvas when `accelerated` */
 export function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): JavaCanvas {
-  const nc = NativeCanvas.over(ctx, w, h);
-  nc.accelerated = accelerated;
-  return canvasPeer(nc);
+  return canvasPeer(NativeCanvas.over(ctx, w, h), accelerated);
 }
 const windows = new Map<Ctx2D, JavaCanvas>();
 /** the RecordingCanvas a hardware-accelerated window draws its views through, one per target and
  *  reset for each frame */
 export function windowCanvas(ctx: Ctx2D, w: number, h: number): JavaCanvas {
   let peer = windows.get(ctx);
-  if (!peer) {
-    const nc = new NativeCanvas();
-    nc.accelerated = true;
-    windows.set(ctx, peer = canvasPeer(nc));
-  }
-  const nc = canvasOf(peer);
+  if (!peer) windows.set(ctx, peer = canvasPeer(new NativeCanvas(), true));
+  const nc = canvasOf(peer), f = recordingField(), p = peer as Record<string, unknown>;
   nc.setTarget(ctx, w, h, null);
   nc.semanticOwner = nc.semanticBase = null;
-  const p = peer as Record<string, unknown>;
-  p[widthField] = w; p[heightField] = h;
+  p[f.width] = w; p[f.height] = h;
   // what RenderNodeAnimator and AnimatedVectorDrawable run on and check is attached
-  p[nodeField ||= declaredField("android/graphics/RecordingCanvas", "mNode")] = windowRoot();
+  p[f.node] = windowRoot();
   return peer;
 }
 /** View's constructor tells Canvas the target SDK: what restore underflow, setBitmap and clip ops

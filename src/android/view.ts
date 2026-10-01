@@ -894,7 +894,7 @@ export const drawView = driven(function* drawView(v: JView, cv: JavaCanvas, pare
       const lp = v.rare?.layerPaint;
       saveLayer(nc, { left: 0, top: 0, right: w, bottom: h }, lp ? paintOf(lp) : null);
       // a software layer draws into a bitmap even under a hardware window
-      if (v.layerType === 1 && nc.accelerated) into = nc.softwareTwin();
+      if (v.layerType === 1 && rt.iof(cv, "android/graphics/RecordingCanvas")) into = nc.softwareTwin();
     }
     try { yield drawSemantic(v, into); } finally { if (into !== cv) canvasOf(into).restoreToCount(1); }
   } catch (e) {
