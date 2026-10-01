@@ -2,7 +2,7 @@
 // so the getc/putc macros and __srget refills work; /proc/cpuinfo and /proc/meminfo are synthesized.
 
 import { mem, guestAt, wrote } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr } from "./host";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
@@ -578,7 +578,7 @@ const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 40
 function fillStatvfs(b: number): void {
   mem.memset(b, 0, 112);
   const v = [4096, 4096, 0x100000, 0x80000, 0x80000, 0x10000, 0x8000, 0x8000, 0, 0, 255];
-  for (let i = 0; i < v.length; i++) stp(b + i * PTR, v[i]);
+  for (let i = 0; i < v.length; i++) mem.st32(b + i * 4, v[i]);
 }
 /** statfs: a fixed-size filesystem with room; the LP64 struct is all 64-bit fields at an 8-byte stride */
 function fillStatfs(b: number): void {
@@ -852,22 +852,20 @@ interface FtsWalk {
   current: number;
 }
 const ftsWalks = new Map<number, FtsWalk>();
-const ftsLayout = () => PTR === 8
-  ? { parent: 8, link: 16, accpath: 40, path: 48, errno: 56, pathlen: 64, namelen: 72, ino: 80, dev: 88, nlink: 96, level: 100, info: 102, flags: 104, instr: 106, statp: 112, name: 120 }
-  : { parent: 4, link: 8, accpath: 20, path: 24, errno: 28, pathlen: 36, namelen: 40, ino: 44, dev: 48, nlink: 52, level: 56, info: 58, flags: 60, instr: 62, statp: 64, name: 68 };
+const FTS = { parent: 4, link: 8, accpath: 20, path: 24, errno: 28, pathlen: 36, namelen: 40, ino: 44, dev: 48, nlink: 52, level: 56, info: 58, flags: 60, instr: 62, statp: 64, name: 68 };
 
 function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number): number {
-  const layout = ftsLayout(), name = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
+  const name = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
   const pathlen = utf8(path).length, namelen = utf8(name).length;
-  const entry = mem.malloc(layout.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(LAYOUT.STAT_SIZE);
+  const entry = mem.malloc(FTS.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(LAYOUT.STAT_SIZE);
   walk.allocations.push(entry, pathp, statp);
-  mem.memset(entry, 0, layout.name + namelen + 1);
-  stp(entry + layout.parent, parent); stp(entry + layout.accpath, pathp); stp(entry + layout.path, pathp);
-  stLong(entry + layout.pathlen, pathlen); stLong(entry + layout.namelen, namelen);
-  mem.st32(entry + layout.ino, inoOf(path)); mem.st32(entry + layout.dev, 1); mem.st32(entry + layout.nlink, 1);
-  mem.st16(entry + layout.level, level); mem.st16(entry + layout.info, info); stp(entry + layout.statp, statp);
+  mem.memset(entry, 0, FTS.name + namelen + 1);
+  stp(entry + FTS.parent, parent); stp(entry + FTS.accpath, pathp); stp(entry + FTS.path, pathp);
+  mem.st32(entry + FTS.pathlen, pathlen); mem.st32(entry + FTS.namelen, namelen);
+  mem.st32(entry + FTS.ino, inoOf(path)); mem.st32(entry + FTS.dev, 1); mem.st32(entry + FTS.nlink, 1);
+  mem.st16(entry + FTS.level, level); mem.st16(entry + FTS.info, info); stp(entry + FTS.statp, statp);
   const file = vfs.stat(path); fillStat(statp, info === 1 || info === 6, file?.size ?? 4096, Date.now(), path);
-  mem.putCstr(entry + layout.name, name);
+  mem.putCstr(entry + FTS.name, name);
   return entry;
 }
 
@@ -887,8 +885,8 @@ async function sortFts(cpu: Cpu, node: FtsNode, compar: number, cell: number): P
     for (let i = 1; i < node.children.length; i++) {
       const value = node.children[i]; let j = i;
       while (j > 0) {
-        stp(cell, node.children[j - 1].pre); stp(cell + PTR, value.pre);
-        if ((await cpu.call(compar, [cell, cell + PTR])) <= 0) break;
+        stp(cell, node.children[j - 1].pre); stp(cell + 4, value.pre);
+        if ((await cpu.call(compar, [cell, cell + 4])) <= 0) break;
         node.children[j] = node.children[j - 1]; j--;
       }
       node.children[j] = value;
@@ -898,10 +896,9 @@ async function sortFts(cpu: Cpu, node: FtsNode, compar: number, cell: number): P
 }
 
 function flattenFts(walk: FtsWalk, node: FtsNode): void {
-  const layout = ftsLayout();
   walk.entries.push(node.pre);
   node.first = node.children[0]?.pre ?? 0;
-  for (let i = 0; i < node.children.length; i++) stp(node.children[i].pre + layout.link, node.children[i + 1]?.pre ?? 0);
+  for (let i = 0; i < node.children.length; i++) stp(node.children[i].pre + FTS.link, node.children[i + 1]?.pre ?? 0);
   for (const child of node.children) flattenFts(walk, child);
   if (node.post) walk.entries.push(node.post);
   node.end = walk.entries.length;
@@ -909,11 +906,11 @@ function flattenFts(walk: FtsWalk, node: FtsNode): void {
 
 async function ftsOpen(cpu: Cpu, argv: number, options: number, compar: number): Promise<number | bigint> {
   if (!argv || options & ~0xff) { fail(cpu, E.INVAL); return 0; }
-  const handle = mem.malloc(PTR), walk: FtsWalk = { entries: [], nodes: new Map(), allocations: [handle], index: 0, current: 0 };
+  const handle = mem.malloc(4), walk: FtsWalk = { entries: [], nodes: new Map(), allocations: [handle], index: 0, current: 0 };
   const roots: FtsNode[] = [];
-  for (let p = argv, pathp; (pathp = ldp(p)); p += PTR) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
+  for (let p = argv, pathp; (pathp = ldp(p)); p += 4) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
   if (!roots.length) { closeFts(handle); fail(cpu, E.INVAL); return 0; }
-  const cell = mem.malloc(2 * PTR); walk.allocations.push(cell);
+  const cell = mem.malloc(8); walk.allocations.push(cell);
   for (const root of roots) { await sortFts(cpu, root, compar, cell); flattenFts(walk, root); }
   ftsWalks.set(handle, walk);
   return ptr(handle);
@@ -974,8 +971,8 @@ export function stdioInit(): void {
       if (fds.get(fd)?.dgram) return writeBytes(cpu, fds.get(fd), gather(iov, count));
       return vectored(cpu, iov, count, (p, n) => fdWrite(cpu, fd, p, n));
     },
-    pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), offArg(a)),
-    pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), offArg(a)),
+    pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), a.i()),
+    pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
     pread64: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), Number(a.l())),
     pwrite64: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), Number(a.l())),
     lseek: (cpu, a) => (PTR === 8 ? BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())) : fdSeek(cpu, a.i(), a.i(), a.i())),
@@ -1008,7 +1005,7 @@ export function stdioInit(): void {
     rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
     ftruncate: (cpu, a) => truncateFd(cpu, a.i(), offArg(a)),
     ftruncate64: (cpu, a) => truncateFd(cpu, a.i(), Number(a.l())),
-    posix_fallocate: (_c, a) => fallocateFd(fds.get(a.i()), offArg(a), offArg(a)),
+    posix_fallocate: (_c, a) => fallocateFd(fds.get(a.i()), a.i(), a.i()),
     posix_fallocate64: (_c, a) => fallocateFd(fds.get(a.i()), Number(a.l()), Number(a.l())),
     truncate: (cpu, a) => {
       const file = vfs.open(a.str()), n = offArg(a);
@@ -1117,11 +1114,11 @@ export function stdioInit(): void {
     __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); chk(cpu, n, a.u(), "read"); return fdRead(cpu, fd, p, n); },
     __write_chk: (cpu, a) => {
       const fd = a.i(), p = a.p(), n = a.va(), size = a.va();
-      if (n > size || n > (PTR === 8 ? 0x7fffffffffffffffn : 0x7fffffffn)) cpu.fault("fortify: write past the buffer");
+      if (n > size || n > 0x7fffffffn) cpu.fault("fortify: write past the buffer");
       return fdWrite(cpu, fd, p, Number(n));
     },
     __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
-    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
+    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
     flock: () => 0,
     unlinkat: (cpu, a) => { a.i(); const p = a.str(), flags = a.i(); if (flags & 0x200) { const d = vfs.norm(p); if (!vfs.isDir(d)) return fail(cpu, E.NOTDIR); vfs.rmdir(d); return 0; } return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
     fchmodat: () => 0, utimensat: () => 0, futimens: () => 0,
@@ -1173,7 +1170,7 @@ export function stdioInit(): void {
         kept.push(de);
       }
       if (compar && kept.length > 1) {
-        const cell = mem.malloc(2 * PTR), cmp = async (x: number, y: number) => { stp(cell, x); stp(cell + PTR, y); return (await cpu.call(compar, [cell, cell + PTR])) | 0; };
+        const cell = mem.malloc(8), cmp = async (x: number, y: number) => { stp(cell, x); stp(cell + 4, y); return (await cpu.call(compar, [cell, cell + 4])) | 0; };
         try {
           // insertion sort: stable, and each comparison is a guest call
           for (let i = 1; i < kept.length; i++) {
@@ -1184,8 +1181,8 @@ export function stdioInit(): void {
           }
         } finally { mem.free(cell); }
       }
-      const list = mem.malloc(Math.max(1, kept.length) * PTR);
-      for (let i = 0; i < kept.length; i++) stp(list + i * PTR, kept[i]);
+      const list = mem.malloc(Math.max(1, kept.length) * 4);
+      for (let i = 0; i < kept.length; i++) stp(list + i * 4, kept[i]);
       stp(out, list);
       return kept.length;
     },
@@ -1196,7 +1193,7 @@ export function stdioInit(): void {
       if (!walk) return 0;
       if (walk.current) {
         const node = walk.nodes.get(walk.current);
-        if (node && mem.ld16u(walk.current + ftsLayout().instr) === 4) walk.index = node.end;
+        if (node && mem.ld16u(walk.current + FTS.instr) === 4) walk.index = node.end;
       }
       const entry = walk.entries[walk.index++] ?? 0;
       walk.current = entry;
@@ -1210,7 +1207,7 @@ export function stdioInit(): void {
     fts_set: (cpu, a) => {
       const walk = ftsWalks.get(a.p()), entry = a.p(), instruction = a.i();
       if (!walk || !walk.nodes.has(entry) || instruction < 1 || instruction > 4) return fail(cpu, E.INVAL);
-      mem.st16(entry + ftsLayout().instr, instruction); return 0;
+      mem.st16(entry + FTS.instr, instruction); return 0;
     },
     fts_close: (_c, a) => closeFts(a.p()),
 
@@ -1241,7 +1238,7 @@ export function stdioInit(): void {
       return r instanceof Promise ? r.then(fin) : fin(r);
     },
     fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return Math.floor(r / sz); },
-    fseek: (cpu, a) => { const fp = a.p(), off = offArg(a); return fileSeek(cpu, fp, off, a.i()); },
+    fseek: (cpu, a) => { const fp = a.p(), off = a.i(); return fileSeek(cpu, fp, off, a.i()); },
     ftell: (cpu, a) => fileTell(cpu, a.p()),
     rewind: (cpu, a) => { const fp = a.p(); fileSeek(cpu, fp, 0, 0); mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~F_ERR); },
     fgetpos: (cpu, a) => { const fp = a.p(), pos = a.p(), value = fileTell(cpu, fp); if (value < 0) return -1; stp(pos, value); return 0; },

@@ -180,11 +180,11 @@ test("inotify waits on a real descriptor and reports completed file writes", asy
 });
 
 test("fts walks directories in pre- and postorder", async () => {
-  setA64(true); libcInit(); stdioInit();
+  setA64(false); libcInit(); stdioInit();
   const cpu = new Cpu(mainThread, "fts-test"), path = mem.strdup("/fts-test"), argv = mem.malloc(16);
   vfs.mkdir("/fts-test"); vfs.mkdir("/fts-test/sub");
   vfs.write("/fts-test/a", Uint8Array.of(1)); vfs.write("/fts-test/sub/b", Uint8Array.of(2));
-  stp(argv, path); stp(argv + 8, 0);
+  stp(argv, path); stp(argv + 4, 0);
   const open = lookupHost("fts_open", "libc.so")!, read = lookupHost("fts_read", "libc.so")!, close = lookupHost("fts_close", "libc.so")!;
   try {
     const walk = await cpu.call(open, [argv, 16, 0]);
@@ -192,13 +192,13 @@ test("fts walks directories in pre- and postorder", async () => {
     for (;;) {
       const entry = Number(await cpu.call(read, [walk]));
       if (!entry) break;
-      entries.push([mem.cstr(entry + 120), mem.ld16u(entry + 102)]);
+      entries.push([mem.cstr(entry + 68), mem.ld16u(entry + 58)]);
     }
     expect(entries).toEqual([["fts-test", 1], ["a", 8], ["sub", 1], ["b", 8], ["sub", 6], ["fts-test", 6]]);
     expect(await cpu.call(close, [walk])).toBe(0);
   } finally {
     mem.free(argv); mem.free(path); vfs.delete("/fts-test/a"); vfs.delete("/fts-test/sub/b");
-    vfs.rmdir("/fts-test/sub"); vfs.rmdir("/fts-test"); cpu.dispose(); setA64(false);
+    vfs.rmdir("/fts-test/sub"); vfs.rmdir("/fts-test"); cpu.dispose();
   }
 });
 
