@@ -10,6 +10,7 @@ import { vcall, callOn, newObj, linkInit, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";
+import { hostStub } from "./binder";
 import { rootOf, type JView } from "./view";
 import { overlays } from "./popup";
 import { device } from "../shell/config";
@@ -50,20 +51,30 @@ rt.register({
 const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
 const UA = `Mozilla/5.0 (Linux; Android 13; webdroid) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${WEBVIEW_VERSION} Mobile Safari/537.36`;
 const FACTORY = "webdroid/WebViewFactoryProvider";
+/** the provider package's PackageInfo */
+const webViewPackage = driven(function* webViewPackage$(): Gen<JObj> {
+  const pi: Record<string, unknown> = yield newObj("android/content/pm/PackageInfo"), ai: Record<string, unknown> = yield newObj("android/content/pm/ApplicationInfo");
+  const set = (o: Record<string, unknown>, cls: string, values: Record<string, unknown>) => { for (const k in values) o[declaredField(cls, k)] = values[k]; };
+  set(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
+  set(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
+  return pi as unknown as JObj;
+});
 rt.register({
   name: "android/webkit/WebViewFactory", ctor: class extends JObj {}, platformClinit: true,
   methods: {
     // getWebViewContextAndSetProvider's package, then the provider class its context's loader finds
     "static getProviderClass()Ljava/lang/Class;": driven(function* (): Gen {
-      const pi: Record<string, unknown> = yield newObj("android/content/pm/PackageInfo"), ai: Record<string, unknown> = yield newObj("android/content/pm/ApplicationInfo");
-      const set = (o: Record<string, unknown>, cls: string, values: Record<string, unknown>) => { for (const k in values) o[declaredField(cls, k)] = values[k]; };
-      set(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
-      set(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
-      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = pi;
+      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = yield webViewPackage();
       return rt.classFor(FACTORY);
     }),
   },
 });
+// WebViewUpdateService: the provider package is the only one, current and never updated
+rt.register({ name: "webdroid/WebViewUpdateService", ctor: class extends JObj {}, sup: "android/webkit/IWebViewUpdateService$Stub", methods: {
+  "getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": webViewPackage,
+  "getCurrentWebViewPackageName()Ljava/lang/String;": () => WEBVIEW_PACKAGE,
+} });
+hostStub("webviewupdate", "webdroid/WebViewUpdateService");
 
 // ── WebSettings: the app reads back what it wrote, so every setter has its value and getter
 const settingsMethods: NonNullable<NativeSpec["methods"]> = {

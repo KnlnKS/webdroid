@@ -101,6 +101,7 @@ function pendingActivities(context: JContext, code: number, intents: JIntent[] |
   if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
   return pending("activity", context, code, intents[intents.length - 1], flags, intents);
 }
+const START_CANCELED = -96;
 const KINDS: Record<PendingOperation["kind"], number> = { broadcast: 1, activity: 2, service: 4, "foreground-service": 5 };
 const KIND_OF: Record<number, PendingOperation["kind"]> = { 1: "broadcast", 2: "activity", 4: "service", 5: "foreground-service" };
 /** an IIntentSender over a record of the shell's registry, as AOSP's PendingIntent holds one */
@@ -131,9 +132,23 @@ export const intentSenderMethods = {
   "sendIntentSender(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;ILandroid/content/Intent;Ljava/lang/String;Landroid/content/IIntentReceiver;Ljava/lang/String;Landroid/os/Bundle;)I":
     driven(function* (_caller: unknown, sender: JObj, _token: unknown, _code: number, fill: JIntent | null, _type: string | null, finished: JObj | null): Gen {
       const id = yield* senderId$(sender);
-      if (!(yield pendingTransport.send(id, fill ? yield encodeIntent(fill) : null))) return -96;
+      if (!(yield pendingTransport.send(id, fill ? yield encodeIntent(fill) : null))) return START_CANCELED;
       if (finished) yield vcall(finished, "performReceive", "(Landroid/content/Intent;ILjava/lang/String;Landroid/os/Bundle;ZZI)V", fill ?? (yield newIntent()), 0, null, null, 0, 0, 0);
       return 0;
+    }),
+};
+/** ActivityTaskManagerService.startActivityIntentSender (Activity.startIntentSenderForResult): an
+ *  activity sender starts for the caller's result; any other kind is an ordinary send */
+export const intentSenderTaskMethods = {
+  "startActivityIntentSender(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IIILandroid/os/Bundle;)I":
+    driven(function* (caller: JObj, target: JObj, _token: unknown, fill: JIntent | null, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number): Gen {
+      const id = yield* senderId$(target), operation = pendingTransport.operation(id);
+      if (!operation) return START_CANCELED;
+      if (operation.kind !== "activity") return (yield pendingTransport.send(id, fill ? yield encodeIntent(fill) : null)) ? 0 : START_CANCELED;
+      const intent: JIntent = yield decodeIntent(operation.intent);
+      if (fill && !(operation.flags & 0x4000000)) yield vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", fill, operation.flags);
+      for (const data of operation.intents?.slice(0, -1) ?? []) yield startActivityFor(caller, yield decodeIntent(data));
+      return startActivityFor(caller, intent, resolvedType, resultTo, resultWho, requestCode);
     }),
 };
 /** PendingIntent.sOnMarshaledListener: per thread, those told of each PendingIntent written to a parcel */

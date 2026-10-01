@@ -10,7 +10,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost, jclsNameOf } from "./apphost";
 import { mkComponentName, newIntent, putExtra, registerSystemActivity } from "./intent";
-import { intentSenderMethods } from "./pendingintent";
+import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
 import type { JActivity } from "./app";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
@@ -84,6 +84,7 @@ const appTasks = new Map<number, Promise<JAppTask>>();
 // IActivityTaskManager
 rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityTaskManager$Stub", methods: {
   ...activityTaskMethods,
+  ...intentSenderTaskMethods,
   "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => {
     const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
     for (const id of appTasks.keys()) if (!ids.includes(id)) appTasks.delete(id);
