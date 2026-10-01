@@ -140,10 +140,12 @@ const tap = async (x: number, y: number): Promise<void> => {
   // the process on screen takes the tap, as it takes the browser's own pointer events
   const remote = (processBroker().foregroundWindow() as { wd?: { tap(x: number, y: number): Promise<void> } } | null)?.wd;
   if (remote) return remote.tap(x, y);
-  await dispatchPointer(0, x, y);
-  // a 60 ms press on the guest's clock, which a controlled clock would otherwise skip past
+  // a 60 ms press on the guest's clock, which a controlled clock would otherwise skip past. The
+  // finger lifts on time however long the app takes to handle the press, as on a touchscreen:
+  // a late UP would read as a long press.
+  const down = dispatchPointer(0, x, y);
   await guestSleep(60);
-  await dispatchPointer(1, x, y);
+  await Promise.all([down, dispatchPointer(1, x, y)]);
 };
 
 // `?jit=0` runs the interpreter alone, to tell the tiers apart
