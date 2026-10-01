@@ -17,6 +17,19 @@ const properties: Record<string, () => string> = {
 
 export const hasProperty = (key: string): boolean => key in properties;
 export const propertyValue = (key: string): string | null => properties[key]?.() ?? null;
+/** bionic's bound on a value, its terminator included */
+export const PROP_VALUE_MAX = 92;
+
+/** prop_info handles for a libc that serves lookups itself (the ARM32 HLE): one per property, at
+ *  an address the caller allocates once */
+const handleKeys = new Map<number, string>(), keyHandles = new Map<string, number>();
+export function propertyHandle(key: string, allocate: (key: string) => number): number {
+  if (!hasProperty(key)) return 0;
+  let at = keyHandles.get(key);
+  if (!at) { keyHandles.set(key, at = allocate(key)); handleKeys.set(at, key); }
+  return at;
+}
+export const propertyKey = (handle: number): string | null => handleKeys.get(handle) ?? null;
 
 /** The path bionic maps read-only when it is a file: init's single, pre-split property area. */
 export const PROPERTY_AREA_PATH = "/dev/__properties__";
@@ -25,7 +38,7 @@ export const PROPERTY_AREA_PATH = "/dev/__properties__";
 // siblings a binary search tree ordered by length then bytes) whose leaves point at prop_info
 // records; offsets are from the end of the header, objects 4-byte aligned
 const HEADER = 128, PROP_AREA_MAGIC = 0x504f5250, PROP_AREA_VERSION = 0xfc6ed0ab;
-const BT_PROP = 4, BT_LEFT = 8, BT_RIGHT = 12, BT_CHILDREN = 16, BT_NAME = 20, PROP_VALUE_MAX = 92, INFO_NAME = 4 + PROP_VALUE_MAX;
+const BT_PROP = 4, BT_LEFT = 8, BT_RIGHT = 12, BT_CHILDREN = 16, BT_NAME = 20, INFO_NAME = 4 + PROP_VALUE_MAX;
 
 /** every property, as bionic's ContextsPreSplit reads /dev/__properties__ */
 export function propertyArea(): Uint8Array {

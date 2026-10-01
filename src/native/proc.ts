@@ -11,22 +11,13 @@ import { tidOf } from "./pthread";
 import { fail, fillSysinfo, logLine, LAYOUT, strncpy, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
-import { hasProperty, propertyValue } from "../shell/properties";
+import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties";
 import { appUserName, procIdentity } from "../shell/procfs";
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
 
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
-/** a prop_info handle names one property; bionic's PROP_VALUE_MAX bounds what is written */
-const propertyKeys = new Map<number, string>(), propertyHandles = new Map<string, number>();
-function propertyInfo(key: string): number {
-  if (!hasProperty(key)) return 0;
-  let at = propertyHandles.get(key);
-  if (!at) { propertyHandles.set(key, at = mem.hostStr(key)); propertyKeys.set(at, key); }
-  return at;
-}
-const PROP_VALUE_MAX = 92;
 const writeProperty = (out: number, text: string) => mem.putCstr(out, text, PROP_VALUE_MAX);
 const SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
 const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
@@ -191,9 +182,9 @@ export function procInit(): void {
     vsyslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, vaList(a.p()))); },
     // an unset property reads as an empty value of length 0, as bionic's do
     __system_property_get: (_c, a) => { const key = a.str(); return writeProperty(a.p(), propertyValue(key) ?? ""); },
-    __system_property_find: (_c, a) => propertyInfo(a.str()),
+    __system_property_find: (_c, a) => propertyHandle(a.str(), (key) => mem.hostStr(key)),
     __system_property_read: (_c, a) => {
-      const key = propertyKeys.get(a.p()) ?? "", name = a.p(), value = a.p();
+      const key = propertyKey(a.p()) ?? "", name = a.p(), value = a.p();
       if (name) writeProperty(name, key);
       return value ? writeProperty(value, propertyValue(key) ?? "") : 0;
     },
