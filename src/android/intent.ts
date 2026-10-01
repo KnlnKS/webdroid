@@ -135,16 +135,7 @@ export async function mkResultIntent(uri: string | null, flags = 3 | 0x40): Prom
  *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
 export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
   setTimeout(() => void onMain(async () => {
-    // the grant flags cover the result's data and every ClipData item URI, as ActivityManager's
-    const flags: number = data ? await vcall(data, "getFlags", "()I") : 0;
-    if (resultCode === RESULT_OK && data && (flags & 3)) {
-      const { grantUriPermission } = await import("./contentresolver");
-      const clip: JObj | null = await vcall(data, "getClipData", "()Landroid/content/ClipData;");
-      const uris = [await vcall(data, "getData", "()Landroid/net/Uri;")];
-      for (let i = 0, n = clip ? await vcall(clip, "getItemCount", "()I") : 0; i < n; i++)
-        uris.push(await vcall(await vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;"));
-      for (const uri of uris) if (uri) grantUriPermission(act.$host.pkg, uri, flags);
-    }
+    if (resultCode === RESULT_OK && data) await (await import("./contentresolver")).grantResultUris(act.$host.pkg, data);
     const target = act.fragmentResults.get(code);
     if (target) {
       act.fragmentResults.delete(code);

@@ -11,7 +11,8 @@ import { setProcessIdentity } from "../src/android/os";
 import { locationTransport } from "../src/android/locationmanager";
 import { hostedService } from "../src/android/binder";
 import { mkUri, type JUri } from "../src/android/net";
-import { settingsStore, systemProvider } from "../src/android/settings";
+import { settingsStore } from "../src/android/settings";
+import { systemProvider } from "../src/android/systemproviders";
 import { appResources } from "./java";
 
 const attr = (name: string, str: string | null, data = 0): XmlAttr => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });

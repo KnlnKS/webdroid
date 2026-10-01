@@ -13,6 +13,7 @@ import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
 import { activityTransport, intentQuery, systemActivity, SYSTEM_ACTIVITY, type SystemHandler } from "../intent";
 import { field } from "../pm";
+import { grantResultUris } from "../contentresolver";
 import { thisApp, userLaunched } from "./am";
 
 const CT = "android/app/servertransaction/";
@@ -200,6 +201,7 @@ async function runSystemActivity(run: SystemHandler, intent: JObj, resultTo: Act
  *  caller takes it as it resumes */
 async function deliverResult(to: ActivityRecord | null, resultWho: string | null, requestCode: number, resultCode: number, data: JObj | null): Promise<void> {
   if (!to || to.finishing) return;
+  if (resultCode === RESULT_OK && data) await grantResultUris(appHost!.pkg, data);
   if (requestCode >= 0) to.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, resultCode, data));
   if (stack.at(-1) === to && to.state === "resumed") { await pause(to); await resume(to); }
 }

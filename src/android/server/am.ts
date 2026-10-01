@@ -12,7 +12,9 @@ import { appHost } from "../apphost";
 import { configurations } from "./wm";
 import { startMainActivity } from "./atm";
 import { uptimeMillis } from "../../guest-clock";
-import { systemProviderHolder } from "../settings";
+import { systemProviderHolder } from "../systemproviders";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../contentresolver";
+import type { JUri } from "../net";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 const pms = () => hostedService("package") as Promise<JObj>;
@@ -128,6 +130,10 @@ export const activityManagerMethods = {
   "refContentProvider(Landroid/os/IBinder;II)Z": () => 1,
   "removeContentProvider(Landroid/os/IBinder;Z)V": () => {},
   "unstableProviderDied(Landroid/os/IBinder;)V": () => {},
+  // ContextImpl's URI permissions, held by UriGrantsManagerService
+  "checkUriPermission(Landroid/net/Uri;IIIILandroid/os/IBinder;)I": (uri: JUri, pid: number, uid: number, modes: number) => checkUriPermission(uri, pid, uid, modes),
+  "grantUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string, uri: JUri, modes: number) => grantUriPermission(pkg, uri, modes),
+  "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, _pkg: string, uri: JUri, modes: number) => revokeUriPermission(uri, modes),
 };
 
 /** ActivityThread.main for this process: its thread attaches to the activity manager, which binds

@@ -4,10 +4,10 @@ import { rt, type NativeSpec, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
-  isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
+  isDocsUri, documentId, docPfd, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_PID, PROCESS_UID, type JBundle, unparcel } from "./os";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, type JBundle, unparcel } from "./os";
 import { newFile, streamOf } from "../jvm/natives/jio";
 import { mkAssetFd, rawResourceBytes } from "./resnative";
 import { newObj, vcall, vcallOn, callOn, construct, mainThread } from "../jvm/natives/jlang";
@@ -18,7 +18,7 @@ import { inMainJob, onMain } from "./mainloop";
 import { packages } from "./packages";
 import { isMediaUri, mediaDelete, mediaInsert, mediaMime, mediaPath, mediaQuery, mediaUpdate } from "./mediastore";
 import { observeContent, stopObserving, notifyContent } from "./server/content";
-import { systemProvider } from "./settings";
+import { systemProvider } from "./systemproviders";
 
 export const providerTransport: { acquire: (provider: Component) => Promise<unknown> } = { acquire: async () => null };
 const providers = new WeakMap<AppHost, Map<string, Promise<unknown>>>();
@@ -186,6 +186,17 @@ export function grantUriPermission(pkg: string, uri: JUri, modes: number): void 
   if (!grants) transientUriGrants.set(pkg, grants = new Map());
   grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & (3 | PREFIX_GRANT | PERSISTABLE_GRANT)));
 }
+/** ActivityManager's grant of a result's URIs to the activity receiving it: its data and every
+ *  ClipData item, under the result's grant flags */
+export async function grantResultUris(pkg: string, data: JObj): Promise<void> {
+  const flags: number = await vcall(data, "getFlags", "()I");
+  if (!(flags & 3)) return;
+  const clip: JObj | null = await vcall(data, "getClipData", "()Landroid/content/ClipData;");
+  const uris: (JUri | null)[] = [await vcall(data, "getData", "()Landroid/net/Uri;")];
+  for (let i = 0, n = clip ? await vcall(clip, "getItemCount", "()I") : 0; i < n; i++)
+    uris.push(await vcall(await vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;"));
+  for (const uri of uris) if (uri) grantUriPermission(pkg, uri, flags);
+}
 export function revokeUriPermission(uri: JUri, modes: number): void {
   if (!uri) rt.npe();
   for (const grants of transientUriGrants.values()) {
@@ -277,10 +288,7 @@ export async function openPfd(u: JUri, mode: string) {
     if (u.uri.startsWith("content:")) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
     return openFilePfd(fileOf(u), mode);
   }
-  const id = documentId(u, true);
-  const write = (mode ?? "r").includes("w");
-  const bytes = await pfdBackingBytes(id) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id));
-  return mkPfd(bytes, write ? (b) => docWrite(id, b) : null, id);
+  return docPfd(documentId(u, true), mode);
 }
 const openOutputStream = driven(function* (u: JUri, mode: string): Gen {
   if (isDocsUri(u)) return docOutputStream(documentId(u, true), mode.includes("a"));

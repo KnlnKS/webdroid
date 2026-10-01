@@ -7,7 +7,7 @@
 // app holding WRITE_SETTINGS is not checked against SystemSettingsValidators, which ship in
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
-import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall, scall, construct, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
@@ -22,6 +22,7 @@ import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
 import { holdsPlatformPermission } from "./context";
 import { SettingsStore, type SettingsTable } from "../shell/settings";
+import { registerSystemProvider } from "./systemproviders";
 
 export const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
@@ -401,28 +402,6 @@ rt.register({ name: "webdroid/SettingsProvider", ctor: class extends JObj {}, su
   "createCancellationSignal()Landroid/os/ICancellationSignal;": () => scall("android/os/CancellationSignal", "createTransport", "()Landroid/os/ICancellationSignal;"),
 } });
 
-const provider = once(() => newStub("webdroid/SettingsProvider"));
-/** a provider system_server publishes (SettingsProvider, as the `settings` authority), by its IContentProvider */
-export const systemProvider = (authority: string | null): JObj | Promise<JObj> | null => authority === SETTINGS_AUTHORITY ? provider() : null;
-const set = (o: JObj, cls: string, values: Record<string, unknown>) => {
-  for (const [name, value] of Object.entries(values)) {
-    const field = declaredField(cls, name);
-    if (!field) throw new Error(`${cls} has no field ${name}`);
-    (o as unknown as Record<string, unknown>)[field] = value;
-  }
-};
-/** ActivityManagerService.getContentProvider's holder for a system provider: SettingsProvider's
- *  ProviderInfo as the AVD's package manager reports it, its binder, and no reference to release */
-export const systemProviderHolder = driven(function* systemProviderHolder$(authority: string): Gen<JObj | null> {
-  const binder = systemProvider(authority);
-  if (!binder) return null;
-  const app: JObj = yield construct("android/content/pm/ApplicationInfo", "()V"), info: JObj = yield construct("android/content/pm/ProviderInfo", "()V");
-  // FLAG_SYSTEM | FLAG_PERSISTENT; the provider is singleUser (FLAG_SINGLE_USER)
-  set(app, "android/content/pm/ApplicationInfo", { packageName: "com.android.providers.settings", processName: "system", uid: 1000, flags: 0x9 });
-  set(info, "android/content/pm/ProviderInfo", { authority, initOrder: 100, flags: 0x40000000 });
-  set(info, "android/content/pm/ComponentInfo", { applicationInfo: app, processName: "system", exported: 1 });
-  set(info, "android/content/pm/PackageItemInfo", { name: "com.android.providers.settings.SettingsProvider", packageName: "com.android.providers.settings" });
-  const holder: JObj = yield construct("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
-  set(holder, "android/app/ContentProviderHolder", { provider: yield binder, noReleaseNeeded: 1 });
-  return holder;
-});
+// FLAG_SYSTEM | FLAG_PERSISTENT; the provider is singleUser (FLAG_SINGLE_USER)
+registerSystemProvider(SETTINGS_AUTHORITY, { pkg: "com.android.providers.settings", cls: "com.android.providers.settings.SettingsProvider",
+  process: "system", appFlags: 0x9, flags: 0x40000000, initOrder: 100, binder: once(() => newStub("webdroid/SettingsProvider")) });
