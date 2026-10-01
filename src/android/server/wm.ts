@@ -59,6 +59,7 @@ class WindowState {
   backCallback: JObj | null = null;
   javaSurface: JObj | null = null;
   dim: Layer | null = null;
+  requested = { width: -1, height: -1 };
   constructor(readonly client: JObj, readonly attrs: JObj, readonly parent: WindowState | null, name: string, type: number, z: number) {
     if (parent) {
       this.layer = displayLayer(name, 0);
@@ -138,10 +139,9 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   if (!ws) return 0;
   if (attrs) await vcall(ws.attrs, "copyFrom", `(L${LP};)I`, attrs);
   const R = (name: string) => result[declaredField("android/view/WindowRelayoutResult", name)];
-  const state = await insetsState(), display = await displayRect();
-  await vcall(await newObj("android/view/WindowLayout", "()V"), "computeFrames",
-    `(L${LP};Landroid/view/InsetsState;Landroid/graphics/Rect;Landroid/graphics/Rect;IIIIFLandroid/window/ClientWindowFrames;)V`,
-    ws.attrs, state, display, display, WINDOWING_MODE_FULLSCREEN, width, height, ws.requestedVisibleTypes, 1, R("frames"));
+  const state = await insetsState();
+  ws.requested = { width, height };
+  await computeFrames(ws, state, R("frames"));
   await mergedConfiguration(R("mergedConfiguration"));
   await vcall(R("insetsState"), "set", "(Landroid/view/InsetsState;)V", state);
   const frame = (R("frames") as unknown as Record<string, Record<string, number>>)[declaredField("android/window/ClientWindowFrames", "frame")];
@@ -162,6 +162,26 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   scheduleComposite();
   updateFocus();
   return res | (firstTime ? RELAYOUT_RES_FIRST_TIME : 0);
+}
+
+/** WindowLayout's frames for a window at the size it last asked for */
+async function computeFrames(ws: WindowState, state: JObj, out: JObj): Promise<void> {
+  const display = await displayRect();
+  await vcall(await newObj("android/view/WindowLayout", "()V"), "computeFrames",
+    `(L${LP};Landroid/view/InsetsState;Landroid/graphics/Rect;Landroid/graphics/Rect;IIIIFLandroid/window/ClientWindowFrames;)V`,
+    ws.attrs, state, display, display, WINDOWING_MODE_FULLSCREEN, ws.requested.width, ws.requested.height, ws.requestedVisibleTypes, 1, out);
+}
+/** WindowState.reportResized after the display or configuration changed: each window's new frames,
+ *  configuration and insets, its next traversal forced to relayout */
+export async function resizeWindows(): Promise<void> {
+  const state = await insetsState();
+  for (const ws of [...windows.values()]) {
+    const frames = await newObj("android/window/ClientWindowFrames", "()V"), merged = await newObj("android/util/MergedConfiguration", "()V");
+    await computeFrames(ws, state, frames);
+    await mergedConfiguration(merged);
+    await vcall(ws.client, "resized", "(Landroid/window/ClientWindowFrames;ZLandroid/util/MergedConfiguration;Landroid/view/InsetsState;ZZIIZLandroid/window/ActivityWindowInfo;)V",
+      frames, 0, merged, state, 1, 0, 0, 0, 0, null);
+  }
 }
 
 /** WindowState's dim layer: a black effect layer under a FLAG_DIM_BEHIND window, at its dimAmount */

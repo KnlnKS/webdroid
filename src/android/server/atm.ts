@@ -6,7 +6,8 @@
 import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
 import { newObj, vcall, scall, reportUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
-import { configurations } from "./wm";
+import { configurations, resizeWindows } from "./wm";
+import { notifyDisplayChanged } from "../display";
 import { hostedService } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
@@ -26,6 +27,8 @@ interface ActivityRecord {
   paused: (() => void) | null;
   /** the broker's record of an activity another process started here, or 0 */
   remoteId: number;
+  /** the global configuration it last had, and the orientation it asks for */
+  config: JObj; orientation: number;
 }
 const stack: ActivityRecord[] = [];
 const byToken = (token: JObj | null) => stack.find((r) => r.token === token) ?? null;
@@ -54,12 +57,51 @@ async function pause(r: ActivityRecord): Promise<void> {
   await schedule(r.app, null, await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
   return paused;
 }
+const resumeItem = (r: ActivityRecord) => item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", r.token, 1, 0);
 async function resume(r: ActivityRecord): Promise<void> {
   const results = r.results.splice(0);
-  const delivery = results.length ? await item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
   r.state = "resumed";
-  await schedule(r.app, delivery, await item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", r.token, 1, 0));
+  if (displayHooks.requestOrientation?.(r.orientation)) await configurationChanged();
+  if (await ensureConfiguration(r, results, await resumeItem(r))) return;
+  const delivery = results.length ? await item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
+  await schedule(r.app, delivery, await resumeItem(r));
 }
+
+const CFG = "Landroid/content/res/Configuration;";
+/** ActivityRecord.ensureActivityConfiguration: an activity that declared every changed bit in its
+ *  configChanges hears the change; any other relaunches, ending at `lifecycle` with `results`
+ *  delivered. Returns whether it relaunched. */
+async function ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj): Promise<boolean> {
+  const { global, override } = await configurations();
+  const changes: number = await vcall(r.config, "diff", `(${CFG})I`, global);
+  if (!changes) return false;
+  r.config = global;
+  const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
+  if (!(changes & ~await vcall(r.info, "getRealConfigChanged", "()I"))) {
+    await schedule(r.app, await item("ActivityConfigurationChangeItem", `Landroid/os/IBinder;${CFG}Landroid/window/ActivityWindowInfo;`, r.token, override, windowInfo), null);
+    return false;
+  }
+  const merged = await newObj("android/util/MergedConfiguration", `(${CFG}${CFG})V`, global, override);
+  await schedule(r.app, await item("ActivityRelaunchItem", "Landroid/os/IBinder;Ljava/util/List;Ljava/util/List;ILandroid/util/MergedConfiguration;ZLandroid/window/ActivityWindowInfo;",
+    r.token, results.length ? newArrayList(results) : null, null, changes, merged, 1, windowInfo), lifecycle);
+  return true;
+}
+/** the shell's display: turns it for an orientation request, answering whether it turned */
+export const displayHooks: { requestOrientation?: (request: number) => boolean } = {};
+/** ActivityTaskManagerService.updateConfigurationLocked: the process hears the new configuration,
+ *  then each visible activity (the others when they next resume), then each window its new frames */
+export async function configurationChanged(): Promise<void> {
+  notifyDisplayChanged();
+  const { global } = await configurations();
+  await schedule(thisApp(), await item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
+  for (const r of [...stack]) {
+    if (r.state === "resumed") await ensureConfiguration(r, [], await resumeItem(r));
+    else if (r.state === "paused") await ensureConfiguration(r, [], await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, 0, 0, 0, 0));
+  }
+  await resizeWindows();
+}
+/** the orientation the top activity asks for, or unspecified */
+export const topOrientation = (): number => stack.at(-1)?.orientation ?? -1;
 async function stop(r: ActivityRecord): Promise<void> {
   if (r.state !== "paused") return;
   r.state = "stopping";
@@ -75,10 +117,14 @@ async function destroy(r: ActivityRecord): Promise<void> {
 export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number, remoteId = 0): Promise<void> {
   const token = await newObj("android/os/Binder", "()V");
   const prev = stack.at(-1);
-  const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false, translucent: false, paused: null, remoteId };
+  const orientation = field<number>(info, AI, "screenOrientation");
   if (prev) await pause(prev);
-  stack.push(r);
+  // the display turns for an activity that fixes its orientation before it launches
+  if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
   const { global, override } = await configurations();
+  const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
+    translucent: false, paused: null, remoteId, config: global, orientation };
+  stack.push(r);
   const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
   const launch = await item("LaunchActivityItem",
     "Landroid/os/IBinder;Landroid/content/Intent;ILandroid/content/pm/ActivityInfo;Landroid/content/res/Configuration;Landroid/content/res/Configuration;" +
@@ -215,6 +261,8 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token); if (r) r.state = "stopped";
   },
   "activityDestroyed(Landroid/os/IBinder;)V": () => {},
+  // the relaunch is done; nothing here waits on it
+  "activityRelaunched(Landroid/os/IBinder;)V": () => {},
   // as a start: the pause a finish waits for runs on the caller's main thread
   "finishActivity(Landroid/os/IBinder;ILandroid/content/Intent;I)Z": (token: JObj, resultCode: number, data: JObj | null) => {
     const r = byToken(token);
@@ -244,7 +292,13 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
   "getTaskForActivity(Landroid/os/IBinder;Z)I": (token: JObj) => byToken(token) ? 1 : -1,
   "isTopOfTask(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "getDisplayId(Landroid/os/IBinder;)I": () => 0,
-  "getRequestedOrientation(Landroid/os/IBinder;)I": () => -1,
+  "getRequestedOrientation(Landroid/os/IBinder;)I": (token: JObj) => byToken(token)?.orientation ?? -1,
+  "setRequestedOrientation(Landroid/os/IBinder;I)V": (token: JObj, orientation: number) => {
+    const r = byToken(token);
+    if (!r || r.orientation === orientation) return;
+    r.orientation = orientation;
+    if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) void configurationChanged().catch(reportUncaught);
+  },
   "willActivityBeVisible(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "convertToTranslucent(Landroid/os/IBinder;Landroid/os/Bundle;)Z": (token: JObj) => { const r = byToken(token); if (r) r.translucent = true; return 1; },
   "convertFromTranslucent(Landroid/os/IBinder;)Z": (token: JObj) => { const r = byToken(token); if (r) r.translucent = false; return 1; },
@@ -253,7 +307,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     "reportSizeConfigurations(Landroid/os/IBinder;Landroid/window/SizeConfigurationBuckets;)V",
     "reportActivityFullyDrawn(Landroid/os/IBinder;Z)V", "setRecentsScreenshotEnabled(Landroid/os/IBinder;Z)V",
     "setImmersive(Landroid/os/IBinder;Z)V", "splashScreenAttached(Landroid/os/IBinder;)V", "invalidateHomeTaskSnapshot(Landroid/os/IBinder;)V",
-    "overridePendingTransition(Landroid/os/IBinder;Ljava/lang/String;III)V", "setRequestedOrientation(Landroid/os/IBinder;I)V"),
+    "overridePendingTransition(Landroid/os/IBinder;Ljava/lang/String;III)V"),
 } });
 
 /** the methods IActivityTaskManager adds for ActivityThread's activities */

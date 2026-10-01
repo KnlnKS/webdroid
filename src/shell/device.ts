@@ -59,6 +59,7 @@ import { stageD } from "../jvm/provenance";
 import { appArchives } from "../jvm/natives/jdex";
 import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server/wm";
 import { startActivityThread } from "../android/server/am";
+import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
 import { setDisplayTarget } from "../android/surfaceflinger";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
@@ -89,6 +90,7 @@ export function applyOrientationRequest(request: number): boolean {
   SCREEN_H = device.height;
   fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
   frame = fb.getContext("2d")!;
+  if (stageD()) setDisplayTarget(frame, present);
   syncDeviceOrientation();
   displayChanged();
   return true;
@@ -243,6 +245,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   if (stageD()) {
     hostWindowManager();
     setDisplayTarget(frame, present);
+    displayHooks.requestOrientation = applyOrientationRequest;
     const app: BootedApp = { host, mainActivityCls: "", stack: [], label, background: false };
     setBootedApp(app);
     onStatus("Starting app…");
@@ -310,6 +313,11 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
  *  manager keeps the display in that orientation for it. */
 export function rotateDevice(landscape: boolean): Promise<void> {
   return onMain(async () => {
+    if (stageD()) {
+      const request = topOrientation();
+      if (orientationForRequest(request) === null && request !== 5 && request !== 14 && applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged();
+      return;
+    }
     const act = booted?.stack.at(-1), request = act?.requestedOrientation ?? -1;
     if (act && orientationForRequest(request) === null && request !== 5 && request !== 14) changeActivityOrientation(act, landscape ? 0 : 1);
   });
@@ -331,6 +339,7 @@ function deliverConfigChange(act: JActivity, bits: number): void {
   })).catch(reportUncaught);
 }
 function applyConfigChange(bits: number): void {
+  if (stageD()) { void onMain(configurationChanged).catch(reportUncaught); return; }
   if (!booted) return;
   const act = booted.stack.at(-1);
   if (act) deliverConfigChange(act, bits);
