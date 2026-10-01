@@ -96,3 +96,13 @@ describe("app widgets", () => {
     expect(await vcall(widgets, "isRequestPinAppWidgetSupported", "()Z")).toBe(0);
   });
 });
+
+describe("performance hints", () => {
+  test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
+    const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");
+    expect(await vcall(hints, "getPreferredUpdateRateNanos", "()J")).toBe(1_000_000n);
+    const session = await vcall(hints, "createHintSession", "([IJ)Landroid/os/PerformanceHintManager$Session;", Int32Array.of(7), 16_000_000n);
+    expect([...await vcall(session, "getThreadIds", "()[I")]).toEqual([7]);
+    await vcall(session, "close", "()V");
+  });
+});

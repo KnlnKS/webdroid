@@ -157,7 +157,6 @@ const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
   input_method: "android/view/inputmethod/InputMethodManager",
   device_policy: "android/app/admin/DevicePolicyManager",
-  performance_hint: "android/os/PerformanceHintManager",
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   media_metrics: "android/media/metrics/MediaMetricsManager",
@@ -246,6 +245,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   appwidget: ["android/appwidget/AppWidgetManager", async (ctx) => newObj("android/appwidget/AppWidgetManager",
     "(Landroid/content/Context;Lcom/android/internal/appwidget/IAppWidgetService;)V", ctx, await scall("com/android/internal/appwidget/IAppWidgetService$Stub",
       "asInterface", "(Landroid/os/IBinder;)Lcom/android/internal/appwidget/IAppWidgetService;", await hostedService("appwidget")))],
+  performance_hint: ["android/os/PerformanceHintManager", async () => scall("android/os/PerformanceHintManager", "create", "()Landroid/os/PerformanceHintManager;")],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],
@@ -256,7 +256,6 @@ const SERVICE_NAME = new Map([...Object.entries(SERVICE_CLASS), ...Object.entrie
 SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
-  if (name === "performance_hint") return null;
   let s = services.get(name);
   if (s) return s;
   const manager = AOSP_MANAGERS[name];

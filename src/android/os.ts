@@ -25,7 +25,21 @@ import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 
-rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
+// APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
+// support, a 1 ms preferred rate). A hint only advises the scheduler, so a session keeps its
+// threads and nothing else.
+const hintSessions = new Map<bigint, Int32Array>();
+let nextHintSession = 1n;
+rt.registerJnis("android/os/PerformanceHintManager", {
+  "nativeAcquireManager()J": () => 1n,
+  "nativeGetPreferredUpdateRateNanos(J)J": () => 1_000_000n,
+  "nativeCreateSession(J[IJ)J": (_manager: bigint, tids: Int32Array) => { hintSessions.set(nextHintSession, tids.slice()); return nextHintSession++; },
+  "nativeGetThreadIds(J)[I": (session: bigint) => hintSessions.get(session)?.slice() ?? new Int32Array(0),
+  "nativeSetThreads(J[I)V": (session: bigint, tids: Int32Array) => { hintSessions.set(session, tids.slice()); },
+  "nativeCloseSession(J)V": (session: bigint) => { hintSessions.delete(session); },
+  ...noops("nativeUpdateTargetWorkDuration(JJ)V", "nativeReportActualWorkDuration(JJ)V", "nativeReportActualWorkDuration(JJJJJ)V",
+    "nativeSendHint(JI)V", "nativeSetPreferPowerEfficiency(JZ)V"),
+});
 
 defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
