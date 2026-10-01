@@ -300,6 +300,40 @@ describe("package-game-info", () => {
   });
 });
 
+describe("package-intent-filters", () => {
+  rt.linkNatives();
+
+  test("manifest filters resolve through AOSP's IntentFilter, uri-relative groups included", async () => {
+    const pkg = "test.filters", a = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
+    const filter = (children: XmlNode[]): XmlNode => ({ name: "intent-filter", attrs: [], children: [
+      { name: "action", attrs: [a("name", "android.intent.action.VIEW")], children: [] },
+      { name: "category", attrs: [a("name", "android.intent.category.DEFAULT")], children: [] },
+      { name: "data", attrs: [a("scheme", "https"), a("host", "*.example.com")], children: [] }, ...children] });
+    const activity = (name: string, children: XmlNode[]): XmlNode => ({ name: "activity", attrs: [a("name", name)], children: [filter(children)] });
+    const root: XmlNode = { name: "manifest", attrs: [a("package", pkg)], children: [{ name: "application", attrs: [], children: [
+      activity(".Glob", [{ name: "data", attrs: [a("pathPattern", "/item/.*")], children: [] }]),
+      activity(".Group", [{ name: "uri-relative-filter-group", attrs: [{ name: "allow", str: null, ns: "", resId: 0, type: TV.BOOLEAN, data: 0 }],
+        children: [{ name: "data", attrs: [a("path", "/blocked"), a("query", "x=1")], children: [] }] },
+      // the first group whose filters all match decides; none matching is no match
+      { name: "uri-relative-filter-group", attrs: [], children: [{ name: "data", attrs: [a("pathPrefix", "/")], children: [] }] }]),
+    ] }] };
+    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-filters.apk", 12346, async () => []));
+    try {
+      const { resolveActivity } = await import("../src/android/pm");
+      const resolve = async (url: string) => {
+        const intent = await newObj("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", "android.intent.action.VIEW", mkUri(url));
+        await vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
+        const match = await resolveActivity(intent);
+        return match && match !== "system" ? match.name : null;
+      };
+      expect(await resolve("https://www.example.com/item/7")).toBe(pkg + ".Glob");
+      expect(await resolve("https://www.example.com/blocked?x=1")).toBeNull();
+      expect(await resolve("https://www.example.com/blocked?x=2")).toBe(pkg + ".Group");
+      expect(await resolve("https://elsewhere.test/item/7")).toBeNull();
+    } finally { packages.delete(pkg); }
+  });
+});
+
 describe("package-permissions", () => {
   rt.linkNatives();
   const attr = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });

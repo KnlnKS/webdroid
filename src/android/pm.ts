@@ -19,7 +19,7 @@ import { vfs, apkPath } from "../shell/vfs";
 import { DOCS_AUTHORITY } from "./documents";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
-import { matchesIntentFilter } from "./intent-filter";
+import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
 import { hostStub, hostedService } from "./binder";
@@ -383,20 +383,26 @@ export const servicesMatching = (action: string) => [...packages.values()].flatM
   [...owner.components.service.values()].filter((n) => handlesAction(n, action)).map((node) => ({ node, owner })));
 
 // ── intent resolution, as ComputerEngine's queryIntent*Internal
-const isDefaultFilter = (filter: XmlNode) => filter.children.some((n) => n.name === "category" && attrStr(n, "name") === "android.intent.category.DEFAULT");
 /** the components answering `q`, best first; an explicit component is looked up without its filters */
-export function queryComponents(q: IntentQuery, flags: number, kind: ComponentKind): Match[] {
+function* queryComponents$(q: IntentQuery, flags: number, kind: ComponentKind): Gen<Match[]> {
   const result: Match[] = [];
   if (q.component) {
     const c = lookup(q.componentPkg ?? "", q.component, kind, flags);
     return c ? [{ ...c, priority: 0, isDefault: false }] : [];
   }
+  const target = yield* intentTarget$(q), defaultOnly = !!(flags & MATCH_DEFAULT_ONLY);
   for (const owner of packages.values()) {
     if (q.pkg && q.pkg !== owner.pkg) continue;
     for (const c of components(owner, kind, flags)) {
-      const filters = c.node.children.filter((f) => f.name === "intent-filter" && matchesIntentFilter(f, q, !!(flags & MATCH_DEFAULT_ONLY)));
-      if (!filters.length) continue;
-      result.push({ ...c, priority: Math.max(...filters.map((f) => attr(f, "priority")?.data ?? 0)), isDefault: filters.some(isDefaultFilter) });
+      let priority = -Infinity, isDefault = false;
+      for (const node of c.node.children) {
+        if (node.name !== "intent-filter") continue;
+        const filter: JObj = yield* manifestFilter$(node);
+        if (!(yield* matches$(filter, target, defaultOnly))) continue;
+        priority = Math.max(priority, yield vcall(filter, "getPriority", "()I"));
+        isDefault ||= !!(yield vcall(filter, "hasCategory", "(Ljava/lang/String;)Z", "android.intent.category.DEFAULT"));
+      }
+      if (priority > -Infinity) result.push({ ...c, priority, isDefault });
     }
   }
   return result.sort((a, b) => b.priority - a.priority || +b.isDefault - +a.isDefault);
@@ -421,7 +427,7 @@ function* resolveInfo$(m: Match, flags: number): Gen<JObj> {
 function* queryIntent$(intent: JObj | null, type: string | null, flags: number, kind: ComponentKind): Gen<JObj[]> {
   if (!intent) return [];
   const q = yield* intentQuery$(intent, type);
-  const infos = yield* all$(queryComponents(q, flags, kind), (m) => resolveInfo$(m, flags));
+  const infos = yield* all$(yield* queryComponents$(q, flags, kind), (m) => resolveInfo$(m, flags));
   if (kind === "activity" && answersSystem(q)) infos.push(yield* systemResolveInfo$());
   if (kind === "provider") for (const p of SYSTEM_PROVIDERS) if (!q.action || p.action === q.action) {
     const info: JObj = yield make(RESOLVE);
@@ -433,13 +439,13 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
 /** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
 export const resolveActivity = driven(function* resolveActivity$(intent: JObj, flags: number = MATCH_DEFAULT_ONLY): Gen<Match | "system" | null> {
   const q = yield* intentQuery$(intent);
-  return queryComponents(q, flags, "activity")[0] ?? (answersSystem(q) ? "system" : null);
+  return (yield* queryComponents$(q, flags, "activity"))[0] ?? (answersSystem(q) ? "system" : null);
 });
 export const resolveService = driven(function* resolveService$(intent: JObj, flags: number = 0): Gen<Match | null> {
-  return queryComponents(yield* intentQuery$(intent), flags, "service")[0] ?? null;
+  return (yield* queryComponents$(yield* intentQuery$(intent), flags, "service"))[0] ?? null;
 });
 export const queryReceivers = driven(function* queryReceivers$(intent: JObj, flags: number = 0): Gen<Match[]> {
-  return queryComponents(yield* intentQuery$(intent), flags, "receiver");
+  return yield* queryComponents$(yield* intentQuery$(intent), flags, "receiver");
 });
 
 /** the installed provider for an authority (ComputerEngine.resolveContentProvider) */
