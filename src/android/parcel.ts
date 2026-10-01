@@ -362,7 +362,7 @@ rt.register({
     "readSquashed(Landroid/os/Parcel$SquashReadHelper;)Landroid/os/Parcelable;": async function (this: JParcel, reader: unknown) {
       const offset = readInt(this), at = this.pos;
       if (offset === 0) {
-        const p = await vcall(reader, "readRawParceled", "(Landroid/os/Parcel;)Landroid/os/Parcelable;", this);
+        const p = await vcall(reader, "readRawParceled", "(Landroid/os/Parcel;)Ljava/lang/Object;", this);
         (this.read ??= new Map()).set(at, p);
         return p;
       }
