@@ -46,6 +46,11 @@ function apkAt(path: string): Apk | null {
 export function registerApk(path: string, res: Resources): void {
   if (!loaded.has(path)) loaded.set(path, { path, table: res.arsc, zip: res.zip, lazyEntries: res.lazyEntries });
 }
+/** a split installed with its base: its table and entries are merged into the base's (shell/install.ts),
+ *  so the ApkAssets ResourcesManager loads for its path adds nothing of its own */
+export function registerSplit(path: string): void {
+  if (!loaded.has(path)) loaded.set(path, { path, table: null, zip: {}, lazyEntries: new Map() });
+}
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {
   const apk = apkAt(path);

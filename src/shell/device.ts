@@ -21,7 +21,7 @@ import { Resources, nativeRes } from "../android/res";
 import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
 import { setAppHost, jclsNameOf, type AppHost } from "../android/apphost";
 import { loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
-import { registerApk } from "../android/assetmanager";
+import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, resolveProvider } from "../android/pm";
 import { windowDim, windowParams } from "../android/window";
 import { absGravity, gravityApply } from "../android/gravity";
@@ -211,6 +211,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
   registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
+  for (const sp of install.splits) registerSplit(apkPath(sp.name));
   const themeResId = themeAttr?.data ?? 0;
   const { target } = usesSdk(manifest);
   const jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
