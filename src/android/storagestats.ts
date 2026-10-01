@@ -1,11 +1,15 @@
-// android.app.usage.StorageStatsManager: the one internal volume, measured off the VFS the way
-// installd walks it.
-
-import { JObj, rt, fieldGetters, stubs, driven, type Gen } from "../jvm/runtime";
+// IStorageStatsManager, under AOSP's StorageStatsManager: the one internal volume, measured off the
+// VFS the way installd walks it, with StorageStatsService's checks (decoded from the reference
+// AVD's services.jar): another uid's or the user's stats need PACKAGE_USAGE_STATS, which an app
+// has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
+import { JObj, rt, setDeclared } from "../jvm/runtime";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
 import { mimeOf } from "./mediastore";
 import { storageEstimate } from "./os";
+import { callingIdentity, hostStub } from "./binder";
+import { serviceContext } from "./context";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {
@@ -19,46 +23,65 @@ const apkBytes = (pkgs: string[]) => pkgs.reduce((sum, pkg) => {
   const path = packages.get(pkg)?.path ?? "";
   return sum + BigInt(vfs.files.get(path)?.length ?? vfs.lazyFiles.get(path)?.size ?? 0);
 }, 0n);
-class JStorageStats extends JObj { app = 0n; data = 0n; cache = 0n; externalCache = 0n; }
-function storageStats(pkgs: string[]): JStorageStats {
-  const stats: JStorageStats = rt.make("android/app/usage/StorageStats");
+async function storageStats(pkgs: string[]): Promise<JObj> {
   const own = (sub: string) => pkgs.flatMap((pkg) => [`/data/data/${pkg}/${sub}`, `/sdcard/Android/data/${pkg}/${sub}`]);
-  stats.app = apkBytes(pkgs); stats.data = bytesUnder(own(""));
-  stats.cache = bytesUnder([...own("cache/"), ...pkgs.map((pkg) => `/data/data/${pkg}/code_cache/`)]);
-  stats.externalCache = bytesUnder(pkgs.map((pkg) => `/sdcard/Android/data/${pkg}/cache/`));
-  return stats;
+  return setDeclared(await newObj("android/app/usage/StorageStats"), "android/app/usage/StorageStats", {
+    codeBytes: apkBytes(pkgs), dataBytes: bytesUnder(own("")),
+    cacheBytes: bytesUnder([...own("cache/"), ...pkgs.map((pkg) => `/data/data/${pkg}/code_cache/`)]),
+    externalCacheBytes: bytesUnder(pkgs.map((pkg) => `/sdcard/Android/data/${pkg}/cache/`)),
+  });
 }
-rt.register({
-  name: "android/app/usage/StorageStats", ctor: JStorageStats, ifaces: ["android/os/Parcelable"],
-  methods: fieldGetters({ "getAppBytes()J": "app", "getDataBytes()J": "data", "getCacheBytes()J": "cache", "getExternalCacheBytes()J": "externalCache" }),
-});
-class JExternalStorageStats extends JObj { total = 0n; audio = 0n; video = 0n; image = 0n; app = 0n; obb = 0n; }
-rt.register({
-  name: "android/app/usage/ExternalStorageStats", ctor: JExternalStorageStats, ifaces: ["android/os/Parcelable"],
-  methods: fieldGetters({ "getTotalBytes()J": "total", "getAudioBytes()J": "audio", "getVideoBytes()J": "video",
-    "getImageBytes()J": "image", "getAppBytes()J": "app", "getObbBytes()J": "obb" }),
-});
 const media = (kind: string) => (path: string) => mimeOf(path)?.startsWith(kind) ?? false;
-rt.register({
-  name: "android/app/usage/StorageStatsManager", ctor: class extends JObj {},
-  methods: {
-    "getTotalBytes(Ljava/util/UUID;)J": driven(function* (): Gen { return BigInt(Math.floor((yield storageEstimate()).total)); }),
-    "getFreeBytes(Ljava/util/UUID;)J": driven(function* (): Gen { return BigInt(Math.floor((yield storageEstimate()).free)); }),
-    ...stubs(0, "isQuotaSupported(Ljava/util/UUID;)Z", "isReservedSupported(Ljava/util/UUID;)Z"),
-    "queryStatsForPackage(Ljava/util/UUID;Ljava/lang/String;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;": (_uuid: unknown, pkg: string) => {
-      if (!packages.has(pkg)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
-      return storageStats([pkg]);
-    },
-    "queryStatsForUid(Ljava/util/UUID;I)Landroid/app/usage/StorageStats;": (_uuid: unknown, uid: number) =>
-      storageStats([...packages.values()].filter((record) => record.uid === uid).map((record) => record.pkg)),
-    "queryStatsForUser(Ljava/util/UUID;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;": () => storageStats([...packages.keys()]),
-    "queryExternalStatsForUser(Ljava/util/UUID;Landroid/os/UserHandle;)Landroid/app/usage/ExternalStorageStats;": () => {
-      const stats: JExternalStorageStats = rt.make("android/app/usage/ExternalStorageStats");
-      stats.total = bytesUnder(["/sdcard/"]);
-      stats.audio = bytesUnder(["/sdcard/"], media("audio/")); stats.video = bytesUnder(["/sdcard/"], media("video/"));
-      stats.image = bytesUnder(["/sdcard/"], media("image/"));
-      stats.app = bytesUnder(["/sdcard/Android/data/"]); stats.obb = bytesUnder(["/sdcard/Android/obb/"]);
-      return stats;
-    },
+async function externalStats(): Promise<JObj> {
+  return setDeclared(await newObj("android/app/usage/ExternalStorageStats"), "android/app/usage/ExternalStorageStats", {
+    totalBytes: bytesUnder(["/sdcard/"]), audioBytes: bytesUnder(["/sdcard/"], media("audio/")), videoBytes: bytesUnder(["/sdcard/"], media("video/")),
+    imageBytes: bytesUnder(["/sdcard/"], media("image/")), appBytes: bytesUnder(["/sdcard/Android/data/"]), obbBytes: bytesUnder(["/sdcard/Android/obb/"]),
+  });
+}
+
+const OP_GET_USAGE_STATS = 43, MODE_ALLOWED = 0, MODE_DEFAULT = 3;
+/** StorageStatsService.checkStatsPermission: null when the caller may read others' stats */
+async function statsDenial(uid: number, pkg: string): Promise<string | null> {
+  const context = await serviceContext();
+  const appOps = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "appops");
+  const mode: number = await vcall(appOps, "noteOp", "(IILjava/lang/String;)I", OP_GET_USAGE_STATS, uid, pkg);
+  if (mode === MODE_ALLOWED) return null;
+  if (mode !== MODE_DEFAULT) return `Package ${pkg} from UID ${uid} blocked by mode ${mode}`;
+  return await vcall(context, "checkCallingOrSelfPermission", "(Ljava/lang/String;)I", "android.permission.PACKAGE_USAGE_STATS") === 0 ? null
+    : `Caller does not have android.permission.PACKAGE_USAGE_STATS; callingPackage=${pkg}, callingUid=${uid}`;
+}
+async function enforceStats(pkg: string): Promise<void> {
+  const denial = await statsDenial(callingIdentity().uid, pkg);
+  if (denial) throw rt.mkThrowable("java/lang/SecurityException", denial);
+}
+const uidPackages = (uid: number) => [...packages.values()].filter((record) => record.uid === uid).map((record) => record.pkg);
+const S = "Ljava/lang/String;";
+rt.register({ name: "webdroid/StorageStatsService", ctor: class extends JObj {}, sup: "android/app/usage/IStorageStatsManager$Stub", methods: {
+  [`getTotalBytes(${S}${S})J`]: async () => BigInt(Math.floor((await storageEstimate()).total)),
+  [`getFreeBytes(${S}${S})J`]: async () => BigInt(Math.floor((await storageEstimate()).free)),
+  // the VFS keeps no per-uid quota, and vold reserves nothing
+  [`isQuotaSupported(${S}${S})Z`]: () => 0,
+  [`isReservedSupported(${S}${S})Z`]: () => 0,
+  [`queryStatsForPackage(${S}${S}I${S})Landroid/app/usage/StorageStats;`]: async (_volume: string | null, pkg: string, _user: number, caller: string) => {
+    const record = packages.get(pkg);
+    if (!record) {
+      const missing = rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      throw await newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", missing);
+    }
+    if (record.uid !== callingIdentity().uid) await enforceStats(caller);
+    return storageStats([pkg]);
   },
-});
+  [`queryStatsForUid(${S}I${S})Landroid/app/usage/StorageStats;`]: async (_volume: string | null, uid: number, caller: string) => {
+    if (uid !== callingIdentity().uid) await enforceStats(caller);
+    return storageStats(uidPackages(uid));
+  },
+  [`queryStatsForUser(${S}I${S})Landroid/app/usage/StorageStats;`]: async (_volume: string | null, _user: number, caller: string) => {
+    await enforceStats(caller);
+    return storageStats([...packages.keys()]);
+  },
+  [`queryExternalStatsForUser(${S}I${S})Landroid/app/usage/ExternalStorageStats;`]: async (_volume: string | null, _user: number, caller: string) => {
+    await enforceStats(caller);
+    return externalStats();
+  },
+} });
+hostStub("storagestats", "webdroid/StorageStatsService");

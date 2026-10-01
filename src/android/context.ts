@@ -169,7 +169,6 @@ const SERVICE_CLASS: Record<string, string> = {
   autofill: "android/view/autofill/AutofillManager",
   permission_controller: "android/permission/PermissionControllerManager",
   netstats: "android/app/usage/NetworkStatsManager",
-  storagestats: "android/app/usage/StorageStatsManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
   servicediscovery: "android/net/nsd/NsdManager",
 };
@@ -250,6 +249,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
       "asInterface", "(Landroid/os/IBinder;)Lcom/android/internal/appwidget/IAppWidgetService;", await hostedService("appwidget")))],
   performance_hint: ["android/os/PerformanceHintManager", async () => scall("android/os/PerformanceHintManager", "create", "()Landroid/os/PerformanceHintManager;")],
   systemhealth: ["android/os/health/SystemHealthManager", () => newObj("android/os/health/SystemHealthManager")],
+  storagestats: ["android/app/usage/StorageStatsManager", async (ctx) => newObj("android/app/usage/StorageStatsManager",
+    "(Landroid/content/Context;Landroid/app/usage/IStorageStatsManager;)V", ctx, await scall("android/app/usage/IStorageStatsManager$Stub", "asInterface",
+      "(Landroid/os/IBinder;)Landroid/app/usage/IStorageStatsManager;", await hostedService("storagestats")))],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

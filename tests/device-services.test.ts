@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, scall, vcall } from "../src/jvm/natives/jlang";
+import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jlang";
 import { JApplication } from "../src/android/app";
 import { setAppHost } from "../src/android/apphost";
 import { packages, PackageRecord, packageUid } from "../src/android/packages";
@@ -105,6 +105,19 @@ describe("system health", () => {
     expect(await vcall(stats, "getMeasurementKeyCount", "()I")).toBe(0);
     const thrown = await vcall(health, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", 1000)
       .then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
+    expect(thrown).toBe("java/lang/SecurityException");
+  });
+});
+
+describe("storage stats", () => {
+  test("an app reads its own package's stats, and the user's need PACKAGE_USAGE_STATS", async () => {
+    const stats = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "storagestats");
+    const user = await scall("android/os/Process", "myUserHandle", "()Landroid/os/UserHandle;");
+    const own = await vcall(stats, "queryStatsForPackage", "(Ljava/util/UUID;Ljava/lang/String;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;",
+      await staticField("android/os/storage/StorageManager", "UUID_DEFAULT"), pkg, user);
+    expect(typeof await vcall(own, "getDataBytes", "()J")).toBe("bigint");
+    const thrown = await vcall(stats, "queryStatsForUser", "(Ljava/util/UUID;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;",
+      await staticField("android/os/storage/StorageManager", "UUID_DEFAULT"), user).then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
     expect(thrown).toBe("java/lang/SecurityException");
   });
 });
