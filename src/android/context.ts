@@ -160,7 +160,6 @@ export const grantPrompted = (pkg: string, name: string): void => permissionStor
 const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
   input_method: "android/view/inputmethod/InputMethodManager",
-  device_policy: "android/app/admin/DevicePolicyManager",
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   captioning: "android/view/accessibility/CaptioningManager",
@@ -254,6 +253,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   media_metrics: ["android/media/metrics/MediaMetricsManager", async (ctx) => newObj("android/media/metrics/MediaMetricsManager",
     "(Landroid/media/metrics/IMediaMetricsManager;I)V", await scall("android/media/metrics/IMediaMetricsManager$Stub", "asInterface",
       "(Landroid/os/IBinder;)Landroid/media/metrics/IMediaMetricsManager;", await hostedService("media_metrics")), await vcall(ctx, "getUserId", "()I"))],
+  device_policy: ["android/app/admin/DevicePolicyManager", async (ctx) => newObj("android/app/admin/DevicePolicyManager",
+    "(Landroid/content/Context;Landroid/app/admin/IDevicePolicyManager;)V", ctx, await scall("android/app/admin/IDevicePolicyManager$Stub", "asInterface",
+      "(Landroid/os/IBinder;)Landroid/app/admin/IDevicePolicyManager;", await hostedService("device_policy")))],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

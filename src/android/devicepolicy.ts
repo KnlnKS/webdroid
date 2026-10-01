@@ -1,10 +1,21 @@
-import { JObj, rt, stubs } from "../jvm/runtime";
+// IDevicePolicyManager, under AOSP's DevicePolicyManager: DevicePolicyManagerService runs on every
+// device, but this one lacks FEATURE_DEVICE_ADMIN, so it answers as with mHasFeature false (decoded
+// from the reference AVD's services.jar): no admin, owner or policy is ever in force.
+import { JObj, rt } from "../jvm/runtime";
+import { staticField } from "../jvm/natives/jlang";
+import { hostStub } from "./binder";
 
-rt.register({
-  name: "android/app/admin/DevicePolicyManager", ctor: class extends JObj {},
-  methods: {
-    ...stubs(0, "getCameraDisabled(Landroid/content/ComponentName;)Z", "isAdminActive(Landroid/content/ComponentName;)Z",
-      "isDeviceOwnerApp(Ljava/lang/String;)Z", "isProfileOwnerApp(Ljava/lang/String;)Z"),
-    ...stubs(null, "getActiveAdmins()Ljava/util/List;"),
-  },
-});
+const CN = "Landroid/content/ComponentName;";
+rt.register({ name: "webdroid/DevicePolicyManagerService", ctor: class extends JObj {}, sup: "android/app/admin/IDevicePolicyManager$Stub", methods: {
+  [`isAdminActive(${CN}I)Z`]: () => 0,
+  "getActiveAdmins(I)Ljava/util/List;": () => staticField("java/util/Collections", "EMPTY_LIST"),
+  [`getCameraDisabled(${CN}Ljava/lang/String;IZ)Z`]: () => 0,
+  [`getScreenCaptureDisabled(${CN}IZ)Z`]: () => 0,
+  [`getKeyguardDisabledFeatures(${CN}IZ)I`]: () => 0,
+  [`getPasswordQuality(${CN}IZ)I`]: () => 0,
+  [`getProfileOwnerAsUser(I)${CN}`]: () => null,
+  [`getDeviceOwnerComponent(Z)${CN}`]: () => null,
+  [`getDeviceOwnerComponentOnUser(I)${CN}`]: () => null,
+  "isOrganizationOwnedDeviceWithManagedProfile()Z": () => 0,
+} });
+hostStub("device_policy", "webdroid/DevicePolicyManagerService");

@@ -132,6 +132,17 @@ describe("media metrics", () => {
   });
 });
 
+describe("device policy", () => {
+  test("no admin or owner is in force", async () => {
+    const policy = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "device_policy");
+    const admin = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, pkg + ".Admin");
+    expect(await vcall(policy, "isAdminActive", "(Landroid/content/ComponentName;)Z", admin)).toBe(0);
+    expect(await vcall(await vcall(policy, "getActiveAdmins", "()Ljava/util/List;"), "size", "()I")).toBe(0);
+    expect(await vcall(policy, "isDeviceOwnerApp", "(Ljava/lang/String;)Z", pkg)).toBe(0);
+    expect(await vcall(policy, "getCameraDisabled", "(Landroid/content/ComponentName;)Z", null)).toBe(0);
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");
