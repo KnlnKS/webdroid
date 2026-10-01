@@ -1467,6 +1467,43 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     before the app's uid is set, and Looper.loop captures its calling-identity token once, so
     every message logged "Thread identity changed" (a stack trace and an AMS call each); this
     process's own identity is now one token whatever its uid.
+- 2026-10-04, Stage D: the fast gate, the live flows and the corpus. The fast gate passes 7/7 in
+  both modes; the D-mode live flows and corpus reach their TS-mode depth except where noted below.
+  AOSP's own code is stricter than the TS stack was, so most fixes were fidelity, not D plumbing:
+  - Time: the harness pinned `Date.now`, which froze `currentTimeMillis`. Mihon's and Komikku's
+    splash keep conditions (`elapsed <= 500 || !ready && elapsed <= 5000`) then never cleared, and
+    ViewRootImpl honours the cancelling pre-draw listener. The TS stack had ignored it. Under a
+    controlled clock the guest wall clock is now start plus guest time; a pinned page's clock
+    advances from its fixed instant. Komikku's `ready` is set only for its own intent actions, so
+    a launcher start holds the splash 5 s on a device too; the fast lane keeps a launch's horizon.
+  - Order matters where the TS stack was lenient. A Bundle's keys iterate by hash, as ArrayMap's
+    do, which androidx.startup's initializer order follows. A process's providers install by
+    descending initOrder: Reddit's DI provider must precede InitializationProvider, whose
+    initializers wait on its graph with a timeout.
+  - Windows: a new window got focus before its input channel existed, so a dialog never heard
+    it and its ViewRootImpl dropped the back key. A surface with insets (a dialog's shadow room) sits
+    at the frame less the insets.
+  - Surfaces: lockCanvas returned the surface's own handle, which unlockSwCanvasAndPost releases
+    as its locked reference. The first software frame freed the window surface (Unity's FATAL
+    EXCEPTION in Among Us, Cut the Rope and Subway Surfers). Destroy must not free either: release
+    follows it, and a slot reused in between was freed.
+  - A start waiting for a pause must not wait on a record that a finish destroyed (TikTok's splash
+    finishes in onCreate).
+  - SAF: the storage documents provider is a system provider with a binder, and a result's URIs
+    are granted to the receiver, so `takePersistableUriPermission` works. The provider's asset
+    descriptor has unknown length; with length 0, AssetFileDescriptor's output stream dropped
+    every write.
+  - Harness: a tap's UP follows its DOWN by 60 guest ms regardless of when the DOWN is handled; a
+    late UP read as a long press. The pixel rule waits out main-thread jobs, transitions, and on a
+    real clock the first 1.5 s of frames or runnable threads. A fling's overscroll stretch draws
+    no new pixels, so a tap landed in the scroll and was consumed. `locateText` ranks exact
+    matches first, as the device driver does. A sample asks the compositor to present, since the
+    TS needsDraw does nothing under Stage D.
+  - Many system services gained the methods apps reached, each answering as this device does
+    (blur, screen recording/capture, media projection, backup, WebView update, status bar
+    tiles, window contexts, URI permissions, audio mode, Wi-Fi reconnects).
+  Limits: Clash of Clans and Clash Royale fail their anti-tamper checks in both modes; Resy and
+  TikTok fail their live flows in both modes. Reddit's sheet steps are timing-sensitive under D.
 
 ## Java, storage and framework semantics
 
