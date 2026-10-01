@@ -37,9 +37,8 @@ function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number {
 }
 /** _PC_LINK_MAX 0 … NAME_MAX 4, PATH_MAX 5, PIPE_BUF 6 */
 const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 4096 : n === 0 ? 127 : -1);
-/** struct statvfs: eleven unsigned longs (bsize, frsize, blocks, bfree, bavail, files, ffree, favail, fsid, flag, namemax) */
+/** struct statvfs: eleven unsigned longs (bsize, frsize, blocks, bfree, bavail, files, ffree, favail, fsid, flag, namemax), 44 bytes on ARM32 */
 function fillStatvfs(b: number): void {
-  mem.memset(b, 0, 112);
   const v = [4096, 4096, 0x100000, 0x80000, 0x80000, 0x10000, 0x8000, 0x8000, 0, 0, 255];
   for (let i = 0; i < v.length; i++) mem.st32(b + i * 4, v[i]);
 }

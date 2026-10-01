@@ -9,6 +9,7 @@ import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail, clockTime, utf8 } from "./libc";
+import { KLAYOUT } from "./syscall";
 import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock";
 
 /** Bionic's LP32 mutex word: the low half is state/counter/shared/type and the high half is
@@ -276,8 +277,8 @@ export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: num
 
 /** the kernel's sleeps and yield */
 export const PTHREAD_SYSCALLS: Record<string, HostFn> = {
-  clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
-  nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); return sleepMs(readTs(req)); },
+  clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
+  nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); return sleepMs(readTs(req)); },
   sched_yield: () => yieldToLoop().then(() => 0),
 };
 
