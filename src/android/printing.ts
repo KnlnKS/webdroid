@@ -1,6 +1,6 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { after, newObj, vcall } from "../jvm/natives/jlang";
-import type { JWebView } from "./webkit";
+import type { WebViewChromium as JWebView } from "./webkit";
 
 class JPrintDocumentAdapter extends JObj {
   webView: JWebView | null = null;

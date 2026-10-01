@@ -14,7 +14,7 @@ import { JLinearLayout } from "../src/android/layouts";
 import { classCtors } from "../src/jvm/natives/jreflect";
 import { glSurfaces } from "../src/native/egl-current";
 import { Resources, JTheme } from "../src/android/res";
-import { JWebView } from "../src/android/webkit";
+import type { WebViewChromium } from "../src/android/webkit";
 import { scall, preloadTextPaint, loadFrameworkJar } from "./java";
 
 // framework.jar and a running main looper, as a booted page has them
@@ -580,23 +580,31 @@ describe("webfragment", () => {
   class FragmentClient extends JObj {
     events: unknown[][] = [];
     visited: (() => void | Promise<void>) | null = null;
+    provider: WebViewChromium | null = null;
   }
+  /** a WebView's provider, its view a stand-in: these exercise the provider's navigation alone */
+  const webView = (client: FragmentClient | null = null) => {
+    const p = rt.make("webdroid/WebViewProvider") as WebViewChromium;
+    p.view = new JObj(); p.settings = rt.make("webdroid/WebSettings");
+    if (client) { p.client = client; client.provider = p; }
+    return p;
+  };
   rt.register({
     name: "test/FragmentClient", ctor: FragmentClient, sup: "android/webkit/WebViewClient",
     methods: {
-      "doUpdateVisitedHistory(Landroid/webkit/WebView;Ljava/lang/String;Z)V": async function (this: FragmentClient, view: JWebView, url: string, reload: number) {
-        this.events.push(["visited", url, reload, view.url]); await this.visited?.();
+      "doUpdateVisitedHistory(Landroid/webkit/WebView;Ljava/lang/String;Z)V": async function (this: FragmentClient, _view: unknown, url: string, reload: number) {
+        this.events.push(["visited", url, reload, this.provider!.url]); await this.visited?.();
       },
-      "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V": function (this: FragmentClient, _view: JWebView, url: string) { this.events.push(["finished", url]); },
-      "onPageStarted(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V": function (this: FragmentClient, _view: JWebView, url: string) { this.events.push(["started", url]); },
+      "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V": function (this: FragmentClient, _view: unknown, url: string) { this.events.push(["finished", url]); },
+      "onPageStarted(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V": function (this: FragmentClient, _view: unknown, url: string) { this.events.push(["started", url]); },
       "onPageCommitVisible(Landroid/webkit/WebView;Ljava/lang/String;)V": function (this: FragmentClient) { this.events.push(["commit"]); },
     },
   });
   rt.linkNatives();
 
   test("fragment navigation updates the URL and finishes without starting or committing a document", async () => {
-    const view = new JWebView(), client = new FragmentClient();
-    view.client = client; view.loaded = true; view.progress = 100;
+    const client = new FragmentClient(), view = webView(client);
+    view.loaded = true; view.progress = 100;
     const url = "https://example.org/page#section";
     view.fragmentNavigated(url);
     await onMain(() => {});
@@ -605,8 +613,7 @@ describe("webfragment", () => {
   });
 
   test("a suspended visited-history callback can cancel the old fragment completion", async () => {
-    const view = new JWebView(), client = new FragmentClient();
-    view.client = client;
+    const client = new FragmentClient(), view = webView(client);
     client.visited = async () => { await Promise.resolve(); view.gen++; };
     const url = "https://example.org/page#section";
     view.fragmentNavigated(url);
@@ -615,8 +622,7 @@ describe("webfragment", () => {
   });
 
   test("a queued page-start callback retains its URL when a fragment commits", async () => {
-    const view = new JWebView(), client = new FragmentClient();
-    view.client = client;
+    const client = new FragmentClient(), view = webView(client);
     const url = "https://example.org/page";
     await onMain(() => { view.loadUrl(url); view.fragmentNavigated(url + "#section"); });
     await onMain(() => {});
@@ -624,7 +630,7 @@ describe("webfragment", () => {
   });
 
   test("a WebView history copy is an independent snapshot", async () => {
-    const view = new JWebView();
+    const view = webView();
     view.go({ url: "https://example.org/one" });
     view.go({ url: "https://example.org/two" });
     const history = await vcall(view, "copyBackForwardList", "()Landroid/webkit/WebBackForwardList;");

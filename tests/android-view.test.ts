@@ -11,7 +11,7 @@ import { recordingContext, replay, type DisplayList } from "../src/android/recor
 import { Resources, JTheme } from "../src/android/res";
 import { JImageView } from "../src/android/imageview";
 import { JWindowInsets } from "../src/android/windowinsets";
-import { JWebView } from "../src/android/webkit";
+import type { WebViewChromium } from "../src/android/webkit";
 import { scall, loadLibcore, loadFrameworkJar, preloadTextPaint } from "./java";
 
 // framework drawables construct Paints, which take the device's languages
@@ -818,22 +818,22 @@ describe("webview-keys", () => {
       this.events.push(event); return 1;
     },
   } });
-  rt.register({ name: "test/WebKeyListener", ctor: class extends JObj {}, ifaces: ["android/view/View$OnKeyListener"], methods: {
-    "onKey(Landroid/view/View;ILandroid/view/KeyEvent;)Z": () => 1,
+  class Access extends JObj { events: unknown[] = []; }
+  rt.register({ name: "test/WebAccess", ctor: Access, methods: {
+    "super_dispatchKeyEvent(Landroid/view/KeyEvent;)Z": function (this: Access, event: unknown) { this.events.push(event); return 1; },
   } });
   rt.linkNatives();
 
-  test("WebView key dispatch preserves listener interception and client overrides for both actions", async () => {
-    const view = new JWebView(), client = new KeyClient();
-    const down = await newObj("android/view/KeyEvent", "(II)V", 0, 111);
-    const up = await newObj("android/view/KeyEvent", "(II)V", 1, 111);
-    expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", down)).toBe(0);
+  test("WebView keys the client claims, and keys the page cannot take, go through View's dispatch", async () => {
+    const view = rt.make("webdroid/WebViewProvider") as WebViewChromium, client = new KeyClient(), access = new Access();
+    view.view = new JObj(); view.access = access;
+    const back = await newObj("android/view/KeyEvent", "(II)V", 0, 4);
+    const escape = await newObj("android/view/KeyEvent", "(II)V", 1, 111);
+    expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", back)).toBe(1);
+    expect(access.events).toEqual([back]);
     await vcall(view, "setWebViewClient", "(Landroid/webkit/WebViewClient;)V", client);
-    expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", down)).toBe(1);
-    expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", up)).toBe(1);
-    expect(client.events).toEqual([down, up]);
-    await vcall(view, "setOnKeyListener", "(Landroid/view/View$OnKeyListener;)V", rt.make("test/WebKeyListener"));
-    expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", down)).toBe(1);
-    expect(client.events).toEqual([down, up]);
+    expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", escape)).toBe(1);
+    expect(client.events).toEqual([escape]);
+    expect(access.events).toEqual([back, escape]);
   });
 });

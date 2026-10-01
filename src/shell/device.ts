@@ -589,7 +589,7 @@ const tick0 = driven(function* tick0(frameTime: Promise<bigint>): Gen {
       }
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
-      webLayerSweep();
+      webLayerSweep(ctx.canvas);
     }
   } catch (e) {
     console.error("[tick]", e);

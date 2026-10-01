@@ -1793,7 +1793,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onVisibilityChanged(Landroid/view/View;I)V", "onWindowVisibilityChanged(I)V",
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V"),
   ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I",
-    "willNotDraw()Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
+    "willNotDraw()Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getImportantForContentCapture()I", "getKeepScreenOn()Z",
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z", "onKeyLongPress(ILandroid/view/KeyEvent;)Z",
     "onKeyMultiple(IILandroid/view/KeyEvent;)Z", "onGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
