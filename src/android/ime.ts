@@ -8,7 +8,7 @@
 // declares `implements InputConnection`, and an unregistered interface makes Runtime.link
 // auto-stub it — which poisons every class that names it.
 
-import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
 import { vcall, newObj, after } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
@@ -416,26 +416,49 @@ rt.register({
   },
 });
 
-type InputSession = { view: JView; connection: unknown; info: JEditorInfo; text: string; offset: number; start: number; end: number; compStart: number; compEnd: number };
-let served: InputSession | null = null;
+/** An editor the IME serves, as the IME last heard it: its text from `offset`, the selection in
+ *  the editor's coordinates and the composing region in `text`'s. `call` is an InputConnection
+ *  method by name and argument descriptor: the TS view stack's own InputConnection here, AOSP's
+ *  IRemoteInputConnection in stage D (server/imm.ts). */
+export interface ImeSession {
+  text: string; offset: number; start: number; end: number; compStart: number; compEnd: number;
+  imeOptions: number; actionId: number;
+  call(name: string, args: string, ...values: unknown[]): unknown;
+}
+type InputSession = ImeSession & { view: JView; connection: unknown };
+let served: ImeSession | null = null;
+const servedView = () => (served as InputSession | null)?.view;
 let imeVisible = false;
 let editing = false;
 const imeMain = <T>(fn: () => T | Promise<T>) => inMainJob() ? Promise.resolve(fn()) : onMain(fn);
-function mirrorInput() {
+/** the page's text control takes the served editor's text and selection */
+export function mirrorInput() {
   if (!inputEl || !served || focusedEdit || editing) return;
   inputEl.value = served.text;
   inputEl.setSelectionRange(served.start - served.offset, served.end - served.offset);
 }
-const extractedInput = driven(function* extractedInput(session: InputSession, extracted: JExtractedText): Gen {
-  const text = yield csText(extracted.text);
-  if (extracted.partialStartOffset < 0) { session.text = text; session.offset = extracted.startOffset; }
-  else session.text = session.text.slice(0, extracted.partialStartOffset - session.offset) + text + session.text.slice(extracted.partialEndOffset - session.offset);
-  session.start = extracted.selectionStart + extracted.startOffset; session.end = extracted.selectionEnd + extracted.startOffset;
+/** the IME serves `session`'s editor, or none */
+export function serveInput(session: ImeSession | null) { served = session; mirrorInput(); }
+/** the keyboard shows or hides: the page's text control takes or gives up focus */
+export function showInput(visible: boolean) {
+  imeVisible = visible;
+  if (visible) { mirrorInput(); inputEl?.focus(); } else inputEl?.blur();
+}
+const ET = "android/view/inputmethod/ExtractedText";
+/** an ExtractedText the editor reported: all of its text, or a changed part of it */
+let reports = 0;
+export const extractedInput = driven(function* extractedInput(session: ImeSession, extracted: JObj): Gen {
+  reports++;
+  const f = (name: string) => (extracted as unknown as Record<string, number>)[declaredField(ET, name)];
+  const text: string = yield csText(f("text")), partialStart = f("partialStartOffset"), startOffset = f("startOffset");
+  if (partialStart < 0) { session.text = text; session.offset = startOffset; }
+  else session.text = session.text.slice(0, partialStart - session.offset) + text + session.text.slice(f("partialEndOffset") - session.offset);
+  session.start = f("selectionStart") + startOffset; session.end = f("selectionEnd") + startOffset;
   mirrorInput();
 });
 const connectInput = driven(function* connectInput(view: JView): Gen {
   if (served) {
-    const previous = served; served = null;
+    const previous = served as InputSession; served = null;
     yield vcall(previous.connection, "closeConnection", "()V");
   }
   if (view instanceof JEditText) { focusEditText(view); return true; }
@@ -443,40 +466,46 @@ const connectInput = driven(function* connectInput(view: JView): Gen {
   const info = rt.make("android/view/inputmethod/EditorInfo") as JEditorInfo;
   const connection = yield vcall(view, "onCreateInputConnection", "(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;", info);
   if (!connection) return false;
-  const session = { view, connection, info, text: info.surrounding, offset: info.surroundingStart, start: Math.max(0, info.initialSelStart), end: Math.max(0, info.initialSelEnd), compStart: -1, compEnd: -1 };
+  const session: InputSession = { view, connection, text: info.surrounding, offset: info.surroundingStart,
+    start: Math.max(0, info.initialSelStart), end: Math.max(0, info.initialSelEnd), compStart: -1, compEnd: -1,
+    imeOptions: info.imeOptions, actionId: info.actionId,
+    call: (name, args, ...values) => vcall(connection, name, `(${args})Z`, ...values) };
   served = session;
   const request = rt.make("android/view/inputmethod/ExtractedTextRequest");
   const extracted = yield vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1);
   if (extracted) yield extractedInput(session, extracted);
   mirrorInput(); return true;
 });
+const IME_FLAG_NO_ENTER_ACTION = 0x40000000, IME_ACTION_NONE = 1;
 export const imeActive = () => !!focusedEdit || !!served && imeVisible;
-export const imeHasAction = () => !!focusedEdit || !!served && !(served.info.imeOptions & 0x40000000) && (served.info.imeOptions & 0xff) !== 1;
+export const imeHasAction = () => !!focusedEdit || !!served && !(served.imeOptions & IME_FLAG_NO_ENTER_ACTION) && (served.imeOptions & 0xff) !== IME_ACTION_NONE;
 export function imeInput(text: string, start = text.length, end = start, composing = false) {
   return onMain(async () => {
     if (focusedEdit) { await editInput(text, start, end); return; }
     const session = served;
     if (!session) return;
-    const ic = session.connection, previous = session.text;
+    const previous = session.text, offset = session.offset;
     let [a, b, c] = textDiff(previous, text);
     if (session.compStart >= 0) {
       a = Math.min(a, session.compStart); b = Math.max(b, session.compEnd); c = text.length - (previous.length - b);
     }
-    await vcall(ic, "beginBatchEdit", "()Z");
+    const heard = reports;
+    await session.call("beginBatchEdit", "");
     editing = true;
     try {
-      await vcall(ic, "finishComposingText", "()Z");
+      await session.call("finishComposingText", "");
       if (b > a && c === a) {
-        await vcall(ic, "setSelection", "(II)Z", b + session.offset, b + session.offset);
-        await vcall(ic, "deleteSurroundingText", "(II)Z", b - a, 0);
+        await session.call("setSelection", "II", b + offset, b + offset);
+        await session.call("deleteSurroundingText", "II", b - a, 0);
       } else if (b > a || c > a) {
-        await vcall(ic, "setSelection", "(II)Z", a + session.offset, b + session.offset);
-        await vcall(ic, composing ? "setComposingText" : "commitText", "(Ljava/lang/CharSequence;I)Z", text.slice(a, c), 1);
+        await session.call("setSelection", "II", a + offset, b + offset);
+        await session.call(composing ? "setComposingText" : "commitText", "Ljava/lang/CharSequence;I", text.slice(a, c), 1);
       }
-      await vcall(ic, "setSelection", "(II)Z", start + session.offset, end + session.offset);
-      session.text = text; session.start = start + session.offset; session.end = end + session.offset;
+      await session.call("setSelection", "II", start + offset, end + offset);
       session.compStart = composing ? a : -1; session.compEnd = composing ? c : -1;
-    } finally { try { await vcall(ic, "endBatchEdit", "()Z"); } finally { editing = false; } }
+    } finally { try { await session.call("endBatchEdit", ""); } finally { editing = false; } }
+    // an editor that reports its changes has done so against the text before the edit
+    if (reports === heard) { session.text = text; session.start = start + offset; session.end = end + offset; }
     mirrorInput(); invalidate();
   });
 }
@@ -484,41 +513,41 @@ export function imeSelection(start: number, end: number) {
   return onMain(async () => {
     const session = served;
     if (!session || focusedEdit || start + session.offset === session.start && end + session.offset === session.end) return;
-    await vcall(session.connection, "setSelection", "(II)Z", start + session.offset, end + session.offset);
+    await session.call("setSelection", "II", start + session.offset, end + session.offset);
     session.start = start + session.offset; session.end = end + session.offset;
   });
 }
 export const imeFinishComposition = () => onMain(async () => {
-  if (served && !focusedEdit) { await vcall(served.connection, "finishComposingText", "()Z"); served.compStart = served.compEnd = -1; }
+  if (served && !focusedEdit) { await served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
 });
 export const imeAction = () => onMain(async () => {
   if (focusedEdit) return fireEditorAction();
   if (!served) return false;
-  return !!(await vcall(served.connection, "performEditorAction", "(I)Z", served.info.actionId || served.info.imeOptions & 0xff));
+  return !!(await served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
 });
 rt.register({
   name: "android/view/inputmethod/InputMethodManager", ctor: class extends JObj {},
   methods: {
     "hideSoftInputFromWindow(Landroid/os/IBinder;I)Z": function () { return imeMain(async () => {
-      if (served) await vcall(served.connection, "finishComposingText", "()Z");
-      imeVisible = false; focusEditText(null); inputEl?.blur(); return 1;
+      if (served) await served.call("finishComposingText", "");
+      focusEditText(null); showInput(false); return 1;
     }); },
     "showSoftInput(Landroid/view/View;I)Z": function (view: JView) { return imeMain(async () => {
-      if (!view || served?.view !== view && !await connectInput(view)) return 0;
-      imeVisible = true; mirrorInput(); inputEl?.focus(); return 1;
+      if (!view || servedView() !== view && !await connectInput(view)) return 0;
+      showInput(true); return 1;
     }); },
-    "toggleSoftInput(II)V": () => { imeVisible = !imeVisible; if (imeVisible) inputEl?.focus(); else inputEl?.blur(); },
+    "toggleSoftInput(II)V": () => showInput(!imeVisible),
     "isActive()Z": () => served || focusedEdit ? 1 : 0,
-    "isActive(Landroid/view/View;)Z": (view: unknown) => view != null && (view === served?.view || view === focusedEdit) ? 1 : 0,
+    "isActive(Landroid/view/View;)Z": (view: unknown) => view != null && (view === servedView() || view === focusedEdit) ? 1 : 0,
     "getEnabledInputMethodList()Ljava/util/List;": () => newArrayList(),
     "getInputMethodList()Ljava/util/List;": () => newArrayList(),
     "getCurrentInputMethodSubtype()Landroid/view/inputmethod/InputMethodSubtype;": () => null,
     "restartInput(Landroid/view/View;)V": function (view: JView) { return imeMain(async () => { if (view) await connectInput(view); }); },
     "updateSelection(Landroid/view/View;IIII)V": (view: JView, start: number, end: number) => {
-      if (served?.view === view) { served.start = start; served.end = end; mirrorInput(); }
+      if (served && servedView() === view) { served.start = start; served.end = end; mirrorInput(); }
     },
-    "updateExtractedText(Landroid/view/View;ILandroid/view/inputmethod/ExtractedText;)V": driven(function* (view: JView, _token: number, extracted: JExtractedText): Gen {
-      if (served?.view === view) yield extractedInput(served, extracted);
+    "updateExtractedText(Landroid/view/View;ILandroid/view/inputmethod/ExtractedText;)V": driven(function* (view: JView, _token: number, extracted: JObj): Gen {
+      if (served && servedView() === view) yield extractedInput(served, extracted);
     }),
     "updateCursorAnchorInfo(Landroid/view/View;Landroid/view/inputmethod/CursorAnchorInfo;)V": () => {},
     "dispatchKeyEventFromInputMethod(Landroid/view/View;Landroid/view/KeyEvent;)V": function (view: JView, event: unknown) { return imeMain(async () => { await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event); }); },
