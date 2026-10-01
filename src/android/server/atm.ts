@@ -356,6 +356,9 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
 /** the methods IActivityTaskManager adds for ActivityThread's activities */
 export const activityTaskMethods = {
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
+  // nothing captures the screen, so a screen-capture observer is never called
+  ...noops("registerScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V",
+    "unregisterScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V"),
   "startActivity(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IILandroid/app/ProfilerInfo;Landroid/os/Bundle;)I":
     (app: JObj, _pkg: string, _feature: string, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number) =>
       startActivityFor(app, intent, resolvedType, resultTo, resultWho, requestCode),

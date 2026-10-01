@@ -156,6 +156,14 @@ hostStub("sensitive_content_protection_service", "webdroid/SensitiveContentProte
 hostStub("voiceinteraction", "webdroid/VoiceInteractionManagerService");
 hostStub("content_capture", "webdroid/ContentCaptureManagerService");
 hostStub("network_management", "webdroid/NetworkManagementService");
+// MediaProjectionManagerService with no projection: nothing records or casts the screen, so there is
+// no active projection to report and no change for a watcher to hear
+rt.register({ name: "webdroid/MediaProjectionManagerService", ctor: class extends JObj {}, sup: "android/media/projection/IMediaProjectionManager$Stub", methods: {
+  ...stubs(null, "getActiveProjectionInfo()Landroid/media/projection/MediaProjectionInfo;",
+    "addCallback(Landroid/media/projection/IMediaProjectionWatcherCallback;)Landroid/media/projection/MediaProjectionInfo;"),
+  ...noops("removeCallback(Landroid/media/projection/IMediaProjectionWatcherCallback;)V"),
+} });
+hostStub("media_projection", "webdroid/MediaProjectionManagerService");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
