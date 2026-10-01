@@ -314,6 +314,8 @@ const contextMethods: NativeSpec["methods"] = {
   // API 31. Everything here draws into the one window, but the application context is not a
   // display context on a device and callers branch on that.
   "isUiContext()Z": function (this: JContext) { return this === this.$host.application ? 0 : 1; },
+  // the default display: every context here is on it
+  "getDisplayId()I": () => 0,
   "getDisplay()Landroid/view/Display;": function (this: JContext) {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
     return defaultDisplay();
