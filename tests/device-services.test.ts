@@ -86,3 +86,13 @@ describe("radios this device lacks", () => {
     expect(await vcall(await service("nfc"), "getDefaultAdapter", "()Landroid/nfc/NfcAdapter;")).toBeNull();
   });
 });
+
+describe("app widgets", () => {
+  test("no host binds a widget: ids are empty and the package's providers are listed", async () => {
+    const widgets = await scall("android/appwidget/AppWidgetManager", "getInstance", "(Landroid/content/Context;)Landroid/appwidget/AppWidgetManager;", app);
+    const provider = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, pkg + ".Widget");
+    expect([...await vcall(widgets, "getAppWidgetIds", "(Landroid/content/ComponentName;)[I", provider)]).toEqual([]);
+    expect(await vcall(await vcall(widgets, "getInstalledProviders", "()Ljava/util/List;"), "size", "()I")).toBe(0);
+    expect(await vcall(widgets, "isRequestPinAppWidgetSupported", "()Z")).toBe(0);
+  });
+});

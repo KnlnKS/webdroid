@@ -3,8 +3,8 @@
 // rest is what the reference AVD answers an app (app_process as uid 2000: getDisplayInfo(0),
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
 import { rt, JObj, noops } from "../jvm/runtime";
-import { mangleField, mangleStaticField, jarray } from "../jvm/abi";
-import { newObj, scall, vcall, linkInit } from "../jvm/natives/jlang";
+import { mangleField, jarray } from "../jvm/abi";
+import { newObj, scall, vcall, staticField } from "../jvm/natives/jlang";
 import { hostStub } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
 import { reportUncaught } from "./os";
@@ -47,7 +47,6 @@ async function displayInfo(): Promise<JObj> {
   for (const [name, value] of Object.entries(values)) info[mangleField(INFO, name)] = value;
   return info as unknown as JObj;
 }
-const staticField = async (cls: string, field: string): Promise<unknown> => ((await linkInit(cls)).ctor as Record<string, unknown>)[mangleStaticField(field)];
 const BRIGHTNESS = 0.39763778;
 
 // OverlayProperties: hardware composition the display offers. The AVD composes everything on the

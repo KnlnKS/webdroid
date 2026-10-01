@@ -68,6 +68,9 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
   if (p) await p;
   return info;
 }
+/** a static field's value, once the class has initialized */
+export const staticField = async <T = unknown>(cls: string, field: string): Promise<T> =>
+  ((await linkInit(cls)).ctor as Record<string, T>)[mangleStaticField(field)];
 /** A static Java call from native code, once the class has initialized */
 export function scall(cls: string, name: string, desc: string, ...args: unknown[]): any {
   const info = rt.link(cls), init = rt.initClass(info);

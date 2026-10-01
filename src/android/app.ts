@@ -1,4 +1,4 @@
-import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, grantPermissions, type JContext } from "./context";
+import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, grantPermissions } from "./context";
 import { JWindow } from "./window";
 import {
   type JIntent, activityTransport, launchIntent, mkComponentName, newIntent, putExtra, registerSystemActivity,
@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
+import { reportUncaught, JBundle, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
 import { backKeyMethods, dispatchWindowKey } from "./keyevent";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
@@ -798,69 +798,6 @@ rt.markers("android/view/WindowInsetsAnimation");
 rt.register({
   name: "android/view/WindowInsetsAnimation$Callback", ctor: class extends JObj {},
   methods: { "<init>(I)V": () => {} },
-});
-
-class JAppWidgetManager extends JObj {}
-rt.register({
-  name: "android/appwidget/AppWidgetManager", ctor: JAppWidgetManager,
-  methods: {
-    "static getInstance(Landroid/content/Context;)Landroid/appwidget/AppWidgetManager;": () => systemService(null, "appwidget"),
-    "getAppWidgetIds(Landroid/content/ComponentName;)[I": () => new Int32Array(0),
-    "getInstalledProviders()Ljava/util/List;": () => newArrayList(),
-    "getInstalledProvidersForPackage(Ljava/lang/String;Landroid/os/UserHandle;)Ljava/util/List;": () => newArrayList(),
-    ...noops("updateAppWidget([ILandroid/widget/RemoteViews;)V",
-      "updateAppWidget(Landroid/content/ComponentName;Landroid/widget/RemoteViews;)V",
-      "updateAppWidget(ILandroid/widget/RemoteViews;)V", "notifyAppWidgetViewDataChanged([II)V"),
-    // No widget is placed on a home screen here, so no id names one and its options are empty.
-    "getAppWidgetInfo(I)Landroid/appwidget/AppWidgetProviderInfo;": () => null,
-    "getAppWidgetOptions(I)Landroid/os/Bundle;": () => new JBundle(),
-  },
-});
-// A widget host would deliver these; nothing does, but the class has to exist — an app class
-// extending it cannot link otherwise, and that poisons everything it is referenced from.
-rt.register({
-  name: "android/appwidget/AppWidgetProvider", ctor: class extends JObj {}, sup: "android/content/BroadcastReceiver",
-  methods: {
-    "onReceive(Landroid/content/Context;Landroid/content/Intent;)V": driven(function* (this: JObj, context: JContext, intent: JIntent): Gen {
-      const action: string | null = yield vcall(intent, "getAction", "()Ljava/lang/String;");
-      if (!action?.startsWith("android.appwidget.action.APPWIDGET_")) return;
-      const suffix = action.slice("android.appwidget.action.APPWIDGET_".length);
-      const ids: Int32Array | null = yield vcall(intent, "getIntArrayExtra", "(Ljava/lang/String;)[I", "appWidgetIds");
-      const manager = systemService(context, "appwidget");
-      if (suffix === "UPDATE" && ids?.length) yield vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids);
-      else if (suffix === "DELETED" && ids?.length) yield vcall(this, "onDeleted", "(Landroid/content/Context;[I)V", context, ids);
-      else if (suffix === "ENABLED") yield vcall(this, "onEnabled", "(Landroid/content/Context;)V", context);
-      else if (suffix === "DISABLED") yield vcall(this, "onDisabled", "(Landroid/content/Context;)V", context);
-      else if (suffix === "OPTIONS_CHANGED") {
-        const id: number = yield vcall(intent, "getIntExtra", "(Ljava/lang/String;I)I", "appWidgetId", -1);
-        const options = yield vcall(intent, "getBundleExtra", "(Ljava/lang/String;)Landroid/os/Bundle;", "appWidgetOptions");
-        if (id !== -1) yield vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, options);
-      } else if (suffix === "RESTORED") {
-        const oldIds: Int32Array | null = yield vcall(intent, "getIntArrayExtra", "(Ljava/lang/String;)[I", "appWidgetOldIds");
-        if (oldIds && ids) yield vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids);
-      }
-    }),
-    ...noops("<init>()V"),
-  },
-});
-class JAppWidgetProviderInfo extends JObj {
-  provider: JComponentName | null = null;
-  minWidth = 0; minHeight = 0; minResizeWidth = 0; minResizeHeight = 0;
-  resizeMode = 0; updatePeriodMillis = 0; initialLayout = 0; icon = 0; label = "";
-}
-rt.register({
-  name: "android/appwidget/AppWidgetProviderInfo", ctor: JAppWidgetProviderInfo, ifaces: ["android/os/Parcelable"],
-  statics: {
-    RESIZE_NONE: 0, RESIZE_HORIZONTAL: 1, RESIZE_VERTICAL: 2, RESIZE_BOTH: 3,
-    WIDGET_CATEGORY_HOME_SCREEN: 1, WIDGET_CATEGORY_KEYGUARD: 2, WIDGET_CATEGORY_SEARCHBOX: 4,
-  },
-  fields: ["provider", "minWidth", "minHeight", "minResizeWidth", "minResizeHeight", "resizeMode",
-    "updatePeriodMillis", "initialLayout", "icon", "label"],
-  methods: {
-    "<init>()V": function () {},
-    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/String;": function (this: JAppWidgetProviderInfo) { return this.label; },
-    ...PARCELABLE,
-  },
 });
 
 rt.register({
