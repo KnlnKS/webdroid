@@ -8,7 +8,7 @@ import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barA
 import { jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
 import { backKeyMethods, dispatchWindowKey } from "./keyevent";
-import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
@@ -25,7 +25,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
-import { getPM } from "./pm";
+import { packageManagerService, permissionManagerService, packageResources } from "./pm";
 import { hostStub, transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
@@ -265,12 +265,13 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   // AOSP: the manifest's parentActivityName, as a main-activity intent when that parent has no parent of its own
   "getParentActivityIntent()Landroid/content/Intent;": driven(function* (this: JActivity): Gen {
-    const pm = getPM(), info = "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;";
-    const parent: string | null = (yield vcall(pm, "getActivityInfo", info, mkComponentName(this.$host.pkg, jclsNameOf(this)), 0)).parentActivityName;
+    const pm = yield vcall(this, "getPackageManager", "()Landroid/content/pm/PackageManager;"), info = "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;";
+    const parentOf = (activity: Record<string, string | null>) => activity[declaredField("android/content/pm/ActivityInfo", "parentActivityName")];
+    const parent = parentOf(yield vcall(pm, "getActivityInfo", info, mkComponentName(this.$host.pkg, jclsNameOf(this)), 0));
     if (!parent) return null;
     const target = mkComponentName(this.$host.pkg, parent);
     let grandparent: string | null;
-    try { grandparent = (yield vcall(pm, "getActivityInfo", info, target, 0)).parentActivityName; }
+    try { grandparent = parentOf(yield vcall(pm, "getActivityInfo", info, target, 0)); }
     catch (error) { if (rt.iof(error, "android/content/pm/PackageManager$NameNotFoundException")) return null; throw error; }
     if (!grandparent) return vcall(rt.link("android/content/Intent").ctor, "makeMainActivity", "(Landroid/content/ComponentName;)Landroid/content/Intent;", target);
     const intent: JIntent = rt.make("android/content/Intent");
@@ -563,6 +564,11 @@ rt.register({
     // it for services such as a Stub's PermissionEnforcer. There is no "android" package context
     // here; the application answers, and its permission checks answer as the system's would.
     "getSystemContext()Landroid/app/ContextImpl;": currentApplication,
+    "static getPackageManager()Landroid/content/pm/IPackageManager;": packageManagerService,
+    "static getPermissionManager()Landroid/permission/IPermissionManager;": permissionManagerService,
+    // ResourcesManager's, keyed by the APK: the application's own, or an installed package's
+    "getTopLevelResources(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Landroid/app/LoadedApk;Landroid/content/res/Configuration;)Landroid/content/res/Resources;":
+      (resDir: string, _splits: unknown, _overlays: unknown, _resources: unknown, _libraries: unknown, _apk: unknown, config: unknown) => packageResources(resDir, config),
   },
 });
 rt.register({
@@ -571,6 +577,7 @@ rt.register({
     "static getInitialApplication()Landroid/app/Application;": currentApplication,
     "static getInitialPackage()Ljava/lang/String;": () => appHost?.pkg ?? null,
     "static getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
+    "static getPackageManager()Landroid/content/pm/IPackageManager;": packageManagerService,
   },
 });
 
@@ -626,11 +633,6 @@ for (const [name, methods, statics] of [
   }],
   ["android/nfc/NfcManager", { "getDefaultAdapter()Landroid/nfc/NfcAdapter;": () => null }],
   ["android/nfc/NfcAdapter", { "static getDefaultAdapter(Landroid/content/Context;)Landroid/nfc/NfcAdapter;": () => null }],
-  // a single-user device with no managed profile: nothing to reach across
-  ["android/content/pm/CrossProfileApps", {
-    "getTargetUserProfiles()Ljava/util/List;": () => newArrayList(),
-    ...stubs(0, "canInteractAcrossProfiles()Z", "canRequestInteractAcrossProfiles()Z"),
-  }],
   ["android/media/AudioManager", {
     "getAllowedCapturePolicy()I": () => audioCapturePolicy,
     "setAllowedCapturePolicy(I)V": (policy: number) => {

@@ -18,10 +18,10 @@ import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
 import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
-import { setAppHost, type AppHost } from "../android/apphost";
+import { setAppHost, jclsNameOf, type AppHost } from "../android/apphost";
 import { loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk } from "../android/assetmanager";
-import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM } from "../android/pm";
+import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, resolveProvider } from "../android/pm";
 import { windowDim, windowParams } from "../android/window";
 import { absGravity, gravityApply } from "../android/gravity";
 import { JActivity, dispatchSplashExit } from "../android/app";
@@ -229,7 +229,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   if (typeof savedLocales === "string" && savedLocales) applyApplicationLocales(await localesFromTags(savedLocales));
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
-  setManifest(manifest, activities, providers);
+  setManifest(manifest);
   setViewTargetSdk(target);
   await setCanvasTargetSdk(target);
   setTargetSdkVersion(target);
@@ -278,9 +278,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
           const cls = pn.replace(/\./g, "/");
           if (rt.link(cls).stub) continue;
           const authority = attrStr(node, "authorities")?.split(";")[0];
-          if (!authority) continue;
-          const info = await vcallOn(mainThread, getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128) as Parameters<typeof attachProvider>[1] | null;
-          if (info) await attachProvider(application, info);
+          const component = authority ? resolveProvider(authority) : null;
+          if (component) await attachProvider(application, component);
         } catch (e) { console.warn("[provider]", pn, (e as { msg?: string })?.msg ?? e); }
       }
       await vcallOn(mainThread, application, "onCreate", "()V");
@@ -320,7 +319,7 @@ function deliverConfigChange(act: JActivity, bits: number): void {
   requestLayoutAll();
   // AOSP's resources take the change first, as ActivityThread applies it before the activity sees it
   void onMain(() => after(applyDeviceConfiguration(), (config) => {
-    if (activityHandlesConfig(act, bits)) return vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", config);
+    if (activityHandlesConfig(jclsNameOf(act), bits)) return vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", config);
     recreateActivity(act);
   })).catch(reportUncaught);
 }

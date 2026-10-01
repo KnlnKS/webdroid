@@ -7,7 +7,7 @@ import { mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os
 import { JParcel } from "./parcel";
 import { exportParcel, importParcel, withCallingIdentity, type ParcelData, type Caller } from "./binder";
 import { attachProvider, providerTransport, providerOperations } from "./contentresolver";
-import { getPM } from "./pm";
+import { resolveProvider, exported, componentProcess, authoritiesOf } from "./pm";
 import { appHost } from "./apphost";
 
 type Value = { kind: "uri"; value: string } | { kind: "value"; data: ParcelData }
@@ -48,10 +48,10 @@ rt.register({ name: "webdroid/RemoteContentProvider", ctor: JRemoteProvider, met
   },
 ])) });
 export function connectProviders(call: ProviderCall): void {
-  providerTransport.acquire = async (info) => {
+  providerTransport.acquire = async (component) => {
     rt.link("webdroid/RemoteContentProvider");
-    const provider = new JRemoteProvider(); provider.pkg = info.packageName; provider.process = info.processName ?? info.packageName;
-    provider.authority = info.authority.split(";")[0]; provider.call = call; return provider;
+    const provider = new JRemoteProvider(); provider.pkg = component.owner.pkg; provider.process = componentProcess(component);
+    provider.authority = authoritiesOf(component.node)[0]!; provider.call = call; return provider;
   };
 }
 let nextFileToken = 1;
@@ -67,11 +67,11 @@ export async function receiveProvider(request: ProviderRequest, caller: Caller):
     return { kind: "value", value: await encodeProviderValue(null) };
   }
   if (!Object.entries(providerOperations).some(([name, desc]) => name === request.name && desc === request.desc)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown provider operation");
-  const info = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", request.authority, 128);
+  const component = resolveProvider(request.authority);
   const host = appHost;
-  if (!info || !host?.application || info.packageName !== host.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Provider unavailable: " + request.authority);
-  if (!info.exported && info.applicationInfo.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "Provider is not exported");
-  const provider = await attachProvider(host.application, info);
+  if (!component || !host?.application || component.owner.pkg !== host.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Provider unavailable: " + request.authority);
+  if (!exported(component) && component.owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "Provider is not exported");
+  const provider = await attachProvider(host.application, component);
   const args = await Promise.all(request.args.map(value => decodeProviderValue(value)));
   return withCallingIdentity(caller, async () => {
     const value = await vcall(provider, request.name, request.desc, ...args);

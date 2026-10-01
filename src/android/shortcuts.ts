@@ -6,7 +6,7 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { hostStub } from "./binder";
-import { getPM } from "./pm";
+import { launcherActivity } from "./pm";
 
 const MAX_PER_ACTIVITY = 15, MAX_UPDATES_PER_INTERVAL = 10;
 const FLAG_DYNAMIC = 1, MATCH_DYNAMIC = 2, CLONE_REMOVE_FOR_CREATOR = 9;
@@ -20,10 +20,9 @@ const dynamicOf = (pkg: string) => {
 };
 const idOf = (si: JObj): Promise<string> => vcall(si, "getId", "()Ljava/lang/String;");
 async function mainActivity(pkg: string): Promise<JObj> {
-  const intent = await vcall(getPM(), "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
-  const component = intent && await vcall(intent, "getComponent", `()${CN}`);
-  if (!component) throw rt.mkThrowable("java/lang/IllegalStateException", "Launcher activity not found for package " + pkg);
-  return component;
+  const launcher = launcherActivity(pkg);
+  if (!launcher) throw rt.mkThrowable("java/lang/IllegalStateException", "Launcher activity not found for package " + pkg);
+  return newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, launcher.name);
 }
 /** ShortcutService.fixUpIncomingShortcutInfo: the publisher's own, complete, on an activity, as a copy it no longer holds */
 async function incoming(pkg: string, si: JObj | null, forUpdate = false): Promise<JObj> {

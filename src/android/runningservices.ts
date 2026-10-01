@@ -6,7 +6,7 @@ import { newObj, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang
 import { onMain, inMainJob, fnRunnable } from "./mainloop";
 import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
-import { getPM } from "./pm";
+import { resolveService, exported, componentPermission, componentProcess, checkPermission } from "./pm";
 import { binderTransport, exportBinder } from "./binder";
 import { startForegroundNotification, stopForegroundNotification } from "./notification";
 
@@ -156,17 +156,18 @@ function connectionDelivery(executor: unknown): (job: () => Promise<void>) => Pr
 }
 export async function svcBind(ctx: JContext, intent: JIntent, connection: unknown, flags: number, executor: unknown = null): Promise<number> {
   const deliver = connectionDelivery(executor);
-  const resolved = await vcall(getPM(), "resolveService", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0);
-  const info = resolved?.serviceInfo, owner = info && packages.get(info.packageName);
-  if (!owner || (!info.exported && owner.pkg !== ctx.$host.pkg)) {
+  const resolved = await resolveService(intent), owner = resolved?.owner;
+  if (!resolved || !owner || (!exported(resolved) && owner.pkg !== ctx.$host.pkg)) {
     if (!connections.has(connection)) failedConnections.add(connection);
     return 0;
   }
-  if (info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, ctx.$host.pkg) !== 0)
-    throw rt.mkThrowable("java/lang/SecurityException", "Service requires " + info.permission);
+  const permission = componentPermission(resolved), processName = componentProcess(resolved);
+  if (permission && await checkPermission(permission, ctx.$host.pkg) !== 0)
+    throw rt.mkThrowable("java/lang/SecurityException", "Service requires " + permission);
   if (connections.has(connection)) return 1;
   failedConnections.delete(connection);
-  const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || info.processName !== (PROCESS_NAME || ctx.$host.pkg);
+  const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || processName !== (PROCESS_NAME || ctx.$host.pkg);
+  const info = { name: resolved.name, processName };
   const bound: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   bound.component = info.name; bound.componentPkg = owner.pkg;
   const connect = () => {

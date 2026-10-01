@@ -7,7 +7,7 @@ import { resString, themeOf, JTheme, nativeTheme, nativeRes, type JAttrSet } fro
 import { newObj, scall, vcall, vcallOn, curThread, after, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
-import { getAppInfo, getPM } from "./pm";
+import { newPackageManager, loadedApplicationInfo } from "./pm";
 import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermission } from "./contentresolver";
 import type { JUri } from "./net";
 import { PROCESS_PID, PROCESS_UID } from "./os";
@@ -22,9 +22,11 @@ import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages, usesSdk } from "./packages";
+import { attr } from "./axml";
 import { hostedService } from "./binder";
 
 const privDir = (p: string) => { vfs.mkdir(p); return newFile(p); };
+const packageManagers = new WeakMap<JContext, JObj | Promise<JObj>>();
 
 export class JContext extends JObj {
   declare $host: AppHost;
@@ -34,7 +36,11 @@ export class JContext extends JObj {
 }
 /** AOSP's base context of the application, activities and created contexts; SDKs reflect on its
  *  fields (Phrase replaces mResources), so getResources answers from the field */
-class JContextImpl extends JContext { resources: unknown = null; }
+class JContextImpl extends JContext {
+  resources: unknown = null; packageInfo: unknown = null;
+  // ApplicationPackageManager reaches the process's ActivityThread through this field
+  get mainThread(): unknown { return scall("android/app/ActivityThread", "currentActivityThread", "()Landroid/app/ActivityThread;"); }
+}
 class JDisplayContext extends JContextImpl { display: unknown = null; }
 export function newContextImpl<T extends JContextImpl = JContextImpl>(host: AppHost, cls = "android/app/ContextImpl"): T {
   const context: T = rt.make(cls);
@@ -151,7 +157,6 @@ const SERVICE_CLASS: Record<string, string> = {
   servicediscovery: "android/net/nsd/NsdManager",
   bluetooth: "android/bluetooth/BluetoothManager",
   nfc: "android/nfc/NfcManager",
-  crossprofileapps: "android/content/pm/CrossProfileApps",
 };
 /** managers AOSP's bytecode serves over the services hosted behind binder, constructed as
  *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
@@ -185,6 +190,10 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     newObj("android/accounts/AccountManager", "(Landroid/content/Context;Landroid/accounts/IAccountManager;)V", ctx, await hostedService("account"))],
   permission_enforcer: ["android/os/PermissionEnforcer", (ctx) => newObj("android/os/PermissionEnforcer", "(Landroid/content/Context;)V", ctx)],
   shortcut: ["android/content/pm/ShortcutManager", (ctx) => newObj("android/content/pm/ShortcutManager", "(Landroid/content/Context;)V", ctx)],
+  crossprofileapps: ["android/content/pm/CrossProfileApps", async (ctx) =>
+    newObj("android/content/pm/CrossProfileApps", "(Landroid/content/Context;Landroid/content/pm/ICrossProfileApps;)V", ctx, await hostedService("crossprofileapps"))],
+  permission: ["android/permission/PermissionManager", (ctx) => newObj("android/permission/PermissionManager", "(Landroid/content/Context;)V", ctx)],
+  legacy_permission: ["android/permission/LegacyPermissionManager", () => newObj("android/permission/LegacyPermissionManager")],
   locale: ["android/app/LocaleManager", async (ctx) =>
     newObj("android/app/LocaleManager", "(Landroid/content/Context;Landroid/app/ILocaleManager;)V", ctx, await hostedService("locale"))],
   textservices: ["android/view/textservice/TextServicesManager", async (ctx) => scall("android/view/textservice/TextServicesManager",
@@ -295,11 +304,11 @@ const contextMethods: NativeSpec["methods"] = {
     if (!ready) {
       const caller = this.$host;
       ready = (async () => {
-        const info = await vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 128);
+        const app = record.application, themeResId = app ? attr(app, "theme")?.data ?? 0 : 0;
         const jresources = await loadResources(record.path, await javaConfiguration(deviceConfiguration()));
-        const theme = await newTheme(jresources, null, info.theme);
+        const theme = await newTheme(jresources, null, themeResId);
         const context = newContextImpl({ ...caller, pkg, res: nativeRes(jresources), zip: record.res.zip,
-          jresources, theme, themeResId: info.theme, iconRes: info.icon, splits: [] });
+          jresources, theme, themeResId, iconRes: app ? attr(app, "icon")?.data ?? 0 : 0, splits: [] });
         if (flags & 1) context.packageLoader = await newObj("webdroid/PackageClassLoader", "(Ljava/lang/String;)V", record.path);
         return context;
       })();
@@ -325,10 +334,18 @@ const contextMethods: NativeSpec["methods"] = {
   "createWindowContext(ILandroid/os/Bundle;)Landroid/content/Context;": driven(function* (this: JContext, type: number): Gen {
     return contextForDisplay(this, yield vcall(this, "getDisplay", "()Landroid/view/Display;"), type);
   }),
-  "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) {
-    return this.$host === appHost ? getAppInfo(this.$host) : vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", this.$host.pkg, 128);
+  "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) { return loadedApplicationInfo(this.$host.pkg); },
+  // ContextImpl's, one per base context, over IPackageManager
+  "getPackageManager()Landroid/content/pm/PackageManager;": function (this: JContext) {
+    let impl: JContext = this;
+    while (!(impl instanceof JContextImpl) && (impl as JContextWrapper).base) impl = (impl as JContextWrapper).base!;
+    const pm = packageManagers.get(impl);
+    if (pm) return pm;
+    const made = newPackageManager(impl);
+    packageManagers.set(impl, made);
+    return after(made, (manager) => { packageManagers.set(impl, manager); return manager; });
   },
-  "getPackageManager()Landroid/content/pm/PackageManager;": function () { return getPM(); },
+  "getUserId()I": () => 0,
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
   "getMainLooper()Landroid/os/Looper;": () => scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"),
   "getMainExecutor()Ljava/util/concurrent/Executor;": mainExecutor,
@@ -374,8 +391,8 @@ const contextMethods: NativeSpec["methods"] = {
     return vcall(this.$host.jresources, "getAssets", "()Landroid/content/res/AssetManager;");
   },
   "getClassLoader()Ljava/lang/ClassLoader;": function (this: JContext) { return this.packageLoader ?? systemClassLoader(); },
-  "getPackageResourcePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
-  "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
+  "getPackageResourcePath()Ljava/lang/String;": function (this: JContext) { return packages.get(this.$host.pkg)?.path ?? null; },
+  "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return packages.get(this.$host.pkg)?.path ?? null; },
   // AOSP's ensurePrivateDirExists: the directory exists once asked for (native code stat()s it)
   "getFilesDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/files`); },
   "getDataDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}`); },
@@ -491,7 +508,7 @@ const configurationContext = driven(function* (source: JContext, config: unknown
   return newContextImpl(Object.assign(Object.create(source.$host), { res: nativeRes(jresources), jresources, theme }));
 });
 class JWindowContext extends JContextWrapper { windowType = 0; windowManager: unknown = null; }
-rt.register({ name: "android/app/ContextImpl", ctor: JContextImpl, sup: "android/content/Context", fields: { mResources: "resources" }, methods: {
+rt.register({ name: "android/app/ContextImpl", ctor: JContextImpl, sup: "android/content/Context", fields: { mResources: "resources", mMainThread: "mainThread", mPackageInfo: "packageInfo" }, methods: {
   "getResources()Landroid/content/res/Resources;": function (this: JContextImpl) { return this.resources; },
 } });
 rt.register({ name: "webdroid/DisplayContext", ctor: JDisplayContext, sup: "android/app/ContextImpl", methods: {

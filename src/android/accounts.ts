@@ -24,10 +24,11 @@ type Authenticator = { type: string; pkg: string; cls: string; label: number; ic
 /** the manifests' authenticator services, each described by its <account-authenticator> resource */
 function authenticators(): Authenticator[] {
   const out: Authenticator[] = [];
-  for (const { node, meta, owner } of servicesMatching("android.accounts.AccountAuthenticator")) {
+  for (const { node, owner } of servicesMatching("android.accounts.AccountAuthenticator")) {
     if (!owner.enabled || attr(node, "enabled")?.data === 0) continue;
-    const id = meta.map.get("android.accounts.AccountAuthenticator");
-    const bytes = typeof id === "number" ? owner.res.fileOf(id)?.bytes : null;
+    const meta = node.children.find((md) => md.name === "meta-data" && attrStr(md, "name") === "android.accounts.AccountAuthenticator");
+    const id = meta && attr(meta, "resource")?.data;
+    const bytes = id ? owner.res.fileOf(id)?.bytes : null;
     if (!bytes) continue;
     const n = parseAXML(bytes), ref = (name: string) => attr(n, name)?.data ?? 0;
     out.push({

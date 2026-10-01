@@ -76,7 +76,7 @@ rt.register({
     CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0,
     PREVIEW_SDK_FINGERPRINT: "REL", DEVICE_INITIAL_SDK_INT: device.sdk, MEDIA_PERFORMANCE_CLASS: 0,
     // SDK_INT, plus one for a pre-release codename, which a release build has none of
-    RESOURCES_SDK_INT: device.sdk },
+    RESOURCES_SDK_INT: device.sdk, ACTIVE_CODENAMES: jarray([], "Ljava/lang/String;") },
 });
 // API 33's codes, in the name order ART's getFields() reports for a dex class; apps index
 // the array by SDK_INT to read the release codename
@@ -598,6 +598,12 @@ rt.register({
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
     ...heldByteWrites,
     "flush()V": pfdFlush,
+    // FileOutputStream's, which PackageInstaller.Session.fsync reaches: the written bytes, then the descriptor
+    "getFD()Ljava/io/FileDescriptor;": driven(function* (this: JPfdOut): Gen {
+      if (!this.pfd) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
+      yield pfdFlush.call(this);
+      return vcall(this.pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+    }),
     "close()V": driven(function* (this: JPfdOut): Gen { yield pfdFlush.call(this, true); const pfd = this.pfd; this.pfd = null; if (pfd) yield vcall(pfd, "close", "()V"); }),
   },
 });
@@ -617,7 +623,7 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
 } });
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
-const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
 export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   try {
     const e = yield navigator.storage?.estimate?.();

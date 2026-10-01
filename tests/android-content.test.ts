@@ -16,7 +16,8 @@ import { centralDir, zipTree } from "../src/jvm/natives/jzip";
 import { mergeInstall } from "../src/shell/install";
 import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
-import { getPM, registerPackage, FLAG_IS_GAME } from "../src/android/pm";
+import { registerPackage, FLAG_IS_GAME, field } from "../src/android/pm";
+import { hostedService } from "../src/android/binder";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
 import { Resources, JTheme, themeOf, rvString, newSV, nativeRes, AID } from "../src/android/res";
 import { newTheme } from "../src/android/resources";
@@ -291,19 +292,20 @@ describe("intent-filter-path", () => {
 describe("package-checksums", () => {
   class ChecksumListener extends JObj { checksums: unknown = null; }
   rt.register({
-    name: "test/ChecksumListener", ctor: ChecksumListener, ifaces: ["android/content/pm/PackageManager$OnChecksumsReadyListener"],
+    name: "test/ChecksumListener", ctor: ChecksumListener, ifaces: ["android/content/pm/IOnChecksumsReadyListener"],
     methods: { "onChecksumsReady(Ljava/util/List;)V": function (this: ChecksumListener, checksums: unknown) { this.checksums = checksums; } },
   });
   rt.linkNatives();
 
-  test("PackageManager reports installed APK checksums and signing certificates", async () => {
+  test("the package service reports installed APK checksums and signing certificates", async () => {
     const bytes = new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer());
     const archive = await parsePackageArchive(bytes);
     const path = "/data/app/checksum-test/base.apk";
     vfs.write(path, bytes);
     registerPackage(archive, path);
     const listener = new ChecksumListener();
-    await vcall(getPM(), "requestChecksums", "(Ljava/lang/String;ZILjava/util/List;Landroid/content/pm/PackageManager$OnChecksumsReadyListener;)V", archive.pkg, 0, 8, newArrayList(), listener);
+    const pms = await hostedService("package");
+    await vcall(pms, "requestPackageChecksums", "(Ljava/lang/String;ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V", archive.pkg, 0, 0, 8, newArrayList(), listener, 0);
     const checksums = await toJsArray(listener.checksums);
     expect(checksums).toHaveLength(1);
     expect(await vcall(checksums[0], "getSplitName", "()Ljava/lang/String;")).toBeNull();
@@ -312,7 +314,7 @@ describe("package-checksums", () => {
     const cert = archive.certificates[0];
     const hash = new Int8Array(await crypto.subtle.digest("SHA-256", cert.slice()));
     const hasCertificate = (bytes: Int8Array, type: number) =>
-      vcall(getPM(), "hasSigningCertificate", "(Ljava/lang/String;[BI)Z", archive.pkg, bytes, type);
+      vcall(pms, "hasSigningCertificate", "(Ljava/lang/String;[BI)Z", archive.pkg, bytes, type);
     expect(await hasCertificate(new Int8Array(cert), 0)).toBe(1);
     expect(await hasCertificate(hash, 1)).toBe(1);
     hash[0] ^= 1;
@@ -321,10 +323,33 @@ describe("package-checksums", () => {
   });
 });
 
+describe("package-installer", () => {
+  rt.linkNatives();
+
+  test("a session stages what AOSP's Session writes, and abandoning it drops the file", async () => {
+    const installer = await vcall(await hostedService("package"), "getPackageInstaller", "()Landroid/content/pm/IPackageInstaller;");
+    const params = await newObj("android/content/pm/PackageInstaller$SessionParams", "(I)V", 1);
+    const id = await vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, "test.installer", null, 0);
+    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V",
+      await vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id));
+    const out = await vcall(session, "openWrite", "(Ljava/lang/String;JJ)Ljava/io/OutputStream;", "base.apk", 0n, -1n);
+    await vcall(out, "write", "([B)V", Int8Array.of(1, 2, 3));
+    await vcall(session, "fsync", "(Ljava/io/OutputStream;)V", out);
+    await vcall(out, "close", "()V");
+    expect(await vcall(session, "getNames", "()[Ljava/lang/String;")).toEqual(["base.apk"]);
+    expect(vfs.read(`/data/app/vmdl${id}.tmp/base.apk`)).toEqual(Uint8Array.of(1, 2, 3));
+    const info = await vcall(installer, "getSessionInfo", "(I)Landroid/content/pm/PackageInstaller$SessionInfo;", id);
+    expect(await vcall(info, "getInstallerPackageName", "()Ljava/lang/String;")).toBe("test.installer");
+    await vcall(session, "abandon", "()V");
+    expect(vfs.read(`/data/app/vmdl${id}.tmp/base.apk`)).toBeNull();
+    expect(await vcall(installer, "getSessionInfo", "(I)Landroid/content/pm/PackageInstaller$SessionInfo;", id)).toBeNull();
+  });
+});
+
 describe("package-game-info", () => {
   rt.linkNatives();
 
-  test("installed game metadata survives the PackageManager ApplicationInfo path", async () => {
+  test("installed game metadata survives the package service's ApplicationInfo", async () => {
     const pkg = "test.game.info";
     const root: XmlNode = { name: "manifest", attrs: [{ name: "package", str: pkg, ns: "", resId: 0, type: TV.STRING, data: 0 }], children: [
       { name: "application", attrs: [
@@ -336,8 +361,9 @@ describe("package-game-info", () => {
     record.system = true;
     packages.set(pkg, record);
     try {
-      const info = await vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
-      expect([info.category, info.flags & (FLAG_IS_GAME | 1)]).toEqual([0, FLAG_IS_GAME | 1]);
+      const info = await vcall(await hostedService("package"), "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, 0n, 0);
+      const APP = "android/content/pm/ApplicationInfo";
+      expect([field(info, APP, "category"), field<number>(info, APP, "flags") & (FLAG_IS_GAME | 1)]).toEqual([0, FLAG_IS_GAME | 1]);
     } finally { packages.delete(pkg); }
   });
 });
@@ -355,15 +381,16 @@ describe("package-permissions", () => {
     const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
     packages.set(pkg, record); signaturePermissions.add(denied);
     try {
-      const info = await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, 0x1000);
-      expect([...info.requestedPermissions]).toEqual(["android.permission.INTERNET", denied]);
-      expect([...info.requestedPermissionsFlags]).toEqual([3, 1]);
+      const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
+      const packageInfo = (flags: bigint) => vcall(pms, "getPackageInfo", "(Ljava/lang/String;JI)Landroid/content/pm/PackageInfo;", pkg, flags, 0);
+      const info = await packageInfo(0x1000n);
+      expect([...field<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
+      expect([...field<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
       record.grants.add(denied);
-      const granted = await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, 0x1000);
-      expect([...granted.requestedPermissionsFlags]).toEqual([3, 3]);
-      const omitted = await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, 0);
-      expect(omitted.requestedPermissions).toBeNull();
-      expect(omitted.requestedPermissionsFlags).toBeNull();
+      expect([...field<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
+      const omitted = await packageInfo(0n);
+      expect(field(omitted, PI, "requestedPermissions")).toBeNull();
+      expect(field(omitted, PI, "requestedPermissionsFlags")).toBeNull();
     } finally { packages.delete(pkg); signaturePermissions.delete(denied); }
   });
 });

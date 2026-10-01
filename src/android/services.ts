@@ -13,7 +13,7 @@ import { type JComponentName, type JIntent, mkComponentName, registerSystemActiv
 import type { JActivity } from "./app";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught, bundleBox } from "./os";
 import { runningServices } from "./runningservices";
-import { JConfigurationInfo, getPM } from "./pm";
+import { GL_ES_VERSION, protectionLevel } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { hostStub } from "./binder";
 import { packages } from "./packages";
@@ -120,11 +120,11 @@ rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends J
       return task;
     })));
   },
-  "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": () => {
-    rt.link("android/content/pm/ConfigurationInfo");
-    const info = new JConfigurationInfo(), config = deviceConfiguration();
-    info.reqTouchScreen = config.touchscreen; info.reqKeyboardType = config.keyboard; info.reqNavigation = config.navigation;
-    info.reqGlEsVersion = 0x30000; return info;
+  "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": async () => {
+    const info: JObj = await newObj("android/content/pm/ConfigurationInfo"), config = deviceConfiguration(), fields = info as unknown as Record<string, number>;
+    const values = { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard, reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION };
+    for (const [name, value] of Object.entries(values)) fields[declaredField("android/content/pm/ConfigurationInfo", name)] = value;
+    return info;
   },
 } });
 
@@ -378,8 +378,9 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
     if (await scall(AOM, "shouldForceCollectNoteForOp", "(I)Z", code)) return 1;
     const permission: string | null = await scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
     if (permission === null) return 0;
-    const info = await vcall(getPM(), "getPermissionInfo", "(Ljava/lang/String;I)Landroid/content/pm/PermissionInfo;", permission, 0);
-    return +(await vcall(info, "getProtection", "()I") === 1 || (await vcall(info, "getProtectionFlags", "()I") & 0x40) !== 0);
+    // PermissionInfo's PROTECTION_DANGEROUS, or PROTECTION_FLAG_APPOP; an undeclared permission is neither
+    const level = protectionLevel(permission) ?? 0;
+    return +((level & 15) === 1 || (level & 0x40) !== 0);
   },
   ...noops("finishOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;)V",
     "finishOperationForDevice(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;I)V",

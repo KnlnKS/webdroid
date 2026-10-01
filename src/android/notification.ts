@@ -15,7 +15,6 @@ import { hostStub, callingIdentity, exportParcel, importParcel, type ParcelData 
 import { JParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
-import { getPM } from "./pm";
 import { appHost } from "./apphost";
 import { permissionGranted, grantPrompted } from "./context";
 
@@ -118,8 +117,10 @@ function hasPermission(uid: number): boolean {
   const pkg = packageOf(uid);
   return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
 }
-const appInfo = (pkg: string): Promise<JObj> =>
-  vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
+/** the system's view of packages: the application's PackageManager over the hosted service */
+const getPM = async (): Promise<JObj> => vcall(appHost!.application, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+const appInfo = async (pkg: string): Promise<JObj> =>
+  vcall(await getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
 
 // ── PreferencesHelper: a package's channels, groups and delegate
 const policyFile = (pkg: string) => "android:notification-policy:" + pkg;
@@ -357,7 +358,7 @@ async function summaryLook(pkg: string, members: Ungrouped[]): Promise<{ icon: J
   return { icon: icon ?? await monochromeAppIcon(pkg), color, visibility };
 }
 async function monochromeAppIcon(pkg: string): Promise<JObj> {
-  const drawable = await vcall(getPM(), "getApplicationIcon", "(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;", pkg);
+  const drawable = await vcall(await getPM(), "getApplicationIcon", "(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;", pkg);
   if (rt.iof(drawable, "android/graphics/drawable/AdaptiveIconDrawable") && await vcall(drawable, "getMonochrome", "()Landroid/graphics/drawable/Drawable;")) {
     const inset: number = await scall("android/graphics/drawable/AdaptiveIconDrawable", "getExtraInsetFraction", "()F");
     return scall("android/graphics/drawable/Icon", "createWithResourceAdaptiveDrawable", "(Ljava/lang/String;IZF)Landroid/graphics/drawable/Icon;",
@@ -415,7 +416,7 @@ async function addAutoGroupSummary(trigger: PostedNotification, flags: number, m
   const extras = get(summary, N, "extras");
   await vcall(extras, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "android.appInfo",
     await vcall(get(triggering, N, "extras"), "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "android.appInfo"));
-  const launch = await vcall(getPM(), "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;", trigger.pkg);
+  const launch = await vcall(await getPM(), "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;", trigger.pkg);
   if (launch && context) set(summary, N, "contentIntent", await scall("android/app/PendingIntent", "getActivity",
     "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 0, launch, 0x4000000));
   const record: PostedNotification = {

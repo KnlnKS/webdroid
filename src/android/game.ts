@@ -4,13 +4,14 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { appHost } from "./apphost";
 import { hostStub } from "./binder";
-import { FLAG_IS_GAME, getAppInfo } from "./pm";
+import { packages } from "./packages";
+import { attr } from "./axml";
 
-const GAME_MODE_UNSUPPORTED = 0, GAME_MODE_STANDARD = 1;
+const GAME_MODE_UNSUPPORTED = 0, GAME_MODE_STANDARD = 1, CATEGORY_GAME = 0;
 function isGame(pkg: string | null): boolean {
   if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("java/lang/SecurityException", "Access denied, requires android.permission.MANAGE_GAME_MODE");
-  const info = getAppInfo(appHost);
-  return info.category === 0 || !!(info.flags & FLAG_IS_GAME);
+  const app = packages.get(pkg)?.application;
+  return !!app && (attr(app, "appCategory")?.data === CATEGORY_GAME || !!attr(app, "isGame")?.data);
 }
 rt.register({ name: "webdroid/GameManagerService", ctor: class extends JObj {}, sup: "android/app/IGameManagerService$Stub", methods: {
   "getGameMode(Ljava/lang/String;I)I": (pkg: string | null) => isGame(pkg) ? GAME_MODE_STANDARD : GAME_MODE_UNSUPPORTED,

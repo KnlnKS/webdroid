@@ -10,7 +10,7 @@ import { JBinder, INTERFACE_TRANSACTION } from "./binder";
 import { JParcel, readDouble, readInt, readString, writeDouble, writeInt, writeString } from "./parcel";
 import { parcelCreator } from "./parcelable";
 import { type JBundle, PROCESS_PID, PROCESS_UID } from "./os";
-import { getPM } from "./pm";
+import { resolveService } from "./pm";
 import { bindAsSystem } from "./runningservices";
 import type { JIntent, JComponentName } from "./intent";
 import type { JContext } from "./context";
@@ -174,8 +174,8 @@ const PROVIDER_ACTION = "com.android.location.service.GeocodeProvider";
 let providerBinder: Promise<JObj> | null = null;
 async function providerComponent(): Promise<JComponentName | null> {
   const intent: JIntent = await newObj("android/content/Intent", "(Ljava/lang/String;)V", PROVIDER_ACTION);
-  const [first] = await toJsArray(await vcall(getPM(), "queryIntentServices", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 0)) as { serviceInfo: { packageName: string; name: string } }[];
-  return first ? await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", first.serviceInfo.packageName, first.serviceInfo.name) : null;
+  const first = await resolveService(intent);
+  return first ? await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", first.owner.pkg, first.name) : null;
 }
 /** the provider's binder, bound once for the process as the platform keeps it bound */
 function provider(): Promise<JObj> {

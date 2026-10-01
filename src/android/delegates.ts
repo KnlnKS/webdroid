@@ -660,6 +660,9 @@ const deviceProperties: Record<string, () => string> = {
   "persist.sys.timezone": () => device.timezone,
   // the reference AVD's heap limits, which ActivityManager reports as the memory classes
   "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
+  // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
+  // mode) rather than over a FileBridge socket, which needs a server thread there is none of
+  "fw.revocable_fd": () => "true",
 };
 /** android_os_SystemProperties.cpp's readers: an absent or unparsable value is the default */
 const propValue = (key: string) => deviceProperties[key]?.() ?? null;

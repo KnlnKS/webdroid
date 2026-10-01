@@ -1,4 +1,4 @@
-import { JObj, rt, type Gen } from "../jvm/runtime";
+import { JObj, rt, declaredField, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JGestureDetector, JSimpleGestureListener, minimumScalingSpan } from "./compat";
 import { motionOf, eventTimeMs, eventX, eventY, AXIS_X, AXIS_Y } from "./motionevent";
@@ -21,7 +21,8 @@ class JScaleGestureDetector extends JObj {
     this.listener = listener;
     this.spanSlop = device.touchSlop * 2; this.minSpan = minimumScalingSpan();
     const info = yield vcall(context, "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;");
-    this.setQuick(info.targetSdkVersion > 18); this.stylus = info.targetSdkVersion > 22;
+    const target: number = info[declaredField("android/content/pm/ApplicationInfo", "targetSdkVersion")];
+    this.setQuick(target > 18); this.stylus = target > 22;
   }
   setQuick(enabled: boolean) {
     this.quick = enabled;

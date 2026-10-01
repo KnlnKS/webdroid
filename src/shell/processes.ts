@@ -22,8 +22,7 @@ import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
 import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
 import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
-import { getPM, JResolveInfo } from "../android/pm";
-import { toJsArray } from "../jvm/natives/jcoll";
+import { checkPermission, queryReceivers, exported, componentPermission, componentProcess } from "../android/pm";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
@@ -39,7 +38,7 @@ import { packedArchives, type PackedArchive } from "./packedarchive";
 import { guestSleep } from "../guest-clock";
 
 const permissionDenied = async (permission: string, pkg: string) =>
-  await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, pkg) !== 0;
+  await checkPermission(permission, pkg) !== 0;
 const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
 type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind: "unbind"; key: string }
@@ -377,15 +376,13 @@ class ProcessBroker {
   }
   async broadcast(pid: number | null, data: IntentData, permission: string | null, ordered: boolean): Promise<void> {
     const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data, false);
-    const list = await vcall(getPM(), "queryBroadcastReceivers", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 0);
     const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
-    for (const resolved of await toJsArray(list)) {
-      if (!(resolved instanceof JResolveInfo)) continue;
-      const info = resolved.activityInfo;
+    for (const receiver of await queryReceivers(intent)) {
+      const pkg = receiver.owner.pkg, permission = componentPermission(receiver);
       // the platform package's receivers are system_server's, whose part the shell plays itself
-      if (!info || info.packageName === "android" || caller && !info.exported && info.packageName !== caller.pkg) continue;
-      if (caller && info.permission && await permissionDenied(info.permission, caller.pkg)) continue;
-      targets.push({ entry: this.connect(info.packageName, info.processName), component: info.name, priority: resolved.priority ?? 0 });
+      if (pkg === "android" || caller && !exported(receiver) && pkg !== caller.pkg) continue;
+      if (caller && permission && await permissionDenied(permission, caller.pkg)) continue;
+      targets.push({ entry: this.connect(pkg, componentProcess(receiver)), component: receiver.name, priority: receiver.priority });
     }
     targets.sort((a, b) => b.priority - a.priority);
     const bundle = new JParcel(); await vcall(bundle, "writeBundle", "(Landroid/os/Bundle;)V", null);

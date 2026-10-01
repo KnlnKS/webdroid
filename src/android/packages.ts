@@ -1,5 +1,5 @@
-import { attr, attrStr, type XmlNode } from "./axml";
-import type { Resources } from "./res";
+import { attr, attrStr, TV, type XmlNode } from "./axml";
+import { normRV, type Resources } from "./res";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 export const qualifyComponent = (name: string, pkg: string): string => {
@@ -52,7 +52,14 @@ export class PackageRecord {
     return name.startsWith(":") ? this.pkg + name : name;
   }
 
-  get enabled(): boolean { return !this.application || attr(this.application, "enabled")?.data !== 0; }
+  /** a boolean manifest attribute, read through this package's resources when it names one (@bool/...) */
+  flag(node: XmlNode | null | undefined, name: string, def: boolean): boolean {
+    const value = node ? attr(node, name) : undefined;
+    if (!value) return def;
+    return (value.type === TV.REFERENCE ? this.res.resolveRefs(normRV({ t: value.type, d: value.data })).d : value.data) !== 0;
+  }
+  get enabled(): boolean { return this.flag(this.application, "enabled", true); }
+  get sdk(): { min: number; target: number } { return usesSdk(this.root); }
   async visibleCertificates(): Promise<Uint8Array[]> { return this.compatibilityCertificates ?? this.certificates(); }
 }
 
@@ -67,6 +74,31 @@ try {
     uids.set(entry[0], entry[1]); nextUid = Math.max(nextUid, entry[1] + 1);
   }
 } catch { /* storage can be unavailable */ }
+
+
+/** PackageManager component enabled states an app set (DEFAULT until then); part of the
+ *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
+type Component = { pkg: string; cls: string };
+export const componentState = {
+  key: (c: Component) => "wd:install:" + c.pkg + ":component:" + c.cls,
+  get(c: Component): number { return Number(globalThis.localStorage?.getItem(this.key(c)) ?? 0); },
+  set(c: Component, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
+};
+
+/**
+ * When this package was installed, epoch ms. An app's data directory IS its installation
+ * here, so the first boot that has no persisted state is the install, and the timestamp is
+ * kept with that state (wd.reset wipes it along with the rest of the "install").
+ */
+export function installTime(pkg: string): bigint {
+  const key = "wd:install:" + pkg;
+  let ms = Number(globalThis.localStorage?.getItem(key) ?? 0);
+  if (!ms) {
+    ms = Date.now();
+    try { globalThis.localStorage?.setItem(key, String(ms)); } catch { /* private mode */ }
+  }
+  return BigInt(ms);
+}
 
 export function packageUid(pkg: string): number {
   const old = uids.get(pkg);

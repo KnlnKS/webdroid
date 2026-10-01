@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { getPM } from "../src/android/pm";
+import { hostedService } from "../src/android/binder";
 import { packages, type PackageRecord } from "../src/android/packages";
 import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { rt } from "../src/jvm/runtime";
@@ -10,12 +10,12 @@ rt.linkNatives();
 const messageDigest = (algorithm: string) => scall("java/security/MessageDigest", "getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;", algorithm);
 
 describe("android-signing-certificate", () => {
-  test("PackageManager compares installed signing certificates in raw and SHA-256 form", async () => {
+  test("the package service compares installed signing certificates in raw and SHA-256 form", async () => {
     const pkg = "org.webdroid.test.signing", uid = 77124;
     const certificate = new Uint8Array([48, 3, 2, 1, 5]);
     packages.set(pkg, { uid, visibleCertificates: async () => [certificate] } as PackageRecord);
     try {
-      const pm = getPM();
+      const pm = await hostedService("package");
       const has = (bytes: Int8Array, type: number) =>
         vcall(pm, "hasSigningCertificate", "(Ljava/lang/String;[BI)Z", pkg, bytes, type);
       const digest = new Int8Array(await crypto.subtle.digest("SHA-256", certificate));

@@ -12,24 +12,24 @@ import { mkAssetFd, rawResourceBytes } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
 import { mkCursor, contentValues } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { getPM } from "./pm";
+import { resolveProvider, javaProviderInfo, componentProcess, authoritiesOf, type Component } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { packages } from "./packages";
 import { isMediaUri, mediaDelete, mediaInsert, mediaMime, mediaPath, mediaQuery, mediaUpdate } from "./mediastore";
 
-type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
-export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
+export const providerTransport: { acquire: (provider: Component) => Promise<unknown> } = { acquire: async () => null };
 const providers = new WeakMap<AppHost, Map<string, Promise<unknown>>>();
-export function attachProvider(ctx: JContext, info: ProviderInfo): Promise<unknown> {
+/** ActivityThread.installProvider: the provider's instance in this process, attached to its ProviderInfo */
+export function attachProvider(ctx: JContext, component: Component): Promise<unknown> {
   let local = providers.get(ctx.$host);
   if (!local) providers.set(ctx.$host, local = new Map());
-  const authorities = info.authority.split(";");
+  const authorities = authoritiesOf(component.node);
   const existing = local.get(authorities[0]);
   if (existing) return existing;
   const create = async () => {
-    const provider = await callOn(mainThread, () => newObj(info.name.replace(/\./g, "/")));
-    await vcallOn(mainThread, provider, "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V", ctx, info);
+    const provider = await callOn(mainThread, () => newObj(component.name.replace(/\./g, "/")));
+    await vcallOn(mainThread, provider, "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V", ctx, await javaProviderInfo(component));
     return provider;
   };
   const ready = (inMainJob() ? create() : onMain(create)).catch((error) => {
@@ -44,10 +44,10 @@ async function contentProvider(uri: JUri): Promise<unknown> {
   if (!authority || !appHost?.application) return null;
   const existing = providers.get(appHost)?.get(authority);
   if (existing) return existing;
-  const info: ProviderInfo | null = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128);
-  if (!info) return null;
-  return info.packageName === appHost.pkg && (!info.processName || info.processName === (PROCESS_NAME || appHost.pkg))
-    ? attachProvider(appHost.application, info) : providerTransport.acquire(info);
+  const component = resolveProvider(authority);
+  if (!component) return null;
+  return component.owner.pkg === appHost.pkg && componentProcess(component) === (PROCESS_NAME || appHost.pkg)
+    ? attachProvider(appHost.application, component) : providerTransport.acquire(component);
 }
 
 export const providerOperations = {

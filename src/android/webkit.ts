@@ -1,9 +1,9 @@
 // WebViews occupy DOM frames above the canvas. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc, jmethod } from "../jvm/abi";
-import { vcall, callOn, mkEnumSet, JThread, type JSimpleEnum } from "../jvm/natives/jlang";
+import { vcall, callOn, mkEnumSet, newObj, JThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { JViewGroup, initViewFromCtx, defaultSize, rootOf, type JView } from "./view";
@@ -715,12 +715,11 @@ rt.register({
       "static disableWebView()V"),
     ...stubs(0, "isPrivateBrowsingEnabled()Z"),
     ...stubs(1, "requestFocusFromTouch()Z"),
-    "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": () => {
-      const pi = inst<{ packageName: string; versionName: string; applicationInfo: unknown }>("android/content/pm/PackageInfo");
-      const ai = inst<{ packageName: string; processName: string; flags: number }>("android/content/pm/ApplicationInfo");
-      pi.packageName = ai.packageName = ai.processName = WEBVIEW_PACKAGE;
-      ai.flags = 1; // FLAG_SYSTEM
-      pi.versionName = WEBVIEW_VERSION; pi.applicationInfo = ai;
+    "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": async () => {
+      const pi: Record<string, unknown> = await newObj("android/content/pm/PackageInfo"), ai: Record<string, unknown> = await newObj("android/content/pm/ApplicationInfo");
+      const set = (o: Record<string, unknown>, cls: string, values: Record<string, unknown>) => { for (const k in values) o[declaredField(cls, k)] = values[k]; };
+      set(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
+      set(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
       return pi;
     },
     "static getWebViewClassLoader()Ljava/lang/ClassLoader;": () => rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")](),

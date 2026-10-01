@@ -1,5 +1,5 @@
 import { parcelledClip } from "./clipboard";
-import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
+import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
 import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
@@ -201,6 +201,7 @@ const intentMethods: NativeSpec["methods"] = {
   "addFlags(I)Landroid/content/Intent;": function (this: JIntent, f: number) { this.flags |= f; return this; },
   "setFlags(I)Landroid/content/Intent;": function (this: JIntent, f: number) { this.flags = f; return this; },
   "addCategory(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: string) { this.categories.add(c); return this; },
+  "removeCategory(Ljava/lang/String;)V": function (this: JIntent, c: string) { this.categories.delete(c); },
   "hasCategory(Ljava/lang/String;)Z": function (this: JIntent, c: string) { return this.categories.has(c) ? 1 : 0; },
   "fillIn(Landroid/content/Intent;I)I": function (this: JIntent, other: JIntent, flags: number) {
     let changed = 0;
@@ -273,11 +274,12 @@ const intentMethods: NativeSpec["methods"] = {
   "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": driven(function* (this: JIntent, pm: unknown): Gen {
     if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);
     const resolved = yield vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
-    return resolved?.activityInfo ? mkComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
+    const info = resolved && resolved[declaredField("android/content/pm/ResolveInfo", "activityInfo")];
+    return info ? mkComponentName(info[declaredField("android/content/pm/PackageItemInfo", "packageName")], info[declaredField("android/content/pm/PackageItemInfo", "name")]) : null;
   }),
   "resolveActivityInfo(Landroid/content/pm/PackageManager;I)Landroid/content/pm/ActivityInfo;": driven(function* (this: JIntent, pm: unknown, flags: number): Gen {
     const resolved = yield vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, flags | 0x10000);
-    return resolved?.activityInfo ?? null;
+    return resolved?.[declaredField("android/content/pm/ResolveInfo", "activityInfo")] ?? null;
   }),
   "toString()Ljava/lang/String;": function (this: JIntent) {
     return `Intent{act=${this.action} cmp=${this.component}}`;
@@ -348,14 +350,6 @@ function readComponent(p: JParcel): JComponentName | null {
   const cls = readString(p); if (cls === null) throw rt.mkThrowable("java/lang/NullPointerException", "class name");
   return mkComponentName(pkg, cls);
 }
-/** PackageManager component enabled states an app set (DEFAULT until then); part of the
- *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
-type Component = { pkg: string; cls: string };
-export const componentState = {
-  key: (c: Component) => "wd:install:" + c.pkg + ":component:" + c.cls,
-  get(c: Component): number { return Number(globalThis.localStorage?.getItem(this.key(c)) ?? 0); },
-  set(c: Component, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
-};
 export function mkComponentName(pkg: string, cls: string): JComponentName {
   rt.link("android/content/ComponentName");
   const c = new JComponentName();
@@ -458,18 +452,18 @@ export async function launchIntent(host: AppHost, intent: JIntent, result?: Acti
   };
   const system = systemActivity(intent, false);
   if (system) return runSystem(system);
-  const { getPM } = await import("./pm");
-  const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
-  if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
-  const info = resolved.activityInfo;
+  const pm = await import("./pm");
+  const resolved = await pm.resolveActivity(intent);
+  if (!resolved) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
   // a data-scoped system activity (the browser) answers only where no installed activity does
-  if (info.packageName === "android" && info.name === SYSTEM_ACTIVITY) return runSystem(systemActivity(intent)!);
-  if (info.packageName !== sender && (!info.exported || info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, sender) !== 0))
-    throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + info.name);
-  const component = info.name.replace(/\./g, "/");
-  if (info.packageName !== host.pkg || info.processName !== (PROCESS_NAME || host.pkg)) {
-    if (!activityTransport.launch) throw rt.mkThrowable("android/content/ActivityNotFoundException", "Activity process unavailable: " + info.processName);
-    return activityTransport.launch(info.packageName, info.processName, component, intent, result);
+  if (resolved === "system") return runSystem(systemActivity(intent)!);
+  const pkg = resolved.owner.pkg, permission = pm.componentPermission(resolved), processName = pm.componentProcess(resolved);
+  if (pkg !== sender && (!pm.exported(resolved) || permission && await pm.checkPermission(permission, sender) !== 0))
+    throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + resolved.name);
+  const component = resolved.name.replace(/\./g, "/");
+  if (pkg !== host.pkg || processName !== (PROCESS_NAME || host.pkg)) {
+    if (!activityTransport.launch) throw rt.mkThrowable("android/content/ActivityNotFoundException", "Activity process unavailable: " + processName);
+    return activityTransport.launch(pkg, processName, component, intent, result);
   }
   const caller = result && result.code >= 0 ? await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;") as JComponentName : null;
   // ActivityThread delivers the launch after the caller's current lifecycle callback returns.
@@ -494,7 +488,7 @@ export function registerSystemActivity(action: string, run: SystemHandler, schem
 /** The platform package answers for them, as ResolverActivity and DocumentsUI do on a device, so
  *  an intent resolved to that component and started explicitly reaches the same handler. */
 export const SYSTEM_ACTIVITY = "com.android.internal.app.ResolverActivity";
-export function systemActivity(intent: JIntent | null, scoped = true): SystemHandler | null {
+export function systemActivity(intent: Pick<JIntent, "action" | "dataUri" | "component" | "componentPkg"> | null, scoped = true): SystemHandler | null {
   if (!intent || intent.component && (intent.componentPkg !== "android" || intent.component !== SYSTEM_ACTIVITY)) return null;
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(intent.dataUri ?? "")?.[1].toLowerCase() ?? "";
   return systemActivities.get(intent.action ?? "")?.find((h) => h.schemes ? scoped && h.schemes.includes(scheme) : true)?.run ?? null;

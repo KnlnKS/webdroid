@@ -4,10 +4,13 @@ import { mkIter, toJsArray } from "../jvm/natives/jcoll";
 import type { JPersistableBundle } from "./os";
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { attr, attrStr, TV, type XmlNode } from "./axml";
-import type { JIntent } from "./intent";
+import { jarray } from "../jvm/abi";
 import { type JUri, hostPort, mkUri, uriDecode, uriParts } from "./net";
 import { appHost } from "./apphost";
 import { resString } from "./res";
+
+/** what a manifest filter matches of an intent: its action, categories, data and resolved type */
+export interface IntentFields { action: string | null; categories: Iterable<string>; dataUri: string | null; typeStr: string | null }
 
 function value(node: XmlNode, name: string): string | null {
   const a = attr(node, name);
@@ -92,7 +95,7 @@ function patterns(data: XmlNode[], name: string, text: string): boolean | null {
   return present ? false : null;
 }
 
-export function matchesIntentFilter(filter: XmlNode, intent: JIntent, defaultOnly: boolean): boolean {
+export function matchesIntentFilter(filter: XmlNode, intent: IntentFields, defaultOnly: boolean): boolean {
   const has = (kind: string, name: string) => filter.children.some((n) => n.name === kind && value(n, "name") === name);
   if (intent.action && !has("action", intent.action)) return false;
   if (defaultOnly && !has("category", "android.intent.category.DEFAULT")) return false;
@@ -243,6 +246,24 @@ rt.register({
     "addDataPath(Ljava/lang/String;I)V": function (this: JIntentFilter, path: string, type: number) {
       rt.link("android/os/PatternMatcher"); this.paths.push(Object.assign(new JPatternMatcher(), { path, type }));
     },
+    "addDataSchemeSpecificPart(Ljava/lang/String;I)V": function (this: JIntentFilter, ssp: string, type: number) {
+      rt.link("android/os/PatternMatcher"); this.ssp.push(Object.assign(new JPatternMatcher(), { path: ssp, type }));
+    },
+    "addMimeGroup(Ljava/lang/String;)V": function (this: JIntentFilter, group: string) { if (!this.mimeGroups.includes(group)) this.mimeGroups.push(group); },
+    "countMimeGroups()I": function (this: JIntentFilter) { return this.mimeGroups.length; },
+    "getMimeGroup(I)Ljava/lang/String;": function (this: JIntentFilter, i: number) { return this.mimeGroups[i] ?? null; },
+    "setAutoVerify(Z)V": function (this: JIntentFilter, verify: number) { this.autoVerify = verify; },
+    "setVisibilityToInstantApp(I)V": function (this: JIntentFilter, visibility: number) { this.visibility = visibility; },
+    "isVisibleToInstantApp()Z": function (this: JIntentFilter) { return this.visibility !== 0 ? 1 : 0; },
+    "isExplicitlyVisibleToInstantApp()Z": function (this: JIntentFilter) { return this.visibility === 1 ? 1 : 0; },
+    "isImplicitlyVisibleToInstantApp()Z": function (this: JIntentFilter) { return this.visibility === 2 ? 1 : 0; },
+    "getCategory(I)Ljava/lang/String;": function (this: JIntentFilter, i: number) { return this.categories[i] ?? null; },
+    "getDataScheme(I)Ljava/lang/String;": function (this: JIntentFilter, i: number) { return this.schemes[i] ?? null; },
+    "hasDataScheme(Ljava/lang/String;)Z": function (this: JIntentFilter, scheme: string) { return this.schemes.includes(scheme) ? 1 : 0; },
+    "getDataType(I)Ljava/lang/String;": function (this: JIntentFilter, i: number) { return this.types[i] ?? null; },
+    "getHosts()[Ljava/lang/String;": function (this: JIntentFilter) { return jarray(this.authorities.map((a) => a.host), "Ljava/lang/String;"); },
+    "setOrder(I)V": function (this: JIntentFilter, order: number) { this.order = order; },
+    "getOrder()I": function (this: JIntentFilter) { return this.order; },
     "countDataPaths()I": function (this: JIntentFilter) { return this.paths.length; },
     "getDataPath(I)Landroid/os/PatternMatcher;": function (this: JIntentFilter, index: number) { if (index < 0 || index >= this.paths.length) rt.aio(index, this.paths.length); return this.paths[index]; },
     "hasDataPath(Ljava/lang/String;)Z": function (this: JIntentFilter, path: string) { return +this.paths.some(p => p.matches(path)); },

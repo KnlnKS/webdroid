@@ -1269,6 +1269,38 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   history, bubbles, conversations' shortcut checks, the immutable-PendingIntent checks for
   remote-input actions and user-initiated jobs are not modelled; the foreground service
   notification follows ActiveServices from source, not a device probe.
+- 2026-10-02, Stage D: PackageManager on bytecode. `pm.ts` hosts IPackageManager, IPermissionManager,
+  ILegacyPermissionManager and ICrossProfileApps over the package registry, and
+  `packageinstaller.ts` IPackageInstaller and its sessions; ApplicationPackageManager,
+  PermissionManager, PackageInstaller and every android.content.pm data class run from bytecode.
+  Context.getPackageManager is ContextImpl's (one per base context); getResourcesForApplication
+  reaches the TS ActivityThread's getTopLevelResources through ContextImpl.mMainThread. The
+  service's answers were diffed field by field against the reference AVD for FitNotes
+  (IPackageManager as uid 2000): beyond install paths, uid, data dir (`/data/user/0` there) and
+  install state (the AVD's copy was never launched, so FLAG_STOPPED), they match, which needed
+  ParsingPackageUtils' defaults the TS copy lacked: manifest booleans resolved through resources
+  (WorkManager's `@bool` enabled flags hide two of its components, as on the device), MCC|MNC in
+  every activity's configChanges, FLAG_CAN_DISPLAY_ON_REMOTE_DEVICES, resizeMode 1 from the
+  target SDK, maxRecents 8, privateFlags (pointer tagging, audio capture, partial direct boot),
+  empty splitNames/attributionTags/pathPermissions arrays, kill-after-restore only with a backup
+  agent, and Context.getApplicationInfo without meta-data. PackageInfo.reqFeatures needs
+  GET_CONFIGURATIONS; PackageManager.checkPermission now consults runtime grants (the TS copy
+  granted every requested dangerous permission). getPackageArchiveInfo is AOSP's PackageParser2 and
+  ApkSignatureVerifier; it needed split permissions (the AVD's list), Build.VERSION.ACTIVE_CODENAMES,
+  IncrementalManager natives answering "no IncFS", and IntentFilter methods. PackageInstaller
+  sessions write through AOSP's revocable-fd path (`fw.revocable_fd`), since a FileBridge needs a
+  server thread. The service builds its answers in `driven` generators, never `async` functions: a
+  Java call after an `await` runs on whatever thread is current, so it can wait on a class the
+  calling thread is itself initializing. Reddit's launch deadlocked that way inside hostStub's
+  async Stub construction (newStub now constructs on the asking thread), and a SigningDetails
+  built after an await read ICU's Calendar mid-initialization from another of its threads. The
+  first getService of a hosted service can take long enough for ServiceManager to log a slow
+  lookup, so EventLog's natives now write to the log. Launch timings under `--jobs 1` match the
+  parent within noise (FitNotes 2.33-2.42 against 2.33-3.43 s; calculatorm 1.71-1.80 against
+  1.81-1.90 s); Komikku alone passed 3 of 3 interleaved with the parent (2 of 3).
+  Limits: package visibility (AppsFilter, `<queries>`) is not applied; ResolveInfo.filter and
+  match are not filled; resolveIntent returns the best match rather than the chooser for ties;
+  installs reach only the realm that ran them; ILegacyPermissionManager answers nothing.
 
 ## Java, storage and framework semantics
 

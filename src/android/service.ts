@@ -12,6 +12,7 @@ import { onMain } from "./mainloop";
 rt.register({
   name: "android/os/UserHandle", ctor: JUserHandle, ifaces: ["android/os/Parcelable"],
   methods: {
+    "<init>(I)V": function (this: JUserHandle, id: number) { (this as { id: number }).id = id; },
     "getIdentifier()I": function (this: JUserHandle) { return this.id; },
     "hashCode()I": function (this: JUserHandle) { return this.id; },
     "equals(Ljava/lang/Object;)Z": function (this: JUserHandle, o: unknown) {

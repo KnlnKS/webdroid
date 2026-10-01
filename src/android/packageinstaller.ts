@@ -1,82 +1,142 @@
-import { JObj, rt, driven, declaredField, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
-import { jarray, u8 } from "../jvm/abi";
+// IPackageInstaller and IPackageInstallerSession, under AOSP's PackageInstaller and its Session:
+// a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
+// does, and its commit installs a single base APK through the package registry.
+import { JObj, rt, noops, declaredField, driven, type Gen } from "../jvm/runtime";
+import { construct, scall, vcall, after } from "../jvm/natives/jlang";
+import { jarray } from "../jvm/abi";
+import { newFile } from "../jvm/natives/jio";
+import { newArrayList } from "../jvm/natives/jcoll";
+import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
-import { JIntent } from "./intent";
 import { sendBroadcast } from "./broadcast";
-import { sendIntent } from "./pendingintent";
+import { sendIntent, type JIntentSender } from "./pendingintent";
 import { appHost } from "./apphost";
 import { reportUncaught } from "./os";
+import { newStub } from "./binder";
+import type { JIntent } from "./intent";
 
-const SESSION_PARAMS = "android/content/pm/PackageInstaller$SessionParams";
-class JSession extends JObj {
-  id = 0;
-  // what the session keeps of its SessionParams, read when it is created
-  mode = 1;
-  packageName: string | null = null;
-  entries = new Map<string, JObj>();
-  sealed = false;
-}
-const sessions = new Map<number, JSession>();
+const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
+const STATUS_SUCCESS = 0, STATUS_FAILURE_INVALID = 4, MODE_FULL_INSTALL = 1;
+const MODE_WRITE_ONLY = 0x20000000, MODE_CREATE = 0x08000000, MODE_TRUNCATE = 0x04000000;
+interface Session { id: number; mode: number; packageName: string | null; installer: string | null; names: string[]; sealed: boolean; binder: JObj | null }
+const sessions = new Map<number, Session>();
+const callbacks = new Set<JObj>();
 let nextSession = 1;
-function session(id: number): JSession {
+const stageDir = (id: number) => `/data/app/vmdl${id}.tmp`;
+function session(id: number): Session {
   const value = sessions.get(id);
-  if (!value) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unknown install session ${id}`);
+  if (!value) throw rt.mkThrowable("java/lang/SecurityException", `Caller has no access to session ${id}`);
   return value;
 }
-rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSession, ifaces: ["java/io/Closeable"],
-  methods: {
-    "openWrite(Ljava/lang/String;JJ)Ljava/io/OutputStream;": driven(function* (this: JSession, name: string, offset: bigint, _length: bigint): Gen {
-      if (this.sealed) throw rt.mkThrowable("java/lang/SecurityException", "Session is sealed");
-      if (!name || name.includes("/") || offset !== 0n) throw rt.mkThrowable("java/io/IOException", "Invalid session entry or unsupported resume offset");
-      const stream = yield newObj("java/io/ByteArrayOutputStream"); this.entries.set(name, stream); return stream;
-    }),
-    "getNames()[Ljava/lang/String;": function (this: JSession) { return jarray([...this.entries.keys()], "Ljava/lang/String;"); },
-    "fsync(Ljava/io/OutputStream;)V": function (this: JSession, stream: JObj) {
-      if (![...this.entries.values()].includes(stream)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Stream does not belong to session");
-    },
-    "close()V": () => {},
-    "abandon()V": function (this: JSession) { sessions.delete(this.id); this.sealed = true; this.entries.clear(); },
-    "commit(Landroid/content/IntentSender;)V": function (this: JSession, sender: Parameters<typeof sendIntent>[0]) {
-      if (this.sealed) throw rt.mkThrowable("java/lang/SecurityException", "Session is sealed");
-      this.sealed = true;
-      const finish = async () => {
-        const result = new JIntent(); result.extras.map.set("android.content.pm.extra.SESSION_ID", this.id);
-        try {
-          if (this.mode !== 1 || this.entries.size !== 1) throw new Error("Install requires one base APK");
-          const stream = this.entries.values().next().value;
-          const data: Int8Array = await vcall(stream, "toByteArray", "()[B");
-          const pkg = await installPackageArchive(u8(data), this.packageName);
-          const added = new JIntent(); added.action = "android.intent.action.PACKAGE_ADDED"; added.dataUri = `package:${pkg}`;
-          sendBroadcast(appHost?.application ?? await newObj("android/content/Context"), added);
-          result.extras.map.set("android.content.pm.extra.PACKAGE_NAME", pkg);
-          result.extras.map.set("android.content.pm.extra.STATUS", 0);
-        } catch (error) {
-          result.extras.map.set("android.content.pm.extra.STATUS", 4);
-          result.extras.map.set("android.content.pm.extra.STATUS_MESSAGE", error instanceof Error ? error.message : String(error));
-        }
-        sessions.delete(this.id); this.entries.clear();
-        await sendIntent(sender, result);
-      };
-      void finish().catch(reportUncaught);
-    },
+function notify(name: string, desc: string, ...args: unknown[]): void {
+  for (const callback of callbacks) void Promise.resolve(vcall(callback, name, desc, ...args)).catch(reportUncaught);
+}
+function finish(s: Session, success: boolean): void {
+  sessions.delete(s.id);
+  for (const name of s.names) vfs.delete(stageDir(s.id) + "/" + name);
+  notify("onSessionFinished", "(IZ)V", s.id, success ? 1 : 0);
+}
+
+/** PackageInstallerSession.commit: install the staged APK, then report to the status receiver */
+function* commit$(s: Session, sender: JIntentSender): Gen<void> {
+  const result: JIntent = yield construct("android/content/Intent", "()V");
+  const extra = (key: string, value: unknown, desc: string) => vcall(result, "putExtra", `(${S}${desc})Landroid/content/Intent;`, key, value);
+  yield extra("android.content.pm.extra.SESSION_ID", s.id, "I");
+  let installed: string | null = null, failure = "";
+  try {
+    if (s.mode !== MODE_FULL_INSTALL || s.names.length !== 1) throw new Error("Install requires one base APK");
+    const bytes = vfs.read(stageDir(s.id) + "/" + s.names[0]);
+    if (!bytes) throw new Error("Session file was not written");
+    installed = yield installPackageArchive(bytes, s.packageName);
+  } catch (error) {
+    failure = error instanceof Error ? error.message : (error as { msg?: string } | null)?.msg ?? String(error);
+  }
+  if (installed !== null) {
+    const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
+    sendBroadcast(appHost?.application ?? (yield construct("android/content/Context", "()V")), yield construct("android/content/Intent",
+      `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri));
+    yield extra("android.content.pm.extra.PACKAGE_NAME", installed, S);
+    yield extra("android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
+  } else {
+    yield extra("android.content.pm.extra.STATUS", STATUS_FAILURE_INVALID, "I");
+    yield extra("android.content.pm.extra.STATUS_MESSAGE", failure, S);
+  }
+  finish(s, installed !== null);
+  yield sendIntent(sender, result);
+}
+
+class JSessionService extends JObj { session: Session | null = null; }
+const own = (o: JSessionService) => {
+  const s = o.session;
+  if (!s || !sessions.has(s.id)) throw rt.mkThrowable("java/lang/SecurityException", "Session was abandoned or committed");
+  return s;
+};
+const unsealed = (o: JSessionService) => {
+  const s = own(o);
+  if (s.sealed) throw rt.mkThrowable("java/lang/SecurityException", "Session is sealed");
+  return s;
+};
+rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, sup: "android/content/pm/IPackageInstallerSession$Stub", methods: {
+  "openWrite(Ljava/lang/String;JJ)Landroid/os/ParcelFileDescriptor;": driven(function* openWrite$(this: JSessionService, name: string | null, offset: bigint): Gen {
+    const s = unsealed(this);
+    if (!name || name.includes("/") || name === "." || name === "..") throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid name: " + name);
+    if (offset !== 0n) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Resuming a session write is not supported");
+    vfs.mkdir(stageDir(s.id));
+    if (!s.names.includes(name)) s.names.push(name);
+    return scall("android/os/ParcelFileDescriptor", "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;",
+      yield newFile(stageDir(s.id) + "/" + name), MODE_WRITE_ONLY | MODE_CREATE | MODE_TRUNCATE);
+  }),
+  "getNames()[Ljava/lang/String;": function (this: JSessionService) { return jarray(own(this).names.slice(), S); },
+  "seal()V": function (this: JSessionService) { own(this).sealed = true; },
+  "commit(Landroid/content/IntentSender;Z)V": function (this: JSessionService, sender: JIntentSender | null) {
+    const s = unsealed(this);
+    if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
+    s.sealed = true;
+    void Promise.resolve(rt.drive(commit$(s, sender))).catch(reportUncaught);
   },
-});
-class JPackageInstaller extends JObj {}
-const installer = new JPackageInstaller();
-export function getPackageInstaller() { rt.link("android/content/pm/PackageInstaller"); return installer; }
-rt.register({ name: "android/content/pm/PackageInstaller", ctor: JPackageInstaller,
-  statics: { STATUS_PENDING_USER_ACTION: -1, STATUS_SUCCESS: 0, STATUS_FAILURE: 1, STATUS_FAILURE_INVALID: 4,
-    EXTRA_STATUS: "android.content.pm.extra.STATUS", EXTRA_STATUS_MESSAGE: "android.content.pm.extra.STATUS_MESSAGE", EXTRA_SESSION_ID: "android.content.pm.extra.SESSION_ID", EXTRA_PACKAGE_NAME: "android.content.pm.extra.PACKAGE_NAME" },
-  methods: {
-    "createSession(Landroid/content/pm/PackageInstaller$SessionParams;)I": (params: Record<string, unknown>) => {
-      rt.link("android/content/pm/PackageInstaller$Session");
-      const value = new JSession(); value.id = nextSession++;
-      value.mode = params[declaredField(SESSION_PARAMS, "mode")] as number;
-      value.packageName = params[declaredField(SESSION_PARAMS, "appPackageName")] as string | null;
-      sessions.set(value.id, value); return value.id;
-    },
-    "openSession(I)Landroid/content/pm/PackageInstaller$Session;": session,
-    "abandonSession(I)V": (id: number) => { const value = session(id); value.sealed = true; value.entries.clear(); sessions.delete(id); },
+  "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(s, false); },
+  "getInstallFlags()I": () => 0,
+  "getParentSessionId()I": () => -1,
+  "isMultiPackage()Z": () => 0,
+  "isStaged()Z": () => 0,
+  ...noops("close()V", "setClientProgress(F)V", "addClientProgress(F)V"),
+} });
+
+function* sessionInfo$(s: Session): Gen<JObj> {
+  const info: JObj = yield construct(PI + "$SessionInfo", "()V"), fields = info as unknown as Record<string, unknown>;
+  const values: Record<string, unknown> = { sessionId: s.id, userId: 0, installerPackageName: s.installer, mode: s.mode,
+    appPackageName: s.packageName, sealed: s.sealed ? 1 : 0, active: 1, parentSessionId: -1 };
+  for (const name in values) fields[declaredField(PI + "$SessionInfo", name)] = values[name];
+  return info;
+}
+function* sessionList$(installer: string | null | undefined): Gen {
+  const infos: JObj[] = [];
+  for (const s of sessions.values()) if (installer === undefined || s.installer === installer) infos.push(yield* sessionInfo$(s));
+  return construct("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(infos));
+}
+rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageInstaller$Stub", methods: {
+  [`createSession(L${PI}$SessionParams;${S}${S}I)I`]: (params: JObj, installer: string | null) => {
+    const read = (name: string) => (params as unknown as Record<string, unknown>)[declaredField(PI + "$SessionParams", name)];
+    const s: Session = { id: nextSession++, mode: read("mode") as number, packageName: read("appPackageName") as string | null,
+      installer, names: [], sealed: false, binder: null };
+    sessions.set(s.id, s);
+    notify("onSessionCreated", "(I)V", s.id);
+    return s.id;
   },
-});
+  "openSession(I)Landroid/content/pm/IPackageInstallerSession;": (id: number) => {
+    const s = session(id);
+    return s.binder ?? after(newStub("webdroid/PackageInstallerSession"), (binder) => {
+      (binder as JSessionService).session = s;
+      return s.binder = binder;
+    });
+  },
+  "abandonSession(I)V": (id: number) => finish(session(id), false),
+  [`getSessionInfo(I)L${PI}$SessionInfo;`]: (id: number) => { const s = sessions.get(id); return s ? rt.drive(sessionInfo$(s)) : null; },
+  [`getMySessions(${S}I)Landroid/content/pm/ParceledListSlice;`]: driven(function* getMySessions$(installer: string | null): Gen { return yield* sessionList$(installer); }),
+  "getAllSessions(I)Landroid/content/pm/ParceledListSlice;": driven(function* getAllSessions$(): Gen { return yield* sessionList$(undefined); }),
+  "registerCallback(Landroid/content/pm/IPackageInstallerCallback;I)V": (callback: JObj) => { callbacks.add(callback); },
+  "unregisterCallback(Landroid/content/pm/IPackageInstallerCallback;)V": (callback: JObj) => { callbacks.delete(callback); },
+} });
+let installer: JObj | Promise<JObj> | null = null;
+/** IPackageManager.getPackageInstaller's answer, which servicemanager does not list */
+export const installerService = () => installer ??= newStub("webdroid/PackageInstallerService");
