@@ -313,7 +313,7 @@ class ProcessBroker {
       frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
       frame.src = "/process?pid=" + entry.pid + `&screen=${formatScreen(device)}&statusBarDp=${device.statusBarDp}&hz=${device.refreshRate}`;
       const params = new URLSearchParams(location.search);
-      for (const key of ["bytecode", "libc", "jit", "fuzzCoverage", "testClock"]) {
+      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock"]) {
         const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
       }
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));

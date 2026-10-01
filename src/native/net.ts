@@ -961,8 +961,7 @@ const FD_SETSIZE = 1024;
 const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (fd >>> 3)] & (1 << (fd & 7)));
 const setFd = (set: number, fd: number): void => { mem.st8(set + (fd >>> 3), mem.u8[set + (fd >>> 3)] | (1 << (fd & 7))); };
 
-/** Bionic select(2), sharing readiness and wakeups with poll(2). */
-/** select over fd_sets, waiting `ms` (-1: until one is ready) */
+/** select(2) over fd_sets, sharing readiness and wakeups with poll(2), waiting `ms` (-1: until one is ready) */
 export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, ms: number): number | Promise<number> {
   if (count < 0 || count > FD_SETSIZE) return fail(cpu, E.INVAL);
   const setBytes = Math.ceil(count / (PTR * 8)) * PTR;

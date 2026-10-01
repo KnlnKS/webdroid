@@ -25,7 +25,6 @@ const tlsDescriptors = new Map<number, { mod: Module; offset: number }>();
 let tlsDescResolver = 0;
 /** names the host serves in place of any image's own definition */
 export const interposed = new Map<string, number>();
-/** the linker's static TLS placement for a module mapped while it is set (bionic's initial set) */
 /** the linker's process-specific parts: static TLS placement for a module mapped while it is set
  *  (bionic's initial set), AT_HWCAP for IFUNC resolvers, and the device libraries dlopen may name */
 export const linkerHooks: {
@@ -166,68 +165,68 @@ const findExidx: HostFn = (_cpu, a) => {
   return m?.exidx.addr ?? 0;
 };
 const libdl: Record<string, HostFn> = {
-    dlopen: async (cpu, a) => {
-      const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
-      if (!name) return 1; // the main program
-      if (hostLibNames().includes(name)) return handleOf({ lib: name });
-      const have = byName.get(name);
-      if (have) { have.refs++; return handleOf({ mod: have }); }
-      if (!libSource(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
-      try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu) }); }
-      catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
-    },
-    dlsym: (_cpu, a) => {
-      const h = a.i(), sym = a.str();
-      if (h === 0 || h === -1 || h === -2 || h === 1) {
-        const v = resolveGlobalOrNull(sym);
-        if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
-        return v;
+  dlopen: async (cpu, a) => {
+    const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
+    if (!name) return 1; // the main program
+    if (hostLibNames().includes(name)) return handleOf({ lib: name });
+    const have = byName.get(name);
+    if (have) { have.refs++; return handleOf({ mod: have }); }
+    if (!libSource(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
+    try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu) }); }
+    catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
+  },
+  dlsym: (_cpu, a) => {
+    const h = a.i(), sym = a.str();
+    if (h === 0 || h === -1 || h === -2 || h === 1) {
+      const v = resolveGlobalOrNull(sym);
+      if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
+      return v;
+    }
+    const hd = handles[h - HANDLE_BASE];
+    if (!hd) { setErr("invalid handle"); return 0; }
+    if ("mod" in hd) {
+      const v = hd.mod.exports.get(sym);
+      if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
+      return v;
+    }
+    return probeHost(sym, hd.lib);
+  },
+  dlclose: (_cpu, a) => { const hd = handles[a.i() - HANDLE_BASE]; if (hd && "mod" in hd) hd.mod.refs--; return 0; },
+  dlerror: () => {
+    if (dlerrorMsg === null) return 0;
+    mem.putCstr(dlerrorBuf, dlerrorMsg, 256);
+    dlerrorMsg = null;
+    return dlerrorBuf;
+  },
+  // Dl_info: dli_fname, dli_fbase, dli_sname, dli_saddr
+  dladdr: (_cpu, a) => {
+    const addr = a.p(), info = a.p();
+    const m = moduleOf(addr);
+    if (!m) return 0;
+    const s = nearestSymbol(m, addr);
+    stp(info, nameStr(m)); stp(info + PTR, m.base);
+    stp(info + 2 * PTR, s ? mem.hostStr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
+    return 1;
+  },
+  // dl_phdr_info: dlpi_addr, dlpi_name, dlpi_phdr, dlpi_phnum (u16), then the counters, all at
+  // the pointer stride — 64 bytes on LP64, 32 on ILP32. The unwinder walks this to find
+  // PT_GNU_EH_FRAME, so it is the C++ throw path.
+  dl_iterate_phdr: async (cpu, a) => {
+    const cb = a.p(), data = a.va();
+    const size = PTR === 8 ? 64 : 32;
+    const info = mem.malloc(size);
+    try {
+      for (const m of [...modules]) {
+        mem.memset(info, 0, size);
+        stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
+        const r = await cpu.call(cb, [info, size, data]);
+        if (r) return r;
       }
-      const hd = handles[h - HANDLE_BASE];
-      if (!hd) { setErr("invalid handle"); return 0; }
-      if ("mod" in hd) {
-        const v = hd.mod.exports.get(sym);
-        if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
-        return v;
-      }
-      return probeHost(sym, hd.lib);
-    },
-    dlclose: (_cpu, a) => { const hd = handles[a.i() - HANDLE_BASE]; if (hd && "mod" in hd) hd.mod.refs--; return 0; },
-    dlerror: () => {
-      if (dlerrorMsg === null) return 0;
-      mem.putCstr(dlerrorBuf, dlerrorMsg, 256);
-      dlerrorMsg = null;
-      return dlerrorBuf;
-    },
-    // Dl_info: dli_fname, dli_fbase, dli_sname, dli_saddr
-    dladdr: (_cpu, a) => {
-      const addr = a.p(), info = a.p();
-      const m = moduleOf(addr);
-      if (!m) return 0;
-      const s = nearestSymbol(m, addr);
-      stp(info, nameStr(m)); stp(info + PTR, m.base);
-      stp(info + 2 * PTR, s ? mem.hostStr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
-      return 1;
-    },
-    // dl_phdr_info: dlpi_addr, dlpi_name, dlpi_phdr, dlpi_phnum (u16), then the counters, all at
-    // the pointer stride — 64 bytes on LP64, 32 on ILP32. The unwinder walks this to find
-    // PT_GNU_EH_FRAME, so it is the C++ throw path.
-    dl_iterate_phdr: async (cpu, a) => {
-      const cb = a.p(), data = a.va();
-      const size = PTR === 8 ? 64 : 32;
-      const info = mem.malloc(size);
-      try {
-        for (const m of [...modules]) {
-          mem.memset(info, 0, size);
-          stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
-          const r = await cpu.call(cb, [info, size, data]);
-          if (r) return r;
-        }
-        return 0;
-      } finally { mem.free(info); }
-    },
-    __gnu_Unwind_Find_exidx: findExidx,
-    dl_unwind_find_exidx: findExidx,
+      return 0;
+    } finally { mem.free(info); }
+  },
+  __gnu_Unwind_Find_exidx: findExidx,
+  dl_unwind_find_exidx: findExidx,
 };
 
 const nameStrs = new Map<Module, number>();

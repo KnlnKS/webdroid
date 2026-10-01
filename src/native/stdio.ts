@@ -367,8 +367,6 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
   f.pos += n;
   return n;
 }
-/** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
- *  told what the call has moved so far: a read that would then have to wait moves nothing. */
 /** an iovec array's bytes as one buffer: what one datagram carries */
 function gather(iov: number, count: number): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -378,6 +376,8 @@ function gather(iov: number, count: number): Uint8Array {
   for (const p of parts) { out.set(p, at); at += p.length; }
   return out;
 }
+/** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
+ *  told what the call has moved so far: a read that would then have to wait moves nothing. */
 function vectored(cpu: Cpu, iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
   if (count < 0 || count > 1024) return fail(cpu, E.INVAL);
   const from = (i: number, done: number): number | Promise<number> => {
@@ -809,12 +809,14 @@ function fallocateFd(f: Fd | undefined, offset: number, len: number): number {
   return 0;
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
+/** a directory's entries as readdir lists them */
+const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
 /** getdents64: linux_dirent64 records (bionic's struct dirent on LP64) from the fd's position on */
 export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (!f.dir) return fail(cpu, E.NOTDIR);
-  const entries = [".", "..", ...vfs.list(f.path)];
+  const entries = dirEntries(f.path);
   let at = 0;
   for (; f.pos < entries.length; f.pos++) {
     const name = utf8(entries[f.pos]), reclen = (LAYOUT.D_NAME + name.length + 1 + 7) & ~7;
@@ -831,7 +833,7 @@ export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): num
 }
 function openDir(path: string): number {
   const h = mem.malloc(16);
-  dirs.set(h, { entries: [".", "..", ...vfs.list(path)], i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) });
+  dirs.set(h, { entries: dirEntries(path), i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) });
   return h;
 }
 function nextDirent(d: { entries: string[]; i: number }, de: number): number {
@@ -1170,7 +1172,7 @@ export function stdioInit(): void {
       const path = vfs.norm(a.str()), out = a.p(), filter = a.p(), compar = a.p();
       if (!vfs.isDir(path)) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
       const kept: number[] = [];
-      for (const name of [".", "..", ...vfs.list(path)]) {
+      for (const name of dirEntries(path)) {
         const de = mem.malloc(LAYOUT.DIRENT_SIZE);
         nextDirent({ entries: [name], i: 0 }, de);
         if (filter && !(await cpu.call(filter, [de]))) { mem.free(de); continue; }
