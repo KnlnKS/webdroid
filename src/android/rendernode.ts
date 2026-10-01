@@ -6,7 +6,7 @@
 // projection and stretch are properties kept, not drawn; animators run from the frame loop
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
-import { Recorder, displayListLength, recordOrRun, replay, replayingCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
+import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { rt, JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
@@ -15,11 +15,12 @@ import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
 import { Camera3D, type Mat, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./matrix";
-import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect, unsupported } from "./canvas";
+import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas";
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
 import { type RuntimeShaderBuilder } from "./runtime-shader";
 import type { TextureLayer } from "./texturelayer";
+import { drawFunctor, trackingClips, pushClip, popClip } from "./webfunctor";
 
 let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
@@ -161,6 +162,7 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
   if (!ops?.length || n.drawing || n.nothingToDraw) return;
   ctx.save();
   n.drawing = true;
+  let clipped = false;
   // A bad op must not abandon this node's save, or its clip leaks into the frame.
   try {
     setViewProperties(ctx, n);
@@ -178,6 +180,7 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
         r = clipFlags & CLIP_TO_CLIP_BOUNDS ? Math.min(w, r) : w; b = clipFlags & CLIP_TO_CLIP_BOUNDS ? Math.min(h, b) : h;
       }
       ctx.beginPath(); ctx.rect(l, t, r - l, b - t); ctx.clip();
+      if (trackingClips()) { pushClip(ctx, l, t, r, b); clipped = true; }
     }
     if (n.revealClip) { ctx.beginPath(); ctx.arc(n.revealX, n.revealY, n.revealRadius, 0, 2 * Math.PI); ctx.clip(); }
     else if (n.outlineClip) {
@@ -207,7 +210,7 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
     }
   }
   catch (e) { perf.drawErrors++; noteNodeError(e); }
-  finally { n.drawing = false; ctx.restore(); }
+  finally { n.drawing = false; ctx.restore(); if (clipped) popClip(); }
 }
 const nodeErrSeen = new Set<string>();
 function noteNodeError(e: unknown) {
@@ -497,7 +500,7 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
     const [pl, pt, pr, pb, prx, pry, pp] = [prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b), prop<number>(rx), prop<number>(ry), prop<NativePaint>(p)];
     recordOrRun(canvasAt(h).ctx, (ctx) => drawRoundRect(NativeCanvas.over(ctx), pl.value, pt.value, pr.value, pb.value, prx.value, pry.value, pp.value));
   },
-  // the ripple is a RuntimeShader animated on the RenderThread; WebView functors are the compositor's
+  // the ripple is a RuntimeShader animated on the RenderThread
   "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) => {
     const [px, py, pr, pp, pg, ph] = [prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p), prop<number>(progress), prop<number>(phase)];
     const shader = deref<RuntimeShaderBuilder>(builder);
@@ -507,7 +510,15 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
     const l = deref<TextureLayer>(layer);
     recordOrRun(canvasAt(h).ctx, (ctx) => l.draw(ctx));
   },
-  "nDrawWebViewFunctor(JI)V": unsupported("RecordingCanvas.drawWebViewFunctor"),
+  // replayed, the functor is clipped by the nodes drawing it and the canvas replaying them
+  "nDrawWebViewFunctor(JI)V": (h: bigint, functor: number) => {
+    const nc = canvasAt(h);
+    if (isRecording(nc.ctx)) recordOrRun(nc.ctx, (ctx) => {
+      const r = replayingCanvas();
+      drawFunctor(ctx, functor, r ? [r.cl, r.ct, r.cr, r.cb] : null);
+    });
+    else drawFunctor(nc.ctx, functor, [nc.cl, nc.ct, nc.cr, nc.cb]);
+  },
 });
 rt.registerJnis("android/graphics/CanvasProperty", {
   "nCreateFloat(F)J": (value: number) => ownedHandle({ value }),

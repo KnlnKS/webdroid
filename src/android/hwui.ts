@@ -14,6 +14,7 @@ import { onNextVsync } from "./vsync";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
+import { resetDrawn } from "./webfunctor";
 import type { NativeBitmap } from "./bitmap";
 
 const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
@@ -34,6 +35,7 @@ async function drawFrame(p: Proxy): Promise<number> {
   const ctx = buffer.getContext("2d")!;
   ctx.reset();
   if (!p.opaque) ctx.clearRect(0, 0, buffer.width, buffer.height);
+  resetDrawn(buffer);
   drawNodeInto(ctx, p.root);
   perf.draws++; perf.drawMs += performance.now() - t0;
   // prepareTree's position updates reach their listeners before the frame queues, so a SurfaceView

@@ -11,6 +11,7 @@ import { canvasOf } from "./canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import type { GlSurface } from "./glview";
+import { drawnOn, deviceRect, placeFunctors, type Rect } from "./webfunctor";
 
 // SurfaceControl.Builder's creation flags
 const HIDDEN = 0x4, OPAQUE = 0x400, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
@@ -77,8 +78,10 @@ function composite(): void {
   ctx.save();
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  placed.clear();
   for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer);
   ctx.restore();
+  placeFunctors(placed);
   perf.drawMs += performance.now() - t0;
   target.present();
 }
@@ -103,13 +106,18 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
     chain.push(l);
   }
   ctx.save();
+  let screen: Rect = [0, 0, ctx.canvas.width, ctx.canvas.height];
   for (let i = chain.length - 1; i >= 0; i--) {
     const l = chain[i], crop = l.crop;
     ctx.translate(l.x, l.y);
     if (l.matrix) { const [a, b, c, d] = l.matrix; ctx.transform(a, b, c, d, 0, 0); }
     ctx.globalAlpha *= l.alpha;
-    if (crop) { ctx.beginPath(); ctx.roundRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t, l.cornerRadius); ctx.clip(); }
+    if (crop) {
+      ctx.beginPath(); ctx.roundRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t, l.cornerRadius); ctx.clip();
+      screen = clipTo(screen, deviceRect(ctx.getTransform(), crop.l, crop.t, crop.r, crop.b));
+    }
   }
+  placeWebContent(ctx.getTransform(), layer, screen);
   if (layer.color) {
     const [r, g, b] = layer.color;
     ctx.fillStyle = `rgb(${r * 255},${g * 255},${b * 255})`;
@@ -121,6 +129,25 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
     else ctx.drawImage(buffer, 0, 0);
   }
   ctx.restore();
+}
+
+/** WebView functors shown this composition, at their display rects */
+const placed = new Map<number, Rect>();
+const clipTo = (a: Rect, b: Rect): Rect => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
+/** web content is DOM over the display, so content composed over a functor hides it; the functors
+ *  this layer's buffer drew show where the buffer composes */
+function placeWebContent(m: DOMMatrix, layer: Layer, screen: Rect): void {
+  const buffer = layer.buffer, dest = layer.dest;
+  const [bw, bh] = !buffer ? [0, 0] : "displayWidth" in buffer ? [buffer.displayWidth, buffer.displayHeight] : [buffer.width, buffer.height];
+  const bounds = clipTo(screen, layer.color ? screen : dest ? deviceRect(m, dest.l, dest.t, dest.r, dest.b) : deviceRect(m, 0, 0, bw, bh));
+  for (const [id, r] of placed) if (r[0] < bounds[2] && bounds[0] < r[2] && r[1] < bounds[3] && bounds[1] < r[3]) placed.delete(id);
+  const functors = buffer && drawnOn(buffer);
+  if (!functors?.size) return;
+  const at = dest ? m.translate(dest.l, dest.t).scale((dest.r - dest.l) / bw, (dest.b - dest.t) / bh) : m;
+  for (const [id, [l, t, r, b]] of functors) {
+    const rect = clipTo(deviceRect(at, l, t, r, b), bounds);
+    if (rect[2] > rect[0] && rect[3] > rect[1]) placed.set(id, rect);
+  }
 }
 
 // ── SurfaceControl and its Transaction
