@@ -1,4 +1,5 @@
-import { JObj, rt, noops } from "../jvm/runtime";
+import { JObj, rt, noops, stubs } from "../jvm/runtime";
+import { hostStub } from "./binder";
 import { JContextWrapper } from "./context";
 import { ownedHandle, release } from "./handles";
 
@@ -15,3 +16,12 @@ rt.registerJnis("android/app/backup/FileBackupHelperBase", {
   "dtor(J)V": release,
 });
 rt.markers("android/app/backup/BackupHelper", "android/app/backup/RestoreObserver");
+
+// IBackupManager, under AOSP's BackupManager: the service runs, as on the reference AVD, with
+// backup disabled and no transport, so a data change is noted and nothing is scheduled
+rt.register({ name: "webdroid/BackupManagerService", ctor: class extends JObj {}, sup: "android/app/backup/IBackupManager$Stub", methods: {
+  ...noops("dataChanged(Ljava/lang/String;)V", "dataChangedForUser(ILjava/lang/String;)V"),
+  ...stubs(0, "isBackupEnabled()Z", "isBackupEnabledForUser(I)Z"),
+  "isBackupServiceActive(I)Z": () => 1,
+} });
+hostStub("backup", "webdroid/BackupManagerService");
