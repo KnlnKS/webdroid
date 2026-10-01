@@ -3,7 +3,7 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
+import { isRecording, nestedRecording, recordOrRun, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList, type Recorder } from "./recording";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
@@ -36,8 +36,8 @@ export class NativeCanvas {
   ctx!: Ctx2D;
   w = 0; h = 0;
   bmp: NativeBitmap | null = null;
-  /** a RenderNode's RecordingCanvas: its recording context and the list it appends to */
-  recording: { ctx: Ctx2D; ops: DisplayList } | null = null;
+  /** a RenderNode's RecordingCanvas: what it records into, its node taking each finished list */
+  recorder: Recorder | null = null;
   saveCount = 1;
   layers: Layer[] | null = null;
   /** the device clip's bounds, which SkCanvas::getDeviceClipBounds reports */

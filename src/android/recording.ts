@@ -7,7 +7,7 @@ type Operation = (ctx: Ctx2D) => void;
 export type DisplayList = unknown[];
 const CALL = 0, SET = 1, DEFER = 2;
 
-/** where a recording context appends: retargeted when a pooled canvas starts another list */
+/** where a recording context appends */
 type Recording = { ops: DisplayList };
 const recordings = new WeakMap<Ctx2D, Recording>();
 const replayCanvases = new WeakMap<Ctx2D, NativeCanvas>();
@@ -50,8 +50,8 @@ const DRAWS = new Set(["fillRect", "strokeRect", "clearRect", "fillText", "strok
   "putImageData", "clip", "drawFocusIfNeeded"]);
 
 /** Mirror native operations for measurement while retaining them for display-list replay. */
-export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D {
-  const rec: Recording = { ops };
+export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D { return recordInto(mirror, { ops }); }
+function recordInto(mirror: Ctx2D, rec: Recording): Ctx2D {
   const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
   const context = new Proxy(mirror, {
     get(target, key) {
@@ -76,10 +76,20 @@ export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D {
   mirrors.set(context, mirror);
   return context;
 }
-/** a recording context appending to `ops` from now on, its mirror reset to a fresh canvas state */
-export function retarget(ctx: Ctx2D, ops: DisplayList): void {
-  recordings.get(ctx)!.ops = ops;
-  (mirrors.get(ctx) as OffscreenCanvasRenderingContext2D).reset();
+/** A recording context reused for one display list after another (SkPictureRecorder): `take`
+ *  hands over what was recorded and starts a fresh list over a reset canvas state. The mirror
+ *  answers reads made while recording (the matrix, text metrics); replay never reads it, so one
+ *  pixel is enough. */
+export class Recorder implements Recording {
+  ops: DisplayList = [];
+  private readonly mirror = new OffscreenCanvas(1, 1).getContext("2d")!;
+  readonly ctx = recordInto(this.mirror, this);
+  take(): DisplayList {
+    const ops = this.ops;
+    this.ops = [];
+    this.mirror.reset();
+    return ops;
+  }
 }
 /** A recording that shares `ctx`'s mirror, so its state stays continuous, but keeps its
  *  operations in `ops`: the content of a layer, replayed into the layer's own raster. */

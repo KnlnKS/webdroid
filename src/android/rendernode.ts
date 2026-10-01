@@ -6,7 +6,7 @@
 // projection, stretch and position callbacks are properties kept, not drawn or run; animators run
 // from the frame loop (rtanimator.ts).
 
-import { displayListLength, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, retarget, type Ctx2D, type DisplayList } from "./recording";
+import { Recorder, displayListLength, recordOrRun, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { rt } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
@@ -372,11 +372,10 @@ rt.registerJnis("android/graphics/RenderNode", {
 const IDENTITY = identity();
 
 // ── RecordingCanvas: SkiaRecordingCanvas records into a display list its node takes when done ──
-/** a new recording over a fresh mirror; the list goes to its node when the recording finishes */
+/** a new recording over a fresh canvas state; the list goes to its node when the recording finishes */
 function beginRecording(nc: NativeCanvas, w: number, h: number) {
-  const rec = nc.recording!;
-  rec.ops = [];
-  retarget(rec.ctx, rec.ops);
+  const rec = nc.recorder!;
+  rec.take();
   nc.setTarget(rec.ctx, w, h, null);
   nc.semanticOwner = nc.semanticBase = null;
 }
@@ -417,21 +416,17 @@ type Property<T> = { value: T };
 const prop = <T>(h: bigint) => deref<Property<T>>(h).value;
 rt.registerJnis("android/graphics/RecordingCanvas", {
   "nCreateDisplayListCanvas(JII)J": (_node: bigint, w: number, h: number) => {
-    const nc = new NativeCanvas(), ops: DisplayList = [];
-    // the mirror answers reads made while recording (the matrix, text metrics): replay never reads
-    // it, so one pixel is enough
-    nc.recording = { ctx: recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, ops), ops };
+    const nc = new NativeCanvas();
+    nc.recorder = new Recorder();
     beginRecording(nc, w, h);
     return handle(nc);
   },
   "nResetDisplayListCanvas(JJII)V": (h: bigint, _node: bigint, w: number, ht: number) => beginRecording(nat(h), w, ht),
   // SkiaRecordingCanvas::finishRecording closes what is still open before the node takes the list
   "nFinishRecording(JJ)V": (h: bigint, node: bigint) => {
-    const nc = nat(h), rec = nc.recording!;
+    const nc = nat(h);
     nc.restoreToCount(1);
-    nodeAt(node).setDisplayList(rec.ops);
-    rec.ops = [];
-    retarget(rec.ctx, rec.ops);
+    nodeAt(node).setDisplayList(nc.recorder!.take());
   },
   "nDrawRenderNode(JJ)V": (h: bigint, node: bigint) => {
     const nc = nat(h), n = nodeAt(node);

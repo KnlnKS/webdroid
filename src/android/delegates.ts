@@ -28,7 +28,7 @@ import { asZygote } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
-import { recordingContext, replay, replayWithSemantics, retarget, type DisplayList } from "./recording";
+import { Recorder, replay, replayWithSemantics, type DisplayList } from "./recording";
 import { device } from "../shell/config";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
@@ -608,14 +608,13 @@ delegate("android/graphics/Interpolator", {
 class NativePicture {
   w = 0; h = 0;
   ops: DisplayList | null = null;
-  /** while recording: the canvas recording into `recording` (PictureCanvas owns its handle) */
-  canvas: NativeCanvas | null = null; recording: DisplayList | null = null;
+  /** while recording: what the PictureCanvas (which owns its handle) records into */
+  recorder: Recorder | null = null;
   /** SkPictureRecorder::finishRecordingAsPicture: the list is the picture's, and the canvas records no more of it */
   endRecording() {
-    if (!this.recording) return;
-    this.ops = this.recording; this.recording = null;
-    retarget(this.canvas!.recording!.ctx, []);
-    this.canvas = null;
+    if (!this.recorder) return;
+    this.ops = this.recorder.take();
+    this.recorder = null;
   }
 }
 const picture = (h: bigint) => deref<NativePicture>(h);
@@ -623,7 +622,7 @@ delegate("android/graphics/Picture", {
   // a copy of a picture still recording holds what was recorded so far
   "nativeConstructor(J)J": (src: bigint) => {
     const p = new NativePicture();
-    if (src) { const s = picture(src); p.w = s.w; p.h = s.h; p.ops = s.recording ? s.recording.slice() : s.ops; }
+    if (src) { const s = picture(src); p.w = s.w; p.h = s.h; p.ops = s.recorder ? s.recorder.ops.slice() : s.ops; }
     return ownedHandle(p);
   },
   "nativeDestructor(J)V": (h: bigint) => { picture(h).endRecording(); release(h); },
@@ -631,10 +630,8 @@ delegate("android/graphics/Picture", {
     const p = picture(h);
     p.endRecording();
     p.w = w; p.h = ht; p.ops = null;
-    const ops: DisplayList = p.recording = [], ctx = recordingContext(new OffscreenCanvas(1, 1).getContext("2d")!, ops);
-    const c = p.canvas = NativeCanvas.over(ctx, w, ht);
-    c.recording = { ctx, ops };
-    return handle(c);
+    p.recorder = new Recorder();
+    return handle(NativeCanvas.over(p.recorder.ctx, w, ht));
   },
   "nativeEndRecording(J)V": (h: bigint) => picture(h).endRecording(),
   "nativeGetWidth(J)I": (h: bigint) => picture(h).w,
