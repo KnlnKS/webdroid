@@ -89,16 +89,23 @@ rt.register({ name: "webdroid/LocaleManagerService", ctor: class extends JObj {}
   "getOverrideLocaleConfig(Ljava/lang/String;I)Landroid/app/LocaleConfig;": () => null,
 } });
 hostStub("locale", "webdroid/LocaleManagerService");
+/** a list of distinct locales, the first of each tag kept */
+function initLocaleList(this: JLocaleList, locales: JLocale[]) {
+  if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
+  return after(withTags(locales), ({ values, tags }) => {
+    const first = tags.map((tag, i) => tags.indexOf(tag) === i);
+    this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
+  });
+}
 rt.register({
   name: "android/os/LocaleList", ctor: JLocaleList, ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/os/LocaleList", readLocaleList); } },
   methods: {
-    "<init>([Ljava/util/Locale;)V": function (this: JLocaleList, locales: JLocale[]) {
-      if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
-      return after(withTags(locales), ({ values, tags }) => {
-        const first = tags.map((tag, i) => tags.indexOf(tag) === i);
-        this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
-      });
+    "<init>([Ljava/util/Locale;)V": initLocaleList,
+    // `top` first, then the rest of `others` without it
+    "<init>(Ljava/util/Locale;Landroid/os/LocaleList;)V": function (this: JLocaleList, top: JLocale | null, others: JLocaleList | null) {
+      if (!top) throw rt.mkThrowable("java/lang/NullPointerException", "topLocale is null");
+      return initLocaleList.call(this, [top, ...(others?.values ?? [])]);
     },
     "static getDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => defaultList ?? theConfig.locales),
     // the process default ActivityThread sets from its configuration, with its best locale first

@@ -111,6 +111,8 @@ async function stop(r: ActivityRecord): Promise<void> {
 async function destroy(r: ActivityRecord): Promise<void> {
   r.state = "destroying";
   stack.splice(stack.indexOf(r), 1);
+  // a start waiting on its pause goes on: the report would find no record
+  const paused = r.paused; r.paused = null; paused?.();
   await schedule(r.app, null, await item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
 }
 

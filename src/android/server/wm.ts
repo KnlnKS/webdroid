@@ -330,6 +330,12 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   "getBaseDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
   "getInitialDisplayDensity(I)I": () => device.densityDpi,
   "getBaseDisplayDensity(I)I": () => device.densityDpi,
+  // the compositor draws no blur behind or across windows, so cross-window blur is never enabled
+  "registerCrossWindowBlurEnabledListener(Landroid/view/ICrossWindowBlurEnabledListener;)Z": () => 0,
+  "unregisterCrossWindowBlurEnabledListener(Landroid/view/ICrossWindowBlurEnabledListener;)V": () => {},
+  // nothing records the screen
+  "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
+  "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
 } });
 
 /** WindowManagerGlobal's IWindowManager, for an app whose windows AOSP's ViewRootImpl manages */
