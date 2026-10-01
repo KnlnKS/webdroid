@@ -125,6 +125,33 @@ rt.register({ name: "webdroid/TrustManagerService", ctor: class extends JObj {},
 hostStub("window", "webdroid/WindowManagerService");
 hostStub("trust", "webdroid/TrustManagerService");
 
+// system_server services every device runs, which an app reaches with nothing to act on here: no
+// assistant is selected (VoiceInteractionManagerService then ignores activity events), no content
+// capture service package is installed to allowlist a package's options, and netd's cleartext
+// inspection is not available, so only the default POLICY_ACCEPT, which inspects nothing, applies
+rt.register({ name: "webdroid/VoiceInteractionManagerService", ctor: class extends JObj {}, sup: "com/android/internal/app/IVoiceInteractionManagerService$Stub",
+  methods: noops("notifyActivityEventChanged(Landroid/os/IBinder;I)V") });
+rt.register({ name: "webdroid/ContentCaptureManagerService", ctor: class extends JObj {}, sup: "android/view/contentcapture/IContentCaptureManager$Stub",
+  methods: noops("registerContentCaptureOptionsCallback(Ljava/lang/String;Landroid/view/contentcapture/IContentCaptureOptionsCallback;)V") });
+rt.register({ name: "webdroid/NetworkManagementService", ctor: class extends JObj {}, sup: "android/os/INetworkManagementService$Stub", methods: {
+  "setUidCleartextNetworkPolicy(II)V": (_uid: number, policy: number) => { if (policy !== 0) rt.noteMissing(`netd cleartext network policy ${policy}`); },
+} });
+// TextClassificationManagerService with no TextClassifierService package installed: each request
+// fails ("No configured system TextClassifierService") and the caller uses its local classifier
+const TC = "Landroid/view/textclassifier/", TCB = "Landroid/service/textclassifier/ITextClassifierCallback;";
+const classifierFailure = (_session: unknown, _request: unknown, callback: JObj) => vcall(callback, "onFailure", "()V");
+rt.register({ name: "webdroid/TextClassificationManagerService", ctor: class extends JObj {}, sup: "android/service/textclassifier/ITextClassifierService$Stub", methods: {
+  ...Object.fromEntries([["onSuggestSelection", "TextSelection$Request"], ["onClassifyText", "TextClassification$Request"],
+    ["onGenerateLinks", "TextLinks$Request"], ["onDetectLanguage", "TextLanguage$Request"], ["onSuggestConversationActions", "ConversationActions$Request"]]
+    .map(([name, request]) => [`${name}(${TC}TextClassificationSessionId;${TC}${request};${TCB})V`, classifierFailure])),
+  ...noops(`onSelectionEvent(${TC}TextClassificationSessionId;${TC}SelectionEvent;)V`, `onTextClassifierEvent(${TC}TextClassificationSessionId;${TC}TextClassifierEvent;)V`,
+    `onCreateTextClassificationSession(${TC}TextClassificationContext;${TC}TextClassificationSessionId;)V`, `onDestroyTextClassificationSession(${TC}TextClassificationSessionId;)V`),
+} });
+hostStub("textclassification", "webdroid/TextClassificationManagerService");
+hostStub("voiceinteraction", "webdroid/VoiceInteractionManagerService");
+hostStub("content_capture", "webdroid/ContentCaptureManagerService");
+hostStub("network_management", "webdroid/NetworkManagementService");
+
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
 // AVD's Wi-Fi network as an app sees it (no transport info, owner or admin uids); its DNS server is

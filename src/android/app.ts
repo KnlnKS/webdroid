@@ -777,6 +777,8 @@ rt.register({
   methods: { "<init>(I)V": () => {} },
 });
 
+// SystemServer starts AutofillManagerService only with FEATURE_AUTOFILL, which this device lacks
+absentService("autofill");
 rt.register({
   name: "android/view/autofill/AutofillManager", ctor: class extends JObj {},
   methods: {
