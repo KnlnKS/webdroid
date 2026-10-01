@@ -120,10 +120,65 @@ async function destroy(r: ActivityRecord): Promise<void> {
 let transitions = 0;
 export const pendingTransitions = (): number => transitions;
 
-/** ActivityStarter: a resolved activity on top of this process's task */
+const LAUNCH_MULTIPLE = 0, LAUNCH_SINGLE_TOP = 1, LAUNCH_SINGLE_TASK = 2, RESULT_CANCELED = 0;
+const FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, FLAG_SINGLE_TOP = 0x20000000, FLAG_NEW_TASK = 0x10000000, FLAG_CLEAR_TASK = 0x8000, FLAG_REORDER_TO_FRONT = 0x20000;
+/** ActivityStarter's reuse of an instance in the task (one task per process): a singleTop or
+ *  SINGLE_TOP start of the top activity, a singleTask/singleInstance activity, or CLEAR_TOP clear
+ *  what is above it and hand it the intent; REORDER_TO_FRONT brings it to the top; CLEAR_TASK with
+ *  NEW_TASK empties the task first. Returns whether the existing instance took the intent. */
+async function reuseActivity(intent: JObj, info: JObj): Promise<boolean> {
+  const flags: number = await vcall(intent, "getFlags", "()I"), mode = field<number>(info, AI, "launchMode");
+  if ((flags & FLAG_CLEAR_TASK) && (flags & FLAG_NEW_TASK)) {
+    await clearAbove(null);
+    return false;
+  }
+  const name = field<string>(info, AI, "name");
+  const existing = [...stack].reverse().find((r) => !r.finishing && field<string>(r.info, AI, "name") === name);
+  if (!existing) return false;
+  const singleTop = mode === LAUNCH_SINGLE_TOP || (flags & FLAG_SINGLE_TOP) !== 0;
+  if (existing === stack.at(-1) && (singleTop || mode >= LAUNCH_SINGLE_TASK)) return newIntent(existing, intent).then(() => true);
+  if (mode >= LAUNCH_SINGLE_TASK || (flags & FLAG_ACTIVITY_CLEAR_TOP)) {
+    // a standard activity under CLEAR_TOP without SINGLE_TOP is itself replaced by a new instance
+    const reuse = mode !== LAUNCH_MULTIPLE || singleTop;
+    await clearAbove(reuse ? existing : stack[stack.indexOf(existing) - 1] ?? null);
+    if (reuse) await newIntent(existing, intent);
+    return reuse;
+  }
+  if (flags & FLAG_REORDER_TO_FRONT) {
+    const top = stack.at(-1)!;
+    await pause(top);
+    stack.splice(stack.indexOf(existing), 1);
+    stack.push(existing);
+    existing.state = "paused";
+    await newIntent(existing, intent);
+    await resume(existing);
+    return true;
+  }
+  return false;
+}
+/** finish every activity above `target` (all of them for null): those covered are destroyed, and
+ *  the top finishes, resuming what is then below it; each owes its caller RESULT_CANCELED */
+async function clearAbove(target: ActivityRecord | null): Promise<void> {
+  const above = stack.slice(target ? stack.indexOf(target) + 1 : 0);
+  for (const r of above.slice(0, -1)) {
+    r.finishing = true;
+    await owedResult(r, RESULT_CANCELED, null);
+    await destroy(r);
+  }
+  const top = above.at(-1);
+  if (top) await finish(top, RESULT_CANCELED, null);
+}
+/** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a temporary pause when resumed */
+async function newIntent(r: ActivityRecord, intent: JObj): Promise<void> {
+  const referrer = await newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", intent, appHost!.pkg);
+  await schedule(r.app, await item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", r.token, newArrayList([referrer]), +(r.state === "resumed")), null);
+}
+
+/** ActivityStarter: a resolved activity on top of this process's task, or the instance already there that takes the intent */
 export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number, remoteId = 0): Promise<void> {
   transitions++;
   try {
+    if (await reuseActivity(intent, info)) return;
     const token = await newObj("android/os/Binder", "()V");
     const prev = stack.at(-1);
     const orientation = field<number>(info, AI, "screenOrientation");
@@ -231,14 +286,17 @@ export async function taskVisibility(phase: "pause" | "stop" | "resume" | "visib
   }
 }
 
+/** the result a finishing activity owes the one that started it for one */
+async function owedResult(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<void> {
+  if (r.resultTo && r.requestCode >= 0)
+    r.resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
+}
 async function finish(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<boolean> {
   transitions++;
   try {
     if (r.finishing) return true;
     r.finishing = true;
-    if (r.resultTo && r.requestCode >= 0) {
-      r.resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
-    }
+    await owedResult(r, resultCode, data);
     const wasTop = stack.at(-1) === r;
     await pause(r);
     const below = stack[stack.indexOf(r) - 1];
@@ -249,7 +307,6 @@ async function finish(r: ActivityRecord, resultCode: number, data: JObj | null):
   } finally { transitions--; }
 }
 
-const LAUNCH_MULTIPLE = 0, FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, RESULT_CANCELED = 0;
 const isComponent = async (r: ActivityRecord, component: JObj | null) => !!component &&
   field<string>(r.info, AI, "packageName") === await vcall(component, "getPackageName", "()Ljava/lang/String;") &&
   field<string>(r.info, AI, "name") === await vcall(component, "getClassName", "()Ljava/lang/String;");
@@ -266,8 +323,7 @@ async function navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, r
   const restarted = parent && !reuse && await startActivityFor(r.app, dest) === START_SUCCESS;
   void (async () => {
     for (const c of covered) await finish(c, RESULT_CANCELED, null);
-    if (reuse) await schedule(parent!.app, await item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", parent!.token,
-      newArrayList([await newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", dest, appHost!.pkg)]), 0), null);
+    if (reuse) await newIntent(parent!, dest);
     if (restarted) await finish(parent!, resultCode, resultData);
     await finish(r, resultCode, resultData);
   })().catch(reportUncaught);
