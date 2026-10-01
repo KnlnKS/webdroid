@@ -758,12 +758,14 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   [`queryContentProviders(${S}IJ${S})${SLICE}`]: driven(function* queryContentProviders$(process: string | null, uid: number, flags: bigint, metaDataKey: string | null): Gen {
     const out: JObj[] = process === null ? yield* all$(SYSTEM_PROVIDERS, systemProviderInfo$) : [];
+    const own: [number, JObj][] = [];
     for (const owner of packages.values()) for (const c of components(owner, "provider", flag(flags))) {
       if (!authoritiesOf(c.node).length || process !== null && (componentProcess(c) !== process || owner.uid !== uid)) continue;
       if (metaDataKey !== null && !c.node.children.some((n) => n.name === "meta-data" && attrStr(n, "name") === metaDataKey)) continue;
-      out.push(yield* providerInfo$(c, flag(flags), null));
+      own.push([attr(c.node, "initOrder")?.data ?? 0, yield* providerInfo$(c, flag(flags), null)]);
     }
-    return slice(out);
+    // sProviderInitOrderSorter: by descending initOrder, the order ActivityThread installs them in
+    return slice([...out, ...own.sort((a, b) => b[0] - a[0]).map(([, info]) => info)]);
   }),
   [`getComponentEnabledSetting(${CN}I)I`]: driven(function* getComponentEnabledSetting$(c: JObj): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
