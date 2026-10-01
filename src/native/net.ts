@@ -7,9 +7,9 @@
 import { ByteQueue, DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists, ipv4Key, ipv4Text, parseIpv4 } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { hostLib, PTR, stp, ldLong, type HostFn, type HostRet, ptr } from "./host";
+import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem, guestAt } from "./mem";
-import { fail, LAYOUT } from "./libc";
+import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
 import { unixSocket, isUnixSocket } from "./stdio";
 import { unixConnect } from "./unix";
@@ -781,15 +781,15 @@ function putSockaddr(endpoint: Endpoint, address: number, length: number, capaci
 
 function nativeGetifaddrs(cpu: Cpu, result: number): number {
   if (!result) return fail(cpu, E.FAULT);
-  const size = PTR === 8 ? 56 : 28;
+  const size = 28;
   const entry = mem.malloc(size + 35);
   if (!entry) return fail(cpu, E.NOMEM);
   mem.memset(entry, 0, size + 35);
   const lo = INTERFACES[0], address = entry + size, netmask = address + 16, name = netmask + 16;
-  stp(entry + PTR, name);
-  mem.st32(entry + PTR * 2, lo.flags);
-  stp(entry + (PTR === 8 ? 24 : 12), address);
-  stp(entry + (PTR === 8 ? 32 : 16), netmask);
+  stp(entry + 4, name);
+  mem.st32(entry + 8, lo.flags);
+  stp(entry + 12, address);
+  stp(entry + 16, netmask);
   mem.st16(address, AF_INET); mem.u8.set(V4_LOOPBACK, address + 4);
   mem.st16(netmask, AF_INET); mem.u8.set([255, 0, 0, 0], netmask + 4);
   mem.u8.set([...enc.encode(lo.name), 0], name);
@@ -797,9 +797,8 @@ function nativeGetifaddrs(cpu: Cpu, result: number): number {
   return 0;
 }
 
-const addrinfoLayout = () => PTR === 8
-  ? { size: 48, canon: 24, addr: 32, next: 40 }
-  : { size: 32, canon: 20, addr: 24, next: 28 };
+/** struct addrinfo: its size and the offsets of its pointers */
+const ADDRINFO = { size: 32, canon: 20, addr: 24, next: 28 };
 
 function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number | Promise<number> {
   if (!result) { fail(cpu, E.FAULT); return EAI_SYSTEM; }
@@ -823,10 +822,9 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
   const answer = (found: number[][] | number): number => {
     if (typeof found === "number") return found;
     const bytes = found[0];
-    const layout = addrinfoLayout();
-    const sockaddr = layout.size;
+    const sockaddr = ADDRINFO.size;
     const canonBytes = flags & AI_CANONNAME ? enc.encode(node) : null;
-    const size = layout.size + 16 + (canonBytes ? canonBytes.length + 1 : 0);
+    const size = ADDRINFO.size + 16 + (canonBytes ? canonBytes.length + 1 : 0);
     const allocation = mem.malloc(size);
     if (!allocation) { fail(cpu, E.NOMEM); return EAI_SYSTEM; }
     mem.memset(allocation, 0, size);
@@ -835,8 +833,8 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
     mem.st32(allocation + 8, resultType);
     mem.st32(allocation + 12, resultProtocol);
     mem.st32(allocation + 16, 16);
-    stp(allocation + layout.addr, allocation + sockaddr);
-    stp(allocation + layout.next, 0);
+    stp(allocation + ADDRINFO.addr, allocation + sockaddr);
+    stp(allocation + ADDRINFO.next, 0);
     mem.st16(allocation + sockaddr, AF_INET);
     mem.u8[allocation + sockaddr + 2] = port >>> 8;
     mem.u8[allocation + sockaddr + 3] = port & 255;
@@ -844,7 +842,7 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
     if (canonBytes) {
       const canon = allocation + sockaddr + 16;
       mem.u8.set(canonBytes, canon);
-      stp(allocation + layout.canon, canon);
+      stp(allocation + ADDRINFO.canon, canon);
     }
     stp(result, allocation);
     record(`resolved ${node} -> ${ipv4Text(bytes)} result=${mem.va(allocation).toString()}`);
@@ -1060,7 +1058,7 @@ export function netInit(): void {
     select: (cpu, args) => {
       const count = args.i(), r = args.p(), w = args.p(), x = args.p(), timeout = args.p();
       if (!timeout) return nativeSelect(cpu, count, r, w, x, -1);
-      const seconds = ldLong(timeout + LAYOUT.TS_SEC), micros = ldLong(timeout + LAYOUT.TS_NSEC);
+      const seconds = mem.ld32(timeout), micros = mem.ld32(timeout + 4);
       if (seconds < 0 || micros < 0 || micros >= 1_000_000) return fail(cpu, E.INVAL);
       return nativeSelect(cpu, count, r, w, x, seconds * 1000 + micros / 1000);
     },
