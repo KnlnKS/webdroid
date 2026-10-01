@@ -509,23 +509,3 @@ test("PBKDF2 secret keys derive through PBEKeySpec", async () => {
   ]);
 });
 
-test("Wi-Fi locks expose their held state", async () => {
-  const manager = rt.make("android/net/wifi/WifiManager");
-  const lock = await vcall(manager, "createWifiLock", "(ILjava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;", 1, "test");
-  expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
-  await vcall(lock, "acquire", "()V");
-  await vcall(lock, "acquire", "()V");
-  await vcall(lock, "release", "()V");
-  expect(await vcall(lock, "isHeld", "()Z")).toBe(1);
-  await vcall(lock, "release", "()V");
-  expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
-  await expect(vcallAsync(lock, "release", "()V"))
-    .rejects.toMatchObject({ constructor: rt.link("java/lang/RuntimeException").ctor });
-  await vcall(lock, "setReferenceCounted", "(Z)V", 0);
-  await vcall(lock, "release", "()V");
-  await vcall(lock, "acquire", "()V");
-  await vcall(lock, "release", "()V");
-  await vcall(lock, "release", "()V");
-  expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
-});
-

@@ -2,7 +2,6 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
-import { mangleMethod } from "../src/jvm/abi";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { systemService } from "../src/android/context";
 import { scall, mountApexData, loadFrameworkJar } from "./java";
@@ -422,31 +421,5 @@ describe("urlconnection-mime", () => {
     expect(await guess("unknown.extension")).toBeNull();
     const error = await guess(null).then(() => null, e => e);
     expect(rt.iof(error, "java/lang/NullPointerException")).toBeTruthy();
-  });
-});
-
-describe("wifi", () => {
-  const signalLevel = (rssi: number, levels: number) =>
-    (rt.link("android/net/wifi/WifiManager").ctor as unknown as Record<string, (rssi: number, levels: number) => number>)[
-      mangleMethod("calculateSignalLevel", "(II)I")
-    ](rssi, levels);
-
-  test("WifiManager retains its DHCP and redacted connection state", async () => {
-    const wifi = rt.make("android/net/wifi/WifiManager");
-    expect(await vcall(wifi, "getDhcpInfo", "()Landroid/net/DhcpInfo;")).not.toBeNull();
-    const info = await vcall(wifi, "getConnectionInfo", "()Landroid/net/wifi/WifiInfo;");
-    expect(await vcall(info, "getSSID", "()Ljava/lang/String;")).toBe("<unknown ssid>");
-  });
-
-  test("WifiManager clamps and truncates signal levels like Android", () => {
-    expect(signalLevel(-101, 5)).toBe(0);
-    expect(signalLevel(-100, 5)).toBe(0);
-    expect(signalLevel(-89, 5)).toBe(0);
-    expect(signalLevel(-77, 5)).toBe(2);
-    expect(signalLevel(-56, 5)).toBe(3);
-    expect(signalLevel(-55, 5)).toBe(4);
-    expect(signalLevel(-54, 5)).toBe(4);
-    expect(signalLevel(-77, 9)).toBe(4);
-    expect(signalLevel(-77, 1)).toBe(0);
   });
 });

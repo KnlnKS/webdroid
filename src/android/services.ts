@@ -132,6 +132,7 @@ hostStub("trust", "webdroid/TrustManagerService");
 // Callbacks reach ConnectivityManager's CallbackHandler as CALLBACK_* messages through the
 // Messenger each request carries, as ConnectivityService sends them.
 const NET_ID = 100, TYPE_WIFI = 1, TRANSPORT_WIFI = 1;
+export const DNS_SERVER = "8.8.8.8";
 /** NET_CAPABILITY_*: NOT_METERED, INTERNET, NOT_RESTRICTED, TRUSTED, NOT_VPN, VALIDATED, NOT_ROAMING,
  *  FOREGROUND, NOT_CONGESTED, NOT_SUSPENDED, NOT_VCN_MANAGED, NOT_BANDWIDTH_CONSTRAINED */
 const CAPABILITIES = [11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 28, 37];
@@ -142,7 +143,7 @@ const networkState = {
   caps: null as Promise<JObj> | null,
   link: null as Promise<JObj> | null,
 };
-const theNetwork = () => networkState.network ??= newObj("android/net/Network", "(I)V", NET_ID);
+export const theNetwork = (): Promise<JObj> => networkState.network ??= newObj("android/net/Network", "(I)V", NET_ID);
 const capabilities = () => networkState.caps ??= (async () => {
   let b = await newObj(`${NC}$Builder`);
   b = await vcall(b, "addTransportType", `(I)${NCB}`, TRANSPORT_WIFI);
@@ -155,7 +156,7 @@ const capabilities = () => networkState.caps ??= (async () => {
 const linkProperties = () => networkState.link ??= (async () => {
   const lp = await newObj("android/net/LinkProperties");
   await vcall(lp, "setInterfaceName", "(Ljava/lang/String;)V", "wlan0");
-  const dns = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "8.8.8.8");
+  const dns = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", DNS_SERVER);
   await vcall(lp, "addDnsServer", "(Ljava/net/InetAddress;)Z", dns);
   return lp;
 })();

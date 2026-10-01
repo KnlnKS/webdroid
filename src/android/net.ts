@@ -2,7 +2,7 @@
 // (services.ts), under AOSP's ConnectivityManager.
 
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, curThread, stringHash, mkEnumSet } from "../jvm/natives/jlang";
+import { vcall, curThread, stringHash } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet } from "../jvm/natives/jcoll";
 import { pathOf } from "../jvm/natives/jio";
 import { type JParcel, parcelCreator } from "./parcel";
@@ -269,97 +269,6 @@ rt.register({
 });
 
 
-// ── Wi-Fi: the relay's network is the one Wi-Fi network, and everything a location permission
-// would gate (SSID, BSSID, address) reads as the platform's redacted values
-class JWifiInfo extends JObj {}
-class JScanResult extends JObj {
-  SSID: string | null = null;
-  BSSID: string | null = null;
-  capabilities: string | null = null;
-  level = 0;
-  frequency = 0;
-  timestamp = 0n;
-}
-rt.register({
-  name: "android/net/wifi/ScanResult", ctor: JScanResult, ifaces: ["android/os/Parcelable"],
-  fields: ["SSID", "BSSID", "capabilities", "level", "frequency", "timestamp"],
-  methods: { "<init>()V": function () {}, "describeContents()I": () => 0 },
-});
-const supplicantStates = mkEnumSet("android/net/wifi/SupplicantState", [
-  "DISCONNECTED", "INTERFACE_DISABLED", "INACTIVE", "SCANNING", "AUTHENTICATING", "ASSOCIATING",
-  "ASSOCIATED", "FOUR_WAY_HANDSHAKE", "GROUP_HANDSHAKE", "COMPLETED", "DORMANT", "UNINITIALIZED", "INVALID",
-]);
-rt.register({
-  name: "android/net/wifi/WifiInfo", ctor: JWifiInfo, ifaces: ["android/net/TransportInfo", "android/os/Parcelable"],
-  methods: {
-    "getSSID()Ljava/lang/String;": () => "<unknown ssid>",
-    "getSupplicantState()Landroid/net/wifi/SupplicantState;": () => supplicantStates[11],
-    "getBSSID()Ljava/lang/String;": () => "02:00:00:00:00:00",
-    "getMacAddress()Ljava/lang/String;": () => "02:00:00:00:00:00",
-    "getNetworkId()I": () => -1,
-    "getIpAddress()I": () => 0,
-    "getRssi()I": () => -127,
-    "getLinkSpeed()I": () => -1,
-    "getFrequency()I": () => -1,
-    "getHiddenSSID()Z": () => 0,
-    "describeContents()I": () => 0,
-    "toString()Ljava/lang/String;": () => "SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, RSSI: -127, Link speed: -1Mbps, Net ID: -1",
-  },
-});
-class JDhcpInfo extends JObj { ipAddress = 0; gateway = 0; netmask = 0; dns1 = 0; dns2 = 0; serverAddress = 0; leaseDuration = 0; }
-rt.register({
-  name: "android/net/DhcpInfo", ctor: JDhcpInfo, ifaces: ["android/os/Parcelable"],
-  fields: ["ipAddress", "gateway", "netmask", "dns1", "dns2", "serverAddress", "leaseDuration"],
-  methods: { "<init>()V": function () {} },
-});
-class JWifiLock extends JObj { held = false; refCounted = true; acquisitions = 0; }
-const wifiLockMethods = {
-  "acquire()V": function (this: JWifiLock) {
-    if (this.refCounted) this.acquisitions++;
-    this.held = true;
-  },
-  "release()V": function (this: JWifiLock) {
-    if (this.refCounted) {
-      if (--this.acquisitions < 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
-      this.held = this.acquisitions > 0;
-    } else this.held = false;
-  },
-  "isHeld()Z": function (this: JWifiLock) { return +this.held; },
-  "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },
-};
-rt.register({
-  name: "android/net/wifi/WifiManager$WifiLock", ctor: JWifiLock,
-  methods: wifiLockMethods,
-});
-rt.register({ name: "android/net/wifi/WifiManager$MulticastLock", ctor: class extends JWifiLock {}, methods: wifiLockMethods });
-rt.register({
-  name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
-  statics: { WIFI_STATE_DISABLED: 1, WIFI_STATE_ENABLED: 3, WIFI_STATE_UNKNOWN: 4, WIFI_STATE_CHANGED_ACTION: "android.net.wifi.WIFI_STATE_CHANGED", NETWORK_STATE_CHANGED_ACTION: "android.net.wifi.STATE_CHANGE", SCAN_RESULTS_AVAILABLE_ACTION: "android.net.wifi.SCAN_RESULTS" },
-  methods: {
-    "static calculateSignalLevel(II)I": (rssi: number, numLevels: number) => {
-      if (rssi <= -100) return 0;
-      const top = (numLevels - 1) | 0;
-      if (rssi >= -55) return top;
-      const scaled = Math.fround(Math.fround(Math.fround(rssi + 100) * Math.fround(top)) / 45);
-      return Math.trunc(scaled) | 0;
-    },
-    // the one network is Wi-Fi: WIFI_STATE_ENABLED
-    "isWifiEnabled()Z": () => 1,
-    "getWifiState()I": () => 3,
-    "setWifiEnabled(Z)Z": () => 0,
-    "getConnectionInfo()Landroid/net/wifi/WifiInfo;": () => new JWifiInfo(),
-    "getDhcpInfo()Landroid/net/DhcpInfo;": () => new JDhcpInfo(),
-    "getScanResults()Ljava/util/List;": () => newArrayList(),
-    "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
-    "createWifiLock(ILjava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
-    "createWifiLock(Ljava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
-    "createMulticastLock(Ljava/lang/String;)Landroid/net/wifi/WifiManager$MulticastLock;": () => rt.make("android/net/wifi/WifiManager$MulticastLock"),
-    "startScan()Z": () => 0,
-    "isScanAlwaysAvailable()Z": () => 0,
-    "is5GHzBandSupported()Z": () => 0,
-    "isP2pSupported()Z": () => 0,
-  },
-});
 // TrafficStats: per-thread socket tagging for the kernel's accounting. Bytes are counted per
 // tag nowhere here, so the tag is kept per thread and the totals answer UNSUPPORTED (-1).
 const threadTags = new WeakMap<object, number>();

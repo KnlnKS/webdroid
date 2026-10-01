@@ -170,7 +170,6 @@ const SERVICE_CLASS: Record<string, string> = {
   netstats: "android/app/usage/NetworkStatsManager",
   storagestats: "android/app/usage/StorageStatsManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
-  wifi: "android/net/wifi/WifiManager",
   servicediscovery: "android/net/nsd/NsdManager",
   bluetooth: "android/bluetooth/BluetoothManager",
   nfc: "android/nfc/NfcManager",
@@ -242,6 +241,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   phone: ["android/telephony/TelephonyManager", (ctx) => newObj("android/telephony/TelephonyManager", "(Landroid/content/Context;)V", ctx)],
   telephony_subscription_service: ["android/telephony/SubscriptionManager",
     (ctx) => newObj("android/telephony/SubscriptionManager", "(Landroid/content/Context;)V", ctx)],
+  // WifiFrameworkInitializer's fetcher: a WifiManager when the device has Wi-Fi
+  wifi: ["android/net/wifi/WifiManager", async (ctx) => scall("android/net/wifi/WifiFrameworkInitializer", "lambda$registerServiceWrappers$0",
+    "(Landroid/content/Context;Landroid/os/IBinder;)Landroid/net/wifi/WifiManager;", ctx, await hostedService("wifi"))],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

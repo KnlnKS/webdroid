@@ -82,6 +82,7 @@ import "./android/alarm";
 import "./android/packageinstaller";
 import "./android/net";
 import "./android/telephony";
+import "./android/wifi";
 import "./android/localsocket";
 import "./android/sharedprefs";
 import "./android/intent";
