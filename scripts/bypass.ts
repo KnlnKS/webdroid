@@ -5,7 +5,7 @@
 //   bun run bypass [--corpus] [--write-baseline]
 // --corpus rescans apks/ into the fixture; --write-baseline accepts the current findings.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { ACC, rt } from "../src/jvm/runtime";
 import { descToName } from "../src/jvm/abi";
 import type { ClassDef } from "../src/jvm/dex";
@@ -65,12 +65,19 @@ function declarations(text: string): Map<string, string> {
   return out;
 }
 const moduleDecls = new Map<string, Map<string, string>>();
+/** a spec module's declarations and those of its parts beside it (textview-compound.ts for textview.ts) */
+function specDecls(file: string): Map<string, string> {
+  const dir = dirname(file), parts = readdirSync(dir).filter((f) => f.startsWith(`${basename(file, ".ts")}-`) && f.endsWith(".ts"));
+  const decls = declarations(readFileSync(file, "utf8"));
+  for (const part of parts) for (const [name, decl] of declarations(readFileSync(resolve(dir, part), "utf8"))) if (!decls.has(name)) decls.set(name, decl);
+  return decls;
+}
 /** `source` with the module-level helpers it names, three calls deep */
 function withHelpers(cls: string, source: string): string {
   const file = specFile(cls);
   if (!file) return source;
   let decls = moduleDecls.get(file);
-  if (!decls) moduleDecls.set(file, decls = declarations(readFileSync(file, "utf8")));
+  if (!decls) moduleDecls.set(file, decls = specDecls(file));
   const seen = new Set<string>();
   for (let depth = 0, frontier = source; depth < 3 && frontier; depth++) {
     let next = "";
