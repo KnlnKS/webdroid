@@ -36,14 +36,12 @@ async function schedule(app: JObj, callback: JObj | null, lifecycle: JObj | null
 const item = (cls: string, desc: string, ...args: unknown[]) => scall(CT + cls, "obtain", `(${desc})L${CT}${cls};`, ...args);
 
 /** pause the resumed activity and wait for the client to report it */
-function pause(r: ActivityRecord): Promise<void> {
-  if (r.state !== "resumed") return Promise.resolve();
+async function pause(r: ActivityRecord): Promise<void> {
+  if (r.state !== "resumed") return;
   r.state = "pausing";
-  return new Promise<void>((resolve) => {
-    r.paused = resolve;
-    void item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0)
-      .then((pauseItem: JObj) => schedule(r.app, null, pauseItem));
-  });
+  const paused = new Promise<void>((resolve) => { r.paused = resolve; });
+  await schedule(r.app, null, await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
+  return paused;
 }
 async function resume(r: ActivityRecord): Promise<void> {
   const results = r.results.splice(0);
