@@ -11,7 +11,10 @@ import { mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
-import { hostStub, callingIdentity, exportParcel, importParcel, type ParcelData } from "./binder";
+import { hostStub, hostedService, callingIdentity, exportParcel, importParcel, type ParcelData } from "./binder";
+import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
+import { onMain } from "./mainloop";
+import { reportUncaught } from "./os";
 import { JParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
@@ -600,7 +603,62 @@ const POLICY = "android/app/NotificationManager$Policy";
 const policy = () => newObj(POLICY, "(IIIIII)V", 380, 2, 2, 157, 0, 2);
 const ZEN_MODE_OFF = 0;
 
+// NotificationManagerService's toasts: one shows at a time, for SHORT_DELAY or LONG_DELAY. A text
+// toast draws as SystemUI's ToastUI draws it, through ToastPresenter at config_toastDefaultGravity
+// and toast_y_offset; a custom one shows through its own ITransientNotification.
+const TOAST_DELAY = [2000, 3500];
+interface ToastRecord { pkg: string; token: JObj; text: unknown; duration: number; callback: JObj | null; custom: JObj | null; presenter?: JObj; timer?: GuestTimer }
+const toastQueue: ToastRecord[] = [];
+const T = "Landroid/app/ITransientNotificationCallback;";
+async function showToast(service: JObj, t: ToastRecord): Promise<void> {
+  const windowToken = await newObj("android/os/Binder", "()V");
+  if (t.custom) await vcall(t.custom, "show", "(Landroid/os/IBinder;)V", windowToken);
+  else {
+    const ctx = await scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+    const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+    const id = (name: string, type: string) => vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
+    const gravity: number = await vcall(res, "getInteger", "(I)I", await id("config_toastDefaultGravity", "integer"));
+    const y: number = await vcall(res, "getDimensionPixelSize", "(I)I", await id("toast_y_offset", "dimen"));
+    t.presenter = await newObj("android/widget/ToastPresenter", "(Landroid/content/Context;Landroid/view/accessibility/IAccessibilityManager;Landroid/app/INotificationManager;Ljava/lang/String;)V",
+      ctx, await hostedService("accessibility"), service, t.pkg);
+    const view = await scall("android/widget/ToastPresenter", "getTextToastView", "(Landroid/content/Context;Ljava/lang/CharSequence;)Landroid/view/View;", ctx, t.text);
+    await vcall(t.presenter, "show", `(Landroid/view/View;Landroid/os/IBinder;Landroid/os/IBinder;IIIIFF${T}Z)V`, view, t.token, windowToken, t.duration, gravity, 0, y, 0, 0, t.callback, 0);
+  }
+  t.timer = setGuestTimeout(() => void onMain(() => hideToast(t)).catch(reportUncaught), TOAST_DELAY[t.duration ? 1 : 0]);
+}
+async function hideToast(t: ToastRecord): Promise<void> {
+  const i = toastQueue.indexOf(t);
+  if (i < 0) return;
+  if (i > 0) { toastQueue.splice(i, 1); return; }
+  clearGuestTimeout(t.timer);
+  if (t.custom) await vcall(t.custom, "hide", "()V");
+  else if (t.presenter) await vcall(t.presenter, "hide", `(${T})V`, t.callback);
+  toastQueue.shift();
+  if (toastQueue[0]) await showToast(toastService!, toastQueue[0]);
+}
+let toastService: JObj | null = null;
+function enqueueToast(this: JObj, t: ToastRecord): number {
+  toastService = this;
+  toastQueue.push(t);
+  if (toastQueue.length === 1) void showToast(this, t).catch(reportUncaught);
+  return 1;
+}
+
 rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends JObj {}, sup: "android/app/INotificationManager$Stub", methods: {
+  "enqueueTextToast(Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/CharSequence;IZILandroid/app/ITransientNotificationCallback;)Z":
+    function (this: JObj, pkg: string, token: JObj, text: unknown, duration: number, _ui: number, _display: number, callback: JObj | null) {
+      return enqueueToast.call(this, { pkg, token, text, duration, callback, custom: null });
+    },
+  "enqueueToast(Ljava/lang/String;Landroid/os/IBinder;Landroid/app/ITransientNotification;IZI)Z":
+    function (this: JObj, pkg: string, token: JObj, custom: JObj, duration: number) {
+      return enqueueToast.call(this, { pkg, token, text: null, duration, callback: null, custom });
+    },
+  "cancelToast(Ljava/lang/String;Landroid/os/IBinder;)V": (pkg: string, token: JObj) => {
+    const t = toastQueue.find((r) => r.pkg === pkg && r.token === token);
+    if (t) return hideToast(t);
+  },
+  // ToastPresenter reports the window gone; the record left the queue when it was hidden
+  "finishToken(Ljava/lang/String;Landroid/os/IBinder;)V": () => {},
   "enqueueNotificationWithTag(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILandroid/app/Notification;I)V": enqueueNotification,
   "cancelNotificationWithTag(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V":
     async (pkg: string, opPkg: string | null, tag: string | null, id: number, userId: number) => {
