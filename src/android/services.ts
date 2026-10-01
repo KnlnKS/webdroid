@@ -148,6 +148,11 @@ rt.register({ name: "webdroid/TextClassificationManagerService", ctor: class ext
     `onCreateTextClassificationSession(${TC}TextClassificationContext;${TC}TextClassificationSessionId;)V`, `onDestroyTextClassificationSession(${TC}TextClassificationSessionId;)V`),
 } });
 hostStub("textclassification", "webdroid/TextClassificationManagerService");
+// SensitiveContentProtectionManagerService only blocks a sensitive window from screen sharing, and
+// nothing projects the screen here
+rt.register({ name: "webdroid/SensitiveContentProtectionManagerService", ctor: class extends JObj {}, sup: "android/view/ISensitiveContentProtectionManager$Stub",
+  methods: noops("setSensitiveContentProtection(Landroid/os/IBinder;Ljava/lang/String;Z)V") });
+hostStub("sensitive_content_protection_service", "webdroid/SensitiveContentProtectionManagerService");
 hostStub("voiceinteraction", "webdroid/VoiceInteractionManagerService");
 hostStub("content_capture", "webdroid/ContentCaptureManagerService");
 hostStub("network_management", "webdroid/NetworkManagementService");
