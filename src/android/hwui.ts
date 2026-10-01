@@ -14,6 +14,9 @@ import { onNextVsync } from "./vsync";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
+import type { NativeBitmap } from "./bitmap";
+
+const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
 
 const SYNC_OK = 0, SYNC_LOST_SURFACE_REWARD_IF_FOUND = 2, SYNC_CONTEXT_IS_STOPPED = 4;
 interface Proxy {
@@ -71,6 +74,17 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
   "nSetSurface(JLandroid/view/Surface;Z)V": (h: bigint, surface: JObj | null) => { proxy(h).surface = nativeSurface(surface); },
   "nSetSurfaceControl(JJ)V": () => {},
   ...textureLayerNatives,
+  // PixelCopy.request on a surface: its latest buffer, or the whole of it for an empty source rect
+  "nCopySurfaceInto(Landroid/view/Surface;IIIILandroid/graphics/HardwareRenderer$CopyRequest;)V":
+    async (javaSurface: JObj, l: number, t: number, r: number, b: number, request: JObj) => {
+      const s = nativeSurface(javaSurface), src = s?.queue?.canvas;
+      if (!src) return vcall(request, "onCopyFinished", "(I)V", PIXEL_COPY_SOURCE_NO_DATA);
+      if (r <= l || b <= t) { l = t = 0; r = src.width; b = src.height; }
+      const dst = deref<NativeBitmap>(await vcall(request, "getDestinationBitmap", "(II)J", r - l, b - t));
+      dst.ctx.clearRect(0, 0, dst.w, dst.h);
+      dst.ctx.drawImage(src, l, t, r - l, b - t, 0, 0, dst.w, dst.h);
+      return vcall(request, "onCopyFinished", "(I)V", PIXEL_COPY_SUCCESS);
+    },
   "nSyncAndDrawFrame(J[JI)I": (h: bigint) => drawFrame(proxy(h)),
   "nDestroy(JJ)V": (h: bigint) => { proxy(h).surface = null; },
   "nSetOpaque(JZ)V": (h: bigint, opaque: number) => { proxy(h).opaque = !!opaque; },
