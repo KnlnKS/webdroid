@@ -895,17 +895,19 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       const st = existing("stat", path);
       return statOf(st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
     },
-    // the VFS keeps no permission bits or owners: an existing file takes any mode and owner
+    // the VFS keeps no permission bits or owners: an existing file takes any mode, and the groups an app may own
     "chmod(Ljava/lang/String;I)V": (path: string) => {
       if (path === null) rt.npe();
       existing("chmod", path);
     },
-    "chown(Ljava/lang/String;II)V": (path: string) => {
+    "chown(Ljava/lang/String;II)V": (path: string, uid: number, gid: number) => {
       if (path === null) rt.npe();
       existing("chown", path);
+      if (!mayChown(uid, gid)) throw errno("chown", E.PERM);
     },
-    // nor extended attributes, as fsetxattr answers
-    "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string) => {
+    // the VFS keeps no extended attributes, as a filesystem without xattr support
+    "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
+      if (path === null || name === null) rt.npe();
       existing("setxattr", path);
       throw errno("setxattr", OS_CONSTANTS.EOPNOTSUPP);
     },
@@ -1057,10 +1059,15 @@ function setTimes(path: string, modified: bigint): void {
   if (!vfs.exists(p)) throw unixError(E.NOENT);
   vfs.mtimes.set(p, Number(modified / 1000n));
 }
-/** chown(2) as an app's uid may: to its own ids, or -1 to keep one */
+/** chown(2) as an app's uid may: its own uid, a group it is in (its own, or the cache and shared
+ *  application gids ProcessList gives every app process), or -1 to keep one */
+function mayChown(uid: number, gid: number): boolean {
+  const own = procIdentity.uid, user = own - own % 100000, offset = own % 100000 - 10000;
+  return (uid === -1 || uid === own) && (gid === -1 || gid === own || offset >= 0 && (gid === user + 20000 + offset || gid === 50000 + offset));
+}
 function chownPath(path: string, uid: number, gid: number): void {
   statPath(path, null);
-  if (![-1, procIdentity.uid].includes(uid) || ![-1, procIdentity.uid].includes(gid)) throw unixError(E.PERM);
+  if (!mayChown(uid, gid)) throw unixError(E.PERM);
 }
 const fdPath = (fd: number): string => { const st = javaFdStat(fd); if (!st) throw unixError(E.BADF); return st.path ?? ""; };
 /** open DIR streams: the entries as readdir(3) returns them, and the descriptor closedir closes */
