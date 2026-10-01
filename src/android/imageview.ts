@@ -240,9 +240,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     const nc = canvasOf(cv), ctx = nc.ctx;
     const saveCount = nc.save();
     try {
-      if (this.cropToPadding) {
-        ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
-      }
+      if (this.cropToPadding) nc.clipRect(this.scrollX + this.padL, this.scrollY + this.padT, this.scrollX + this.padL + aw, this.scrollY + this.padT + ah);
       ctx.translate(this.padL, this.padT);
       if (matrix) applyMatrix(ctx, matrix);
       const drawn = drawAt(d, cv, 0, 0, dw, dh);
