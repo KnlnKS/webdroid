@@ -134,6 +134,7 @@ rt.markers("android/os/IBinder$DeathRecipient");
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
   // blocking-call warnings are StrictMode reporting, which is not modelled
   "static allowBlocking(Landroid/os/IBinder;)Landroid/os/IBinder;": (binder: unknown) => binder,
+  "static defaultBlocking(Landroid/os/IBinder;)Landroid/os/IBinder;": (binder: unknown) => binder,
   "static copyAllowBlocking(Landroid/os/IBinder;Landroid/os/IBinder;)V": () => {},
   // a stability label for binders crossing partitions; every binder here shares one build
   "markVintfStability()V": () => {},
