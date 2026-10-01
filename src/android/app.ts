@@ -13,7 +13,7 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, type JLayoutParams, setWindowContent, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj, scall, after } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, newObj, scall, after } from "../jvm/natives/jlang";
 import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import { actionOf } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
@@ -639,74 +639,6 @@ for (const [name, methods, statics] of [
   }],
   ["android/nfc/NfcManager", { "getDefaultAdapter()Landroid/nfc/NfcAdapter;": () => null }],
   ["android/nfc/NfcAdapter", { "static getDefaultAdapter(Landroid/content/Context;)Landroid/nfc/NfcAdapter;": () => null }],
-  // the CellLocation family an app type-checks a (null) cell against; a device with no radio reports none
-  ["android/telephony/CellLocation", {
-    "static getEmpty()Landroid/telephony/CellLocation;": () => null,
-    "static requestLocationUpdate()V": () => {},
-  }],
-  ["android/telephony/gsm/GsmCellLocation", { ...stubs(-1, "getLac()I", "getCid()I", "getPsc()I"), ...noops("<init>()V", "setLacAndCid(II)V") }],
-  ["android/telephony/cdma/CdmaCellLocation", {
-    ...stubs(-1, "getBaseStationId()I", "getSystemId()I", "getNetworkId()I"),
-    ...stubs(0x7fffffff, "getBaseStationLatitude()I", "getBaseStationLongitude()I"),
-    "static convertQuartSecToDecDegrees(I)D": (quartSec: number) => quartSec / 14400,   // AOSP: quarter-seconds of arc to degrees
-    ...noops("<init>()V"),
-  }],
-  // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
-  // withholds from ordinary apps are null.
-  ["android/telephony/TelephonyManager", {
-    ...stubs("", "getNetworkOperator()Ljava/lang/String;", "getNetworkOperatorName()Ljava/lang/String;",
-      "getSimOperator()Ljava/lang/String;", "getSimOperatorName()Ljava/lang/String;",
-      "getSimCountryIso()Ljava/lang/String;", "getNetworkCountryIso()Ljava/lang/String;"),
-    ...stubs(0, "getPhoneType()I", "getNetworkType()I", "getDataNetworkType()I", "getCallState()I", "getDataState()I",
-      "isNetworkRoaming()Z", "hasIccCard()Z"),
-    ...stubs(1, "getSimState()I"),
-    ...stubs(null, "getDeviceId()Ljava/lang/String;", "getLine1Number()Ljava/lang/String;",
-      "getSubscriberId()Ljava/lang/String;", "getSimSerialNumber()Ljava/lang/String;",
-      "getSimCarrierIdName()Ljava/lang/CharSequence;", "getSimSpecificCarrierIdName()Ljava/lang/CharSequence;"),
-    ...stubs(-1, "getSimCarrierId()I", "getSimSpecificCarrierId()I"),   // UNKNOWN_CARRIER_ID
-    ...noops("listen(Landroid/telephony/PhoneStateListener;I)V", "unregisterTelephonyCallback(Landroid/telephony/TelephonyCallback;)V"),
-    // no radio: the one thing a registration ever hears is the initial "disconnected"/"idle"
-    // state, delivered on the caller's executor as the platform does
-    "registerTelephonyCallback(Ljava/util/concurrent/Executor;Landroid/telephony/TelephonyCallback;)V": (executor: unknown, cb: unknown) => {
-      if (executor === null || cb === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "executor and callback must not be null");
-      const initial: [string, string, string, unknown[]][] = [
-        ["android/telephony/TelephonyCallback$DataConnectionStateListener", "onDataConnectionStateChanged", "(II)V", [0, 0]],
-        ["android/telephony/TelephonyCallback$CallStateListener", "onCallStateChanged", "(I)V", [0]],
-      ];
-      for (const [iface, name, desc, args] of initial) {
-        if (!rt.iof(cb, iface)) continue;
-        const task = rt.make("webdroid/TelephonyDelivery") as JObj & { run: () => Promise<void> };
-        task.run = () => vcall(cb, name, desc, ...args);
-        void vcallUncaught(executor, "execute", "(Ljava/lang/Runnable;)V", task);
-      }
-    },
-    "getActiveModemCount()I": () => 0,
-    // one radio-less manager answers for every subscription id
-    "createForSubscriptionId(I)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
-    "getCellLocation()Landroid/telephony/CellLocation;": () => null,                  // no radio: no cell
-    "createForPhoneAccountHandle(Landroid/telecom/PhoneAccountHandle;)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
-  }, {
-    PHONE_TYPE_NONE: 0, PHONE_TYPE_GSM: 1, PHONE_TYPE_CDMA: 2, PHONE_TYPE_SIP: 3,
-    NETWORK_TYPE_UNKNOWN: 0,
-    SIM_STATE_UNKNOWN: 0, SIM_STATE_ABSENT: 1, SIM_STATE_READY: 5,
-    CALL_STATE_IDLE: 0, CALL_STATE_RINGING: 1, CALL_STATE_OFFHOOK: 2,
-    DATA_DISCONNECTED: 0,
-  }],
-  // no SIM: no active subscriptions, and every default id is INVALID_SUBSCRIPTION_ID
-  ["android/telephony/SubscriptionManager", {
-    "static from(Landroid/content/Context;)Landroid/telephony/SubscriptionManager;": (ctx: unknown) => systemService(ctx as Parameters<typeof systemService>[0], "telephony_subscription_service"),
-    "getActiveSubscriptionInfoList()Ljava/util/List;": () => null,
-    "getActiveSubscriptionInfoCount()I": () => 0,
-    "getActiveSubscriptionInfoCountMax()I": () => 1,
-    "getActiveSubscriptionInfo(I)Landroid/telephony/SubscriptionInfo;": () => null,
-    "getActiveSubscriptionInfoForSimSlotIndex(I)Landroid/telephony/SubscriptionInfo;": () => null,
-    ...stubs(-1, "static getDefaultSubscriptionId()I", "static getDefaultDataSubscriptionId()I",
-      "static getDefaultVoiceSubscriptionId()I", "static getDefaultSmsSubscriptionId()I"),
-    "static isValidSubscriptionId(I)Z": (id: number) => id >= 0 ? 1 : 0,
-    ...noops("addOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
-      "addOnSubscriptionsChangedListener(Ljava/util/concurrent/Executor;Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
-      "removeOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V"),
-  }, { INVALID_SUBSCRIPTION_ID: -1, DEFAULT_SUBSCRIPTION_ID: 2147483647, INVALID_SIM_SLOT_INDEX: -1 }],
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
@@ -729,13 +661,6 @@ for (const name of ["android/bluetooth/le/ScanCallback", "android/bluetooth/Blue
   rt.register({ name, ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 }
 rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
-rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-rt.register({ name: "webdroid/TelephonyDelivery", ctor: class extends JObj { run: () => Promise<void> = async () => {}; }, ifaces: ["java/lang/Runnable"],
-  methods: { "run()V": function (this: { run: () => Promise<void> }) { return this.run(); } } });
-rt.markers("android/telephony/TelephonyCallback$DataConnectionStateListener", "android/telephony/TelephonyCallback$CallStateListener",
-  "android/telephony/TelephonyCallback$ServiceStateListener", "android/telephony/TelephonyCallback$SignalStrengthsListener",
-  "android/telephony/TelephonyCallback$DisplayInfoListener");
 // libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber
 // regroups anything: the digits a caller typed are the digits it reads back.
 rt.register({

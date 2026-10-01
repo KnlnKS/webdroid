@@ -254,6 +254,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   }
   return onMain(async () => {
     onStatus("Starting app…");
+    await scall("android/app/ActivityThread", "initializeMainlineModules", "()V");
     // handleBindApplication names the process, which Process.myProcessName answers
     await scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", processName ?? pkg);
     const baseCtx = newContextImpl(host);

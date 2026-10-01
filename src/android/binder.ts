@@ -229,11 +229,14 @@ export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
   return M_ENFORCED in rt.link(cls).ctor.prototype
     ? yield construct(cls, "(Landroid/os/PermissionEnforcer;)V", yield construct("android/os/PermissionEnforcer", "()V")) : yield construct(cls, "()V");
 });
+/** services the platform registers only on hardware this device does not have */
+const absentServices = new Set<string>();
+export const absentService = (...names: string[]): void => names.forEach((name) => absentServices.add(name));
 class JServiceManager extends JObj { binder: JBinder | null = null; }
 /** a hosted service's binder, made when first asked for */
 export function hostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);
-  if (!service) { rt.noteMissing(`service ${name} [binder]`); return null; }
+  if (!service) { if (!absentServices.has(name)) rt.noteMissing(`service ${name} [binder]`); return null; }
   if (typeof service !== "function") return service;
   const made = service();
   binderServices.set(name, made);

@@ -22,7 +22,7 @@ import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages, usesSdk } from "./packages";
 import { attr } from "./axml";
-import { hostedService } from "./binder";
+import { callingIdentity, hostedService } from "./binder";
 
 const privDir = (p: string) => { vfs.mkdir(p); return newFile(p); };
 const packageManagers = new WeakMap<JContext, JObj | Promise<JObj>>();
@@ -136,6 +136,12 @@ export function uidPermissionState(name: string, uid: number): number {
   }
   return -1;
 }
+/** ContextImpl.enforce */
+function enforcePermission(name: string, uid: number, selfToo: boolean, message: string | null): void {
+  if (!uidPermissionState(name, uid)) return;
+  throw rt.mkThrowable("java/lang/SecurityException", (message !== null ? message + ": " : "")
+    + (selfToo ? `Neither user ${uid} nor current process has ` : `uid ${uid} does not have `) + name + ".");
+}
 export function grantPermissions(names: string[]): Int32Array {
   const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
   // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
@@ -155,7 +161,6 @@ const SERVICE_CLASS: Record<string, string> = {
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   media_metrics: "android/media/metrics/MediaMetricsManager",
-  phone: "android/telephony/TelephonyManager",
   captioning: "android/view/accessibility/CaptioningManager",
   camera: "android/hardware/camera2/CameraManager",
   autofill: "android/view/autofill/AutofillManager",
@@ -166,7 +171,6 @@ const SERVICE_CLASS: Record<string, string> = {
   storagestats: "android/app/usage/StorageStatsManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
   wifi: "android/net/wifi/WifiManager",
-  telephony_subscription_service: "android/telephony/SubscriptionManager",
   servicediscovery: "android/net/nsd/NsdManager",
   bluetooth: "android/bluetooth/BluetoothManager",
   nfc: "android/nfc/NfcManager",
@@ -235,6 +239,12 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     newObj("android/hardware/SystemSensorManager", "(Landroid/content/Context;Landroid/os/Looper;)V", ctx, await mainLooper())],
   storage: ["android/os/storage/StorageManager", async (ctx) =>
     newObj("android/os/storage/StorageManager", "(Landroid/content/Context;Landroid/os/Looper;)V", ctx, await mainLooper())],
+  phone: ["android/telephony/TelephonyManager", (ctx) => newObj("android/telephony/TelephonyManager", "(Landroid/content/Context;)V", ctx)],
+  telephony_subscription_service: ["android/telephony/SubscriptionManager",
+    (ctx) => newObj("android/telephony/SubscriptionManager", "(Landroid/content/Context;)V", ctx)],
+  telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
+  telephony_registry: ["android/telephony/TelephonyRegistryManager",
+    (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };
@@ -507,8 +517,11 @@ const contextMethods: NativeSpec["methods"] = {
   },
   "createDeviceProtectedStorageContext()Landroid/content/Context;": function (this: JContext) { return this; },
   ...noops("registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V",
-    "unregisterComponentCallbacks(Landroid/content/ComponentCallbacks;)V", "<init>()V",
-    "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V"),
+    "unregisterComponentCallbacks(Landroid/content/ComponentCallbacks;)V", "<init>()V"),
+  "enforcePermission(Ljava/lang/String;IILjava/lang/String;)V": (name: string, _pid: number, uid: number, message: string | null) =>
+    enforcePermission(name, uid, false, message),
+  "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V": (name: string, message: string | null) =>
+    enforcePermission(name, callingIdentity().uid, true, message),
   "getAttributionTag()Ljava/lang/String;": function (this: JContext) { return this.attributionTag; },
   ...stubs(0, "isDeviceProtectedStorage()Z", "isRestricted()Z"),
   // ContextImpl's test; no context here is created with CONTEXT_IGNORE_SECURITY

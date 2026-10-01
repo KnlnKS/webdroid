@@ -352,6 +352,9 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
     "startWatchingAsyncNoted(Ljava/lang/String;Lcom/android/internal/app/IAppOpsAsyncNotedCallback;)V",
     "stopWatchingAsyncNoted(Ljava/lang/String;Lcom/android/internal/app/IAppOpsAsyncNotedCallback;)V"),
   "extractAsyncOps(Ljava/lang/String;)Ljava/util/List;": () => newArrayList(),
+  // no package is sampled for runtime access messages: OP_NONE, asked again in an hour
+  "reportRuntimeAppOpAccessMessageAndGetConfig(Ljava/lang/String;Landroid/app/SyncNotedAppOp;Ljava/lang/String;)Lcom/android/internal/app/MessageSamplingConfig;": () =>
+    newObj("com/android/internal/app/MessageSamplingConfig", "(IIJ)V", -1, 0, BigInt(Date.now() + 3600_000)),
 } });
 hostStub("appops", "webdroid/AppOpsService");
 
