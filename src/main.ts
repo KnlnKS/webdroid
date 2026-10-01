@@ -126,7 +126,6 @@ async function boot(file: string, local?: File) {
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const topDecor = (): any => currentApp()?.stack.at(-1)?.window.decor ?? null;
 const clsName = (v: any): string => v.constructor?.$i?.name ?? v.constructor.name;
 /** depth-first over a view tree, with each view's absolute position (parents' scroll removed) */
@@ -141,7 +140,8 @@ const tap = async (x: number, y: number): Promise<void> => {
   const remote = (processBroker().foregroundWindow() as { wd?: { tap(x: number, y: number): Promise<void> } } | null)?.wd;
   if (remote) return remote.tap(x, y);
   await dispatchPointer(0, x, y);
-  await sleep(60);
+  // a 60 ms press on the guest's clock, which a controlled clock would otherwise skip past
+  await guestSleep(60);
   await dispatchPointer(1, x, y);
 };
 
