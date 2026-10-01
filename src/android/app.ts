@@ -25,14 +25,13 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
 import { packageManagerService, permissionManagerService, packageResources } from "./pm";
-import { hostStub, transactionCaller } from "./binder";
+import { absentService, hostStub, transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { JActionMode, startActionMode } from "./actionmode";
 
 export { fireActivityLifecycle } from "./lifecycle";
 
-rt.markers("android/bluetooth/BluetoothProfile$ServiceListener");
 
 class JTaskDescription extends JObj {
   label: string | null = null;
@@ -634,21 +633,10 @@ rt.register({
       "getTimers(I)Ljava/util/Map;", "getMeasurements(I)Ljava/util/Map;"].map((sig) => [sig, () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); }])),
   },
 });
+// No Bluetooth or NFC radio: SystemServer starts neither service, so AOSP's BluetoothManager and
+// NfcManager, which every device registers, report no adapter
+absentService("bluetooth_manager", "nfc");
 for (const [name, methods, statics] of [
-  // No Bluetooth or NFC radio: the managers exist, as AOSP always registers them, and report no
-  // adapter, which is what a device without the feature answers.
-  ["android/bluetooth/BluetoothAdapter", {
-    "static getDefaultAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
-    "isEnabled()Z": () => 0,
-  }],
-  ["android/bluetooth/BluetoothManager", {
-    "getAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
-    "getConnectedDevices(I)Ljava/util/List;": () => newArrayList(),
-    "getDevicesMatchingConnectionStates(I[I)Ljava/util/List;": () => newArrayList(),
-    "getConnectionState(Landroid/bluetooth/BluetoothDevice;I)I": () => 0, // STATE_DISCONNECTED
-  }],
-  ["android/nfc/NfcManager", { "getDefaultAdapter()Landroid/nfc/NfcAdapter;": () => null }],
-  ["android/nfc/NfcAdapter", { "static getDefaultAdapter(Landroid/content/Context;)Landroid/nfc/NfcAdapter;": () => null }],
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
@@ -665,10 +653,6 @@ for (const [name, methods, statics] of [
   }],
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
-}
-// callback bases apps extend; without a radio nothing ever invokes them
-for (const name of ["android/bluetooth/le/ScanCallback", "android/bluetooth/BluetoothGattCallback"]) {
-  rt.register({ name, ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 }
 rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
 // libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber

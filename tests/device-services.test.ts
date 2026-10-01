@@ -13,7 +13,7 @@ import { appResources } from "./java";
 
 const pkg = "org.webdroid.test.services";
 const attr = (name: string, str: string | null, data = 0): XmlAttr => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
-let phone: JObj, subscriptions: JObj, wifi: JObj;
+let app: JApplication, phone: JObj, subscriptions: JObj, wifi: JObj;
 rt.register({ name: "webdroid/test/CallState", ctor: class extends JObj {}, sup: "android/telephony/TelephonyCallback",
   ifaces: ["android/telephony/TelephonyCallback$CallStateListener"], methods: { "onCallStateChanged(I)V": () => {} } });
 rt.register({ name: "webdroid/test/Inline", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/Executor"],
@@ -30,7 +30,7 @@ beforeAll(async () => {
   const res = new Resources(null, {});
   packages.set(pkg, new PackageRecord(manifest, res, "/t.apk", packageUid(pkg), async () => []));
   setProcessIdentity(4321, packageUid(pkg));
-  const app = new JApplication();
+  app = new JApplication();
   const host = { pkg, application: app, res, jresources: await appResources(res, pkg), splits: [], themeResId: 0, iconRes: 0, currentActivity: () => null, activities: () => [] } as never;
   Reflect.set(app, "$host", host); setAppHost(host);
   phone = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "phone");
@@ -75,5 +75,14 @@ describe("wifi", () => {
     expect(await vcall(lock, "isHeld", "()Z")).toBe(1);
     await vcall(lock, "release", "()V");
     expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
+  });
+});
+
+describe("radios this device lacks", () => {
+  test("Bluetooth and NFC managers exist and report no adapter", async () => {
+    const service = (name: string) => vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", name);
+    expect(await vcall(await service("bluetooth"), "getAdapter", "()Landroid/bluetooth/BluetoothAdapter;")).toBeNull();
+    expect(await scall("android/bluetooth/BluetoothAdapter", "getDefaultAdapter", "()Landroid/bluetooth/BluetoothAdapter;")).toBeNull();
+    expect(await vcall(await service("nfc"), "getDefaultAdapter", "()Landroid/nfc/NfcAdapter;")).toBeNull();
   });
 });
