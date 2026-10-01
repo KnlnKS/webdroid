@@ -102,7 +102,6 @@ import "./android/app";
 import "./android/vibrator";
 import "./android/audio";
 import "./android/backup";
-import "./android/adservices";
 import "./android/netstats";
 import "./android/storagestats";
 import "./android/popup";

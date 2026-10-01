@@ -17,6 +17,11 @@ let app: JApplication, phone: JObj, subscriptions: JObj, wifi: JObj;
 /** the Java exception a call throws, as "class: message", or null */
 const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
   .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
+const outcomes: ((value: string) => void)[] = [];
+rt.register({ name: "webdroid/test/Outcome", ctor: class extends JObj {}, ifaces: ["android/os/OutcomeReceiver"], methods: {
+  "onResult(Ljava/lang/Object;)V": (value: unknown) => outcomes.shift()?.(`result ${value}`),
+  "onError(Ljava/lang/Throwable;)V": (error: { constructor: { $i?: { name: string } }; msg?: string }) => outcomes.shift()?.(`${error.constructor.$i?.name}: ${error.msg}`),
+} });
 rt.register({ name: "webdroid/test/CallState", ctor: class extends JObj {}, sup: "android/telephony/TelephonyCallback",
   ifaces: ["android/telephony/TelephonyCallback$CallStateListener"], methods: { "onCallStateChanged(I)V": () => {} } });
 rt.register({ name: "webdroid/test/Inline", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/Executor"],
@@ -166,6 +171,17 @@ describe("camera", () => {
     expect(await vcall(camera, "getCameraIdList", "()[Ljava/lang/String;")).toHaveLength(0);
     expect(await thrown(() => vcall(camera, "getCameraCharacteristics", "(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;", "0")))
       .toBe("java/lang/IllegalArgumentException: No cameras available on device");
+  });
+});
+
+describe("measurement", () => {
+  test("no AdServices package is installed, so a measurement call fails on the receiver", async () => {
+    const measurement = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "measurement_service");
+    const outcome = new Promise<string>((resolve) => { outcomes.push(resolve); });
+    await vcall(measurement, "registerTrigger", "(Landroid/net/Uri;Ljava/util/concurrent/Executor;Landroid/os/OutcomeReceiver;)V",
+      await scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "https://example.com/trigger"),
+      await newObj("webdroid/test/Inline"), await newObj("webdroid/test/Outcome"));
+    expect(await outcome).toBe("java/lang/IllegalStateException: Unable to find the service");
   });
 });
 
