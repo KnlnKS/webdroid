@@ -416,16 +416,26 @@ export class NativeCanvas {
     };
     apply(ctx);
     this.persist(apply);
-    if (!out && !path.inverseFill && !this.clipEmpty) {
-      const m = ctx.getTransform();
+    if (!out && !path.inverseFill) {
       path.bounds(pathBox);
-      if (!(m.a * m.d - m.b * m.c)) this.setClipEmpty();
-      else {
-        const d = deviceBounds(m, pathBox.left, pathBox.top, pathBox.right, pathBox.bottom);
-        this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
-      }
+      this.narrowOut(pathBox.left, pathBox.top, pathBox.right, pathBox.bottom);
     }
     return !this.clipEmpty;
+  }
+  /** SkCanvas::clipRRect, anti-aliased as hwui clips a view to its outline */
+  clipRoundRect(l: number, t: number, r: number, b: number, radius: number): boolean {
+    clipRoundRect(this.ctx, l, t, r, b, radius);
+    if (this.persistent) this.persist((c) => clipRoundRect(c, l, t, r, b, radius));
+    this.narrowOut(l, t, r, b);
+    return !this.clipEmpty;
+  }
+  /** intersect the bounds with an anti-aliased clip's local bounds, rounded out */
+  private narrowOut(l: number, t: number, r: number, b: number) {
+    if (this.clipEmpty) return;
+    const m = this.ctx.getTransform();
+    if (!(m.a * m.d - m.b * m.c)) { this.setClipEmpty(); return; }
+    const d = deviceBounds(m, l, t, r, b);
+    this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
   /** SkCanvas::quickReject: whether the rect under the matrix misses the device clip's bounds,
    *  outset a pixel for anti-aliasing */
@@ -595,9 +605,9 @@ export async function setCanvasTargetSdk(target: number): Promise<void> {
 }
 
 let outlineFields: { mode: string; rect: string; radius: string; path: string } | null = null;
-/** intersect ctx's clip with a Java Outline's shape (what View.setClipToOutline asks); an empty
- *  outline does not clip */
-export function clipToOutline(ctx: Ctx2D, outline: object): void {
+/** intersect the canvas's clip with a Java Outline's shape (what View.setClipToOutline asks); an
+ *  empty outline does not clip */
+export function clipToOutline(nc: NativeCanvas, outline: object): void {
   const f = outlineFields ??= {
     mode: declaredField("android/graphics/Outline", "mMode"), rect: declaredField("android/graphics/Outline", "mRect"),
     radius: declaredField("android/graphics/Outline", "mRadius"), path: declaredField("android/graphics/Outline", "mPath"),
@@ -605,9 +615,9 @@ export function clipToOutline(ctx: Ctx2D, outline: object): void {
   const o = outline as Record<string, unknown>, mode = o[f.mode];
   if (!mode) return;
   // MODE_PATH, else MODE_ROUND_RECT
-  if (mode === 2) { const p = nativePathOf(o[f.path] as object); ctx.clip(p.path(), p.fillRule); return; }
+  if (mode === 2) { nc.clipPath(nativePathOf(o[f.path] as object), false); return; }
   const r = o[f.rect] as JRect;
-  clipRoundRect(ctx, r.left, r.top, r.right, r.bottom, o[f.radius] as number);
+  nc.clipRoundRect(r.left, r.top, r.right, r.bottom, o[f.radius] as number);
 }
 export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: number, radius: number) {
   ctx.beginPath();

@@ -885,7 +885,7 @@ export const drawView = driven(function* drawView(v: JView, cv: JavaCanvas, pare
         yield vcall(outline, "setAlpha", "(F)V", 1);
         yield guardCall(v.outlineProvider ?? bgOutline, M_getOutline, v, outline);
       }
-      clipToOutline(ctx, outline);
+      clipToOutline(nc, outline);
     }
     if (w > 0 && h > 0) nc.clipRect(0, 0, w, h); else nc.clipRect(0, 0, 0, 0);
     let into = cv;
