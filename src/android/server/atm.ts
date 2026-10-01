@@ -4,7 +4,7 @@
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
-import { newObj, vcall, scall } from "../../jvm/natives/jlang";
+import { newObj, vcall, scall, reportUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations } from "./wm";
 import { hostedService } from "../binder";
@@ -116,7 +116,9 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
   const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
   const pkg = field<string>(info, AI, "packageName"), process = field<string>(info, AI, "processName");
-  if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) await startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode);
+  // the pause a local start waits for runs on the caller's main thread, so the call returns once it
+  // is under way, as ActivityStarter returns once the pause is scheduled
+  if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode).catch(reportUncaught);
   else if (activityTransport.launch) await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy);
   else return START_INTENT_NOT_RESOLVED;
   return START_SUCCESS;
@@ -174,9 +176,12 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token); if (r) r.state = "stopped";
   },
   "activityDestroyed(Landroid/os/IBinder;)V": () => {},
-  "finishActivity(Landroid/os/IBinder;ILandroid/content/Intent;I)Z": async (token: JObj, resultCode: number, data: JObj | null) => {
+  // as a start: the pause a finish waits for runs on the caller's main thread
+  "finishActivity(Landroid/os/IBinder;ILandroid/content/Intent;I)Z": (token: JObj, resultCode: number, data: JObj | null) => {
     const r = byToken(token);
-    return r ? +(await finish(r, resultCode, data)) : 0;
+    if (!r) return 0;
+    void finish(r, resultCode, data).catch(reportUncaught);
+    return 1;
   },
   // back on a root activity: AOSP moves a launcher-started task back; one task, so it finishes
   "onBackPressed(Landroid/os/IBinder;Landroid/app/IRequestFinishCallback;)V": (_token: JObj, callback: JObj) =>
