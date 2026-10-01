@@ -4,7 +4,8 @@
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
-import { newObj, vcall, scall, reportUncaught } from "../../jvm/natives/jlang";
+import { newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
+import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
@@ -111,6 +112,7 @@ async function stop(r: ActivityRecord): Promise<void> {
 async function destroy(r: ActivityRecord): Promise<void> {
   r.state = "destroying";
   stack.splice(stack.indexOf(r), 1);
+  reportPresentation();
   // a start waiting on its pause goes on: the report would find no record
   const paused = r.paused; r.paused = null; paused?.();
   await schedule(r.app, null, await item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
@@ -187,8 +189,9 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
     if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
     const { global, override } = await configurations();
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent: false, paused: null, remoteId, config: global, orientation };
+      translucent: await translucentTheme(info), paused: null, remoteId, config: global, orientation };
     stack.push(r);
+    reportPresentation();
     const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
     const launch = await item("LaunchActivityItem",
       "Landroid/os/IBinder;Landroid/content/Intent;ILandroid/content/pm/ActivityInfo;Landroid/content/res/Configuration;Landroid/content/res/Configuration;" +
@@ -202,6 +205,29 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
     await schedule(app, launch, await item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", token, 1, 0));
   } finally { transitions--; }
 }
+
+const STYLEABLE = "com/android/internal/R$styleable";
+/** the package's resources as AttributeCache reads them, through a package context of the system
+ *  context: an activity may start before the Application exists */
+let resources: Promise<JObj> | null = null;
+const packageResources = () => resources ??= (async () => {
+  const system = await vcall(await scall("android/app/ActivityThread", "currentActivityThread", "()Landroid/app/ActivityThread;"), "getSystemContext", "()Landroid/app/ContextImpl;");
+  return vcall(await vcall(system, "createPackageContext", "(Ljava/lang/String;I)Landroid/content/Context;", appHost!.pkg, 0), "getResources", "()Landroid/content/res/Resources;");
+})();
+/** ActivityRecord's occludesParent from the activity's theme: one translucent or floating, or showing
+ *  the wallpaper, lets what is under it show */
+async function translucentTheme(info: JObj): Promise<boolean> {
+  const theme = await vcall(await packageResources(), "newTheme", "()Landroid/content/res/Resources$Theme;");
+  await vcall(theme, "applyStyle", "(IZ)V", await vcall(info, "getThemeResource", "()I"), 1);
+  const statics = (await linkInit(STYLEABLE)).ctor as Record<string, unknown>;
+  const a = await vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", statics[mangleStaticField("Window")]);
+  try {
+    return !!await scall(AI, "isTranslucentOrFloating", "(Landroid/content/res/TypedArray;)Z", a) ||
+      !!await vcall(a, "getBoolean", "(IZ)Z", statics[mangleStaticField("Window_windowShowWallpaper")], 0);
+  } finally { await vcall(a, "recycle", "()V"); }
+}
+/** the broker shows the process under this one while every activity here lets it show through */
+const reportPresentation = () => activityTransport.presentation?.(stack.length > 0 && stack.every((r) => r.translucent));
 
 /** the launcher activity of `pkg`, as the home screen starts it */
 export async function startMainActivity(app: JObj, pkg: string): Promise<void> {
@@ -330,6 +356,11 @@ async function navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, r
   return reuse || !!restarted;
 }
 
+function setTranslucent(token: JObj, translucent: boolean): number {
+  const r = byToken(token);
+  if (r) { r.translucent = translucent; reportPresentation(); }
+  return 1;
+}
 rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JObj {}, sup: "android/app/IActivityClientController$Stub", methods: {
   "activityPaused(Landroid/os/IBinder;)V": (token: JObj) => {
     const r = byToken(token);
@@ -397,8 +428,8 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) void configurationChanged().catch(reportUncaught);
   },
   "willActivityBeVisible(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
-  "convertToTranslucent(Landroid/os/IBinder;Landroid/os/Bundle;)Z": (token: JObj) => { const r = byToken(token); if (r) r.translucent = true; return 1; },
-  "convertFromTranslucent(Landroid/os/IBinder;)Z": (token: JObj) => { const r = byToken(token); if (r) r.translucent = false; return 1; },
+  "convertToTranslucent(Landroid/os/IBinder;Landroid/os/Bundle;)Z": (token: JObj) => setTranslucent(token, true),
+  "convertFromTranslucent(Landroid/os/IBinder;)Z": (token: JObj) => setTranslucent(token, false),
   ...stubs(0, "isImmersive(Landroid/os/IBinder;)Z", "isRootVoiceInteraction(Landroid/os/IBinder;)Z"),
   ...noops("setTaskDescription(Landroid/os/IBinder;Landroid/app/ActivityManager$TaskDescription;)V",
     "reportSizeConfigurations(Landroid/os/IBinder;Landroid/window/SizeConfigurationBuckets;)V",
