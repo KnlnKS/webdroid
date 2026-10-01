@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
-import { Cpu, setA64, sigHandlers } from "./cpu";
+import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
@@ -35,39 +35,33 @@ test("sysinfo uses the device RAM in both native ABIs without overrunning its st
 });
 
 test("sort and search pass pointers in the guest ABI", async () => {
-  for (const a64 of [false, true]) {
-    setA64(a64); libcInit();
-    const cpu = new Cpu(new JThread(), "comparator-test"), data = mem.malloc(20), cmp = mem.reserve(4096, 4096);
-    mem.u32.set(a64 ? [0xb9400000, 0xb9400021, 0x4b010000, 0xd65f03c0] : [0xe5900000, 0xe5911000, 0xe0400001, 0xe12fff1e], cmp >>> 2);
-    mem.i32.set([9, -2, 4, 1, 4], data >>> 2);
-    try {
-      await cpu.call(lookupHost("qsort", "libc.so")!, [data, 4, 4, cmp]);
-      expect(Array.from(mem.i32.slice(data >>> 2, (data >>> 2) + 4))).toEqual([-2, 1, 4, 9]);
-      expect((await cpu.call(lookupHost("bsearch", "libc.so")!, [data + 16, data, 4, 4, cmp])) >>> 0).toBe(data + 8);
-      mem.st32(data + 16, 8);
-      expect(await cpu.call(lookupHost("bsearch", "libc.so")!, [data + 16, data, 4, 4, cmp])).toBe(0);
-    } finally { mem.free(data); cpu.dispose(); }
-  }
-  setA64(false);
+  setA64(false); libcInit();
+  const cpu = new Cpu(new JThread(), "comparator-test"), data = mem.malloc(20), cmp = mem.reserve(4096, 4096);
+  mem.u32.set([0xe5900000, 0xe5911000, 0xe0400001, 0xe12fff1e], cmp >>> 2);
+  mem.i32.set([9, -2, 4, 1, 4], data >>> 2);
+  try {
+    await cpu.call(lookupHost("qsort", "libc.so")!, [data, 4, 4, cmp]);
+    expect(Array.from(mem.i32.slice(data >>> 2, (data >>> 2) + 4))).toEqual([-2, 1, 4, 9]);
+    expect((await cpu.call(lookupHost("bsearch", "libc.so")!, [data + 16, data, 4, 4, cmp])) >>> 0).toBe(data + 8);
+    mem.st32(data + 16, 8);
+    expect(await cpu.call(lookupHost("bsearch", "libc.so")!, [data + 16, data, 4, 4, cmp])).toBe(0);
+  } finally { mem.free(data); cpu.dispose(); }
 });
 
 test("memmem searches binary ranges without treating NUL as a terminator", async () => {
-  for (const a64 of [false, true]) {
-    setA64(a64); libcInit();
-    const cpu = new Cpu(new JThread(), "memmem-test");
-    const data = mem.malloc(8);
-    mem.u8.set([1, 0, 2, 1, 0, 2, 0, 3], data);
-    const search = lookupHost("memmem", "libc.so")!;
-    try {
-      expect(await cpu.call(search, [data, 8, data + 3, 3])).toBe(data);
-      expect(await cpu.call(search, [data + 1, 7, data + 3, 3])).toBe(data + 3);
-      expect(await cpu.call(search, [data, 2, data + 3, 3])).toBe(0);
-      expect(await cpu.call(search, [data, 7, data + 7, 1])).toBe(0);
-      expect(await cpu.call(search, [data, 8, data + 7, 1])).toBe(data + 7);
-      expect(await cpu.call(search, [data, 0, 0, 0])).toBe(data);
-    } finally { mem.free(data); cpu.dispose(); }
-  }
-  setA64(false);
+  setA64(false); libcInit();
+  const cpu = new Cpu(new JThread(), "memmem-test");
+  const data = mem.malloc(8);
+  mem.u8.set([1, 0, 2, 1, 0, 2, 0, 3], data);
+  const search = lookupHost("memmem", "libc.so")!;
+  try {
+    expect(await cpu.call(search, [data, 8, data + 3, 3])).toBe(data);
+    expect(await cpu.call(search, [data + 1, 7, data + 3, 3])).toBe(data + 3);
+    expect(await cpu.call(search, [data, 2, data + 3, 3])).toBe(0);
+    expect(await cpu.call(search, [data, 7, data + 7, 1])).toBe(0);
+    expect(await cpu.call(search, [data, 8, data + 7, 1])).toBe(data + 7);
+    expect(await cpu.call(search, [data, 0, 0, 0])).toBe(data);
+  } finally { mem.free(data); cpu.dispose(); }
 });
 
 test("ARM EABI memory fill takes the byte count before the value", async () => {
@@ -140,21 +134,4 @@ test("A64 mmap keeps executable and low-hinted mappings where the core runs code
     expect(data >> 32n).not.toBe(0n);
     expect(mem.unmapVa(data, size)).toBe(true);
   } finally { cpu.dispose(); setA64(false); }
-});
-
-test("an instruction the CPU lacks raises SIGILL, and siglongjmp leaves the handler", async () => {
-  setA64(true); libcInit();
-  const cpu = new Cpu(new JThread(), "sigill-test"), code = mem.reserve(4096, 4096), buf = mem.hostAlloc(256, 16), handler = code + 0x100;
-  const lit = (at: number, v: number) => mem.u32.set([v, 0], at >>> 2);
-  // sigsetjmp(buf); if (!result) pmull v0.1q; return result
-  mem.u32.set([0xa9bf7bfd, 0x58000120, 0x58000150, 0xd63f0200, 0x35000060, 0x0ee0e000, 0x528000e0, 0xa8c17bfd, 0xd65f03c0, 0xd503201f], code >>> 2);
-  lit(code + 40, buf); lit(code + 48, lookupHost("sigsetjmp", "libc.so")!);
-  // the handler: siglongjmp(buf, SIGILL)
-  mem.u32.set([0x58000080, 0x52800081, 0x58000090, 0xd61f0200], handler >>> 2);
-  lit(handler + 16, buf); lit(handler + 24, lookupHost("siglongjmp", "libc.so")!);
-  sigHandlers.set(4, { fn: handler, flags: 0, mask: 0n });
-  try {
-    expect(await cpu.call(code)).toBe(4);
-    expect(cpu.depth).toBe(0);
-  } finally { sigHandlers.delete(4); cpu.dispose(); setA64(false); }
 });

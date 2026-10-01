@@ -1,6 +1,7 @@
 // bionic libc surface: strings, memory, time, ctype, math, process stubs, sockets that fail
-// honestly. Struct layouts live in LAYOUT, chosen by the process ABI. stdio is in stdio.ts,
-// printf/scanf in printf.ts.
+// honestly. An ARM32 process's libc; a 64-bit process runs bionic itself (bionic.ts) and reaches
+// these bodies only through the kernel layer (syscall.ts). Struct layouts live in LAYOUT, chosen
+// by the process ABI. stdio is in stdio.ts, printf/scanf in printf.ts.
 
 import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
@@ -25,22 +26,20 @@ import { isShared, syncShared, trackSharedMap } from "./mappings";
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
+/** bionic struct offsets/sizes; LAYOUT is the process's, chosen in libcInit. LAYOUT64 overrides
+ *  only the structs the kernel layer fills (stat, timespec, statfs): FILE, dirent, tm and bionic's
+ *  sigaction are only an ARM32 process's. */
 const LAYOUT32 = {
   FILE_SIZE: 84, F_P: 0, F_R: 4, F_W: 8, F_FLAGS: 12, F_FILE: 14, F_BF_BASE: 16, F_BF_SIZE: 20, F_LBFSIZE: 24, F_COOKIE: 28,
   STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
   ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96,
   DIRENT_SIZE: 276, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
-  TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
+  TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65,
   SIGACTION_SIZE: 16, SA_HANDLER: 0, SA_FLAGS: 8, STATFS_SIZE: 88,
 };
 const LAYOUT64: typeof LAYOUT32 = {
-  FILE_SIZE: 152, F_P: 0, F_R: 8, F_W: 12, F_FLAGS: 16, F_FILE: 18, F_BF_BASE: 24, F_BF_SIZE: 32, F_LBFSIZE: 40, F_COOKIE: 48,
-  STAT_SIZE: 128, ST_INO32: 8, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
-  ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8,
-  DIRENT_SIZE: 280, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
-  TM_SIZE: 56, TM_GMTOFF: 40, TM_ZONE: 48, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
-  SIGACTION_SIZE: 32, SA_HANDLER: 8, SA_FLAGS: 0, STATFS_SIZE: 120,
+  ...LAYOUT32,
+  STAT_SIZE: 128, ST_INO32: 8, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8, TS_NSEC: 8, TS_SIZE: 16, STATFS_SIZE: 120,
 };
 export let LAYOUT = LAYOUT32;
 /** REALTIME, REALTIME_COARSE and REALTIME_ALARM are the wall clock (core/libc.zig matches) */
@@ -130,7 +129,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   const yday = Math.floor(((utc ? Date.UTC(g.y, g.mo, g.md) : new Date(g.y, g.mo, g.md).getTime()) - jan1) / 86400000);
   const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0];
   for (let i = 0; i < f.length; i++) mem.st32(tm + i * 4, f[i]);
-  stLong(tm + LAYOUT.TM_GMTOFF, utc ? 0 : -d.getTimezoneOffset() * 60);
+  mem.st32(tm + LAYOUT.TM_GMTOFF, utc ? 0 : -d.getTimezoneOffset() * 60);
   stp(tm + LAYOUT.TM_ZONE, tznames[utc ? 0 : 1]);
 }
 export function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
@@ -169,31 +168,19 @@ function timegm(tm: number): number {
 }
 let tznames: number[] = [0, 0];
 
-// ── setjmp/longjmp: the callee-saved registers live in the guest jmp_buf itself — r4–r14 on
-// ARM, x19–x30 + sp + d8–d15 on A64 (168 of the buffer's 256 bytes)
+// ── setjmp/longjmp: the callee-saved registers r4–r14 live in the guest jmp_buf itself
 function setjmp(cpu: Cpu, buf: number): number {
-  const w = cpu.w;
-  if (!cpu.a64) { for (let i = 4; i <= 14; i++) mem.st32(buf + (i - 4) * 4, w[2 * i]); return 0; }
-  for (let i = 19; i <= 31; i++) { mem.st32(buf + (i - 19) * 8, w[2 * i]); mem.st32(buf + (i - 19) * 8 + 4, w[2 * i + 1]); }
-  for (let k = 8; k <= 15; k++) { mem.st32(buf + 104 + (k - 8) * 8, cpu.si[4 * k]); mem.st32(buf + 108 + (k - 8) * 8, cpu.si[4 * k + 1]); }
+  for (let i = 4; i <= 14; i++) mem.st32(buf + (i - 4) * 4, cpu.w[2 * i]);
   return 0;
 }
 function longjmp(cpu: Cpu, buf: number, val: number): typeof NORET {
   const w = cpu.w;
   const apply = () => {
-    if (!cpu.a64) {
-      for (let i = 4; i <= 14; i++) w[2 * i] = mem.ld32(buf + (i - 4) * 4);
-      w[0] = val || 1;
-      cpu.setPc(w[28]);
-      return;
-    }
-    for (let i = 19; i <= 31; i++) { w[2 * i] = mem.ld32(buf + (i - 19) * 8); w[2 * i + 1] = mem.ld32(buf + (i - 19) * 8 + 4); }
-    for (let k = 8; k <= 15; k++) { cpu.si[4 * k] = mem.ld32(buf + 104 + (k - 8) * 8); cpu.si[4 * k + 1] = mem.ld32(buf + 108 + (k - 8) * 8); }
-    w[0] = val || 1; w[1] = 0;
-    cpu.setPc(w[60]);
+    for (let i = 4; i <= 14; i++) w[2 * i] = mem.ld32(buf + (i - 4) * 4);
+    w[0] = val || 1;
+    cpu.setPc(w[28]);
   };
-  const sp = cpu.a64 ? mem.ld64(buf + 96) : BigInt(mem.ld32(buf + 36) >>> 0);
-  if (!cpu.leaveHandler(sp, apply)) apply();
+  if (!cpu.leaveHandler(BigInt(mem.ld32(buf + 36) >>> 0), apply)) apply();
   return NORET;
 }
 
@@ -429,13 +416,12 @@ export function libcInit(): void {
     },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, ERRSTR[e] ?? `Unknown error ${e}`, n); return 0; },
-    // long is 64-bit on LP64
-    strtol: (cpu, a) => (PTR === 8 ? strtoNum(cpu, a.p(), a.p(), a.i(), 64, false) : Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, false))),
-    strtoul: (cpu, a) => (PTR === 8 ? strtoNum(cpu, a.p(), a.p(), a.i(), 64, true) : Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, true)) | 0),
+    strtol: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, false)),
+    strtoul: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, true)) | 0,
     strtoll: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, false),
     strtoull: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, true),
     atoi: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
-    atol: (cpu, a) => (PTR === 8 ? strtoNum(cpu, a.p(), 0, 10, 64, false) : Number(strtoNum(cpu, a.p(), 0, 10, 32, false))),
+    atol: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
     atoll: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 64, false),
     strtod: (c, a) => retD(c, strtodAt(a.p(), a.p())),
     strtof: (c, a) => retF(c, Math.fround(strtodAt(a.p(), a.p()))),
@@ -501,7 +487,7 @@ export function libcInit(): void {
     sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(a)); },
     vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(vaList(a.p()))); },
 
-    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) stLong(p, t); return PTR === 8 ? BigInt(t) : t; },
+    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) mem.st32(p, t); return t; },
     gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
     clock_gettime: (_c, a) => {
       const id = a.i(), ts = a.p();
@@ -511,12 +497,12 @@ export function libcInit(): void {
     clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },
     clock: () => Math.floor(performance.now() * 1000),
     times: () => Math.floor(performance.now() / 10),
-    localtime_r: (_c, a) => ptr(toTm(ldLong(a.p()), a.p(), false)),
-    gmtime_r: (_c, a) => ptr(toTm(ldLong(a.p()), a.p(), true)),
-    localtime: (_c, a) => toTm(ldLong(a.p()), tmBuf, false),
-    gmtime: (_c, a) => toTm(ldLong(a.p()), tmBuf, true),
-    mktime: (_c, a) => { const t = Math.floor(mktime(a.p()) / 1000); return PTR === 8 ? BigInt(t) : t; },
-    timegm: (_c, a) => { const t = timegm(a.p()); return PTR === 8 ? BigInt(t) : t; },
+    localtime_r: (_c, a) => ptr(toTm(mem.ld32(a.p()), a.p(), false)),
+    gmtime_r: (_c, a) => ptr(toTm(mem.ld32(a.p()), a.p(), true)),
+    localtime: (_c, a) => toTm(mem.ld32(a.p()), tmBuf, false),
+    gmtime: (_c, a) => toTm(mem.ld32(a.p()), tmBuf, true),
+    mktime: (_c, a) => Math.floor(mktime(a.p()) / 1000),
+    timegm: (_c, a) => timegm(a.p()),
     // bionic's <time64.h>, which 32-bit code uses past 2038: time64_t is 64-bit on every ABI
     localtime64_r: (_c, a) => ptr(toTm(Number(mem.ld64(a.p())), a.p(), false)),
     gmtime64_r: (_c, a) => ptr(toTm(Number(mem.ld64(a.p())), a.p(), true)),

@@ -14,15 +14,17 @@ test("native time fields preserve signed longs and the process ABI width", async
       const cpu = new Cpu(mainThread, "time-test"), value = mem.hostAlloc(16), tm = mem.hostAlloc(LAYOUT.TM_SIZE);
       const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
       try {
-        const ms = Date.UTC(2025, 5, 16, 16);
-        if (a64) mem.st64(value, BigInt(ms / 1000)); else mem.st32(value, ms / 1000);
-        await call("localtime_r", value, tm);
-        const offset = a64 ? Number(mem.ld64(tm + LAYOUT.TM_GMTOFF)) : mem.ld32(tm + LAYOUT.TM_GMTOFF) | 0;
-        expect(offset).toBe(-25200);
-        expect(mem.ld32(tm + 20)).toBe(125);
+        // the tm functions are an ARM32 process's alone; the kernel layer's timespecs are both ABIs'
+        if (!a64) {
+          mem.st32(value, Date.UTC(2025, 5, 16, 16) / 1000);
+          await call("localtime_r", value, tm);
+          expect(mem.ld32(tm + LAYOUT.TM_GMTOFF) | 0).toBe(-25200);
+          expect(mem.ld32(tm + 20)).toBe(125);
+        }
         for (const time of [-1, ...(a64 ? [Date.UTC(2140, 0, 1)] : [])]) {
           writeTs(value, time);
           expect(readTs(value)).toBe(time);
+          if (a64) continue;
           await call("gmtime_r", value, tm);
           expect(mem.ld32(tm + 20)).toBe(new Date(time).getUTCFullYear() - 1900);
         }
