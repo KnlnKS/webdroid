@@ -14,7 +14,7 @@ import { JBundle, reportUncaught } from "./os";
 import { mkUri, uriParts, type JUri } from "./net";
 import { csText } from "../jvm/natives/jchars";
 import { scannedMediaUri } from "./mediastore";
-import { presentSurface, surfaceTarget } from "./glview";
+import { presentSurface, windowSurface, type GlSurface } from "./glview";
 import { streamVolume, streamMaxVolume } from "./audio";
 
 rt.markers("android/media/ImageReader$OnImageAvailableListener");
@@ -349,9 +349,11 @@ export function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
 }
 /** each frame the element shows goes to the display surface while it plays */
 function pumpFrames(mp: JMediaPlayer, el: HTMLVideoElement) {
-  const next = () => {
+  // the display's surface, resolved once per display: a SurfaceHolder answers it through Java
+  let display: unknown, surface: GlSurface | null = null;
+  const next = async () => {
     if (mp.media !== el || el.paused) return;
-    const surface = surfaceTarget(mp.display);
+    if (display !== mp.display) { display = mp.display; surface = await windowSurface(display); }
     if (surface && el.videoWidth) {
       presentSurface(surface, new VideoFrame(el));
       if (!mp.rendering) { mp.rendering = true; void call(mp.infoL, "onInfo", "(Landroid/media/MediaPlayer;II)Z", mp, 3, 0); }   // MEDIA_INFO_VIDEO_RENDERING_START
