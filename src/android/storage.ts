@@ -7,6 +7,7 @@ import { jarray, mangleStaticField } from "../jvm/abi";
 import { newObj, scall, vcall, linkInit } from "../jvm/natives/jlang";
 import { newFile } from "../jvm/natives/jio";
 import { hostStub } from "./binder";
+import { vfs } from "../shell/vfs";
 import { storageEstimate, uuidDefault } from "./os";
 
 const SHARED = "/sdcard", USER = 0;
@@ -40,6 +41,14 @@ rt.register({ name: "webdroid/StorageManagerService", ctor: class extends JObj {
   "getAllocatableBytes(Ljava/lang/String;ILjava/lang/String;)J": driven(function* (): Gen { return bytes((yield storageEstimate()).free); }),
   "getCacheQuotaBytes(Ljava/lang/String;I)J": driven(function* (): Gen { return bytes((yield storageEstimate()).total / 20); }),
   "getCacheSizeBytes(Ljava/lang/String;I)J": () => 0n,
+  // vold creates an app's own external data, obb and media directories for it, and nothing else
+  "mkdirs(Ljava/lang/String;Ljava/lang/String;)V": (pkg: string, path: string) => {
+    const dir = vfs.norm(path);
+    if (!["data", "obb", "media"].some((kind) => `${dir}/`.startsWith(`${SHARED}/Android/${kind}/${pkg}/`)))
+      throw rt.mkThrowable("java/lang/SecurityException", `Invalid mkdirs path: ${path}`);
+    for (let i = SHARED.length; i >= 0; i = dir.indexOf("/", i + 1)) vfs.mkdir(dir.slice(0, i));
+    vfs.mkdir(dir);
+  },
 } });
 hostStub("mount", "webdroid/StorageManagerService");
 // android_os_storage_StorageManager: the vfs keeps no project quotas, so FS_IOC_FSGETXATTR fails
