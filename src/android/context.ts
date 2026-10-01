@@ -105,11 +105,28 @@ export class PermissionStore {
 }
 let permissionStore = new PermissionStore();
 export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
+/** signature|appop|pre23 permissions, the special access a user grants in Settings (which this
+ *  device has no screen for): held at install by a requesting app targeting below 23 or a system one */
+const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
 export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
-export const permissionGranted = (pkg: string, name: string): boolean =>
-  !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!packages.get(pkg)?.grants.has(name);
-const permissionState = (name: string) => permissionGranted(appHost?.pkg ?? "", name) ? 0 : -1;
+export const permissionGranted = (pkg: string, name: string): boolean => {
+  const record = packages.get(pkg);
+  if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
+  return !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!record?.grants.has(name);
+};
+/** whether a package holds a platform permission no third-party app is granted at install: it is a
+ *  system package that requests it (privileged or preinstalled), or the special access above */
+export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
+  const record = packages.get(pkg);
+  if (SPECIAL_ACCESS.has(name)) return permissionGranted(pkg, name);
+  return !!record && (record.grants.has(name) || record.system && record.permissions.has(name));
+};
+/** the app's own check: a permission it requested and holds (checkUidPermission for its package) */
+const permissionState = (name: string) => {
+  const pkg = appHost?.pkg ?? "";
+  return packages.get(pkg)?.permissions.has(name) && permissionGranted(pkg, name) ? 0 : -1;
+};
 /** PermissionManagerService.checkUidPermission: root and system hold every permission; an app's
  *  uid holds one its package requested and, if it is a runtime permission, was granted */
 export function uidPermissionState(name: string, uid: number): number {
