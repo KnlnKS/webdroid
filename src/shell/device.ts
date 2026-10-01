@@ -28,15 +28,16 @@ import { JActivity, dispatchSplashExit } from "../android/app";
 import { getPrefs } from "../android/sharedprefs";
 import { newContextImpl } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
-import { reportUncaught, runFrameCallbacks, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
+import { reportUncaught, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { pressBackKey } from "../android/keyevent";
 import {
   booted, setBootedApp, aliasTargets, activityHost, launchMain, recreateActivity, invalidateWindow, visibleActivities,
   atHome, activityVisibility0, startWin, dropStartingWindow, type BootedApp,
 } from "./activities";
 import { packageUid, packages } from "../android/packages";
-import { onMain, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, copyEvent, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
+import { onMain, mainDbg, mainLooper, fnRunnable, type JFnRunnable } from "../android/mainloop";
+import { mainChoreographer, deliverVsync, CALLBACK_TRAVERSAL } from "../android/vsync";
+import { JView, JViewGroup, uiState, setFrameRequester, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, copyEvent, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { windowCanvas, setCanvasTargetSdk } from "../android/canvas";
@@ -123,6 +124,7 @@ export function startZygote(): Promise<void> {
     // the runtime's own setup and the system font map need no app: a device's zygote runs them
     mountSystemFonts(await fetchSystemFonts());
     await zygoteInit();
+    scheduleTraversal();
   })();
 }
 
@@ -357,7 +359,6 @@ const pressBack0 = driven(function* pressBack0(): Gen<void> {
 });
 
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
-let drawing = false;
 const drawStartWin = driven(function* drawStartWin(w: { view: JView; fullscreen: boolean }): Gen {
   const contentY = w.fullscreen ? 0 : STATUS_H, ctx = frame;
   ctx.save();
@@ -378,30 +379,45 @@ const drawStartWin = driven(function* drawStartWin(w: { view: JView; fullscreen:
   present();
 });
 
-export async function tick() {
-  if (drawing) return;
-  drawing = true;
-  // AOSP clears mIsInTraversal in a finally: a rejected frame must not latch the guard on
-  // and stop every later frame.
-  try { await onMain(tick0); } finally { drawing = false; }
+let traversal: JFnRunnable | null = null, traversalPending = false;
+const frameWaiters: (() => void)[] = [];
+/** ViewRootImpl.scheduleTraversals: the windows lay out and draw in the next vsync's frame, after
+ *  that frame's input and animation callbacks */
+export function scheduleTraversal(): void {
+  if (traversalPending || !mainLooper) return;
+  traversalPending = true;
+  traversal ??= fnRunnable(runTraversal);
+  void after(mainChoreographer(), (c) => vcall(c, "postCallback", "(ILjava/lang/Runnable;Ljava/lang/Object;)V", CALLBACK_TRAVERSAL, traversal, null));
 }
-const tick0 = driven(function* tick0(): Gen {
+setFrameRequester(scheduleTraversal);
+async function runTraversal(): Promise<void> {
+  traversalPending = false;
+  const t0 = performance.now();
+  perf.frames++;
+  try {
+    await tick0(choreographerFrameTime());
+    perf.completedFrames++; perf.frameMs += performance.now() - t0;
+  } finally { for (const resolve of frameWaiters.splice(0)) resolve(); }
+}
+/** the frame time Choreographer.doFrame hands every callback of this frame */
+const choreographerFrameTime = (): Promise<bigint> => after(mainChoreographer(), (c) => vcall(c, "getFrameTimeNanos", "()J")) as Promise<bigint>;
+/** one frame now, on a vsync outside the display's pacing: a harness stepping a controlled clock */
+export function testFrame(): Promise<void> {
+  const done = new Promise<void>((resolve) => frameWaiters.push(resolve));
+  scheduleTraversal();
+  deliverVsync();
+  return done;
+}
+const tick0 = driven(function* tick0(frameTime: Promise<bigint>): Gen {
   const ctx = frame;
   try {
-    // choreographer + animation callbacks. One timestamp for the whole frame, as AOSP's
-    // doFrame does: every callback here awaits, so recomputing it per callback let two
-    // callbacks in the SAME frame see times hundreds of ms apart during boot.
-    uiState.frameTimeNanos = BigInt(Math.floor(guestNow() * 1e6));
-    if (uiState.frameCallbacks.length) {
-      mainDbg.phase = "frame";
-      yield runFrameCallbacks(uiState.frameCallbacks.splice(0), uiState.frameTimeNanos, uiState.frameTimeNanos + device.frameIntervalNanos);
-    }
-
+    const frameTimeNanos: bigint = yield frameTime;
     mainDbg.phase = "anim";
     if (uiState.animHooks.size) {
       for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
+      if (uiState.animHooks.size) scheduleTraversal();
     }
-    if (animateRenderThread(Number(uiState.frameTimeNanos / 1000000n))) uiState.needsDraw = true;
+    if (animateRenderThread(Number(frameTimeNanos / 1000000n))) uiState.needsDraw = true;
     const activities = visibleActivities();
     const act = activities.at(-1);
     const decor = act?.window.decor;

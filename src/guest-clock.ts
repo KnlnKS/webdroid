@@ -148,6 +148,10 @@ export const clearGuestInterval = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearInterval(timer as ReturnType<typeof setInterval>); };
 export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
+/** the page's start: every realm's CLOCK_MONOTONIC (SystemClock.uptimeMillis, System.nanoTime) counts from it */
+export const bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;
+/** CLOCK_MONOTONIC in milliseconds, one clock for every realm of the page */
+export const uptimeMillis = clock ? guestNow : (): number => performance.timeOrigin - bootTime + realNow();
 
 const hostYield = (): Promise<void> => new Promise((resolve) => realSetTimeout(resolve, 0));
 const advanceTo = async (targetMs: number): Promise<number> => {

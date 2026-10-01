@@ -12,6 +12,7 @@ import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermi
 import type { JUri } from "./net";
 import { PROCESS_PID, PROCESS_UID } from "./os";
 import { mainExecutor, mainHandler } from "./mainloop";
+import { defaultDisplay } from "./display";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { dbPath, openDatabase } from "./sqlite";
 import { javaTheme, newTheme, loadResources, configuredResources, javaConfiguration } from "./resources";
@@ -64,10 +65,6 @@ const viaResources = (name: string, desc: string, themed = false) => async funct
   if (themed) args.push(await vcallOn(thread, this, "getTheme", "()Landroid/content/res/Resources$Theme;"));
   return vcallOn(thread, resources, name, desc, ...args);
 };
-// the one logical display (Display.DEFAULT_DISPLAY = 0); AOSP hands out one Display per id
-let defaultDisplay: unknown;
-export const display = () => defaultDisplay ??= newObj("android/view/Display", null);
-export const displayListeners = new Set<unknown>();
 /**
  * A runtime permission is DENIED until the app asks for it, which is the state a freshly
  * installed app is in — reporting a blanket grant sends an app straight past the fallback it
@@ -129,7 +126,6 @@ const SERVICE_CLASS: Record<string, string> = {
   captioning: "android/view/accessibility/CaptioningManager",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
-  display: "android/hardware/display/DisplayManager",
   autofill: "android/view/autofill/AutofillManager",
   appwidget: "android/appwidget/AppWidgetManager",
   systemhealth: "android/os/health/SystemHealthManager",
@@ -148,6 +144,7 @@ const SERVICE_CLASS: Record<string, string> = {
 /** managers AOSP's bytecode serves over the services hosted behind binder, constructed as
  *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
 const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promise<unknown>]> = {
+  display: ["android/hardware/display/DisplayManager", (ctx) => newObj("android/hardware/display/DisplayManager", "(Landroid/content/Context;)V", ctx)],
   activity: ["android/app/ActivityManager", (ctx) => newObj("android/app/ActivityManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   power: ["android/os/PowerManager", async (ctx) => newObj("android/os/PowerManager",
     "(Landroid/content/Context;Landroid/os/IPowerManager;Landroid/os/IThermalService;Landroid/os/Handler;)V",
@@ -305,7 +302,7 @@ const contextMethods: NativeSpec["methods"] = {
   "isUiContext()Z": function (this: JContext) { return this === this.$host.application ? 0 : 1; },
   "getDisplay()Landroid/view/Display;": function (this: JContext) {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
-    return display();
+    return defaultDisplay();
   },
   "createDisplayContext(Landroid/view/Display;)Landroid/content/Context;": function (this: JContext, display: unknown) { return contextForDisplay(this, display); },
   "createWindowContext(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;": function (this: JContext, display: unknown, type: number) { return contextForDisplay(this, display, type); },

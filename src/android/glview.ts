@@ -6,14 +6,15 @@ import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, JThread, curThread, scall, construct } from "../jvm/natives/jlang";
 import { deref, ownedHandle, release } from "./handles";
-import { guestNow } from "../guest-clock";
+import { uptimeMillis } from "../guest-clock";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
 import { JRect } from "./graphics";
 import { matrixOf, javaMatrix, identity } from "./matrix";
 import { bitmapOf } from "./bitmap";
 import { gl, tables } from "./gl";
-import { reportUncaught, vsync } from "./os";
+import { reportUncaught } from "./os";
+import { vsync } from "./vsync";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
 
@@ -271,7 +272,7 @@ export class NativeSurfaceTexture {
   frameAvailable(): void {
     const frame = this.surface.present;
     this.queued = typeof VideoFrame !== "undefined" && frame instanceof VideoFrame ? BigInt(frame.timestamp) * 1000n
-      : this.surface.presentationTimeNanos ?? BigInt(Math.floor(guestNow() * 1e6));
+      : this.surface.presentationTimeNanos ?? BigInt(Math.floor(uptimeMillis() * 1e6));
     this.surface.presentationTimeNanos = undefined;
     this.onUpdate?.();
     if (!this.weak) return;

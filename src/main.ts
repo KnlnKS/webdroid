@@ -1,7 +1,8 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import { codeStats } from "./jvm/codecache";
 import "./natives";
-import { recordVsync, PROCESS_PID } from "./android/os";
+import { PROCESS_PID } from "./android/os";
+import { recordVsync, vsyncScheduled } from "./android/vsync";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
@@ -13,7 +14,7 @@ import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
-import { bootApk, startZygote, tick, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, startZygote, testFrame, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -147,7 +148,7 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, vfs, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
+  rt, vfs, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
   nativeRequirements,
   layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
@@ -282,7 +283,7 @@ const wd = {
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
   testFrame: async () => {
-    if (processPresentation.visible) await tick();
+    if (processPresentation.visible) await testFrame();
     for (const frame of document.querySelectorAll("iframe")) {
       if (new URL(frame.src, location.href).origin !== location.origin) continue;
       const child = frame.contentWindow as unknown as { wd?: { testFrame?: () => Promise<void> } };
@@ -292,25 +293,20 @@ const wd = {
 };
 (globalThis as any).wd = wd;
 
-// frame loop: rAF when visible, timer fallback when the tab is hidden/backgrounded
-let lastTick = 0, ticking = false;
-function doTick() {
+// the display: a vsync per rAF while visible, at the display's rate on a timer while the tab is hidden
+let lastVsync = 0;
+function vsync(time: number) {
   if (!processPresentation.visible) return;
-  drainInput(); // ahead of the frame, and ahead of the guard below: a slow frame must not starve input
-  if (ticking) return; // the timer fallback must not count a frame that is still in flight
-  ticking = true;
-  wd.ticks++;
-  lastTick = performance.now();
-  perf.frames++;
-  void tick().then(() => { perf.completedFrames++; perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
+  drainInput(); // the wheel's synthetic drag steps once per display frame
+  if (recordVsync(time)) { wd.ticks++; lastVsync = performance.now(); }
 }
 function loop(time: number) {
-  if (recordVsync(time)) doTick();
+  vsync(time);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 setInterval(() => {
-  if (performance.now() - lastTick > 40) doTick();
+  if (performance.now() - lastVsync > 40) vsync(performance.now());
 }, 33);
 
 attachIme(canvas, kbd);

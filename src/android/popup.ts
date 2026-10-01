@@ -3,7 +3,8 @@
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallUncaught } from "../jvm/natives/jlang";
-import { reportUncaught, uptimeMillis } from "./os";
+import { reportUncaught } from "./os";
+import { uptimeMillis } from "../guest-clock";
 import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST, MATCH_PARENT, WRAP_CONTENT, setViewBackground } from "./view";
 import { JMotionEvent } from "./motionevent";
 import { KEYCODE_BACK, type JKeyEvent } from "./keyevent";

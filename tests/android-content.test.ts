@@ -8,7 +8,8 @@ import { checkUriPermission, grantUriPermission, revokeUriPermission, providerOp
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
 import { mangleMethod } from "../src/jvm/abi";
-import { JContext, JContextWrapper, display } from "../src/android/context";
+import { JContext, JContextWrapper } from "../src/android/context";
+import { defaultDisplay } from "../src/android/display";
 import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
 import { centralDir, zipTree } from "../src/jvm/natives/jzip";
@@ -722,7 +723,7 @@ describe("window-context", () => {
   });
 
   test("display and window contexts retain display identity and own their window service", async () => {
-    const source = new JContext(), screen = await display();
+    const source = new JContext(), screen = await defaultDisplay();
     Reflect.set(source, "$host", { pkg: "test" });
     const displayContext = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", screen);
     expect(await vcall(displayContext, "getDisplay", "()Landroid/view/Display;")).toBe(screen);

@@ -9,7 +9,8 @@ import { JActivity, activityMethods } from "./app";
 import { ensureDecor } from "./decor";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
-import { systemService, display } from "./context";
+import { systemService } from "./context";
+import { defaultDisplay } from "./display";
 import { device } from "../shell/config";
 import { rootWindowInsets } from "./windowinsets";
 import { addOverlay, removeOverlay, overlays } from "./popup";
@@ -314,7 +315,7 @@ rt.register({
 rt.register({
   name: "android/view/WindowManagerImpl", ctor: class extends JObj {}, ifaces: ["android/view/WindowManager"],
   methods: {
-    "getDefaultDisplay()Landroid/view/Display;": display,
+    "getDefaultDisplay()Landroid/view/Display;": defaultDisplay,
     "getCurrentWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "isCrossWindowBlurEnabled()Z": () => 0,

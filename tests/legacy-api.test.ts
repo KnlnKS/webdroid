@@ -9,6 +9,7 @@ import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/a
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
+import { defaultDisplay } from "../src/android/display";
 import { scall, loadLibcore, appResources, preloadTextPaint, loadFrameworkJar } from "./java";
 import { toJsArray } from "../src/jvm/natives/jcoll";
 
@@ -275,7 +276,7 @@ test("sets retain their intersection and a non-HDR display reports no modes", as
   expect(await vcall(set, "contains", "(Ljava/lang/Object;)Z", "a")).toBe(0);
   expect(await vcall(set, "contains", "(Ljava/lang/Object;)Z", "b")).toBe(1);
 
-  const display = await newObj("android/view/Display");
+  const display = await defaultDisplay();
   const hdr = await vcall(display, "getHdrCapabilities", "()Landroid/view/Display$HdrCapabilities;");
   expect(await vcall(hdr, "getSupportedHdrTypes", "()[I")).toHaveLength(0);
 });

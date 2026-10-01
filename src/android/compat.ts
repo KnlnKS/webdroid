@@ -1,7 +1,7 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, newObj, after } from "../jvm/natives/jlang";
+import { vcall, newObj, after, curThread, type JThread } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
 import { identity, javaMatrix, about, rotateM, scaleM, translateM, IDENTITY } from "./matrix";
@@ -9,7 +9,8 @@ import { mangleMethod } from "../jvm/abi";
 import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
-import { reportUncaught, uptimeMillis } from "./os";
+import { reportUncaught } from "./os";
+import { uptimeMillis } from "../guest-clock";
 import { currentResources, rvDimen, rvFloat, rvInt, namedAttrRV, themeOf, type Resources, type JTheme } from "./res";
 import { parseAXML, attr, TV, type XmlNode } from "./axml";
 import { complexToFraction } from "./util";
@@ -583,9 +584,32 @@ rt.register({
       controller.order = rvInt(res, namedAttrRV(res, root, "animationOrder"), 0);
       return controller;
     }),
-    "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
+    // AnimationState per thread: Choreographer locks the clock to the frame's vsync for its callbacks
+    "static lockAnimationClock(JJ)V": (vsyncMillis: bigint, presentNanos: bigint) => {
+      Object.assign(animationState(), { locked: true, vsyncMillis, presentNanos });
+    },
+    "static lockAnimationClock(J)V": (vsyncMillis: bigint) => {
+      Object.assign(animationState(), { locked: true, vsyncMillis, presentNanos: vsyncMillis * 1000000n });
+    },
+    "static unlockAnimationClock()V": () => { animationState().locked = false; },
+    "static currentAnimationTimeMillis()J": () => {
+      const state = animationState();
+      if (state.locked) return state.vsyncMillis > state.reported ? state.vsyncMillis : state.reported;
+      return state.reported = BigInt(Math.floor(uptimeMillis()));
+    },
+    "static getExpectedPresentationTimeNanos()J": () => {
+      const state = animationState();
+      return state.locked ? state.presentNanos : BigInt(Math.floor(uptimeMillis() * 1e6));
+    },
+    "static getExpectedPresentationTimeMillis()J": () => {
+      const state = animationState();
+      return state.locked ? state.presentNanos / 1000000n : BigInt(Math.floor(uptimeMillis()));
+    },
   },
 });
+const animationStates = new WeakMap<JThread, { locked: boolean; vsyncMillis: bigint; presentNanos: bigint; reported: bigint }>();
+const animationState = () => animationStates.get(curThread) ??
+  animationStates.set(curThread, { locked: false, vsyncMillis: 0n, presentNanos: 0n, reported: 0n }).get(curThread)!;
 rt.markers("android/view/animation/Animation$AnimationListener");
 
 const DOUBLE_TAP_TIMEOUT = 300, DOUBLE_TAP_MIN_TIME = 40, LONG_PRESS_TIMEOUT = 450;

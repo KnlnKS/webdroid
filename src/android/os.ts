@@ -16,8 +16,6 @@ import { box, boxObject, unboxAs, type BoxDesc } from "../jvm/natives/jbox";
 import { E, ERRSTR } from "../native/abi";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
-import { type NativeLooper, mainLooper, myLooper } from "./mainloop";
-import { uiState } from "./view";
 import { newFile, pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
@@ -25,7 +23,7 @@ import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSour
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
-import { guestNow, guestSleep, setGuestTimeout } from "../guest-clock";
+import { guestSleep, uptimeMillis } from "../guest-clock";
 
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
 
@@ -33,8 +31,6 @@ defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
 defineException("android/os/OperationCanceledException", "java/lang/RuntimeException");
 
-export const bootTime = typeof window === "undefined" ? performance.timeOrigin : window.parent.performance.timeOrigin;
-export const uptimeMillis = () => performance.timeOrigin - bootTime + guestNow();
 const RUNTIME_STATS = ["art.gc.gc-count", "art.gc.gc-time", "art.gc.bytes-allocated", "art.gc.bytes-freed", "art.gc.blocking-gc-count", "art.gc.blocking-gc-time", "art.gc.gc-count-rate-histogram", "art.gc.blocking-gc-count-rate-histogram"];
 // ── SystemClock / Build / Process / Trace / Debug / StrictMode
 class JSystemClock extends JObj {}
@@ -710,150 +706,6 @@ rt.register({
     "createOpenDocumentTreeIntent()Landroid/content/Intent;": () => newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.OPEN_DOCUMENT_TREE"),
   },
 });
-
-// ── Choreographer (frame callbacks; shell drains queue each rAF)
-class JFrameTimeline extends JObj {
-  active = false;
-  id = 0n;
-  presentation = 0n;
-  check() {
-    if (!this.active) throw rt.mkThrowable("java/lang/IllegalStateException", "Frame data is only valid during its vsync callback");
-  }
-}
-class JFrameData extends JFrameTimeline {
-  time = 0n;
-  timelines = jarray([new JFrameTimeline()], "Landroid/view/Choreographer$FrameTimeline;");
-}
-rt.register({
-  name: "android/view/Choreographer$FrameTimeline", ctor: JFrameTimeline,
-  methods: {
-    "getVsyncId()J": function (this: JFrameTimeline) { this.check(); return this.id; },
-    "getExpectedPresentationTimeNanos()J": function (this: JFrameTimeline) { this.check(); return this.presentation; },
-    "getDeadlineNanos()J": function (this: JFrameTimeline) { this.check(); return this.presentation; },
-  },
-});
-rt.register({
-  name: "android/view/Choreographer$FrameData", ctor: JFrameData,
-  methods: {
-    "getFrameTimeNanos()J": function (this: JFrameData) { this.check(); return this.time; },
-    "getFrameTimelines()[Landroid/view/Choreographer$FrameTimeline;": function (this: JFrameData) { this.check(); return this.timelines; },
-    "getPreferredFrameTimeline()Landroid/view/Choreographer$FrameTimeline;": function (this: JFrameData) { this.check(); return this.timelines[0]; },
-  },
-});
-rt.markers("android/view/Choreographer$VsyncCallback");
-let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
-const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
-function flushVsyncWaiters(): void {
-  clearTimeout(vsyncWatchdog); vsyncWatchdog = undefined;
-  const waiters = vsyncWaiters;
-  vsyncWaiters = [];
-  for (const resolve of waiters) resolve();
-}
-/** The next virtual vsync: what a blocking eglSwapBuffers waits for. A realm whose frame loop is
- *  not running (hidden page, background process) still advances, at the display's rate. */
-export function vsync(): Promise<void> {
-  return new Promise((resolve) => {
-    vsyncWaiters.push(resolve);
-    vsyncWatchdog ??= setTimeout(flushVsyncWaiters, 2 * vsyncIntervalMs());
-  });
-}
-/** a display frame: true when it is a virtual vsync, whose choreographers off the main looper run now; the caller ticks the main one */
-export function recordVsync(time: number): boolean {
-  // Allow sub-millisecond rAF jitter without skipping a virtual display frame.
-  if (nextVsync && time + 0.75 < nextVsync) return false;
-  const interval = vsyncIntervalMs();
-  nextVsync = !nextVsync || time > nextVsync + interval ? time + interval : nextVsync + interval;
-  dispatchLooperFrames();
-  flushVsyncWaiters();
-  return true;
-}
-const dispatchVsync = driven(function* dispatchVsync(callback: JObj, time: bigint, presentation: bigint): Gen {
-  rt.link("android/view/Choreographer$FrameData");
-  rt.link("android/view/Choreographer$FrameTimeline");
-  const data = new JFrameData(), timeline = data.timelines[0];
-  data.time = timeline.id = time;
-  // The browser exposes one predicted presentation, not Android's alternate timelines.
-  timeline.presentation = presentation;
-  data.active = timeline.active = true;
-  try { yield vcall(callback, "onVsync", "(Landroid/view/Choreographer$FrameData;)V", data); }
-  finally { data.active = timeline.active = false; }
-});
-export type FrameCallback = { frame?: unknown; run?: unknown; vsync?: JObj };
-/** A Choreographer belongs to one looper, as getInstance() is per thread in AOSP. The main one's
- *  queue is the shell frame's (uiState.frameCallbacks); another's runs on its own thread at each
- *  vsync, so a render thread keeps its cadence while the main thread is busy or blocked. */
-class JChoreographer extends JObj {
-  readonly queue: FrameCallback[];
-  frameTimeNanos = 0n;
-  constructor(readonly looper: NativeLooper) { super(); this.queue = looper === mainLooper ? uiState.frameCallbacks : []; }
-  // AOSP's own field, read reflectively by anything measuring frame pacing (Sentry, Matrix,
-  // Flutter's FPS probe). It is the same nanos getFrameTimeNanos() answers.
-  get mLastFrameTimeNanos(): bigint { return this.looper === mainLooper ? uiState.frameTimeNanos : this.frameTimeNanos; }
-  post(cb: FrameCallback): void {
-    this.queue.push(cb);
-    if (this.looper !== mainLooper) pendingChoreographers.add(this);
-  }
-  remove(match: (cb: FrameCallback) => boolean): void {
-    for (let i = this.queue.length; i-- > 0;) if (match(this.queue[i])) this.queue.splice(i, 1);
-  }
-}
-const choreographers = new WeakMap<NativeLooper, JChoreographer>();
-const pendingChoreographers = new Set<JChoreographer>();
-/** the vsync of every choreographer off the main looper: its callbacks run as one message on its thread */
-function dispatchLooperFrames(): void {
-  if (!pendingChoreographers.size) return;
-  const time = BigInt(Math.floor(guestNow() * 1e6)), presentation = time + device.frameIntervalNanos;
-  for (const choreographer of pendingChoreographers) {
-    const cbs = choreographer.queue.splice(0);
-    choreographer.frameTimeNanos = time;
-    choreographer.looper.post(() => runFrameCallbacks(cbs, time, presentation));
-  }
-  pendingChoreographers.clear();
-}
-export const runFrameCallbacks = driven(function* runFrameCallbacks(cbs: FrameCallback[], time: bigint, presentation: bigint): Gen {
-  for (const cb of cbs) {
-    try {
-      if (cb.frame) yield vcall(cb.frame, "doFrame", "(J)V", time);
-      else if (cb.vsync) yield dispatchVsync(cb.vsync, time, presentation);
-      else if (cb.run) yield vcall(cb.run, "run", "()V");
-    } catch (e) { reportUncaught(e); }
-  }
-});
-const nonNull = (cb: unknown): void => { if (cb == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "callback must not be null"); };
-/** AOSP's marker for a record whose action is a FrameCallback rather than a Runnable */
-let frameCallbackToken: JObj | null = null;
-const FRAME_CALLBACK_TOKEN = () => frameCallbackToken ??= rt.make("java/lang/Object");
-rt.register({
-  name: "android/view/Choreographer", ctor: JChoreographer,
-  fields: ["mLastFrameTimeNanos"],
-  statics: { get FRAME_CALLBACK_TOKEN() { return FRAME_CALLBACK_TOKEN(); } },
-  methods: {
-    "postCallbackDelayedInternal(ILjava/lang/Object;Ljava/lang/Object;J)V": function (this: JChoreographer, _type: number, action: unknown, token: unknown, d: bigint) {
-      const cb = token === FRAME_CALLBACK_TOKEN() ? { frame: action } : { run: action };
-      if (d > 0n) setGuestTimeout(() => this.post(cb), Number(d)); else this.post(cb);
-    },
-    "static getInstance()Landroid/view/Choreographer;": () => {
-      const looper = myLooper();
-      if (!looper) throw rt.mkThrowable("java/lang/IllegalStateException", "The current thread must have a looper!");
-      let choreographer = choreographers.get(looper);
-      if (!choreographer) choreographers.set(looper, choreographer = new JChoreographer(looper));
-      return choreographer;
-    },
-    "postVsyncCallback(Landroid/view/Choreographer$VsyncCallback;)V": function (this: JChoreographer, cb: JObj) { nonNull(cb); this.post({ vsync: cb }); },
-    "removeVsyncCallback(Landroid/view/Choreographer$VsyncCallback;)V": function (this: JChoreographer, cb: JObj) { nonNull(cb); this.remove((c) => c.vsync === cb); },
-    "postFrameCallback(Landroid/view/Choreographer$FrameCallback;)V": function (this: JChoreographer, cb: unknown) { this.post({ frame: cb }); },
-    "postFrameCallbackDelayed(Landroid/view/Choreographer$FrameCallback;J)V": function (this: JChoreographer, cb: unknown, d: bigint) {
-      setGuestTimeout(() => this.post({ frame: cb }), Number(d));
-    },
-    "removeFrameCallback(Landroid/view/Choreographer$FrameCallback;)V": function (this: JChoreographer, cb: unknown) { this.remove((c) => c.frame === cb); },
-    "postCallback(ILjava/lang/Runnable;Ljava/lang/Object;)V": function (this: JChoreographer, _type: number, r: unknown) { this.post({ run: r }); },
-    "removeCallbacks(ILjava/lang/Runnable;Ljava/lang/Object;)V": function (this: JChoreographer, _type: number, r: unknown) { this.remove((c) => c.run === r); },
-    "getFrameTimeNanos()J": function (this: JChoreographer) { return this.mLastFrameTimeNanos; },
-  },
-});
-rt.register({ name: "android/view/Choreographer$FrameCallback", ctor: class extends JObj {}, methods: {
-  "doFrame(J)V": () => { throw rt.mkThrowable("java/lang/AbstractMethodError", "android.view.Choreographer.FrameCallback.doFrame"); },
-} });
 
 // android.os.Environment: virtual storage paths (backed by our in-memory FS)
 rt.register({

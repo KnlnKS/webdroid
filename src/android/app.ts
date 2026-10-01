@@ -1,4 +1,4 @@
-import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
+import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, launchIntent, mkComponentName,
@@ -791,18 +791,6 @@ for (const [name, methods, statics] of [
       }
       return 1;
     } }],
-  ["android/hardware/display/DisplayManager", {
-    // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
-    // never fire because no display is ever added, removed or reconfigured here
-    "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
-    "getDisplays()[Landroid/view/Display;": driven(function* (): Gen { return jarray([yield display()], "Landroid/view/Display;"); }),
-    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": driven(function* (cat: string | null): Gen { return jarray(cat === null ? [yield display()] : [], "Landroid/view/Display;"); }),
-    "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {
-      if (l === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener must not be null");
-      displayListeners.add(l);
-    },
-    "unregisterDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;)V": (l: unknown) => { displayListeners.delete(l); },
-  }, { DISPLAY_CATEGORY_PRESENTATION: "android.hardware.display.category.PRESENTATION" }],
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
@@ -836,8 +824,6 @@ rt.register({
     "static stripSeparators(Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n?.replace(/[^0-9+]/g, "") ?? null,
   },
 });
-// apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
-rt.markers("android/hardware/display/DisplayManager$DisplayListener");
 // IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
 // or enabled, so a client's state is all off; the focus highlight is framework-res's
 async function systemResource(type: string, name: string, read: string, desc: string, ...args: unknown[]): Promise<number> {

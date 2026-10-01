@@ -13,7 +13,8 @@ import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, impor
 import { JParcel } from "../android/parcel";
 import { JIntent, activityTransport, deliverActivityResult, type ActivityResultTarget } from "../android/intent";
 import { onMain } from "../android/mainloop";
-import { PROCESS_PID, uptimeMillis, reportUncaught } from "../android/os";
+import { PROCESS_PID, reportUncaught } from "../android/os";
+import { uptimeMillis } from "../guest-clock";
 import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
 import { vcall } from "../jvm/natives/jlang";
 import { apkPath, vfs } from "./vfs";

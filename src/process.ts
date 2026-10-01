@@ -1,8 +1,9 @@
 import "./natives";
 import { processBroker, connectProcess, processPresentation } from "./shell/processes";
-import { bootApk, startZygote, setScreenCanvas, tick, SCREEN_W, SCREEN_H, currentApp, pressBack, dispatchPointer } from "./shell/device";
+import { bootApk, startZygote, setScreenCanvas, testFrame, SCREEN_W, SCREEN_H, currentApp, pressBack, dispatchPointer } from "./shell/device";
 import { loadSkiaText } from "./android/skia-text";
-import { setProcessIdentity, recordVsync } from "./android/os";
+import { setProcessIdentity } from "./android/os";
+import { recordVsync } from "./android/vsync";
 import { attachIme, drainInput } from "./shell/input";
 import { setWebLayer } from "./android/webkit";
 import { apkCertificates, packageArchive } from "./android/packagearchive";
@@ -44,16 +45,12 @@ setWebLayer(document.getElementById("weblayer")!);
 attachIme(canvas, document.getElementById("kbd") as HTMLTextAreaElement);
 processPresentation.visible = false;
 setBackgroundRealm(true);
-let frameId = 0, ticking = false, ticks = 0;
+let frameId = 0, ticks = 0;
 function frame(time: number): void {
   frameId = 0;
   if (!processPresentation.visible) return;
   drainInput();
-  if (recordVsync(time) && !ticking) {
-    ticks++;
-    ticking = true;
-    void tick().finally(() => { ticking = false; });
-  }
+  if (recordVsync(time)) ticks++;
   frameId = requestAnimationFrame(frame);
 }
 processPresentation.changed = (visible) => {
@@ -63,7 +60,7 @@ processPresentation.changed = (visible) => {
 };
 // the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
 (globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements,
-  get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? tick() : Promise.resolve(),
+  get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? testFrame() : Promise.resolve(),
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => {
   guestClockControl.dispose();

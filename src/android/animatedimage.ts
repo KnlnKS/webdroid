@@ -10,7 +10,7 @@ import { type NativeColorFilter, type JRect, tintedBmp } from "./graphics";
 import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import type { EncodedImage } from "./decode";
-import { uptimeMillis } from "./os";
+import { uptimeMillis } from "../guest-clock";
 
 const REPEAT_INFINITE = -1, FINISHED = -1n, RETRY_MS = 16n;
 class AnimatedImage {

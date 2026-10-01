@@ -1,6 +1,6 @@
 import { JObj, rt } from "../jvm/runtime";
 import { i8, utf8 } from "../jvm/abi";
-import { uptimeMillis } from "./os";
+import { uptimeMillis } from "../guest-clock";
 
 class JStatsEvent extends JObj { atom = 0; bytes = new Int8Array(0); }
 class JStatsBuilder extends JObj {

@@ -1,4 +1,5 @@
-import type { FrameCallback } from "./os";
+import { mainChoreographer, CALLBACK_ANIMATION } from "./vsync";
+import { defaultDisplay } from "./display";
 import { isRecording, recordOrRun, type Ctx2D } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
@@ -7,16 +8,17 @@ import { JRect, JPoint } from "./graphics";
 import { type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, scaleM, translateM } from "./matrix";
 import { canvasOf, type JavaCanvas, clipToOutline, saveLayer } from "./canvas";
 import { setInvalidateHook } from "./rendernode";
-import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, jmethod, type JMethod } from "../jvm/abi";
 import { vcall, vcallOn, after, construct, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, adoptDrawable, Adopt, drawAt } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
-import { reportUncaught, uptimeMillis } from "./os";
+import { reportUncaught } from "./os";
+import { uptimeMillis } from "../guest-clock";
 import { keyDispatcherState } from "./keyevent";
-import { JProperty, type JDisplayMetrics } from "./util";
+import { JProperty } from "./util";
 import { csText } from "../jvm/natives/jchars";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
@@ -37,25 +39,32 @@ export const makeSpec = (size: number, mode: number) => ((size & 0x3fffffff) | m
 
 export const MATCH_PARENT = -1, WRAP_CONTENT = -2;
 
-// invalidation plumbing — the shell polls these
-export const uiState = {
-  needsLayout: true,
+// invalidation plumbing: setting a flag asks the shell for a traversal on the next vsync, as
+// ViewRootImpl.scheduleTraversals does
+let requestFrame = (): void => {};
+export const setFrameRequester = (f: () => void): void => { requestFrame = f; };
+class AnimHooks extends Set<() => boolean> {
+  override add(hook: () => boolean): this { super.add(hook); requestFrame(); return this; }
+}
+class UiState {
+  private layout = true; private insets = true; private draw = true;
+  get needsLayout(): boolean { return this.layout; }
+  set needsLayout(v: boolean) { this.layout = v; if (v) requestFrame(); }
   /** a traversal owes the tree an inset dispatch (requestApplyInsets, a new listener, a new
    *  top activity). One boolean test per frame when nothing asked. */
-  needsInsets: true,
-  needsDraw: true,
+  get needsInsets(): boolean { return this.insets; }
+  set needsInsets(v: boolean) { this.insets = v; if (v) requestFrame(); }
+  get needsDraw(): boolean { return this.draw; }
+  set needsDraw(v: boolean) { this.draw = v; if (v) requestFrame(); }
   /** the next pass must re-measure everything: a caller dirtied something it could not name */
-  forceAll: true,
-  frameCallbacks: [] as FrameCallback[],
-  animHooks: new Set<() => boolean>(), // ts-side animators; return false to remove
-  /** the current frame's timestamp. AOSP's Choreographer computes this ONCE in doFrame and
-   *  hands the same value to every callback; Compose's BroadcastFrameClock fans one timestamp
-   *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
-  frameTimeNanos: 0n,
+  forceAll = true;
+  /** ts-side animators, run each frame until they return false */
+  readonly animHooks = new AnimHooks();
   /** debug only (wd.layoutTrace): requestLayout counts by requesting class, and by frame phase
    *  plus the two native frames that asked. Null costs one test per request. */
-  layoutTrace: null as { cls: Record<string, number>; site: Record<string, number> } | null,
-};
+  layoutTrace: { cls: Record<string, number>; site: Record<string, number> } | null = null;
+}
+export const uiState = new UiState();
 function traceLayoutRequest(t: NonNullable<typeof uiState.layoutTrace>, v: JView | null | undefined) {
   const cls = v ? ((v.constructor as { $i?: { name: string } }).$i?.name ?? v.constructor.name) : "(all)";
   t.cls[cls] = (t.cls[cls] ?? 0) + 1;
@@ -1288,7 +1297,7 @@ const viewMethods: NativeSpec["methods"] = {
     return after(removeRunnable(r), () => 1);
   },
   "postOnAnimation(Ljava/lang/Runnable;)V": function (this: JView, r: unknown) {
-    uiState.frameCallbacks.push({ run: r });
+    return after(mainChoreographer(), (c) => vcall(c, "postCallback", "(ILjava/lang/Runnable;Ljava/lang/Object;)V", CALLBACK_ANIMATION, r, null));
   },
   "getDrawableState()[I": function (this: JView) {
     if (this.stateCache) return Int32Array.from(this.stateCache);
@@ -1632,7 +1641,7 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": viewDispatchInsets,
   "postOnAnimationDelayed(Ljava/lang/Runnable;J)V": function (this: JView, r: unknown, d: bigint) {
-    setTimeout(() => uiState.frameCallbacks.push({ run: r }), Number(d));
+    return after(mainChoreographer(), (c) => vcall(c, "postCallbackDelayed", "(ILjava/lang/Runnable;Ljava/lang/Object;J)V", CALLBACK_ANIMATION, r, null, d));
   },
   "getParentForAccessibility()Landroid/view/ViewParent;": function (this: JView) { return this.parent; },
   "startAnimation(Landroid/view/animation/Animation;)V": function (this: JView, a: unknown) { startViewAnim(this, a); },
@@ -1643,9 +1652,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.foreground; },
   // the window's handler while attached (AttachInfo.mHandler), else null
   "getHandler()Landroid/os/Handler;": function (this: JView) { return this.attached ? mainHandler() : null; },
-  "getDisplay()Landroid/view/Display;": function () {
-    const info = rt.link("android/view/Display");
-    return new info.ctor();
+  "getDisplay()Landroid/view/Display;": function (this: JView) {
+    return this.attached ? defaultDisplay() : null;
   },
   "hasTransientState()Z": function (this: JView) { return this.transientState > 0 || (this as JViewGroup).transientChildren > 0 ? 1 : 0; },
   "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
@@ -2758,60 +2766,6 @@ rt.register({
     PADDED_BOUNDS: mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", view.padL, view.padT, view.width() - view.padR, view.height() - view.padB)),
   },
 });
-class JDisplay extends JObj {}
-function fillMetrics(dm: JDisplayMetrics, heightPx: number) {
-  dm.density = device.density; dm.densityDpi = device.densityDpi; dm.scaledDensity = device.density;
-  dm.widthPixels = device.width; dm.heightPixels = heightPx;
-}
-// the one display mode: the panel's size at its refresh rate
-class JDisplayMode extends JObj {}
-let theMode: JDisplayMode | null = null;
-const displayMode = () => (theMode ??= new JDisplayMode());
-class JHdrCapabilities extends JObj {}
-const hdrCapabilities = new JHdrCapabilities();
-rt.register({
-  name: "android/view/Display$HdrCapabilities", ctor: JHdrCapabilities,
-  statics: { HDR_TYPE_DOLBY_VISION: 1, HDR_TYPE_HDR10: 2, HDR_TYPE_HLG: 3, HDR_TYPE_HDR10_PLUS: 4 },
-  methods: {
-    "getSupportedHdrTypes()[I": () => new Int32Array(0),
-    ...stubs(0, "getDesiredMaxLuminance()F", "getDesiredMaxAverageLuminance()F", "getDesiredMinLuminance()F"),
-  },
-});
-rt.register({
-  name: "android/view/Display$Mode", ctor: JDisplayMode,
-  methods: {
-    "getModeId()I": () => 1,
-    "getPhysicalWidth()I": () => device.width,
-    "getPhysicalHeight()I": () => device.height,
-    "getRefreshRate()F": () => device.refreshRate,
-  },
-});
-rt.register({
-  name: "android/view/Display", ctor: JDisplay,
-  statics: { STATE_UNKNOWN: 0, STATE_OFF: 1, STATE_ON: 2, STATE_DOZE: 3, STATE_DOZE_SUSPEND: 4 },
-  methods: {
-    "getWidth()I": () => device.width,
-    // getMetrics excludes the system bars; getRealMetrics is the whole display
-    "getHeight()I": () => device.height - device.statusBar,
-    "getMetrics(Landroid/util/DisplayMetrics;)V": (dm: JDisplayMetrics) => fillMetrics(dm, device.height - device.statusBar),
-    "getRealMetrics(Landroid/util/DisplayMetrics;)V": (dm: JDisplayMetrics) => fillMetrics(dm, device.height),
-    "getSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height - device.statusBar; },
-    "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
-    "getRefreshRate()F": () => device.refreshRate,
-    "getState()I": () => 2,
-    "getPresentationDeadlineNanos()J": () => device.frameIntervalNanos,
-    "getMode()Landroid/view/Display$Mode;": () => displayMode(),
-    "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),
-    "getHdrCapabilities()Landroid/view/Display$HdrCapabilities;": () => hdrCapabilities,
-    // a rectangular framebuffer has no rounded corners; androidx asks the Display and the
-    // WindowInsets for them through the same descriptor
-    "getRoundedCorner(I)Landroid/view/RoundedCorner;": () => null,
-    ...stubs(0, "getRotation()I", "isWideColorGamut()Z", "isHdr()Z", "getDisplayId()I"),
-    ...stubs(0n, "getAppVsyncOffsetNanos()J"),
-    ...stubs(null, "getCutout()Landroid/view/DisplayCutout;"),
-  },
-});
-
 // ── OrientationEventListener: the device is fixed portrait, so enable() never produces a
 // rotation callback; canDetectOrientation() is honest about having an accelerometer.
 class JOrientationEventListener extends JObj { enabled = 0; rate = 3; }

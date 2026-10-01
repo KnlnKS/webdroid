@@ -1,7 +1,8 @@
 import { JObj, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
-import { type JBundle, uptimeMillis } from "./os";
+import { type JBundle } from "./os";
+import { uptimeMillis } from "../guest-clock";
 import { vcall, vcallOn, curThread, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";

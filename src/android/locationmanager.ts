@@ -7,7 +7,8 @@
 import { JObj, noops, rt, stubs } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
-import { reportUncaught, bootTime, uptimeMillis } from "./os";
+import { reportUncaught } from "./os";
+import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { hostStub } from "./binder";
 import { permissionGranted } from "./context";

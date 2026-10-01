@@ -194,7 +194,7 @@ function installProbe(cfg: ProbeConfig): void {
       if (u.needsLayout) r.push("layout");
       if (u.needsInsets) r.push("insets");
     }
-    if (u.frameCallbacks.length) r.push("frameCallbacks");
+    if (wd.vsyncScheduled?.()) r.push("vsync");
     if (u.animHooks.size) r.push("animators");
     if (wd.yields.pending()) r.push("yields");
     if (inflight) r.push("inflight");

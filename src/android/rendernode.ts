@@ -22,6 +22,8 @@ import { type RuntimeShaderBuilder } from "./runtime-shader";
 
 let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
+/** a frame is owed: the window redraws on the next vsync */
+export const requestRedraw = (): void => invalidateHook?.();
 
 const f32 = Math.fround, ALPHA_EPSILON = f32(0.001), NON_ZERO_EPSILON = f32(0.001);
 /** MathUtils::isZero */

@@ -4,7 +4,7 @@ import { rt, JObj, stubs, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
-import { uptimeMillis } from "./os";
+import { uptimeMillis } from "../guest-clock";
 
 export class JKeyEvent extends JObj {
   action = 0; keyCode = 0; tracking = false; canceled = false;

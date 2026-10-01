@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
-import { guestNow, type GuestTimer } from "../../guest-clock";
+import { uptimeMillis, type GuestTimer } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
@@ -1139,7 +1139,7 @@ rt.register({
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
     "static currentTimeMillis()J": () => BigInt(Date.now()),
-    "static nanoTime()J": () => BigInt(Math.floor(guestNow() * 1e6)),
+    "static nanoTime()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     // libcore's Object.identityHashCode reads the lock word
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
     // System.c: the zygote's working directory, and the linker's default search path

@@ -9,7 +9,7 @@ import { rt } from "../jvm/runtime";
 import { scall } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { type NativePaint } from "./paint";
-import { NativeRenderNode } from "./rendernode";
+import { NativeRenderNode, requestRedraw } from "./rendernode";
 import { interpolatePaths, PathData } from "./pathparser";
 import { accelDecel } from "./interpolator";
 import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable";
@@ -88,7 +88,7 @@ abstract class RenderAnimator {
   protected abstract onFinished(): void;
   setStart(v: number): void { this.from = v; this.delta = this.final - v; this.hasStart = true; }
 
-  request(r: number, staging: number): void { this.stagingState = staging; this.requests.push(r); active.add(this); }
+  request(r: number, staging: number): void { this.stagingState = staging; this.requests.push(r); active.add(this); requestRedraw(); }
   private resolve(r: number): void {
     const running = this.state === RUNNING || this.state === REVERSING;
     switch (r) {
@@ -140,6 +140,10 @@ abstract class RenderAnimator {
 const active = new Set<RenderAnimator>();
 /** the render thread's part of the frame at `now` (ms): true while anything animates, which the
  *  frame must then draw */
+// Render-thread animations always run here; a client may only leave them on (the default divisor)
+rt.registerJni("android/graphics/HardwareRenderer", "nSetRtAnimationsEnabled(Z)V", (enabled: number) => {
+  if (!enabled) rt.noteMissing("android/graphics/HardwareRenderer.nSetRtAnimationsEnabled(false)");
+});
 export function animateRenderThread(now: number): boolean {
   if (!active.size) return false;
   for (const a of [...active]) {
