@@ -10,7 +10,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { linkInit, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { mangleStaticField } from "../jvm/abi";
 import { callingIdentity, hostStub } from "./binder";
-import { uidPermissionState } from "./context";
+import { enforceCallingOrSelfPermission, uidPermissionState } from "./context";
 import { packages } from "./packages";
 import { locationTransport } from "./locationmanager";
 import { DNS_SERVER, netUp, theNetwork } from "./services";
@@ -19,10 +19,7 @@ const WIFI_STATE_ENABLED = 3, WIFI_STANDARD_LEGACY = 1, SECURITY_TYPE_OPEN = 0, 
 const S = "Ljava/lang/String;", SLICE = "com/android/wifi/x/com/android/modules/utils/ParceledListSlice";
 const emptySlice = () => newObj(SLICE, "(Ljava/util/List;)V", newArrayList());
 
-async function enforce(permission: string): Promise<void> {
-  const context = await scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
-  await vcall(context, "enforceCallingOrSelfPermission", `(${S}${S})V`, permission, "WifiService");
-}
+const enforce = (permission: string) => enforceCallingOrSelfPermission(permission, "WifiService");
 const enforceAccess = () => enforce("android.permission.ACCESS_WIFI_STATE");
 /** WifiPermissionsUtil.enforceCanAccessScanResults for an app: location on, and fine location (coarse
  *  below Q) */

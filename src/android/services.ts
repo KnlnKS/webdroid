@@ -5,7 +5,7 @@
 // missing by its AIDL name.
 import { JObj, rt, noops, stubs, declaredField, setDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
-import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, staticField } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost, jclsNameOf } from "./apphost";
@@ -16,10 +16,10 @@ import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
 import { GL_ES_VERSION, protectionLevel } from "./pm";
 import { deviceConfiguration } from "./resnative";
-import { hostStub } from "./binder";
+import { callingIdentity, hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
-import { isRuntimePermission, permissionGranted, uidPermissionState } from "./context";
+import { enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./context";
 import { stickyBroadcasts } from "./broadcast";
 import { activityManagerMethods } from "./server/am";
 import { activityTaskMethods } from "./server/atm";
@@ -426,10 +426,32 @@ stickyBroadcasts.set("android.intent.action.BATTERY_CHANGED", driven(function* (
     yield putExtra(intent, key, value, desc);
   return intent;
 }));
+/** BatteryStatsService.takeUidSnapshot: no uid's usage is recorded here, so a snapshot holds no
+ *  values; another uid's needs BATTERY_STATS */
+const HPARCELER = "Landroid/os/health/HealthStatsParceler;";
+async function uidSnapshot(uid: number): Promise<JObj> {
+  if (uid !== callingIdentity().uid) await enforceCallingOrSelfPermission("android.permission.BATTERY_STATS", null);
+  return newObj("android/os/health/HealthStatsParceler", "(Landroid/os/health/HealthStatsWriter;)V", await newObj("android/os/health/HealthStatsWriter",
+    "(Landroid/os/health/HealthKeys$Constants;)V", await staticField("android/os/health/UidHealthStats", "CONSTANTS")));
+}
+const uidSnapshots = async (uids: Int32Array) => {
+  const snapshots: JObj[] = [];
+  for (const uid of uids) snapshots.push(await uidSnapshot(uid));
+  return jarray(snapshots, HPARCELER);
+};
 rt.register({ name: "webdroid/BatteryStatsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IBatteryStats$Stub", methods: {
   "isCharging()Z": () => +pluggedIn(),
   "computeChargeTimeRemaining()J": () => -1n,
+  [`takeUidSnapshot(I)${HPARCELER}`]: uidSnapshot,
+  [`takeUidSnapshots([I)[${HPARCELER}`]: uidSnapshots,
+  "takeUidSnapshotsAsync([ILandroid/os/ResultReceiver;)V": async (uids: Int32Array, receiver: JObj) => {
+    const result = await newObj("android/os/Bundle", "(I)V", 1);
+    await vcall(result, "putParcelableArray", "(Ljava/lang/String;[Landroid/os/Parcelable;)V", "uid_snapshots", await uidSnapshots(uids));
+    await vcall(receiver, "send", "(ILandroid/os/Bundle;)V", 0, result);
+  },
 } });
+// IPowerStatsService: present on every device; nothing here reads a power monitor
+rt.register({ name: "webdroid/PowerStatsService", ctor: class extends JObj {}, sup: "android/os/IPowerStatsService$Stub" });
 rt.register({ name: "webdroid/BatteryPropertiesRegistrar", ctor: class extends JObj {}, sup: "android/os/IBatteryPropertiesRegistrar$Stub", methods: {
   "getProperty(ILandroid/os/BatteryProperty;)I": async (id: number, prop: JObj) => {
     const value = id === BATTERY_CAPACITY ? device.battery.level : id === BATTERY_STATUS ? device.battery.status : null;
@@ -441,6 +463,7 @@ rt.register({ name: "webdroid/BatteryPropertiesRegistrar", ctor: class extends J
 
 hostStub("power", "webdroid/PowerManagerService");
 hostStub("batterystats", "webdroid/BatteryStatsService");
+hostStub("powerstats", "webdroid/PowerStatsService");
 hostStub("batteryproperties", "webdroid/BatteryPropertiesRegistrar");
 hostStub("thermalservice", "webdroid/ThermalService");
 hostStub("deviceidle", "webdroid/DeviceIdleController");

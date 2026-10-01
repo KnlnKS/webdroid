@@ -136,6 +136,10 @@ export function uidPermissionState(name: string, uid: number): number {
   }
   return -1;
 }
+/** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
+export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+export const enforceCallingOrSelfPermission = async (permission: string, message: string | null): Promise<void> =>
+  vcall(await serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
 /** ContextImpl.enforce */
 function enforcePermission(name: string, uid: number, selfToo: boolean, message: string | null): void {
   if (!uidPermissionState(name, uid)) return;
@@ -163,7 +167,6 @@ const SERVICE_CLASS: Record<string, string> = {
   captioning: "android/view/accessibility/CaptioningManager",
   camera: "android/hardware/camera2/CameraManager",
   autofill: "android/view/autofill/AutofillManager",
-  systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
   netstats: "android/app/usage/NetworkStatsManager",
   storagestats: "android/app/usage/StorageStatsManager",
@@ -246,6 +249,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     "(Landroid/content/Context;Lcom/android/internal/appwidget/IAppWidgetService;)V", ctx, await scall("com/android/internal/appwidget/IAppWidgetService$Stub",
       "asInterface", "(Landroid/os/IBinder;)Lcom/android/internal/appwidget/IAppWidgetService;", await hostedService("appwidget")))],
   performance_hint: ["android/os/PerformanceHintManager", async () => scall("android/os/PerformanceHintManager", "create", "()Landroid/os/PerformanceHintManager;")],
+  systemhealth: ["android/os/health/SystemHealthManager", () => newObj("android/os/health/SystemHealthManager")],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

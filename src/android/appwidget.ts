@@ -9,6 +9,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, hostStub } from "./binder";
 import { packages } from "./packages";
+import { serviceContext } from "./context";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";
@@ -69,8 +70,7 @@ async function parseProvider(pm: JObj, activity: JObj): Promise<JObj | null> {
   }
 }
 async function installedProviders(): Promise<JObj[]> {
-  const context = await scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
-  const pm = await vcall(context, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+  const pm = await vcall(await serviceContext(), "getPackageManager", "()Landroid/content/pm/PackageManager;");
   const receivers = await vcall(pm, "queryBroadcastReceivers", "(Landroid/content/Intent;I)Ljava/util/List;",
     await newObj("android/content/Intent", `(${S})V`, "android.appwidget.action.APPWIDGET_UPDATE"), GET_META_DATA | MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE);
   const providers: JObj[] = [];

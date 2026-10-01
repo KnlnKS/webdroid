@@ -97,6 +97,18 @@ describe("app widgets", () => {
   });
 });
 
+describe("system health", () => {
+  test("a uid snapshot holds no usage, and another uid's needs BATTERY_STATS", async () => {
+    const health = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "systemhealth");
+    const stats = await vcall(health, "takeMyUidSnapshot", "()Landroid/os/health/HealthStats;");
+    expect(await vcall(stats, "getDataType", "()Ljava/lang/String;")).toBe("UidHealthStats");
+    expect(await vcall(stats, "getMeasurementKeyCount", "()I")).toBe(0);
+    const thrown = await vcall(health, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", 1000)
+      .then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
+    expect(thrown).toBe("java/lang/SecurityException");
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");

@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
+import { reportUncaught, JBundle, PROCESS_NAME, mkPfd } from "./os";
 import { backKeyMethods, dispatchWindowKey } from "./keyevent";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
@@ -621,35 +621,12 @@ rt.register({
     "getId()Ljava/lang/String;": function (this: JAccessibilityServiceInfo) { return this.id; },
   },
 });
-class JHealthStats extends JObj {}
-const uidHealthSnapshot = () => new JHealthStats();
-rt.register({
-  name: "android/os/health/HealthStats", ctor: JHealthStats,
-  methods: {
-    "getDataType()Ljava/lang/String;": () => "UidHealthStats",
-    ...stubs(0, "hasTimer(I)Z", "hasMeasurement(I)Z", "hasStats(I)Z", "hasTimers(I)Z", "hasMeasurements(I)Z"),
-    // the snapshot holds no keys, so every keyed read is out of range
-    ...Object.fromEntries(["getTimer(I)Landroid/os/health/TimerStat;", "getMeasurement(I)J", "getStats(I)Ljava/util/Map;",
-      "getTimers(I)Ljava/util/Map;", "getMeasurements(I)Ljava/util/Map;"].map((sig) => [sig, () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); }])),
-  },
-});
 // No Bluetooth or NFC radio: SystemServer starts neither service, so AOSP's BluetoothManager and
 // NfcManager, which every device registers, report no adapter
 absentService("bluetooth_manager", "nfc");
 for (const [name, methods, statics] of [
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
-  }],
-  ["android/os/health/SystemHealthManager", {
-    "takeMyUidSnapshot()Landroid/os/health/HealthStats;": uidHealthSnapshot,
-    "takeUidSnapshot(I)Landroid/os/health/HealthStats;": (uid: number) => {
-      if (uid !== PROCESS_UID) throw rt.mkThrowable("java/lang/SecurityException", "BATTERY_STATS permission required");
-      return uidHealthSnapshot();
-    },
-    "takeUidSnapshots([I)[Landroid/os/health/HealthStats;": (uids: Int32Array) => {
-      if ([...uids].some((uid) => uid !== PROCESS_UID)) throw rt.mkThrowable("java/lang/SecurityException", "BATTERY_STATS permission required");
-      return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
-    },
   }],
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });

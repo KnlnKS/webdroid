@@ -6,6 +6,7 @@
 import { JObj, rt } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { absentService, callingIdentity, hostStub } from "./binder";
+import { enforceCallingOrSelfPermission, serviceContext } from "./context";
 import { packages } from "./packages";
 
 absentService("phone", "isub", "iphonesubinfo", "carrier_config", "isms", "simphonebook", "telephony_ims");
@@ -40,8 +41,8 @@ async function locationResult(context: unknown, events: number[], pkg: string, f
 /** TelephonyRegistry.checkListenerPermission: it throws for a missing permission, and a soft denial
  *  only leaves the listener unregistered, which with no modem is the same as registering it */
 async function checkListenerPermission(events: number[], subId: number, pkg: string, featureId: string | null): Promise<void> {
-  const context = await scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"), any = (set: number[]) => events.some((e) => set.includes(e));
-  const enforce = (permission: string) => vcall(context, "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, "listen");
+  const context = await serviceContext(), any = (set: number[]) => events.some((e) => set.includes(e));
+  const enforce = (permission: string) => enforceCallingOrSelfPermission(permission, "listen");
   if (any(LOCATION)) {
     const result = await locationResult(context, events, pkg, featureId);
     if (result === "DENIED_SOFT") return;
