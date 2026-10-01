@@ -8,7 +8,8 @@ import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDim
 import { type JDrawable, loadDrawableRV, drawAt } from "./drawable";
 import type { JavaCanvas } from "./canvas";
 import { gravityH, gravityV, G } from "./gravity";
-import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
+import { actionOf, eventTimeMs, eventX, eventY } from "./motionevent";
+import { trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./touchscroll";
 import { device } from "../shell/config";
 import { TV } from "./axml";
 import { inflateLayout } from "./inflate";
@@ -743,36 +744,36 @@ const scrollMethods: NativeSpec["methods"] = {
     // AOSP re-claims the present scroll through scrollTo, which clamps it to the new extent
     yield vcall(this, "scrollTo", "(II)V", this.scrollX, this.scrollY);
   }),
-  "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScrollView, ev: JMotionEvent) {
-    const a = ev.action & 0xff;
+  "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScrollView, ev: JObj) {
+    const a = actionOf(ev) & 0xff;
     if (a === 0) {
-      this.downX = ev.x; this.downY = ev.y;
-      this.lastX = ev.x; this.lastY = ev.y;
+      this.downX = eventX(ev); this.downY = eventY(ev);
+      this.lastX = eventX(ev); this.lastY = eventY(ev);
       this.dragging = false;
       this.flingAnim = null;
       this.velo = 0;
     } else if (a === 2) {
-      const d = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
-      const cross = this.horizontal ? Math.abs(ev.y - this.downY) : Math.abs(ev.x - this.downX);
+      const d = this.horizontal ? Math.abs(eventX(ev) - this.downX) : Math.abs(eventY(ev) - this.downY);
+      const cross = this.horizontal ? Math.abs(eventY(ev) - this.downY) : Math.abs(eventX(ev) - this.downX);
       if (d > device.touchSlop && d > cross) { this.dragging = true; return 1; }
     }
     return 0;
   },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScrollView, ev: JMotionEvent) {
-    const a = ev.action & 0xff;
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScrollView, ev: JObj) {
+    const a = actionOf(ev) & 0xff;
     if (a === 0) {
-      this.lastX = ev.x; this.lastY = ev.y;
-      this.lastMoveT = ev.eventTime;
+      this.lastX = eventX(ev); this.lastY = eventY(ev);
+      this.lastMoveT = eventTimeMs(ev);
       this.flingAnim = null;
       return 1;
     }
     if (a === 2) {
-      const d = this.horizontal ? this.lastX - ev.x : this.lastY - ev.y;
-      const dt = Math.max(1, ev.eventTime - this.lastMoveT);
+      const d = this.horizontal ? this.lastX - eventX(ev) : this.lastY - eventY(ev);
+      const dt = Math.max(1, eventTimeMs(ev) - this.lastMoveT);
       this.velo = trackVelocity(this.velo, d, dt);
-      this.lastMoveT = ev.eventTime;
+      this.lastMoveT = eventTimeMs(ev);
       if (!this.dragging) {
-        const dd = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
+        const dd = this.horizontal ? Math.abs(eventX(ev) - this.downX) : Math.abs(eventY(ev) - this.downY);
         if (dd > device.touchSlop) this.dragging = true;
       }
       if (this.dragging) {
@@ -781,11 +782,11 @@ const scrollMethods: NativeSpec["methods"] = {
         this.clampScroll();
         invalidate();
       }
-      this.lastX = ev.x; this.lastY = ev.y;
+      this.lastX = eventX(ev); this.lastY = eventY(ev);
       return 1;
     }
     if (a === 1 || a === 3) {
-      let v = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
+      let v = restVelocity(this.velo, SCROLL_WEIGHT, eventTimeMs(ev) - this.lastMoveT);
       if (this.dragging && Math.abs(v) > FLING.arm) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;

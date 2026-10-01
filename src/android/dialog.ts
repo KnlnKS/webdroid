@@ -17,7 +17,7 @@ import { setPaintTypeface } from "./paint";
 import { JDrawable, loadDrawableRV, drawAt } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { dispatchWindowKey, backKeyMethods, type JKeyEvent } from "./keyevent";
+import { dispatchWindowKey, backKeyMethods, keyCodeOf } from "./keyevent";
 import { AID, resString, rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
@@ -25,7 +25,7 @@ import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "../jvm/natives/jchars";
 import { applyWindowTheme, windowDim, type JWindow } from "./window";
 import { complexToFraction } from "./util";
-import { JMotionEvent } from "./motionevent";
+import { actionOf, eventX, eventY } from "./motionevent";
 
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
@@ -133,7 +133,7 @@ rt.register({
         ctx.restore();
       }
     }),
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: DialogRoot, ev: JMotionEvent): Gen {
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: DialogRoot, ev: JObj): Gen {
       if (this.dialog) yield vcall(this.dialog, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", ev);
       return 1;
     }),
@@ -189,10 +189,10 @@ class JDialog extends JObj {
     return this.root;
   }
 }
-async function dialogTouch(dialog: JDialog, event: JMotionEvent): Promise<number> {
-  const root = dialog.root, action = event.action & 0xff;
+async function dialogTouch(dialog: JDialog, event: JObj): Promise<number> {
+  const root = dialog.root, action = actionOf(event) & 0xff;
   if (!dialog.cancelable || !dialog.showing || !dialog.canceledOnTouchOutside || !root) return 0;
-  if (action !== 4 && (action !== 1 || event.x >= 0 && event.x < root.width() && event.y >= 0 && event.y < root.height())) return 0;
+  if (action !== 4 && (action !== 1 || eventX(event) >= 0 && eventX(event) < root.width() && eventY(event) >= 0 && eventY(event) < root.height())) return 0;
   await vcall(dialog, "cancel", "()V");
   return 1;
 }
@@ -299,8 +299,8 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.ownerActivity; },
   "setOwnerActivity(Landroid/app/Activity;)V": function (this: JDialog, activity: unknown) { this.ownerActivity = activity; },
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return vcall(this, "cancel", "()V"); },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JDialog, event: JMotionEvent) { return dialogTouch(this, event); },
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JDialog, event: JMotionEvent): Gen {
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JDialog, event: JObj) { return dialogTouch(this, event); },
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JDialog, event: JObj): Gen {
     if (this.win && (yield vcall(this.win, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event))) return 1;
     return vcall(this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
   }),
@@ -308,11 +308,12 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
 
   "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V": function (this: JDialog, l: unknown) { this.keyL = l; },
   // Dialog.dispatchKeyEvent: its OnKeyListener, then the window's views, then KeyEvent.dispatch
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JDialog, ev: JKeyEvent): Gen {
-    if (this.keyL && (yield vcall(this.keyL, "onKey", "(Landroid/content/DialogInterface;ILandroid/view/KeyEvent;)Z", this, ev.keyCode, ev))) return 1;
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JDialog, ev: JObj): Gen {
+    if (this.keyL && (yield vcall(this.keyL, "onKey", "(Landroid/content/DialogInterface;ILandroid/view/KeyEvent;)Z", this, keyCodeOf(ev), ev))) return 1;
     return dispatchWindowKey(this, this.root, ev);
   }),
   ...backKeyMethods,
+  ...stubs(0, "onKeyLongPress(ILandroid/view/KeyEvent;)Z", "onKeyMultiple(IILandroid/view/KeyEvent;)Z"),
   // Window.Callback, as Dialog's defaults
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
   ...noops("onContentChanged()V", "onCreate(Landroid/os/Bundle;)V", "onStart()V", "onStop()V",
@@ -332,7 +333,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
 };
 rt.register({
   name: "android/app/Dialog", ctor: JDialog,
-  ifaces: ["android/content/DialogInterface", "android/view/Window$Callback"],
+  ifaces: ["android/content/DialogInterface", "android/view/Window$Callback", "android/view/KeyEvent$Callback"],
   methods: dialogMethods,
 });
 rt.register({ name: "android/content/DialogInterface", ctor: class extends JObj {},

@@ -6,8 +6,8 @@ import { vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
 import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST, MATCH_PARENT, WRAP_CONTENT, setViewBackground } from "./view";
-import { JMotionEvent } from "./motionevent";
-import { KEYCODE_BACK, type JKeyEvent } from "./keyevent";
+import { actionOf, eventX, eventY } from "./motionevent";
+import { KEYCODE_BACK, keyCodeOf, keyActionOf, keyDispatcherState } from "./keyevent";
 import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { AID, obtainStyled, rvDimen, rvInt, themeOf, frameworkDimen, resString, type Resources, type JTheme, type JAttrSet } from "./res";
@@ -49,23 +49,30 @@ export function removeOverlay(v: JView) {
 const M_dispatchKey = mangleMethod("dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z");
 const M_onTouch = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 /** PopupWindow.PopupDecorView.onTouchEvent: a DOWN outside the window, or ACTION_OUTSIDE, dismisses it */
-const touchDismisses = (v: JView, ev: JMotionEvent) => {
-  const a = ev.action & 0xff;
-  return a === 4 || (a === 0 && (ev.x < 0 || ev.y < 0 || ev.x >= v.width() || ev.y >= v.height()));
+const touchDismisses = (v: JView, ev: JObj) => {
+  const a = actionOf(ev) & 0xff;
+  return a === 4 || (a === 0 && (eventX(ev) < 0 || eventY(ev) < 0 || eventX(ev) >= v.width() || eventY(ev) >= v.height()));
 };
 /** PopupDecorView's input overrides of `sup`: BACK (a tracked DOWN, then its UP) and touchDismisses
  *  dismiss the popup window; anything else goes to `sup` */
 export function popupInput(sup: string, dismiss: (v: JView) => unknown): NonNullable<NativeSpec["methods"]> {
   const superMethod = (m: string) => rt.link(sup).ctor.prototype[m] as (this: JView, ev: unknown) => unknown;
   return {
-    "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: JKeyEvent): Gen {
-      if (ev.keyCode === KEYCODE_BACK) {
-        if (ev.action === 0 && ev.repeat === 0) { ev.tracking = true; return 1; }
-        if (ev.action === 1 && ev.tracking && !ev.canceled) { yield dismiss(this); return 1; }
+    "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: JObj): Gen {
+      if (keyCodeOf(ev) === KEYCODE_BACK) {
+        const state = yield keyDispatcherState(), action = keyActionOf(ev);
+        if (action === 0 && (yield vcall(ev, "getRepeatCount", "()I")) === 0) {
+          yield vcall(state, "startTracking", "(Landroid/view/KeyEvent;Ljava/lang/Object;)V", ev, this);
+          return 1;
+        }
+        if (action === 1 && (yield vcall(state, "isTracking", "(Landroid/view/KeyEvent;)Z", ev)) && !(yield vcall(ev, "isCanceled", "()Z"))) {
+          yield dismiss(this);
+          return 1;
+        }
       }
       return superMethod(M_dispatchKey).call(this, ev);
     }),
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JObj): Gen {
       if (touchDismisses(this, ev)) { yield dismiss(this); return 1; }
       return superMethod(M_onTouch).call(this, ev);
     }),
@@ -212,10 +219,10 @@ rt.register({
       }
     },
     ...popupInput("android/view/View", removeOverlay),
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: PopupMenuView, ev: JMotionEvent) {
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: PopupMenuView, ev: JObj) {
       if (touchDismisses(this, ev)) removeOverlay(this);
-      else if ((ev.action & 0xff) === 1) {
-        const i = Math.floor((ev.y - this.padV) / this.itemH);
+      else if ((actionOf(ev) & 0xff) === 1) {
+        const i = Math.floor((eventY(ev) - this.padV) / this.itemH);
         removeOverlay(this);
         if (i >= 0 && i < this.items.length) this.onPick?.(this.items[i].id);
       }
@@ -300,7 +307,7 @@ rt.register({
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_onMeasure];
       yield sup.call(this, windowSpec(p.w, specSize(wSpec)), windowSpec(p.h, specSize(hSpec)));
     }),
-    "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: PopupDecorView, ev: JMotionEvent): Gen {
+    "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: PopupDecorView, ev: JObj): Gen {
       const p = this.popup!;
       if (p.touchInterceptor && (yield vcall(p.touchInterceptor, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))) return 1;
       return rt.link("android/widget/FrameLayout").ctor.prototype[M_dispatchTouch].call(this, ev);

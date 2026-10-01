@@ -2,7 +2,8 @@ import "../../../src/natives";
 import { onMain } from "../../../src/android/mainloop";
 import { overlays } from "../../../src/android/popup";
 import { JView } from "../../../src/android/view";
-import type { JKeyEvent } from "../../../src/android/keyevent";
+import { keyActionOf } from "../../../src/android/keyevent";
+import type { JObj } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { pressBack } from "../../../src/shell/device";
 import { loadPlatformDex } from "../../../src/android/framework";
@@ -17,7 +18,7 @@ async function probe() {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const view = Object.assign(new JView(), {
-    [mangleMethod("dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z")]: (ev: JKeyEvent) => { if (ev.action === 1) events.push("back"); return 1; },
+    [mangleMethod("dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z")]: (ev: JObj) => { if (keyActionOf(ev) === 1) events.push("back"); return 1; },
   });
   overlays.push({ view, x: 0, y: 0, flags: 0 });
   try {

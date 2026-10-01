@@ -7,7 +7,7 @@ import {
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
-import { backKeyMethods, dispatchWindowKey, type JKeyEvent } from "./keyevent";
+import { backKeyMethods, dispatchWindowKey } from "./keyevent";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -15,7 +15,7 @@ import { requestLayout, type JView, type JLayoutParams, setWindowContent, findBy
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
 import { vcall, vcallOn, curThread, mainThread, vcallUncaught, newObj, scall, after } from "../jvm/natives/jlang";
 import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
-import type { JMotionEvent } from "./motionevent";
+import { actionOf } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { inMainJob, onMain } from "./mainloop";
@@ -411,9 +411,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }, 0);
   },
   "getVolumeControlStream()I": () => 3,
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActivity, event: JMotionEvent): Gen {
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActivity, event: JObj): Gen {
     const thread = curThread;
-    if (event.action === 0) yield vcallOn(thread, this, "onUserInteraction", "()V");
+    if (actionOf(event) === 0) yield vcallOn(thread, this, "onUserInteraction", "()V");
     if (yield vcallOn(thread, this.window, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event)) return 1;
     return vcallOn(thread, this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
   }),
@@ -432,8 +432,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(1, "onCreateOptionsMenu(Landroid/view/Menu;)Z", "onPrepareOptionsMenu(Landroid/view/Menu;)Z",
     "onMenuOpened(ILandroid/view/Menu;)Z"),
   ...backKeyMethods,
+  ...stubs(0, "onKeyLongPress(ILandroid/view/KeyEvent;)Z", "onKeyMultiple(IILandroid/view/KeyEvent;)Z"),
   // Activity.dispatchKeyEvent: the window's view tree first, then KeyEvent.dispatch to the activity
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JActivity, ev: JKeyEvent): Gen {
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JActivity, ev: JObj): Gen {
     yield vcall(this, "onUserInteraction", "()V");
     return dispatchWindowKey(this, this.window.decor, ev);
   }),

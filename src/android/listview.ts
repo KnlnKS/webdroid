@@ -5,7 +5,8 @@ import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, dr
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall, after, vcallUncaught } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom, setViewBackground } from "./view";
-import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
+import { actionOf, eventTimeMs, eventY } from "./motionevent";
+import { restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./touchscroll";
 import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources, attrSet } from "./res";
 import { attr } from "./axml";
 import type { JavaCanvas } from "./canvas";
@@ -544,28 +545,28 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
       if (pending instanceof Promise) yield pending;
     }
   }),
-  "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JListView, ev: JMotionEvent) {
-    const a = ev.action & 0xff;
+  "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JListView, ev: JObj) {
+    const a = actionOf(ev) & 0xff;
     if (a === 0) {
-      this.downY = this.lastY = ev.y;
+      this.downY = this.lastY = eventY(ev);
       this.dragging = false;
       this.flingAnim = null;
       this.setScrollState(0);
       this.velo = 0;
-    } else if (a === 2 && Math.abs(ev.y - this.downY) > device.touchSlop) {
+    } else if (a === 2 && Math.abs(eventY(ev) - this.downY) > device.touchSlop) {
       this.dragging = true;
       return 1;
     }
     return 0;
   },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JListView, ev: JMotionEvent): Gen {
-    const a = ev.action & 0xff;
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JListView, ev: JObj): Gen {
+    const a = actionOf(ev) & 0xff;
     if (a === 0) {
-      this.lastY = ev.y;
-      this.lastMoveT = ev.eventTime;
+      this.lastY = eventY(ev);
+      this.lastMoveT = eventTimeMs(ev);
       this.flingAnim = null;
       // the item under the finger: a tap target, and a long press once the timer fires
-      const idx = this.itemIndexAt(ev.y + this.scrollY);
+      const idx = this.itemIndexAt(eventY(ev) + this.scrollY);
       this.pressTarget = idx;
       this.longFired = false;
       cancelItemLongPress(this);
@@ -578,17 +579,17 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
       return 1;
     }
     if (a === 2) {
-      const d = this.lastY - ev.y;
-      const dt = Math.max(1, ev.eventTime - this.lastMoveT);
+      const d = this.lastY - eventY(ev);
+      const dt = Math.max(1, eventTimeMs(ev) - this.lastMoveT);
       this.velo = trackVelocity(this.velo, d, dt);
-      this.lastMoveT = ev.eventTime;
-      if (!this.dragging && Math.abs(ev.y - this.downY) > device.touchSlop) this.dragging = true;
+      this.lastMoveT = eventTimeMs(ev);
+      if (!this.dragging && Math.abs(eventY(ev) - this.downY) > device.touchSlop) this.dragging = true;
       if (this.dragging) {
         cancelItemLongPress(this);
         this.setScrollState(1);
         this.scrollRows(d);
       }
-      this.lastY = ev.y;
+      this.lastY = eventY(ev);
       return 1;
     }
     if (a === 1) {
@@ -599,7 +600,7 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
           yield guardCall(this, M_perfItemClick, v, this.pressTarget, yield rowId(this, this.pressTarget));
         }
       }
-      let vv = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
+      let vv = restVelocity(this.velo, SCROLL_WEIGHT, eventTimeMs(ev) - this.lastMoveT);
       if (this.dragging && Math.abs(vv) > FLING.arm) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
@@ -1047,8 +1048,8 @@ rt.register({
       yield showSpinnerPopup(this);
       return 1;
     }),
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSpinner, ev: JMotionEvent): Gen {
-      if ((ev.action & 0xff) === 1) yield vcall(this, "performClick", "()Z");
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSpinner, ev: JObj): Gen {
+      if ((actionOf(ev) & 0xff) === 1) yield vcall(this, "performClick", "()Z");
       return 1;
     }),
     ...absSpinnerMethods,

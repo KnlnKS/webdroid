@@ -37,8 +37,9 @@ import {
 import { packageUid, packages } from "../android/packages";
 import { onMain, mainDbg, mainLooper, fnRunnable, type JFnRunnable } from "../android/mainloop";
 import { mainChoreographer, deliverVsync, CALLBACK_TRAVERSAL } from "../android/vsync";
-import { JView, JViewGroup, uiState, setFrameRequester, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, copyEvent, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
-import { JMotionEvent } from "../android/motionevent";
+import { JView, JViewGroup, uiState, setFrameRequester, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";
+import { obtainAsCopy } from "../android/motionevent";
+import { touchEvent } from "../android/inputdevices";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { windowCanvas, setCanvasTargetSdk } from "../android/canvas";
 import { animateRenderThread } from "../android/rtanimator";
@@ -600,20 +601,21 @@ export function dispatchPointer(action: number, x: number, y: number, at = guest
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 let touchDown = 0n;
+/** InputEventReceiver's delivery to a window: the event in the window's coordinates, recycled once
+ *  dispatch finishes */
+const deliverTouch = driven(function* deliverTouch(target: JObj, action: number, x: number, y: number, downMs: number, atMs: number, left: number, top: number): Gen {
+  const ev: JObj = yield obtainAsCopy(touchEvent(action, x, y, downMs, atMs, left, top));
+  try { return yield guardCall(target, M_dispatch, ev); }
+  finally { yield vcall(ev, "recycle", "()V"); }
+});
 const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: number, y: number, t: number): Gen<void> {
   // a tap on the home screen is a tap on the app's icon
   if (atHome()) { if (action === 1) yield activityVisibility0("resume"); return; }
   const window = booted?.stack.at(-1)?.window, decor = window?.decor;
   if (!decor) return;
-  const ev = new JMotionEvent();
-  ev.action = action;
-  ev.rawX = x;
-  ev.rawY = y;
   // SystemClock.uptimeMillis's clock, stamped when the event was generated rather than when the
   // queue reached it, so a fling's velocity does not depend on how loaded the host is.
-  ev.eventTime = t;
-  if (action === 0) downTime = ev.eventTime;
-  ev.downTime = downTime;
+  if (action === 0) downTime = t;
   try {
     if (action === 0) {
       // InputDispatcher: the topmost touchable window whose frame holds the point, or that is
@@ -624,7 +626,7 @@ const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: nu
         if (v.visibility !== 0) continue;
         const inside = x >= v.left && x < v.right && y >= v.top && y < v.bottom;
         if (!(o.flags & FLAG_NOT_TOUCHABLE) && (inside || !(o.flags & (FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL)))) { touchTarget = o; break; }
-        if (o.flags & FLAG_WATCH_OUTSIDE_TOUCH) yield guardCall(v, M_dispatch, Object.assign(copyEvent(ev), { action: 4, x: x - v.left, y: y - v.top }));
+        if (o.flags & FLAG_WATCH_OUTSIDE_TOUCH) yield deliverTouch(v, 4, x, y, downTime, t, v.left, v.top);
       }
     } else if (touchTarget === null) {
       // No target is latched: the DOWN never happened. Falling through would dispatch this MOVE
@@ -635,16 +637,8 @@ const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: nu
     if (touchTarget !== "decor") {
       // a window the gesture's DOWN removed (a dismissed popup) takes nothing more of it
       const v = touchTarget.view;
-      if (v.visibility === 0 && overlays.includes(touchTarget)) {
-        ev.x = x - v.left;
-        ev.y = y - v.top;
-        yield guardCall(v, M_dispatch, ev);
-      }
-    } else {
-      ev.x = x;
-      ev.y = y;
-      yield guardCall(window.callbackObj ?? window.activity, M_dispatch, ev);
-    }
+      if (v.visibility === 0 && overlays.includes(touchTarget)) yield deliverTouch(v, action, x, y, downTime, t, v.left, v.top);
+    } else yield deliverTouch(window.callbackObj ?? window.activity, action, x, y, downTime, t, 0, 0);
     if (action === 1 || action === 3) touchTarget = null;
   } catch (e) {
     reportUncaught(e);

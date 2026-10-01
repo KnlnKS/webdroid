@@ -6,7 +6,9 @@ import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { JEditText } from "../src/android/textview";
 import { editorAction } from "../src/android/textview-input";
-import { JView, JViewGroup, makeSpec, MS_EXACTLY, measureView, layoutView, MS_AT_MOST, JLinearLP, JMarginLP, obtainEvent, MS_UNSPEC } from "../src/android/view";
+import { JView, JViewGroup, makeSpec, MS_EXACTLY, measureView, layoutView, MS_AT_MOST, JLinearLP, JMarginLP, MS_UNSPEC } from "../src/android/view";
+import { obtainMotion } from "../src/android/motionevent";
+import { keyActionOf } from "../src/android/keyevent";
 import { ST, drawableBounds } from "../src/android/drawable";
 import { JLinearLayout } from "../src/android/layouts";
 import { classCtors } from "../src/jvm/natives/jreflect";
@@ -67,7 +69,7 @@ describe("expandable-list", () => {
 
 describe("editor-action", () => {
   rt.linkNatives();
-  class KeyListener extends JObj { keys: [number, number][] = []; [mangleMethod("onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z")](_v: unknown, code: number, ev: any) { this.keys.push([ev.action, code]); return 1; } }
+  class KeyListener extends JObj { keys: [number, number][] = []; [mangleMethod("onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z")](_v: unknown, code: number, ev: JObj) { this.keys.push([keyActionOf(ev), code]); return 1; } }
   class ActionListener extends JObj { actions: number[] = []; consume = 1; [mangleMethod("onEditorAction", "(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z")](_v: unknown, action: number) { this.actions.push(action); return this.consume; } }
 
   test("an editor action nobody listens for arrives as an ENTER key press", async () => {
@@ -383,8 +385,8 @@ describe("scale-gesture", () => {
     },
   } });
   rt.linkNatives();
-  const touch = (detector: JObj, action: number, time: number, y = 100) =>
-    vcall(detector, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", obtainEvent(0n, BigInt(time), action, 100, y));
+  const touch = async (detector: JObj, action: number, time: number, y = 100) =>
+    vcall(detector, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", await obtainMotion(0, time, action, 100, y));
   async function create() {
     const listener = rt.make("test/ScaleListener") as Listener;
     const detector = await newObj("android/view/ScaleGestureDetector", "(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V", rt.make("test/ScaleContext"), listener);

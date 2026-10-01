@@ -1,9 +1,7 @@
 // android.hardware: Sensor value classes and the listener interface apps implement.
 // SensorManager itself is a Context system service and lives with the others in app.ts.
 
-import { rt, JObj, stubs, fieldGetters, fieldSetters } from "../jvm/runtime";
-import { device } from "../shell/config";
-import { newArrayList } from "../jvm/natives/jcoll";
+import { rt, JObj, fieldGetters } from "../jvm/runtime";
 
 rt.markers("android/hardware/SensorEventListener");
 rt.markers("android/hardware/TriggerEventListener");
@@ -44,86 +42,3 @@ rt.register({
   fields: ["values", "accuracy", "timestamp", "sensor"],
 });
 
-// ── android.hardware.input: the one input device is the touchscreen (id 1, SOURCE_TOUCHSCREEN)
-class JInputDevice extends JObj {}
-class JMotionRange extends JObj { axis = 0; max = 0; }
-const touchscreen = new JInputDevice();
-function inputDevice(id: number): JInputDevice | null {
-  if (id !== 1) return null;
-  rt.link("android/view/InputDevice");
-  return touchscreen;
-}
-export class JInputEvent extends JObj { deviceId = 0; source = 0; }
-rt.register({
-  name: "android/view/InputEvent", ctor: JInputEvent, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "getDevice()Landroid/view/InputDevice;": function (this: JInputEvent) { return inputDevice(this.deviceId); },
-    ...fieldGetters({ "getDeviceId()I": "deviceId", "getSource()I": "source" }),
-    ...fieldSetters({ "setSource(I)V": "source" }),
-    "isFromSource(I)Z": function (this: JInputEvent, source: number) { return (this.source & source) === source ? 1 : 0; },
-  },
-});
-const range = (axis: number, max: number) => { const r = new JMotionRange(); r.axis = axis; r.max = max; return r; };
-const ranges = [range(0, 0), range(1, 0), range(2, 1), range(3, 1)];
-function motionRange(axis: number, source = 0x1002): JMotionRange | null {
-  if (source !== 0x1002) return null;
-  const r = ranges[axis];
-  if (!r) return null;
-  rt.link("android/view/InputDevice$MotionRange");
-  if (axis < 2) r.max = axis === 0 ? device.width : device.height;
-  return r;
-}
-rt.register({
-  name: "android/view/InputDevice", ctor: JInputDevice,
-  statics: { SOURCE_TOUCHSCREEN: 0x1002, SOURCE_KEYBOARD: 0x101, SOURCE_MOUSE: 0x2002, SOURCE_JOYSTICK: 0x1000010, SOURCE_GAMEPAD: 0x401, SOURCE_DPAD: 0x201,
-    SOURCE_CLASS_POINTER: 2, SOURCE_CLASS_BUTTON: 1, SOURCE_CLASS_JOYSTICK: 16, SOURCE_UNKNOWN: 0, SOURCE_ANY: -256, KEYBOARD_TYPE_NONE: 0, KEYBOARD_TYPE_ALPHABETIC: 2 },
-  methods: {
-    "static getDeviceIds()[I": () => Int32Array.of(1),
-    "static getDevice(I)Landroid/view/InputDevice;": inputDevice,
-    "getName()Ljava/lang/String;": () => "touchscreen",
-    "getDescriptor()Ljava/lang/String;": () => "touchscreen",
-    "getSources()I": () => 0x1002,
-    "supportsSource(I)Z": (s: number) => ((s & 0x1002) === s ? 1 : 0),
-    ...stubs(1, "getId()I"),
-    ...stubs(0, "getKeyboardType()I", "isVirtual()Z", "isExternal()Z", "getVendorId()I", "getProductId()I",
-      "getControllerNumber()I"),
-    "getMotionRange(I)Landroid/view/InputDevice$MotionRange;": motionRange,
-    "getMotionRange(II)Landroid/view/InputDevice$MotionRange;": motionRange,
-    "getMotionRanges()Ljava/util/List;": () => newArrayList(ranges.map(r => motionRange(r.axis))),
-    "hasKeys([I)[Z": (keys: Int32Array) => new Uint8Array(keys.length),
-  },
-});
-// Every load falls back to the virtual keyboard (Virtual.kcm, type FULL), as AOSP does for a
-// device without its own map; deviceHasKey agrees with the touchscreen's hasKeys.
-class JKeyCharacterMap extends JObj {}
-let virtualKeyboard: JKeyCharacterMap | null = null;
-rt.register({
-  name: "android/view/KeyCharacterMap", ctor: JKeyCharacterMap,
-  statics: { VIRTUAL_KEYBOARD: -1, BUILT_IN_KEYBOARD: 0, NUMERIC: 1, PREDICTIVE: 2, ALPHA: 3, FULL: 4, SPECIAL_FUNCTION: 5 },
-  methods: {
-    "static load(I)Landroid/view/KeyCharacterMap;": () => virtualKeyboard ??= new JKeyCharacterMap(),
-    "getKeyboardType()I": () => 4,
-    "static deviceHasKey(I)Z": () => 0,
-    "static deviceHasKeys([I)[Z": (keys: Int32Array) => new Uint8Array(keys.length),
-  },
-});
-rt.register({
-  name: "android/view/InputDevice$MotionRange", ctor: JMotionRange,
-  methods: {
-    "getAxis()I": function (this: JMotionRange) { return this.axis; },
-    "getMin()F": () => 0, "getMax()F": function (this: JMotionRange) { return this.max; },
-    "getRange()F": function (this: JMotionRange) { return this.max; },
-    "getFlat()F": () => 0, "getFuzz()F": () => 0, "getResolution()F": () => 0,
-    "getSource()I": () => 0x1002,
-  },
-});
-rt.markers("android/hardware/input/InputManager$InputDeviceListener");
-rt.register({
-  name: "android/hardware/input/InputManager", ctor: class extends JObj {},
-  methods: {
-    "getInputDeviceIds()[I": () => Int32Array.of(1),
-    "getInputDevice(I)Landroid/view/InputDevice;": inputDevice,
-    "registerInputDeviceListener(Landroid/hardware/input/InputManager$InputDeviceListener;Landroid/os/Handler;)V": () => {},
-    "unregisterInputDeviceListener(Landroid/hardware/input/InputManager$InputDeviceListener;)V": () => {},
-  },
-});

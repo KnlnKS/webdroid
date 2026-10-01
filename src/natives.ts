@@ -139,6 +139,8 @@ import "./android/notification";
 import "./android/delegates";
 import "./android/services";
 import "./android/display";
+import "./android/inputdevices";
+import "./android/velocity";
 import "./android/vsync";
 import "./android/surfaceflinger";
 import "./android/hwui";

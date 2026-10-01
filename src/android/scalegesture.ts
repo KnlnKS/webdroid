@@ -1,7 +1,7 @@
 import { JObj, rt, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JGestureDetector, JSimpleGestureListener, minimumScalingSpan } from "./compat";
-import { type JMotionEvent } from "./motionevent";
+import { motionOf, eventTimeMs, eventX, eventY, AXIS_X, AXIS_Y } from "./motionevent";
 import { device } from "../shell/config";
 import { inMainJob, onMain } from "./mainloop";
 
@@ -34,13 +34,12 @@ class JScaleGestureDetector extends JObj {
   previous() {
     this.prevSpan = this.span; this.prevSpanX = this.spanX; this.prevSpanY = this.spanY; this.prevTime = this.time;
   }
-  touch(event: JMotionEvent): number | Promise<number> { return rt.drive(this.touch$(event)); }
-  *touch$(event: JMotionEvent): Gen<number> {
-    this.time = event.eventTime;
-    const action = event.action & 255;
+  touch(event: JObj): number | Promise<number> { return rt.drive(this.touch$(event)); }
+  *touch$(event: JObj): Gen<number> {
+    this.time = eventTimeMs(event);
     if (this.quick) yield this.detector!.touch(event);
-    const count: number = yield vcall(event, "getPointerCount", "()I");
-    const button = ((yield vcall(event, "getButtonState", "()I")) & 32) !== 0;
+    const e = motionOf(event), action = e.action & 255, count = e.pointerCount;
+    const button = (e.buttonState & 32) !== 0;
     const cancelled = this.anchor === 2 && !button, complete = action === 1 || action === 3 || cancelled;
     if (action === 0 || complete) {
       if (this.inProgress) {
@@ -50,21 +49,19 @@ class JScaleGestureDetector extends JObj {
       if (complete) return 1;
     }
     if (!this.inProgress && this.stylus && !this.anchor && button) {
-      this.anchorX = event.x; this.anchorY = event.y; this.anchor = 2; this.initialSpan = 0;
+      this.anchorX = eventX(event); this.anchorY = eventY(event); this.anchor = 2; this.initialSpan = 0;
     }
     const changed = action === 0 || action === 5 || action === 6 || cancelled;
-    const skip = action === 6 ? (event.action >> 8) & 255 : -1, div = count - +(skip >= 0);
+    const skip = action === 6 ? (e.action >> 8) & 255 : -1, div = count - +(skip >= 0);
     let x = 0, y = 0, dx = 0, dy = 0;
-    if (this.anchor) { x = this.anchorX; y = this.anchorY; this.above = event.y < y; }
+    if (this.anchor) { x = this.anchorX; y = this.anchorY; this.above = e.axis(AXIS_Y) < y; }
     else {
-      for (let i = 0; i < count; i++) if (i !== skip) {
-        x += yield vcall(event, "getX", "(I)F", i); y += yield vcall(event, "getY", "(I)F", i);
-      }
+      for (let i = 0; i < count; i++) if (i !== skip) { x += e.axis(AXIS_X, i); y += e.axis(AXIS_Y, i); }
       x /= div; y /= div;
     }
     for (let i = 0; i < count; i++) if (i !== skip) {
-      dx += Math.abs((yield vcall(event, "getX", "(I)F", i)) - x);
-      dy += Math.abs((yield vcall(event, "getY", "(I)F", i)) - y);
+      dx += Math.abs(e.axis(AXIS_X, i) - x);
+      dy += Math.abs(e.axis(AXIS_Y, i) - y);
     }
     const spanX = dx * 2 / div, spanY = dy * 2 / div, span = this.anchor ? spanY : Math.hypot(spanX, spanY);
     const wasInProgress = this.inProgress;
@@ -98,8 +95,8 @@ class JScaleGestureDetector extends JObj {
 class JScaleDoubleTapListener extends JSimpleGestureListener { scale!: JScaleGestureDetector; }
 rt.register({ name: "webdroid/ScaleDoubleTapListener", ctor: JScaleDoubleTapListener,
   sup: "android/view/GestureDetector$SimpleOnGestureListener", methods: {
-    "onDoubleTap(Landroid/view/MotionEvent;)Z": function (this: JScaleDoubleTapListener, event: JMotionEvent) {
-      this.scale.anchorX = event.x; this.scale.anchorY = event.y; this.scale.anchor = 1; return 1;
+    "onDoubleTap(Landroid/view/MotionEvent;)Z": function (this: JScaleDoubleTapListener, event: JObj) {
+      this.scale.anchorX = eventX(event); this.scale.anchorY = eventY(event); this.scale.anchor = 1; return 1;
     },
   },
 });
@@ -113,7 +110,7 @@ rt.register({ name: "android/view/ScaleGestureDetector$SimpleOnScaleGestureListe
 rt.register({ name: "android/view/ScaleGestureDetector", ctor: JScaleGestureDetector, methods: {
   "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V": function (this: JScaleGestureDetector, c: unknown, l: unknown) { return this.init(c, l); },
   "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;Landroid/os/Handler;)V": function (this: JScaleGestureDetector, c: unknown, l: unknown) { return this.init(c, l); },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScaleGestureDetector, event: JMotionEvent) { return inMainJob() ? this.touch(event) : onMain(() => this.touch(event)); },
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScaleGestureDetector, event: JObj) { return inMainJob() ? this.touch(event) : onMain(() => this.touch(event)); },
   "isInProgress()Z": function (this: JScaleGestureDetector) { return +this.inProgress; },
   "setQuickScaleEnabled(Z)V": function (this: JScaleGestureDetector, enabled: number) { this.setQuick(!!enabled); },
   "isQuickScaleEnabled()Z": function (this: JScaleGestureDetector) { return +this.quick; },

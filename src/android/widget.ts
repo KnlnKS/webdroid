@@ -1,5 +1,5 @@
 import { guestNow } from "../guest-clock";
-import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawAt, drawableSize, drawableBounds, rvCsl, colorFor, rvColors, adoptDrawable, Adopt } from "./drawable";
 import { rt, type JObj, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue, themeOf } from "./res";
@@ -13,7 +13,7 @@ import { compoundPadL, compoundPadR, syncCompoundPads } from "./textview-compoun
 import { csText } from "../jvm/natives/jchars";
 import { G, absGravity } from "./gravity";
 import { vcall, after, type JSimpleEnum } from "../jvm/natives/jlang";
-import { type JMotionEvent } from "./motionevent";
+import { actionOf, copyEvent, eventTimeMs, eventX, eventY, motionOf } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
 import { accelDecel, loadInterpolator } from "./interpolator";
 import { mangleMethod } from "../jvm/abi";
@@ -263,9 +263,9 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
     ctx.save(); ctx.translate(this.padL, this.padT);
     try { yield drawAt(this.thumb, canvas, x, y, x + this.thumbW, y + this.thumbH); } finally { ctx.restore(); }
   }),
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSeekBar, event: JMotionEvent): Gen {
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSeekBar, event: JObj): Gen {
     if (!this.enabled) return 0;
-    const action = event.action & 255;
+    const action = actionOf(event) & 255;
     if (action === 0) {
       yield vcall(this, "setPressed", "(Z)V", 1);
       if (this.parent) yield vcall(this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
@@ -273,7 +273,7 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
     }
     if (action === 0 || action === 1 || action === 2) {
       const width = this.width() - this.padL - this.padR;
-      yield this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (event.x - this.padL) / width : 0)), true);
+      yield this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (eventX(event) - this.padL) / width : 0)), true);
     }
     if (action === 1 || action === 3) {
       yield vcall(this, "setPressed", "(Z)V", 0);
@@ -506,7 +506,7 @@ class JSwitch extends JCompoundButton {
 const NO_INSETS = insetsOf(0, 0, 0, 0);
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 /** View.onTouchEvent, which a widget's own override defers to */
-const viewTouch = (v: JView, ev: JMotionEvent) => (rt.link("android/view/View").ctor.prototype[M_onTouchEvent] as (e: JMotionEvent) => unknown).call(v, ev);
+const viewTouch = (v: JView, ev: JObj) => (rt.link("android/view/View").ctor.prototype[M_onTouchEvent] as (e: JObj) => unknown).call(v, ev);
 function switchPadRight(this: JSwitch) { return compoundPadR.call(this) + this.switchW + (this.text ? this.switchPadding : 0); }
 syncCompoundPads.add(switchPadRight);
 // Switch's setters only swap the callback; the state AOSP's attach-time refreshDrawableState would
@@ -567,37 +567,39 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
   },
   // AOSP Switch.onTouchEvent: a press on the thumb that moves past the slop drags it; letting go
   // flings by velocity or settles on the nearer side, and the base view sees a cancel instead
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSwitch, ev: JMotionEvent): Gen {
-    const action = ev.action & 255, slop = device.touchSlop;
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSwitch, ev: JObj): Gen {
+    const action = actionOf(ev) & 255, slop = device.touchSlop;
     if (action === 0 || action === 2) {
-      if (action === 2 && ev.eventTime > this.lastT) this.velocity = (ev.x - this.lastX) * 1000 / (ev.eventTime - this.lastT);
-      this.lastX = ev.x; this.lastT = ev.eventTime;
+      if (action === 2 && eventTimeMs(ev) > this.lastT) this.velocity = (eventX(ev) - this.lastX) * 1000 / (eventTimeMs(ev) - this.lastT);
+      this.lastX = eventX(ev); this.lastT = eventTimeMs(ev);
     }
     if (action === 0) {
       const insets: JInsets = yield* this.insets$();
       const left = this.switchL + this.thumbOffset(this.thumbRange(insets)) - slop, right = left + this.thumbW + this.pad.left + this.pad.right + slop;
-      if (this.enabled && this.thumb && ev.x > left && ev.x < right && ev.y > this.switchT - slop && ev.y < this.switchB + slop) {
-        this.touchMode = 1; this.touchX = ev.x; this.touchY = ev.y; this.velocity = 0;
+      if (this.enabled && this.thumb && eventX(ev) > left && eventX(ev) < right && eventY(ev) > this.switchT - slop && eventY(ev) < this.switchB + slop) {
+        this.touchMode = 1; this.touchX = eventX(ev); this.touchY = eventY(ev); this.velocity = 0;
       }
     } else if (action === 2 && this.touchMode === 1) {
-      if (Math.abs(ev.x - this.touchX) > slop || Math.abs(ev.y - this.touchY) > slop) {
+      if (Math.abs(eventX(ev) - this.touchX) > slop || Math.abs(eventY(ev) - this.touchY) > slop) {
         this.touchMode = 2; this.animStart = -1;
         if (this.parent) yield vcall(this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
-        this.touchX = ev.x; this.touchY = ev.y;
+        this.touchX = eventX(ev); this.touchY = eventY(ev);
         return 1;
       }
     } else if (action === 2 && this.touchMode === 2) {
-      const range = this.thumbRange(yield* this.insets$()), d = range ? (ev.x - this.touchX) / range : ev.x > this.touchX ? 1 : -1;
+      const range = this.thumbRange(yield* this.insets$()), d = range ? (eventX(ev) - this.touchX) / range : eventX(ev) > this.touchX ? 1 : -1;
       const pos = Math.max(0, Math.min(1, this.thumbPos + d));
-      if (pos !== this.thumbPos) { this.touchX = ev.x; this.thumbPos = pos; invalidate(this); }
+      if (pos !== this.thumbPos) { this.touchX = eventX(ev); this.thumbPos = pos; invalidate(this); }
       return 1;
     } else if (action === 1 || action === 3) {
       if (this.touchMode === 2) {
         this.touchMode = 0;
         const on = action === 1 && this.enabled ? (Math.abs(this.velocity) > device.dp(50) ? this.velocity > 0 : this.thumbPos > 0.5) : this.checked;
         yield vcall(this, "setChecked", "(Z)V", +on);
-        const cancel = copyEvent(ev); cancel.action = 3;
+        const cancel: JObj = yield copyEvent(ev);
+        motionOf(cancel).action = 3;
         yield viewTouch(this, cancel);
+        yield vcall(cancel, "recycle", "()V");
         return 1;
       }
       this.touchMode = 0;

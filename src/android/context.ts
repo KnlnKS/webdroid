@@ -125,7 +125,6 @@ const SERVICE_CLASS: Record<string, string> = {
   input_method: "android/view/inputmethod/InputMethodManager",
   device_policy: "android/app/admin/DevicePolicyManager",
   performance_hint: "android/os/PerformanceHintManager",
-  input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   media_metrics: "android/media/metrics/MediaMetricsManager",
@@ -154,6 +153,7 @@ const SERVICE_CLASS: Record<string, string> = {
  *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
 const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promise<unknown>]> = {
   display: ["android/hardware/display/DisplayManager", (ctx) => newObj("android/hardware/display/DisplayManager", "(Landroid/content/Context;)V", ctx)],
+  input: ["android/hardware/input/InputManager", (ctx) => newObj("android/hardware/input/InputManager", "(Landroid/content/Context;)V", ctx)],
   activity: ["android/app/ActivityManager", (ctx) => newObj("android/app/ActivityManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   power: ["android/os/PowerManager", async (ctx) => newObj("android/os/PowerManager",
     "(Landroid/content/Context;Landroid/os/IPowerManager;Landroid/os/IThermalService;Landroid/os/Handler;)V",

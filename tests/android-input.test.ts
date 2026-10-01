@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { vcall, newObj } from "../src/jvm/natives/jlang";
@@ -6,10 +6,12 @@ import { JRect } from "../src/android/graphics";
 import { mangleMethod } from "../src/jvm/abi";
 import { JView, JViewGroup, attachView, detachView } from "../src/android/view";
 import { JFrameLayout } from "../src/android/layouts";
-import { JMotionEvent } from "../src/android/motionevent";
+import { obtainMotion, actionOf, eventX, eventY } from "../src/android/motionevent";
 import { device } from "../src/shell/config";
 import { JActivity } from "../src/android/app";
-import { scall } from "./java";
+import { scall, loadFrameworkJar, loadLibcore } from "./java";
+
+beforeAll(async () => { await loadLibcore(); await loadFrameworkJar(); });
 
 describe("focus-change", () => {
   rt.linkNatives();
@@ -72,7 +74,7 @@ describe("focus-change", () => {
 describe("touch-delegate", () => {
   class Target extends JView { events: number[][] = []; }
   rt.register({ name: "test/TouchTarget", ctor: Target, sup: "android/view/View", methods: {
-    "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": function (this: Target, e: JMotionEvent) { this.events.push([e.action, e.x, e.y]); return 1; },
+    "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": function (this: Target, e: JObj) { this.events.push([actionOf(e), eventX(e), eventY(e)]); return 1; },
   } });
   rt.linkNatives();
   test("a non-clickable host forwards a captured gesture and cancels outside the slop bounds", async () => {
@@ -82,7 +84,7 @@ describe("touch-delegate", () => {
     const delegate = await newObj("android/view/TouchDelegate", "(Landroid/graphics/Rect;Landroid/view/View;)V", bounds, target);
     await vcall(host, "setTouchDelegate", "(Landroid/view/TouchDelegate;)V", delegate);
     expect(await vcall(host, "getTouchDelegate", "()Landroid/view/TouchDelegate;")).toBe(delegate);
-    const event = async (action: number, x: number, y: number) => vcall(host, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", Object.assign(new JMotionEvent(), { action, x, y }));
+    const event = async (action: number, x: number, y: number) => vcall(host, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", await obtainMotion(0, 0, action, x, y));
     expect(await event(0, 0, 0)).toBe(0);
     expect(await event(0, 15, 15)).toBe(1);
     await event(2, 1000, 1000); await event(3, 1000, 1000);
@@ -105,7 +107,7 @@ describe("viewgroup-touch", () => {
     const seen: number[] = [];
     class Activity extends JActivity {
       [mangleMethod("onUserInteraction", "()V")]() { seen.push(-1); }
-      [mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z")](event: JMotionEvent) { seen.push(event.action); return 1; }
+      [mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z")](event: JObj) { seen.push(actionOf(event)); return 1; }
     }
     const activity = new Activity(), decor = new JFrameLayout();
     activity.window.decor = decor; decor.right = 200; decor.bottom = 200;

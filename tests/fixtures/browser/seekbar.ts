@@ -5,7 +5,7 @@ import { mangleMethod } from "../../../src/jvm/abi";
 import { newObj, vcall, vcallOn, curThread, JThread } from "../../../src/jvm/natives/jlang";
 import { canvasOver } from "../../../src/android/canvas";
 import { JView } from "../../../src/android/view";
-import { JMotionEvent } from "../../../src/android/motionevent";
+import { obtainMotion } from "../../../src/android/motionevent";
 import { initDeviceLocales } from "../../../src/android/resnative";
 
 async function probe() {
@@ -44,7 +44,7 @@ async function probe() {
     [mangleMethod("onStopTrackingTouch", "(Landroid/widget/SeekBar;)V")]: () => events.push(["stop", curThread === thread]),
   });
   await vcall(view, "setOnSeekBarChangeListener", "(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V", listener);
-  for (const [action, x] of [[0, 75], [2, 90], [1, 90]]) await vcallOn(thread, view, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", Object.assign(new JMotionEvent(), { action, x, y: 20 }));
+  for (const [action, x] of [[0, 75], [2, 90], [1, 90]]) await vcallOn(thread, view, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", await obtainMotion(0, 0, action, x, 20));
   return { before: pixel(20, 20), thumb: pixel(50, 20), after: pixel(80, 20), above: pixel(20, 5),
     restored: ctx.getTransform().isIdentity, events, progress: await vcall(view, "getProgress", "()I"), pressed: view.pressed };
 }

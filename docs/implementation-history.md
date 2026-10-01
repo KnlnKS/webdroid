@@ -1213,6 +1213,30 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   and WebView-functor draws throw UnsupportedOperationException, elevation shadows and Z order
   not drawn, getFillPath needs the page's CanvasKit, resolution logging, ObbScanner, ResourceTimer
   and fd-backed ApkAssets unimplemented.
+- 2026-10-01, input events on bytecode (Stage D). MotionEvent and its PointerCoords/Properties,
+  InputEvent, KeyEvent and its DispatcherState, KeyCharacterMap, InputDevice, VelocityTracker,
+  InputManager and InputManagerGlobal run from AOSP bytecode over natives with libinput's
+  semantics (`motionevent.ts`, `velocity.ts`, `keyevent.ts`) and a hosted IInputManager
+  (`inputdevices.ts`). scripts/InputProbe.java prints 128 lines on the reference AVD; fwtest runs
+  the same dex here and matches every line (event ids masked). Device findings: Java coordinates
+  are stored through calculateTransformedXY, so obtain(x = 100.3) keeps 100.299805 (1/1024) and
+  offsets add to that; nativeInitialize sets the private orientation flags (0x180) only when a
+  pointer's orientation is nonzero, and getFlags hides them; orientations go through bionic's
+  atan2f, one ulp off a correctly rounded atan2, so it is ported; the eleven VelocityTracker
+  strategies agree to the last digit. The touchscreen is the AVD's virtio_input_multi_touch_1 (id
+  12, sources 0x80005103, Generic.kcm); `adb emu event mouse` shows its touches as
+  TOUCHSCREEN|STYLUS with private flag 0x80, pressure 1 and xPrecision 32768/width. The virtual
+  keyboard is id -1 (Virtual.kcm), and hasKeys on a negative id asks every AVD device, so its key
+  set is recorded (`gen-framework --input`). The host builds the reader's event (`touchEvent`) and
+  wraps it in a pooled Java MotionEvent, recycled after dispatch; the TS view stack reads through
+  `motionOf`/`eventX` and offsets as dispatchTransformedTouchEvent does; key events reach views,
+  activities and dialogs through KeyEvent.dispatch with the dispatcher state. One move costs 1.4 us
+  in Bun (obtain, View dispatch, VelocityTracker.addMovement, recycle). Found while gating: a typed
+  view's bulk get over an external mapping did not wait for its pages, so java.text.Normalizer's
+  first NFC load read zeros and every composition threw StringIndexOutOfBounds (getDeadChar
+  reaches it); SparseArray lacked setValueAt. Limits: the TS scrollers and GestureDetector keep
+  their per-frame EWMA velocity; IInputManager hosts only what InputDevice, KeyCharacterMap and
+  VelocityTracker reach; no InputChannel/InputEventReceiver yet.
 
 ## Java, storage and framework semantics
 

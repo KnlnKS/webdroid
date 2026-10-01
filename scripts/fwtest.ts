@@ -57,7 +57,7 @@ console.log(`\ncoverage ${have}/${total} declared natives (${((have / (total || 
 
 // --- evidence: run the real bytecode and see what it actually reaches ---
 console.log("");
-for (const area of ["fonts", "graphics", "bitmap", "text", "resources"]) await import(`./fwtest/${area}`);
+for (const area of ["fonts", "graphics", "bitmap", "text", "resources", "input"]) await import(`./fwtest/${area}`);
 
 if (gaps.length) {
   console.log(`\n${gaps.length} declared natives with no delegate, first 30:`);

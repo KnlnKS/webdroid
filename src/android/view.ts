@@ -12,12 +12,12 @@ import { mangleMethod, mangleStaticField, jmethod, type JMethod } from "../jvm/a
 import { vcall, vcallOn, after, construct, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, adoptDrawable, Adopt, drawAt } from "./drawable";
-import { JMotionEvent } from "./motionevent";
+import { motionOf, actionOf, eventX, eventY } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
-import { keyDispatcherState } from "./keyevent";
+import { keyDispatcherState, keyCodeOf, dispatchKeyTo } from "./keyevent";
 import { JProperty } from "./util";
 import { csText } from "../jvm/natives/jchars";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
@@ -302,18 +302,13 @@ const attachToParent = driven(function* attachToParent(this: JViewGroup, c: JVie
     yield vcall(this, "requestChildFocus", "(Landroid/view/View;Landroid/view/View;)V", c, yield vcall(c, "findFocus", "()Landroid/view/View;"));
   }
 });
-export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
-  const e = new JMotionEvent();
-  e.downTime = Number(dt); e.eventTime = Number(et); e.action = action; e.x = e.rawX = x; e.y = e.rawY = y;
-  e.deviceId = 0; e.source = 2; e.size = 1; e.metaState = metaState; e.toolType = 0;
-  return e;
-}
-export function copyEvent(src: JMotionEvent) {
-  const e = new JMotionEvent();
-  Object.assign(e, src);
-  return e;
-}
 const M_performLongClick = mangleMethod("performLongClick", "()Z");
+/** ViewGroup.dispatchTransformedTouchEvent: the child sees the event offset into its coordinates */
+const dispatchOffset = driven(function* dispatchOffset(child: JView, ev: JObj, dx: number, dy: number): Gen {
+  motionOf(ev).offsetLocation(dx, dy);
+  try { return yield guardCall(child, M_dispatchTouch, ev); }
+  finally { motionOf(ev).offsetLocation(-dx, -dy); }
+});
 const M_onLayout = mangleMethod("onLayout", "(ZIIII)V");
 const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const M_onDraw = mangleMethod("onDraw", "(Landroid/graphics/Canvas;)V");
@@ -1311,7 +1306,7 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "isAttachedToWindow()Z": function (this: JView) { return this.attached ? 1 : 0; },
   "getWindowToken()Landroid/os/IBinder;": attachedWindowToken,
-  "getKeyDispatcherState()Landroid/view/KeyEvent$DispatcherState;": function (this: JView) { return this.attached ? keyDispatcherState : null; },
+  "getKeyDispatcherState()Landroid/view/KeyEvent$DispatcherState;": function (this: JView) { return this.attached ? keyDispatcherState() : null; },
   "getApplicationWindowToken()Landroid/os/IBinder;": attachedWindowToken,
   "getRootView()Landroid/view/View;": function (this: JView) { return rootOf(this); },
   "getLocationOnScreen([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, true); },
@@ -1414,13 +1409,13 @@ const viewMethods: NativeSpec["methods"] = {
   "getViewTreeObserver()Landroid/view/ViewTreeObserver;": function (this: JView) { return getVTO(this); },
   "setTouchDelegate(Landroid/view/TouchDelegate;)V": function (this: JView, delegate: JObj | null) { this.touchDelegate = delegate; },
   "getTouchDelegate()Landroid/view/TouchDelegate;": function (this: JView) { return this.touchDelegate; },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JObj): Gen {
     if (!this.enabled) return +(this.clickable || this.longClickable);
     if (this.touchDelegate && (yield vcall(this.touchDelegate, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", ev))) return 1;
     if (!this.clickable && !this.longClickable) return 0;
-    switch (ev.action & 0xff) {
+    switch (actionOf(ev) & 0xff) {
       case 0: // DOWN
-        yield vcall(this, "drawableHotspotChanged", "(FF)V", ev.x, ev.y);
+        yield vcall(this, "drawableHotspotChanged", "(FF)V", eventX(ev), eventY(ev));
         this.pressed = true;
         this.longPressAction = null;
         void this.refreshDrawableState();
@@ -1435,9 +1430,10 @@ const viewMethods: NativeSpec["methods"] = {
         }
         return 1;
       case 2: { // MOVE
-        if (this.clickable) yield vcall(this, "drawableHotspotChanged", "(FF)V", ev.x, ev.y);
+        const x = eventX(ev), y = eventY(ev);
+        if (this.clickable) yield vcall(this, "drawableHotspotChanged", "(FF)V", x, y);
         const slop = device.dp(10);
-        if (ev.x < -slop || ev.y < -slop || ev.x > this.width() + slop || ev.y > this.height() + slop) {
+        if (x < -slop || y < -slop || x > this.width() + slop || y > this.height() + slop) {
           this.pressed = false;
           void this.refreshDrawableState();
         }
@@ -1463,8 +1459,8 @@ const viewMethods: NativeSpec["methods"] = {
     }
     return 0;
   }),
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
-    const action = ev.action & 0xff;
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JObj): Gen {
+    const action = actionOf(ev) & 0xff;
     // AOSP ends any nested scroll a new gesture or its end leaves behind
     if (action === 0) yield guardCall(this, M_stopNestedScroll);
     let handled = 0;
@@ -1590,12 +1586,9 @@ const viewMethods: NativeSpec["methods"] = {
   "setBottom(I)V": function (this: JView, v: number) { setBound(this, this.left, this.top, this.right, v); },
   // AOSP View.dispatchKeyEvent: the OnKeyListener sees the event first, then KeyEvent.dispatch
   // routes it to onKeyDown/onKeyUp by action.
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: unknown): Gen {
-    const code = yield vcall(ev, "getKeyCode", "()I"), action = yield vcall(ev, "getAction", "()I");
-    if (this.keyL && this.enabled && (yield vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev))) return 1;
-    const handled = action === 0 ? yield vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev)
-      : action === 1 ? yield vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev) : 0;
-    if (handled) return 1;
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: JObj): Gen {
+    if (this.keyL && this.enabled && (yield vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, keyCodeOf(ev), ev))) return 1;
+    if (yield dispatchKeyTo(ev, this, this.attached)) return 1;
     for (let i = this.unhandledKeyLs.length - 1; i >= 0; i--)
       if (yield vcall(this.unhandledKeyLs[i], "onUnhandledKeyEvent", "(Landroid/view/View;Landroid/view/KeyEvent;)Z", this, ev)) return 1;
     return 0;
@@ -1720,13 +1713,13 @@ const viewMethods: NativeSpec["methods"] = {
   // compute*Scroll* methods a scrolling view (RecyclerView, a custom list) supplies
   "canScrollHorizontally(I)Z": function (this: JView, direction: number) { return canScroll(this, "Horizontal", direction); },
   "canScrollVertically(I)Z": function (this: JView, direction: number) { return canScroll(this, "Vertical", direction); },
-  "dispatchHoverEvent(Landroid/view/MotionEvent;)Z": function (this: JView, ev: JMotionEvent) {
+  "dispatchHoverEvent(Landroid/view/MotionEvent;)Z": function (this: JView, ev: JObj) {
     return vcall(this, "onHoverEvent", "(Landroid/view/MotionEvent;)Z", ev);
   },
   // AOSP routes a pointer hover to dispatchHoverEvent; the rest falls to onGenericMotionEvent
-  "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": function (this: JView, ev: JMotionEvent) {
-    const action = ev.action & 0xff;
-    const hover = ev.source & 2 && (action === 7 || action === 9 || action === 10)
+  "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": function (this: JView, ev: JObj) {
+    const e = motionOf(ev), action = e.action & 0xff;
+    const hover = e.source & 2 && (action === 7 || action === 9 || action === 10)
       ? vcall(this, "dispatchHoverEvent", "(Landroid/view/MotionEvent;)Z", ev) : 0;
     return after(hover, (h) => h ? 1 : vcall(this, "onGenericMotionEvent", "(Landroid/view/MotionEvent;)Z", ev));
   },
@@ -1801,8 +1794,8 @@ const viewMethods: NativeSpec["methods"] = {
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V"),
   ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I",
     "willNotDraw()Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
-    "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",
-    "onGenericMotionEvent(Landroid/view/MotionEvent;)Z",
+    "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z", "onKeyLongPress(ILandroid/view/KeyEvent;)Z",
+    "onKeyMultiple(IILandroid/view/KeyEvent;)Z", "onGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
     "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z",
     "getRotationX()F", "getRotationY()F", "isHovered()Z", "isAccessibilityFocused()Z",
@@ -2318,8 +2311,8 @@ export const vgMethods: NativeSpec["methods"] = {
       v = v.parent;
     }
   },
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JViewGroup, ev: JMotionEvent): Gen {
-    const action = ev.action & 0xff;
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JViewGroup, ev: JObj): Gen {
+    const e = motionOf(ev), action = e.action & 0xff;
     if (action === 0) { this.touchTarget = null; this.disallowIntercept = false; }
     let intercepted = false;
     if (!this.disallowIntercept && (action === 0 || this.touchTarget)) {
@@ -2327,34 +2320,26 @@ export const vgMethods: NativeSpec["methods"] = {
     }
     if (action === 0 && !intercepted) {
       // find touch target among children (reverse order)
+      const x = eventX(ev), y = eventY(ev);
       for (let i = this.children.length - 1; i >= 0; i--) {
         const c = this.children[i];
         if (c.visibility !== 0) continue;
-        const cx = ev.x + this.scrollX - (c.left + c.translationX);
-        const cy = ev.y + this.scrollY - (c.top + c.translationY);
-        if (cx < 0 || cy < 0 || cx >= c.width() || cy >= c.height()) continue;
-        const ox = ev.x, oy = ev.y;
-        ev.x = cx; ev.y = cy;
-        const handled = yield guardCall(c, M_dispatchTouch, ev);
-        ev.x = ox; ev.y = oy;
-        if (handled) { this.touchTarget = c; return 1; }
+        const dx = this.scrollX - (c.left + c.translationX), dy = this.scrollY - (c.top + c.translationY);
+        if (x + dx < 0 || y + dy < 0 || x + dx >= c.width() || y + dy >= c.height()) continue;
+        if (yield dispatchOffset(c, ev, dx, dy)) { this.touchTarget = c; return 1; }
       }
     } else if (this.touchTarget && !intercepted) {
       const c = this.touchTarget;
-      const ox = ev.x, oy = ev.y;
-      ev.x = ev.x + this.scrollX - (c.left + c.translationX);
-      ev.y = ev.y + this.scrollY - (c.top + c.translationY);
-      const handled = yield guardCall(c, M_dispatchTouch, ev);
-      ev.x = ox; ev.y = oy;
+      const handled = yield dispatchOffset(c, ev, this.scrollX - (c.left + c.translationX), this.scrollY - (c.top + c.translationY));
       if (action === 1 || action === 3) this.touchTarget = null;
       return handled ? 1 : 0;
     } else if (this.touchTarget && intercepted) {
       // send cancel to target, take over
       const c = this.touchTarget;
-      const oldAction = ev.action;
-      ev.action = 3;
+      const oldAction = e.action;
+      e.action = 3;
       yield guardCall(c, M_dispatchTouch, ev);
-      ev.action = oldAction;
+      motionOf(ev).action = oldAction;
       this.touchTarget = null;
     }
     // AOSP: the group's own OnTouchListener sees only what no child took (View.dispatchTouchEvent
@@ -2468,16 +2453,16 @@ rt.register({
       this.bounds = bounds; this.view = view; this.slop = device.touchSlop;
       Object.assign(this.slopBounds, { left: bounds.left - this.slop, top: bounds.top - this.slop, right: bounds.right + this.slop, bottom: bounds.bottom + this.slop });
     },
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JTouchDelegate, ev: JMotionEvent) {
-      const x = Math.trunc(ev.x), y = Math.trunc(ev.y), action = ev.action & 255;
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JTouchDelegate, ev: JObj) {
+      const e = motionOf(ev), x = Math.trunc(eventX(ev)), y = Math.trunc(eventY(ev)), action = e.action & 255;
       const contains = (b: JRect) => x >= b.left && y >= b.top && x < b.right && y < b.bottom;
       let send = false, hit = true;
       if (action === 0) send = this.targeted = contains(this.bounds);
       else if (action === 1 || action === 2 || action === 5 || action === 6) { send = this.targeted; hit = contains(this.slopBounds); }
       else if (action === 3) { send = this.targeted; this.targeted = false; }
       if (!send) return 0;
-      ev.x = hit ? this.view.width() >> 1 : -this.slop * 2;
-      ev.y = hit ? this.view.height() >> 1 : -this.slop * 2;
+      if (hit) e.setLocation(this.view.width() >> 1, this.view.height() >> 1);
+      else e.setLocation(-this.slop * 2, -this.slop * 2);
       return guardCall(this.view, M_dispatchTouch, ev);
     },
   },
@@ -2597,7 +2582,7 @@ rt.register({
     }
     stateSets().forEach((set, m) => { view[mangleStaticField(stateSetName(m))] = set; });
   },
-  ifaces: ["android/graphics/drawable/Drawable$Callback"],
+  ifaces: ["android/graphics/drawable/Drawable$Callback", "android/view/KeyEvent$Callback"],
   statics: {
     ...Object.fromEntries([...VIEW_PROPERTIES, ...Array.from({ length: 32 }, (_, m) => stateSetName(m))].map((p) => [p, null])),
     VISIBLE: 0, INVISIBLE: 4, GONE: 8, NO_ID: -1,

@@ -1,4 +1,4 @@
-// Android 15 KeyEvent key codes, in numeric order.
+// Android 15 KeyEvent key codes, in numeric order: InputEventLookup's labels.
 export const keyCodes = new Map(`
 UNKNOWN SOFT_LEFT SOFT_RIGHT HOME BACK CALL ENDCALL 0 1 2 3 4 5 6 7 8 9 STAR POUND DPAD_UP DPAD_DOWN DPAD_LEFT
 DPAD_RIGHT DPAD_CENTER VOLUME_UP VOLUME_DOWN POWER CAMERA CLEAR A B C D E F G H I J K L M N O P Q R S T U V W
@@ -33,20 +33,3 @@ STYLUS_BUTTON_PRIMARY STYLUS_BUTTON_SECONDARY STYLUS_BUTTON_TERTIARY STYLUS_BUTT
 MACRO_2 MACRO_3 MACRO_4 EMOJI_PICKER SCREENSHOT
 `.trim().split(/\s+/).map((name, code) => [name, code]));
 
-const deadAccents = new Map<number, number>([
-  [0x2cb, 0x300], [0xb4, 0x301], [0x2c6, 0x302], [0x2dc, 0x303], [0xaf, 0x304], [0x2d8, 0x306],
-  [0x2d9, 0x307], [0xa8, 0x308], [0x2c0, 0x309], [0x2da, 0x30a], [0x2dd, 0x30b], [0x2c7, 0x30c],
-  [0x2bb, 0x312], [0x1fbd, 0x313], [0x2bd, 0x314], [0x2bc, 0x315], [0x2e, 0x323], [0xb8, 0x327],
-  [0x2db, 0x328], [0x2cc, 0x329], [0x2cd, 0x331], [0x2d, 0x335], [0x60, 0x300], [0x5e, 0x302],
-  [0x7e, 0x303], [0x27, 0x301], [0x22, 0x308],
-]);
-// Android's stroke-key compositions are not Unicode canonical compositions.
-const strokeKeys = new Map([..."DGHILOTdghilot"].map((c, i) => [c.charCodeAt(0), "ĐǤĦƗŁØŦđǥħɨłøŧ".charCodeAt(i)]));
-export function deadChar(accent: number, c: number): number {
-  if (c === accent || c === 32) return accent;
-  const combining = deadAccents.get(accent);
-  if (!combining) return 0;
-  if (accent === 45 && strokeKeys.has(c)) return strokeKeys.get(c)!;
-  const text = String.fromCharCode(c, combining).normalize("NFC"), result = text.codePointAt(0)!;
-  return text.length === (result > 0xffff ? 2 : 1) ? result : 0;
-}

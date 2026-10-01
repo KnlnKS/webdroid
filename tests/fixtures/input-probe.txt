@@ -1,0 +1,128 @@
+device -1 Input Device -1: Virtual|  Descriptor: a718a782d34bc767f4689c232d64d527998ea7fd|  Generation: 3|  Location: built-in|  Enabled: true|  Keyboard Type: alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x301 ( keyboard dpad )|
+devkcm -1 type=4 virtual=true full=true ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[true, true, true, true, true, true, true, false, true]
+device 0 Input Device 0: qwerty2|  Descriptor: e9ac6dde47cf0ffa91b87f7b85e6f8de0933fc98|  Generation: 93|  Location: built-in|  Enabled: true|  Keyboard Type: alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x301 ( keyboard dpad )|
+devkcm 0 type=3 virtual=false full=true ext=false enabled=true ctrl=0 vendor=1575 product=1 hasKeys=[true, true, true, true, true, true, true, false, true]
+device 2 Input Device 2: virtio_input_multi_touch_11|  Descriptor: e760666b71e579617395a5018f318365e9f44147|  Generation: 95|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 2 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 3 Input Device 3: virtio_input_multi_touch_10|  Descriptor: 03d5168c37d991df1726df002537cd6ccc5b68cb|  Generation: 94|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 3 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 4 Input Device 4: virtio_input_multi_touch_9|  Descriptor: ac8abc2b3d95a68148a903fffc0a312b4dd19302|  Generation: 96|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 4 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 5 Input Device 5: virtio_input_multi_touch_8|  Descriptor: df0ec362af5f2fec5a1bbb512f6e9556bd6b3fcf|  Generation: 92|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 5 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 6 Input Device 6: virtio_input_multi_touch_7|  Descriptor: e1c836c7be888adb29ca6646292e486f96461e97|  Generation: 91|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 6 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 7 Input Device 7: virtio_input_multi_touch_6|  Descriptor: 0b49b597447c4c7be1d009f9a86bbed08b2e6b6d|  Generation: 90|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 7 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 8 Input Device 8: virtio_input_multi_touch_5|  Descriptor: a009ac16f7539a9e4072c1f537120c35a8163d3b|  Generation: 89|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 8 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 9 Input Device 9: virtio_input_multi_touch_4|  Descriptor: 3e50b6575df319e017bd447766007caeb20ef93b|  Generation: 88|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 9 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 10 Input Device 10: virtio_input_multi_touch_3|  Descriptor: d02b0eff93435c71d7fcb0c5db2c4e01c700002e|  Generation: 97|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 10 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 11 Input Device 11: virtio_input_multi_touch_2|  Descriptor: 929d4636b8e04f50240a26561429a6e91c9eff9e|  Generation: 87|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|
+devkcm 11 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 12 Input Device 12: virtio_input_multi_touch_1|  Descriptor: 43db9dd6fa61939c1b516cd9522f0fe93926a00b|  Generation: 86|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x80005103 ( keyboard touchscreen stylus )|    AXIS_X: source=0x5002 min=0.0 max=1079.967 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_Y: source=0x5002 min=0.0 max=2159.934 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_PRESSURE: source=0x5002 min=0.0 max=1.0 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_SIZE: source=0x5002 min=0.0 max=1.0 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_TOUCH_MAJOR: source=0x5002 min=0.0 max=2414.9534 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_TOUCH_MINOR: source=0x5002 min=0.0 max=2414.9534 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_TOOL_MAJOR: source=0x5002 min=0.0 max=2414.9534 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_TOOL_MINOR: source=0x5002 min=0.0 max=2414.9534 flat=0.0 fuzz=0.0 resolution=0.0|    AXIS_ORIENTATION: source=0x5002 min=-1.5707964 max=1.5707964 flat=0.0 fuzz=0.0 resolution=0.0|
+devkcm 12 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=0 product=0 hasKeys=[false, false, false, false, false, false, false, false, false]
+device 13 Input Device 13: gpio-keys|  Descriptor: 485d69228e24f5e46da1598745890b214130dbc4|  Generation: 85|  Location: built-in|  Enabled: true|  Keyboard Type: non-alphabetic|  Has Vibrator: false|  Has Sensor: false|  Has battery: false|  Has mic: false|  USI Version: null|  Sources: 0x101 ( keyboard )|
+devkcm 13 type=4 virtual=false full=false ext=false enabled=true ctrl=0 vendor=1 product=1 hasKeys=[false, false, false, false, false, true, false, false, false]
+deviceHasKeys [true, true, true, true, true, true, true, false, true]
+deviceHasKey SEARCH true BACK true
+me1 x=100.299805 y=200.7002 rx=100.299805 ry=200.7002 o=0.0 tM=0.0 xp=1.0 yp=1.0 rot=0 cur=NaN,NaN | MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=0, x[0]=100.299805, y[0]=200.7002, toolType[0]=TOOL_TYPE_UNKNOWN, buttonState=0, classification=NONE, metaState=0, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=0, eventTime=1016, downTime=1000, deviceId=0, source=0x2, displayId=0, eventId=-216588384 }
+me1 nanos 1016000000 down 1000 p=1.0 s=1.0 tool=0 dev=0 src=2 flags=0 cls=0 disp=0
+me1 offset x=110.399414 y=195.5 rx=100.299805 ry=200.7002 o=0.0 tM=0.0 xp=1.0 yp=1.0 rot=0 cur=NaN,NaN
+me1 rot90 x=-145.5 y=130.39941 rx=100.299805 ry=200.7002 o=0.0 tM=0.0 xp=1.0 yp=1.0 rot=3 cur=NaN,NaN
+me1 rot30 x=-382.4131 y=80.359375 rx=100.299805 ry=200.7002 o=0.0 tM=0.0 xp=1.0 yp=1.0 rot=-1 cur=NaN,NaN
+me1 coords x=-382.4131 y=80.359375 p=1.0 s=1.0 tM=0.0 tm=0.0 TM=0.0 Tm=0.0 o=0.0 rx=0.0 ry=0.0 v=0.0 g1=0.0 bits=false
+me1 setLocation x=7.0 y=9.0 rx=100.299805 ry=200.7002 o=0.0 tM=0.0 xp=1.0 yp=1.0 rot=-1 cur=NaN,NaN
+me1 scale x=10.499023 y=13.499023 rx=150.4502 ry=301.05078 o=0.0 tM=0.0 xp=1.5 yp=1.5 rot=-1 cur=NaN,NaN
+me1 rawoff 682.3834
+mp MotionEvent { action=ACTION_POINTER_DOWN(1), actionButton=0, id[0]=0, x[0]=12.0, y[0]=20.0, toolType[0]=TOOL_TYPE_FINGER, id[1]=3, x[1]=36.0, y[1]=40.0, toolType[1]=TOOL_TYPE_STYLUS, buttonState=BUTTON_PRIMARY, classification=NONE, metaState=META_SHIFT_ON|META_ALT_ON|META_SHIFT_LEFT_ON, flags=0x0, edgeFlags=0x0, pointerCount=2, historySize=2, eventTime=5036, downTime=5000, deviceId=7, source=0x1002, displayId=0, eventId=-335134895 }
+mp hist=2 h0=30.0 t0=5020 cur=36.0 meta=67 idx3=1 idx1=-1 ai=1 bits=9
+mp hc00 x=10.0 y=20.0 p=0.5 s=0.25 tM=12.0 tm=0.0 TM=0.0 Tm=0.0 o=0.5 rx=0.0 ry=0.0 v=0.0 g1=3.0
+mp c1 x=36.0 y=40.0 p=1.0 s=0.0 tM=0.0 tm=0.0 TM=0.0 Tm=0.0 o=0.0 rx=2.0 ry=3.0 v=-1.0 g1=0.0
+mp c1 rot x=-40.0 y=36.0 p=1.0 s=0.0 tM=0.0 tm=0.0 TM=0.0 Tm=0.0 o=1.5707964 rx=-3.0 ry=2.0 v=-1.0 g1=0.0 raw1=36.0,40.0 o0=2.0707965
+mp split3 MotionEvent { action=ACTION_DOWN, actionButton=0, id[0]=3, x[0]=-40.0, y[0]=36.0, toolType[0]=TOOL_TYPE_STYLUS, buttonState=BUTTON_PRIMARY, classification=NONE, metaState=META_SHIFT_ON|META_ALT_ON|META_SHIFT_LEFT_ON, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=2, eventTime=5036, downTime=5000, deviceId=7, source=0x1002, displayId=0, eventId=-722364266 }
+mp split0 MotionEvent { action=ACTION_MOVE, actionButton=0, id[0]=0, x[0]=-20.0, y[0]=12.0, toolType[0]=TOOL_TYPE_FINGER, buttonState=BUTTON_PRIMARY, classification=NONE, metaState=META_SHIFT_ON|META_ALT_ON|META_SHIFT_LEFT_ON, flags=0x0, edgeFlags=0x0, pointerCount=1, historySize=2, eventTime=5036, downTime=5000, deviceId=7, source=0x1002, displayId=0, eventId=-850961605 }
+mp split9 threw java.lang.IllegalArgumentException: idBits must be a non-empty subset of the pointer IDs from this MotionEvent, got idBits: 0x200 for MotionEvent { action=ACTION_POINTER_DOWN(1), actionButton=0, id[0]=0, x[0]=-20.0, y[0]=12.0, toolType[0]=TOOL_TYPE_FINGER, id[1]=3, x[1]=-40.0, y[1]=36.0, toolType[1]=TOOL_TYPE_STYLUS, buttonState=BUTTON_PRIMARY, classification=NONE, metaState=META_SHIFT_ON|META_ALT_ON|META_SHIFT_LEFT_ON, flags=0x0, edgeFlags=0x0, pointerCount=2, historySize=2, eventTime=5036, downTime=5000, deviceId=7, source=0x1002, displayId=0, eventId=-335134895 }
+mp nohist 0 -40.0 5036
+mp parcel size=432 010000000200000003000000513f06ec0700000002100000000000002000000000000000000000000000000000000000000000000000000000000000000000000501000000000000800100000000000043000000010000000000000000000000000080bf000000000000803f00000000000000000000c03f000020400000c07f0000c07f0000803f0000000000000000000000000000803f0000000000f2052a0100000000000000010000000300000002000000001f372b0100000000000080000080f8000020410000a0410000003f0000803e000040410000003f000040400000000000000000180040e00000f041000020420000803f000080bf0000004000004040000000000031b12b0100000000000080000080f8000030410000a0410000003f0000803e000040410000003f000040400000000000000000180040e000000442000020420000803f000080bf00000040000040400000000000432b2c0100000000000080000080f8000040410000a0410000003f0000803e000040410000003f000040400000000000000000180040e000001042000020420000803f000080bf000000400000404000000000
+mp back MotionEvent { action=ACTION_POINTER_DOWN(1), actionButton=0, id[0]=0, x[0]=-20.0, y[0]=12.0, toolType[0]=TOOL_TYPE_FINGER, id[1]=3, x[1]=-40.0, y[1]=36.0, toolType[1]=TOOL_TYPE_STYLUS, buttonState=BUTTON_PRIMARY, classification=NONE, metaState=META_SHIFT_ON|META_ALT_ON|META_SHIFT_LEFT_ON, flags=0x0, edgeFlags=0x0, pointerCount=2, historySize=2, eventTime=5036, downTime=5000, deviceId=7, source=0x1002, displayId=0, eventId=-335134895 }
+mp getX(5) java.lang.IllegalArgumentException: invalid pointerIndex 5 for MotionEvent { action=POINTER_DOWN(1), id[0]=0, x[0]=-20, y[0]=12, id[1]=3, x[1]=-40, y[1]=36, toolType[1]=STYLUS, buttonState=1, metaState=67, flags=0x180, pointerCount=2, historySize=2, eventTime=5036000000, downTime=5000000000, deviceId=7, source=TOUCHSCREEN, displayId=0, eventId=0xec063f51}
+mp getHistoricalX(0,7) java.lang.IllegalArgumentException: historyPos 7 out of range for MotionEvent { action=POINTER_DOWN(1), id[0]=0, x[0]=-20, y[0]=12, id[1]=3, x[1]=-40, y[1]=36, toolType[1]=STYLUS, buttonState=1, metaState=67, flags=0x180, pointerCount=2, historySize=2, eventTime=5036000000, downTime=5000000000, deviceId=7, source=TOUCHSCREEN, displayId=0, eventId=0xec063f51}
+mp applyTransform x=-12.0 y=-20.0 rx=-20.0 ry=12.0 o=-2.6415925 tM=12.0 xp=1.5 yp=2.5 rot=3 cur=NaN,NaN x1=-36.0
+joy 0.5 -0.25 raw 0.5
+mouse cur 40.0,50.0
+mouse cur off 45.0,55.0
+axis AXIS_X AXIS_GESTURE_SWIPE_FINGER_COUNT 54 AXIS_RESERVED_29 53 -1 12
+vt default 1796.1431 633.96606 capped 3.0 3.0 paused 0.0 single 0.0
+vt impulse 1667.1073 601.3921 capped 3.0 3.0 paused 0.0 single 0.0
+vt lsq1 1525.862 609.69086 capped 3.0 3.0 paused 0.0 single 0.0
+vt lsq2 1796.1431 633.96606 capped 3.0 3.0 paused 0.0 single 0.0
+vt lsq3 1640.5316 572.0412 capped 3.0 3.0 paused 0.0 single 0.0
+vt wlsq2-delta 1792.0238 629.5829 capped 3.0 3.0 paused 0.0 single 0.0
+vt wlsq2-central 1830.5582 664.4615 capped 3.0 3.0 paused 0.0 single 0.0
+vt wlsq2-recent 1796.141 633.96497 capped 3.0 3.0 paused 0.0 single 0.0
+vt int1 1567.5764 605.10077 capped 3.0 3.0 paused 0.0 single 0.0
+vt int2 1589.8281 573.0818 capped 3.0 3.0 paused 0.0 single 0.0
+vt legacy 1477.193 603.5088 capped 3.0 3.0 paused 0.0 single 0.0
+vt supported truetruetruefalse
+vt scroll 77.12689 x=0.0
+vt two 777.77374 1111.108 -555.55853 333.3307 active=777.77374 none=0.0
+kcm type 4 alpha=true mod=0
+kcm 29 label=65 number=0 match=97 matchShift=65 printing=true get=97,65,0,65,97,0,0,97,97, fallback=null fallbackCtrl=null mapped=7
+kcm 8 label=49 number=49 match=49 matchShift=33 printing=true get=49,33,0,49,33,0,0,49,49, fallback=null fallbackCtrl=null mapped=7
+kcm 62 label=32 number=0 match=32 matchShift=32 printing=false get=32,32,0,32,32,0,0,32,32, fallback=84/1 fallbackCtrl=204/0 mapped=7
+kcm 66 label=10 number=0 match=0 matchShift=0 printing=false get=10,10,0,10,10,0,0,10,10, fallback=null fallbackCtrl=null mapped=7
+kcm 77 label=64 number=0 match=64 matchShift=64 printing=true get=64,64,0,64,64,0,0,64,64, fallback=null fallbackCtrl=null mapped=7
+kcm 67 label=0 number=0 match=0 matchShift=0 printing=false get=0,0,0,0,0,0,0,0,0, fallback=null fallbackCtrl=null mapped=7
+kcm 149 label=53 number=53 match=0 matchShift=0 printing=true get=0,0,0,0,0,0,0,53,0, fallback=null fallbackCtrl=null mapped=7
+kcm 56 label=46 number=46 match=0 matchShift=0 printing=true get=46,62,0,46,62,0,0,46,46, fallback=null fallbackCtrl=null mapped=7
+kcm 68 label=96 number=0 match=0 matchShift=0 printing=true get=96,126,-2147482933,96,126,0,-2147482933,96,96, fallback=null fallbackCtrl=null mapped=7
+kcm 61 label=9 number=0 match=0 matchShift=0 printing=false get=9,9,0,9,9,0,0,9,9, fallback=null fallbackCtrl=null mapped=7
+kcm 4 label=0 number=0 match=0 matchShift=0 printing=false get=0,0,0,0,0,0,0,0,0, fallback=null fallbackCtrl=null mapped=7
+kcm 33 label=69 number=0 match=0 matchShift=0 printing=true get=101,69,-2147483468,69,101,0,-2147483468,101,101, fallback=null fallbackCtrl=null mapped=7
+kcm 17 label=42 number=42 match=0 matchShift=0 printing=true get=42,42,0,42,42,0,0,42,42, fallback=null fallbackCtrl=null mapped=7
+kcm 158 label=46 number=46 match=0 matchShift=0 printing=true get=0,0,0,0,0,0,0,46,0, fallback=null fallbackCtrl=null mapped=7
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_SHIFT_LEFT, scanCode=0, metaState=META_SHIFT_ON|META_SHIFT_LEFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=0 ucm=0 dl=0 num=0 print=false flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_H, scanCode=0, metaState=META_SHIFT_ON|META_SHIFT_LEFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=72 ucm=72 dl=72 num=0 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_H, scanCode=0, metaState=META_SHIFT_ON|META_SHIFT_LEFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=72 ucm=72 dl=72 num=0 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_SHIFT_LEFT, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=0 ucm=0 dl=0 num=0 print=false flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_I, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=105 ucm=73 dl=73 num=0 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_I, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=105 ucm=73 dl=73 num=0 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_SHIFT_LEFT, scanCode=0, metaState=META_SHIFT_ON|META_SHIFT_LEFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=0 ucm=0 dl=0 num=0 print=false flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_1, scanCode=0, metaState=META_SHIFT_ON|META_SHIFT_LEFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=33 ucm=33 dl=49 num=49 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_1, scanCode=0, metaState=META_SHIFT_ON|META_SHIFT_LEFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=33 ucm=33 dl=49 num=49 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_SHIFT_LEFT, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=0 ucm=0 dl=0 num=0 print=false flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_ENTER, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=10 ucm=10 dl=10 num=0 print=false flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_ENTER, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=10 ucm=10 dl=10 num=0 print=false flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_7, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=55 ucm=38 dl=55 num=55 print=true flags=0 src=257 t=true
+kcm ev KeyEvent { action=ACTION_UP, keyCode=KEYCODE_7, scanCode=0, metaState=0, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x101, displayId=-1 } uc=55 ucm=38 dl=55 num=55 print=true flags=0 src=257 t=true
+kcm unmappable true
+kcm deadChar 224 234 0
+kcm parcel size=6540
+kcm parcel back type=4 eq=true a=65
+kcm empty type=0 get=0 label=0 mapped=7 events=0 number=0 match=0 fb=null eq=false
+kcm empty parcel 0500000000000000
+key KEYCODE_A 1000 KEYCODE_SCREENSHOT 29 29 0 17 0 max=318
+key q 81 Q dev=-1 src=0 KeyEvent { action=ACTION_DOWN, keyCode=KEYCODE_Q, scanCode=0, metaState=META_SHIFT_ON, flags=0x0, repeatCount=0, T, deviceId=-1, source=0x0, displayId=-1 }
+key parcel size=68
+hasKeys -1 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 19 20 21 22 23 24 25 26 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 65 66 67 68 69 70 71 72 73 74 75 76 82 84 85 86 87 88 112 113 114 115 122 123 187 219 223 264 265 266 267 277 278 279 308
+range -1 null null n=0 supports=falsetruefalse bus=0 disp=-1 id=InputDeviceIdentifier: vendorId: 0, productId: 0, descriptor: a718a782d34bc767f4689c232d64d527998ea7fd
+devkcm2 -1 eqVirtual=true meta-enter=null button-x=23/0
+hasKeys 12 308
+range 12 1079.967/20482 null n=9 supports=truetruefalse bus=6 disp=0 id=InputDeviceIdentifier: vendorId: 0, productId: 0, descriptor: 43db9dd6fa61939c1b516cd9522f0fe93926a00b
+devkcm2 12 eqVirtual=false meta-enter=null button-x=67/0
+ascii +62-62 +59/41+8/41-8/41-59 +59/41+75/41-75/41-59 +59/41+10/41-10/41-59 +59/41+11/41-11/41-59 +59/41+12/41-12/41-59 +59/41+14/41-14/41-59 +75-75 +59/41+16/41-16/41-59 +59/41+7/41-7/41-59 +59/41+15/41-15/41-59 +59/41+70/41-70/41-59 +55-55 +69-69 +56-56 +76-76 +7-7 +8-8 +9-9 +10-10 +11-11 +12-12 +13-13 +14-14 +15-15 +16-16 +59/41+74/41-74/41-59 +74-74 +59/41+55/41-55/41-59 +70-70 +59/41+56/41-56/41-59 +59/41+76/41-76/41-59 +59/41+9/41-9/41-59 +59/41+29/41-29/41-59 +59/41+30/41-30/41-59 +59/41+31/41-31/41-59 +59/41+32/41-32/41-59 +59/41+33/41-33/41-59 +59/41+34/41-34/41-59 +59/41+35/41-35/41-59 +59/41+36/41-36/41-59 +59/41+37/41-37/41-59 +59/41+38/41-38/41-59 +59/41+39/41-39/41-59 +59/41+40/41-40/41-59 +59/41+41/41-41/41-59 +59/41+42/41-42/41-59 +59/41+43/41-43/41-59 +59/41+44/41-44/41-59 +59/41+45/41-45/41-59 +59/41+46/41-46/41-59 +59/41+47/41-47/41-59 +59/41+48/41-48/41-59 +59/41+49/41-49/41-59 +59/41+50/41-50/41-59 +59/41+51/41-51/41-59 +59/41+52/41-52/41-59 +59/41+53/41-53/41-59 +59/41+54/41-54/41-59 +71-71 +73-73 +72-72 +59/41+13/41-13/41-59 +59/41+69/41-69/41-59 +68-68 +29-29 +30-30 +31-31 +32-32 +33-33 +34-34 +35-35 +36-36 +37-37 +38-38 +39-39 +40-40 +41-41 +42-42 +43-43 +44-44 +45-45 +46-46 +47-47 +48-48 +49-49 +50-50 +51-51 +52-52 +53-53 +54-54 +59/41+71/41-71/41-59 +59/41+73/41-73/41-59 +59/41+72/41-72/41-59 +59/41+68/41-68/41-59 +66-66 +61-61 null
+getEvents(null) java.lang.IllegalArgumentException: chars must not be null.
+fling -3335.3096/41.18832 -2776.9783/37.7333 -2962.4924/42.641552 -2757.3696/42.54411 -2432.703/40.689198 -2299.1343/41.640274 -2066.784/41.297466 -1857.6779/40.68293 -1710.7603/41.569603 -1483.5952/41.224907 -1282.4504/40.689198 -1122.4675/41.613663 up -1122.4675
+batched 812.5014 175.00047
+orient src=0x2 o=0.0 flags=0x0 getO=0.0 pcO=0.0 x=-7.0
+orient src=0x2 o=0.5 flags=0x180 getO=2.0707965 pcO=2.0707965 x=-7.0
+orient src=0x1002 o=0.0 flags=0x0 getO=0.0 pcO=0.0 x=-7.0
+orient src=0x1002 o=0.5 flags=0x180 getO=2.0707965 pcO=2.0707965 x=-7.0
+orient src=0x2002 o=0.0 flags=0x0 getO=0.0 pcO=0.0 x=-7.0
+orient src=0x2002 o=0.5 flags=0x180 getO=2.0707965 pcO=2.0707965 x=-7.0
+orient src=0x101 o=0.0 flags=0x0 getO=0.0 pcO=0.0 x=-7.0
+orient src=0x101 o=0.5 flags=0x180 getO=2.0707965 pcO=2.0707965 x=-7.0
+tainted 0x80000000
