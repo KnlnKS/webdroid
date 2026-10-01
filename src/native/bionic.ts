@@ -5,11 +5,11 @@
 // code: __errno, getauxval, __init_static_tls, __allocate_thread_mapping, pthread_getattr_np).
 
 import { mem } from "./mem";
-import { hostLib, lookupHost, replaceHostLib, stp, type HostFn } from "./host";
+import { defineHost, hostLib, lookupHost, replaceHostLib, stp, type HostFn } from "./host";
 import { interposed, linkerHooks, loadModule, runInit, hostLibDl, modules } from "./dl";
 import { setThreadHook, type Cpu } from "./cpu";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
-import { auxv } from "./libc";
+import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
+import { auxv, fail } from "./libc";
 import { abortMessageSource } from "./proc";
 import type { Module } from "./elf";
 import { processEnv } from "../shell/environment";
@@ -29,9 +29,15 @@ const BIONIC_LIBS = ["/apex/com.android.runtime/lib64/bionic/libdl.so", "/apex/c
  *  (netdClientInit's libnetd_client.so, which connects getaddrinfo to netd's dnsproxyd) */
 export const DEVICE_LIBS = [...BIONIC_LIBS, "/system/lib64/libnetd_client.so"];
 
-/** what the host serves in place of bionic's own: the core's memory and string primitives. Not the
- *  allocator: libc calls its malloc directly as well as through its PLT, so scudo must own the heap. */
+/** what the host serves in place of bionic's own: the core's memory and string primitives */
 const INTRINSICS = ["memcpy", "memmove", "memset", "memcmp", "memchr", "strlen", "strnlen", "strcmp", "strncmp", "__memcpy_chk"];
+/** The heap is the core's too, reached through bionic's malloc dispatch table (what malloc_debug and
+ *  heapprofd install), since libc calls its malloc directly as well as through its PLT. MallocDispatch
+ *  on LP64: calloc, free, mallinfo, malloc, malloc_usable_size, memalign, posix_memalign, realloc,
+ *  malloc_iterate, malloc_disable, malloc_enable, mallopt, aligned_alloc, malloc_info. */
+const HEAP = ["calloc", "free", "mallinfo", "malloc", "malloc_usable_size", "memalign", "posix_memalign", "realloc",
+  "malloc_iterate", "malloc_disable", "malloc_enable", "mallopt", "aligned_alloc", "malloc_info"];
+const GLOBALS_DISPATCH = 0x48;
 
 // libc_shared_globals
 const G_SIZE = 0x6d8, G_AUXV = 0x418, G_ABORT_MSG = 0x448, G_TLS_SIZE = 0x450, G_TLS_ALIGN = 0x458, G_TLS_TCB = 0x460, G_TLS_BIONIC = 0x468, G_TLS_EXE = 0x470;
@@ -52,6 +58,7 @@ const staticModules: Module[] = [];
  *  give the calling thread its bionic identity, then run each library's initializers in order. */
 export async function bootBionic(cpu: Cpu): Promise<void> {
   for (const name of INTRINSICS) interposed.set(name, lookupHost(name, "libc.so")!);
+  const heap = heapDispatch();
   for (const lib of ["libc.so", "libm.so", "libdl.so", "liblog.so", "libz.so"]) replaceHostLib(lib);
   hostLib("ld-android.so", loaderExports());
   linkerHooks.hwcap = BigInt(auxv().find(([type]) => type === 16)![1]);
@@ -88,6 +95,27 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   abortMessageSource.text = () => { const m = mem.ld64(globals + G_ABORT_MSG); return m ? mem.cstr(mem.txVa(m) + 8) : ""; };
   await cfiAdd(mods, cpu);
   for (const mod of mods) await runInit(mod, cpu);
+  // after libc's own init, which zeroes __libc_globals; what scudo allocated before is never freed
+  stp(libc.locals.get("__libc_globals")! + GLOBALS_DISPATCH, heap);
+}
+
+function heapDispatch(): number {
+  const own: Record<string, HostFn> = {
+    // struct mallinfo is returned through x8: the core heap's arena and what is in use of it
+    mallinfo: (cpu) => {
+      const out = cpu.xp(8), s = mem.stats();
+      mem.memset(out, 0, 80);
+      mem.st64(out, BigInt(s.peak)); mem.st64(out + 56, BigInt(s.used)); mem.st64(out + 64, BigInt(Math.max(0, s.peak - s.used)));
+      return 0;
+    },
+    malloc_iterate: (cpu) => fail(cpu, E.NOTSUP),
+    malloc_info: (cpu) => fail(cpu, E.NOTSUP),
+    // nothing allocates concurrently with a fork here, and the core heap has no tunables
+    malloc_disable: () => 0, malloc_enable: () => 0, mallopt: () => 0,
+  };
+  const table = mem.hostAlloc(HEAP.length * 8, 32);
+  HEAP.forEach((name, i) => stp(table + i * 8, name in own ? defineHost(name, own[name]) : lookupHost(name === "aligned_alloc" ? "memalign" : name, "libc.so")!));
+  return table;
 }
 
 // linker_cfi.cpp's shadow: a u16 per 256 KiB of address space, kept by the linker once a module
