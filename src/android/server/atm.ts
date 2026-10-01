@@ -213,13 +213,18 @@ export async function startActivityInProcess(component: string, intent: JObj, re
 }
 /** the broker showing or hiding this process: its top activity pauses, what is paused stops, and
  *  the top resumes (the launcher activity starts again in an emptied app process, as its icon
- *  would). A process shown behind a translucent one is not restarted yet. */
+ *  would). Shown behind a translucent process, a stopped top starts again without resuming, as
+ *  ActivityRecord.makeActiveIfNeeded does. */
 export async function taskVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
   const top = stack.at(-1), pkg = appHost!.pkg;
   if (!top) { if (phase === "resume" && userLaunched()) await startMainActivity(thisApp(), pkg); return; }
   if (phase === "pause") await pause(top);
   else if (phase === "stop") for (const r of [...stack]) await stop(r);
   else if (phase === "resume" && top.state !== "resumed") await resume(top);
+  else if (phase === "visible" && top.state === "stopped") {
+    top.state = "paused";
+    await schedule(top.app, null, await item("StartActivityItem", "Landroid/os/IBinder;Landroid/app/ActivityOptions$SceneTransitionInfo;", top.token, null));
+  }
 }
 
 async function finish(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<boolean> {
