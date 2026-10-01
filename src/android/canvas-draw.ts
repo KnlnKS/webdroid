@@ -246,9 +246,11 @@ function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePa
   nc.recordText(s, x, y, p.textSize, p.textAlignN);
   if (tryDrawBitmapText(nc, s, x, y, p)) return;
   const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
+  const blend = p.compositeOp(), prev = blend ? ctx.globalCompositeOperation : null;
   // SkFont's scale and skew: the glyphs under [scaleX skewX; 0 1] at the origin of the run
   const warped = p.textScaleX !== 1 || p.textSkewX !== 0;
   try {
+    if (blend) ctx.globalCompositeOperation = blend;
     ctx.font = p.font();
     ctx.textRendering = "geometricPrecision";
     if ("lang" in ctx) ctx.lang = p.language;
@@ -272,7 +274,11 @@ function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePa
       if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));
       if (p.strikeThru) ctx.fillRect(sx, y + strikeThruPosition(p), w, Math.max(1, strikeThruThickness(p)));
     }
-  } finally { if (shadow) ctx.restore(); if (shaded) endAlpha(ctx); }
+  } finally {
+    if (prev) ctx.globalCompositeOperation = prev;
+    if (shadow) ctx.restore();
+    if (shaded) endAlpha(ctx);
+  }
 }
 const onPath = new PathMeasure(), posTan = new Float32Array(4), graphemes = typeof Intl !== "undefined" ? new Intl.Segmenter() : null;
 /** Canvas::drawTextOnPath (SkiaCanvas::drawLayoutOnPath): each cluster placed at the middle of its

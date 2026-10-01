@@ -121,6 +121,17 @@ async function probe() {
   for (let y = 0; y < 60; y++) for (let x = 0; x < 200; x++) if (pixels[y * 200 + x] >>> 24) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
   out.textOnPath = [minX, minY, maxX, maxY];
 
+  // text through a CLEAR paint erases its glyphs, as SkCanvas applies the paint's blender to text
+  const xb = await bitmap(40, 40), xc = await newObj("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", xb);
+  await vcall(xc, "drawColor", "(I)V", 0xffff0000 | 0);
+  const clear = await newObj("android/graphics/Paint", "()V");
+  await vcall(clear, "setTextSize", "(F)V", 40);
+  await vcall(clear, "setXfermode", "(Landroid/graphics/Xfermode;)Landroid/graphics/Xfermode;", await newObj("android/graphics/PorterDuffXfermode", "(Landroid/graphics/PorterDuff$Mode;)V", await mode("CLEAR")));
+  await vcall(xc, "drawText", `(${S}FF${P})V`, "M", 0, 35, clear);
+  const xpixels = new Int32Array(40 * 40);
+  await vcall(xb, "getPixels", "([IIIIIII)V", xpixels, 0, 40, 0, 0, 40, 40);
+  out.clearText = [xpixels.some((v) => v === 0), xpixels.some((v) => v === (0xff000000 | 0))];
+
   // a picture drawn into another picture's recording replays when that one is drawn, over its target
   const inner = await newObj("android/graphics/Picture", "()V"), outer = await newObj("android/graphics/Picture", "()V");
   await vcall(await vcall(inner, "beginRecording", "(II)Landroid/graphics/Canvas;", 20, 20), "drawColor", "(I)V", 0xffff0000 | 0);
