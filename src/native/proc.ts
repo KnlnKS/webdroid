@@ -17,7 +17,6 @@ export const killLog: string[] = [];
 
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
-const pointerArg = (cpu: Cpu, address: bigint): number | bigint => cpu.a64 ? address : Number(address);
 const SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
 const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
 /** RLIMIT_STACK is Android's 8 MiB, the main thread's stack; the rest keep 1 MiB */
@@ -101,8 +100,7 @@ function exchangeAction(a: ArgReader, size: number, handlerAt: number, flagsAt: 
   return 0;
 }
 function sigaction(a: ArgReader, wide: boolean): number {
-  const ilp32wide = wide && PTR !== 8;
-  return exchangeAction(a, ilp32wide ? 20 : LAYOUT.SIGACTION_SIZE, LAYOUT.SA_HANDLER, ilp32wide ? 12 : LAYOUT.SA_FLAGS, PTR === 8 ? 16 : 4, wide || PTR === 8);
+  return exchangeAction(a, wide ? 20 : LAYOUT.SIGACTION_SIZE, LAYOUT.SA_HANDLER, wide ? 12 : LAYOUT.SA_FLAGS, 4, wide);
 }
 /** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
  *  mask), which is not bionic's */
@@ -157,8 +155,7 @@ export function procInit(): void {
     __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
     sigaction: (_c, a) => sigaction(a, false),
     rt_sigaction: (_c, a) => rtSigaction(a),
-    // bionic's 64-bit-mask variant: the same record on LP64; on ILP32 the mask widens to 8
-    // bytes at +4 and pushes sa_flags to +12
+    // bionic's 64-bit-mask variant: the mask widens to 8 bytes at +4 and pushes sa_flags to +12
     sigaction64: (_c, a) => sigaction(a, true),
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
@@ -172,11 +169,11 @@ export function procInit(): void {
     tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; },
     raise: (cpu, a) => { signalThread(cpu, cpu, a.i()); return 0; },
     kill: (cpu, a) => { a.i(); signalThread(cpu, cpu, a.i()); return 0; },
-    sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), PTR); return e ? fail(cpu, e) : 0; },
+    sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
     sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
     sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
     sigwait: () => new Promise<never>(() => {}),
-    sigaltstack, sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); const p = a.p(); if (PTR === 8) mem.st64(p, mask); else mem.st32(p, Number(mask & 0xffffffffn)); return 0; },
+    sigaltstack, sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); mem.st32(a.p(), Number(mask & 0xffffffffn)); return 0; },
     pthread_sigqueue: () => 0, killpg: () => 0,
     openlog: () => {}, closelog: () => {},
     syslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, a)); },
@@ -194,10 +191,10 @@ export function procInit(): void {
     if_nametoindex: () => 0, if_indextoname: () => 0,
     // sorting and searching call back into the guest for every comparison
     qsort: async (cpu, a) => {
-      const vbase = a.va(), n = a.u(), size = a.u(), cmp = a.p();
+      const base = a.p(), n = a.u(), size = a.u(), cmp = a.p();
       if (n < 2) return;
       const idx = [...Array(n).keys()];
-      const key = (i: number) => pointerArg(cpu, vbase + BigInt(i * size));
+      const key = (i: number) => base + i * size;
       // merge sort: O(n log n) guest calls, stable
       const merge = async (lo: number, hi: number): Promise<void> => {
         if (hi - lo < 2) return;
@@ -211,18 +208,17 @@ export function procInit(): void {
         for (let k = 0; k < out.length; k++) idx[lo + k] = out[k];
       };
       await merge(0, n);
-      const base = mem.txVa(vbase);
       const copy = mem.u8.slice(base, base + n * size);
       for (let i = 0; i < n; i++) mem.u8.set(copy.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
       wrote(base, n * size);
     },
     bsearch: async (cpu, a) => {
-      const keyp = a.va(), base = a.va(), n = a.u(), size = a.u(), cmp = a.p();
+      const keyp = a.p(), base = a.p(), n = a.u(), size = a.u(), cmp = a.p();
       let lo = 0, hi = n;
       while (lo < hi) {
-        const mid = (lo + hi) >> 1, p = base + BigInt(mid * size);
-        const r = (await cpu.call(cmp, [pointerArg(cpu, keyp), pointerArg(cpu, p)])) | 0;
-        if (r === 0) return pointerArg(cpu, p);
+        const mid = (lo + hi) >> 1, p = base + mid * size;
+        const r = (await cpu.call(cmp, [keyp, p])) | 0;
+        if (r === 0) return p;
         if (r < 0) hi = mid; else lo = mid + 1;
       }
       return 0;
@@ -261,11 +257,11 @@ export function procInit(): void {
   };
   for (const n of ["fork", "vfork", "execl", "execlp", "execv", "execve", "execvp", "waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
   for (const suffix of ["", "64"]) {
-    M["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : PTR); return 0; };
-    M["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : PTR); return 0; };
+    M["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : 4); return 0; };
+    M["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : 4); return 0; };
     for (const op of ["add", "del", "ismember"]) M[(op === "ismember" ? "sigismember" : "sig" + op + "set") + suffix] = (cpu, a) => {
       const p = a.p(), n = a.i() - 1;
-      if (n < 0 || n >= (suffix ? 8 : PTR) * 8) return fail(cpu, E.INVAL);
+      if (n < 0 || n >= (suffix ? 8 : 4) * 8) return fail(cpu, E.INVAL);
       const at = p + (n >> 3), bit = 1 << (n & 7);
       if (op === "ismember") return mem.u8[at] & bit ? 1 : 0;
       mem.st8(at, op === "add" ? mem.u8[at] | bit : mem.u8[at] & ~bit);
