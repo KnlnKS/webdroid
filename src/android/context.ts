@@ -10,7 +10,8 @@ import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermission } from "./contentresolver";
 import type { JUri } from "./net";
-import { mainLooper, mainExecutor, mainHandler, PROCESS_PID, PROCESS_UID } from "./os";
+import { PROCESS_PID, PROCESS_UID } from "./os";
+import { mainExecutor, mainHandler } from "./mainloop";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { dbPath, openDatabase } from "./sqlite";
 import { javaTheme, newTheme, loadResources, configuredResources, javaConfiguration } from "./resources";
@@ -316,7 +317,7 @@ const contextMethods: NativeSpec["methods"] = {
   },
   "getPackageManager()Landroid/content/pm/PackageManager;": function () { return getPM(); },
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
-  "getMainLooper()Landroid/os/Looper;": () => mainLooper,
+  "getMainLooper()Landroid/os/Looper;": () => scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"),
   "getMainExecutor()Ljava/util/concurrent/Executor;": mainExecutor,
   "getMainThreadHandler()Landroid/os/Handler;": mainHandler,
   // API 34: the context stays on the default device, so its device id never changes

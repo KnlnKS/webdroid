@@ -1,10 +1,14 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
+import { loadFrameworkJar } from "./java";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { JView, makeSpec, measureView, MS_AT_MOST, uiState } from "../src/android/view";
+
+// framework.jar and a running main looper, as a booted page has them
+beforeAll(loadFrameworkJar);
 
 describe("view-animation-dispatch", () => {
   rt.linkNatives();

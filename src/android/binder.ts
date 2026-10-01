@@ -63,8 +63,6 @@ export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel 
 }
 
 const callers = new WeakMap<JThread, Caller>();
-const savedIdentities = new WeakMap<JThread, Map<bigint, Caller>>();
-let nextIdentity = 1n;
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 const oneWay = new Map<number, Promise<unknown>>();
@@ -117,15 +115,15 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "markVintfStability()V": () => {},
   "static getCallingUid()I": () => callingIdentity().uid,
   "static getCallingPid()I": () => callingIdentity().pid,
+  // IPCThreadState packs the caller into the token, so clearing twice gives the same one
   "static clearCallingIdentity()J": () => {
-    let saved = savedIdentities.get(curThread);
-    if (!saved) savedIdentities.set(curThread, saved = new Map());
-    const token = nextIdentity++; saved.set(token, callingIdentity()); callers.delete(curThread); return token;
+    const { pid, uid } = callingIdentity();
+    callers.delete(curThread);
+    return BigInt(uid) << 32n | BigInt(pid >>> 0);
   },
   "static restoreCallingIdentity(J)V": (token: bigint) => {
-    const saved = savedIdentities.get(curThread), caller = saved?.get(token);
-    if (!caller) throw rt.mkThrowable("java/lang/IllegalStateException", "Invalid calling identity");
-    callers.set(curThread, caller); saved!.delete(token);
+    const caller = { pid: Number(BigInt.asIntN(32, token)), uid: Number(BigInt.asIntN(32, token >> 32n)) };
+    if (caller.pid === PROCESS_PID && caller.uid === PROCESS_UID) callers.delete(curThread); else callers.set(curThread, caller);
   },
   "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) { this.owner = owner; this.descriptor = descriptor; },
   "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) { return this.descriptor === descriptor ? this.owner : null; },

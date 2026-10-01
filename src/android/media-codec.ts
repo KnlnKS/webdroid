@@ -6,7 +6,7 @@ import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacit
 import { JMediaFormat } from "./media-format";
 import { JBufferInfo } from "./media";
 import { JSurface, presentSurface, type GlSurface } from "./glview";
-import { mainHandler, reportUncaught } from "./os";
+import { mainHandler, postTo } from "./mainloop";
 
 type VideoLimits = { maxDimension: number; maxBitrate: number; blockSize: number; maxBlocks: number; blocksPerSecond: number };
 type Definition = ({ kind: "video"; mime: string; codec: string; profiles: [number, number][] } & VideoLimits) | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
@@ -199,7 +199,7 @@ export class JMediaCodec extends JObj {
   send(name: string, desc: string, ...args: unknown[]): void {
     if (!this.callback) return;
     const epoch = this.epoch, callback = this.callback;
-    void (this.handler ?? mainHandler()).looper.run(() => epoch === this.epoch ? vcall(callback, name, desc, this, ...args) : undefined).catch(reportUncaught);
+    postTo(this.handler ?? mainHandler(), () => epoch === this.epoch ? vcall(callback, name, desc, this, ...args) : undefined);
   }
   wake(): void { for (const resolve of this.waiters) resolve(); this.waiters.clear(); }
   check(): void { if (this.error) throw this.error; if (this.released) throw rt.mkThrowable("java/lang/IllegalStateException", "codec released"); }
@@ -331,7 +331,7 @@ export class JMediaCodec extends JObj {
         if (render && epoch === this.epoch && surface) {
           presentSurface(surface, output.frame);
           const listener = this.frameListener;
-          if (listener) void (this.frameHandler ?? mainHandler()).looper.run(() => epoch === this.epoch ? vcall(listener, "onFrameRendered", "(Landroid/media/MediaCodec;JJ)V", this, output.info.presentationTimeUs, BigInt(Math.floor(performance.now() * 1e6))) : undefined).catch(reportUncaught);
+          if (listener) postTo(this.frameHandler ?? mainHandler(), () => epoch === this.epoch ? vcall(listener, "onFrameRendered", "(Landroid/media/MediaCodec;JJ)V", this, output.info.presentationTimeUs, BigInt(Math.floor(performance.now() * 1e6))) : undefined);
         } else output.frame.close();
       };
       const delay = timeNs === undefined ? 0 : Number(timeNs) / 1e6 - performance.now();

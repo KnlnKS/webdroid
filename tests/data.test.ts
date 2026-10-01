@@ -1,4 +1,4 @@
-import { expect, test, jest, describe } from "bun:test";
+import { expect, test, jest, describe, beforeAll } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -11,7 +11,10 @@ import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
 import { onMain } from "../src/android/mainloop";
-import { loadLibcore } from "./java";
+import { loadLibcore, loadFrameworkJar } from "./java";
+
+// framework.jar and a running main looper, as a booted page has them
+beforeAll(loadFrameworkJar);
 
 rt.linkNatives();
 const loadSql = () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });

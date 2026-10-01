@@ -1,11 +1,14 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { systemService } from "../src/android/context";
-import { scall, mountApexData } from "./java";
+import { scall, mountApexData, loadFrameworkJar } from "./java";
+
+// framework.jar and a running main looper, as a booted page has them
+beforeAll(loadFrameworkJar);
 
 rt.linkNatives();
 

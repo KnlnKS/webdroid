@@ -13,6 +13,7 @@
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 
+import { startMainLooper } from "./mainloop";
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
 import { type JRectF, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, composeShader } from "./graphics";
@@ -706,4 +707,6 @@ export async function zygoteInit(): Promise<void> {
   await loadSystemFontMap();
   await initDeviceLocales();
   await preloadPaint();
+  // ActivityThread.main, once the process is forked
+  await startMainLooper();
 }

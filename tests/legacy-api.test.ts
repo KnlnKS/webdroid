@@ -9,8 +9,11 @@ import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/a
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
-import { scall, loadLibcore, appResources, preloadTextPaint } from "./java";
+import { scall, loadLibcore, appResources, preloadTextPaint, loadFrameworkJar } from "./java";
 import { toJsArray } from "../src/jvm/natives/jcoll";
+
+// framework.jar and a running main looper, as a booted page has them
+beforeAll(loadFrameworkJar);
 
 
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });

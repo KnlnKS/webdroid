@@ -1212,14 +1212,10 @@ export class JThread extends JObj {
   permit = false;
   unpark: (() => void) | null = null;
   done: Promise<void> | null = null;
-  looper: unknown = null;   // android Looper, set by android/os
+  /** the thread's native Looper (android/mainloop), once it has prepared one */
+  looper: unknown = null;
   /** the ThreadGroup a Java constructor named; null is the main group */
   group: unknown = null;
-  /** native calls in progress on this thread: its looper cannot dispatch while it is inside one */
-  inNative = 0;
-  nativeIdle: (() => void)[] = [];
-  /** resolves once the thread is back from native code (at once when it is not in any) */
-  untilIdle(): Promise<void> { return this.inNative ? new Promise((r) => this.nativeIdle.push(r)) : Promise.resolve(); }
 }
 export let curThread: JThread = null as never;
 export const mainThread = curThread = new JThread();

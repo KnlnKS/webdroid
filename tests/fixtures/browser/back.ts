@@ -5,8 +5,14 @@ import { JView } from "../../../src/android/view";
 import type { JKeyEvent } from "../../../src/android/keyevent";
 import { mangleMethod } from "../../../src/jvm/abi";
 import { pressBack } from "../../../src/shell/device";
+import { loadPlatformDex } from "../../../src/android/framework";
+import { rt } from "../../../src/jvm/runtime";
+import { startMainLooper } from "../../../src/android/mainloop";
 
 async function probe() {
+  await loadPlatformDex();
+  rt.linkNatives();
+  await startMainLooper();
   const events: string[] = [];
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();

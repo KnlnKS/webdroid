@@ -3,7 +3,6 @@ import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, curThread, mainThread, JThread, park } from "../src/jvm/natives/jlang";
 import { jarray } from "../src/jvm/abi";
-import { mainLooper } from "../src/android/os";
 
 describe("blocking-queue-drain", () => {
   rt.linkNatives();
@@ -79,27 +78,6 @@ describe("thread-enumeration", () => {
     } finally { task.finish?.(); }
     await vcall(thread, "join", "()V");
     expect(await vcall(cls, "activeCount", "()I")).toBe(count);
-  });
-
-  test("a suspended looper job releases ambient thread identity while preserving queue order", async () => {
-    const thread = await newObj("java/lang/Thread"), looper = rt.make("android/os/Looper") as typeof mainLooper;
-    looper.thread = thread;
-    let started!: () => void, finish!: () => void;
-    const began = new Promise<void>(resolve => { started = resolve; });
-    const held = new Promise<void>(resolve => { finish = resolve; });
-    const events: string[] = [];
-    const first = looper.run(() => {
-      expect(curThread).toBe(thread); events.push("first"); started(); return held;
-    });
-    const second = looper.run(() => { expect(curThread).toBe(thread); events.push("second"); });
-    await began;
-    try {
-      expect(curThread).toBe(mainThread);
-      expect(events).toEqual(["first"]);
-    } finally { finish(); }
-    await Promise.all([first, second]);
-    expect(events).toEqual(["first", "second"]);
-    expect(curThread).toBe(mainThread);
   });
 });
 

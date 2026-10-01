@@ -4,7 +4,7 @@ import { vcall, curThread, vcallOn, newObj } from "../jvm/natives/jlang";
 import { JFrameLayout } from "./layouts";
 import { JView, type JLayoutParams, initViewFromCtx } from "./view";
 import { AID, obtainStyled, rvInt, type JAttrSet } from "./res";
-import { JFnRunnable, mainHandler } from "./os";
+import { type JFnRunnable, fnRunnable, postRunnable, removeRunnable } from "./mainloop";
 
 class JViewAnimator extends JFrameLayout {
   displayed = 0;
@@ -103,18 +103,16 @@ class JViewFlipper extends JViewAnimator {
     const running = this.windowVisible && this.started;
     if (running === this.running) return;
     this.running = running;
-    if (!running) { if (this.flip) mainHandler().cancel(this.flip); return; }
+    if (!running) { if (this.flip) yield removeRunnable(this.flip); return; }
     if (!this.flip) {
-      const flip: JFnRunnable = rt.make("webdroid/FnRunnable");
-      this.flip = flip;
-      flip.fn = async () => {
+      this.flip = fnRunnable(async () => {
         if (!this.running) return;
         await vcall(this, "showNext", "()V");
-        if (this.running) mainHandler().post(this.flip, this.interval);
-      };
+        if (this.running) await postRunnable(this.flip, this.interval);
+      });
     }
     yield vcall(this, "showOnly", "(IZ)V", this.displayed, +animate);
-    if (this.running) mainHandler().post(this.flip, this.interval);
+    if (this.running) yield postRunnable(this.flip, this.interval);
   }
 }
 async function initFlipper(this: JViewFlipper, context: unknown, attrs: JAttrSet | null = null) {

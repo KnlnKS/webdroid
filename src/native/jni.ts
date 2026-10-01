@@ -225,12 +225,10 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     }
     if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
     let r0: number, r1: number;
-    const jt = cpu.jthread;
-    jt.inNative++;
     try {
       r0 = await cpu.call(r.fn, list, r.label);
       r1 = cpu.ret1;
-    } finally { cur = cpu; if (--jt.inNative === 0) for (const w of jt.nativeIdle.splice(0)) w(); }
+    } finally { cur = cpu; }
     let out: unknown;
     switch (ret[0]) {
       case "V": out = undefined; break;

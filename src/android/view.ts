@@ -14,7 +14,7 @@ import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable,
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
-import { mainHandler, reportUncaught, uptimeMillis } from "./os";
+import { reportUncaught, uptimeMillis } from "./os";
 import { keyDispatcherState } from "./keyevent";
 import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "../jvm/natives/jchars";
@@ -23,7 +23,7 @@ import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
 import { mkVPA } from "./viewanimator";
 import type { JContext } from "./context";
-import { mainDbg } from "./mainloop";
+import { mainDbg, mainHandler, postRunnable, removeRunnable } from "./mainloop";
 import type { JWindow } from "./window";
 import { absGravity, gravityApply, G } from "./gravity";
 
@@ -1271,9 +1271,9 @@ const viewMethods: NativeSpec["methods"] = {
   // interleave the Runnable with a layout or a Handler dispatch at any await, and removeCallbacks
   // can cancel a queued post.
   "scheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V": function (r0: unknown, r: unknown, when: bigint) {
-    mainHandler().post(r, Math.max(0, Number(when) - uptimeMillis()));
+    void postRunnable(r, Number(when) - uptimeMillis());
   },
-  "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (_d: unknown, r: unknown) { mainHandler().cancel(r); },
+  "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (_d: unknown, r: unknown) { return removeRunnable(r); },
   // AOSP's 1-arg form cancels everything scheduled by that drawable. Compose's
   // AndroidComposeView calls it; without the overload the whole draw pass threw.
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
@@ -1285,7 +1285,7 @@ const viewMethods: NativeSpec["methods"] = {
   "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JView, r: unknown, d: bigint) { return postView(this, r, Number(d)); },
   "removeCallbacks(Ljava/lang/Runnable;)Z": function (this: JView, r: unknown) {
     if (this.pendingPosts) this.pendingPosts = this.pendingPosts.filter(post => post.run !== r);
-    mainHandler().cancel(r); return 1;
+    return after(removeRunnable(r), () => 1);
   },
   "postOnAnimation(Ljava/lang/Runnable;)V": function (this: JView, r: unknown) {
     uiState.frameCallbacks.push({ run: r });
@@ -1641,12 +1641,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getAnimation()Landroid/view/animation/Animation;": function (this: JView) { return this.jAnim; },
   "animate()Landroid/view/ViewPropertyAnimator;": function (this: JView) { return mkVPA(this); },
   "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.foreground; },
-  "getHandler()Landroid/os/Handler;": driven(function* (): Gen {
-    const info = rt.link("android/os/Handler");
-    const p = rt.initClass(info);
-    if (p) yield p;
-    return new info.ctor();
-  }),
+  // the window's handler while attached (AttachInfo.mHandler), else null
+  "getHandler()Landroid/os/Handler;": function (this: JView) { return this.attached ? mainHandler() : null; },
   "getDisplay()Landroid/view/Display;": function () {
     const info = rt.link("android/view/Display");
     return new info.ctor();
@@ -1970,14 +1966,14 @@ export const dispatchAttached = driven(function* dispatchAttached(v: JView, thre
   requestLayout(v);
   invalidate(v);
 });
-function postView(view: JView, run: unknown, delay: number): number {
-  if (view.attached) return mainHandler().post(run, delay);
+function postView(view: JView, run: unknown, delay: number): unknown {
+  if (view.attached) return postRunnable(run, delay);
   (view.pendingPosts ??= []).push({ run, delay });
   return 1;
 }
 function flushViewPosts(view: JView): void {
   if (view.pendingPosts) {
-    for (const post of view.pendingPosts) mainHandler().post(post.run, post.delay);
+    for (const post of view.pendingPosts) void postRunnable(post.run, post.delay);
     view.pendingPosts = null;
   }
   if (view instanceof JViewGroup) for (const child of view.children) flushViewPosts(child);

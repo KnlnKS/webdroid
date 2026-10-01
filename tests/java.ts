@@ -2,12 +2,16 @@ import { rt } from "../src/jvm/runtime";
 
 export { scall } from "../src/jvm/natives/jlang";
 
-/** framework.jar on the platform class path, as a booted page has it */
+/** framework.jar on the platform class path and the main looper running, as a booted page has them */
 export async function loadFrameworkJar(): Promise<void> {
   const { jarDexes } = await import("../src/android/framework");
-  if (rt.dexIndex.has("android/app/Activity")) return;
-  const jar = new Uint8Array(await Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url)).arrayBuffer());
-  for (const dex of jarDexes(jar, "framework.jar")) rt.loadDex(dex, true);
+  if (!rt.dexIndex.has("android/app/Activity")) {
+    await loadLibcore();
+    const jar = new Uint8Array(await Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url)).arrayBuffer());
+    for (const dex of jarDexes(jar, "framework.jar")) rt.loadDex(dex, true);
+    rt.linkNatives();
+  }
+  await (await import("../src/android/mainloop")).startMainLooper();
 }
 
 let apex: Promise<void> | null = null;

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import "../natives";
-import { JLooper } from "../android/os";
+import { NativeLooper } from "../android/mainloop";
 import { JThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
@@ -16,7 +16,7 @@ test("Java and NDK code share one thread looper without preparing unrelated thre
   const get = lookupHost("ALooper_forThread", "libandroid.so")!;
   try {
     expect(await cpu.call(get)).toBe(0);
-    thread.looper = new JLooper(thread);
+    thread.looper = new NativeLooper(thread);
     const handle = await cpu.call(get);
     expect(handle).toBeGreaterThan(0);
     expect(await cpu.call(lookupHost("ALooper_prepare", "libandroid.so")!, [1])).toBe(handle);

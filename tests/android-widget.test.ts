@@ -13,7 +13,10 @@ import { classCtors } from "../src/jvm/natives/jreflect";
 import { glSurfaces } from "../src/native/egl-current";
 import { Resources, JTheme } from "../src/android/res";
 import { JWebView } from "../src/android/webkit";
-import { scall, preloadTextPaint } from "./java";
+import { scall, preloadTextPaint, loadFrameworkJar } from "./java";
+
+// framework.jar and a running main looper, as a booted page has them
+beforeAll(loadFrameworkJar);
 
 beforeAll(preloadTextPaint);
 

@@ -1,42 +1,167 @@
-// Android's main looper is a single serialized queue; our async chains must not
-// interleave (Handler posts vs layout passes vs input) or androidx internals race
-// (e.g. ViewPager fragment double-add). Every main-thread entry point routes here.
-// Each job runs with curThread pinned to the main thread so Looper/Thread identity
-// checks (androidx enforceMainThread, fragment host asserts) see the main thread.
-import { curThread, setCurThread, mainThread } from "../jvm/natives/jlang";
+// libutils' Looper under android.os.MessageQueue. AOSP's Looper, MessageQueue, Handler and Message
+// run from bytecode; a thread's Looper.loop parks in nativePollOnce until nativeWake, its timeout or
+// a native callback posted to its looper, which runs there as a device Looper runs its fd callbacks.
+//
+// The main thread loops from boot. Host work (frames, input, broker requests) reaches it with
+// onMain, as a message on the main Handler, so it keeps its order with the app's own posts.
+import { rt, JObj } from "../jvm/runtime";
+import { curThread, setCurThread, mainThread, scall, newObj, vcall, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
+import { handle, deref, release } from "./handles";
+import { clearGuestTimeout, setGuestTimeout } from "../guest-clock";
 import { perf } from "../perf";
+import { yieldToLoop } from "../jvm/yield";
 
-let q: Promise<unknown> = Promise.resolve();
-
-/** Debug: set true to record where the job that is currently hogging the queue came from. */
-/** phase: which stage of the frame the main job is in, so a stuck frame names it */
+/** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
+ *  inline; phase: which stage of a frame the main thread is in, so a stuck frame names it */
 export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued: 0, phase: "" };
 
 /**
- * Are we running inside a main-looper job right now? Thread identity is NOT the same
- * question: curThread is pinned to the main thread by every job AND by boot, so a chain
- * that only set it would run "inline" while the queue is free to interleave with it at
- * every await. Callers that must not re-enter the queue (they already hold it) test this.
+ * Is the main thread dispatching right now? Thread identity is NOT the same question: a chain that
+ * only set curThread would run "inline" while the main thread is free to interleave with it at
+ * every await. Callers that must not wait behind the main thread (it awaits them) test this.
  */
 export function inMainJob(): boolean { return mainDbg.depth > 0; }
 
+/** A thread may hold the JS thread this long between macrotask turns before its looper yields, so
+ *  a message that keeps reposting itself cannot starve input, rendering or other realms. */
+const SLICE_MS = 16;
+let turnStart = 0, turnArmed = false;
+const turnChannel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
+if (turnChannel) {
+  turnChannel.port1.onmessage = () => { turnArmed = false; };
+  (turnChannel.port1 as unknown as { unref?: () => void }).unref?.();
+}
+/** has the current macrotask held the JS thread past its slice? */
+function sliceOver(): boolean {
+  const now = performance.now();
+  if (!turnArmed && turnChannel) { turnArmed = true; turnStart = now; turnChannel.port2.postMessage(0); }
+  return now - turnStart > SLICE_MS;
+}
+
+export class NativeLooper {
+  private callbacks: (() => unknown)[] = [];
+  private woken = false;
+  private waiter: (() => void) | null = null;
+  polling = false;
+  constructor(readonly thread: JThread) {}
+  wake(): void { this.woken = true; this.signal(); }
+  /** run `fn` on this looper's thread at its next poll, between messages */
+  post(fn: () => unknown): void { this.callbacks.push(fn); this.signal(); }
+  private signal(): void { const w = this.waiter; this.waiter = null; w?.(); }
+  /** MessageQueue.nativePollOnce: synchronous when there is nothing to wait for */
+  pollOnce(timeout: number): void | Promise<void> {
+    if (!this.callbacks.length && !this.woken && timeout === 0 && !sliceOver()) return;
+    return this.poll(timeout);
+  }
+  private async poll(timeout: number): Promise<void> {
+    const main = this === mainLooper;
+    if (!this.callbacks.length && !this.woken) {
+      this.polling = true;
+      if (main) mainDbg.depth--;
+      try { await (timeout === 0 ? yieldToLoop() : this.idle(timeout)); }
+      finally { this.polling = false; if (main) mainDbg.depth++; }
+    }
+    this.woken = false;
+    for (const fn of this.callbacks.splice(0)) {
+      setCurThread(this.thread);
+      try { await fn(); } catch (error) { await dispatchUncaught(this.thread, error); }
+    }
+    setCurThread(this.thread);
+  }
+  private idle(timeout: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = timeout > 0 ? setGuestTimeout(() => this.signal(), timeout) : undefined;
+      this.waiter = () => { clearGuestTimeout(timer); resolve(); };
+    });
+  }
+}
+
+/** the looper of the calling thread, if it has prepared one */
+export const myLooper = (): NativeLooper | undefined => curThread.looper as NativeLooper | undefined;
+
+rt.registerJnis("android/os/MessageQueue", {
+  "nativeInit()J": () => handle(curThread.looper = new NativeLooper(curThread)),
+  "nativeDestroy(J)V": (ptr: bigint) => {
+    const looper = deref<NativeLooper>(ptr);
+    if (looper.thread.looper === looper) looper.thread.looper = null;
+    release(ptr);
+  },
+  "nativePollOnce(JI)V": function (this: JObj, ptr: bigint, timeout: number) { return deref<NativeLooper>(ptr).pollOnce(timeout); },
+  "nativeWake(J)V": (ptr: bigint) => deref<NativeLooper>(ptr).wake(),
+  "nativeIsPolling(J)Z": (ptr: bigint) => +deref<NativeLooper>(ptr).polling,
+});
+
+export let mainLooper: NativeLooper | undefined;
+let mainHandlerObj: JObj | null = null, starting: Promise<void> | null = null;
+const ready = Promise.withResolvers<void>();
+
+/** ActivityThread.main's first and last steps: prepare the main looper, then loop on it for good.
+ *  An exception escaping a message goes to the main thread's uncaught handler and the loop goes on,
+ *  where a device would kill the process. */
+export function startMainLooper(): Promise<void> {
+  return starting ??= (async () => {
+    const thread = curThread;
+    setCurThread(mainThread);
+    try {
+      await scall("android/os/Looper", "prepareMainLooper", "()V");
+      mainLooper = mainThread.looper as NativeLooper;
+      mainHandlerObj = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"));
+    } finally { setCurThread(thread); }
+    mainDbg.depth++;
+    const loop = (): void => {
+      setCurThread(mainThread);
+      void Promise.resolve(scall("android/os/Looper", "loop", "()V")).catch(async (error) => {
+        await dispatchUncaught(mainThread, error);
+        loop();
+      });
+    };
+    loop();
+    ready.resolve();
+  })();
+}
+
+/** the main thread's Handler, which View.post and the framework's managers post on */
+export function mainHandler(): JObj {
+  if (!mainHandlerObj) throw new Error("the main looper has not started");
+  return mainHandlerObj;
+}
+
+/** a Runnable over a JS closure, for host work that must go through a Handler queue */
+export class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
+rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });
+export function fnRunnable(fn: () => unknown): JFnRunnable {
+  rt.link("webdroid/FnRunnable");
+  const r = new JFnRunnable(); r.fn = fn; return r;
+}
+
+/** Run `job` on the main thread after what is already queued there, once the zygote has started
+ *  the main looper. A failed job rejects its own promise and leaves the looper running. */
 export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   const site = mainDbg.trace ? new Error().stack ?? "" : "";
   mainDbg.queued++; perf.mainJobs++;
-  const p = q.then(async () => {
-    await mainThread.untilIdle();                                               // main blocked in a native call dispatches nothing until it returns
-    const prev = curThread;
-    setCurThread(mainThread);
-    mainDbg.queued--;
-    mainDbg.depth++;
-    if (mainDbg.trace) { mainDbg.running = site; mainDbg.started = Date.now(); }
-    try {
-      return await job();
-    } finally {
-      mainDbg.depth--;
-      setCurThread(prev);
-    }
+  return new Promise<T>((resolve, reject) => {
+    const post = () => void postRunnable(fnRunnable(async () => {
+      mainDbg.queued--;
+      if (mainDbg.trace) { mainDbg.running = site; mainDbg.started = Date.now(); }
+      try { resolve(await job()); } catch (error) { reject(error); }
+    }));
+    if (mainHandlerObj) post(); else void ready.promise.then(post);
   });
-  q = p.catch(() => { /* a failed job must not poison the queue */ });
-  return p;
 }
+
+/** Handler.postDelayed(r, delay ms) on the main handler unless another is named */
+export const postRunnable = (r: unknown, delay = 0, handler = mainHandler()): unknown =>
+  vcall(handler, "postDelayed", "(Ljava/lang/Runnable;J)Z", r, BigInt(Math.max(0, Math.ceil(delay))));
+export const removeRunnable = (r: unknown, handler = mainHandler()): unknown =>
+  vcall(handler, "removeCallbacks", "(Ljava/lang/Runnable;)V", r);
+/** post `fn` to a Handler as a Runnable */
+export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable {
+  const r = fnRunnable(fn);
+  void postRunnable(r, delay, handler);
+  return r;
+}
+
+/** Context.getMainExecutor: AOSP's HandlerExecutor over the main handler */
+let mainExecutorObj: Promise<unknown> | null = null;
+export const mainExecutor = (): Promise<unknown> =>
+  mainExecutorObj ??= newObj("android/os/HandlerExecutor", "(Landroid/os/Handler;)V", mainHandler());

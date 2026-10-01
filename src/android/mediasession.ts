@@ -1,7 +1,8 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { curThread, idHash, stringHash, vcall } from "../jvm/natives/jlang";
-import { JHandler, JFnRunnable, JLooper, type JBundle } from "./os";
+import { idHash, newObj, stringHash, vcall } from "../jvm/natives/jlang";
+import type { JBundle } from "./os";
+import { myLooper, postTo } from "./mainloop";
 import { type JContext } from "./context";
 import { JService } from "./app";
 
@@ -9,7 +10,8 @@ class JMediaSession extends JObj {
   token = new JSessionToken(this);
   controller = new JMediaController();
   callback: unknown = null;
-  handler = new JHandler();
+  handler: JObj | null = null;
+  epoch = 0;
   active = 0;
   released = false;
   flags = 0;
@@ -95,21 +97,19 @@ async function initialize(session: JMediaSession, context: JContext | null, tag:
 }
 function dispatch(session: JMediaSession, method: string, desc: string, ...args: unknown[]) {
   if (session.released || !session.callback) return;
-  const callback = session.callback, job = new JFnRunnable();
-  job.fn = () => session.released || session.callback !== callback ? undefined : vcall(callback, method, desc, ...args);
-  session.handler.post(job, 0);
+  const { callback, epoch } = session;
+  postTo(session.handler!, () => session.released || session.epoch !== epoch ? undefined : vcall(callback, method, desc, ...args));
 }
 const initSession = function (this: JMediaSession, context: JContext | null, tag: string) { return initialize(this, context, tag); };
 rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
   "<init>(Landroid/content/Context;Ljava/lang/String;)V": initSession,
   "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V": initSession,
   "setCallback(Landroid/media/session/MediaSession$Callback;)V": function (this: JMediaSession, callback: unknown) { return vcall(this, "setCallback", "(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V", callback, null); },
-  "setCallback(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V": function (this: JMediaSession, callback: unknown, handler: JHandler | null) {
-    for (const key of this.handler.pending.keys()) this.handler.cancel(key);
-    this.callback = callback; this.handler = new JHandler();
-    if (handler) this.handler.looper = handler.looper;
-    else if (curThread.looper instanceof JLooper) this.handler.looper = curThread.looper;
-    else if (callback) throw rt.mkThrowable("java/lang/RuntimeException", "Cannot create a media callback handler without a Looper");
+  // a replaced callback's pending calls lapse, as AOSP drops its old handler's messages
+  "setCallback(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V": async function (this: JMediaSession, callback: unknown, handler: JObj | null) {
+    if (!handler && callback && !myLooper()) throw rt.mkThrowable("java/lang/RuntimeException", "Cannot create a media callback handler without a Looper");
+    this.callback = callback; this.epoch++;
+    this.handler = handler ?? (callback ? await newObj("android/os/Handler", "()V") : null);
   },
   "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaSession) { return this.token; },
   "getController()Landroid/media/session/MediaController;": function (this: JMediaSession) { return this.controller; },

@@ -3,8 +3,8 @@ import { type JComponentName, type JIntent, mkComponentName, filterKey } from ".
 import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
 import { newObj, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
-import { onMain, inMainJob } from "./mainloop";
-import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME, JFnRunnable } from "./os";
+import { onMain, inMainJob, fnRunnable } from "./mainloop";
+import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
 import { getPM } from "./pm";
 import { binderTransport, exportBinder } from "./binder";
@@ -147,8 +147,7 @@ let nextConnection = 1;
 function connectionDelivery(executor: unknown): (job: () => Promise<void>) => Promise<void> {
   if (!executor) return onMain;
   return job => {
-    rt.link("webdroid/FnRunnable"); const runnable = new JFnRunnable(); runnable.fn = job;
-    return vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
+    return vcall(executor, "execute", "(Ljava/lang/Runnable;)V", fnRunnable(job));
   };
 }
 export async function svcBind(ctx: JContext, intent: JIntent, connection: unknown, flags: number, executor: unknown = null): Promise<number> {

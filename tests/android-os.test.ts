@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { JActivity, JApplication, JService } from "../src/android/app";
 import { appHost, setAppHost } from "../src/android/apphost";
@@ -6,16 +6,17 @@ import { packages, PackageRecord } from "../src/android/packages";
 import { Resources } from "../src/android/res";
 import { TV, type XmlAttr } from "../src/android/axml";
 import { mangleMethod } from "../src/jvm/abi";
-import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, mainThread, setCurThread } from "../src/jvm/natives/jlang";
+import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore } from "./java";
-import { onMain } from "../src/android/mainloop";
+import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
-import { JHandler, JMessage, PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
+import { PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
 
 describe("activity-main-queue", () => {
   rt.linkNatives();
+  beforeAll(async () => { await loadLibcore(); await loadFrameworkJar(); rt.linkNatives(); });
 
   test("Activity.runOnUiThread runs inline in the main job", async () => {
     const events: string[] = [];
@@ -100,204 +101,35 @@ describe("cancellation-signal", () => {
   });
 });
 
-describe("handler", () => {
-  class RecordingHandler extends JHandler {
-    delivered: number[] = [];
-  }
-  class RecordingRunnable extends JObj {
-    runs = 0;
-    onRun: (() => void) | null = null;
-  }
-  rt.register({
-    name: "test/RecordingHandler", ctor: RecordingHandler, sup: "android/os/Handler",
-    methods: {
-      "handleMessage(Landroid/os/Message;)V": function (this: RecordingHandler, message: JMessage) {
-        this.delivered.push(message.arg1);
-      },
-    },
-  });
-  rt.register({
-    name: "test/RecordingRunnable", ctor: RecordingRunnable, ifaces: ["java/lang/Runnable"],
-    methods: { "run()V": function (this: RecordingRunnable) { this.runs++; this.onRun?.(); } },
-  });
-  rt.linkNatives();
-
-  function message(what: number, value: number): JMessage {
-    const result = new JMessage();
-    result.what = what;
-    result.arg1 = value;
-    return result;
-  }
-
-  test("removing queued messages preserves other keys and a later replacement", async () => {
-    const handler = new RecordingHandler();
+describe("looper", () => {
+  test("the main looper runs posts in order, a delayed one after its delay, and host jobs between them", async () => {
+    await loadLibcore(); await loadFrameworkJar(); rt.linkNatives();
+    const events: string[] = [];
+    const runnable = (name: string) => fnRunnable(() => { events.push(name); });
+    const t0 = performance.now();
     await onMain(async () => {
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", message(3, 1));
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", message(4, 2));
-      expect(await vcall(handler, "hasMessages", "(I)Z", 3)).toBe(1);
-      await vcall(handler, "removeMessages", "(I)V", 3);
-      expect(await vcall(handler, "hasMessages", "(I)Z", 3)).toBe(0);
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", message(3, 3));
+      await postRunnable(runnable("late"), 30);
+      await postRunnable(runnable("a"));
+      await postRunnable(runnable("b"));
     });
+    await onMain(() => events.push("job"));
+    expect(events).toEqual(["a", "b", "job"]);
+    await new Promise((r) => setTimeout(r, 40));
     await onMain(() => {});
-    expect(handler.delivered).toEqual([2, 3]);
+    expect(events).toEqual(["a", "b", "job", "late"]);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(30);
   });
 
-  test("a delayed message can be removed after its timer expires behind a busy looper", async () => {
-    const handler = new RecordingHandler();
-    await onMain(async () => {
-      await vcall(handler, "sendMessageDelayed", "(Landroid/os/Message;J)Z", message(3, 1), 1n);
-      await Bun.sleep(20);
-      expect(await vcall(handler, "hasMessages", "(I)Z", 3)).toBe(1);
-      await vcall(handler, "removeMessages", "(I)V", 3);
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", message(3, 2));
-    });
-    await onMain(() => {});
-    expect(handler.delivered).toEqual([2]);
-  });
-
-  test("removing queued callbacks permits reposting the same runnable", async () => {
-    const handler = new RecordingHandler(), removed = new RecordingRunnable(), kept = new RecordingRunnable();
-    await onMain(async () => {
-      await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", removed);
-      await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", kept);
-      await vcall(handler, "removeCallbacks", "(Ljava/lang/Runnable;)V", removed);
-      await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", removed);
-    });
-    await onMain(() => {});
-    expect(removed.runs).toBe(1);
-    expect(kept.runs).toBe(1);
-  });
-
-  test("hasCallbacks reflects queued runnable identity", async () => {
-    const handler = new RecordingHandler(), runnable = new RecordingRunnable();
-    await onMain(async () => {
-      expect(await vcall(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", runnable)).toBe(0);
-      await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", runnable);
-      expect(await vcall(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", runnable)).toBe(1);
-      await vcall(handler, "removeCallbacks", "(Ljava/lang/Runnable;)V", runnable);
-      expect(await vcall(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", runnable)).toBe(0);
-    });
-  });
-
-  test("removeCallbacksAndMessages cancels queued messages and runnables", async () => {
-    const handler = new RecordingHandler(), runnable = new RecordingRunnable();
-    await onMain(async () => {
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", message(3, 1));
-      await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", runnable);
-      await vcall(handler, "removeCallbacksAndMessages", "(Ljava/lang/Object;)V", null);
-      await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", runnable);
-    });
-    await onMain(() => {});
-    expect(handler.delivered).toEqual([]);
-    expect(runnable.runs).toBe(1);
-  });
-
-  test("removeCallbacksAndMessages keeps work belonging to another token", async () => {
-    const handler = new RecordingHandler();
-    const removedToken = new JObj(), keptToken = new JObj();
-    const removed = new RecordingRunnable(), kept = new RecordingRunnable();
-    await onMain(async () => {
-      const first = message(3, 1), second = message(3, 2);
-      first.obj = removedToken; second.obj = keptToken;
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", first);
-      await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", second);
-      await vcall(handler, "postDelayed", "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z", removed, removedToken, 0n);
-      await vcall(handler, "postDelayed", "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z", kept, keptToken, 0n);
-      await vcall(handler, "removeCallbacksAndMessages", "(Ljava/lang/Object;)V", removedToken);
-    });
-    await onMain(() => {});
-    expect(handler.delivered).toEqual([2]);
-    expect(removed.runs).toBe(0);
-    expect(kept.runs).toBe(1);
-  });
-
-  test("a long-lived Handler releases completed callback keys", async () => {
-    const handler = new RecordingHandler();
-    await onMain(() => {
-      for (let i = 0; i < 1000; i++) handler.post(new RecordingRunnable(), 0);
-    });
-    await onMain(() => {});
-    expect(handler.pending.size).toBe(0);
-  });
-
-  test("a callback can repost itself while being dispatched", async () => {
-    const handler = new RecordingHandler(), runnable = new RecordingRunnable();
-    runnable.onRun = () => { if (runnable.runs === 1) handler.post(runnable, 0); };
-    await onMain(() => handler.post(runnable, 0));
-    await onMain(() => {});
-    await onMain(() => {});
-    expect(runnable.runs).toBe(2);
-    expect(handler.pending.size).toBe(0);
-  });
-
-  class IdleHandler extends JObj { calls = 0; keep = true; wake: (() => void) | null = null; }
-  rt.register({ name: "test/QueueIdleHandler", ctor: IdleHandler, ifaces: ["android/os/MessageQueue$IdleHandler"], methods: {
-    "queueIdle()Z": function (this: IdleHandler) { this.calls++; this.wake?.(); return +this.keep; },
-  } });
-  rt.link("test/QueueIdleHandler");
-  test("queue idle state excludes future messages and removes cancelled due work", async () => {
-    const handler = new RecordingHandler();
-    const queue = await vcall(handler.looper, "getQueue", "()Landroid/os/MessageQueue;");
-    await onMain(async () => {
-      handler.send(message(1, 0), 10000);
-      expect(await vcall(queue, "isIdle", "()Z")).toBe(1);
-      handler.send(message(2, 0), 0);
-      expect(await vcall(queue, "isIdle", "()Z")).toBe(0);
-      handler.cancel(2);
-      expect(await vcall(queue, "isIdle", "()Z")).toBe(1);
-      handler.cancel(1);
-    });
-  });
-  test("idle handlers run once per idle transition and can be removed", async () => {
-    const handler = new RecordingHandler(), idle = new IdleHandler();
-    const queue = await vcall(handler.looper, "getQueue", "()Landroid/os/MessageQueue;");
-    let notified = new Promise<void>(resolve => { idle.wake = resolve; });
-    await vcall(queue, "addIdleHandler", "(Landroid/os/MessageQueue$IdleHandler;)V", idle);
-    await notified;
-    expect(idle.calls).toBe(1);
-    notified = new Promise<void>(resolve => { idle.wake = resolve; });
-    handler.send(message(1, 2), 0);
-    await notified;
-    expect(idle.calls).toBe(2);
-    await vcall(queue, "removeIdleHandler", "(Landroid/os/MessageQueue$IdleHandler;)V", idle);
-    handler.send(message(1, 3), 0);
-    await onMain(() => {});
-    expect(idle.calls).toBe(2);
-  });
-});
-
-describe("handler-thread-dispatch", () => {
-  rt.linkNatives();
-  for (const logged of [false, true]) test(`${logged ? "logged" : "unlogged"} handler callbacks retain the looper thread across awaits`, async () => {
-    const thread = new JThread();
-    setCurThread(thread);
-    await vcall(rt.link("android/os/Looper").ctor, "prepare", "()V");
-    setCurThread(mainThread);
-    const events: [string, JThread][] = [];
-    let complete!: () => void;
-    const done = new Promise<void>(resolve => { complete = resolve; });
-    const printer = {
-      [mangleMethod("println", "(Ljava/lang/String;)V")]: async (s: string) => {
-        events.push([s.startsWith(">") ? "before" : "after", curThread]);
-        await Promise.resolve();
-        if (s.startsWith("<")) complete();
-      },
-    };
-    if (logged) await vcall(thread.looper, "setMessageLogging", "(Landroid/util/Printer;)V", printer);
-    const callback = {
-      [mangleMethod("handleMessage", "(Landroid/os/Message;)Z")]: async () => {
-        events.push(["callback", curThread]);
-        await Promise.resolve();
-        return 0;
-      },
-    };
-    const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;Landroid/os/Handler$Callback;)V", thread.looper, callback);
-    Object.assign(handler, { [mangleMethod("handleMessage", "(Landroid/os/Message;)V")]: () => { events.push(["handler", curThread]); if (!logged) complete(); } });
-    await vcall(handler, "sendEmptyMessage", "(I)Z", 1);
-    await done;
-    expect(events.map(([name]) => name)).toEqual(logged ? ["before", "callback", "handler", "after"] : ["callback", "handler"]);
-    expect(events.map(([, observed]) => observed === thread)).toEqual(logged ? [true, true, true, true] : [true, true]);
+  test("a HandlerThread loops on its own thread until it quits", async () => {
+    await loadLibcore(); await loadFrameworkJar(); rt.linkNatives();
+    const thread = await newObj("android/os/HandlerThread", "(Ljava/lang/String;)V", "worker");
+    await vcall(thread, "start", "()V");
+    const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await vcall(thread, "getLooper", "()Landroid/os/Looper;"));
+    const ran = new Promise<unknown>((resolve) => postTo(handler, () => resolve(curThread)));
+    expect(await ran).toBe(thread);
+    expect(await vcall(thread, "quit", "()Z")).toBe(1);
+    await vcall(thread, "join", "()V");
+    expect(await vcall(thread, "isAlive", "()Z")).toBe(0);
   });
 });
 

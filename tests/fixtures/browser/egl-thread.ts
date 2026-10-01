@@ -19,6 +19,7 @@ import { nativeWindowFor, ndkInit } from "../../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../../src/native/host";
 import { allocateDirectNow, bufferBytes, directReady, nativeOrder } from "../../../src/jvm/natives/jnio";
 import { loadPlatformDex } from "../../../src/android/framework";
+import { startMainLooper } from "../../../src/android/mainloop";
 import { mountPlatformData } from "../../../src/shell/apex";
 
 function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
@@ -220,6 +221,7 @@ async function probe() {
   await loadPlatformDex();
   mountPlatformData();
   rt.linkNatives();
+  await startMainLooper();
   await directReady();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
   const c14 = rt.link("android/opengl/EGL14").ctor;
