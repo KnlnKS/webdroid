@@ -10,6 +10,7 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { canvasOf } from "./canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
+import { frameDrawn } from "./vsync";
 import type { GlSurface } from "./glview";
 import { drawnOn, deviceRect, placeFunctors, type Rect } from "./webfunctor";
 
@@ -375,7 +376,9 @@ rt.registerJnis("android/view/Surface", {
   "nativeGetFromSurfaceControl(JJ)J": (_h: bigint, sc: bigint) => handle({ queue: null, layer: layerOf(sc) } satisfies Surface),
   "nativeGetFromBlastBufferQueue(JJ)J": (h: bigint, q: bigint) => h && surface(h).queue === queue(q) ? h : handle({ queue: queue(q), layer: null } satisfies Surface),
   "nativeRelease(J)V": (h: bigint) => release(h),
-  "nativeDestroy(J)V": (h: bigint) => release(h),
+  // Surface.destroy disconnects the producer, then release() frees the native object: freeing it
+  // here would free a handle another surface took in between
+  "nativeDestroy(J)V": () => {},
   "nativeIsValid(J)Z": (h: bigint) => +!!(h && (surface(h).queue || surface(h).layer || surface(h).producer)),
   "nativeGetWidth(J)I": (h: bigint) => (surface(h).queue ?? surface(h).producer)?.width ?? 0,
   "nativeGetHeight(J)I": (h: bigint) => (surface(h).queue ?? surface(h).producer)?.height ?? 0,
@@ -392,7 +395,8 @@ rt.registerJnis("android/view/Surface", {
     const s = surface(h), buffer = surfaceBuffer(s);
     if (!buffer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Surface has no buffer to lock");
     canvasOf(canvas).setTarget(buffer.getContext("2d")!, buffer.width, buffer.height, null);
-    return h;
+    // the locked object is a reference of its own, which unlockCanvasAndPost releases
+    return handle({ ...s } satisfies Surface);
   },
-  "nativeUnlockCanvasAndPost(JLandroid/graphics/Canvas;)V": (h: bigint) => queueBuffer(surface(h)),
+  "nativeUnlockCanvasAndPost(JLandroid/graphics/Canvas;)V": (h: bigint) => { perf.draws++; frameDrawn(); return queueBuffer(surface(h)); },
 });
