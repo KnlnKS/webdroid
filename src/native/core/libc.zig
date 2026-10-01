@@ -233,7 +233,7 @@ extern "env" fn guest_ms() f64;
 extern "env" fn wall_ms() f64;
 /// libc.ts clockTime: REALTIME, REALTIME_COARSE and REALTIME_ALARM read the wall clock; every other
 /// clock is the guest's monotonic one, offset so it is never 0
-fn clockGettime(c: *Cpu) Result {
+pub fn clockGettime(c: *Cpu) Result {
     const id: u32 = @truncate(arg(c, 0));
     const ts = ptr(c, 1) orelse return .fault;
     const ms = if (id == 0 or id == 5 or id == 8) wall_ms() else guest_ms() + 1000;

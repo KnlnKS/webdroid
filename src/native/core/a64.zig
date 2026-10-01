@@ -1,6 +1,7 @@
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
+const libc = @import("libc.zig");
 const simd = @import("simd.zig");
 const Cpu = cpu.Cpu;
 const Status = cpu.Status;
@@ -807,6 +808,8 @@ fn svc(c: *Cpu) Status {
     switch (@as(u32, @truncate(c.x[8]))) {
         172 => c.x[0] = c.pid,
         178 => c.x[0] = c.os_tid,
+        // what the vDSO serves on a device: the clock without a trip to the host
+        113 => c.x[0] = if (libc.clockGettime(c) == .done) 0 else @bitCast(@as(i64, -14)),
         // every other number is the host's: it serves the same table as libc's syscall(2)
         else => {
             c.exit = @truncate(c.x[8]);
