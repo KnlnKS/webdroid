@@ -346,7 +346,9 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     "reportSizeConfigurations(Landroid/os/IBinder;Landroid/window/SizeConfigurationBuckets;)V",
     "reportActivityFullyDrawn(Landroid/os/IBinder;Z)V", "setRecentsScreenshotEnabled(Landroid/os/IBinder;Z)V",
     "setImmersive(Landroid/os/IBinder;Z)V", "splashScreenAttached(Landroid/os/IBinder;)V", "invalidateHomeTaskSnapshot(Landroid/os/IBinder;)V",
-    "overridePendingTransition(Landroid/os/IBinder;Ljava/lang/String;III)V"),
+    // activity transitions are not animated, so an override has nothing to replace
+    "overridePendingTransition(Landroid/os/IBinder;Ljava/lang/String;III)V", "overrideActivityTransition(Landroid/os/IBinder;ZIII)V",
+    "clearOverrideActivityTransition(Landroid/os/IBinder;Z)V"),
 } });
 
 /** the methods IActivityTaskManager adds for ActivityThread's activities */
