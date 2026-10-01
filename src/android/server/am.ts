@@ -57,20 +57,64 @@ async function bind(app: JObj): Promise<void> {
   if (launcher) await startMainActivity(app, pkg);
 }
 
-// ContentProviders this process published, by authority, and system_server's. ActivityThread finds
-// its own before it asks; a provider in another app process is not reachable yet, so it answers null
-// as for an unknown one.
-const published = new Map<string, JObj>();
-const HOLDER = "android/app/ContentProviderHolder";
+// ContentProviders this process published, by authority. ActivityThread finds its own before it
+// asks; system_server's come from their hosts, and another process's from that process through the
+// broker, which starts it and waits for the publication as a ContentProviderRecord does.
+type Publication = ReturnType<typeof Promise.withResolvers<JObj>>;
+const published = new Map<string, JObj>(), publications = new Map<string, Publication>();
+const HOLDER = "android/app/ContentProviderHolder", PROVIDER_INFO = "android/content/pm/ProviderInfo";
+const APP_INFO = "android/content/pm/ApplicationInfo", COMPONENT_INFO = "android/content/pm/ComponentInfo";
+/** ContentResolver.CONTENT_PROVIDER_READY_TIMEOUT_MILLIS: how long a publication is waited for */
+const PROVIDER_WAIT_MS = 20_000;
+function publication(authority: string): Publication {
+  let pending = publications.get(authority);
+  if (!pending) publications.set(authority, pending = Promise.withResolvers());
+  return pending;
+}
 async function publishProviders(holders: JObj): Promise<void> {
   const count: number = await vcall(holders, "size", "()I");
   for (let i = 0; i < count; i++) {
     const holder: Record<string, unknown> = await vcall(holders, "get", "(I)Ljava/lang/Object;", i);
     if (!holder) continue;
     holder[declaredField(HOLDER, "noReleaseNeeded")] = 1;
-    const authority = (holder[declaredField(HOLDER, "info")] as Record<string, string | null>)[declaredField("android/content/pm/ProviderInfo", "authority")];
-    for (const name of authority?.split(";") ?? []) published.set(name, holder as unknown as JObj);
+    const authority = (holder[declaredField(HOLDER, "info")] as Record<string, string | null>)[declaredField(PROVIDER_INFO, "authority")];
+    for (const name of authority?.split(";") ?? []) {
+      published.set(name, holder as unknown as JObj);
+      publication(name).resolve(holder as unknown as JObj);
+    }
   }
+}
+/** the IContentProvider binder this process publishes for an authority, for a caller in another
+ *  process; null when it is not published in time */
+export async function publishedProvider(authority: string): Promise<JObj | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const holder = await Promise.race([publication(authority).promise, new Promise<null>((resolve) => { timer = setTimeout(resolve, PROVIDER_WAIT_MS, null); })]);
+  clearTimeout(timer);
+  return holder && (holder as Record<string, JObj>)[declaredField(HOLDER, "provider")];
+}
+/** the broker's: the binder another process publishes for an authority, starting that process */
+export const providerProcesses: { get: (pkg: string, process: string, authority: string) => Promise<JObj | null> } = { get: async () => null };
+
+/** getContentProviderImpl: system_server's provider, this process's own, or a holder for the
+ *  package manager's: a local one (newHolder(null, true)) when it may run here, multiprocess or
+ *  this process's with its uid, which ActivityThread instantiates rather than waiting for a
+ *  publication; otherwise the binder its own process published, which the broker waits for */
+async function contentProvider(name: string, userId: number): Promise<JObj | null> {
+  const own = published.get(name) ?? await systemProviderHolder(name);
+  if (own) return own;
+  const info: Record<string, unknown> | null = await vcall(await pms(), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
+  if (!info) return null;
+  const app = info[declaredField(COMPONENT_INFO, "applicationInfo")] as Record<string, unknown>;
+  const process = info[declaredField(COMPONENT_INFO, "processName")] as string;
+  const holder: Record<string, unknown> = await newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
+  if (app[declaredField(APP_INFO, "uid")] === PROCESS_UID && (info[declaredField(PROVIDER_INFO, "multiprocess")] || process === (PROCESS_NAME || appHost!.pkg))) {
+    holder[declaredField(HOLDER, "mLocal")] = 1;
+    return holder as unknown as JObj;
+  }
+  const binder = await providerProcesses.get(app[declaredField(APP_INFO, "packageName")] as string, process, name);
+  if (!binder) return null;
+  holder[declaredField(HOLDER, "provider")] = await scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder);
+  return holder as unknown as JObj;
 }
 
 /** the methods IActivityManager adds for ActivityThread */
@@ -79,9 +123,11 @@ export const activityManagerMethods = {
   "finishAttachApplication(JJ)V": () => {},
   "publishContentProviders(Landroid/app/IApplicationThread;Ljava/util/List;)V": (_app: JObj, holders: JObj) => publishProviders(holders),
   "getContentProvider(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;IZ)Landroid/app/ContentProviderHolder;":
-    (_app: JObj, _pkg: string, name: string) => published.get(name) ?? systemProviderHolder(name),
+    (_app: JObj, _pkg: string, name: string, userId: number) => contentProvider(name, userId),
+  // a provider's process lives until it dies, which its binder's holders learn from the broker
   "refContentProvider(Landroid/os/IBinder;II)Z": () => 1,
   "removeContentProvider(Landroid/os/IBinder;Z)V": () => {},
+  "unstableProviderDied(Landroid/os/IBinder;)V": () => {},
 };
 
 /** ActivityThread.main for this process: its thread attaches to the activity manager, which binds

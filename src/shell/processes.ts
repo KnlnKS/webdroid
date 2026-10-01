@@ -25,8 +25,9 @@ import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver, type Broadc
 import { deliverBroadcast as deliverQueued, type Sender } from "../android/server/broadcastqueue";
 import { hostedServices } from "../android/server/activeservices";
 import { startActivityInProcess, taskVisibility } from "../android/server/atm";
+import { publishedProvider, providerProcesses } from "../android/server/am";
 import { stageD } from "../jvm/provenance";
-import { checkPermission, queryReceivers, exported, componentPermission, componentProcess } from "../android/pm";
+import { checkPermission, queryReceivers, exported, componentPermission, componentProcess, resolveProvider } from "../android/pm";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
@@ -75,6 +76,7 @@ type ProcessEndpoint = {
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
   provider: (request: ProviderRequest, caller: Caller) => Promise<ProviderReply>;
+  contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
 };
@@ -392,6 +394,20 @@ class ProcessBroker {
       throw new Error("Provider permission denied: " + permission);
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
   }
+  /** getContentProviderImpl for a provider in another process: checkContentProviderPermission,
+   *  then the binder its process publishes, starting it. The provider enforces each call's
+   *  read or write permission itself. */
+  async contentProvider(pid: number, pkg: string, process: string, authority: string): Promise<BinderHandle | null> {
+    const caller = this.entry(pid), provider = resolveProvider(authority);
+    if (provider?.owner.pkg !== pkg) return null;
+    if (caller.uid !== provider.owner.uid) {
+      const permission = componentPermission(provider);
+      const allowed = async (name: string) => { const p = attrStr(provider.node, name) ?? permission; return !p || !await permissionDenied(p, caller.pkg); };
+      if (!exported(provider) || !await allowed("readPermission") && !await allowed("writePermission"))
+        throw rt.mkThrowable("java/lang/SecurityException", `Permission Denial: opening provider ${provider.name} from pid=${pid}, uid=${caller.uid}`);
+    }
+    return this.request(this.connect(pkg, process), (endpoint) => endpoint.contentProvider(authority));
+  }
   async broadcast(pid: number | null, data: IntentData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
     const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data), sender = caller && { uid: caller.uid, pkg: caller.pkg };
     const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
@@ -500,6 +516,7 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
+  providerProcesses.get = async (pkg, process, authority) => importBinder(await remote(broker.contentProvider(PROCESS_PID, pkg, process, authority)));
   broadcastTransport.send = async (intent, permissions, ordered, initial) => broadcastResult(await remote(
     broker.broadcast(PROCESS_PID, await encodeIntent(intent), permissions, ordered, initial && await resultData(initial))));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
@@ -554,6 +571,7 @@ export function connectProcess(): ProcessEndpoint {
     },
     transact: receiveTransaction,
     provider: receiveProvider,
+    contentProvider: async (authority) => exportBinder(await publishedProvider(authority)),
     broadcast: async (intent, component, ordered, data, sender) => {
       const received = await decodeIntent(intent);
       if (stageD()) return resultData(await deliverQueued(received, component, ordered, await broadcastResult(data), sender));

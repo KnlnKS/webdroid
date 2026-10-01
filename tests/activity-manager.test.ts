@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
 
-// ActivityThread's services and receivers are AOSP's under Stage D, so the activity manager is
-// driven in a process that serves android/app from bytecode.
-test("the activity manager drives a process's services and ordered receivers through its IApplicationThread", async () => {
-  const run = Bun.spawn(["bun", new URL("fixtures/activity-manager.ts", import.meta.url).pathname],
+// ActivityThread's services, receivers and providers are AOSP's under Stage D, so the activity
+// manager is driven in a process that serves android/app from bytecode.
+async function fixture(name: string): Promise<unknown> {
+  const run = Bun.spawn(["bun", new URL(`fixtures/${name}.ts`, import.meta.url).pathname],
     { env: { ...process.env, WEBDROID_BYTECODE: "stage-d" }, stdout: "pipe", stderr: "ignore" });
-  const out = JSON.parse((await new Response(run.stdout).text()).trim().split("\n").at(-1)!);
-  expect(out).toEqual({
+  return JSON.parse((await new Response(run.stdout).text()).trim().split("\n").at(-1)!);
+}
+
+test("the activity manager drives a process's services and ordered receivers through its IApplicationThread", async () => {
+  expect(await fixture("activity-manager")).toEqual({
     started: "org.webdroid.test.am.Svc", bound: 1,
     // created once, its start delivered, the binding the client waits on requested
     up: ["create org.webdroid.test.am.Svc", "args 1", "bind 0"],
@@ -16,5 +19,18 @@ test("the activity manager drives a process's services and ordered receivers thr
     unbound: ["unbind"], staleStop: 0, stop: 1, down: ["stop"],
     ordered: { calls: ["receive a", "receive b", "receive abort"], code: 3, data: "ababort", aborted: true },
     foreign: [],
+  });
+}, 120_000);
+
+test("another process's provider is reached through the binder it publishes", async () => {
+  expect(await fixture("remote-provider")).toEqual({
+    owner: true,
+    // the package manager's provider, from the owner's process
+    asked: ["org.webdroid.test.owner org.webdroid.test.owner org.webdroid.test.owner.data"],
+    proxy: "android/content/ContentProviderProxy",
+    // rows cross in a CursorWindow beside an IBulkCursor binder
+    columns: ["key", "value"], rows: [["a", "1"], ["b", "null"]],
+    // a writable descriptor crosses as its bytes; its writes return to the provider's
+    read: "hello", written: ["bye false", "bye true"],
   });
 }, 120_000);
