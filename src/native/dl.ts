@@ -98,7 +98,7 @@ function installTlsDescriptors(mod: Module): void {
     const tls = entry.mod.tls;
     if (!tls) return cpu.fault("TLS descriptor without a TLS segment");
     if (entry.mod.tpOffset !== null) return entry.mod.tpOffset + entry.offset;
-    return cpu.staticTls(entry.mod, tls.image, tls.size, tls.align) + entry.offset - cpu.tlsBase;
+    return BigInt(cpu.staticTls(entry.mod, tls.image, tls.size, tls.align) + entry.offset) - cpu.tlsVa;
   });
   for (const entry of mod.tlsDescriptors) {
     tlsDescriptors.set(entry.addr, { mod, offset: entry.offset });

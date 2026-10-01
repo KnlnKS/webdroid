@@ -207,6 +207,9 @@ export class Cpu {
   set excl(v: number) { this.u32[OFF_EXCL >> 2] = v; }
   get tlsBase(): number { return this.u32[OFF_TLS >> 2]; }
   set tlsBase(v: number) { this.u32[OFF_TLS >> 2] = v; this.u32[(OFF_TLS >> 2) + 1] = 0; }
+  /** the thread pointer as the guest holds it: a guest libc's TLS block may lie in a plane */
+  get tlsVa(): bigint { return BigInt(this.u32[(OFF_TLS >> 2) + 1]) << 32n | BigInt(this.u32[OFF_TLS >> 2]); }
+  set tlsVa(v: bigint) { this.u32[OFF_TLS >> 2] = Number(v & 0xffffffffn); this.u32[(OFF_TLS >> 2) + 1] = Number(v >> 32n); }
   /** instructions executed */
   get ic(): number { return this.u32[(OFF_IC >> 2) + 1] * 4294967296 + this.u32[OFF_IC >> 2]; }
   /** start of the block being executed (fault attribution) */
@@ -439,7 +442,6 @@ export class Cpu {
   private savePool: Uint8Array[] = [];
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   async call(fn: number, args: CallArg[] = [], label = "call", resume?: (returned: boolean) => void, stackTop?: bigint): Promise<number> {
-    if (!this.attached && threadHook) { this.attached = true; await threadHook(this); }
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -524,6 +526,7 @@ export class Cpu {
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
   async run(): Promise<void> {
+    if (!this.attached && threadHook) { this.attached = true; await threadHook(this); }
     this.loops++;
     try { await this.loop(); } finally { this.loops--; }
   }

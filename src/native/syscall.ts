@@ -59,6 +59,7 @@ const A64: Record<number, HostFn> = {
   96: (cpu, a) => { cpu.clearChildTid = a.va(); return cpu.osTid; },               // set_tid_address
   98: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); return futex(cpu, addr, op, val, ts); },
   99: () => 0,                                                                   // set_robust_list: no process-shared robust mutexes to recover
+  121: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },                     // sched_getparam: SCHED_OTHER's priority
   122: () => 0,                                                                  // sched_setaffinity: one core, nothing to pin
   123: (cpu, a) => {                                                             // sched_getaffinity
     const pid = a.i(), n = a.u(), set = a.p();
@@ -88,7 +89,7 @@ const A64: Record<number, HostFn> = {
   172: (cpu) => cpu.pid,
   178: (cpu) => cpu.osTid,
   179: (_c, a) => { fillSysinfo(a.p()); return 0; },
-  220: (cpu, a) => { const flags = a.u(), stack = a.va(), ptid = a.p(), tls = a.p(), ctid = a.p(); return cloneThread(cpu, flags, stack, ptid, tls, ctid); },
+  220: (cpu, a) => { const flags = a.u(), stack = a.va(), ptid = a.p(), tls = a.va(), ctid = a.p(); return cloneThread(cpu, flags, stack, ptid, tls, ctid); },
   232: (cpu, a) => {                                                             // mincore
     const addr = a.va(), len = Number(a.va()), vec = a.p();
     if (addr & BigInt(PAGE_SIZE - 1) || !Number.isSafeInteger(len) || len <= 0) return fail(cpu, E.INVAL);

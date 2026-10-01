@@ -259,11 +259,11 @@ export function startThread(parent: Cpu, start: number, arg: bigint, detached: b
 const CLONE_THREAD = 0x10000, CLONE_SETTLS = 0x80000, CLONE_PARENT_SETTID = 0x100000, CLONE_CHILD_CLEARTID = 0x200000;
 /** clone(2) for a thread (the guest libc's pthread_create): the child continues past the svc with
  *  the caller's registers, 0 in x0, its own stack and thread pointer. A process fork is ENOSYS. */
-export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: number, tls: number, ctid: number): number {
+export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: number, tls: bigint, ctid: number): number {
   if (!(flags & CLONE_THREAD) || !stack) return fail(parent, E.NOSYS);
   const cpu = newThread(parent);
   cpu.forkFrom(parent, stack);
-  if (flags & CLONE_SETTLS) { cpu.tlsBase = tls; cpu.attached = true; }
+  if (flags & CLONE_SETTLS) { cpu.tlsVa = tls; cpu.attached = true; }
   if (flags & CLONE_PARENT_SETTID) mem.st32(ptid, cpu.osTid);
   if (flags & CLONE_CHILD_CLEARTID) cpu.clearChildTid = BigInt(mem.va(ctid));
   void launch(cpu, () => cpu.run(), () => {
