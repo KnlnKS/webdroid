@@ -284,9 +284,6 @@ export function libcInit(): void {
       fail(cpu, E.NOENT);
       return 0;
     },
-    // an unset system property: zero length written, zero returned, as bionic does
-    __system_property_get: (_c, a) => { a.p(); mem.st8(a.p(), 0); return 0; },
-    __system_property_find: () => 0,
     uname: (_c, a) => {
       const p = a.p();
       const f = ["Linux", "localhost", "3.10.0", "#1 SMP PREEMPT", PTR === 8 ? "aarch64" : "armv7l", "localdomain"];
