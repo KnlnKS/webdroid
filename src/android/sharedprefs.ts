@@ -4,6 +4,7 @@ import { boxFloat, boxObject } from "../jvm/natives/jbox";
 import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { removeFrom } from "./view";
 import { onMain } from "./mainloop";
+import { vfs } from "../shell/vfs";
 
 type PreferenceValue = string | number | bigint | boolean | null | readonly string[];
 class PreferenceStore {
@@ -58,6 +59,28 @@ export let preferenceStore = new PreferenceStore();
 export function usePreferenceStore(store: PreferenceStore): void {
   preferenceStore = store;
   for (const prefs of prefsCache.values()) prefs.load();
+}
+const escapeXml = (s: string) => s.replace(/[&<>"]/g, (c) => `&${({ "&": "amp", "<": "lt", ">": "gt", '"': "quot" } as Record<string, string>)[c]};`);
+/** Stage D's SharedPreferencesImpl reads shared_prefs XML: a package's preferences this store holds
+ *  (an earlier TS-mode run, a harness seed) become the files it has not written yet, in
+ *  XmlUtils.writeMapXml's form. A whole number becomes an int: the store does not keep the type. */
+export function writePrefsFiles(pkg: string): void {
+  const prefix = `wd:prefs:${pkg}:`, storage = globalThis.localStorage;
+  for (let i = 0; storage && i < storage.length; i++) {
+    const key = storage.key(i)!;
+    const path = `/data/data/${pkg}/shared_prefs/${key.slice(prefix.length)}.xml`;
+    if (!key.startsWith(prefix) || vfs.stat(path)) continue;
+    const entries = [...new PreferenceStore().open(key.slice("wd:prefs:".length))].map(([k, v]) => {
+      const name = escapeXml(k);
+      if (v === null) return `<null name="${name}" />`;
+      if (typeof v === "string") return `<string name="${name}">${escapeXml(v)}</string>`;
+      if (typeof v === "boolean") return `<boolean name="${name}" value="${v}" />`;
+      if (typeof v === "bigint") return `<long name="${name}" value="${v}" />`;
+      if (typeof v === "number") return `<${Number.isInteger(v) ? "int" : "float"} name="${name}" value="${v}" />`;
+      return `<set name="${name}">${v.map((x) => `<string>${escapeXml(x)}</string>`).join("")}</set>`;
+    });
+    vfs.write(path, new TextEncoder().encode(`<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n${entries.join("\n")}\n</map>\n`));
+  }
 }
 class JSharedPrefs extends JObj {
   name = "";

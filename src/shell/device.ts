@@ -26,7 +26,7 @@ import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, resolveProvider } f
 import { windowDim, windowParams } from "../android/window";
 import { absGravity, gravityApply } from "../android/gravity";
 import { JActivity, dispatchSplashExit } from "../android/app";
-import { getPrefs } from "../android/sharedprefs";
+import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
 import { newContextImpl } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
 import { reportUncaught, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
@@ -178,6 +178,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   if (!stageD()) rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();
   await vfs.prepare(pkg);
+  if (stageD()) writePrefsFiles(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
   const appCls = (attrStr(appNode!, "name") ?? "android.app.Application").replace(/^\./, pkg + ".").replace(/\./g, "/");
   const themeAttr = appNode?.attrs.find((a) => a.name === "theme");
