@@ -165,6 +165,10 @@ rt.register({ name: "webdroid/MediaProjectionManagerService", ctor: class extend
   ...noops("removeCallback(Landroid/media/projection/IMediaProjectionWatcherCallback;)V"),
 } });
 hostStub("media_projection", "webdroid/MediaProjectionManagerService");
+// StatusBarManagerService: quick settings never bind a tile, so a tile's listening request has no panel to reach
+rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj {}, sup: "com/android/internal/statusbar/IStatusBarService$Stub",
+  methods: noops("requestTileServiceListeningState(Landroid/content/ComponentName;I)V") });
+hostStub("statusbar", "webdroid/StatusBarManagerService");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference

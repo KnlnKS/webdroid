@@ -22,10 +22,12 @@ const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.s
 /** Stage D's coupled set: the application framework (ActivityThread, Activity, ContextImpl), the
  *  view stack, windows and the framework side of android.content, over TS system services.
  *  GLSurfaceView is a SurfaceView and GestureOverlayView a FrameLayout, so they go with the view
- *  stack; GLSurfaceView's GLThread drives EGL10. */
+ *  stack; GLSurfaceView's GLThread drives EGL10. Services outside android/app (tiles, media
+ *  browsers, route providers) are Services, so they go with it. */
 const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/content/", "android/window/", "android/transition/",
   "android/preference/", "android/inputmethodservice/", "android/accessibilityservice/", "com/android/internal/policy/",
-  "android/opengl/GLSurfaceView", "android/gesture/"];
+  "android/opengl/GLSurfaceView", "android/gesture/", "android/service/quicksettings/", "android/service/media/",
+  "android/media/MediaRoute2ProviderService"];
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
  *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). `stage-d`
