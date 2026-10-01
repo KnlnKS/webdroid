@@ -505,11 +505,14 @@ class JParcelFileDescriptor extends JObj {
   closed = false;
   backing: PfdBacking | null = null;
   descriptor: JObj | null = null;
+  /** the descriptor a wrapper (ContentResolver's ParcelFileDescriptorInner) acts for */
+  wrapped: JParcelFileDescriptor | null = null;
 }
 type PfdBacking = { path: string; refs: number; key: string; closing: Promise<void> | null; sink: ((b: Uint8Array, closed?: boolean) => unknown) | null };
 /** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
  *  read-only descriptor over bytes with no file behind them reads those bytes. */
 function pfdFd(p: JParcelFileDescriptor): number {
+  if (p.wrapped && !p.closed) return pfdFd(p.wrapped);
   if (p.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "Already closed");
   if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
   else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd(p.bytes);
@@ -562,6 +565,12 @@ rt.register({
     get CREATOR() { return parcelCreator("android/os/ParcelFileDescriptor", async (parcel) => readObject(parcel)); },
   },
   methods: {
+    // a wrapper over another descriptor: its file, released when the wrapper closes
+    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JParcelFileDescriptor, wrapped: JParcelFileDescriptor | null) {
+      if (!wrapped) rt.npe();
+      const { bytes, sink, path, flags, backing } = wrapped!;
+      Object.assign(this, { bytes, sink, path, flags, backing, wrapped });
+    },
     "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: JObj | null, mode: number): Gen {
       if (!f) rt.npe();
       const path = pathOf(f!);
@@ -590,6 +599,11 @@ rt.register({
       return after(mkFd(pfdFd(this)), (d) => this.descriptor ??= d);
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
+    "seekTo(J)J": function (this: JParcelFileDescriptor, pos: bigint) {
+      const r = javaSeekFd(pfdFd(this), Number(pos), 0);
+      if (r < 0) throw errno("lseek", -r);
+      return BigInt(r);
+    },
     "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
     "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd: javaDupFd(fd) }),
     // AOSP dup(FileDescriptor): a new descriptor on the same open file description
@@ -620,6 +634,11 @@ rt.register({
     }),
     "close()V": driven(function* (this: JParcelFileDescriptor): Gen {
       if (this.closed) return;
+      if (this.wrapped) {
+        this.closed = true;
+        if (this.descriptor) setFdInt(this.descriptor, -1);
+        return yield vcall(this.wrapped, "close", "()V");
+      }
       if (this.fd >= 0) javaCloseFd(this.fd);
       this.fd = -1; this.closed = true;
       if (this.descriptor) setFdInt(this.descriptor, -1);
