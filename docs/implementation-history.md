@@ -1760,6 +1760,24 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     37/57 (531 with scudo), snprintf 780/2000+, strtod 260/115, mutex 22/68, clock_gettime 46/55
     (189 before the core served svc 113), sin+exp 37/180, qsort of 1,000 ints 26.6 ms/0.27 ms.
     Cut the Rope is armeabi-v7a only and the reference build has no 32-bit bionic.
+  - Adopted for every arm64 process (decision record `docs/decisions/0001-bionic-libc.md`); the HLE
+    libc is ARM32-only and its LP64 paths are gone except what the syscall layer, the heap and the
+    mem/str intrinsics still reach. The gate matrix under bionic found what the HLE had masked:
+    `Args64` read a host function's stack arguments from plane 0, and bionic's pthread_create
+    puts thread stacks in higher planes, so Flutter's ninth glTexSubImage2D argument (pixels) read
+    as NULL (Lichess drew no text) and TikTok's player passed a string as a pointer to
+    glTexImage2D; `mremap` was ENOSYS (bionic's `__cxa_atexit` grows its table with it); writing
+    `/proc/self/task/<tid>/comm` (pthread_setname_np on another thread) failed; `openat` with
+    O_DIRECTORY answered ENOTDIR for a missing path (Google Maps' navigation cache).
+  - Properties: bionic reads init's pre-split prop_area from `/dev/__properties__` only when it
+    is root-owned and not group/other writable, and its CachedProperty re-finds a property only
+    when the area serial moved from 0, so the serialized area carries a serial per property.
+    Without it native `localtime` ran in GMT; Java, bionic and the ARM32 HLE now share
+    `src/shell/properties.ts`.
+  - A Java thread that entered native code now leaves bionic as pthread_exit does
+    (`__cxa_thread_finalize`, `pthread_key_clean_all`, `__free_dynamic_tls`,
+    `__pthread_internal_remove`, all `.symtab` locals); before, its destructors never ran and its
+    TLS block and pthread_internal_t leaked.
 
 ## App investigations and remaining limits
 

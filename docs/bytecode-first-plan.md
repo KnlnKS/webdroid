@@ -589,82 +589,41 @@ implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process 
 each unit's findings. Stage E runs in parallel on `knlnks/bytecode-stage-e1`: its handoff is
 "Stage E handoff" below.
 
-### Stage E handoff (2026-10-03): E1 measured, the flip is not made yet
+### Stage E handoff (2026-10-01): E1 is complete
 
-Stage E1 runs on its own branch, `knlnks/bytecode-stage-e1` (worktree `../webdroid-stage-e1`, not
-pushed), off `knlnks/bytecode` at 50da8c36 while Stage D continues there. Rebase it onto
-`knlnks/bytecode` before merging; it touches `src/native/`, `src/shell/procfs.ts`/`vfs.ts`,
-`src/jvm/natives/jlang.ts` (the /proc task hook), `server.ts`, `scripts/gen-framework.ts` and
-`src/jvm/bootclasspath.ts`. `../webdroid-e1-base` is a clean detached worktree at 50da8c36 (vendor and
-apks symlinked) for A/B runs and bisects; delete it when done.
-Findings, measurements and the rejected memory experiment are in the implementation history's
-"Stage E1: the reference build's bionic as guest code" entry.
+Stage E1 is on `knlnks/bytecode-stage-e1` (worktree `../webdroid-stage-e1`, not pushed), rebased
+onto `knlnks/bytecode`; rebase again and merge once Stage D's work allows. It touches
+`src/native/`, `src/shell/` (procfs, vfs, properties), `src/android/delegates.ts`
+(SystemProperties reads `src/shell/properties.ts`), `src/jvm/natives/jlang.ts` (the /proc task
+hooks), `server.ts`, `scripts/gen-framework.ts` and `src/jvm/bootclasspath.ts`. Delete
+`../webdroid-e1-base` (detached, used for gate runs) when done.
 
-**What exists.** `?libc=bionic` (headless `WEBDROID_LIBC=bionic`; the e2e driver passes the
-variable through) runs a 64-bit process over the reference build's libdl, libc, libm, libc++,
-liblog and libz as guest code; the default is still the HLE libc. Pieces:
-- `src/native/bionic.ts` is the dynamic linker's share of bionic startup (dl.ts is the linker):
-  libc_shared_globals (auxv, environ, progname, static TLS layout and module table), each
-  thread's TCB, pthread_internal_t and bionic_tls (attached at a host-created thread's first
-  `run()`; libc's hidden `__pthread_internal_add` from `.symtab` adds it to the thread list),
-  ld-android.so's `__loader_*` over dl.ts's libdl bodies, the CFI shadow libdl's
-  `__cfi_slowpath` reads, and the abort message. Offsets are this build's, each checked against
-  libc.so's own disassembly (comments name the functions); a new reference build must recheck them.
-- Host intrinsics: the core's mem*/str* primitives replace libc's (IFUNC exports included), and
-  the allocator is the core's heap, installed through bionic's malloc dispatch table
-  (`__libc_globals`+0x48, the hook malloc_debug uses) after libc's init; scudo initializes but
-  only holds what libc allocated before that point.
-- `src/native/syscall.ts`: the raw syscall table both libcs reach (clone threads, exit,
-  futex, getdents64, ppoll/pselect6, sigtimedwait, sigsuspend, tkill, process_vm_readv, ...).
-  svc 113 (clock_gettime) is served in the core like the vDSO.
-- `src/native/unix.ts`: AF_UNIX sockets to in-process daemons: logd's logdw (liblog records reach
-  the console) and netd's dnsproxyd (bionic's getaddrinfo goes through the mirrored
-  `libnetd_client.so`, which the linker dlopens from `/system/lib64` via `DEVICE_LIBS`).
-  fwmarkd is absent on purpose: FwmarkClient treats an unreachable daemon as success.
-- Kernel and core fixes the variant needed (they apply to both libcs): A64 Top Byte Ignore,
-  CRC32/CRC32C instructions with HWCAP_CRC32, AT_RANDOM, extents for commits far past a plane's
-  prefix (scudo's strided regions), store faults in stack guards and the core's own data, an
-  8 MiB main-thread stack and RLIMIT_STACK, /proc/self/task and /proc/self/maps, crash signals
-  with no handler ending the process, and the A64 geteuid/rt_sigprocmask mix-up.
-- `vendor/aosp` mirrors the libraries at their device paths; `PLATFORM_DATA` in
-  bootclasspath.ts was extended by hand to match what `gen-framework` now pulls (rerun it with the
-  AVD to regenerate). Measurements: `scripts/libc-ab/` (bench.ts, amongus.ts).
+**Decision:** every arm64 process runs the reference build's bionic; armeabi-v7a keeps the HLE
+libc, now ARM32-only (`docs/decisions/0001-bionic-libc.md`). Findings are in the implementation
+history's "Stage E1" entry. There is no libc flag: an A/B against the HLE needs a worktree at
+33b23028 with `?libc=bionic` unset.
 
-**Measurements** (headless, `--jobs 1`, nothing else running; history has the details):
-- Among Us menu: HLE 20.5-20.7 GL frames/s, bionic 22.7-23.2; host calls/s 34k vs 15k; first
-  GL frame about 9.4 s in both; no fault or missing syscall in either.
-- YouTube live flow: 16/16 steps, 7 observed gaps, no native error in both (2 runs each).
-- TikTok live flow: both libcs show the same known swipe/video wedges and the same
-  IllegalMonitorStateException; no native error or required native in either.
-- libc calls from guest code (ns, HLE/bionic): malloc+free 37/57, snprintf 780/2000-2500,
-  strtod 260/115, mutex 22/68, clock_gettime 46/55, sin+exp 37/180, qsort of 1,000 ints
-  26.6 ms/0.27 ms (the HLE calls the guest comparator from the host per comparison).
-- Cut the Rope (armeabi-v7a only) cannot run bionic: the reference build is arm64-only and
-  ships no 32-bit libc. Genshin was not run (standing constraint).
+**What exists.** `src/native/bionic.ts` is the dynamic linker's share of bionic startup (dl.ts is
+the linker): libc_shared_globals, static TLS and each host-created thread's TCB/pthread_internal_t/
+bionic_tls (attached at its first `run()`, torn down as pthread_exit does when its Java thread
+ends), ld-android.so's `__loader_*`, the CFI shadow, the abort message, and the property area
+(`/dev/__properties__`, init's pre-split prop_area from `src/shell/properties.ts`, which Java's
+SystemProperties and the ARM32 HLE also read). Offsets are this build's, each checked against
+libc.so's disassembly; a new reference build must recheck them. The host keeps the core's
+mem*/str* primitives and the heap (through bionic's malloc dispatch table); `src/native/syscall.ts`
+is the kernel boundary both libcs reach, `src/native/unix.ts` serves logd and netd's dnsproxyd.
+`scripts/libc-bench/` times libc calls from guest code.
 
-**Assessment.** bionic wins on correctness (exact printf/strtod/locale/stdio/time, FORTIFY and
-fdsan, real pthread and signal semantics, real DNS and logging paths) and did not lose on the
-measured apps; it already exposed VFS gaps the HLE hid (`/proc/self/task`, `/proc/self/maps`).
-Its per-call costs are higher for formatting, mutexes and libm; none showed in the apps above.
-Recommended outcome: adopt bionic for arm64 processes, keep the HLE for ARM32 (no 32-bit bionic
-in the one build, §0.4). Not done yet:
-1. Write the decision record (`docs/decisions/`, plan §6) once the gates below hold.
-2. Run the matrix with `WEBDROID_LIBC=bionic`: `bun run e2e`, `--live` for the allowed flows,
-   `--full --jobs 1`, corpus, `bun run lat` (its apps are Java-only, so expect no change), the
-   full `bun run test`, and smoke. So far only `bun test src/native`, typecheck, the quick gate
-   in HLE mode (passes; FitNotes' frame-diagnostic timeout and Komikku's populated-library are
-   the known parallel-load flakes, both passed alone and Komikku 4/4 against base) and the runs
-   above were done.
-3. Then make bionic the default for arm64 (`bionicRequested` in bionic.ts) and, per Stage F,
-   delete the HLE bodies only arm64 used (most of libc.ts/stdio.ts/printf.ts stay for ARM32).
-4. Open gaps in the bionic variant: no property area (both libcs read every system property as
-   unset; recording the AVD's into a `/dev/__properties__` file would fix both, and liblog's
-   loggability follows); a Java thread that ends leaves its bionic thread in libc's list with
-   its key destructors unrun; fork/vfork are ENOSYS (popen and system fail); dlclose does not
-   unload; AF_INET6 and AF_UNIX sockets other than the daemons are unsupported; a host
-   operation that keeps a plane buffer offset across an await breaks if the plane moves (the
-   reason the per-unit memory model was rejected).
-5. Stage E2 (native libraries behind JNI, such as minikin/HarfBuzz/Skia) and E3 are not started.
+**Open:**
+1. Per-call costs above the HLE's core-served versions (snprintf, mutex, libm); act on a measured
+   frame or tap only (§4.7).
+2. fork/vfork are ENOSYS (popen, system); dlclose does not unload; AF_INET6 and AF_UNIX sockets
+   other than the daemons are unsupported; mremap cannot grow in place or move shared mappings.
+3. A host operation that keeps a plane buffer offset across an await breaks if the plane moves
+   (why the per-unit memory model was rejected).
+4. The property store holds only what the device profile answers; recording the AVD's
+   properties (and Build's values with them) is Stage D/F work.
+5. Stage E2 (native libraries behind JNI: minikin, HarfBuzz, Skia) and E3 are not started.
 
 ### Latest handoff (2026-10-03): Stage D in progress, start here
 
