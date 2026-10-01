@@ -7,10 +7,14 @@ import { canvasOver } from "../../../src/android/canvas";
 import { JView } from "../../../src/android/view";
 import { obtainMotion } from "../../../src/android/motionevent";
 import { initDeviceLocales } from "../../../src/android/resnative";
+import { mountPlatformData } from "../../../src/shell/apex";
+import { startMainLooper } from "../../../src/android/mainloop";
 
 async function probe() {
   await loadPlatformDex();
+  mountPlatformData();
   rt.linkNatives();
+  await startMainLooper();
   // a Paint (every framework drawable has one) takes the device's languages
   await initDeviceLocales();
   const view = rt.make("android/widget/SeekBar");
