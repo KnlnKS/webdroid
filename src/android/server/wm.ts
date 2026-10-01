@@ -133,12 +133,13 @@ async function addWindow(window: JObj, attrs: JObj, visibility: number, outChann
   ws.visibility = visibility;
   ws.requestedVisibleTypes = await insetsType("defaultVisible");
   windows.set(window, ws);
-  updateFocus();
   if (outChannel) {
     const pair: JObj[] = await scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
     ws.channel = channelOf(pair[0]);
     await vcall(pair[1], "copyTo", "(Landroid/view/InputChannel;)V", outChannel);
   }
+  // after the channel exists, which the focus event travels on
+  updateFocus();
   if (outState) await vcall(outState, "set", "(Landroid/view/InsetsState;)V", await insetsState());
   if (outFrame) await vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
   if (outScale) outScale[0] = 1;
@@ -162,8 +163,10 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   if (visibility === VISIBLE) {
     if (!ws.javaSurface) { ws.javaSurface = await javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
     await vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
-    if (!ws.parent) { ws.layer.x = frame.left; ws.layer.y = frame.top; }
-    else { ws.layer.x = frame.left - ws.parent.layer.x; ws.layer.y = frame.top - ws.parent.layer.y; }
+    // the surface extends past the frame by its insets (room for a shadow)
+    const insets = lp<Record<string, number>>(ws.attrs, "surfaceInsets");
+    ws.layer.x = frame.left - insets.left - (ws.parent?.layer.x ?? 0);
+    ws.layer.y = frame.top - insets.top - (ws.parent?.layer.y ?? 0);
   } else {
     await vcall(R("surfaceControl"), "release", "()V");
   }
