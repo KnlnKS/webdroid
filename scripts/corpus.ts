@@ -38,7 +38,8 @@ async function boot(page: Page, apk: string): Promise<Row> {
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (message) => { if (message.type() === "error") errors.push(`${message.location().url}: ${message.text()}`); });
   try {
-    await page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
+    const cut = process.env.WEBDROID_BYTECODE ? `&bytecode=${encodeURIComponent(process.env.WEBDROID_BYTECODE)}` : "";
+    await page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}${cut}`, { waitUntil: "load", timeout: 60000 });
     // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
     // shell that never got an activity up
     await page.waitForFunction("window.wd && window.wd.perf.draws > 0", null, { timeout: waitMs }).catch(() => {});
