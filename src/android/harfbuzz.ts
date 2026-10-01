@@ -29,7 +29,7 @@ const HB_MEMORY_MODE_READONLY = 1;
 export const HB_DIRECTION_LTR = 4, HB_DIRECTION_RTL = 5;
 
 /** one face of a font file in wasm memory, and its fonts by variation settings */
-export interface Face { readonly face: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
+export interface Face { readonly face: Ptr; readonly data: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
 /** an hb_font at the face's upem, so positions come in font units; glyph outlines are cached */
 export interface Font { readonly font: Ptr; readonly face: Face; readonly outlines: Map<number, Path2D | null> }
 
@@ -69,14 +69,14 @@ function addFunction(table: WebAssembly.Table, sig: string, fn: (...args: number
 export class HarfBuzz {
   private u8!: Uint8Array; private u16!: Uint16Array; private i32!: Int32Array; private u32!: Uint32Array;
   private scratch: Ptr; private text: Ptr = 0; private textCap = 0;
-  readonly buffer: Ptr;
+  private readonly buffer: Ptr;
   private readonly drawFuncs: Ptr;
   private sink: Sink | null = null;
   private readonly languages = new Map<string, Ptr>();
   private readonly faces = new WeakMap<ArrayBufferLike, Map<string, Face>>();
   private readonly released = new FinalizationRegistry<Map<string, Face>>((faces) => this.destroy(faces));
 
-  constructor(readonly x: Exports) {
+  constructor(private readonly x: Exports) {
     x.__wasm_call_ctors();
     this.scratch = x.malloc(64);
     this.buffer = x.hb_buffer_create();
@@ -109,8 +109,7 @@ export class HarfBuzz {
       this.u8.set(bytes, data);
       const blob = x.hb_blob_create(data, bytes.length, HB_MEMORY_MODE_READONLY, 0, 0), face = x.hb_face_create(blob, ttcIndex);
       x.hb_blob_destroy(blob);
-      f = { face, upem: x.hb_face_get_upem(face), color: !!(x.hb_ot_color_has_paint(face) || x.hb_ot_color_has_layers(face) || x.hb_ot_color_has_png(face)), fonts: new Map() };
-      (f as Face & { data: Ptr }).data = data;
+      f = { face, data, upem: x.hb_face_get_upem(face), color: !!(x.hb_ot_color_has_paint(face) || x.hb_ot_color_has_layers(face) || x.hb_ot_color_has_png(face)), fonts: new Map() };
       byFile.set(key, f);
     }
     return f;
@@ -119,7 +118,7 @@ export class HarfBuzz {
     for (const f of faces.values()) {
       for (const font of f.fonts.values()) this.x.hb_font_destroy(font.font);
       this.x.hb_face_destroy(f.face);
-      this.x.free((f as Face & { data: Ptr }).data);
+      this.x.free(f.data);
     }
   }
   /** the face's font under variation settings: [tag, value] pairs */
