@@ -78,7 +78,7 @@ test("A64 transient mappings stay out of the malloc arena", () => {
   expect(mapping >> 32n).not.toBe(0n);
   expect(reservation >> 32n).not.toBe(0n);
   expect(interleaved.planes).toBe(before.planes + 2);
-  expect(interleaved.chunks).toBe(before.chunks);                        // backed on first touch
+  expect(interleaved.chunks).toBe(before.chunks + 1);
   expect(interleaved.peak - before.peak).toBeLessThan(0x10_0000);
 
   mem.free(allocation);

@@ -122,10 +122,11 @@ export const mem = {
       if (!core.check_reserve(h, lo, size)) return false;
       ranges.push([va, size]); n -= size; va += BigInt(size);
     }
-    // code runs from plane 0 alone, so only there can a reservation drop decoded instructions
     for (const [addr, size] of ranges) {
       const [h, lo] = split(addr);
-      if (!h) core.invalidate_range(lo, size);
+      const start = (h ? core.tx(h, lo) : lo) >>> 0;
+      if (start) core.invalidate_range(start, size);
+      if (h) mem.dropVa(addr, size);
       mem.decommitVa(addr, size);
     }
     return true;
