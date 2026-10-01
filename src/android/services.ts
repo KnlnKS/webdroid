@@ -355,6 +355,24 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
 } });
 hostStub("appops", "webdroid/AppOpsService");
 
+// IPermissionChecker (PermissionCheckerService), behind PermissionChecker: every app in the
+// attribution chain must hold the permission; a data source checking for a caller (a provider)
+// is itself exempt. App ops are not modelled, so nothing is soft-denied.
+const SOURCE = "android/content/AttributionSourceState";
+rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionChecker$Stub", methods: {
+  "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
+    (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) => {
+      for (let current: JObj | undefined = source, first = true; current; first = false) {
+        const fields = current as unknown as Record<string, unknown>;
+        if (!(first && fromDatasource) && uidPermissionState(permission, fields[declaredField(SOURCE, "uid")] as number) !== 0) return 2; // PERMISSION_HARD_DENIED
+        current = (fields[declaredField(SOURCE, "next")] as JObj[] | null)?.[0];
+      }
+      return 0;
+    },
+  "finishDataDelivery(ILandroid/content/AttributionSourceState;Z)V": () => {},
+} });
+hostStub("permission_checker", "webdroid/PermissionCheckerService");
+
 // IUsageStatsManager, under UsageStatsManager: the app in front is in the ACTIVE standby bucket and
 // never inactive. Usage history needs PACKAGE_USAGE_STATS, which an app is never granted here, so
 // queries answer null as UsageStatsService does for a caller without it (the manager returns empty).
