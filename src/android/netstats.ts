@@ -1,35 +1,32 @@
-import { JObj, rt } from "../jvm/runtime";
+// INetworkStatsService, under AOSP's NetworkStatsManager and android.app.usage.NetworkStats: no
+// kernel accounting records traffic here (TrafficStats answers UNSUPPORTED), so every session's
+// summary is empty and every history has no buckets.
+import { JObj, rt, noops } from "../jvm/runtime";
+import { newObj } from "../jvm/natives/jlang";
+import { uptimeMillis } from "../guest-clock";
+import { hostStub, newStub } from "./binder";
 
-class JNetworkStats extends JObj { closed = false; }
-class JNetworkStatsBucket extends JObj {
-  uid = -1;
-  rxBytes = 0n;
-  txBytes = 0n;
-}
-
-rt.register({
-  name: "android/app/usage/NetworkStats$Bucket", ctor: JNetworkStatsBucket,
-  statics: { UID_ALL: -1, TAG_NONE: 0, STATE_ALL: -1, METERED_ALL: -1, ROAMING_ALL: -1 },
-  methods: {
-    "<init>()V": function () {},
-    "getUid()I": function (this: JNetworkStatsBucket) { return this.uid; },
-    "getRxBytes()J": function (this: JNetworkStatsBucket) { return this.rxBytes; },
-    "getTxBytes()J": function (this: JNetworkStatsBucket) { return this.txBytes; },
-  },
-});
-rt.register({
-  name: "android/app/usage/NetworkStats", ctor: JNetworkStats, ifaces: ["java/lang/AutoCloseable"],
-  methods: {
-    "hasNextBucket()Z": function () { return 0; },
-    "getNextBucket(Landroid/app/usage/NetworkStats$Bucket;)Z": function () { return 0; },
-    "close()V": function (this: JNetworkStats) { this.closed = true; },
-  },
-});
-rt.register({
-  name: "android/app/usage/NetworkStatsManager", ctor: class extends JObj {},
-  methods: {
-    "querySummary(ILjava/lang/String;JJ)Landroid/app/usage/NetworkStats;": function () {
-      return new JNetworkStats();
-    },
-  },
-});
+const NS = "Landroid/net/NetworkStats;", NSH = "Landroid/net/NetworkStatsHistory;", T = "Landroid/net/NetworkTemplate;";
+/** NetworkStatsService's default history bucket, Settings.Global netstats_uid_bucket_duration (2 h) */
+const BUCKET_MS = 2n * 3600_000n;
+const summary = () => newObj("android/net/NetworkStats", "(JI)V", BigInt(Math.floor(uptimeMillis())), 0);
+const history = () => newObj("android/net/NetworkStatsHistory", "(J)V", BUCKET_MS);
+rt.register({ name: "webdroid/NetworkStatsSession", ctor: class extends JObj {}, sup: "android/net/INetworkStatsSession$Stub", methods: {
+  [`getSummaryForAllUid(${T}JJZ)${NS}`]: summary,
+  [`getTaggedSummaryForAllUid(${T}JJ)${NS}`]: summary,
+  [`getDeviceSummaryForNetwork(${T}JJ)${NS}`]: summary,
+  [`getSummaryForNetwork(${T}JJ)${NS}`]: summary,
+  [`getHistoryForNetwork(${T}I)${NSH}`]: history,
+  [`getHistoryIntervalForNetwork(${T}IJJ)${NSH}`]: history,
+  [`getHistoryForUid(${T}IIII)${NSH}`]: history,
+  [`getHistoryIntervalForUid(${T}IIIIJJ)${NSH}`]: history,
+  "getRelevantUids()[I": () => new Int32Array(0),
+  ...noops("close()V"),
+} });
+const session = () => newStub("webdroid/NetworkStatsSession");
+rt.register({ name: "webdroid/NetworkStatsService", ctor: class extends JObj {}, sup: "android/net/INetworkStatsService$Stub", methods: {
+  "openSession()Landroid/net/INetworkStatsSession;": session,
+  "openSessionForUsageStats(ILjava/lang/String;)Landroid/net/INetworkStatsSession;": session,
+  ...noops("forceUpdate()V"),
+} });
+hostStub("netstats", "webdroid/NetworkStatsService");

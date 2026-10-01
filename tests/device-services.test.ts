@@ -151,6 +151,15 @@ describe("permission controller", () => {
   });
 });
 
+describe("network stats", () => {
+  test("no traffic is recorded: a summary has no buckets", async () => {
+    const manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "netstats");
+    const stats = await vcall(manager, "querySummary", "(ILjava/lang/String;JJ)Landroid/app/usage/NetworkStats;", 1, null, 0n, 1n);
+    expect(await vcall(stats, "hasNextBucket", "()Z")).toBe(0);
+    await vcall(stats, "close", "()V");
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");
