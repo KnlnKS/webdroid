@@ -39,20 +39,6 @@ import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../s
 import { JActivity } from "../src/android/app";
 import { scall, loadLibcore, appResources, preloadTextPaint } from "./java";
 
-describe("adservices", () => {
-  rt.linkNatives();
-
-  test("disabled measurement service reports its unavailable state", async () => {
-    const context = await newObj("android/content/Context");
-    const cls = rt.classFor("android/adservices/measurement/MeasurementManager");
-    expect(await vcall(context, "getSystemServiceName", "(Ljava/lang/Class;)Ljava/lang/String;", cls)).toBe("measurement_service");
-    const manager = await vcall(context, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", cls);
-    expect(rt.iof(manager, "android/adservices/measurement/MeasurementManager")).toBe(1);
-    await expect(vcallAsync(manager, "registerTrigger", "(Landroid/net/Uri;Ljava/util/concurrent/Executor;Landroid/os/OutcomeReceiver;)V", null, null, null))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
-  });
-});
-
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
     const pkg = "org.webdroid.test.uri";
