@@ -34,7 +34,7 @@ function nativeInit(abi: string): void {
   rt.nativeAbis = NATIVE_ABIS.filter(a => (a === "arm64-v8a") === wide);
   inited = true;
   kernelInit();
-  libcInit();
+  if (!wide) libcInit();
   dlInit();
   jniInit();
   gles1Init();

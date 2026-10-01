@@ -109,6 +109,8 @@ function exchangeAction(a: ArgReader, { size, handler: handlerAt, flags: flagsAt
  *  mask), which is not bionic's */
 const rtSigaction = (a: ArgReader): number => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true });
 const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
+/** what the core leaves to the host of a __memcpy_chk it serves: a failed check */
+export const memcpyChk: HostFn = (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; };
 
 /** the kernel's signals, resource limits, capabilities and scheduling policy */
 export const PROC_SYSCALLS: Record<string, HostFn> = {
@@ -251,7 +253,7 @@ export function procInit(): void {
     asctime: (_c, a) => mem.hostStr(asctime(a.p())),
     ctime_r: (_c, a) => { const t = mem.ld32(a.p()), buf = a.p(); mem.putCstr(buf, new Date(t * 1000).toString().slice(0, 24) + "\n", 26); return ptr(buf); },
     // fortified wrappers: the object size is checked, then the plain function's work is done
-    __memcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
+    __memcpy_chk: memcpyChk,
     __memmove_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
     __memset_chk: (cpu, a) => { const d = a.p(), v = a.i(), n = a.u(); chk(n, a.u(), cpu); mem.memset(d, v, n); return ARG0; },
     __strcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s) + 1; chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },

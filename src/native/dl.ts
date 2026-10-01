@@ -153,7 +153,8 @@ function handleOf(h: Handle): number {
 export function dlInit(): void {
   setSymbolizeHook(symbolizePc);
   dlerrorBuf = mem.hostAlloc(256);
-  hostLib("libdl.so", libdl);
+  // a 64-bit process links bionic's libdl.so, which reaches these bodies through ld-android.so
+  if (!isA64()) hostLib("libdl.so", libdl);
 }
 
 /** libdl's bodies, which bionic's libdl.so reaches as ld-android.so's __loader_* (their extra

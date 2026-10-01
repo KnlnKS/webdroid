@@ -6,12 +6,12 @@
 // code: __errno, getauxval, __init_static_tls, __allocate_thread_mapping, pthread_getattr_np).
 
 import { mem } from "./mem";
-import { defineHost, hostLib, lookupHost, replaceHostLib, stp, type HostFn } from "./host";
+import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host";
 import { interposed, linkerHooks, loadModule, runInit, hostLibDl, modules } from "./dl";
 import { setThreadHooks, type Cpu } from "./cpu";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
 import { auxv, fail } from "./libc";
-import { abortMessageSource } from "./proc";
+import { abortMessageSource, memcpyChk } from "./proc";
 import type { Module } from "./elf";
 import { processEnv } from "../shell/environment";
 import { procIdentity } from "../shell/procfs";
@@ -54,9 +54,8 @@ const staticModules: Module[] = [];
 /** The linker's work before any guest instruction runs: map the libraries, lay out static TLS,
  *  give the calling thread its bionic identity, then run each library's initializers in order. */
 export async function bootBionic(cpu: Cpu): Promise<void> {
-  for (const name of INTRINSICS) interposed.set(name, lookupHost(name, "libc.so")!);
+  for (const name of INTRINSICS) interposed.set(name, defineHost(name, name === "__memcpy_chk" ? memcpyChk : SERVED));
   const heap = heapDispatch();
-  for (const lib of ["libc.so", "libm.so", "libdl.so", "liblog.so", "libz.so"]) replaceHostLib(lib);
   hostLib("ld-android.so", loaderExports());
   linkerHooks.hwcap = BigInt(auxv().find(([type]) => type === 16)![1]);
   linkerHooks.deviceLib = (name) => DEVICE_LIBS.find((path) => path.endsWith("/" + name)) ?? null;
@@ -126,7 +125,7 @@ function heapDispatch(): number {
     malloc_disable: () => 0, malloc_enable: () => 0, mallopt: () => 0,
   };
   const table = mem.hostAlloc(HEAP.length * 8, 32);
-  HEAP.forEach((name, i) => stp(table + i * 8, name in own ? defineHost(name, own[name]) : lookupHost(name === "aligned_alloc" ? "memalign" : name, "libc.so")!));
+  HEAP.forEach((name, i) => stp(table + i * 8, defineHost(name === "aligned_alloc" ? "memalign" : name, own[name] ?? SERVED)));
   return table;
 }
 
