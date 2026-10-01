@@ -18,9 +18,10 @@ import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, measureText, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import { windowRoot } from "./rtanimator";
 import {
-  type JRect, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
-  drawNinePatch, argbOfColorLong, BLEND_MODES, COMPOSITE,
+  type JRect, type NativeColorFilter, NativeBitmapShader, cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
+  argbOfColorLong, BLEND_MODES, COMPOSITE,
 } from "./graphics";
+import { type NinePatchChunk, drawNinePatch } from "./ninepatch";
 import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */

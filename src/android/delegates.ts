@@ -15,11 +15,7 @@
 
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
-import {
-  type JRectF,
-  NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, composeShader,
-  type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches,
-} from "./graphics";
+import { type JRectF, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { paintAt, measureCtx, preloadPaint, setFontMetrics } from "./paint";
@@ -603,21 +599,6 @@ delegate("android/graphics/Interpolator", {
     k.repeat = Math.min(repeat, 32000); k.mirror = !!mirror;
   },
   "nativeTimeToValues(JI[F)I": (h: bigint, msec: number, values: Float32Array | null) => keyFrames(h).timeToValues(msec, values),
-});
-
-// ── android.graphics.NinePatch: its chunk deserialized ─────────────────────────────────
-// NinePatch frees its chunk from finalize(), which never runs here
-delegate("android/graphics/NinePatch", {
-  "isNinePatchChunk([B)Z": (chunk: Int8Array | null) => +isNinePatchChunk(chunk),
-  "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => ownedHandle(validNinePatchChunk(chunk)),
-  "nativeFinalize(J)V": release,
-  "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, dst: Rect) => {
-    const bmp = deref<NativeBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
-    if (!rects.length) return 0n;
-    const r = new NativeRegion();
-    r.setRects(rects);
-    return ownedHandle(r);
-  },
 });
 
 // ── android.graphics.Picture: a recorded display list ──────────────────────────────────
