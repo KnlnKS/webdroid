@@ -6,7 +6,7 @@ import type { Runtime } from "../jvm/runtime";
 import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
-import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET } from "./host";
+import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
@@ -615,11 +615,11 @@ export class Cpu {
    *  rest through libc's syscall(2) table (a raw svc and the wrapper reach the same bodies) */
   private syscall(nr: number): void {
     const w = this.w;
-    if (nr === 135) {                                                                    // rt_sigprocmask
-      const result = w[6] === 8 ? this.sigmask(w[0], this.xp(1), this.xp(2), 8) : 22;
+    if (hostTrace.on) hostTrace.ring.push(`${this.name}:svc ${nr}(${[0, 1, 2, 3, 4, 5].map((i) => (BigInt(w[2 * i + 1] >>> 0) << 32n | BigInt(w[2 * i] >>> 0)).toString(16)).join(",")}) lr=${symbolizeHook(this.lr >>> 0)}`);
+    if (nr === (this.a64 ? 135 : 175)) {                                                  // rt_sigprocmask
+      const set = this.a64 ? this.xp(1) : w[2] >>> 0, old = this.a64 ? this.xp(2) : w[4] >>> 0;
+      const result = w[6] === 8 ? this.sigmask(w[0], set, old, 8) : 22;
       w[0] = -result; w[1] = result ? -1 : 0;
-    } else if (nr === 175) {
-      w[0] = -(w[6] === 8 ? this.sigmask(w[0], w[2] >>> 0, w[4] >>> 0, 8) : 22);
     } else {
       if (!rawSyscall) this.fault(`syscall ${nr}`);
       const a = this.args;
