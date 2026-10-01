@@ -10,7 +10,7 @@ import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
 import { textureLayerNatives } from "./texturelayer";
 import { animateRenderThread } from "./rtanimator";
 import { nativeSurface, surfaceBuffer, queueBuffer } from "./surfaceflinger";
-import { onNextVsync } from "./vsync";
+import { onNextVsync, frameDrawn } from "./vsync";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
@@ -38,6 +38,7 @@ async function drawFrame(p: Proxy): Promise<number> {
   resetDrawn(buffer);
   drawNodeInto(ctx, p.root);
   perf.draws++; perf.drawMs += performance.now() - t0;
+  frameDrawn();
   // prepareTree's position updates reach their listeners before the frame queues, so a SurfaceView
   // merges its move into this frame's transaction
   for (const [listener, l, t, r, b] of positionUpdates.splice(0)) {

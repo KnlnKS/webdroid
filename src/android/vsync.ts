@@ -6,7 +6,9 @@ import { rt, type JObj } from "../jvm/runtime";
 import { mangleField } from "../jvm/abi";
 import { vcall, newObj, scall, callOn, after, mainThread } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeLooper } from "./mainloop";
+import { type NativeLooper, mainLooper } from "./mainloop";
+import { stageD } from "../jvm/provenance";
+import { perf } from "../perf";
 import { device } from "../shell/config";
 import { uptimeMillis } from "../guest-clock";
 
@@ -62,6 +64,13 @@ let vsyncHooks: (() => void)[] = [];
 /** run `fn` at the next vsync: a renderer drawing on its own cadence */
 export function onNextVsync(fn: () => void): void { vsyncHooks.push(fn); }
 /** a vsync now, outside the display's pacing: a test harness stepping frames on a controlled clock */
+let frameStart: number | null = null;
+/** the renderer drew the main thread's frame */
+export function frameDrawn(): void {
+  if (frameStart === null) return;
+  perf.completedFrames++; perf.frameMs += performance.now() - frameStart;
+  frameStart = null;
+}
 export function deliverVsync(): void {
   latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
@@ -69,6 +78,9 @@ export function deliverVsync(): void {
     r.scheduled = false;
     r.looper.post(() => {
       fill(r.data as never);
+      // under Stage D the main thread's frame is the Choreographer.doFrame this vsync starts; it
+      // completes when the renderer draws it
+      if (stageD() && r.looper === mainLooper) { perf.frames++; frameStart ??= performance.now(); }
       return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count);
     });
   }
