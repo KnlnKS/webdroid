@@ -37,7 +37,10 @@ console.error = (...args: unknown[]) => {
   logs.push(`error: ${args.map(String).join(" ")}`);
 };
 window.addEventListener("error", (event) => logs.push(`window.error: ${event.message}`));
-window.addEventListener("unhandledrejection", (event) => logs.push(`unhandledrejection: ${String(event.reason)}`));
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason as { message?: string; msg?: string; stack?: string } | null;
+  logs.push(`unhandledrejection: ${reason?.message ?? reason?.msg ?? String(reason)}\n${(reason?.stack ?? "").slice(0, 600)}`);
+});
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
 canvas.width = SCREEN_W; canvas.height = SCREEN_H;
 setScreenCanvas(canvas);

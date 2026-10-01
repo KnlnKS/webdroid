@@ -1,5 +1,5 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, newObj, vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, construct, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
 import { jarray, mangleMethod } from "../jvm/abi";
@@ -177,15 +177,20 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
 // ── servicemanager: the context object BinderInternal hands AOSP's ServiceManager. It answers
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
 // returns for an absent service, and is reported as a boundary gap.
-const binderServices = new Map<string, JObj | Promise<JObj> | (() => Promise<JObj>)>();
+const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
 const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
 /** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
  *  methods declare @EnforcePermission takes its enforcer at construction (its no-argument
  *  constructor asks the system context for one); none of the hosted methods calls it. */
 export function hostStub(name: string, cls: string): void {
-  binderServices.set(name, async () => M_ENFORCED in rt.link(cls).ctor.prototype
-    ? newObj(cls, "(Landroid/os/PermissionEnforcer;)V", await newObj("android/os/PermissionEnforcer")) : newObj(cls));
+  binderServices.set(name, () => newStub(cls));
 }
+/** a Stub subclass's instance, as hostStub makes one (also for binders a service hands out), on
+ *  the asking thread: a class it initializes may be one that thread is already initializing */
+export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
+  return M_ENFORCED in rt.link(cls).ctor.prototype
+    ? yield construct(cls, "(Landroid/os/PermissionEnforcer;)V", yield construct("android/os/PermissionEnforcer", "()V")) : yield construct(cls, "()V");
+});
 class JServiceManager extends JObj { binder: JBinder | null = null; }
 /** a hosted service's binder, made when first asked for */
 export function hostedService(name: string): JObj | Promise<JObj> | null {
@@ -194,7 +199,7 @@ export function hostedService(name: string): JObj | Promise<JObj> | null {
   if (typeof service !== "function") return service;
   const made = service();
   binderServices.set(name, made);
-  void made.then((binder: JObj) => binderServices.set(name, binder));
+  if (made instanceof Promise) void made.then((binder: JObj) => binderServices.set(name, binder), () => binderServices.set(name, service));
   return made;
 }
 rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["android/os/IServiceManager"], methods: {
