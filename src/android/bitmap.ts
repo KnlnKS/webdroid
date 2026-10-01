@@ -23,6 +23,8 @@ const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
 export const bytesPerPixel = (config: number): number => BPP[config] ?? 4;
 /** SkAlphaType */
 export const OPAQUE = 1, PREMUL = 2, UNPREMUL = 3;
+/** the alpha type a config can hold: 565 is always opaque, ALPHA_8 always premultiplied */
+const alphaFor = (config: number, alphaType: number) => config === RGB_565 ? OPAQUE : config === ALPHA_8 ? PREMUL : alphaType;
 
 let generation = 0;
 /** SkNextID: generation ids are unique across bitmaps, as caches keyed on them assume */
@@ -51,7 +53,7 @@ export class NativeBitmap {
   constructor(public w: number, public h: number, public config = ARGB_8888, alphaType = PREMUL, rowBytes = w * bytesPerPixel(config)) {
     this.rowBytes = rowBytes;
     this.allocation = rowBytes * h;
-    this.alphaType = config === RGB_565 ? OPAQUE : config === ALPHA_8 ? PREMUL : alphaType;
+    this.alphaType = alphaFor(config, alphaType);
   }
   get hasAlpha(): boolean { return this.alphaType !== OPAQUE; }
   /** drawn pixels exist (a raster or a decoded image), so a copy can be a draw rather than a readback */
@@ -69,16 +71,12 @@ export class NativeBitmap {
   }
   /** what to draw this bitmap from: the decoded image while nothing has written to it */
   get image(): CanvasImageSource { return this.img ?? this.raster(); }
-  /** The raster, made on demand. A bitmap that is only written and read as pixels never needs
-   *  one, and outside a browser there is no OffscreenCanvas to make. Handing it out drops the
-   *  pixel memo, because whoever took it may draw. */
-  get canvas(): OffscreenCanvas {
-    const cv = this.raster();
-    this.px = null;
-    return cv;
-  }
+  /** A context drawing into the raster, made on demand: a bitmap that is only written and read as
+   *  pixels never needs one, and outside a browser there is no OffscreenCanvas to make. Handing it
+   *  out drops the pixel memo, because whoever took it may draw. */
   get ctx(): OffscreenCanvasRenderingContext2D {
-    void this.canvas;
+    this.raster();
+    this.px = null;
     if (!this.drawingCtx) {
       // Canvas retains this context across draws, after pixel readbacks and shader snapshots.
       const methods = new Map<PropertyKey, unknown>();
@@ -110,7 +108,7 @@ export class NativeBitmap {
   /** Bitmap::reconfigure: the same allocation with new dimensions and undefined contents */
   reconfigure(w: number, h: number, config: number, alphaType: number): void {
     this.w = w; this.h = h; this.config = config; this.rowBytes = w * bytesPerPixel(config);
-    this.alphaType = config === RGB_565 ? OPAQUE : config === ALPHA_8 ? PREMUL : alphaType;
+    this.alphaType = alphaFor(config, alphaType);
     this.dropPixels();
     this.genId = nextGeneration();
   }
@@ -138,7 +136,7 @@ export class NativeBitmap {
   /** Bitmap::setAlphaType: the memory stays, what it means changes */
   setAlphaType(alphaType: number): void {
     if (this.config === RGB_565 || this.config === ALPHA_8 || alphaType === this.alphaType) return;
-    if (this.px || this.cx || this.img) {
+    if (this.px || this.rastered) {
       const memory = memoryOf(this);
       this.alphaType = alphaType;
       setMemory(this, memory);
@@ -250,8 +248,10 @@ function copyBitmapPixels(src: ArrayLike<number>, dst: Uint8Array | Uint8Clamped
   }
 }
 const is8888 = (b: NativeBitmap) => b.config === ARGB_8888 || b.config === HARDWARE;
-/** the bitmap's memory, rowBytes per row, as computeByteSize counts it */
-export function memoryOf(b: NativeBitmap, out: Uint8Array = new Uint8Array(b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config))): Uint8Array {
+/** SkImageInfo::computeByteSize: the last row needs only its pixels */
+const byteSize = (b: NativeBitmap) => b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config);
+/** the bitmap's memory, rowBytes per row */
+export function memoryOf(b: NativeBitmap, out: Uint8Array = new Uint8Array(byteSize(b))): Uint8Array {
   const px = b.pixels(), bpp = bytesPerPixel(b.config);
   if (is8888(b) && b.rowBytes === b.w * 4) { copyBitmapPixels(px, out.subarray(0, px.length), b.premultiplied, false); return out; }
   const m = new DataView(out.buffer, out.byteOffset, out.byteLength);
@@ -339,13 +339,9 @@ const spaceOf = (h: bigint): NativeColorSpace | null => { const s = h ? deref<Na
 
 // ── the Java object
 const BITMAP = "android/graphics/Bitmap";
-let F: { ptr: string; density: string; chunk: string } | null = null;
-const fields = () => F ??= { ptr: declaredField(BITMAP, "mNativePtr"), density: declaredField(BITMAP, "mDensity"), chunk: declaredField(BITMAP, "mNinePatchChunk") };
+let ptrField = "";
 /** the native state behind a Java Bitmap */
-export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>((b as Record<string, bigint>)[fields().ptr]);
-/** a Java Bitmap's density (Bitmap.getDensity without the call) */
-export const densityOf = (b: object): number => (b as Record<string, number>)[fields().density];
-export const ninePatchChunkOf = (b: object): Int8Array | null => (b as Record<string, Int8Array | null>)[fields().chunk];
+export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>((b as Record<string, bigint>)[ptrField ||= declaredField(BITMAP, "mNativePtr")]);
 /** bitmap::createBitmap: the Java Bitmap around `b`; a density below 0 is Bitmap.getDefaultDensity */
 export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | null = null, insets: unknown = null, requestPremultiplied = b.alphaType !== UNPREMUL): object | Promise<object> {
   return construct(BITMAP, "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;Z)V", handle(b), b.w, b.h, density, +requestPremultiplied, chunk, insets, 1);
@@ -376,8 +372,7 @@ function copyBitmap(src: NativeBitmap, config: number): NativeBitmap {
   dst.commit(0, 0, dst.w, dst.h);
   return dst;
 }
-const MUTABLE = 1;
-const wrap = (b: NativeBitmap, flags: number) => { b.immutable = !(flags & MUTABLE); return javaBitmap(b); };
+const wrap = (b: NativeBitmap, mutable: number | boolean) => { b.immutable = !mutable; return javaBitmap(b); };
 
 rt.registerJnis(BITMAP, {
   "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": (colors: Int32Array | null, off: number, stride: number, w: number, h: number, config: number, mutable: number, cs: bigint) => {
@@ -385,10 +380,10 @@ rt.registerJnis(BITMAP, {
     const b = new NativeBitmap(w, h, creatable(config));
     if (config !== ALPHA_8) b.space = spaceOf(cs);
     if (colors) setPixels(b, colors, off, stride, 0, 0, w, h);
-    return wrap(b, mutable ? MUTABLE : 0);
+    return wrap(b, mutable);
   },
   // HARDWARE is our raster, as a GPU buffer is on a device: immutable, drawn without a readback
-  "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, config: number, mutable: number) => wrap(copyBitmap(bmp(h), config), mutable ? MUTABLE : 0),
+  "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, config: number, mutable: number) => wrap(copyBitmap(bmp(h), config), mutable),
   "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bmp(h), ARGB_8888), 0),
   // no ashmem here: a shared copy is an immutable heap copy, and no bitmap reports a descriptor
   "nativeCopyAshmem(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bmp(h), bmp(h).config), 0),
@@ -447,7 +442,7 @@ rt.registerJnis(BITMAP, {
   }),
   "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
     const b = bmp(h);
-    setMemory(b, remainingBytes(buffer).slice(0, b.rowBytes * (b.h - 1) + b.w * bytesPerPixel(b.config)));
+    setMemory(b, remainingBytes(buffer).slice(0, byteSize(b)));
   }),
   "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
@@ -467,7 +462,7 @@ rt.registerJnis(BITMAP, {
     return javaBitmap(b, density);
   },
   "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bmp(h), paint ? paintAt(paint) : null, offsetXY), MUTABLE),
+    wrap(extractBitmapAlpha(bmp(h), paint ? paintAt(paint) : null, offsetXY), true),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
   "nativeHasAlpha(J)Z": (h: bigint) => +bmp(h).hasAlpha,
