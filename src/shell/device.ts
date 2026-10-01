@@ -246,7 +246,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     const app: BootedApp = { host, mainActivityCls: "", stack: [], label, background: false };
     setBootedApp(app);
     onStatus("Starting app…");
-    await onMain(startActivityThread);
+    await onMain(() => startActivityThread(!processName));
     return app;
   }
   return onMain(async () => {

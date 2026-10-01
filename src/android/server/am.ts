@@ -17,6 +17,8 @@ import { systemProviderHolder } from "../settings";
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 const pms = () => hostedService("package") as Promise<JObj>;
 
+let launcher = false;
+
 async function bind(app: JObj): Promise<void> {
   const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;
   const pm = await pms();
@@ -34,7 +36,7 @@ async function bind(app: JObj): Promise<void> {
     "Landroid/content/AutofillOptions;Landroid/content/ContentCaptureOptions;[J[JLandroid/os/SharedMemory;JJ)V",
     process, info, null, null, 0, providers, null, null, null, null, null, 0, 0, 0, 0, 0, global, compat, null,
     await newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), null, now, now);
-  if (process === pkg) await startMainActivity(app, pkg);
+  if (launcher) await startMainActivity(app, pkg);
 }
 
 // ContentProviders this process published, by authority, and system_server's. ActivityThread finds
@@ -65,8 +67,10 @@ export const activityManagerMethods = {
 };
 
 /** ActivityThread.main for this process: its thread attaches to the activity manager, which binds
- *  the application and launches its first activity. The main looper is already running. */
-export async function startActivityThread(): Promise<void> {
+ *  the application and, for the app the user launched, its launcher activity. A process started
+ *  for another's component runs just that. The main looper is already running. */
+export async function startActivityThread(launched: boolean): Promise<void> {
+  launcher = launched;
   const thread = await newObj("android/app/ActivityThread", "()V");
   await vcall(thread, "attach", "(ZJ)V", 0, 0n);
 }
