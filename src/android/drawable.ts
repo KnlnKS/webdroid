@@ -3,7 +3,7 @@
 // caches and inflaters), and the view stack uses them only through their Java API.
 
 import { type JObj, declaredField } from "../jvm/runtime";
-import { vcall, vcallOn, scall, curThread, callOn, after, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, scall, curThread, callOn, after, construct } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
 import { TV } from "./axml";
 import { type Resources, type RV, type JTheme, rvColor } from "./res";
@@ -33,7 +33,7 @@ export function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | nul
   if (!v || v.t === TV.NULL) return null;
   if (v.t === TV.ATTRIBUTE) return loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme);
   if (v.t === TV.REFERENCE) return loadDrawable(res, v.d, theme);
-  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return newObj("android/graphics/drawable/ColorDrawable", "(I)V", v.d);
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return construct("android/graphics/drawable/ColorDrawable", "(I)V", v.d);
   return v.r ? loadDrawable(res, v.r, theme) : null;
 }
 

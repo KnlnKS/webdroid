@@ -7,7 +7,7 @@ import { JRect, JPoint, type Mat, applyMatrix, isIdentity, javaMatrix, mul, abou
 import { canvasOf, type JavaCanvas, clipToOutline, saveLayer } from "./canvas";
 import { setInvalidateHook } from "./rendernode";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, callOn, after, newObj, idHash, curThread, type JThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, after, newObj, construct, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback } from "./drawable";
 import { JMotionEvent } from "./motionevent";
@@ -1110,7 +1110,7 @@ const viewMethods: NativeSpec["methods"] = {
   "setBackgroundColor(I)V": driven(function* (this: JView, c: number): Gen {
     if (this.background && rt.iof(this.background, "android/graphics/drawable/ColorDrawable")) {
       yield vcall(yield vcall(this.background, "mutate", "()Landroid/graphics/drawable/Drawable;"), "setColor", "(I)V", c);
-    } else yield vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", yield newObj("android/graphics/drawable/ColorDrawable", "(I)V", c));
+    } else yield vcall(this, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", yield construct("android/graphics/drawable/ColorDrawable", "(I)V", c));
   }),
   "setBackgroundResource(I)V": driven(function* (this: JView, id: number): Gen {
     const d = id ? yield loadDrawable(this.jres!, id, this.theme) : null;

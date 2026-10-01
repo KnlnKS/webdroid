@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates, isShown } from "./view";
 import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, drawAt, setDrawableCallback, rvCsl } from "./drawable";
-import { curThread, vcall, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
+import { curThread, vcall, vcallOn, mkEnumSet, construct, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt } from "./res";
 import { modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat } from "./graphics";
@@ -116,7 +116,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   }),
   "setImageBitmap(Landroid/graphics/Bitmap;)V": function (this: JImageView, b: object | null) {
     const thread = curThread;
-    return after(b ? newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", this.jres?.jobj ?? null, b) : null,
+    return after(b ? construct("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", this.jres?.jobj ?? null, b) : null,
       (d) => vcallOn(thread, this, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d));
   },
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
@@ -151,7 +151,7 @@ const imageViewMethods: NativeSpec["methods"] = {
       (mode) => vcallOn(thread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode));
   },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": driven(function* (this: JImageView, c: number, mode: unknown): Gen {
-    const f = yield newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
+    const f = yield construct("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
     return vcall(this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
   }),
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
@@ -195,7 +195,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },
   "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) {
-    if (!this.drawMatrix()) return newObj("android/graphics/Matrix", "()V");
+    if (!this.drawMatrix()) return construct("android/graphics/Matrix", "()V");
     return this.jImageMatrix ?? after(javaMatrix(this.imageMatrix), (m) => (this.jImageMatrix = m));
   },
   "setImageMatrix(Landroid/graphics/Matrix;)V": function (this: JImageView, matrix: object | null) {
