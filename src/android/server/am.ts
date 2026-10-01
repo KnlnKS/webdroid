@@ -12,6 +12,7 @@ import { appHost } from "../apphost";
 import { configurations } from "./wm";
 import { startMainActivity } from "./atm";
 import { uptimeMillis } from "../../guest-clock";
+import { systemProviderHolder } from "../settings";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 const pms = () => hostedService("package") as Promise<JObj>;
@@ -36,8 +37,9 @@ async function bind(app: JObj): Promise<void> {
   if (process === pkg) await startMainActivity(app, pkg);
 }
 
-// ContentProviders this process published, by authority. ActivityThread finds its own before it
-// asks; a provider in another process is not reachable yet, so it answers null as for an unknown one.
+// ContentProviders this process published, by authority, and system_server's. ActivityThread finds
+// its own before it asks; a provider in another app process is not reachable yet, so it answers null
+// as for an unknown one.
 const published = new Map<string, JObj>();
 const HOLDER = "android/app/ContentProviderHolder";
 async function publishProviders(holders: JObj): Promise<void> {
@@ -57,7 +59,7 @@ export const activityManagerMethods = {
   "finishAttachApplication(JJ)V": () => {},
   "publishContentProviders(Landroid/app/IApplicationThread;Ljava/util/List;)V": (_app: JObj, holders: JObj) => publishProviders(holders),
   "getContentProvider(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;IZ)Landroid/app/ContentProviderHolder;":
-    (_app: JObj, _pkg: string, name: string) => published.get(name) ?? null,
+    (_app: JObj, _pkg: string, name: string) => published.get(name) ?? systemProviderHolder(name),
   "refContentProvider(Landroid/os/IBinder;II)Z": () => 1,
   "removeContentProvider(Landroid/os/IBinder;Z)V": () => {},
 };

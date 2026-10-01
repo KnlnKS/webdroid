@@ -1,22 +1,23 @@
-import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj, stubs, driven, type Gen } from "../jvm/runtime";
+import { services, attributionSource, type JContext } from "./context";
+import { rt, type NativeSpec, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle, unparcel } from "./os";
+import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_PID, PROCESS_UID, type JBundle, unparcel } from "./os";
 import { newFile, streamOf } from "../jvm/natives/jio";
 import { mkAssetFd, rawResourceBytes } from "./resnative";
-import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
+import { newObj, vcall, vcallOn, callOn, construct, mainThread } from "../jvm/natives/jlang";
 import { mkCursor, contentValues } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { resolveProvider, javaProviderInfo, componentProcess, authoritiesOf, type Component } from "./pm";
-import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { packages } from "./packages";
 import { isMediaUri, mediaDelete, mediaInsert, mediaMime, mediaPath, mediaQuery, mediaUpdate } from "./mediastore";
+import { observeContent, stopObserving, notifyContent } from "./server/content";
+import { systemProvider } from "./settings";
 
 export const providerTransport: { acquire: (provider: Component) => Promise<unknown> } = { acquire: async () => null };
 const providers = new WeakMap<AppHost, Map<string, Promise<unknown>>>();
@@ -41,6 +42,8 @@ export function attachProvider(ctx: JContext, component: Component): Promise<unk
 }
 async function contentProvider(uri: JUri): Promise<unknown> {
   const authority = /^content:\/\/([^/?#]+)/.exec(uri.uri)?.[1];
+  const system = authority ? systemProvider(authority) : null;
+  if (system) return Object.assign(rt.make("webdroid/SystemContentProvider") as JSystemProvider, { authority, binder: await system });
   if (!authority || !appHost?.application) return null;
   const existing = providers.get(appHost)?.get(authority);
   if (existing) return existing;
@@ -60,6 +63,51 @@ export const providerOperations = {
   getType: "(Landroid/net/Uri;)Ljava/lang/String;",
   call: "(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;",
 };
+/** a provider system_server hosts, reached as ContentProvider.Transport's callers reach one: through
+ *  its IContentProvider, with this app's attribution and the selection as query arguments */
+class JSystemProvider extends JObj { authority = ""; binder: JObj | null = null; }
+const AS = "Landroid/content/AttributionSource;", B = "Landroid/os/Bundle;";
+const callerSource = () => attributionSource(PROCESS_UID, PROCESS_PID, appHost?.pkg ?? null);
+function* selectionArgs(selection: string | null, args: string[] | null, sort: string | null = null): Gen<JBundle | null> {
+  if (selection === null && args === null && sort === null) return null;
+  const b: JBundle = yield construct("android/os/Bundle", "()V");
+  if (selection !== null) yield vcall(b, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", "android:query-arg-sql-selection", selection);
+  if (args !== null) yield vcall(b, "putStringArray", "(Ljava/lang/String;[Ljava/lang/String;)V", "android:query-arg-sql-selection-args", args);
+  if (sort !== null) yield vcall(b, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", "android:query-arg-sql-sort-order", sort);
+  return b;
+}
+/** the provider operation as its IContentProvider call: the caller's attribution, then `args` */
+const forward = (name: string, desc: string, args: (...a: any[]) => Gen<unknown[]>) =>
+  driven(function* (this: JSystemProvider, ...a: unknown[]): Gen {
+    return yield vcall(this.binder, name, desc, yield callerSource(), ...yield* args.apply(this, a));
+  });
+rt.register({ name: "webdroid/SystemContentProvider", ctor: JSystemProvider, methods: {
+  ["query" + providerOperations.query]: forward("query", `(${AS}Landroid/net/Uri;[Ljava/lang/String;${B}Landroid/os/ICancellationSignal;)Landroid/database/Cursor;`,
+    function* (u, projection, selection, args, sort) { return [u, projection, yield* selectionArgs(selection, args, sort), null]; }),
+  ["insert" + providerOperations.insert]: forward("insert", `(${AS}Landroid/net/Uri;Landroid/content/ContentValues;${B})Landroid/net/Uri;`,
+    function* (u, values) { return [u, values, null]; }),
+  ["bulkInsert" + providerOperations.bulkInsert]: forward("bulkInsert", `(${AS}Landroid/net/Uri;[Landroid/content/ContentValues;)I`,
+    function* (u, values) { return [u, values]; }),
+  ["update" + providerOperations.update]: forward("update", `(${AS}Landroid/net/Uri;Landroid/content/ContentValues;${B})I`,
+    function* (u, values, selection, args) { return [u, values, yield* selectionArgs(selection, args)]; }),
+  ["delete" + providerOperations.delete]: forward("delete", `(${AS}Landroid/net/Uri;${B})I`,
+    function* (u, selection, args) { return [u, yield* selectionArgs(selection, args)]; }),
+  ["getType" + providerOperations.getType]: forward("getType", `(${AS}Landroid/net/Uri;)Ljava/lang/String;`, function* (u) { return [u]; }),
+  ["call" + providerOperations.call]: forward("call", `(${AS}Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;${B})${B}`,
+    function* (this: JSystemProvider, method, arg, extras) { return [this.authority, method, arg, extras]; }),
+  ["openFile" + providerOperations.openFile]: forward("openFile", `(${AS}Landroid/net/Uri;Ljava/lang/String;Landroid/os/ICancellationSignal;)Landroid/os/ParcelFileDescriptor;`,
+    function* (u, mode) { return [u, mode, null]; }),
+} });
+/** ContentResolver.acquireProvider: a system provider's IContentProvider; an app's provider here is
+ *  its ContentProvider object, which has no binder to hand out */
+function acquireProvider(authority: string | null): JObj | Promise<JObj> | null {
+  if (authority === null) return null;
+  const system = systemProvider(authority);
+  if (system) return system;
+  if (resolveProvider(authority)) throw rt.unimplemented("ContentResolver.acquireProvider for an app provider");
+  return null;
+}
+const acquireUri = (u: JUri | null) => u && uriParts(u).scheme === "content" ? acquireProvider(uriDecode(uriParts(u).authority)) : null;
 /** query(..., CancellationSignal): the signal is checked once, then the plain query answers */
 const cancellableQuery = driven(function* (this: JObj, u: JUri, projection: unknown, selection: unknown, args: unknown, sort: unknown, cancellation: unknown): Gen {
   if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
@@ -210,17 +258,12 @@ const openAfd = async (u: JUri, mode: string) => {
   const pfd = await openPfd(u, mode);
   return mkAssetFd(pfd.bytes, pfd);
 };
-const contentObservers = new Set<{ uri: string; descendants: boolean; observer: unknown }>();
 /** `flags` is NOTIFY_*; the boolean overload's syncToNetwork is NOTIFY_SYNC_TO_NETWORK (1) */
-async function notifyContentObservers(uri: JUri, origin: unknown, flags = 0): Promise<void> {
+const notifyContentObservers = driven(function* notifyContentObservers$(uri: JUri, origin: unknown, flags: number | boolean = 0): Gen<void> {
   if (!uri) rt.npe();
-  for (const entry of [...contentObservers]) {
-    if (entry.uri !== uri.uri && !(entry.descendants && uri.uri.startsWith(entry.uri.replace(/\/$/, "") + "/"))) continue;
-    const self = entry.observer === origin;
-    if (self && !await vcall(entry.observer, "deliverSelfNotifications", "()Z")) continue;
-    await vcall(entry.observer, "dispatchChange", "(ZLandroid/net/Uri;I)V", self ? 1 : 0, uri, flags);
-  }
-}
+  const selfNotify = !!origin && !!(yield vcall(origin, "deliverSelfNotifications", "()Z"));
+  yield notifyContent(uri.uri, origin ?? null, selfNotify, +flags);
+});
 /** the ContentResolver.QUERY_ARG_* keys the Bundle form of query understands */
 const QUERY_ARGS = new Set(["android:query-arg-sql-selection", "android:query-arg-sql-selection-args", "android:query-arg-sql-sort-order",
   "android:query-arg-sort-columns", "android:query-arg-sort-direction", "android:query-arg-limit",
@@ -235,12 +278,23 @@ const resolverMethods: NativeSpec["methods"] = {
   "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;I)V": notifyContentObservers,
   "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": (uri: JUri, descendants: number, observer: unknown) => {
     if (!uri || !observer) rt.npe();
-    contentObservers.add({ uri: uri.uri, descendants: !!descendants, observer });
+    observeContent(uri.uri, !!descendants, observer, (changed, self, flags) =>
+      vcall(observer, "dispatchChange", "(ZLandroid/net/Uri;I)V", +self, mkUri(changed), flags));
   },
   "unregisterContentObserver(Landroid/database/ContentObserver;)V": (observer: unknown) => {
     if (!observer) rt.npe();
-    for (const entry of contentObservers) if (entry.observer === observer) contentObservers.delete(entry);
+    stopObserving(observer);
   },
+  "acquireProvider(Landroid/net/Uri;)Landroid/content/IContentProvider;": acquireUri,
+  "acquireUnstableProvider(Landroid/net/Uri;)Landroid/content/IContentProvider;": acquireUri,
+  "acquireExistingProvider(Landroid/net/Uri;)Landroid/content/IContentProvider;": acquireUri,
+  "acquireProvider(Ljava/lang/String;)Landroid/content/IContentProvider;": acquireProvider,
+  "acquireUnstableProvider(Ljava/lang/String;)Landroid/content/IContentProvider;": acquireProvider,
+  // a system provider is held for the process's life (noReleaseNeeded)
+  "releaseProvider(Landroid/content/IContentProvider;)Z": () => 1,
+  "releaseUnstableProvider(Landroid/content/IContentProvider;)Z": () => 1,
+  "getAttributionSource()Landroid/content/AttributionSource;": callerSource,
+  "getUserId()I": () => 0,
   "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": driven(function* (u: JUri): Gen {
     return isDocsUri(u) ? docInputStream(documentId(u, true))
       : isResourceUri(u) ? streamOf(resourceBytes(u))
@@ -373,91 +427,3 @@ const resolverMethods: NativeSpec["methods"] = {
     newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", mkUri(grant.uri), grant.flags, BigInt(grant.time))))),
 };
 rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
-// android.provider.Settings — a read-only device with everything at its documented default.
-// Reads go through a ContentResolver on a real device; nothing here is writable, so every
-// getter simply hands back the caller's own default. AOSP splits the same table three ways.
-const settingsUri = (table: string, name: string) => mkUri(`content://settings/${table}/${name}`);
-defineException("android/provider/Settings$SettingNotFoundException", "java/lang/Exception");
-/** ANDROID_ID: 64 random bits minted on first ask and kept for the install, as the platform does */
-function androidId(): string {
-  const store = typeof localStorage === "undefined" ? null : localStorage;
-  let id = store?.getItem("wd:android_id") ?? null;
-  if (!id) {
-    id = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
-    store?.setItem("wd:android_id", id);
-  }
-  return id;
-}
-// Secure.LOCATION_MODE and LOCATION_PROVIDERS_ALLOWED are the device's location switch: an app
-// that reads them before asking for fixes (ResyLocationManager.isLocationEnabled) sees the same
-// answer the LocationManager gives.
-function intSetting(table: string, name: string): number | null {
-  if (table === "secure" && name === "location_mode") return locationTransport.enabled() ? 3 : 0;
-  return null;
-}
-function stringSetting(table: string, name: string): string | null {
-  if (name === "android_id") return androidId();
-  if (name === "device_name") return "webdroid";
-  if (table === "secure" && name === "location_providers_allowed") return locationTransport.enabled() ? "gps,network" : "";
-  return null;
-}
-const settingNotFound = (_r: unknown, n: string) => { throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n); };
-for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System", "system"]] as const) {
-  rt.register({
-    name: `android/provider/Settings$${cls}`, ctor: class extends JObj {},
-    statics: {
-      ...(cls === "System" ? { SCREEN_BRIGHTNESS: "screen_brightness", RINGTONE: "ringtone", NOTIFICATION_SOUND: "notification_sound", ALARM_ALERT: "alarm_alert",
-        DEFAULT_RINGTONE_URI: settingsUri(table, "ringtone"), DEFAULT_NOTIFICATION_URI: settingsUri(table, "notification_sound"),
-        DEFAULT_ALARM_ALERT_URI: settingsUri(table, "alarm_alert") } : {}),
-      ...(cls === "Global" ? { ADB_ENABLED: "adb_enabled", ADB_WIFI_ENABLED: "adb_wifi_enabled" } : {}),
-      ANIMATOR_DURATION_SCALE: "animator_duration_scale",
-      TRANSITION_ANIMATION_SCALE: "transition_animation_scale",
-      WINDOW_ANIMATION_SCALE: "window_animation_scale",
-      ACCESSIBILITY_ENABLED: "accessibility_enabled",
-      AIRPLANE_MODE_ON: "airplane_mode_on",
-      DEVELOPMENT_SETTINGS_ENABLED: "development_settings_enabled",
-      TEXT_SHOW_PASSWORD: "show_password",
-      FONT_SCALE: "font_scale",
-      ANDROID_ID: "android_id", DEVICE_NAME: "device_name",
-      LOCATION_MODE: "location_mode", LOCATION_PROVIDERS_ALLOWED: "location_providers_allowed",
-      LOCATION_MODE_OFF: 0, LOCATION_MODE_SENSORS_ONLY: 1, LOCATION_MODE_BATTERY_SAVING: 2, LOCATION_MODE_HIGH_ACCURACY: 3,
-      CONTENT_URI: mkUri(`content://settings/${table}`),
-    },
-    methods: {
-      "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)F": (_r: unknown, _n: string, d: number) => d,
-      "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;)F": settingNotFound,
-      "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;)J": settingNotFound,
-      "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, n: string, d: number) => intSetting(table, n) ?? d,
-      "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;)I": (_r: unknown, n: string) => {
-        const value = intSetting(table, n);
-        return value === null ? settingNotFound(_r, n) : value;
-      },
-      "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;J)J": (_r: unknown, _n: string, d: bigint) => d,
-      "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => stringSetting(table, n),
-      // the framework's per-user reads; this device has the one user
-      "static getStringForUser(Landroid/content/ContentResolver;Ljava/lang/String;I)Ljava/lang/String;": (_r: unknown, n: string) => stringSetting(table, n),
-      ...(cls === "Global" ? {} : {
-        "static getIntForUser(Landroid/content/ContentResolver;Ljava/lang/String;II)I": (_r: unknown, n: string, d: number) => intSetting(table, n) ?? d,
-        "static getIntForUser(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, n: string) => intSetting(table, n) ?? settingNotFound(_r, n),
-        "static getLongForUser(Landroid/content/ContentResolver;Ljava/lang/String;JI)J": (_r: unknown, _n: string, d: bigint) => d,
-        "static getFloatForUser(Landroid/content/ContentResolver;Ljava/lang/String;FI)F": (_r: unknown, _n: string, d: number) => d,
-      }),
-      "static getUriFor(Ljava/lang/String;)Landroid/net/Uri;": (n: string) => settingsUri(table, n),
-      ...stubs(0, "static putFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)Z", "static putInt(Landroid/content/ContentResolver;Ljava/lang/String;I)Z",
-        "static putLong(Landroid/content/ContentResolver;Ljava/lang/String;J)Z", "static putString(Landroid/content/ContentResolver;Ljava/lang/String;Ljava/lang/String;)Z"),
-    },
-  });
-}
-// the column-name interface every provider contract extends
-rt.register({ name: "android/provider/BaseColumns", ctor: class extends JObj {}, statics: { _ID: "_id", _COUNT: "_count" } });
-rt.register({ name: "android/provider/Settings", ctor: class extends JObj {},
-  methods: {
-    "static isInSystemServer()Z": () => 0,
-    "static canDrawOverlays(Landroid/content/Context;)Z": (context: unknown) => {
-      if (!context) rt.npe();
-      return 0;
-    },
-  },
-  statics: { ACTION_APPLICATION_DETAILS_SETTINGS: "android.settings.APPLICATION_DETAILS_SETTINGS",
-             ACTION_MANAGE_OVERLAY_PERMISSION: "android.settings.action.MANAGE_OVERLAY_PERMISSION",
-             ACTION_SETTINGS: "android.settings.SETTINGS" } });

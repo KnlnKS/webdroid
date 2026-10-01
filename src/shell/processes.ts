@@ -27,6 +27,7 @@ import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { notificationStore, useNotificationStore } from "../android/notification";
+import { settingsStore, useSettingsStore } from "../android/settings";
 import { rt } from "../jvm/runtime";
 import { useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
@@ -93,6 +94,8 @@ class ProcessBroker {
     this.intents.cancel(id);
   }
   readonly location = new BrowserLocation();
+  readonly settings = settingsStore();
+  constructor() { this.location.enabledChanged = () => this.settings.changed("secure", "location_mode"); }
   readonly permissions = new PermissionStore();
   private cookieStores = new Map<string, Promise<WebCookies>>();
   cookies(pkg: string): Promise<WebCookies> {
@@ -467,8 +470,8 @@ export function connectProcess(): ProcessEndpoint {
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
-  const stopAccounts = useAccountStore(broker.accounts);
-  if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopAccounts);
+  const stopAccounts = useAccountStore(broker.accounts), stopSettings = useSettingsStore(broker.settings);
+  if (broker.alive(PROCESS_PID)) { broker.watch(PROCESS_PID, stopAccounts); broker.watch(PROCESS_PID, stopSettings); }
   usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
   locationTransport.available = () => broker.location.available;

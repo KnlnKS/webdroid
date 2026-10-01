@@ -1336,6 +1336,58 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   attribute references resolve against the running app's resources, not the owner's; priorities
   are not clamped for non-privileged apps; Intent.prepareToLeaveProcess's StrictMode and
   file-URI checks (Uri.checkFileUriExposed and friends) have no TS Uri counterpart yet.
+- 2026-10-02, Stage D: Settings and DeviceConfig on bytecode. Settings, Settings.System/Secure/
+  Global/Config, NameValueCache and DeviceConfig run from framework.jar over `settings.ts`, a
+  hosted IContentProvider (a ContentProviderNative subclass) for the `settings` authority, ported
+  from the reference AVD's SettingsProvider.apk: GET/PUT/DELETE/LIST/RESET for the four tables,
+  query/insert/update/delete/getType/openFile with its Arguments parsing, moved-key rerouting and
+  error messages. The TS ContentResolver reaches it through acquireProvider (NameValueCache) and a
+  ContentProvider-shaped adapter (its own query/call/insert...); ActivityManager.getContentProvider
+  hands AOSP's ActivityThread a ContentProviderHolder for it. `server/content.ts` is ContentService's
+  observer tree (hosted as IContentService for AOSP's ContentResolver; the TS resolver registers
+  there too) with ObserverNode's rules: a change reaches observers at its uri, ancestors watching
+  descendants, and every observer below it. The tables live in the broker's SettingsStore
+  (`shell/settings.ts`), persisted with the device (`wd:settings`), and each process's observers
+  hear every write. Values are `device-settings.ts`, which `gen-framework --settings` records from
+  the AVD. Findings (probe app at targetSdk 30 and 35, run on the AVD and in webdroid; the logs
+  match line for line apart from the data scope below and generation tracking):
+  - Readability: enforceSettingReadable applies checkReadableAnnotation at every target SDK (only
+    FLAG_TEST_ONLY and system apps skip it), so a declared non-@Readable key throws at targetSdk 30
+    too; @Readable(maxTargetSdk) keys throw above their ceiling; undeclared keys are readable.
+    multi_sim_data_call needs READ_PRIVILEGED_PHONE_STATE at 30 and 35; bluetooth_address answers
+    null without LOCAL_MAC_ADDRESS. LIST_* and whole-table queries skip what the caller may not read
+    and null values; DeviceConfig reads need no permission.
+  - Writes: an app gets "<pkg> was not granted  this permission: android.permission.WRITE_SETTINGS."
+    for System (WRITE_SETTINGS is signature|appop|pre23|preinstalled, so only an app targeting
+    below 23 or a system one holds it here), "Permission denial, must have one of:
+    [android.permission.WRITE_SECURE_SETTINGS]" for Secure/Global and the WRITE_DEVICE_CONFIG
+    message for config; RESET with mode 0 is "Invalid reset mode: 0".
+  - Observers: night mode on the AVD notified content://settings/secure/ui_night_mode (plus its
+    custom-type and dark-theme times); a non-descendant observer of the table heard nothing.
+  - Device values: ui_night_mode is absent until night mode is first set (2 dark, 1 after); the
+    shell writes it from the browser's preference. location_mode follows the location switch
+    (written by LocationManagerService on the AVD) while location_providers_allowed stays the
+    stale "gps" either way. The data keeps declared, @Readable, non-null keys and drops undeclared
+    product keys, values naming AVD apps (IME, assistant, autofill, spell checker...) or
+    /product/media sounds, the default sounds' media URIs, Bluetooth identity (no adapter here)
+    and device_name, which is Build.MODEL as DatabaseHelper sets it. SSAID is AOSP's HMAC-SHA256
+    of the signing certificates under a per-device user key, so packages sharing a signer share it
+    (the old per-origin `wd:android_id` is gone). Device config keeps the 48 flags named by a boot
+    class path class that reads DeviceConfig or Settings.Config, of the AVD's 3,419.
+  Also: AOSP's canDrawOverlays falls back to checkSelfPermission(SYSTEM_APPLICATION_OVERLAY), which
+  the TS check granted to any app for any non-runtime permission; an app's own check now needs the
+  permission requested, and SYSTEM_ALERT_WINDOW/WRITE_SETTINGS (special access) are held only below
+  targetSdk 23. A driven computation's suspended promise carries its asker's frames (suspendWith
+  appends to them), so a cache must never hand that promise to a second asker: it would resume
+  with the first asker's result. Harmonic's welcome-scroll swipe fails intermittently on the parent
+  too (4 of 8 runs alone), as does Komikku after a parallel run.
+  Limits: no generation tracking (MemoryIntArray), so NameValueCache never caches; System writes
+  by an app holding WRITE_SETTINGS skip SystemSettingsValidators (they ship in
+  SettingsProvider.apk); resets, sync-disabled mode and the config monitor callback are
+  unimplemented for the callers allowed to use them; observers hear changes made in other
+  processes only through the store, not other apps' providers' notifyChange; registerContentObserver
+  does not check that the authority exists; under `?bytecode=stage-d` boot stops in
+  handleBindApplication before Settings is reached, so the D-mode path is covered by unit tests only.
 
 ## Java, storage and framework semantics
 

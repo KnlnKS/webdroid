@@ -605,6 +605,11 @@ each unit's findings.
 - **Display** (`display.ts`): IDisplayManager hosted as `display`; Display, DisplayManager and
   DisplayManagerGlobal from bytecode. One CLOCK_MONOTONIC per page (`guest-clock.ts` uptimeMillis).
 - StrictMode, StateSet and the sparse arrays from bytecode.
+- **Settings** (`settings.ts`): Settings, Settings.Config and DeviceConfig from bytecode over a
+  hosted SettingsProvider (IContentProvider for `settings`, reached by acquireProvider in TS mode
+  and as a system ContentProviderHolder from getContentProvider in D-mode), ContentService's
+  observer tree as IContentService (`server/content.ts`), the AVD's tables in the broker's
+  SettingsStore (`gen-framework --settings`).
 
 **The coupled flip, behind `?bytecode=stage-d`** (`STAGE_D` in provenance.ts: android/app,
 view, widget, content, window, transition, preference, inputmethodservice, accessibilityservice

@@ -12,6 +12,7 @@ import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
+import { deviceNightMode } from "../android/settings";
 import { fetchSystemFonts, mountSystemFonts } from "../android/fonts";
 import { loadCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
@@ -143,6 +144,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   const pkg = attrStr(manifest, "package") ?? "app";
   applicationNightOverride = nightOverride(getPrefs(pkg, "__system_uimode").map.get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
+  deviceNightMode(device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcherOrientation(manifest));
@@ -351,7 +353,10 @@ function setApplicationNightMode(pkg: string, mode: number): void {
   applyNightMode(applicationNightOverride ?? device.night);
 }
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
-  .addEventListener("change", (e) => { if (applicationNightOverride === null) applyNightMode(e.matches); });
+  .addEventListener("change", (e) => {
+    deviceNightMode(e.matches);
+    if (applicationNightOverride === null) applyNightMode(e.matches);
+  });
 
 
 // A key is input like a touch: it runs as a main-looper job, so androidx's main-thread asserts

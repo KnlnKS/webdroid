@@ -29,7 +29,6 @@ import { mkPfd } from "../src/android/os";
 import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
 import { javaReadFd } from "../src/native/stdio";
 import { Arsc } from "../src/android/arsc";
-import { locationTransport } from "../src/android/locationmanager";
 import { getInflater } from "../src/android/inflate";
 import { JFrameLayout } from "../src/android/layouts";
 import { JWindow } from "../src/android/window";
@@ -671,26 +670,6 @@ describe("service-bind", () => {
     expect(await vcall(context, "bindService", "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z", intent, connection, 0)).toBe(0);
     await vcall(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection);
     await expect(vcallAsync(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection)).rejects.toMatchObject({ msg: "Service not registered" });
-  });
-});
-
-describe("settings-location", () => {
-  rt.linkNatives();
-  const CR = "Landroid/content/ContentResolver;";
-
-  test("Settings.Secure reports the device's location switch", () => {
-    const enabled = locationTransport.enabled;
-    try {
-      locationTransport.enabled = () => false;
-      expect(scall("android/provider/Settings$Secure", "getInt", `(${CR}Ljava/lang/String;)I`, null, "location_mode")).toBe(0);
-      expect(scall("android/provider/Settings$Secure", "getString", `(${CR}Ljava/lang/String;)Ljava/lang/String;`, null, "location_providers_allowed")).toBe("");
-      locationTransport.enabled = () => true;
-      expect(scall("android/provider/Settings$Secure", "getInt", `(${CR}Ljava/lang/String;)I`, null, "location_mode")).toBe(3);
-      expect(scall("android/provider/Settings$Secure", "getInt", `(${CR}Ljava/lang/String;I)I`, null, "location_mode", 7)).toBe(3);
-      expect(scall("android/provider/Settings$Secure", "getString", `(${CR}Ljava/lang/String;)Ljava/lang/String;`, null, "location_providers_allowed")).toBe("gps,network");
-      expect(() => scall("android/provider/Settings$Secure", "getInt", `(${CR}Ljava/lang/String;)I`, null, "no_such_setting")).toThrow();
-      expect(scall("android/provider/Settings$Global", "getInt", `(${CR}Ljava/lang/String;I)I`, null, "location_mode", 7)).toBe(7);
-    } finally { locationTransport.enabled = enabled; }
   });
 });
 

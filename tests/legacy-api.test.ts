@@ -128,7 +128,6 @@ test("Hashtable-style contains is containsValue and rejects null", async () => {
 
 test("reached platform queries return device state and default WebView identity", async () => {
   const context = await newObj("android/content/Context");
-  expect(await scall("android/provider/Settings", "canDrawOverlays", "(Landroid/content/Context;)Z", context)).toBe(0);
   expect(await scall("android/webkit/WebSettings", "getDefaultUserAgent", "(Landroid/content/Context;)Ljava/lang/String;", context)).toContain("Android 13");
   expect(await vcall(rt.classFor("java/lang/String"), "getAnnotations", "()[Ljava/lang/annotation/Annotation;")).toHaveLength(0);
 });

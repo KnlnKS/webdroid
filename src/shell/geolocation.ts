@@ -12,6 +12,8 @@ export class BrowserLocation {
   private denied = false;
   private observingPermission = false;
   last: LocationFix | null = null;
+  /** the location switch moved (LocationManagerService writes Secure.LOCATION_MODE) */
+  enabledChanged = () => {};
   get available() { return typeof navigator !== "undefined" && !!navigator.geolocation; }
   get enabled() { return this.available && !this.denied; }
   subscribe(pid: number, id: number, highAccuracy: boolean, active: boolean, receive: (event: LocationEvent) => void) {
@@ -34,7 +36,7 @@ export class BrowserLocation {
         const changed = () => {
           if (status.state === "denied") this.deny();
           else {
-            if (this.denied && status.state === "granted") { this.denied = false; this.emit({ kind: "enabled" }); }
+            if (this.denied && status.state === "granted") { this.denied = false; this.enabledChanged(); this.emit({ kind: "enabled" }); }
             this.update();
           }
         };
@@ -65,7 +67,7 @@ export class BrowserLocation {
     this.denied = true; this.last = null;
     if (this.watch !== null) navigator.geolocation.clearWatch(this.watch);
     this.watch = null; this.generation++;
-    if (changed) this.emit({ kind: "error", code: 1 });
+    if (changed) { this.enabledChanged(); this.emit({ kind: "error", code: 1 }); }
   }
   private emit(event: LocationEvent) { for (const sub of this.subscriptions.values()) sub.receive(event); }
 }

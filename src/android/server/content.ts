@@ -1,53 +1,64 @@
-// IContentService, under AOSP's ContentResolver: content observers by URI with ContentService's
-// ObserverNode rules (a change reaches observers at the URI, at its ancestors registered for
-// descendants, and at every descendant), and sync answered as a device with no sync adapters.
-import { rt, JObj, noops, stubs } from "../../jvm/runtime";
+// ContentService's observer tree for this process: a change notifies the observers registered at
+// its uri, those above it that asked for descendants, and every one below it unless the sender
+// skips descendants (ObserverNode.collectObserversLocked). AOSP's ContentResolver reaches it as
+// IContentService; the TS ContentResolver registers its ContentObservers here directly. Sync is
+// answered as a device with no sync adapters.
+import { rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime";
+import { newArrayList } from "../../jvm/natives/jcoll";
 import { vcall } from "../../jvm/natives/jlang";
 import { jarray } from "../../jvm/abi";
-import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
 import { reportUncaught } from "../os";
+import { mkUri, uriParts, uriDecode, type JUri } from "../net";
 
-interface Entry { key: string; descendants: boolean; observer: JObj; userId: number }
-const entries: Entry[] = [];
-/** authority and path segments, as ObserverNode walks a URI */
-async function uriKey(uri: JObj): Promise<string> {
-  const segments = await vcall(await vcall(uri, "getPathSegments", "()Ljava/util/List;"), "toArray", "()[Ljava/lang/Object;");
-  return [await vcall(uri, "getAuthority", "()Ljava/lang/String;") ?? "", ...segments].join("/");
+const NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS = 2;
+type Observer = { key: unknown; segments: string[]; descendants: boolean; deliver: (uri: string, self: boolean, flags: number) => unknown };
+const observers: Observer[] = [];
+/** countUriSegments/getUriSegment: the authority, then the path's segments */
+function segmentsOf(uri: string): string[] {
+  const parts = uriParts(mkUri(uri));
+  return [uriDecode(parts.authority) ?? "", ...parts.path.split("/").filter(Boolean).map((s) => uriDecode(s) ?? "")];
 }
-const binderOf = (observer: JObj): JObj => vcall(observer, "asBinder", "()Landroid/os/IBinder;");
-
-async function notifyChange(uris: JObj[], from: JObj | null, selfNotify: number, flags: number, userId: number): Promise<void> {
-  const fromBinder = from ? binderOf(from) : null, deliveries = new Map<Entry, JObj[]>();
-  for (const uri of uris) {
-    const key = await uriKey(uri);
-    for (const e of entries) {
-      if (e.userId !== -1 && userId !== -1 && e.userId !== userId) continue;
-      const hit = e.key === key || key.startsWith(e.key + "/") && e.descendants || e.key.startsWith(key + "/");
-      if (!hit || binderOf(e.observer) === fromBinder && !selfNotify) continue;
-      (deliveries.get(e) ?? deliveries.set(e, []).get(e)!).push(uri);
-    }
-  }
-  for (const [e, hits] of deliveries) {
-    const self = +(binderOf(e.observer) === fromBinder);
-    void Promise.resolve(vcall(e.observer, "onChangeEtc", "(Z[Landroid/net/Uri;II)V", self, jarray(hits, "Landroid/net/Uri;"), flags, userId)).catch(reportUncaught);
-  }
+export function observeContent(uri: string, descendants: boolean, key: unknown, deliver: Observer["deliver"]): void {
+  observers.push({ key, segments: segmentsOf(uri), descendants, deliver });
 }
+export function stopObserving(key: unknown): void {
+  for (let i = observers.length - 1; i >= 0; i--) if (observers[i].key === key) observers.splice(i, 1);
+}
+function notified(o: Observer, changed: string[], flags: number): boolean {
+  const n = Math.min(o.segments.length, changed.length);
+  for (let i = 0; i < n; i++) if (o.segments[i] !== changed[i]) return false;
+  if (o.segments.length < changed.length) return o.descendants;
+  return !(flags & NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS && o.descendants);
+}
+/** ContentService.notifyChange for one uri; `origin` is the observer the change came from */
+export const notifyContent = driven(function* notifyContent$(uri: string, origin: unknown, selfNotify: boolean, flags: number): Gen<void> {
+  const changed = segmentsOf(uri);
+  for (const o of observers.filter((o) => notified(o, changed, flags))) {
+    const self = origin !== null && o.key === origin;
+    if (self && !selfNotify) continue;
+    try { yield o.deliver(uri, self, flags); } catch (error) { reportUncaught(error); }
+  }
+});
 
+const IObserver = "Landroid/database/IContentObserver;";
 const ACCOUNT = "Landroid/accounts/Account;", S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;";
+const binderOf = (observer: JObj) => vcall(observer, "asBinder", "()Landroid/os/IBinder;");
 rt.register({ name: "webdroid/ContentService", ctor: class extends JObj {}, sup: "android/content/IContentService$Stub", methods: {
-  "registerContentObserver(Landroid/net/Uri;ZLandroid/database/IContentObserver;II)V": async (uri: JObj, descendants: number, observer: JObj, userId: number) => {
+  [`registerContentObserver(Landroid/net/Uri;Z${IObserver}II)V`]: driven(function* (uri: JUri | null, descendants: number, observer: JObj | null, userId: number): Gen<void> {
     if (!uri || !observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid uri and observer");
-    entries.push({ key: await uriKey(uri), descendants: !!descendants, observer, userId });
-  },
-  "unregisterContentObserver(Landroid/database/IContentObserver;)V": (observer: JObj) => {
+    observeContent(uri.uri, !!descendants, yield binderOf(observer), (changed, self, flags) =>
+      vcall(observer, "onChangeEtc", "(Z[Landroid/net/Uri;II)V", +self, jarray([mkUri(changed)], "Landroid/net/Uri;"), flags, userId));
+  }),
+  [`unregisterContentObserver(${IObserver})V`]: driven(function* (observer: JObj | null): Gen<void> {
     if (!observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid observer");
-    const binder = binderOf(observer);
-    for (let i = entries.length; i-- > 0;) if (binderOf(entries[i].observer) === binder) entries.splice(i, 1);
-  },
-  "notifyChange([Landroid/net/Uri;Landroid/database/IContentObserver;ZIIILjava/lang/String;)V":
-    (uris: JObj[], observer: JObj | null, selfNotify: number, flags: number, userId: number) => notifyChange([...uris], observer, selfNotify, flags, userId),
-  // no sync adapter is installed: nothing syncs, and master sync keeps its default
+    stopObserving(yield binderOf(observer));
+  }),
+  [`notifyChange([Landroid/net/Uri;${IObserver}ZIIILjava/lang/String;)V`]: driven(function* (uris: JUri[] | null, observer: JObj | null, selfNotify: number, flags: number): Gen<void> {
+    if (!uris) throw rt.mkThrowable("java/lang/NullPointerException", "uris");
+    const origin = observer ? yield binderOf(observer) : null;
+    for (const uri of uris) yield notifyContent(uri.uri, origin, !!selfNotify, flags);
+  }),
   "getSyncAdapterTypes()[Landroid/content/SyncAdapterType;": () => jarray([], "Landroid/content/SyncAdapterType;"),
   "getSyncAdapterTypesAsUser(I)[Landroid/content/SyncAdapterType;": () => jarray([], "Landroid/content/SyncAdapterType;"),
   "getSyncAdapterPackagesForAuthorityAsUser(Ljava/lang/String;I)[Ljava/lang/String;": () => jarray([], S),

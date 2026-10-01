@@ -4,6 +4,7 @@
 //   bun run gen-framework --verify   # verify what is already in vendor/aosp
 //   bun run gen-framework --charsets # record only the device's single-byte charsets
 //   bun run gen-framework --input    # record only the device's key character maps and key sets
+//   bun run gen-framework --settings # record only the device's settings tables
 //
 // framework.jar carries android.* and com.android.internal.* as bytecode; framework-res.apk
 // carries the resource table those classes' R ids were compiled against. Neither is usable
@@ -17,9 +18,13 @@
 import { existsSync } from "node:fs";
 import { unzipSync } from "fflate";
 import { rt } from "../src/jvm/runtime";
-import { loadJarDexes } from "./lib";
+import { loadJarDexes, openDexes } from "./lib";
 import "../src/natives";
 import { mangleStaticField } from "../src/jvm/abi";
+import { insnLen } from "../src/jvm/opcodes";
+import { PLATFORM_JARS } from "../src/jvm/bootclasspath";
+import { loadPlatformJar } from "../src/android/framework";
+import { SYSTEM_PACKAGES } from "../src/shell/system-packages";
 import { Arsc } from "../src/android/arsc";
 import { androidPlatform, androidTool } from "./android-sdk";
 
@@ -33,6 +38,7 @@ const sh = (...args: string[]) => {
 
 if (process.argv.includes("--charsets")) { await recordCharsets(); process.exit(0); }
 if (process.argv.includes("--input")) { await recordInputDevices(); process.exit(0); }
+if (process.argv.includes("--settings")) { await recordSettings(); process.exit(0); }
 if (!process.argv.includes("--verify")) {
   sh("wait-for-device");
   for (let i = 0; sh("shell", "getprop", "sys.boot_completed") !== "1"; i++) {
@@ -83,6 +89,8 @@ if (!process.argv.includes("--verify")) {
     `export const BOOT_JAR_PATHS = ${JSON.stringify(bootJars, null, 1).replace(/\n\s*/g, " ")};\n` +
     `/** the ICU and time zone files, by device path (mirrored under vendor/aosp), with their sizes */\n` +
     `export const PLATFORM_DATA: Record<string, number> = ${JSON.stringify(data)};\n`);
+  // its own process: it boots the class path just written, which the verification below loads apart
+  if (Bun.spawnSync(["bun", "scripts/gen-framework.ts", "--settings"], { stdout: "inherit", stderr: "inherit" }).exitCode) throw new Error("recording settings failed");
 }
 
 for (const f of [JAR, RES]) if (!existsSync(f)) throw new Error(`missing ${f} — run \`bun run gen-framework\` with the reference AVD booted`);
@@ -134,6 +142,61 @@ async function recordCharsets() {
     `// decodes to, the bytes whose character does not encode back to them].\n` +
     `export const SINGLE_BYTE_CHARSETS: [string, string[], number[], string, number[]][] = [\n${rows.join("\n")}\n];\n`);
   console.log(`  src/jvm/charset-tables.ts ${rows.length} charsets`);
+}
+
+/** The device's settings tables as SettingsProvider holds them for an app (src/android/device-settings.ts).
+ *  System, Secure and Global keep the non-null settings some third-party app may read: a key the
+ *  Settings class declares only if it is @Readable (Settings.X.getPublicSettings, which the provider
+ *  enforces per caller), and not one the provider gates on a permission no app holds. Settings that
+ *  name this AVD or its media go: the SSAID and device name are derived per app and from Build.MODEL,
+ *  this device has no Bluetooth adapter, and the default sounds name media files it does not have.
+ *  Device config keeps the flags a class on the boot class path that reads DeviceConfig or
+ *  Settings.Config names, which is what an app process can ask for. */
+async function recordSettings() {
+  for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`${OUT}/${jar}`).arrayBuffer()), i);
+  const { mountPlatformData } = await import("../src/shell/apex");
+  await mountPlatformData((path, size) => ({ size, read: async (at, length) => new Uint8Array(await Bun.file(`${OUT}${path}`).slice(at, at + length).arrayBuffer()) }));
+  rt.linkNatives();
+  const { publicSettings } = await import("../src/android/settings");
+  const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))
+    .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)] as const);
+  const DROPPED = new Set(["android_id", "device_name", "bluetooth_name", "bluetooth_address", "bluetooth_addr_valid", "multi_sim_data_call",
+    "ringtone", "ringtone_set", "notification_sound", "notification_sound_set", "alarm_alert", "alarm_alert_set"]);
+  // the AVD's apps that fill a role (IME, assistant, autofill, spell checker...) are not on this device
+  const avdPackages = new Set(sh("shell", "pm", "list", "packages").split("\n").map((line) => line.trim().replace(/^package:/, "")));
+  const ours = new Set<string>(SYSTEM_PACKAGES.map((p) => p.pkg));
+  const namesAvdApp = (name: string, value: string) => [...value.matchAll(/([a-zA-Z][\w]*(?:\.[\w]+)+)\/[\w.$]+/g)].some((m) => avdPackages.has(m[1])) ||
+    name.endsWith("_package") && avdPackages.has(value) && !ours.has(value);
+  const tables: Record<string, Record<string, string>> = {};
+  for (const table of ["system", "secure", "global"] as const) {
+    const { all, readable } = await publicSettings(table);
+    tables[table] = Object.fromEntries(parse(sh("shell", "settings", "list", table))
+      .filter(([name, value]) => value !== "null" && all.has(name) && readable.has(name) && !DROPPED.has(name) && !namesAvdApp(name, value) &&
+        !/^\/(?:product|system)\/media\//.test(value)));
+  }
+  const named = new Set<string>();
+  const CONFIG_READERS = new Set(["Landroid/provider/DeviceConfig;", "Landroid/provider/DeviceConfigInterface;", "Landroid/provider/Settings$Config;"]);
+  for (const jar of PLATFORM_JARS) for (const dex of await openDexes(`${OUT}/${jar}`)) for (let i = 0; i < dex.classDefCount; i++) {
+    const def = dex.classDef(i), strings: string[] = [];
+    let reads = false;
+    for (const m of [...def.directMethods, ...def.virtualMethods]) {
+      if (!m.codeOff) continue;
+      const { insns } = dex.code(m.codeOff);
+      for (let pc = 0; pc < insns.length; pc += insnLen(insns, pc)) {
+        const op = insns[pc] & 0xff;
+        if (op === 0x1a) strings.push(dex.string(insns[pc + 1]));
+        else if (op === 0x1b) strings.push(dex.string(insns[pc + 1] | insns[pc + 2] << 16));
+        else if (op >= 0x6e && op <= 0x78 && op !== 0x73 && CONFIG_READERS.has(dex.type(dex.method(insns[pc + 1]).cls))) reads = true;
+      }
+    }
+    if (reads) for (const s of strings) named.add(s);
+  }
+  tables.config = Object.fromEntries(parse(sh("shell", "device_config", "list")).filter(([key]) => named.has(key.slice(key.indexOf("/") + 1))));
+  await Bun.write("src/android/device-settings.ts", `// Generated by bun run gen-framework: the reference device's settings tables as an app may read them.\n` +
+    `export const DEVICE_SETTINGS: Record<"system" | "secure" | "global" | "config", Record<string, string>> = {\n` +
+    Object.entries(tables).map(([table, values]) => `  ${table}: {\n${Object.entries(values).map(([n, v]) => `    ${JSON.stringify(n)}: ${JSON.stringify(v)},`).join("\n")}\n  },`).join("\n") +
+    `\n};\n`);
+  console.log(`  src/android/device-settings.ts ${Object.entries(tables).map(([t, v]) => `${t} ${Object.keys(v).length}`).join(", ")}`);
 }
 
 /** The key character maps of the device's virtual keyboard and touchscreen, and the key codes each
