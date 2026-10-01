@@ -1,5 +1,5 @@
 import type { PendingIntents } from "./pendingintents";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
+import { clearGuestTimeout, setGuestTimeout, wallMillis, type GuestTimer } from "../guest-clock";
 
 type Alarm = { type: number; at: number; interval: number; unwatch: () => void };
 export class Alarms {
@@ -20,13 +20,13 @@ export class Alarms {
   private arm(): void {
     if (this.timer !== null) { clearGuestTimeout(this.timer); this.timer = null; }
     let delay = Infinity;
-    const wall = Date.now(), elapsed = this.elapsed();
+    const wall = wallMillis(), elapsed = this.elapsed();
     for (const alarm of this.entries.values()) delay = Math.min(delay, alarm.at - (alarm.type < 2 ? wall : elapsed));
     if (delay !== Infinity) this.timer = setGuestTimeout(() => this.fire(), Math.max(0, Math.min(delay, 0x7fffffff)));
   }
   private fire(): void {
     this.timer = null;
-    const wall = Date.now(), elapsed = this.elapsed();
+    const wall = wallMillis(), elapsed = this.elapsed();
     for (const [id, alarm] of this.entries) {
       const now = alarm.type < 2 ? wall : elapsed;
       if (alarm.at > now) continue;

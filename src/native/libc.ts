@@ -16,7 +16,7 @@ import { procInit, abortMessageOr } from "./proc";
 import { netInit } from "./net";
 import { device } from "../shell/config";
 import { procIdentity, sysconf } from "../shell/procfs";
-import { guestNow } from "../guest-clock";
+import { guestNow, wallMillis } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
 import { isShared, syncShared, trackSharedMap } from "./mappings";
@@ -43,7 +43,7 @@ const LAYOUT64: typeof LAYOUT32 = {
 };
 export let LAYOUT = LAYOUT32;
 /** REALTIME, REALTIME_COARSE and REALTIME_ALARM are the wall clock (core/libc.zig matches) */
-export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? Date.now() : guestNow() + 1000;
+export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? wallMillis() : guestNow() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
 export function readTs(p: number, unit = 1e6): number { return ldLong(p + LAYOUT.TS_SEC) * 1000 + ldLong(p + LAYOUT.TS_NSEC) / unit; }
 export function writeTs(p: number, ms: number, unit = 1e6): void {
@@ -536,8 +536,8 @@ export function libcInit(): void {
     sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(a)); },
     vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(vaList(a.p()))); },
 
-    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) stLong(p, t); return PTR === 8 ? BigInt(t) : t; },
-    gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
+    time: (_c, a) => { const p = a.p(); const t = Math.floor(wallMillis() / 1000); if (p) stLong(p, t); return PTR === 8 ? BigInt(t) : t; },
+    gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, wallMillis(), 1e3); return 0; },
     clock_gettime: (_c, a) => {
       const id = a.i(), ts = a.p();
       writeTs(ts, clockTime(id)); // MONOTONIC/BOOTTIME: never 0

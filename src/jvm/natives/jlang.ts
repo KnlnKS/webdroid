@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
-import { uptimeMillis, type GuestTimer } from "../../guest-clock";
+import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
@@ -1141,7 +1141,7 @@ rt.register({
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
-    "static currentTimeMillis()J": () => BigInt(Date.now()),
+    "static currentTimeMillis()J": () => BigInt(Math.floor(wallMillis())),
     "static nanoTime()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     // libcore's Object.identityHashCode reads the lock word
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
@@ -1166,7 +1166,7 @@ for (const [name, desc] of [["In", "Ljava/io/InputStream;"], ["Out", "Ljava/io/P
 }
 // Clock.systemUTC's wall time: nanoseconds past `offset` seconds, or -1 beyond ±2^32 s as libcore expects
 rt.registerJni("jdk/internal/misc/VM", "getNanoTimeAdjustment(J)J", (offset: bigint) => {
-  const adjustment = BigInt(Date.now()) * 1_000_000n - offset * 1_000_000_000n;
+  const adjustment = BigInt(Math.round(wallMillis() * 1e6)) - offset * 1_000_000_000n;
   return adjustment > MAX_NANO_ADJUSTMENT || adjustment < -MAX_NANO_ADJUSTMENT ? -1n : adjustment;
 });
 const MAX_NANO_ADJUSTMENT = (1n << 32n) * 1_000_000_000n;
