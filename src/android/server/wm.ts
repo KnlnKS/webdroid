@@ -84,10 +84,11 @@ async function insetsState(): Promise<JObj> {
   const state = await newObj("android/view/InsetsState", "()V");
   await vcall(state, "setDisplayFrame", "(Landroid/graphics/Rect;)V", await displayRect());
   const { width: w, height: h, statusBar, navBar } = device;
-  const add = async (index: number, type: number, l: number, t: number, r: number, b: number) => {
+  const add = async (index: number, type: number, l: number, t: number, r: number, b: number, visible = true) => {
     const id = await scall("android/view/InsetsSource", "createId", "(Ljava/lang/Object;II)I", null, index, type);
     const source = await newObj("android/view/InsetsSource", "(II)V", id, type);
     await vcall(source, "setFrame", "(IIII)Landroid/view/InsetsSource;", l, t, r, b);
+    await vcall(source, "setVisible", "(Z)Landroid/view/InsetsSource;", +visible);
     await vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
   };
   if (statusBar) await add(0, await insetsType("statusBars"), 0, 0, w, statusBar);
@@ -95,7 +96,17 @@ async function insetsState(): Promise<JObj> {
     await add(0, await insetsType("navigationBars"), 0, h - navBar, w, h);
     await add(1, await insetsType("mandatorySystemGestures"), 0, h - navBar, w, h);
   }
+  // the input method's window: the browser keyboard, which the page lays out outside the display
+  await add(0, await insetsType("ime"), 0, h, w, h, imeShown);
   return state;
+}
+let imeShown = false;
+/** the input method window shows or hides: every window hears the new state */
+export async function setImeShown(shown: boolean): Promise<void> {
+  if (imeShown === shown) return;
+  imeShown = shown;
+  const state = await insetsState(), controls = await newObj("android/view/InsetsSourceControl$Array", "()V");
+  for (const ws of windows.values()) await vcall(ws.client, "insetsControlChanged", "(Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;)V", state, controls);
 }
 
 /** the device's configuration, and a full-screen task's override of it: what activities and
