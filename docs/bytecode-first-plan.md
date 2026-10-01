@@ -601,10 +601,15 @@ SurfaceTexture included) and `android/text/` runs from AOSP bytecode over native
 hwui/Skia/minikin/libandroid_runtime semantics, most checked against reference-AVD values in
 fwtest and the browser probes. Only Rect, RectF, Point, PointF and Insets keep a TS spec, holding
 just their field layout (the TS view stack reads `r.left`; every method is AOSP's). New modules:
-`canvas.ts` (`canvasOf`), `rendernode.ts`, `paint.ts` (`paintOf`, `newPaint`), `bitmap.ts`
-(`bitmapOf`, `javaBitmap`), `decode.ts`, `animatedimage.ts`, `shaping.ts`/`harfbuzz.ts`
-(TextRunShaper, PositionedGlyphs, drawGlyphs), `vectordrawable.ts`, `pathparser.ts`,
-`rtanimator.ts`, `animation.ts`, `rendereffect.ts`. `android.animation` also moved to bytecode
+`canvas.ts` (NativeCanvas, `canvasOf`) and `canvas-draw.ts` (the draw natives), `rendernode.ts`,
+`recording.ts` (`Recorder`), `paint.ts` (`paintOf`, `newPaint`), `maskfilter.ts`, `patheffect.ts`,
+`matrix.ts`, `ninepatch.ts`, `bitmap.ts` (`bitmapOf`, `javaBitmap`), `decode.ts`,
+`animatedimage.ts`, `shaping.ts`/`harfbuzz.ts` (TextRunShaper, PositionedGlyphs, drawGlyphs),
+`vectordrawable.ts`, `pathparser.ts`, `rtanimator.ts`, `animation.ts`, `rendereffect.ts`;
+`drawable.ts` is the view stack's bridge (`drawAt`, `adoptDrawable`). fwtest's exercises live in
+`scripts/fwtest/`. A code-quality review pass followed the flips (history: "Stage C completed"):
+native handle ids now wait out 1,024 later releases before reuse, since AOSP compares ids to tell
+a changed native instance (`Paint.getNativeInstance`, ComposeShader). `android.animation` also moved to bytecode
 (a Stage D prefix): AOSP's drawables need its AnimatorInflater and keyframe semantics.
 
 **Gates on the branch tip, rerun after the rebase:** typecheck; `bun run test` 1,285 (the six

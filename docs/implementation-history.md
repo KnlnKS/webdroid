@@ -1197,6 +1197,16 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     (Runtime.drive returns it as a value) — XML `<set>` children, menu `<group>` items and child
     visibility never ran; inner generators take a `$` suffix. The TS Handler lacked the
     asynchronous constructors bytecode now calls.
+  A review pass then restructured the flips without changing behaviour (canvas.ts, paint.ts,
+  textview.ts and fwtest.ts split along their seams; one decode request model; one Recorder; the
+  bitmap context Proxy replaced by marking bitmaps written at draw entry, 176-214 -> 4-34 ns per
+  draw in V8) and fixed what it found: handle ids were reused at once, so `setLocalMatrix` twice
+  left a paint drawing the stale shader; a Picture drawn into a recording replayed at record
+  time; text ignored the paint's blend mode; outline and crop clips skipped the canvas's clip
+  bounds; decorations and text on a path measured with browser widths, not minikin's; ImageView
+  applied its alpha twice; verifyDrawable and hotspots skipped subclass drawables; drawable
+  adoption differed from AOSP per setter (ProgressBar never set a callback); a malformed vector
+  path string did not throw.
   Limits: text hyphenation (no patterns), single bidi direction per drawn run, CJK/Arabic/serif/
   monospace fonts absent from the page, glyph fake-bold not outlined, color management (sRGB
   only), 565/4444/F16 not quantized until read back, vertices/meshes/clipShader and texture-layer
