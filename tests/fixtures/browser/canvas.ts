@@ -121,6 +121,16 @@ async function probe() {
   for (let y = 0; y < 60; y++) for (let x = 0; x < 200; x++) if (pixels[y * 200 + x] >>> 24) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
   out.textOnPath = [minX, minY, maxX, maxY];
 
+  // a picture drawn into another picture's recording replays when that one is drawn, over its target
+  const inner = await newObj("android/graphics/Picture", "()V"), outer = await newObj("android/graphics/Picture", "()V");
+  await vcall(await vcall(inner, "beginRecording", "(II)Landroid/graphics/Canvas;", 20, 20), "drawColor", "(I)V", 0xffff0000 | 0);
+  await vcall(inner, "endRecording", "()V");
+  await vcall(await vcall(outer, "beginRecording", "(II)Landroid/graphics/Canvas;", 20, 20), "drawPicture", "(Landroid/graphics/Picture;)V", inner);
+  await vcall(outer, "endRecording", "()V");
+  const pb = await bitmap(20, 20);
+  await vcall(await newObj("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", pb), "drawPicture", "(Landroid/graphics/Picture;)V", outer);
+  out.nestedPicture = [await px(pb, 0, 0), await px(pb, 19, 19)];
+
   // a RenderNode's recording canvas, and the software canvas refusing to draw a node
   const node = await newObj("android/graphics/RenderNode", `(${S})V`, "n");
   const rc = await vcall(node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", 100, 50);

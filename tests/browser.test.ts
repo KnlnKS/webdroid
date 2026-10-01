@@ -98,6 +98,7 @@ test.concurrent("AOSP's Canvas reports the reference device's clips, saves, laye
     partialClip: ["[1.0, 0.0, 3.0][0.0, 1.0, 4.0][0.0, 0.0, 1.0]", "[-3,-4][7,6]"], partialMatrix: ["[1.0, 0.0, 0.0][0.0, 1.0, 0.0][0.0, 0.0, 1.0]", "[1,1][3,3]"],
     density: [0, "ff0000ff", "0", "800000ff", "0"], colors: ["80ff0000", "8000ff00", "0"],
     unclipped: [1, 2, "0", "ffff0000", 1, "ff807f00", "ff00ff00"], punch: ["7fffffff", "ffffffff"],
+    nestedPicture: ["ffff0000", "ffff0000"],
     recording: [100, 1, 8192, 0, "[0,0][100,50]", 0, 1],
     recorded: [1, "No recording in progress, forgot to call #beginRecording()?", "Software rendering doesn't support drawRenderNode"],
     shaders: { gradient: true, replaced: "1,0,0,1,5,0", bitmap: true, composed: "source-over", recomposed: "1,0,0,1,7,0" },
