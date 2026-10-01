@@ -1301,6 +1301,41 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Limits: package visibility (AppsFilter, `<queries>`) is not applied; ResolveInfo.filter and
   match are not filled; resolveIntent returns the best match rather than the chooser for ties;
   installs reach only the realm that ran them; ILegacyPermissionManager answers nothing.
+- 2026-10-02, Stage D: Intent and its kin on bytecode. Intent, ComponentName, IntentFilter,
+  PatternMatcher, IntentSender, UriMatcher, ContentUris, UriPermission and their exceptions run
+  from framework.jar over the TS Bundle, Uri, Rect and Parcel; the shell reaches them only
+  through their Java API (`intent.ts` helpers: newIntent, mkComponentName, componentParts,
+  intentQuery, putExtra). Intents cross processes as AOSP's parcel of them, which needed
+  BaseBundle's lazy unparcelling: Parcel.readBundle keeps the bytes after BUNDLE_MAGIC (and their
+  binders) until an accessor reads the bundle, and writing an unread bundle copies them back, so
+  the broker resolves receivers without the sender's extras classes (the TS encoding used to drop
+  extras for that). TS code that reads `JBaseBundle.map` must `unparcel` first; the getter throws
+  while parcelled. The PendingIntent registry keys records by Intent.filterEquals and applies
+  FLAG_UPDATE_CURRENT with Intent.replaceExtras. Manifest `<intent-filter>`s become the
+  IntentFilter ParsedIntentInfoUtils builds (cached per node) and resolve through
+  IntentFilter.match, as IntentResolver does: about 0.1-0.4 ms for YouTube's ~90 service filters
+  once built, 16-20 ms for the first query that builds them.
+  Device code against the deleted copies, same calls: the TS parcel layout lacked API 35's
+  mExtendedFlags after mFlags; toUri wrote `action=VIEW` beside a data scheme and extras in
+  insertion order (AOSP omits that action and walks the ArrayMap); Intent.toString was
+  `Intent{act=… cmp=…}` and ComponentName.toString Object's; Intent.parseUri and
+  IntentFilter(String, String) were missing. The reference build's
+  Flags.relativeReferenceIntentFilters is a constant true (FeatureFlagsImpl), so
+  `<uri-relative-filter-group>`s are parsed and decide matches (the first group whose filters all
+  match allows or blocks; a URI no group matches does not match); the TS matcher rejected every
+  filter that had one. IntentSender's <clinit> sets ComponentOptions' background start mode
+  (COMPAT through DENIED kept, the ALLOW modes stored as ALLOWED), which the TS ActivityOptions
+  now holds. Java-facing entry points that call Java after a suspension are driven generators
+  (registerReceiver, startService, stopService, the IntentSender binder methods), per the
+  PackageManager entry's thread finding.
+  Measured: an intent with eight extras put, read, parcelled and read back costs 8.9-11.9 us in Bun
+  against the TS copy's 7.2-9.4 us. Live YouTube in a six-flow batch fails on load as on the
+  parent (2 of 4 parent batches, 1 of 4 here, all passing alone); live Harmonic misses a swipe
+  alone on both (1 of 3 here, 1 of 4 on the parent); TikTok wedges after background on both.
+  Limits: PendingIntent itself is still TS (IntentSender is AOSP's over its binder); manifest
+  attribute references resolve against the running app's resources, not the owner's; priorities
+  are not clamped for non-privileged apps; Intent.prepareToLeaveProcess's StrictMode and
+  file-URI checks (Uri.checkFileUriExposed and friends) have no TS Uri counterpart yet.
 
 ## Java, storage and framework semantics
 
