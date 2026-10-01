@@ -16,7 +16,8 @@ import { handle, deref, FINALIZER } from "./handles";
 import { construct, scall, vcall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
-import { extractBitmapAlpha, paintAt } from "./paint";
+import { paintAt } from "./paint";
+import { extractBitmapAlpha } from "./maskfilter";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];

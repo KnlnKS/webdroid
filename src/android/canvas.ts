@@ -13,7 +13,9 @@ import { NativePath, PathMeasure, inversePath, nativePathOf } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
 import { drawGlyphs } from "./shaping";
-import { NativePaint, BlurMask, copyPaint, defaultPaint, beginPaintShadow, measureText, strokeRec, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
+import { BlurMask } from "./maskfilter";
+import { strokeRec } from "./patheffect";
+import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, measureText, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import { windowRoot } from "./rtanimator";
 import {
   type JRect, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
