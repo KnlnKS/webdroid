@@ -44,6 +44,7 @@ import "./android/mediasession";
 import "./android/intentservice";
 import "./android/resultreceiver";
 import "./android/graphics";
+import "./android/matrix";
 import "./android/bitmap";
 import "./android/decode";
 import "./android/animatedimage";

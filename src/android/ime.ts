@@ -14,7 +14,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
 import { csText } from "../jvm/natives/jchars";
 import { JView, invalidate, rootOf } from "./view";
-import { matrixOf, javaMatrix, identity, type Mat } from "./graphics";
+import { matrixOf, javaMatrix, identity, type Mat } from "./matrix";
 import { AID, type JAttrSet, obtainStyled } from "./res";
 import { hostStub } from "./binder";
 import { loadDrawableRV } from "./drawable";

@@ -9,7 +9,7 @@
 
 import { rt, declaredField } from "../jvm/runtime";
 import { deref, handle, release } from "./handles";
-import { type Mat, mapPoint } from "./graphics";
+import { type Mat, mapPoint } from "./matrix";
 
 type PathOp = [string, ...number[]];
 type Verb = number[];

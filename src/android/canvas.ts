@@ -16,10 +16,10 @@ import { drawGlyphs } from "./shaping";
 import { NativePaint, BlurMask, copyPaint, defaultPaint, beginPaintShadow, measureText, strokeRec, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import { windowRoot } from "./rtanimator";
 import {
-  type JRect, type Affine, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, type Mat,
-  cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
-  setAffine, applyMatrix, drawNinePatch, argbOfColorLong, BLEND_MODES, COMPOSITE,
+  type JRect, type NativeColorFilter, NativeBitmapShader, type NinePatchChunk, cssColor, canvasLocalBounds, shaderIdentity, tintedBmp, recolor,
+  drawNinePatch, argbOfColorLong, BLEND_MODES, COMPOSITE,
 } from "./graphics";
+import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;

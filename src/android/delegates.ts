@@ -17,10 +17,10 @@ import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
 import {
   type JRectF,
-  type Mat, Camera3D, IDENTITY, identity, mul, translateM, scaleM, skewM, sinCosM, rotateM, about, invert, mapPoint, isIdentity, applyMatrix,
-  NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, localMatrix, gradient, composeShader,
+  NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, composeShader,
   type NinePatchChunk, isNinePatchChunk, validNinePatchChunk, transparentPatches,
 } from "./graphics";
+import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { paintAt, measureCtx, preloadPaint, setFontMetrics } from "./paint";
 import { initDeviceLocales } from "./resnative";
@@ -121,134 +121,6 @@ delegate("android/graphics/Color", {
 delegate("android/graphics/ColorSpace$Rgb$Native", {
   "nativeCreate(FFFFFFF[F)J": (...args: [...number[], Float32Array]) => handle({ transfer: args.slice(0, 7), xyz: Float32Array.from(args[7] as Float32Array) }),
   "nativeGetNativeFinalizer()J": () => FINALIZER,
-});
-
-// ── android.graphics.Matrix ────────────────────────────────────────────────────────────
-// The 3x3 and its math live in graphics.ts, beside the bridge TS reaches it through. Every write
-// lands in the handle's own array, because TS state (an ImageView's matrix, a Transformation's)
-// can be the array behind a Java Matrix.
-const matrix = (h: bigint) => deref<Mat>(h);
-const put = (h: bigint, m: ArrayLike<number>) => { matrix(h).set(m); };
-
-/** pre/post/set are the same three compositions for every transform AOSP names; Translate has
- *  no pivoted form and SinCos only the set ones */
-function matrixOps(name: string, make: (...a: number[]) => Mat, arity: number, pivot = true, compose = true): Record<string, unknown> {
-  const plain = `(J${"F".repeat(arity)})V`;
-  const pivoted = `(J${"F".repeat(arity + 2)})V`;
-  const at = (a: number[]) => (a.length > arity ? about(make(...a.slice(0, arity)), a[arity], a[arity + 1]) : make(...a));
-  const set = (h: bigint, ...a: number[]) => put(h, at(a));
-  const pre = (h: bigint, ...a: number[]) => put(h, mul(matrix(h), at(a)));
-  const post = (h: bigint, ...a: number[]) => put(h, mul(at(a), matrix(h)));
-  const forms = pivot ? [plain, pivoted] : [plain];
-  return Object.fromEntries(forms.flatMap((desc) => [[`nSet${name}${desc}`, set],
-    ...compose ? [[`nPre${name}${desc}`, pre], [`nPost${name}${desc}`, post]] : []]));
-}
-const hasPerspective = (m: Mat) => m[6] !== 0 || m[7] !== 0 || m[8] !== 1;
-/** SkMatrix::rectStaysRect */
-function rectStaysRect(m: Mat): boolean {
-  if (hasPerspective(m)) return false;
-  return m[1] === 0 && m[3] === 0 ? m[0] !== 0 && m[4] !== 0 : m[0] === 0 && m[4] === 0 && m[1] !== 0 && m[3] !== 0;
-}
-/** SkMatrix::mapVectors: without the translation, or under perspective, less where the origin maps */
-function mapVector(m: Mat, x: number, y: number): [number, number] {
-  if (!hasPerspective(m)) return [m[0] * x + m[1] * y, m[3] * x + m[4] * y];
-  const [px, py] = mapPoint(m, x, y), [ox, oy] = mapPoint(m, 0, 0);
-  return [px - ox, py - oy];
-}
-// SkMatrix::setPolyToPoly: each point set becomes the image of the unit square (or its first two
-// or three corners), and the result is dst's map after the inverse of src's
-const nearlyZero = (x: number) => Math.fround(x * x) === 0;
-function polyMap(p: Float32Array, i: number, n: number): Mat | null {
-  const x = (k: number) => p[i + k * 2], y = (k: number) => p[i + k * 2 + 1];
-  if (n === 2) return Float64Array.of(y(1) - y(0), x(1) - x(0), x(0), x(0) - x(1), y(1) - y(0), y(0), 0, 0, 1);
-  if (n === 3) return Float64Array.of(x(2) - x(0), x(1) - x(0), x(0), y(2) - y(0), y(1) - y(0), y(0), 0, 0, 1);
-  const x0 = x(2) - x(0), y0 = y(2) - y(0), x1 = x(2) - x(1), y1 = y(2) - y(1), x2 = x(2) - x(3), y2 = y(2) - y(3);
-  let a1: number, a2: number, denom: number;
-  if (x2 > 0 ? y2 > 0 ? x2 > y2 : x2 > -y2 : y2 > 0 ? -x2 > y2 : x2 < y2) {
-    if (nearlyZero(denom = x1 * y2 / x2 - y1)) return null;
-    a1 = ((x0 - x1) * y2 / x2 - y0 + y1) / denom;
-  } else {
-    if (nearlyZero(denom = x1 - y1 * x2 / y2)) return null;
-    a1 = (x0 - x1 - (y0 - y1) * x2 / y2) / denom;
-  }
-  if (x1 > 0 ? y1 > 0 ? x1 > y1 : x1 > -y1 : y1 > 0 ? -x1 > y1 : x1 < y1) {
-    if (nearlyZero(denom = y2 - x2 * y1 / x1)) return null;
-    a2 = (y0 - y2 - (x0 - x2) * y1 / x1) / denom;
-  } else {
-    if (nearlyZero(denom = y2 * x1 / y1 - x2)) return null;
-    a2 = ((y0 - y2) * x1 / y1 - x0 + x2) / denom;
-  }
-  return Float64Array.of(a2 * x(3) + x(3) - x(0), a1 * x(1) + x(1) - x(0), x(0),
-    a2 * y(3) + y(3) - y(0), a1 * y(1) + y(1) - y(0), y(0), a2, a1, 1);
-}
-
-delegate("android/graphics/Matrix$ExtraNatives", {
-  "nCreate(J)J": (src: bigint) => handle(src ? Float64Array.from(matrix(src)) : identity()),
-  "nGetNativeFinalizer()J": () => FINALIZER,
-});
-delegate("android/graphics/Matrix", {
-  ...matrixOps("Translate", translateM, 2, false),
-  ...matrixOps("Scale", scaleM, 2),
-  ...matrixOps("Skew", skewM, 2),
-  ...matrixOps("Rotate", rotateM, 1),
-  ...matrixOps("SinCos", sinCosM, 2, true, false),
-  "nReset(J)V": (h: bigint) => put(h, IDENTITY),
-  "nSet(JJ)V": (h: bigint, s: bigint) => put(h, s ? matrix(s) : IDENTITY),
-  "nSetConcat(JJJ)V": (h: bigint, a: bigint, b: bigint) => put(h, mul(matrix(a), matrix(b))),
-  "nPreConcat(JJ)V": (h: bigint, o: bigint) => put(h, mul(matrix(h), matrix(o))),
-  "nPostConcat(JJ)V": (h: bigint, o: bigint) => put(h, mul(matrix(o), matrix(h))),
-  "nIsIdentity(J)Z": (h: bigint) => +isIdentity(matrix(h)),
-  "nIsAffine(J)Z": (h: bigint) => +!hasPerspective(matrix(h)),
-  "nRectStaysRect(J)Z": (h: bigint) => +rectStaysRect(matrix(h)),
-  "nEquals(JJ)Z": (a: bigint, b: bigint) => { const m = matrix(a), o = matrix(b); return +m.every((v, i) => v === o[i]); },
-  "nGetValues(J[F)V": (h: bigint, out: Float32Array) => out.set(matrix(h)),
-  "nSetValues(J[F)V": (h: bigint, v: Float32Array) => put(h, v.subarray(0, 9)),
-  "nInvert(JJ)Z": (h: bigint, into: bigint) => {
-    const inv = invert(matrix(h));
-    if (inv) put(into, inv);
-    return +!!inv;
-  },
-  "nMapPoints(J[FI[FIIZ)V": (h: bigint, dst: Float32Array, di: number, src: Float32Array, si: number, n: number, isPts: number) => {
-    const m = matrix(h), map = isPts ? mapPoint : mapVector;
-    if (src === dst && si !== di) src = src.slice(si, si + n * 2), si = 0;
-    for (let i = 0; i < n * 2; i += 2) {
-      const [x, y] = map(m, src[si + i], src[si + i + 1]);
-      dst[di + i] = x; dst[di + i + 1] = y;
-    }
-  },
-  "nMapRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z": (h: bigint, dst: Rect, src: Rect) => {
-    const m = matrix(h);
-    const [x0, y0] = mapPoint(m, src.left, src.top), [x1, y1] = mapPoint(m, src.right, src.top);
-    const [x2, y2] = mapPoint(m, src.right, src.bottom), [x3, y3] = mapPoint(m, src.left, src.bottom);
-    dst.left = Math.min(x0, x1, x2, x3); dst.right = Math.max(x0, x1, x2, x3);
-    dst.top = Math.min(y0, y1, y2, y3); dst.bottom = Math.max(y0, y1, y2, y3);
-    return +rectStaysRect(m);
-  },
-  // SkMatrix::setRectToRect: an empty source resets and fails, an empty destination scales to 0
-  "nSetRectToRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z": (h: bigint, src: Rect, dst: Rect, stf: number) => {
-    const sw = src.right - src.left, sh = src.bottom - src.top;
-    const dw = dst.right - dst.left, dh = dst.bottom - dst.top;
-    if (!(sw > 0 && sh > 0)) { put(h, IDENTITY); return 0; }
-    if (!(dw > 0 && dh > 0)) { put(h, [0, 0, 0, 0, 0, 0, 0, 0, 1]); return 1; }
-    // FILL stretches each axis; START/CENTER/END keep the aspect and align the slack
-    let sx = dw / sw, sy = dh / sh;
-    if (stf !== 0) sx = sy = Math.min(sx, sy);
-    const k = stf === 2 ? 0.5 : stf === 3 ? 1 : 0;
-    put(h, [sx, 0, dst.left - src.left * sx + (dw - sw * sx) * k, 0, sy, dst.top - src.top * sy + (dh - sh * sy) * k, 0, 0, 1]);
-    return 1;
-  },
-  "nSetPolyToPoly(J[FI[FII)Z": (h: bigint, src: Float32Array, si: number, dst: Float32Array, di: number, n: number) => {
-    if (n === 0) { put(h, IDENTITY); return 1; }
-    if (n === 1) { put(h, translateM(dst[di] - src[si], dst[di + 1] - src[si + 1])); return 1; }
-    const from = polyMap(src, si, n), inverse = from && invert(from), to = inverse && polyMap(dst, di, n);
-    if (!to) return 0;
-    put(h, mul(to, inverse!));
-    return 1;
-  },
-  "nMapRadius(JF)F": (h: bigint, r: number) => {
-    const m = matrix(h), [ax, ay] = mapVector(m, r, 0), [bx, by] = mapVector(m, 0, r);
-    return Math.fround(Math.sqrt(Math.hypot(ax, ay) * Math.hypot(bx, by)));
-  },
 });
 
 // ── ColorFilter and Shader: the native instances a native paint draws with ───────────────────
@@ -482,15 +354,15 @@ delegate("android/graphics/Path", {
   "nAddRoundRect(JFFFF[FI)V": (h: bigint, l: number, t: number, r: number, b: number, radii: Float32Array, d: number) => path(h).addRoundRect(l, t, r, b, radii, d),
   "nAddPath(JJ)V": (h: bigint, o: bigint) => path(h).append(path(o)),
   "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => path(h).append(path(o), undefined, dx, dy),
-  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => path(h).append(path(o), matrix(mat)),
+  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => path(h).append(path(o), matrixAt(mat)),
 
   "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => path(h).offset(dx, dy),
-  "nTransform(JJ)V": (h: bigint, mat: bigint) => path(h).transform(matrix(mat)),
+  "nTransform(JJ)V": (h: bigint, mat: bigint) => path(h).transform(matrixAt(mat)),
   // a null destination transforms in place
   "nTransform(JJJ)V": (h: bigint, mat: bigint, dst: bigint) => {
     const d = dst ? path(dst) : path(h);
     d.set(path(h));
-    d.transform(matrix(mat));
+    d.transform(matrixAt(mat));
   },
   "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => path(h).bounds(r),
   "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => (path(h).isRect(r) ? 1 : 0),
@@ -513,7 +385,7 @@ delegate("android/graphics/PathMeasure", {
   "native_setPath(JJZ)V": (h: bigint, p: bigint, forceClosed: number) => measure(h).setPath(p ? path(p) : undefined, !!forceClosed),
   "native_getLength(J)F": (h: bigint) => measure(h).length(),
   "native_getPosTan(JF[F[F)Z": (h: bigint, d: number, pos: Float32Array | null, tan: Float32Array | null) => (measure(h).getPosTan(d, pos, tan) ? 1 : 0),
-  "native_getMatrix(JFJI)Z": (h: bigint, d: number, m: bigint, flags: number) => (measure(h).getMatrix(d, matrix(m), flags) ? 1 : 0),
+  "native_getMatrix(JFJI)Z": (h: bigint, d: number, m: bigint, flags: number) => (measure(h).getMatrix(d, matrixAt(m), flags) ? 1 : 0),
   "native_getSegment(JFFJZ)Z": (h: bigint, start: number, stop: number, dst: bigint, moveTo: number) =>
     (measure(h).getSegment(start, stop, path(dst), !!moveTo) ? 1 : 0),
   "native_isClosed(J)Z": (h: bigint) => (measure(h).isClosed() ? 1 : 0),
@@ -619,7 +491,7 @@ delegate("android/graphics/Camera", {
   "getLocationX()F": function (this: object) { return Math.fround(camera(this).location[0] / 72); },
   "getLocationY()F": function (this: object) { return Math.fround(camera(this).location[1] / 72); },
   "getLocationZ()F": function (this: object) { return Math.fround(camera(this).location[2] / 72); },
-  "nativeGetMatrix(J)V": function (this: object, m: bigint) { camera(this).matrix(matrix(m)); },
+  "nativeGetMatrix(J)V": function (this: object, m: bigint) { camera(this).matrix(matrixAt(m)); },
   "nativeApplyToCanvas(J)V": function (this: object, h: bigint) {
     const m = identity();
     camera(this).matrix(m);

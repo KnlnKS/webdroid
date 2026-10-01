@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, dr
 import { vcall, newObj, after } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
-import { identity, javaMatrix, about, rotateM, scaleM, translateM, IDENTITY } from "./graphics";
+import { identity, javaMatrix, about, rotateM, scaleM, translateM, IDENTITY } from "./matrix";
 import { mangleMethod } from "../jvm/abi";
 import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jcoll";

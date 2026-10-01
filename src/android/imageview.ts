@@ -4,7 +4,8 @@ import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, dra
 import { curThread, vcall, vcallOn, mkEnumSet, construct, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt } from "./res";
-import { modeConstant, identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat } from "./graphics";
+import { modeConstant } from "./graphics";
+import { identity, isIdentity, javaMatrix, matrixOf, applyMatrix, setAffine, IDENTITY, type Mat } from "./matrix";
 import { canvasOf, type JavaCanvas } from "./canvas";
 
 export class JImageView extends JView {
