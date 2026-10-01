@@ -158,7 +158,6 @@ const SERVICE_CLASS: Record<string, string> = {
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
   captioning: "android/view/accessibility/CaptioningManager",
-  sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
   autofill: "android/view/autofill/AutofillManager",
   appwidget: "android/appwidget/AppWidgetManager",
@@ -174,6 +173,7 @@ const SERVICE_CLASS: Record<string, string> = {
   bluetooth: "android/bluetooth/BluetoothManager",
   nfc: "android/nfc/NfcManager",
 };
+const mainLooper = () => vcall(mainHandler(), "getLooper", "()Landroid/os/Looper;");
 /** managers AOSP's bytecode serves over the services hosted behind binder, constructed as
  *  SystemServiceRegistry constructs them (for the application: this cache is per process) */
 const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promise<unknown>]> = {
@@ -232,6 +232,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
     "(Landroid/content/Context;Lcom/android/internal/app/IBatteryStats;Landroid/os/IBatteryPropertiesRegistrar;)V",
     ctx, await hostedService("batterystats"), await hostedService("batteryproperties"))],
+  sensor: ["android/hardware/SensorManager", async (ctx) =>
+    newObj("android/hardware/SystemSensorManager", "(Landroid/content/Context;Landroid/os/Looper;)V", ctx, await mainLooper())],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };

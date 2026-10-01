@@ -768,39 +768,6 @@ for (const [name, methods, statics] of [
       return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
     },
   }],
-  ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(),
-    ...stubs(0, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",
-      "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z",
-      "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z"),
-    ...noops("unregisterListener(Landroid/hardware/SensorEventListener;)V",
-      "unregisterListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;)V"),
-    "static getAltitude(FF)F": (p0: number, p: number) => Math.fround(44330 * Math.fround(1 - Math.fround(Math.pow(Math.fround(p / p0), Math.fround(1 / Math.fround(5.255)))))),
-    "static getOrientation([F[F)[F": (r: Float32Array, values: Float32Array) => {
-      const stride = r.length === 9 ? 3 : 4;
-      values[0] = Math.atan2(r[1], r[stride + 1]);
-      values[1] = Math.asin(-r[2 * stride + 1]);
-      values[2] = Math.atan2(-r[2 * stride], r[2 * stride + 2]);
-      return values;
-    },
-    "static getRotationMatrix([F[F[F[F)Z": (r: Float32Array | null, inclination: Float32Array | null, gravity: Float32Array, geomagnetic: Float32Array) => {
-      let ax = gravity[0], ay = gravity[1], az = gravity[2];
-      const ex = geomagnetic[0], ey = geomagnetic[1], ez = geomagnetic[2];
-      let hx = ey * az - ez * ay, hy = ez * ax - ex * az, hz = ex * ay - ey * ax;
-      const h = Math.hypot(hx, hy, hz);
-      if (h < 0.1) return 0;
-      hx /= h; hy /= h; hz /= h;
-      const a = Math.hypot(ax, ay, az);
-      ax /= a; ay /= a; az /= a;
-      const mx = ay * hz - az * hy, my = az * hx - ax * hz, mz = ax * hy - ay * hx;
-      if (r?.length === 9) r.set([hx, hy, hz, mx, my, mz, ax, ay, az]);
-      else if (r?.length === 16) r.set([hx, hy, hz, 0, mx, my, mz, 0, ax, ay, az, 0, 0, 0, 0, 1]);
-      if (inclination?.length === 9 || inclination?.length === 16) {
-        const e = Math.hypot(ex, ey, ez), c = (ex * mx + ey * my + ez * mz) / e, s = (ex * ax + ey * ay + ez * az) / e;
-        if (inclination.length === 9) inclination.set([1, 0, 0, 0, c, s, 0, -s, c]);
-        else inclination.set([1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]);
-      }
-      return 1;
-    } }],
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
