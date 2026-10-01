@@ -3,7 +3,7 @@ import { guestNow } from "../guest-clock";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, type Colors, colorFor, colorList, rvColors, type JDrawable, loadDrawableRV, loadDrawable,
-  drawChild, drawableSize, drawableBounds, setDrawableCallback,
+  drawChild, drawableSize,
 } from "./drawable";
 import { type NativePaint, newPaint, paintOf, paintTypeface, setPaintTypeface, fontDescent, fontAscent, fontTop, fontBottom } from "./paint";
 import { csText, csLength } from "../jvm/natives/jchars";
@@ -20,8 +20,10 @@ import {
 import { TV } from "./axml";
 import { tfMedium, typefaceOf } from "./fonts";
 import { type NativeSpec, rt, JObj, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
-import { jarray, mangleMethod, jmethod } from "../jvm/abi";
-import { TextViewLayouts, Align, type TextViewLayout } from "./textview-layout";
+import { jarray, mangleMethod } from "../jvm/abi";
+import { TextViewLayouts, Align, type TextViewLayout, relayout } from "./textview-layout";
+import { compoundDrawableMethods, compoundPads, compoundWidth, compoundHeight, setIntrinsicDrawables, syncCompoundStates } from "./textview-compound";
+import { focusedEdit, inputEl, focusEditText, selectionStart, selectionEnd, setSelection, selectAll } from "./textview-input";
 
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 
@@ -65,7 +67,7 @@ export class JTextView extends JView {
   allCaps = false;
   /** set once a style or the app has spoken about textAllCaps, so a widget default cannot
    *  overrule it afterwards */
-  capsSet: boolean | undefined = undefined;
+  capsSet = false;
   drawableL: JDrawable | null = null;
   drawableT: JDrawable | null = null;
   drawableR: JDrawable | null = null;
@@ -163,13 +165,6 @@ export class JTextView extends JView {
 }
 const isEditable = (cs: unknown) => cs != null && typeof cs !== "string" && rt.iof(cs, "android/text/Editable");
 const isSpannable = (cs: unknown) => cs != null && typeof cs !== "string" && rt.iof(cs, "android/text/Spannable");
-const SELECTION = "android/text/Selection";
-export const selectionStart = (text: unknown): number | Promise<number> =>
-  text == null ? -1 : scall(SELECTION, "getSelectionStart", "(Ljava/lang/CharSequence;)I", text);
-export const selectionEnd = (text: unknown): number | Promise<number> =>
-  text == null ? -1 : scall(SELECTION, "getSelectionEnd", "(Ljava/lang/CharSequence;)I", text);
-export const setSelection = (text: unknown, start: number, end: number): unknown =>
-  scall(SELECTION, "setSelection", "(Landroid/text/Spannable;II)V", text, start, end);
 
 /** TextView.ChangeWatcher: a span over the whole of a Spannable mText through which its edits
  *  reach the view and its listeners */
@@ -200,8 +195,7 @@ rt.register({
   },
 });
 /** setText's last step for Spannable text: its ChangeWatcher, replacing those other views left in it */
-const watchText = driven(function* watchText(tv: JTextView, text: unknown): Gen {
-  const length: number = yield csLength(text);
+const watchText = driven(function* watchText(tv: JTextView, text: unknown, length: number): Gen {
   for (const old of yield vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, length, rt.classFor(CHANGE_WATCHER)))
     yield vcall(text, "removeSpan", "(Ljava/lang/Object;)V", old);
   tv.changeWatcher ??= Object.assign(rt.make(CHANGE_WATCHER), { tv });
@@ -225,7 +219,7 @@ const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, 
   const link = look("textColorLink");
   if (link) {
     tv.linkColors = yield rvColors(res, link, tv.theme, linkColor(tv.paintT));
-    tv.updateLinkColor();
+    yield tv.updateLinkColor();
   }
   const st = look("textStyle");
   if (st) tv.styleBits = rvInt(res, st, 0);
@@ -320,7 +314,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   const link = g(34);
   if (link) {
     tv.linkColors = yield rvColors(res, link, tv.theme, linkColor(tv.paintT));
-    tv.updateLinkColor();
+    yield tv.updateLinkColor();
   }
   const cursor = g(35);
   if (cursor?.t === TV.REFERENCE) tv.cursorDrawableRes = cursor.d;
@@ -333,10 +327,6 @@ const textCursorDrawable = driven(function* textCursorDrawable(tv: JTextView): G
   }
   return tv.cursorDrawable;
 });
-/** AOSP's setters call requestLayout() and invalidate() on the view itself, which a subclass may override */
-function relayout(tv: JTextView): unknown {
-  return after(vcall(tv, "requestLayout", "()V"), () => vcall(tv, "invalidate", "()V"));
-}
 function redraw(tv: JTextView): unknown { return vcall(tv, "invalidate", "()V"); }
 /** AOSP's mLayout != null: measured since the text last changed */
 const hasLayout = (tv: JTextView) => tv.layoutWidthFor >= 0;
@@ -348,52 +338,6 @@ const setTextShadow = driven(function* setTextShadow(this: JTextView, radius: nu
 function setTextAppearance(this: JTextView, id: number) {
   return this.jres ? applyTextAppearance(this, this.jres, id) : undefined;
 }
-/** AOSP: the old drawables let go, the new ones called back to this view, given its state and tint */
-const setCompoundDrawables = driven(function* setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
-  const next = [l, t, r, b];
-  for (const d of [this.drawableL, this.drawableT, this.drawableR, this.drawableB]) if (d && !next.includes(d)) yield setDrawableCallback(d, null);
-  this.drawableL = l; this.drawableT = t; this.drawableR = r; this.drawableB = b;
-  for (const d of next) if (d) yield setDrawableCallback(d, this);
-  if (this.drawableTint) yield applyCompoundTint(this);
-  yield syncCompoundStates(this);
-  yield relayout(this);
-});
-/** AOSP applyCompoundDrawableTint: each compound drawable mutated and given the tint list */
-const applyCompoundTint = driven(function* applyCompoundTint(tv: JTextView): Gen {
-  const thread = curThread;
-  for (const d of [tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB]) if (d) {
-    yield vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;");
-    yield vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tv.drawableTint);
-  }
-  yield syncCompoundStates(tv);
-  invalidate(tv);
-});
-/** AOSP hands the compound drawables the view's state when they arrive and on every change:
- *  a single-choice row's radio is a drawableStart that shows state_checked. On a state change
- *  it invalidates each drawable the new state changed. */
-const syncCompoundStates = driven(function* syncCompoundStates(tv: JTextView, changed = false): Gen {
-  if (!tv.drawableL && !tv.drawableT && !tv.drawableR && !tv.drawableB) return;
-  const thread = curThread, state = Int32Array.from(tv.drawableState());
-  for (const d of [tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB]) {
-    if (d && (yield vcallOn(thread, d, "setState", "([I)Z", state)) && changed)
-      yield vcallOn(thread, tv, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
-  }
-});
-const intrinsicBounds = driven(function* intrinsicBounds(drawables: (JDrawable | null)[]): Gen {
-  const thread = curThread;
-  for (const d of drawables) if (d) {
-    const width = yield drawableSize(d, false, thread), height = yield drawableSize(d, true, thread);
-    yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, width, height);
-  }
-});
-const setIntrinsicDrawables = driven(function* setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
-  yield intrinsicBounds([l, t, r, b]);
-  yield setCompoundDrawables.call(this, l, t, r, b);
-});
-const loadCompound = (tv: JTextView, ids: number[]) => Promise.all(ids.map((id) => (id ? loadDrawable(tv.jres!, id, tv.theme) : null)));
-const DRAWABLES4 = "(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V";
-const compoundWidth = (d: JDrawable | null) => { if (!d) return 0; const b = drawableBounds(d); return Math.max(0, b.right - b.left); };
-const compoundHeight = (d: JDrawable | null) => { if (!d) return 0; const b = drawableBounds(d); return Math.max(0, b.bottom - b.top); };
 /** a TextView subclass's constructors: attach to the context, apply the widget's default style (or
  *  the caller's), then `then` reads what the subclass adds under the same style */
 export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T, set: JAttrSet | null, dsa: number, dsr: number) => unknown): NativeSpec["methods"] {
@@ -429,39 +373,16 @@ function setRawTextSize(tv: JTextView, px: number) {
   tv.tp.textSize = px;
   requestLayout(tv);
 }
-function compoundDrawables(this: JTextView) {
-  return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
-}
-export function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0); }
-export function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0); }
-function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0); }
-function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0); }
-const M_padL = mangleMethod("getCompoundPaddingLeft", "()I"), M_padR = mangleMethod("getCompoundPaddingRight", "()I");
-const M_padT = mangleMethod("getCompoundPaddingTop", "()I"), M_padB = mangleMethod("getCompoundPaddingBottom", "()I");
-/** native getCompoundPadding* bodies that answer synchronously from fields */
-export const syncCompoundPads = new WeakSet<Function>([compoundPadL, compoundPadT, compoundPadR, compoundPadB]);
-/** reused by the synchronous path; callers read it before they can suspend */
-const padScratch = [0, 0, 0, 0];
-/**
- * AOSP measures and draws text within the virtual compound paddings: Switch and SwitchCompat
- * reserve their track there. Only a Java override pays for the calls.
- */
-function compoundPads(tv: JTextView): number[] | Promise<number[]> {
-  const l = jmethod(tv, M_padL)!, t = jmethod(tv, M_padT)!, r = jmethod(tv, M_padR)!, b = jmethod(tv, M_padB)!;
-  if (syncCompoundPads.has(l) && syncCompoundPads.has(t) && syncCompoundPads.has(r) && syncCompoundPads.has(b)) {
-    padScratch[0] = l.call(tv) as number; padScratch[1] = t.call(tv) as number;
-    padScratch[2] = r.call(tv) as number; padScratch[3] = b.call(tv) as number;
-    return padScratch;
-  }
-  return Promise.all([l, t, r, b].map((f) => f.call(tv) as number | Promise<number>)).then((a) => a.map(Number));
-}
-function compoundPadRelative(view: JTextView, start: boolean) {
-  const thread = curThread;
-  return after(vcallOn(thread, view, "getLayoutDirection", "()I"), direction =>
-    vcallOn(thread, view, start !== (direction === 1) ? "getCompoundPaddingLeft" : "getCompoundPaddingRight", "()I"));
+/** a drawable drawn with its bounds' origin at (x, y) */
+function* drawAt$(cv: JavaCanvas, d: JDrawable, x: number, y: number): Gen {
+  const ctx = canvasOf(cv).ctx;
+  ctx.save(); ctx.translate(Math.trunc(x), Math.trunc(y));
+  try { yield drawChild(d, cv); }
+  finally { ctx.restore(); }
 }
 export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
+  ...compoundDrawableMethods,
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
   // Material's Chip hands the text to its ChipDrawable there and nowhere else, and without it
   // the drawable measures itself with no text at all.
@@ -499,9 +420,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     } else if (typeof cs !== "string") cs = yield scall("android/text/TextUtils", "stringOrSpannedString", "(Ljava/lang/CharSequence;)Ljava/lang/CharSequence;", cs);
     const spanned = typeof cs !== "string" || typeof this.rawText !== "string";
     this.rawText = cs;
-    if (isSpannable(cs)) yield watchText(this, cs);
-    invalidate(this);
     const text: string = yield csText(cs);
+    if (isSpannable(cs)) yield watchText(this, cs, text.length);
+    invalidate(this);
     if (text !== this.text || spanned) yield* this.textChanged$(text);
     if (notify) {
       yield* this.sendTextEvent$("onTextChanged", cs, 0, oldLength, text.length);
@@ -604,26 +525,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setTextAppearance(I)V": function (this: JTextView, id: number) {
     return vcall(this, "setTextAppearance", "(Landroid/content/Context;I)V", this.ctx, id);
   },
-  // AOSP chains these through the overridable forms: an (IIII) call reaches the Drawable form,
-  // and that one the plain setter (AppCompat and Material hook the drawables there)
-  "setCompoundDrawablesWithIntrinsicBounds(IIII)V": driven(function* (this: JTextView, l: number, t: number, r: number, b: number): Gen {
-    const [dl, dt, dr, db] = yield loadCompound(this, [l, t, r, b]);
-    yield vcall(this, "setCompoundDrawablesWithIntrinsicBounds", DRAWABLES4, dl, dt, dr, db);
-  }),
-  "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
-    yield intrinsicBounds([l, t, r, b]);
-    yield vcall(this, "setCompoundDrawables", DRAWABLES4, l, t, r, b);
-  }),
-  "setCompoundDrawables(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "getCompoundDrawables()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
-  "setCompoundDrawablePadding(I)V": function (this: JTextView, p: number) { this.drawablePad = p; return relayout(this); },
-  "getCompoundDrawablePadding()I": function (this: JTextView) { return this.drawablePad; },
-  "getCompoundPaddingLeft()I": compoundPadL,
-  "getCompoundPaddingRight()I": compoundPadR,
-  "getCompoundPaddingTop()I": compoundPadT,
-  "getCompoundPaddingBottom()I": compoundPadB,
-  "getCompoundPaddingStart()I": function (this: JTextView) { return compoundPadRelative(this, true); },
-  "getCompoundPaddingEnd()I": function (this: JTextView) { return compoundPadRelative(this, false); },
   // AOSP: the text is set again through the new factory
   "setEditableFactory(Landroid/text/Editable$Factory;)V": function (this: JTextView, factory: unknown) {
     this.editableFactory = factory;
@@ -681,21 +582,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   }),
   "getMovementMethod()Landroid/text/method/MovementMethod;": function (this: JTextView) { return this.movementMethod; },
   "getDefaultMovementMethod()Landroid/text/method/MovementMethod;": () => null,
-  "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
-  "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
-    yield intrinsicBounds([l, t, r, b]);
-    yield vcall(this, "setCompoundDrawablesRelative", DRAWABLES4, l, t, r, b);
-  }),
-  "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": driven(function* (this: JTextView, l: number, t: number, r: number, b: number): Gen {
-    const [dl, dt, dr, db] = yield loadCompound(this, [l, t, r, b]);
-    yield vcall(this, "setCompoundDrawablesRelativeWithIntrinsicBounds", DRAWABLES4, dl, dt, dr, db);
-  }),
-  "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
-    this.drawableTint = csl;
-    return applyCompoundTint(this);
-  },
-  "getCompoundDrawableTintList()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.drawableTint; },
   "getHintTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return colorList(this.hintColors); },
   "getLineSpacingExtra()F": function (this: JTextView) { return this.lineSpacingExtra; },
   "getLineSpacingMultiplier()F": function (this: JTextView) { return this.lineSpacingMult; },
@@ -707,10 +593,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getBreakStrategy()I": function (this: JTextView) { return this.breakStrategy; },
   "setHyphenationFrequency(I)V": function (this: JTextView, h: number) { this.hyphenation = h; if (hasLayout(this)) return relayout(this); },
   "getHyphenationFrequency()I": function (this: JTextView) { return this.hyphenation; },
-  "getTotalPaddingLeft()I": function (this: JTextView) { return vcall(this, "getCompoundPaddingLeft", "()I"); },
-  "getTotalPaddingRight()I": function (this: JTextView) { return vcall(this, "getCompoundPaddingRight", "()I"); },
-  "getTotalPaddingTop()I": compoundPadT,
-  "getTotalPaddingBottom()I": compoundPadB,
   "setHeight(I)V": function (this: JTextView, h: number) {
     this.minH = this.maxH = h; this.minLinesV = 0; this.maxLinesV = Infinity; return relayout(this);
   },
@@ -794,8 +676,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getShadowDy()F": function (this: JTextView) { return this.shadowDy; },
   "getShadowColor()I": function (this: JTextView) { return this.shadowColor; },
   "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; return relayout(this); },
-  ...noops("setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V",
-    "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
+  ...noops("setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setMarqueeRepeatLimit(I)V",
     "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V"),
   "setTextLocales(Landroid/os/LocaleList;)V": function (this: JTextView) { if (hasLayout(this)) return relayout(this); },
@@ -896,16 +777,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.layout = yield this.measuredLines(avail);
       this.layoutWidthFor = this.width();
     }
-    const draw = async (d: JDrawable | null, x: number, y: number) => {
-      if (!d) return;
-      ctx.save(); ctx.translate(Math.trunc(x), Math.trunc(y));
-      try { const result = drawChild(d, cv); if (result instanceof Promise) await result; }
-      finally { ctx.restore(); }
-    };
-    if (this.drawableL) yield draw(this.drawableL, this.padL, contentT + (contentB - contentT - compoundHeight(this.drawableL)) / 2);
-    if (this.drawableR) yield draw(this.drawableR, this.width() - this.padR - compoundWidth(this.drawableR), contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
-    if (this.drawableT) yield draw(this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
-    if (this.drawableB) yield draw(this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
+    if (this.drawableL) yield* drawAt$(cv, this.drawableL, this.padL, contentT + (contentB - contentT - compoundHeight(this.drawableL)) / 2);
+    if (this.drawableR) yield* drawAt$(cv, this.drawableR, this.width() - this.padR - compoundWidth(this.drawableR), contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
+    if (this.drawableT) yield* drawAt$(cv, this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
+    if (this.drawableB) yield* drawAt$(cv, this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
     const layout: TextViewLayout | null = showHint ? yield (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail, hg) : this.layout;
     if (!layout) return;
     // TextView.getVerticalOffset
@@ -931,7 +806,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       const width = yield drawableSize(cursor, false, thread);
       const left = Math.min(Math.max(0, Math.trunc(cx - 0.5)) - padding.left, avail - width + padding.right);
       yield vcallOn(thread, cursor, "setBounds", "(IIII)V", 0, 0, width, this.lineHeight() + padding.top + padding.bottom);
-      yield draw(cursor, contentL + left, cy - this.ascent() - padding.top);
+      yield* drawAt$(cv, cursor, contentL + left, cy - this.ascent() - padding.top);
     }
   }),
 };
@@ -962,7 +837,7 @@ function applyButtonDefaults(b: JButton): void {
   // AOSP's Widget.Material.Button supplies these; they are DEFAULTS, not overrides. A style
   // that spoke for itself — every Material3 button is sentence-case with its own face — has
   // already run in applyTvStyle, and forcing them here undid it.
-  if (b.capsSet === undefined) b.allCaps = true;
+  if (!b.capsSet) b.allCaps = true;
   if (!paintTypeface(b.paintT)) setPaintTypeface(b.paintT, tfMedium);
 }
 
@@ -993,7 +868,7 @@ rt.register({
       return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => setSelection(text, start, end));
     },
     "selectAll()V": function (this: JEditText) {
-      return after(vcall(this, "getText", "()Landroid/text/Editable;"), (text) => scall(SELECTION, "selectAll", "(Landroid/text/Spannable;)V", text));
+      return after(vcall(this, "getText", "()Landroid/text/Editable;"), selectAll);
     },
     "performClick()Z": driven(function* (this: JEditText): Gen {
       yield vcall(this, "requestFocus", "()Z");
@@ -1002,65 +877,9 @@ rt.register({
     }),
   },
 });
-export let focusedEdit: JEditText | null = null;
-/** The shell's hidden text control mirrors the focused EditText. */
-export let inputEl: HTMLInputElement | HTMLTextAreaElement | null = null;
-export function setInputElement(el: HTMLInputElement | HTMLTextAreaElement) { inputEl = el; }
 setFocusHook((v, on) => {
   if (v instanceof JEditText) focusEditText(on ? v : null);
   else if (on && focusedEdit) focusEditText(null);
-});
-/**
- * TextView.onEditorAction: the listener first; then AOSP's defaults — NEXT/PREVIOUS move focus
- * on and DONE closes the keyboard, both of which leave the field here, while any other action
- * (SEARCH, GO, SEND, or none) is delivered as an ENTER key press to the view, which is what a
- * field that listens with an OnKeyListener rather than an editor-action listener receives.
- */
-export const editorAction = driven(function* editorAction(tv: JTextView, action: number): Gen<boolean> {
-  if (tv.editorActionL && (yield vcall(tv.editorActionL, "onEditorAction",
-    "(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z", tv, action, null))) return true;
-  if (action === 5 || action === 6 || action === 7) { if (tv === focusedEdit) focusEditText(null); return false; }
-  rt.link("android/view/KeyEvent");
-  for (const act of [0, 1]) yield vcall(tv, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", yield newObj("android/view/KeyEvent", "(II)V", act, 66));
-  return true;
-});
-/** the IME action key on the focused field */
-export function fireEditorAction(): boolean | Promise<boolean> {
-  const et = focusedEdit;
-  return et ? editorAction(et, (et.imeOptions & 0xff) || 0) : Promise.resolve(false);
-}
-export function focusEditText(et: JEditText | null) {
-  if (focusedEdit === et) return;
-  if (focusedEdit) focusedEdit.focused = false;
-  focusedEdit = et;
-  if (et) { et.focused = true; et.blinkStart = guestNow(); }
-  if (inputEl) {
-    if (et) {
-      inputEl.value = et.text;
-      if (et.showSoftInputOnFocus) inputEl.focus(); else inputEl.blur();
-    } else inputEl.blur();
-  }
-  invalidate();
-}
-/** the changed range between two texts: previous[a, b) became text[a, c) */
-export function textDiff(previous: string, text: string): [number, number, number] {
-  let a = 0, b = previous.length, c = text.length;
-  while (a < b && a < c && previous[a] === text[a]) a++;
-  while (b > a && c > a && previous[b - 1] === text[c - 1]) { b--; c--; }
-  return [a, b, c];
-}
-/** the page's input changed the focused field: one replace through its Editable, whose filters
- *  may shorten or reject it, as an IME commit would be */
-export const editInput = driven(function* editInput(text: string, start: number = text.length, end: number = start): Gen {
-  const et = focusedEdit;
-  if (!et) return;
-  const previous = et.text, [a, b, c] = textDiff(previous, text), editable = yield et.getEditable();
-  if (b > a || c > a) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, text, a, c);
-  if (et.text !== text) {
-    start = end = Math.max(a, et.text.length - (previous.length - b));
-    inputEl?.setSelectionRange(start, end);
-  }
-  yield setSelection(editable, start, end);
 });
 
 /** TextView.setText's filter pass: each filter sees the whole text against EMPTY_SPANNED */

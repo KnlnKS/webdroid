@@ -28,6 +28,11 @@ const enumConstant = driven(function* enumConstant(cls: string, name: string): G
   return (yield linkInit(cls)).ctor[mangleStaticField(name)];
 });
 
+/** AOSP's setters call requestLayout() and invalidate() on the view itself, which a subclass may override */
+export function relayout(tv: JTextView): unknown {
+  return after(vcall(tv, "requestLayout", "()V"), () => vcall(tv, "invalidate", "()V"));
+}
+
 /** what the view reads of its layout */
 export interface TextViewLayout { java: JObj; width: number; align: Align; lines: number; height: number }
 

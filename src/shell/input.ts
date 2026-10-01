@@ -2,7 +2,7 @@
 // trackpad's two-finger swipe reaches every app as a phone's one-finger drag.
 import { device } from "./config";
 import { dispatchPointer } from "./device";
-import { setInputElement } from "../android/textview";
+import { setInputElement } from "../android/textview-input";
 import { imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "../android/ime";
 import { guestNow } from "../guest-clock";
 import { queuePointer, type PointerSample } from "./pointer-queue";
