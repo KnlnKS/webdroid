@@ -1,5 +1,5 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { idHash, newObj, vcall, vcallOn, curThread, type JThread } from "../jvm/natives/jlang";
+import { idHash, newObj, vcall, scall, vcallOn, curThread, type JThread } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
 import { type ActivityResultTarget, type JIntent, launchIntent, newIntent, putExtra } from "./intent";
 import { appHost } from "./apphost";
@@ -10,14 +10,29 @@ import { exportBinder, importBinder } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 import { encodeIntent, decodeIntent, intentCodec, type IntentData } from "./intentipc";
 import { PendingIntents, type PendingOperation } from "../shell/pendingintents";
+import { stageD } from "../jvm/provenance";
+import { broadcastIntent } from "./server/broadcastqueue";
+import { startActivityFor } from "./server/atm";
+import { startService } from "./server/activeservices";
+import { thisApp } from "./server/am";
 
+/** PendingIntentRecord.sendInner, in the creator's process with its identity */
 export async function executePendingIntent(operation: PendingOperation, fill: IntentData | null, alarmCount: number): Promise<void> {
-  const intent = await decodeIntent(operation.intent), context = appHost?.application ?? await newObj("android/content/Context");
+  const intent = await decodeIntent(operation.intent);
   if (!(operation.flags & 0x4000000)) {
     const supplied = fill ? await decodeIntent(fill) : await newIntent();
     if (alarmCount) await putExtra(supplied, "android.intent.extra.ALARM_COUNT", alarmCount, "I");
     await vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", supplied, operation.flags);
   }
+  if (stageD()) {
+    if (operation.kind === "broadcast") await broadcastIntent(intent, [], false);
+    else if (operation.kind === "activity") {
+      for (const data of operation.intents?.slice(0, -1) ?? []) await startActivityFor(thisApp(), await decodeIntent(data));
+      await startActivityFor(thisApp(), intent);
+    } else await startService(intent, null, operation.kind === "foreground-service", operation.pkg);
+    return;
+  }
+  const context = appHost?.application ?? await newObj("android/content/Context");
   if (operation.kind === "broadcast") sendBroadcast(context, intent);
   else if (operation.kind === "activity") {
     for (const data of operation.intents?.slice(0, -1) ?? []) await launchIntent(context.$host, await decodeIntent(data));
@@ -53,6 +68,8 @@ function* senderId$(sender: JObj): Gen<number> {
   return targetId(yield vcall(target, "asBinder", "()Landroid/os/IBinder;"));
 }
 const senderId = driven(senderId$);
+/** a PendingIntent's record: the TS one's target, or AOSP's (Stage D) through its IIntentSender */
+export const operationId = (operation: JObj): number | Promise<number> => operation instanceof JPendingIntent ? pendingId(operation) : senderId(operation);
 async function send(id: number, fill?: JIntent | null): Promise<void> {
   if (!await pendingTransport.send(id, fill ? await encodeIntent(fill) : null))
     throw rt.mkThrowable("android/app/PendingIntent$CanceledException", null);
@@ -87,7 +104,7 @@ function pendingActivities(context: JContext, code: number, intents: JIntent[] |
 const KINDS: Record<PendingOperation["kind"], number> = { broadcast: 1, activity: 2, service: 4, "foreground-service": 5 };
 const KIND_OF: Record<number, PendingOperation["kind"]> = { 1: "broadcast", 2: "activity", 4: "service", 5: "foreground-service" };
 /** an IIntentSender over a record of the shell's registry, as AOSP's PendingIntent holds one */
-const intentSender = (id: number) => vcall(rt.link("android/content/IIntentSender$Stub").ctor, "asInterface",
+const intentSender = (id: number) => scall("android/content/IIntentSender$Stub", "asInterface",
   "(Landroid/os/IBinder;)Landroid/content/IIntentSender;", importBinder({ pid: 0, id }));
 /** IActivityManager's IntentSender calls, over the shell's records */
 export const intentSenderMethods = {

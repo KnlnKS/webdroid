@@ -17,17 +17,35 @@ import { systemProviderHolder } from "../settings";
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 const pms = () => hostedService("package") as Promise<JObj>;
 
-let launcher = false;
+let appThread: JObj | null = null, launcher = false;
+/** whether this is the app the user launched, whose launcher activity starts with it */
+export const userLaunched = (): boolean => launcher;
+/** this process's IApplicationThread, once it attached */
+export function thisApp(): JObj {
+  if (!appThread) throw rt.mkThrowable("java/lang/IllegalStateException", "Process has not attached");
+  return appThread;
+}
+let lane: Promise<unknown> = Promise.resolve();
+/** a call on this process's IApplicationThread after those made before it, as the system server's
+ *  calls reach a process in order; arguments may be pending */
+export function scheduleOnApp(name: string, desc: string, ...args: unknown[]): Promise<void> {
+  const call = lane.then(async () => { await vcall(thisApp(), name, desc, ...await Promise.all(args)); });
+  lane = call.catch(() => {});
+  return call;
+}
+export const compatInfo = async (): Promise<JObj> =>
+  ((await linkInit("android/content/res/CompatibilityInfo")).ctor as Record<string, JObj>)[mangleStaticField("DEFAULT_COMPATIBILITY_INFO")];
 
 async function bind(app: JObj): Promise<void> {
   const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;
+  appThread = app;
   const pm = await pms();
   const info = await vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
   const slice = await vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, GET_META_DATA, null);
   const providers = await scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
     slice ? await vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
   const { global } = await configurations();
-  const compat = ((await linkInit("android/content/res/CompatibilityInfo")).ctor as Record<string, unknown>)[mangleStaticField("DEFAULT_COMPATIBILITY_INFO")];
+  const compat = await compatInfo();
   const now = BigInt(Math.floor(uptimeMillis()));
   await vcall(app, "bindApplication",
     "(Ljava/lang/String;Landroid/content/pm/ApplicationInfo;Ljava/lang/String;Ljava/lang/String;ZLandroid/content/pm/ProviderInfoList;" +

@@ -23,6 +23,8 @@ import { isRuntimePermission, permissionGranted, uidPermissionState } from "./co
 import { stickyBroadcasts } from "./broadcast";
 import { activityManagerMethods } from "./server/am";
 import { activityTaskMethods } from "./server/atm";
+import { activeServiceMethods } from "./server/activeservices";
+import { broadcastQueueMethods } from "./server/broadcastqueue";
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_SERVICE = 300, IMPORTANCE_CACHED = 400;
@@ -58,7 +60,8 @@ const activityManager: NativeSpec["methods"] = {
   "addPackageDependency(Ljava/lang/String;)V": () => {},
   ...intentSenderMethods,
 };
-rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub", methods: { ...activityManager, ...activityManagerMethods } });
+rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub",
+  methods: { ...activityManager, ...activityManagerMethods, ...activeServiceMethods, ...broadcastQueueMethods } });
 
 // IAppTask: one of the caller's tasks, the activities the shell stacks under a task id
 class JAppTask extends JObj { taskId = 0; }

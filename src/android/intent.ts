@@ -61,6 +61,8 @@ export const activityTransport: {
   isTaskRoot?: (act: JActivity) => boolean;
   removeTask?: (act: JActivity) => void;
   presentation?: (translucent: boolean) => void;
+  /** an activity the broker started here (its record id) finished with a result */
+  finished?: (remoteId: number, code: number, data: JIntent | null) => void;
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {

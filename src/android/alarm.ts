@@ -3,7 +3,7 @@
 // by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
 import { JObj, rt } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { JPendingIntent, pendingId, localPendingIntents } from "./pendingintent";
+import { operationId, localPendingIntents } from "./pendingintent";
 import { Alarms } from "../shell/alarms";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
@@ -30,12 +30,12 @@ const listenerAlarms = new Map<unknown, GuestTimer>();
 const WINDOW_EXACT = 0n;
 rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {}, sup: "android/app/IAlarmManager$Stub", methods: {
   "set(Ljava/lang/String;IJJJILandroid/app/PendingIntent;Landroid/app/IAlarmListener;Ljava/lang/String;Landroid/os/WorkSource;Landroid/app/AlarmManager$AlarmClockInfo;)V":
-    (pkg: string, type: number, at: bigint, window: bigint, interval: bigint, _flags: number, operation: JPendingIntent | null, listener: unknown) => {
+    async (pkg: string, type: number, at: bigint, window: bigint, interval: bigint, _flags: number, operation: JObj | null, listener: unknown) => {
       if (type < 0 || type > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid alarm type " + type);
       if (window === WINDOW_EXACT && !canScheduleExact(pkg))
         throw rt.mkThrowable("java/lang/SecurityException", `Caller ${pkg} needs to hold android.permission.SCHEDULE_EXACT_ALARM or android.permission.USE_EXACT_ALARM to set exact alarms.`);
       const trigger = Math.max(0, Number(at));
-      if (operation) return alarmTransport.schedule(pendingId(operation), type, trigger, Number(interval));
+      if (operation) return alarmTransport.schedule(await operationId(operation), type, trigger, Number(interval));
       clearGuestTimeout(listenerAlarms.get(listener));
       const delay = trigger - (type < 2 ? Date.now() : uptimeMillis());
       listenerAlarms.set(listener, setGuestTimeout(() => {
@@ -44,8 +44,8 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
           vcall(listener, "doAlarm", "(Landroid/app/IAlarmCompleteListener;)V", done)).catch(reportUncaught);
       }, Math.max(0, Math.min(delay, 0x7fffffff))));
     },
-  "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": (operation: JPendingIntent | null, listener: unknown) => {
-    if (operation) alarmTransport.cancel(pendingId(operation));
+  "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": async (operation: JObj | null, listener: unknown) => {
+    if (operation) alarmTransport.cancel(await operationId(operation));
     if (listener) { clearGuestTimeout(listenerAlarms.get(listener)); listenerAlarms.delete(listener); }
   },
   "canScheduleExactAlarms(Ljava/lang/String;)Z": (pkg: string) => +canScheduleExact(pkg),

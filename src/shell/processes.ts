@@ -21,7 +21,11 @@ import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
 import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
-import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
+import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver, type BroadcastResult } from "../android/broadcast";
+import { deliverBroadcast as deliverQueued, type Sender } from "../android/server/broadcastqueue";
+import { hostedServices } from "../android/server/activeservices";
+import { startActivityInProcess, taskVisibility } from "../android/server/atm";
+import { stageD } from "../jvm/provenance";
 import { checkPermission, queryReceivers, exported, componentPermission, componentProcess } from "../android/pm";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
@@ -40,9 +44,20 @@ import { guestSleep } from "../guest-clock";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
+async function someDenied(permissions: string[], pkg: string): Promise<boolean> {
+  for (const permission of permissions) if (await permissionDenied(permission, pkg)) return true;
+  return false;
+}
 const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
+async function resultData(result: BroadcastResult): Promise<BroadcastData> {
+  const extras = new JParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
+  return { ...result, extras: exportParcel(extras) };
+}
+const broadcastResult = async (data: BroadcastData): Promise<BroadcastResult> =>
+  ({ ...data, extras: await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
-type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind: "unbind"; key: string }
+type ServiceRequest = { kind: "bind"; intent: IntentData; key: string; flags?: number } | { kind: "unbind"; key: string }
+  | { kind: "stop"; intent: IntentData } | { kind: "peek"; intent: IntentData }
   | { kind: "start"; intent: IntentData; foreground: boolean }
   | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
@@ -60,7 +75,7 @@ type ProcessEndpoint = {
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
   provider: (request: ProviderRequest, caller: Caller) => Promise<ProviderReply>;
-  broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData) => Promise<BroadcastData>;
+  broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
@@ -121,7 +136,7 @@ class ProcessBroker {
   async boot(): Promise<void> {
     if (this.booted) return;
     this.booted = true;
-    await this.broadcast(null, await encodeIntent(await newIntent("android.intent.action.BOOT_COMPLETED")), "android.permission.RECEIVE_BOOT_COMPLETED", false);
+    await this.broadcast(null, await encodeIntent(await newIntent("android.intent.action.BOOT_COMPLETED")), ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
 
   foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
@@ -348,7 +363,8 @@ class ProcessBroker {
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     const caller = pid === null ? null : this.entry(pid);
     if (request.kind === "unbind") caller?.bindings.delete(request.key);
-    const entry = request.kind === "unbind" ? this.byName.get(pkg + "/" + process) : this.connect(pkg, process);
+    // only a start, a bind or a pending operation brings up the service's process
+    const entry = request.kind === "unbind" || request.kind === "stop" || request.kind === "peek" ? this.byName.get(pkg + "/" + process) : this.connect(pkg, process);
     if (!entry || entry.dead) return null;
     const binding = request.kind === "bind" ? { pkg, process } : null;
     if (request.kind === "bind" && binding) caller?.bindings.set(request.key, binding);
@@ -376,8 +392,8 @@ class ProcessBroker {
       throw new Error("Provider permission denied: " + permission);
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
   }
-  async broadcast(pid: number | null, data: IntentData, permission: string | null, ordered: boolean): Promise<void> {
-    const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data);
+  async broadcast(pid: number | null, data: IntentData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
+    const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data), sender = caller && { uid: caller.uid, pkg: caller.pkg };
     const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
     for (const receiver of await queryReceivers(intent)) {
       const pkg = receiver.owner.pkg, permission = componentPermission(receiver);
@@ -387,13 +403,13 @@ class ProcessBroker {
       targets.push({ entry: this.connect(pkg, componentProcess(receiver)), component: receiver.name, priority: receiver.priority });
     }
     targets.sort((a, b) => b.priority - a.priority);
-    const bundle = new JParcel(); await vcall(bundle, "writeBundle", "(Landroid/os/Bundle;)V", null);
-    let result: BroadcastData = { code: 0, data: null, extras: exportParcel(bundle), aborted: false };
+    let result = initial ?? await resultData({ code: 0, data: null, extras: null, aborted: false });
     for (const target of targets) {
-      if (permission && await permissionDenied(permission, target.entry.pkg)) continue;
-      result = await this.request(target.entry, (endpoint) => endpoint.broadcast(data, target.component, ordered, result));
+      if (await someDenied(permissions, target.entry.pkg)) continue;
+      result = await this.request(target.entry, (endpoint) => endpoint.broadcast(data, target.component, ordered, result, sender));
       if (ordered && result.aborted) break;
     }
+    return result;
   }
   private entry(pid: number): Entry {
     const entry = this.entries.get(pid);
@@ -466,6 +482,10 @@ export function connectProcess(): ProcessEndpoint {
     void resultIntent(act.resultData).then((data) => broker.finishActivity(PROCESS_PID, id, act.resultCode, data));
     return true;
   };
+  activityTransport.finished = (id, code, data) => {
+    setVisible(false);
+    void resultIntent(data).then((encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)).catch(reportUncaught);
+  };
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
@@ -480,7 +500,8 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
-  broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
+  broadcastTransport.send = async (intent, permissions, ordered, initial) => broadcastResult(await remote(
+    broker.broadcast(PROCESS_PID, await encodeIntent(intent), permissions, ordered, initial && await resultData(initial))));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
@@ -500,9 +521,12 @@ export function connectProcess(): ProcessEndpoint {
   pendingTransport.flags = id => broker.intents.get(id)?.flags ?? 0;
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
-  serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));
-  serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "unbind", key })); };
-  serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
+  const service = (pkg: string, process: string, request: ServiceRequest) => remote(broker.service(PROCESS_PID, pkg, process, request));
+  serviceTransport.bind = async (owner, process, intent, key, flags) => importBinder(await service(owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key, flags }));
+  serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
+  serviceTransport.start = async (owner, process, intent, foreground) => { await service(owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground }); };
+  serviceTransport.stop = async (owner, process, intent) => { await service(owner.pkg, process, { kind: "stop", intent: await encodeIntent(intent) }); };
+  serviceTransport.peek = async (owner, process, intent) => importBinder(await service(owner.pkg, process, { kind: "peek", intent: await encodeIntent(intent) }));
   return {
     clipboardChanged: async () => clipboardChanged(),
     activity: async (request) => {
@@ -511,11 +535,12 @@ export function connectProcess(): ProcessEndpoint {
       if (request.kind === "finishActivities") return stack.finishActivityIds(request.ids, request.resume);
       if (request.kind === "back") return shell.pressBack();
       if (request.kind === "visibility") {
-        await stack.activityVisibility(request.phase);
+        await (stageD() ? taskVisibility(request.phase) : stack.activityVisibility(request.phase));
         if (request.phase !== "pause") setVisible(request.phase !== "stop");
       } else if (request.kind === "launch") {
         const intent = await decodeIntent(request.intent);
-        await onMain(async () => {
+        if (stageD()) await startActivityInProcess(request.component, intent, request.id);
+        else await onMain(async () => {
           if (!appHost) throw new Error("Process has no application");
           await appHost.launch(request.component, intent, { caller: request.caller, remoteId: request.id, taskId: request.taskId });
           if (!appHost.currentActivity()) throw new Error("Activity did not start: " + request.component);
@@ -529,18 +554,25 @@ export function connectProcess(): ProcessEndpoint {
     },
     transact: receiveTransaction,
     provider: receiveProvider,
-    broadcast: async (intent, component, ordered, data) => {
-      if (!appHost?.application) throw new Error("Process has no application");
+    broadcast: async (intent, component, ordered, data, sender) => {
       const received = await decodeIntent(intent);
+      if (stageD()) return resultData(await deliverQueued(received, component, ordered, await broadcastResult(data), sender));
+      if (!appHost?.application) throw new Error("Process has no application");
       if (!component && !await hasBroadcastReceiver(received)) return data;
-      const result = await deliverBroadcast(appHost.application, received, component, ordered,
-        { ...data, extras: await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
-      const extras = new JParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
-      return { ...result, extras: exportParcel(extras) };
+      return resultData(await deliverBroadcast(appHost.application, received, component, ordered, await broadcastResult(data)));
     },
     service: async (request) => {
-      if (request.kind === "unbind") { await unbindLocalService(request.key); return null; }
       if (request.kind === "pending") { await executePendingIntent(request.operation, request.fill, request.alarmCount); return null; }
+      if (stageD()) {
+        if (request.kind === "unbind") { await hostedServices.unbind(request.key); return null; }
+        const intent = await decodeIntent(request.intent);
+        if (request.kind === "bind") return exportBinder(await hostedServices.bind(intent, request.key, request.flags));
+        if (request.kind === "peek") return exportBinder(await hostedServices.peek(intent));
+        await hostedServices[request.kind](intent);
+        return null;
+      }
+      if (request.kind === "unbind") { await unbindLocalService(request.key); return null; }
+      if (request.kind === "stop" || request.kind === "peek") throw new Error("Unsupported service request: " + request.kind);
       const context = appHost?.application;
       if (!context) throw new Error("Process has no application");
       const intent = await decodeIntent(request.intent);

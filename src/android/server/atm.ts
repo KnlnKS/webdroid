@@ -8,6 +8,11 @@ import { newObj, vcall, scall } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations } from "./wm";
 import { hostedService } from "../binder";
+import { appHost } from "../apphost";
+import { PROCESS_NAME } from "../os";
+import { activityTransport } from "../intent";
+import { field } from "../pm";
+import { thisApp, userLaunched } from "./am";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
@@ -19,9 +24,15 @@ interface ActivityRecord {
   resultTo: ActivityRecord | null; resultWho: string | null; requestCode: number;
   results: JObj[]; finishing: boolean; translucent: boolean;
   paused: (() => void) | null;
+  /** the broker's record of an activity another process started here, or 0 */
+  remoteId: number;
 }
 const stack: ActivityRecord[] = [];
 const byToken = (token: JObj | null) => stack.find((r) => r.token === token) ?? null;
+export const PROCESS_STATE_SERVICE = 10, PROCESS_STATE_RECEIVER = 11;
+/** the process state the activity manager reports with a call: top while an activity here is
+ *  resumed, else the state of the component it runs */
+export const processState = (component: number): number => stack.some((r) => r.state === "resumed") ? PROCESS_STATE_TOP : component;
 const pms = () => hostedService("package") as Promise<JObj>;
 const resolveInfoField = () => declaredField("android/content/pm/ResolveInfo", "activityInfo");
 let controller: JObj | null = null;
@@ -61,10 +72,10 @@ async function destroy(r: ActivityRecord): Promise<void> {
 }
 
 /** ActivityStarter: a resolved activity on top of this process's task */
-export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Promise<void> {
+export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number, remoteId = 0): Promise<void> {
   const token = await newObj("android/os/Binder", "()V");
   const prev = stack.at(-1);
-  const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false, translucent: false, paused: null };
+  const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false, translucent: false, paused: null, remoteId };
   if (prev) await pause(prev);
   stack.push(r);
   const { global, override } = await configurations();
@@ -95,6 +106,40 @@ export async function startMainActivity(app: JObj, pkg: string): Promise<void> {
   await startActivity(app, intent, info, null, null, -1);
 }
 
+const AI = "android/content/pm/ActivityInfo";
+/** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
+export async function startActivityFor(app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode = -1): Promise<number> {
+  const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
+    intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
+  const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
+  if (!info) return START_INTENT_NOT_RESOLVED;
+  const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
+  await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+  const pkg = field<string>(info, AI, "packageName"), process = field<string>(info, AI, "processName");
+  if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) await startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode);
+  else if (activityTransport.launch) await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy);
+  else return START_INTENT_NOT_RESOLVED;
+  return START_SUCCESS;
+}
+/** the broker's launch of one of this process's activities for another process */
+export async function startActivityInProcess(component: string, intent: JObj, remoteId: number): Promise<void> {
+  const name = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", appHost!.pkg, component.replaceAll("/", "."));
+  const info = await vcall(await pms(), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
+  if (!info) throw new Error("Activity not installed: " + component);
+  await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
+  await startActivity(thisApp(), intent, info, null, null, -1, remoteId);
+}
+/** the broker showing or hiding this process: its top activity pauses, what is paused stops, and
+ *  the top resumes (the launcher activity starts again in an emptied app process, as its icon
+ *  would). A process shown behind a translucent one is not restarted yet. */
+export async function taskVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
+  const top = stack.at(-1), pkg = appHost!.pkg;
+  if (!top) { if (phase === "resume" && userLaunched()) await startMainActivity(thisApp(), pkg); return; }
+  if (phase === "pause") await pause(top);
+  else if (phase === "stop") for (const r of [...stack]) await stop(r);
+  else if (phase === "resume" && top.state !== "resumed") await resume(top);
+}
+
 async function finish(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<boolean> {
   if (r.finishing) return true;
   r.finishing = true;
@@ -106,6 +151,7 @@ async function finish(r: ActivityRecord, resultCode: number, data: JObj | null):
   const below = stack[stack.indexOf(r) - 1];
   if (wasTop && below) await resume(below);
   await destroy(r);
+  if (r.remoteId) activityTransport.finished?.(r.remoteId, resultCode, data);
   return true;
 }
 
@@ -162,14 +208,6 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
 export const activityTaskMethods = {
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
   "startActivity(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IILandroid/app/ProfilerInfo;Landroid/os/Bundle;)I":
-    async (app: JObj, _pkg: string, _feature: string, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number) => {
-      const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
-        intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
-      const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
-      if (!info) return START_INTENT_NOT_RESOLVED;
-      const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
-      await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
-      await startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode);
-      return START_SUCCESS;
-    },
+    (app: JObj, _pkg: string, _feature: string, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number) =>
+      startActivityFor(app, intent, resolvedType, resultTo, resultWho, requestCode),
 };

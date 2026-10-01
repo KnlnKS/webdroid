@@ -6,8 +6,9 @@ import type { JIntent } from "./intent";
 import { onMain } from "./mainloop";
 import { reportUncaught, JBundle } from "./os";
 
-type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
-export const broadcastTransport: { send: ((intent: JIntent, permission: string | null, ordered: boolean) => Promise<void>) | null } = { send: null };
+export type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
+/** a broadcast to every process: `permissions` are those a receiver must hold; it answers the final result */
+export const broadcastTransport: { send: ((intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult) => Promise<BroadcastResult>) | null } = { send: null };
 /** an IntentFilter, AOSP's own */
 type JIntentFilter = JObj;
 type Registration = { context: JContext; filter: JIntentFilter; handler: unknown };
@@ -19,6 +20,7 @@ export const stickyBroadcasts = new Map<string, () => JIntent | Promise<JIntent>
 function* matches$(filter: JIntentFilter, intent: JIntent): Gen<boolean> {
   return (yield vcall(filter, "match", "(Landroid/content/ContentResolver;Landroid/content/Intent;ZLjava/lang/String;)I", null, intent, 0, "ActivityManager")) >= 0;
 }
+export const filterMatches = driven(matches$);
 export const registerReceiver = driven(function* registerReceiver$(context: JContext, receiver: JObj | null, filter: JIntentFilter, handler: unknown = null): Gen<JIntent | null> {
   if (receiver) receivers.set(receiver, { context, filter, handler });
   let first: JIntent | null = null;
@@ -46,7 +48,7 @@ const receiverTargets = driven(function* receiverTargets$(intent: JIntent): Gen<
 });
 export const hasBroadcastReceiver = async (intent: JIntent): Promise<boolean> => (await receiverTargets(intent)).length > 0;
 export function sendBroadcast(context: JContext, intent: JIntent, permission: string | null = null, ordered = false): void {
-  if (broadcastTransport.send) { void broadcastTransport.send(intent, permission, ordered).catch(reportUncaught); return; }
+  if (broadcastTransport.send) { void broadcastTransport.send(intent, permission ? [permission] : [], ordered).catch(reportUncaught); return; }
   void deliverBroadcast(context, intent, null, ordered).catch(reportUncaught);
 }
 export async function deliverBroadcast(context: JContext, intent: JIntent, component: string | null, ordered: boolean, result: BroadcastResult = { code: 0, data: null, extras: null, aborted: false }): Promise<BroadcastResult> {

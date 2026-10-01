@@ -25,15 +25,15 @@ class JRunningServiceInfo extends JObj {
   /** IntentBindRecords: one per intent distinct under filterEquals */
   bindings: Binding[] = [];
 }
+const noTransport = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
+/** the services of another process; `flags` are bindService's (BIND_AUTO_CREATE when omitted) */
 export const serviceTransport: {
-  bind: (owner: PackageRecord, process: string, intent: JIntent, key: string) => Promise<unknown>;
+  bind: (owner: PackageRecord, process: string, intent: JIntent, key: string, flags?: number) => Promise<unknown>;
   unbind: (owner: PackageRecord, process: string, key: string) => Promise<void>;
   start: (owner: PackageRecord, process: string, intent: JIntent, foreground: boolean) => Promise<void>;
-} = {
-  bind: async () => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); },
-  unbind: async () => {},
-  start: async () => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); },
-};
+  stop: (owner: PackageRecord, process: string, intent: JIntent) => Promise<void>;
+  peek: (owner: PackageRecord, process: string, intent: JIntent) => Promise<unknown>;
+} = { bind: noTransport, unbind: async () => {}, start: noTransport, stop: noTransport, peek: noTransport };
 rt.register({
   name: "android/app/ActivityManager$RunningServiceInfo", ctor: JRunningServiceInfo, ifaces: ["android/os/Parcelable"],
   statics: { FLAG_STARTED: 1, FLAG_FOREGROUND: 2, FLAG_SYSTEM_PROCESS: 4, FLAG_PERSISTENT_PROCESS: 8 },
