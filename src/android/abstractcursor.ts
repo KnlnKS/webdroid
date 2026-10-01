@@ -188,7 +188,10 @@ const registerSelf = driven(function* registerSelf(c: JAbstractCursor): Gen<void
 rt.register({
   name: "android/database/AbstractCursor$SelfContentObserver", ctor: JSelfContentObserver, sup: "android/database/ContentObserver",
   methods: {
-    "<init>(Landroid/database/AbstractCursor;)V": function (this: JSelfContentObserver, cursor: JAbstractCursor) { this.cursor = cursor; },
+    "<init>(Landroid/database/AbstractCursor;)V": function (this: JSelfContentObserver, cursor: JAbstractCursor) {
+      this.cursor = cursor;
+      return vcall(this, "<init>", "(Landroid/os/Handler;)V", null);
+    },
     "deliverSelfNotifications()Z": () => 0,
     "onChange(Z)V": function (this: JSelfContentObserver) { return this.cursor && vcall(this.cursor, "onChange", "(Z)V", 0); },
   },
