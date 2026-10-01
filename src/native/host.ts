@@ -223,25 +223,28 @@ export class Args64 extends Cursor {
   private cpu!: Cpu;
   private n = 0;      // next core register
   private nv = 0;     // next SIMD/FP register
-  private sp = 0;     // next stack slot
+  private sp = -1;    // next stack slot's buffer offset, translated from sp at the first stack argument
   constructor(cpu: Cpu) { super(); this.reset(cpu); }
-  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.nv = 0; this.sp = cpu.w[62] >>> 0; }
-  i(): number {
-    if (this.n < 8) return this.cpu.w[2 * this.n++];
-    const v = mem.ld32(this.sp); this.sp += 8; return v;
+  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.nv = 0; this.sp = -1; }
+  /** a thread stack can sit above plane 0 (bionic's pthread_create maps one anywhere) */
+  private slot(): number {
+    if (this.sp < 0) { const w = this.cpu.w; this.sp = w[63] ? mem.tx(w[63], w[62]) : w[62] >>> 0; }
+    const at = this.sp; this.sp += 8; return at;
   }
+  i(): number { return this.n < 8 ? this.cpu.w[2 * this.n++] : mem.ld32(this.slot()); }
   p(): number {
-    if (this.n < 8) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 1]; this.n++; return hi ? mem.tx(hi, lo) : lo >>> 0; }
-    const lo = mem.ld32(this.sp), hi = mem.ld32(this.sp + 4); this.sp += 8;
+    let lo: number, hi: number;
+    if (this.n < 8) { lo = this.cpu.w[2 * this.n]; hi = this.cpu.w[2 * this.n + 1]; this.n++; }
+    else { const at = this.slot(); lo = mem.ld32(at); hi = mem.ld32(at + 4); }
     return hi ? mem.tx(hi, lo) : lo >>> 0;
   }
   va(): bigint { return this.ul(); }
   l(): bigint {
     if (this.n < 8) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 1]; this.n++; return retPair(lo, hi); }
-    const v = mem.ld64(this.sp); this.sp += 8; return v;
+    return mem.ld64(this.slot());
   }
-  f(): number { if (this.nv < 8) return this.cpu.s[this.nv++ * 4]; const v = mem.ld32(this.sp); this.sp += 8; return bitsf(v); }
-  d(): number { if (this.nv < 8) return this.cpu.d[this.nv++ * 2]; const v = mem.ld64(this.sp); this.sp += 8; return bitsd(v); }
+  f(): number { return this.nv < 8 ? this.cpu.s[this.nv++ * 4] : bitsf(mem.ld32(this.slot())); }
+  d(): number { return this.nv < 8 ? this.cpu.d[this.nv++ * 2] : bitsd(mem.ld64(this.slot())); }
 }
 
 const strAddrs = new Map<string, number>();
