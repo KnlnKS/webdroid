@@ -1,7 +1,7 @@
 // The file tree every realm sees: in-memory bytes, lazy sources (apks, assets, disk-backed app
 // files) and directories. Java streams, native descriptors and the shell all read and write it.
 import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
-import { procText } from "./procfs";
+import { procList, procText } from "./procfs";
 import type { SharedMaps } from "../native/mappings";
 import { utf8 } from "../jvm/abi";
 
@@ -142,11 +142,11 @@ export const vfs = {
   },
   exists(p: string): boolean {
     p = this.norm(p);
-    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p) || procText(p) !== null;
+    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p) || procText(p) !== null || procList(p) !== null;
   },
   isDir(p: string): boolean {
     p = this.norm(p);
-    return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p);
+    return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p) || procList(p) !== null;
   },
   delete(p: string, notify = true): boolean {
     const path = this.norm(p);
@@ -176,6 +176,8 @@ export const vfs = {
   rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) { this.mtimes.delete(path); this.onWrite(path, "delete"); } return removed; },
   list(p: string): string[] {
     p = this.norm(p);
+    const proc = procList(p);
+    if (proc) return proc;
     const dir = p === "/" ? "/" : p + "/";
     const names = new Set<string>();
     for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);

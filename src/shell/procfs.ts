@@ -38,6 +38,17 @@ function statLine(id: number): string {
 }
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
+/** the process's live threads by tid, what /proc/self/task lists (the JVM keeps it current) */
+export const procTasks = { tids: (): number[] => [procIdentity.pid] };
+/** a /proc directory's entries: the process's own, its task/ and each task's; null for any other path */
+export function procList(path: string): string[] | null {
+  const m = /^\/proc\/(?:self|thread-self|(\d+))(\/task(?:\/(\d+))?)?$/.exec(path);
+  if (!m || m[1] && +m[1] !== procIdentity.pid) return null;
+  if (!m[2]) return ["task", "cmdline", "comm", "maps", "stat", "statm", "status"];
+  if (m[3] === undefined) return procTasks.tids().map(String);
+  return procTasks.tids().includes(+m[3]) ? ["comm", "stat", "status"] : null;
+}
+
 export function procText(path: string): string | null {
   if (!path.startsWith("/proc/") && !path.startsWith("/sys/")) return null;
   if (path === "/proc/cpuinfo") {

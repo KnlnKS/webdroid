@@ -12,6 +12,7 @@ import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
 import { boxObject } from "./jbox";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
+import { procIdentity, procTasks, processTid } from "../../shell/procfs";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
   if (separator == null || parts == null) rt.npe();
@@ -1188,6 +1189,7 @@ rt.registerJnis("java/lang/Runtime", {
 /** the native tier releases a finished thread's Cpu and stack through this */
 export const threadExit = { hook: null as ((t: JThread) => void) | null };
 const liveThreads = new Set<JThread>();
+procTasks.tids = () => [...new Set([procIdentity.pid, ...[...liveThreads].map((t) => processTid(t, t === mainThread))])];
 export class JThread extends JObj {
   jname = "Thread";
   /** the fields libcore reaches in a Thread, by name or Unsafe offset: ThreadLocalRandom's state and
