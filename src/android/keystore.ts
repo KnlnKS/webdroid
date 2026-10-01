@@ -4,7 +4,7 @@
 // the key material, the authorizations KeyMint enforces, and the certificates of asymmetric keys.
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
-import { rt, JObj, declaredField } from "../jvm/runtime";
+import { rt, JObj, declaredField, setDeclared } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { newObj, scall } from "../jvm/natives/jlang";
 import { unbox } from "../jvm/natives/jbox";
@@ -56,7 +56,6 @@ const KINDS = ["invalid", "algorithm", "blockMode", "paddingMode", "digest", "ec
   "boolValue", "integer", "longInteger", "dateTime", "blob"];
 const KIND = Object.fromEntries(KINDS.map((k, i) => [k, i])) as Record<string, number>;
 const f = (o: unknown, cls: string, name: string) => (o as Record<string, unknown>)[declaredField(cls, name)];
-const setf = (o: JObj, cls: string, values: Record<string, unknown>) => { for (const [k, v] of Object.entries(values)) (o as unknown as Record<string, unknown>)[declaredField(cls, k)] = v; return o; };
 const KP = "android/hardware/security/keymint/KeyParameter", KPV = "android/hardware/security/keymint/KeyParameterValue";
 function readParams(arr: unknown[] | null): Param[] {
   return (arr ?? []).map((p) => {
@@ -69,7 +68,7 @@ const DESC: Record<number, string> = { [KIND.boolValue]: "Z", [KIND.integer]: "I
 async function javaParam(p: Param): Promise<JObj> {
   const d = DESC[p.kind] ?? "I", v = p.v instanceof Uint8Array ? new Int8Array(p.v) : typeof p.v === "boolean" ? +p.v : p.v;
   const value = await scall(KPV, KINDS[p.kind], `(${d})L${KPV};`, v);
-  return setf(await newObj(KP), KP, { tag: p.tag, value });
+  return setDeclared(await newObj(KP), KP, { tag: p.tag, value });
 }
 const all = (ps: Param[], tag: number) => ps.filter((p) => p.tag === tag).map((p) => p.v);
 const one = (ps: Param[], tag: number) => ps.find((p) => p.tag === tag)?.v;
@@ -115,7 +114,7 @@ async function find(d: unknown): Promise<Entry> {
   const e = k.domain === DOMAIN.KEY_ID ? entries().find((x) => x.id === k.nspace.toString()) : k.domain === DOMAIN.APP ? entries().find((x) => x.alias === k.alias) : undefined;
   return e ?? failure(RESPONSE.KEY_NOT_FOUND, "Key not found");
 }
-const keyIdDescriptor = async (e: Entry) => setf(await newObj(KD), KD, { domain: DOMAIN.KEY_ID, nspace: BigInt(e.id), alias: null, blob: null });
+const keyIdDescriptor = async (e: Entry) => setDeclared(await newObj(KD), KD, { domain: DOMAIN.KEY_ID, nspace: BigInt(e.id), alias: null, blob: null });
 
 // the characteristics KeyMint enforces, from a generate or import request
 const CHARACTERISTIC_TAGS = new Set([TAG.PURPOSE, TAG.ALGORITHM, TAG.KEY_SIZE, TAG.BLOCK_MODE, TAG.DIGEST, TAG.PADDING, TAG.CALLER_NONCE, TAG.MIN_MAC_LENGTH,
@@ -164,8 +163,8 @@ const KM = "android/system/keystore2/KeyMetadata", AUTH = "android/system/keysto
 async function metadata(e: Entry): Promise<JObj> {
   const params = e.params.map(decodeParam);
   const auths = await Promise.all([...params, { tag: TAG.CREATION_DATETIME, kind: KIND.dateTime, v: BigInt(e.created) }, { tag: TAG.USER_ID, kind: KIND.integer, v: Math.floor(PROCESS_UID / 100000) }]
-    .map(async (p) => setf(await newObj(AUTH), AUTH, { securityLevel: p.tag === TAG.CREATION_DATETIME ? KEYSTORE : SOFTWARE, keyParameter: await javaParam(p) })));
-  return setf(await newObj(KM), KM, {
+    .map(async (p) => setDeclared(await newObj(AUTH), AUTH, { securityLevel: p.tag === TAG.CREATION_DATETIME ? KEYSTORE : SOFTWARE, keyParameter: await javaParam(p) })));
+  return setDeclared(await newObj(KM), KM, {
     key: await keyIdDescriptor(e), keySecurityLevel: e.material ? TRUSTED_ENVIRONMENT : SOFTWARE, authorizations: jarray(auths, `L${AUTH};`),
     certificate: e.cert ? new Int8Array(unb64(e.cert)) : null, certificateChain: e.chain ? new Int8Array(unb64(e.chain)) : null, modificationTimeMs: BigInt(e.modified),
   });
@@ -357,8 +356,8 @@ async function createOperation(d: unknown, opParams: unknown[] | null): Promise<
     }
     const operation = await newObj("webdroid/KeystoreOperation") as JKeystoreOperation;
     operation.op = { e, params: [...ps, ...key.filter((p) => p.tag === TAG.MIN_MAC_LENGTH)], purpose, input: [], aad: [], nonce, done: false };
-    const parameters = returned.length ? setf(await newObj(KPS), KPS, { keyParameter: jarray(await Promise.all(returned.map(javaParam)), `L${KP};`) }) : null;
-    return setf(await newObj(CREATE_OP), CREATE_OP, { iOperation: operation, operationChallenge: null, parameters, upgradedBlob: null });
+    const parameters = returned.length ? setDeclared(await newObj(KPS), KPS, { keyParameter: jarray(await Promise.all(returned.map(javaParam)), `L${KP};`) }) : null;
+    return setDeclared(await newObj(CREATE_OP), CREATE_OP, { iOperation: operation, operationChallenge: null, parameters, upgradedBlob: null });
   });
 }
 
@@ -400,14 +399,14 @@ async function deleteKey(d: unknown) {
 }
 async function listed(start: string | null): Promise<unknown[]> {
   const aliases = entries().map((e) => e.alias).filter((a) => start === null || a > start).sort();
-  return jarray(await Promise.all(aliases.map(async (alias) => setf(await newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }))), `L${KD};`);
+  return jarray(await Promise.all(aliases.map(async (alias) => setDeclared(await newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }))), `L${KD};`);
 }
 rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup: "android/system/keystore2/IKeystoreService$Stub", methods: {
   "getSecurityLevel(I)Landroid/system/keystore2/IKeystoreSecurityLevel;": (level: number) =>
     level === TRUSTED_ENVIRONMENT ? teeLevel() : failure(-68, "No KeyMint instance for security level " + level),
   "getKeyEntry(Landroid/system/keystore2/KeyDescriptor;)Landroid/system/keystore2/KeyEntryResponse;": async (d: unknown) => {
     const e = await find(d);
-    return setf(await newObj(KER), KER, { iSecurityLevel: e.material ? await teeLevel() : null, metadata: await metadata(e) });
+    return setDeclared(await newObj(KER), KER, { iSecurityLevel: e.material ? await teeLevel() : null, metadata: await metadata(e) });
   },
   // a certificate for a key (its leaf and the rest of its chain), or a certificate-only entry
   "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": async (d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {

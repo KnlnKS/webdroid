@@ -1291,6 +1291,11 @@ export const rt = new Runtime();
 const declaredFields = new Map<string, string>();
 /** the property holding `cls`'s instance field `name`, whether a spec maps it or bytecode keeps it;
  *  "" when the class has none */
+/** assigns `values` to `o`'s fields as `cls` declares or inherits them */
+export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<string, unknown>): T {
+  for (const name in values) (o as unknown as Record<string, unknown>)[declaredField(cls, name)] = values[name];
+  return o;
+}
 export function declaredField(cls: string, name: string): string {
   const key = cls + "." + name;
   let prop = declaredFields.get(key);
