@@ -292,40 +292,81 @@ fn poolUnits() u32 {
 inline fn poolIdx(p: u32) u32 {
     return (p - pool_base) / UNIT;
 }
-/// the bottom of the widest free run of pool units below `top`, so what follows can stay contiguous
-fn widestFree(top: u32) ?u32 {
-    var best: ?u32 = null;
-    var best_len: u32 = 0;
+const Run = struct { start: u32, len: u32 };
+/// the widest free run of pool units below `top`
+fn widestFree(top: u32) ?Run {
+    var best: ?Run = null;
     var i: u32 = 0;
     while (i < top) : (i += 1) {
         if (backs[i] != 0) continue;
         var j = i;
         while (j < top and backs[j] == 0) j += 1;
-        if (j - i > best_len) {
-            best = i;
-            best_len = j - i;
-        }
+        if (best == null or j - i > best.?.len) best = .{ .start = i, .len = j - i };
         i = j;
     }
     return best;
 }
-/// back unit u with a zeroed pool unit, the one beside a neighbour's when free
-fn backUnit(u: u32) bool {
-    const top = poolUnits();
-    var dst: ?u32 = null;
-    if (u > 0 and units[u - 1] & 1 != 0) {
-        const n = poolIdx(units[u - 1] & ~@as(u32, 1)) + 1;
-        if (n < top and backs[n] == 0) dst = n;
+/// the first free run of at least `len` pool units below `top`
+fn firstFree(len: u32, top: u32) ?u32 {
+    var run: u32 = 0;
+    for (0..top) |i| {
+        run = if (backs[i] == 0) run + 1 else 0;
+        if (run == len) return @intCast(i + 1 - len);
     }
-    if (dst == null and u + 1 < UNITS and units[u + 1] & 1 != 0) {
-        const n = poolIdx(units[u + 1] & ~@as(u32, 1));
-        if (n > 0 and backs[n - 1] == 0) dst = n - 1;
-    }
-    const d = dst orelse widestFree(top) orelse return false;
+    return null;
+}
+inline fn backed(u: u32) bool {
+    return units[u] & 1 != 0;
+}
+inline fn poolOf(u: u32) u32 {
+    return poolIdx(units[u] & ~@as(u32, 1));
+}
+fn place(u: u32, d: u32) void {
     backs[d] = u + 1;
     const p = pool_base + d * UNIT;
     fill(p, 0, UNIT);
     units[u] = p | 1;
+}
+/// Back unit u with a zeroed pool unit, keeping a mapping's units consecutive in the buffer so a
+/// host access or an unaligned guest one may span them: after its predecessor's when that is free,
+/// else (when no translation into it is held) the predecessor's run moves where it can grow, else
+/// before its successor's; an isolated unit takes the middle of the widest gap, room either way.
+fn backUnit(u: u32, may_move: bool) bool {
+    const top = poolUnits();
+    if (u > 0 and backed(u - 1)) {
+        const n = poolOf(u - 1) + 1;
+        if (n < top and backs[n] == 0) {
+            place(u, n);
+            return true;
+        }
+        if (may_move) {
+            var first = u - 1;
+            while (first > 0 and backed(first - 1) and poolOf(first - 1) + 1 == poolOf(first)) first -= 1;
+            const len = u - first;
+            if (firstFree(2 * (len + 1), top) orelse firstFree(len + 1, top)) |to| {
+                const from = poolOf(first);
+                move(pool_base + to * UNIT, pool_base + from * UNIT, len * UNIT);
+                for (0..len) |i| backs[from + i] = 0;
+                for (0..len) |i| {
+                    const k: u32 = @intCast(i);
+                    backs[to + k] = first + k + 1;
+                    units[first + k] = (pool_base + (to + k) * UNIT) | 1;
+                }
+                moves += 1;
+                place(u, to + len);
+                return true;
+            }
+        }
+    }
+    if (u + 1 < UNITS and backed(u + 1)) {
+        const n = poolOf(u + 1);
+        if (n > 0 and backs[n - 1] == 0) {
+            place(u, n - 1);
+            return true;
+        }
+    }
+    const gap = widestFree(top) orelse return false;
+    place(u, gap.start + gap.len / 2);
     return true;
 }
 fn setUnit(u: u32, state: u32) void {
@@ -351,22 +392,29 @@ fn wholeUnits(v: u64, n: u64) ?[2]u32 {
 }
 /// a plane address → buffer offset, backing its unit on first touch; 0 when not accessible
 pub export fn tx(h_in: u32, l: u32) u32 {
+    return translate(h_in, l, true);
+}
+fn translate(h_in: u32, l: u32, may_move: bool) u32 {
     const h = h_in & 0x00ff_ffff; // a pointer's top-byte tag is not address
     if (h == 0 or h >= PLANES) return 0;
     const u = unitOf((@as(u64, h) << 32) | l);
-    if (units[u] == DEMAND and !backUnit(u)) return 0;
+    if (units[u] == DEMAND and !backUnit(u, may_move)) return 0;
     const e = units[u];
     return if (e & 1 != 0) (e - 1) + (l & (UNIT - 1)) else 0;
 }
-/// whether [v, v + n) is accessible and contiguous in the buffer, backing it as needed
+/// whether [v, v + n) is accessible and contiguous in the buffer, backing it as needed (moving
+/// runs only when no translation into them is held)
 pub fn commit_range(v_in: u64, n: u32) u32 {
+    return commitRange(v_in, n, true);
+}
+fn commitRange(v_in: u64, n: u32, may_move: bool) u32 {
     const v = v_in & 0x00ff_ffff_ffff_ffff;
-    const h = hi(v);
-    if (h == 0) return 1;
-    const first = tx(h, lo(v));
-    if (first == 0) return 0;
-    var a = (v | (UNIT - 1)) + 1;
-    while (a < v + n) : (a += UNIT) if (tx(hi(a), lo(a)) != first + (a - v)) return 0;
+    if (hi(v) == 0) return 1;
+    var a = v;
+    while (a < v + n) : (a = (a | (UNIT - 1)) + 1) if (translate(hi(a), lo(a), may_move) == 0) return 0;
+    const first = translate(hi(v), lo(v), false);
+    a = (v | (UNIT - 1)) + 1;
+    while (a < v + n) : (a += UNIT) if (translate(hi(a), lo(a), false) != first + (a - v)) return 0;
     return 1;
 }
 /// a host access of n bytes at buffer offset p: what plane memory it lands in must be backed and
@@ -375,7 +423,7 @@ export fn commit_phys(p: u32, n: u32) u32 {
     if (pool_base == 0 or p < pool_base) return 1;
     const d = poolIdx(p);
     if (d >= pool_len or backs[d] == 0) return 1;
-    return commit_range(((@as(u64, backs[d] - 1) + UNIT_FIRST) << UNIT_SHIFT) | (p & (UNIT - 1)), n);
+    return commitRange(((@as(u64, backs[d] - 1) + UNIT_FIRST) << UNIT_SHIFT) | (p & (UNIT - 1)), n, false);
 }
 export fn plane_reserved(h: u32) u32 {
     return @intFromBool(R[h & 255] != 0);
