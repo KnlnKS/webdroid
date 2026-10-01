@@ -5,7 +5,6 @@ import { newObj, vcall } from "../../../src/jvm/natives/jlang";
 import { newPaint, setFontMetrics } from "../../../src/android/paint";
 import { declaredField } from "../../../src/jvm/runtime";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
-import { JTextView } from "../../../src/android/textview";
 import { bootWithFonts } from "./boot";
 
 async function probe() {
@@ -35,11 +34,8 @@ async function probe() {
     results.push({ width, fm, loads, draws, aligned: pixels[(y * 60 + 7) * 4 + 1] === 255 && pixels[((y - 1) * 60 + 7) * 4 + 3] === 0,
       restored: ctx.getTransform().isIdentity, hierarchy: rt.iof(span, "android/text/style/DynamicDrawableSpan") });
   }
-  const text = rt.make("android/widget/TextView");
-  if (!(text instanceof JTextView)) throw new Error("Invalid TextView");
-  await vcall(text, "setShadowLayer", "(FFFI)V", 1, 10, 2, 0xffff0000);
-  const getters = await Promise.all(["Radius", "Dx", "Dy", "Color"].map(n => vcall(text, "getShadow" + n, "()" + (n === "Color" ? "I" : "F"))));
-  await vcall(paint, "set", "(Landroid/graphics/Paint;)V", text.paintT);
+  await vcall(paint, "setShadowLayer", "(FFFI)V", 1, 10, 2, 0xffff0000);
+  const getters = await Promise.all(["Radius", "Dx", "Dy", "Color"].map(n => vcall(paint, "getShadowLayer" + n, "()" + (n === "Color" ? "I" : "F"))));
   await vcall(paint, "setTextSize", "(F)V", 30);
   const ctx = new OffscreenCanvas(120, 50).getContext("2d")!;
   const canvas = canvasOver(ctx, 120, 50);

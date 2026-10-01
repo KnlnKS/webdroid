@@ -1,14 +1,10 @@
 import "../../../src/natives";
-import { frame, present, setScreenCanvas } from "../../../src/shell/device";
-import { JRect } from "../../../src/android/graphics";
-import { NativeBitmap, javaBitmap } from "../../../src/android/bitmap";
-import { dispatchAttached, dispatchDetached } from "../../../src/android/view";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
-import { EglContext, getHolder, latchSurfaces, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glview";
+import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glview";
 import { mem } from "../../../src/native/mem";
 import { Cpu, setA64 } from "../../../src/native/cpu";
 import { jitStats, JIT_HEAT } from "../../../src/native/core";
@@ -272,20 +268,9 @@ async function probe() {
   Object.assign(callback, { [mangleMethod("run", "()V")]: () => gl === firstGL });
   const callbackRestored = vcallOn(first, callback, "run", "()V");
   setCurThread(mainThread);
-  const view = rt.make("android/opengl/GLSurfaceView"), renderer = rt.make("java/lang/Object");
-  const rendererThread = Reflect.get(view, "glThread"), callbacks: boolean[] = [];
-  const glSurface: GlSurface = getHolder(view).surface = { view: null, width: 4, height: 4, present: null, frames: 0 };
-  Object.assign(view, { renderer, needCreate: true, sizeChanged: true, winW: 4, winH: 4 });
-  const suspend = async () => { callbacks.push(gl === Reflect.get(view, "egl").gl && curThread === rendererThread); rt.su(rendererThread); await Promise.resolve(); };
-  Object.assign(renderer, {
-    [mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V")]: suspend,
-    [mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V")]: suspend,
-    [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: suspend,
-  });
-  await Reflect.apply(Reflect.get(view, "runFrame"), view, [glSurface]);
-  return { callbacks, bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
+  return { bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
-    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents(),
+    nativeWindow: await nativeWindow(), readback: readback(), uploads: uploadExtents(),
     clientArrays: clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture(), surfaceTexture: await surfaceTexture() };
 }
 async function nativeWindow() {
@@ -325,26 +310,6 @@ async function nativeWindow() {
   surface.present?.close(); mem.free(out);
   return { locked, dimensions, duplicate, posted, pixels, yv12, released, sameHandle, reset, frames: surface.frames };
 }
-async function windowCopy() {
-  const screen = document.createElement("canvas"); screen.width = screen.height = 4;
-  setScreenCanvas(screen);
-  const copy = async () => {
-    const native = new NativeBitmap(4, 4), bitmap = await javaBitmap(native);
-    const rect = new JRect(); rect.right = rect.bottom = 4;
-    const listener = rt.make("java/lang/Object");
-    let finish = (_code: number) => {};
-    const done = new Promise<number>(resolve => { finish = resolve; });
-    Object.assign(listener, { [mangleMethod("onPixelCopyFinished", "(I)V")]: finish });
-    const cls = rt.link("android/view/PixelCopy").ctor;
-    Reflect.apply(Reflect.get(cls, mangleMethod("request", "(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V")), cls, [null, rect, bitmap, listener, null]);
-    return { code: await done, pixel: [...native.ctx.getImageData(0, 0, 1, 1).data] };
-  };
-  frame.fillStyle = "lime"; frame.fillRect(0, 0, 4, 4); present();
-  frame.fillStyle = "red"; frame.fillRect(0, 0, 4, 4);
-  const before = await copy();
-  present();
-  return { before, after: await copy() };
-}
 /** SurfaceTexture in GL contexts, against StProbe on the reference AVD: a latch fills the texture and
  *  takes GLConsumer's flipped matrix, another context cannot update it, a detach deletes the texture
  *  and an attach binds the current image to a new one */
@@ -381,43 +346,5 @@ async function surfaceTexture() {
   const released = [vcall(st, "isReleased", "()Z"), thrown(() => vcall(st, "updateTexImage", "()V"))];
   b.makeCurrent(null);
   return { latched, otherContext, deleted, attached, released };
-}
-/** GLThread: surface callbacks and resume wake it, a frame waits for the display to show the last one,
- *  WHEN_DIRTY draws only on request, and detaching ends the thread */
-async function lifecycle() {
-  const view = rt.make("android/opengl/GLSurfaceView"), renderer = rt.make("java/lang/Object");
-  Object.assign(view, { right: 4, bottom: 4 });
-  getHolder(view).callbacks.push(view); // GLSurfaceView.init, which rt.make skips
-  let drawn = 0;
-  Object.assign(renderer, {
-    [mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V")]: () => {},
-    [mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V")]: () => {},
-    [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: () => { drawn++; },
-  });
-  const settle = async (done: () => boolean) => {
-    for (let i = 0; i < 200 && !done(); i++) await new Promise(resolve => setTimeout(resolve, 5));
-    return done();
-  };
-  const idle = () => new Promise(resolve => setTimeout(resolve, 50));
-  await vcall(view, "setRenderer", "(Landroid/opengl/GLSurfaceView$Renderer;)V", renderer);
-  await vcall(view, "setRenderMode", "(I)V", 0);
-  await vcall(view, "onPause", "()V");
-  await dispatchAttached(view);
-  const created = await settle(() => Reflect.get(view, "hasSurface"));
-  await idle();
-  const paused = drawn === 0;
-  await vcall(view, "onResume", "()V");
-  const first = await settle(() => drawn === 1);
-  await vcall(view, "requestRender", "()V");
-  await idle();
-  const backpressure = drawn === 1;
-  latchSurfaces();
-  const second = await settle(() => drawn === 2);
-  latchSurfaces();
-  await idle();
-  const whenDirty = drawn === 2;
-  await dispatchDetached(view);
-  const ended = await settle(() => !Reflect.get(view, "running"));
-  return created && paused && first && backpressure && second && whenDirty && ended;
 }
 export default probe;

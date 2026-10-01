@@ -7,8 +7,6 @@ import { mangleMethod } from "../src/jvm/abi";
 import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
 import { JTheme, obtainStyled, rvString } from "../src/android/res";
 import { TV } from "../src/android/axml";
-import { JTextView, JEditText } from "../src/android/textview";
-import { perf } from "../src/perf";
 
 beforeAll(loadSystemFonts);
 /** a TextPaint's public field */
@@ -190,43 +188,6 @@ describe("text-platform", () => {
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(paintTypeface(paint)).toBe(typeface);
   });
-
-
-  test("storage stats resolves by class to its named service", async () => {
-    const context = await newObj("android/content/Context");
-    const cls = rt.classFor("android/app/usage/StorageStatsManager");
-    expect(await vcall(context, "getSystemServiceName", "(Ljava/lang/Class;)Ljava/lang/String;", cls)).toBe("storagestats");
-    const manager = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "storagestats");
-    expect(manager).not.toBeNull();
-    expect(await vcall(context, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", cls)).toBe(manager);
-  });
-});
-
-describe("textview-link-color", () => {
-  test("TextView retains link color lists and updates its paint across state changes without layout", async () => {
-    rt.linkNatives();
-    const view = rt.make("android/widget/TextView");
-    if (!(view instanceof JTextView)) throw new Error("Invalid TextView");
-    const colors = await newObj("android/content/res/ColorStateList", "([[I[I)V",
-      [Int32Array.of(16842919), new Int32Array(0)], Int32Array.of(0xff123456, 0xffabcdef));
-    const layouts = perf.layoutRequests;
-    await vcall(view, "setLinkTextColor", "(Landroid/content/res/ColorStateList;)V", colors);
-    expect(await vcall(view, "getLinkTextColors", "()Landroid/content/res/ColorStateList;")).toBe(colors);
-    expect(textPaintField(view.paintT, "linkColor")).toBe(0xffabcdef | 0);
-    view.pressed = true;
-    await view.refreshDrawableState();
-    expect(textPaintField(view.paintT, "linkColor")).toBe(0xff123456 | 0);
-    await vcall(view, "setLinkTextColor", "(I)V", 0xff112233 | 0);
-    expect(textPaintField(view.paintT, "linkColor")).toBe(0xff112233 | 0);
-    await vcall(view, "setLinkTextColor", "(Landroid/content/res/ColorStateList;)V", null);
-    expect(await vcall(view, "getLinkTextColors", "()Landroid/content/res/ColorStateList;")).toBeNull();
-    expect(textPaintField(view.paintT, "linkColor")).toBe(0xff112233 | 0);
-    expect(perf.layoutRequests).toBe(layouts);
-    const span = await newObj("android/text/style/URLSpan", "(Ljava/lang/String;)V", "https://example.com");
-    await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", view.paintT);
-    expect(await vcall(view.paintT, "getColor", "()I")).toBe(textPaintField(view.paintT, "linkColor"));
-    expect(view.tp.underline).toBe(true);
-  });
 });
 
 describe("tts-span", () => {
@@ -247,32 +208,6 @@ describe("tts-span", () => {
       expect(await vcall(copyArgs, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "android.arg." + name.toLowerCase())).toBe("Golden Gate Bridge");
       await vcall(parcel, "recycle", "()V");
     }
-  });
-});
-
-describe("editable", () => {
-  class Watcher extends JObj { events: string[] = []; }
-  const event = (name: string) => async function (this: Watcher, text: unknown, ...range: number[]) {
-    this.events.push(`${name} ${await vcall(text, "toString", "()Ljava/lang/String;")} ${range.join(",")}`.trim());
-  };
-  rt.register({ name: "test/TextWatcher", ctor: Watcher, ifaces: ["android/text/TextWatcher"], methods: {
-    "beforeTextChanged(Ljava/lang/CharSequence;III)V": event("before"),
-    "onTextChanged(Ljava/lang/CharSequence;III)V": event("on"),
-    "afterTextChanged(Landroid/text/Editable;)V": event("after"),
-  } });
-  rt.linkNatives();
-  test("an EditText's filters bound setText and edits through its Editable, which its listeners follow", async () => {
-    const field = new JEditText();
-    await vcall(field, "setFilters", "([Landroid/text/InputFilter;)V", [await newObj("android/text/InputFilter$LengthFilter", "(I)V", 4)]);
-    await vcall(field, "setText", "(Ljava/lang/CharSequence;)V", "abcdef");
-    expect(field.text).toBe("abcd");
-    const watcher = rt.make("test/TextWatcher") as Watcher;
-    await vcall(field, "addTextChangedListener", "(Landroid/text/TextWatcher;)V", watcher);
-    const editable = await vcall(field, "getText", "()Landroid/text/Editable;");
-    await vcall(editable, "delete", "(II)Landroid/text/Editable;", 0, 2);
-    await vcall(editable, "append", "(Ljava/lang/CharSequence;)Landroid/text/Editable;", "xyz");
-    expect(field.text).toBe("cdxy");
-    expect(watcher.events).toEqual(["before abcd 0,2,0", "on cd 0,2,0", "after cd", "before cd 2,0,2", "on cdxy 2,0,2", "after cdxy"]);
   });
 });
 

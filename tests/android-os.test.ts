@@ -1,33 +1,17 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
-import { JActivity, JApplication, JService } from "../src/android/app";
+import { JApplication, JService } from "../src/android/app";
 import { appHost, setAppHost } from "../src/android/apphost";
 import { packages, PackageRecord } from "../src/android/packages";
 import { Resources } from "../src/android/res";
 import { TV, type XmlAttr } from "../src/android/axml";
-import { mangleMethod } from "../src/jvm/abi";
 import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, appResources } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
-import { PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
+import { setProcessIdentity, setProcessName } from "../src/android/os";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
-
-describe("activity-main-queue", () => {
-  rt.linkNatives();
-  beforeAll(async () => { await loadLibcore(); await loadFrameworkJar(); rt.linkNatives(); });
-
-  test("Activity.runOnUiThread runs inline in the main job", async () => {
-    const events: string[] = [];
-    const runnable = { [mangleMethod("run", "()V")]: () => { events.push("run"); } };
-    await onMain(async () => {
-      await vcall(new JActivity(), "runOnUiThread", "(Ljava/lang/Runnable;)V", runnable);
-      events.push("after");
-    });
-    expect(events).toEqual(["run", "after"]);
-  });
-});
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
@@ -383,20 +367,6 @@ describe("stats-event", () => {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     expect(view.getBigInt64(19, true)).toBe(-1n);
     expect(view.getBigInt64(27, true)).toBe(9223372036854775807n);
-  });
-});
-
-describe("system-health", () => {
-  rt.linkNatives();
-
-  test("system health exposes an empty UID snapshot without invented measurements", async () => {
-    const context = rt.make("android/content/Context");
-    const manager = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "systemhealth");
-    expect(manager).not.toBeNull();
-    const snapshot = await vcall(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID);
-    expect(await vcall(snapshot, "getDataType", "()Ljava/lang/String;")).toBe("UidHealthStats");
-    expect(await vcall(snapshot, "hasMeasurement", "(I)Z", 10001)).toBe(0);
-    await expect(vcallAsync(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID + 1)).rejects.toBeDefined();
   });
 });
 

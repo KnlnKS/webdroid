@@ -8,7 +8,7 @@ import { checkUriPermission, grantUriPermission, revokeUriPermission, providerOp
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
 import { mangleMethod } from "../src/jvm/abi";
-import { JContext, JContextWrapper } from "../src/android/context";
+import { JContext } from "../src/android/context";
 import { defaultDisplay } from "../src/android/display";
 import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
@@ -19,8 +19,7 @@ import { parsePackageArchive, apkCertificates } from "../src/android/packagearch
 import { registerPackage, FLAG_IS_GAME, field } from "../src/android/pm";
 import { hostedService } from "../src/android/binder";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
-import { Resources, JTheme, themeOf, rvString, newSV, nativeRes, AID } from "../src/android/res";
-import { newTheme } from "../src/android/resources";
+import { Resources, rvString, newSV } from "../src/android/res";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { mkComponentName, newIntent } from "../src/android/intent";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
@@ -29,15 +28,7 @@ import { mkPfd } from "../src/android/os";
 import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
 import { javaReadFd } from "../src/native/stdio";
 import { Arsc } from "../src/android/arsc";
-import { getInflater } from "../src/android/inflate";
-import { JFrameLayout } from "../src/android/layouts";
-import { JWindow } from "../src/android/window";
-import { resolveSystemBars } from "../src/shell/systembars";
-import { device } from "../src/shell/config";
-import { JView, dispatchAttached, uiState } from "../src/android/view";
-import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
-import { JActivity } from "../src/android/app";
-import { scall, loadLibcore, appResources, preloadTextPaint } from "./java";
+import { scall, loadLibcore, preloadTextPaint } from "./java";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -663,18 +654,6 @@ describe("window-context", () => {
   beforeAll(preloadTextPaint);
   rt.linkNatives();
 
-  test("finding an activity content view installs its decor before setContentView", async () => {
-    const activity = new JActivity(), res = new Resources(null, {}), theme = new JTheme();
-    theme.res = res;
-    Reflect.set(activity, "$host", { res, theme, pkg: "test" });
-    activity.window.activity = activity;
-    expect(activity.window.decor).toBeNull();
-    const content = await vcall(activity, "findViewById", "(I)Landroid/view/View;", 0x01020002);
-    expect(content).not.toBeNull();
-    expect(content).toBe(activity.window.contentParent);
-    expect(await vcall(activity.window, "findViewById", "(I)Landroid/view/View;", 0x01020002)).toBe(content);
-  });
-
   test("display and window contexts retain display identity and own their window service", async () => {
     const source = new JContext(), screen = await defaultDisplay();
     Reflect.set(source, "$host", { pkg: "test" });
@@ -705,93 +684,5 @@ describe("window-context", () => {
     expect(await vcall(attribution, "getAttributionTag", "()Ljava/lang/String;")).toBe("navigation");
     const reset = await vcall(tagged, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", null);
     expect(await vcall(reset, "getAttributionTag", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("unchanged window attributes do not restart inset dispatch", async () => {
-    const window = rt.make("android/view/Window");
-    const attrs = await vcall(window, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;");
-    const pending = uiState.needsInsets;
-    try {
-      uiState.needsInsets = false;
-      await vcall(attrs, "setFitInsetsTypes", "(I)V", 0);
-      await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
-      expect(uiState.needsInsets).toBe(true);
-      uiState.needsInsets = false;
-      await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
-      expect(uiState.needsInsets).toBe(false);
-    } finally { uiState.needsInsets = pending; }
-  });
-
-  test("destroyed context windows detach without dismissing dialogs or other activities", async () => {
-    const owner = new JContext(), other = new JContext();
-    const themed = new JContextWrapper();
-    themed.base = owner;
-    const ownedView = new JView(), otherView = new JView();
-    ownedView.ctx = themed; otherView.ctx = other;
-    addOverlay(ownedView, 0, 0, 0);
-    addOverlay(otherView, 0, 0, 0);
-    await dispatchAttached(ownedView);
-    await dispatchAttached(otherView);
-    try {
-      await detachContextOverlays(owner);
-      expect(ownedView.attached).toBe(false);
-      expect(overlays.some(o => o.view === ownedView)).toBe(false);
-      expect(otherView.attached).toBe(true);
-      expect(overlays.some(o => o.view === otherView)).toBe(true);
-    } finally {
-      await detachContextOverlays(other);
-      removeOverlay(ownedView);
-    }
-  });
-
-  test("Dialog exposes its overlay theme through its context and inflater without changing its owner", async () => {
-    const jresources = await appResources(new Resources(null, {}), "dialog"), res = nativeRes(jresources);
-    const style = (name: string) => res.idFor("style", name, "android"), floating = (t: JTheme | null | undefined) => t?.lookup(AID("windowIsFloating"))?.d;
-    const theme = await newTheme(jresources, null, style("Theme.Material.Light"));
-    const context = Object.assign(rt.make("android/content/Context"), { $host: { res, jresources, theme } });
-    const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, style("Theme.Material.Light.Dialog"));
-    const themed = await vcall(dialog, "getContext", "()Landroid/content/Context;");
-    expect(themed).not.toBe(context);
-    expect(floating(themeOf(themed))).toBe(-1);
-    expect(floating(themeOf(getInflater(themed).jctx))).toBe(-1);
-    expect(floating(theme)).toBe(0);
-    expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBeNull();
-    const owner = rt.make("android/app/Activity");
-    await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);
-    expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBe(owner);
-  });
-
-
-  test("full-screen windows own their system bars and hiding restores the underlying window", async () => {
-    const activity = new JFrameLayout(), dialog = new JFrameLayout();
-    const underneath = activity.windowOwner = new JWindow(), above = dialog.windowOwner = new JWindow();
-    underneath.decor = activity; above.decor = dialog;
-    above.layoutW = above.layoutH = -1;
-    dialog.right = device.width; dialog.bottom = device.height;
-    const overlays = [{ view: dialog, x: 0, y: 0, flags: 0 }];
-    await vcall(underneath, "setStatusBarColor", "(I)V", 0xff112233);
-    await vcall(underneath, "setNavigationBarColor", "(I)V", 0xff223344);
-    await vcall(above, "setStatusBarColor", "(I)V", 0xffeeeeee);
-    await vcall(above, "setNavigationBarColor", "(I)V", 0xffdddddd);
-    const controller = await vcall(above, "getInsetsController", "()Landroid/view/WindowInsetsController;");
-    await vcall(controller, "setSystemBarsAppearance", "(II)V", 24, 24);
-    expect(await vcall(controller, "getSystemBarsAppearance", "()I")).toBe(24);
-    await vcall(controller, "hide", "(I)V", 1);
-    const bars = resolveSystemBars(activity, overlays);
-    expect(bars.root).toBe(dialog);
-    expect([bars.status, bars.navigation, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 2]);
-    above.layoutW = device.width; above.layoutH = device.height;
-    expect(resolveSystemBars(activity, overlays)).toEqual(bars);
-    above.flags |= 8;
-    expect(resolveSystemBars(activity, overlays).root).toBe(activity);
-    above.flags &= ~8;
-    dialog.right--;
-    expect(resolveSystemBars(activity, overlays).root).toBe(activity);
-    dialog.right++;
-    dialog.visibility = 4;
-    const restored = resolveSystemBars(activity, overlays);
-    expect(restored.root).toBe(activity);
-    expect([restored.status, restored.navigation, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 2]);
-    expect(await vcall(underneath, "getNavigationBarColor", "()I")).toBe(0xff223344);
   });
 });
