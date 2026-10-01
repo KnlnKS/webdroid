@@ -8,9 +8,9 @@ import { type Mat, applyMatrix, isIdentity, javaMatrix, mul, about, rotateM, sca
 import { canvasOf, type JavaCanvas, clipToOutline, saveLayer } from "./canvas";
 import { setInvalidateHook } from "./rendernode";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, callOn, after, newObj, construct, idHash, curThread, type JThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, after, construct, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback, drawAt } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
@@ -877,7 +877,7 @@ export const drawView = driven(function* drawView(v: JView, cv: JavaCanvas, pare
     // the image and nothing underneath it.
     const w = v.width(), h = v.height();
     if (v.clipToOutline && v.outlineProvider !== null) {
-      const outline: object = v.outline ??= yield newObj("android/graphics/Outline", "()V");
+      const outline: object = v.outline ??= yield construct("android/graphics/Outline", "()V");
       if (v.outlineDirty || v.outlineW !== w || v.outlineH !== h) {
         v.outlineDirty = false; v.outlineW = w; v.outlineH = h;
         // View.rebuildOutline: setEmpty keeps the alpha
@@ -929,10 +929,7 @@ function drawSelf(v: JView, cv: JavaCanvas): unknown {
 const drawContent = driven(function* drawContent(v: JView, cv: JavaCanvas): Gen {
   const ctx = canvasOf(cv).ctx;
   if (v.surfaceBacked && isRecording(ctx)) {
-    if (!v.surfaceLayer && v.background) {
-      yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
-      yield guardCall(v.background, M_draw, cv);
-    }
+    if (!v.surfaceLayer && v.background) yield drawAt(v.background, cv, 0, 0, v.width(), v.height());
     // The first frame can arrive after recording; later frames replace and close their predecessor.
     recordOrRun(ctx, target => {
       if (v.surfaceLayer) drawSurface(v, target);
@@ -940,12 +937,9 @@ const drawContent = driven(function* drawContent(v: JView, cv: JavaCanvas): Gen 
   } else if (v.surfaceLayer) {
     drawSurface(v, ctx);
   }
-  else if (v.background) {
-    // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
-    // (and app subclasses) rebuild their geometry, and it only fires on a real change
-    yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
-    yield guardCall(v.background, M_draw, cv);
-  }
+  // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
+  // (and app subclasses) rebuild their geometry, and it only fires on a real change
+  else if (v.background) yield drawAt(v.background, cv, 0, 0, v.width(), v.height());
   ctx.translate(-v.scrollX, -v.scrollY);
   yield guardMaybe(v, M_onDraw, cv);
   yield guardMaybe(v, M_dispatchDraw, cv);
@@ -958,20 +952,20 @@ const drawContent = driven(function* drawContent(v: JView, cv: JavaCanvas): Gen 
 const drawForeground = driven(function* drawForeground(this: JView, cv: JavaCanvas): Gen {
   const d = this.foreground;
   if (!d) return;
-  const thread = curThread, w = this.width(), h = this.height();
+  const w = this.width(), h = this.height();
   if (this.foregroundW !== w || this.foregroundH !== h) {
     this.foregroundW = w; this.foregroundH = h;
     const bounds = new JRect();
     bounds.right = w; bounds.bottom = h;
     if (this.foregroundGravity !== G.FILL) {
-      const dw = yield callOn(thread, () => guardCall(d, M_getIntrinsicWidth));
-      const dh = yield callOn(thread, () => guardCall(d, M_getIntrinsicHeight));
-      const ld = yield callOn(thread, () => guardCall(this, M_getLayoutDirection));
+      const dw = yield guardCall(d, M_getIntrinsicWidth);
+      const dh = yield guardCall(d, M_getIntrinsicHeight);
+      const ld = yield guardCall(this, M_getLayoutDirection);
       gravityApply(absGravity(this.foregroundGravity, Number(ld)), Number(dw), Number(dh), bounds, 0, 0, bounds);
     }
-    yield callOn(thread, () => guardCall(d, M_setBounds, bounds.left, bounds.top, bounds.right, bounds.bottom));
+    yield guardCall(d, M_setBounds, bounds.left, bounds.top, bounds.right, bounds.bottom);
   }
-  yield callOn(thread, () => guardCall(d, M_draw, cv));
+  yield guardCall(d, M_draw, cv);
 });
 
 function drawSurface(v: JView, ctx: Ctx2D) {
