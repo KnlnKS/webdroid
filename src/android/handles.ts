@@ -14,14 +14,25 @@ import { rt } from "../jvm/runtime";
 
 const objs: (object | undefined)[] = [undefined];
 const byObj = new WeakMap<object, bigint>();
-/** released slots, reused so a native object recreated every frame does not grow the table */
-const free: number[] = [];
+/** Released slots, reused so a native object recreated every frame does not grow the table —
+ *  oldest first, and only once QUARANTINE later releases have queued behind them. Framework Java
+ *  tells a replaced native instance by its long (Paint.getNativeInstance re-sends a shader, and
+ *  ComposeShader rebuilds, only when the handle differs), so the long a release frees must not
+ *  come straight back for the object that replaces it. */
+const QUARANTINE = 1024;
+let free: number[] = [], head = 0;
+function slot(): number {
+  if (free.length - head <= QUARANTINE) return objs.push(undefined) - 1;
+  const n = free[head++];
+  if (head * 2 > free.length) { free = free.slice(head); head = 0; }
+  return n;
+}
 
 /** hand framework Java a long for this object */
 export function handle(o: object): bigint {
   let h = byObj.get(o);
   if (h === undefined) {
-    const n = free.pop() ?? objs.push(undefined) - 1;
+    const n = slot();
     objs[n] = o;
     byObj.set(o, (h = BigInt(n)));
   }
@@ -42,7 +53,7 @@ const collected = new FinalizationRegistry<{ n: number; ref: WeakRef<object> }>(
 export function weakHandle(o: object): bigint {
   let h = byObj.get(o);
   if (h === undefined) {
-    const n = free.pop() ?? objs.push(undefined) - 1, ref = new WeakRef(o);
+    const n = slot(), ref = new WeakRef(o);
     objs[n] = WEAK; refs[n] = ref;
     byObj.set(o, (h = BigInt(n)));
     collected.register(o, { n, ref });

@@ -143,8 +143,12 @@ async function probe() {
   const bitmapShader = await newObj("android/graphics/BitmapShader", "(Landroid/graphics/Bitmap;Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", await bitmap(2, 2), clamp, clamp);
   const compose = await newObj("android/graphics/ComposeShader", "(Landroid/graphics/Shader;Landroid/graphics/Shader;Landroid/graphics/PorterDuff$Mode;)V", linear, bitmapShader, srcOver);
   const composed = await native(compose) as NativeComposeShader;
+  // a replaced shader's new handle must differ from the one discarded, or ComposeShader keeps the old
+  await vcall(local, "setTranslate", "(FF)V", 7, 0);
+  await vcall(linear, "setLocalMatrix", "(Landroid/graphics/Matrix;)V", local);
+  const recomposed = String((await native(compose) as NativeComposeShader).dst.local);
   out.shaders = { gradient: first instanceof NativeGradient && !first.local, replaced: second !== first && String(second.local),
-    bitmap: await native(bitmapShader) instanceof NativeBitmapShader, composed: composed.dst === second && composed.op };
+    bitmap: await native(bitmapShader) instanceof NativeBitmapShader, composed: composed.dst === second && composed.op, recomposed };
   return out;
 }
 export default probe;
