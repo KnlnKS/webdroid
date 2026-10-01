@@ -248,10 +248,10 @@ export class NativeCanvas {
       this.shaderCtx = new Proxy(ctx, {
         get: (t, k) => {
           if (k in over) return over[k as string];
-          const v = (t as unknown as Record<PropertyKey, unknown>)[k];
-          return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+          const v = Reflect.get(t, k, t);
+          return typeof v === "function" ? v.bind(t) : v;
         },
-        set: (t, k, v) => { (t as unknown as Record<PropertyKey, unknown>)[k] = v; return true; },
+        set: (t, k, v) => Reflect.set(t, k, v, t),
       });
     }
     return this.shaderCtx!;

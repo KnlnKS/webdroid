@@ -4,7 +4,7 @@
 
 import { type JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, scall, curThread, callOn, after, construct } from "../jvm/natives/jlang";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, jmethod } from "../jvm/abi";
 import { TV } from "./axml";
 import { type Resources, type RV, type JTheme, rvColor } from "./res";
 import { type JRect } from "./graphics";
@@ -40,15 +40,14 @@ export function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | nul
 
 export const drawableSize = (d: JDrawable, vertical: boolean, thread = curThread): Maybe<number> =>
   vcallOn(thread, d, vertical ? "getIntrinsicHeight" : "getIntrinsicWidth", "()I") as Maybe<number>;
-type Methods = Record<string, (...a: unknown[]) => unknown>;
 const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V"), M_setBounds = mangleMethod("setBounds", "(IIII)V");
 /** Drawable.draw(Canvas), virtually: an app's own Drawable subclass is what gets drawn */
 export function drawChild(d: JDrawable, cv: unknown, thread = curThread): unknown {
-  return callOn(thread, () => (d as unknown as Methods)[M_draw](cv));
+  return callOn(thread, () => jmethod(d, M_draw)!.call(d, cv));
 }
 /** Drawable.setBounds, then draw(Canvas) */
 export function drawAt(d: JDrawable, cv: unknown, l: number, t: number, r: number, b: number, thread = curThread): unknown {
-  const bounded = callOn(thread, () => (d as unknown as Methods)[M_setBounds](l, t, r, b));
+  const bounded = callOn(thread, () => jmethod(d, M_setBounds)!.call(d, l, t, r, b));
   return bounded instanceof Promise ? bounded.then(() => drawChild(d, cv, thread)) : drawChild(d, cv, thread);
 }
 export const setDrawableCallback = (d: JDrawable, callback: unknown): unknown =>
