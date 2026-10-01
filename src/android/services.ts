@@ -54,6 +54,8 @@ const activityManager: NativeSpec["methods"] = {
   "isUserAMonkey()Z": () => 0,
   // the render thread's tid, for scheduling: everything here shares the page's one thread
   "setRenderThread(I)V": () => {},
+  // AMS records it to kill this process when that package changes; no package changes under a running app
+  "addPackageDependency(Ljava/lang/String;)V": () => {},
   ...intentSenderMethods,
 };
 rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub", methods: { ...activityManager, ...activityManagerMethods } });

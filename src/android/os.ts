@@ -966,10 +966,19 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       const st = existing("stat", path);
       return statOf(st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
     },
-    // the VFS keeps no permission bits: an existing file takes any mode
+    // the VFS keeps no permission bits or owners: an existing file takes any mode and owner
     "chmod(Ljava/lang/String;I)V": (path: string) => {
       if (path === null) rt.npe();
       existing("chmod", path);
+    },
+    "chown(Ljava/lang/String;II)V": (path: string) => {
+      if (path === null) rt.npe();
+      existing("chown", path);
+    },
+    // nor extended attributes, as fsetxattr answers
+    "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string) => {
+      existing("setxattr", path);
+      throw errno("setxattr", OS_CONSTANTS.EOPNOTSUPP);
     },
     "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
       existing("statvfs", path);

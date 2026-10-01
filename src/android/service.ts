@@ -67,10 +67,6 @@ rt.register({ name: "webdroid/DropBoxManagerService", ctor: class extends JObj {
 } });
 hostStub("dropbox", "webdroid/DropBoxManagerService");
 
-// getSystemService("permission_controller"). Nothing calls through it; the class only has
-// to exist so the lookup doesn't fall through to a Binder stub.
-rt.markers("android/permission/PermissionControllerManager");
-
 // ── FileObserver: real shape, no eventing (there is no filesystem to watch here).
 class JFileObserver extends JObj { paths: unknown = null; mask = 0xfff; }
 const fileObserverInit = function (this: JFileObserver, paths: unknown, mask?: number) {

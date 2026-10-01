@@ -810,6 +810,8 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   // the package that provides SdkSandboxService on the reference AVD
   "getSdkSandboxPackageName()Ljava/lang/String;": () => "com.google.android.sdksandbox",
+  // no PermissionController module is installed
+  "getPermissionControllerPackageName()Ljava/lang/String;": () => null,
   "isDeviceUpgrading()Z": () => 0,
   [`getNameForUid(I)${S}`]: (uid: number) => recordsForUid(uid)[0]?.pkg ?? null,
   [`getNamesForUids([I)[${S}`]: (uids: Int32Array) => jarray([...uids].map((uid) => recordsForUid(uid)[0]?.pkg ?? null), S),
