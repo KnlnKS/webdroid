@@ -312,7 +312,8 @@ pub fn decode(w: u32, pc: u32) Op {
         }
         if (is(w, 0x5fe00000, 0x1ac00000)) {
             const opc = bits(w, 10, 6);
-            if (!(opc == 2 or opc == 3 or (opc >= 8 and opc <= 11))) return faultOp(.unimplemented);
+            const crc = opc >= 16 and opc <= 23 and (opc & 3 == 3) == (sf == 1);
+            if (!(opc == 2 or opc == 3 or (opc >= 8 and opc <= 11) or crc)) return faultOp(.unimplemented);
             var r = op(.two, w);
             r.a = @intCast(opc | (sf << 6));
             return r;
@@ -404,9 +405,11 @@ fn operand2(c: *Cpu, o: *const Op) u64 {
     }
 }
 
+/// the address bits of a data access under Top Byte Ignore, which Linux enables for arm64 user space
+pub const TBI_MASK: u64 = 0x00ff_ffff_ffff_ffff;
 pub inline fn addr(c: *Cpu, va: u64) ?u32 {
     const lo: u32 = @truncate(va);
-    const hi: u32 = @intCast(va >> 32);
+    const hi: u32 = @intCast((va & TBI_MASK) >> 32);
     if (hi != 0) {
         const p = mem.tx(hi, lo);
         if (p == 0) {
@@ -677,7 +680,20 @@ fn one(comptime T: type, c: *Cpu, o: *const Op) void {
     };
     setX(c, o.rd, v);
 }
+/// CRC32{B,H,W,X} and CRC32C*: the reflected CRC of Rm's low 1 << sz bytes, onto Wn
+fn crc32(c: *Cpu, o: *const Op) void {
+    const poly: u32 = if (o.a & 4 != 0) 0x82f63b78 else 0xedb88320;
+    var crc: u32 = @truncate(zr(c, o.rn));
+    var m = zr(c, o.rm);
+    for (0..@as(u32, 1) << @intCast(o.a & 3)) |_| {
+        crc ^= @as(u8, @truncate(m));
+        m >>= 8;
+        for (0..8) |_| crc = (crc >> 1) ^ (if (crc & 1 != 0) poly else 0);
+    }
+    setX(c, o.rd, @as(u32, crc));
+}
 fn two(comptime T: type, c: *Cpu, o: *const Op) void {
+    if (o.a & 63 >= 16) return crc32(c, o);
     const a: T = @truncate(zr(c, o.rn));
     const m: T = @truncate(zr(c, o.rm));
     const as: bt.Signed(T) = @bitCast(a);

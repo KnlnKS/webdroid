@@ -350,7 +350,8 @@ fn wholeUnits(v: u64, n: u64) ?[2]u32 {
     return if (b > a) .{ unitOf(a), unitOf(b - 1) } else null;
 }
 /// a plane address → buffer offset, backing its unit on first touch; 0 when not accessible
-pub export fn tx(h: u32, l: u32) u32 {
+pub export fn tx(h_in: u32, l: u32) u32 {
+    const h = h_in & 0x00ff_ffff; // a pointer's top-byte tag is not address
     if (h == 0 or h >= PLANES) return 0;
     const u = unitOf((@as(u64, h) << 32) | l);
     if (units[u] == DEMAND and !backUnit(u)) return 0;
@@ -358,7 +359,8 @@ pub export fn tx(h: u32, l: u32) u32 {
     return if (e & 1 != 0) (e - 1) + (l & (UNIT - 1)) else 0;
 }
 /// whether [v, v + n) is accessible and contiguous in the buffer, backing it as needed
-pub fn commit_range(v: u64, n: u32) u32 {
+pub fn commit_range(v_in: u64, n: u32) u32 {
+    const v = v_in & 0x00ff_ffff_ffff_ffff;
     const h = hi(v);
     if (h == 0) return 1;
     const first = tx(h, lo(v));
