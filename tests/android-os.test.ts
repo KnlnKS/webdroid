@@ -8,7 +8,7 @@ import { TV, type XmlAttr } from "../src/android/axml";
 import { mangleMethod } from "../src/jvm/abi";
 import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
-import { loadFrameworkJar, loadLibcore } from "./java";
+import { loadFrameworkJar, loadLibcore, appResources } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
 import { PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
@@ -243,6 +243,26 @@ describe("process-user-handle", () => {
     expect(await vcall(current, "getIdentifier", "()I")).toBe(0);
     const secondary = await vcall(userHandle, "getUserHandleForUid", "(I)Landroid/os/UserHandle;", 1_012_345);
     expect(await vcall(secondary, "getIdentifier", "()I")).toBe(10);
+  });
+});
+
+describe("environment", () => {
+  rt.linkNatives();
+  // framework-res, for the volume's description
+  beforeAll(() => appResources(new Resources(null, {}), "p"));
+
+  test("AOSP's Environment finds shared storage through the storage service's volume", async () => {
+    const previous = appHost;
+    setAppHost({ pkg: "p" } as never);
+    try {
+      const env = "android/os/Environment", dir = await scall(env, "getExternalStorageDirectory", "()Ljava/io/File;");
+      expect(await vcall(dir, "getPath", "()Ljava/lang/String;")).toBe("/sdcard");
+      expect(await scall(env, "getExternalStorageState", "()Ljava/lang/String;")).toBe("mounted");
+      expect(await scall(env, "isExternalStorageEmulated", "()Z")).toBe(1);
+      expect(await scall(env, "isExternalStorageRemovable", "()Z")).toBe(0);
+      const files: JObj[] = await scall(env, "buildExternalStorageAppFilesDirs", "(Ljava/lang/String;)[Ljava/io/File;", "p");
+      expect(await vcall(files[0], "getPath", "()Ljava/lang/String;")).toBe("/sdcard/Android/data/p/files");
+    } finally { setAppHost(previous); }
   });
 });
 

@@ -565,6 +565,7 @@ rt.register({
     "getApplication()Landroid/app/Application;": currentApplication,
     "static currentApplication()Landroid/app/Application;": currentApplication,
     "static currentPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
+    "static currentOpPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
     "static currentProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || null,
     "getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
     // A process's system context serves framework code that runs as the system in it, which asks

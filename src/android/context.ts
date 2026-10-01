@@ -163,7 +163,6 @@ const SERVICE_CLASS: Record<string, string> = {
   appwidget: "android/appwidget/AppWidgetManager",
   systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
-  storage: "android/os/storage/StorageManager",
   netstats: "android/app/usage/NetworkStatsManager",
   storagestats: "android/app/usage/StorageStatsManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
@@ -234,6 +233,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
     ctx, await hostedService("batterystats"), await hostedService("batteryproperties"))],
   sensor: ["android/hardware/SensorManager", async (ctx) =>
     newObj("android/hardware/SystemSensorManager", "(Landroid/content/Context;Landroid/os/Looper;)V", ctx, await mainLooper())],
+  storage: ["android/os/storage/StorageManager", async (ctx) =>
+    newObj("android/os/storage/StorageManager", "(Landroid/content/Context;Landroid/os/Looper;)V", ctx, await mainLooper())],
   connectivity: ["android/net/ConnectivityManager", async (ctx) =>
     newObj("android/net/ConnectivityManager", "(Landroid/content/Context;Landroid/net/IConnectivityManager;)V", ctx, await hostedService("connectivity"))],
 };

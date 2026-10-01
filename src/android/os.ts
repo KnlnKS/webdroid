@@ -17,12 +17,11 @@ import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
-import { newFile, pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
+import { pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
-import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { newArrayList, newStringSet, toJsArray } from "../jvm/natives/jcoll";
+import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 
@@ -680,7 +679,7 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
     for (let i = 0; i < statVfsFields.length; i++) Reflect.set(this, statVfsFields[i], values[i]);
   },
 } });
-// ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
+// the internal storage volume, identified by the platform's default UUID (StorageManager.UUID_DEFAULT)
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
 export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
@@ -689,76 +688,6 @@ export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: 
     return { total: e?.quota ?? 0, free: Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0)) };
   } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
 });
-// the emulated primary volume that is shared storage: it has no UUID of its own, and its
-// storage UUID is the internal one it lives on
-const SHARED = "/sdcard";
-let primary: JObj | null = null;
-const primaryVolume = () => primary ??= rt.make("android/os/storage/StorageVolume");
-rt.register({
-  name: "android/os/storage/StorageManager", ctor: class extends JObj {},
-  statics: { get UUID_DEFAULT() { return uuidDefault(); } },
-  methods: {
-    "getUuidForPath(Ljava/io/File;)Ljava/util/UUID;": () => uuidDefault(),
-    "getAllocatableBytes(Ljava/util/UUID;)J": driven(function* (): Gen { return BigInt(Math.floor((yield storageEstimate()).free)); }),
-    "getCacheQuotaBytes(Ljava/util/UUID;)J": driven(function* (): Gen { return BigInt(Math.floor((yield storageEstimate()).total / 20)); }),
-    "getCacheSizeBytes(Ljava/util/UUID;)J": () => 0n,
-    "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
-    "isEncrypted(Ljava/io/File;)Z": () => 0,
-    "getStorageVolumes()Ljava/util/List;": () => newArrayList([primaryVolume()]),
-    "getVolumeList()[Landroid/os/storage/StorageVolume;": () => jarray([primaryVolume()], "Landroid/os/storage/StorageVolume;"),
-    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": primaryVolume,
-    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": (file: JObj | null) => {
-      if (!file) rt.npe();
-      const path = pathOf(file!);
-      return path === SHARED || path.startsWith(SHARED + "/") ? primaryVolume() : null;
-    },
-  },
-});
-rt.register({
-  name: "android/os/storage/StorageVolume", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "getDirectory()Ljava/io/File;": () => newFile(SHARED),
-    "getPath()Ljava/lang/String;": () => SHARED,
-    "getDescription(Landroid/content/Context;)Ljava/lang/String;": () => frameworkString("storage_internal") ?? "",
-    "getState()Ljava/lang/String;": () => "mounted",
-    "getMediaStoreVolumeName()Ljava/lang/String;": () => "external_primary",
-    "getStorageUuid()Ljava/util/UUID;": () => uuidDefault(),
-    "getUuid()Ljava/lang/String;": () => null,
-    ...stubs(1, "isPrimary()Z", "isEmulated()Z"),
-    ...stubs(0, "isRemovable()Z", "describeContents()I"),
-    "createOpenDocumentTreeIntent()Landroid/content/Intent;": () => newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.OPEN_DOCUMENT_TREE"),
-  },
-});
-
-// android.os.Environment: virtual storage paths (backed by our in-memory FS)
-rt.register({
-  name: "android/os/Environment", ctor: class extends JObj {},
-  statics: { MEDIA_MOUNTED: "mounted", MEDIA_MOUNTED_READ_ONLY: "mounted_ro", MEDIA_UNMOUNTED: "unmounted", MEDIA_REMOVED: "removed", MEDIA_UNKNOWN: "unknown",
-    DIRECTORY_DOWNLOADS: "Download", DIRECTORY_PICTURES: "Pictures", DIRECTORY_DCIM: "DCIM", DIRECTORY_MUSIC: "Music", DIRECTORY_MOVIES: "Movies", DIRECTORY_DOCUMENTS: "Documents" },
-  methods: {
-    "static getExternalStorageDirectory()Ljava/io/File;": () => newFile("/sdcard"),
-    "static getExternalStoragePublicDirectory(Ljava/lang/String;)Ljava/io/File;": (t: string) => newFile("/sdcard/" + (t ?? "")),
-    "static getDataDirectory()Ljava/io/File;": () => newFile("/data"),
-    "static getRootDirectory()Ljava/io/File;": () => newFile("/system"),
-    // the device's partitions, which AOSP's statics read from the environment its init sets
-    "static getVendorDirectory()Ljava/io/File;": () => newFile("/vendor"),
-    "static getOdmDirectory()Ljava/io/File;": () => newFile("/odm"),
-    "static getOemDirectory()Ljava/io/File;": () => newFile("/oem"),
-    "static getProductDirectory()Ljava/io/File;": () => newFile("/product"),
-    "static getSystemExtDirectory()Ljava/io/File;": () => newFile("/system_ext"),
-    "static getDownloadCacheDirectory()Ljava/io/File;": () => newFile("/cache"),
-    "static getExternalStorageState()Ljava/lang/String;": () => "mounted",
-    "static getExternalStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
-    "static getStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
-    "static isExternalStorageManager()Z": () => 1,
-    "static isExternalStorageEmulated()Z": () => 1,
-    "static isExternalStorageEmulated(Ljava/io/File;)Z": () => 1,
-    "static isExternalStorageRemovable()Z": () => 0,
-    "static isExternalStorageRemovable(Ljava/io/File;)Z": () => 0,
-    "static isExternalStorageLegacy()Z": () => 0,
-  },
-});
-
 // android.system.Os: the libcore syscall surface over the same descriptor table native code uses
 class JErrnoException extends JThrowable { errno = 0; functionName = ""; }
 function errnoMessage(this: JErrnoException): string {
