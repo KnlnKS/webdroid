@@ -2,12 +2,13 @@
 // Drawables and colour lists come from the Java Resources as an app's do (ResourcesImpl's
 // caches and inflaters), and the view stack uses them only through their Java API.
 
-import { type JObj, declaredField } from "../jvm/runtime";
+import { type JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, scall, curThread, callOn, after, construct } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
 import { TV } from "./axml";
 import { type Resources, type RV, type JTheme, rvColor } from "./res";
 import { type JRect } from "./graphics";
+import type { JView } from "./view";
 
 export type JDrawable = JObj;
 export type JColorStateList = JObj;
@@ -52,6 +53,22 @@ export function drawAt(d: JDrawable, cv: unknown, l: number, t: number, r: numbe
 }
 export const setDrawableCallback = (d: JDrawable, callback: unknown): unknown =>
   vcall(d, "setCallback", "(Landroid/graphics/drawable/Drawable$Callback;)V", callback);
+/** the steps an AOSP drawable setter takes besides swapping the callback: the old drawable's
+ *  scheduled work dropped (View.unscheduleDrawable), the new one given the view's layout direction
+ *  and, when stateful, its drawable state */
+export const Adopt = { UNSCHEDULE: 1, DIRECTION: 2, STATE: 4, ALL: 7 } as const;
+/** a view lets `old` go and takes `d` as AOSP's setters do: `old` called back no more, `d` called
+ *  back to the view, with the `steps` (Adopt) that setter takes */
+export const adoptDrawable = driven(function* adoptDrawable(v: JView, old: JDrawable | null, d: JDrawable | null, steps: number): Gen {
+  if (old) {
+    yield setDrawableCallback(old, null);
+    if (steps & Adopt.UNSCHEDULE) yield vcall(v, "unscheduleDrawable", "(Landroid/graphics/drawable/Drawable;)V", old);
+  }
+  if (!d) return;
+  yield setDrawableCallback(d, v);
+  if (steps & Adopt.DIRECTION) yield vcall(d, "setLayoutDirection", "(I)Z", yield vcall(v, "getLayoutDirection", "()I"));
+  if (steps & Adopt.STATE && (yield vcall(d, "isStateful", "()Z"))) yield vcall(d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
+});
 let boundsField = "";
 /** Drawable.getBounds() (final): the drawable's own Rect, which callers must not change */
 export const drawableBounds = (d: JDrawable): JRect =>

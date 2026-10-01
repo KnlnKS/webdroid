@@ -1,6 +1,6 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates, isShown } from "./view";
-import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, drawAt, setDrawableCallback, rvCsl } from "./drawable";
+import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, drawAt, adoptDrawable, Adopt, rvCsl } from "./drawable";
 import { curThread, vcall, vcallOn, mkEnumSet, construct, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt } from "./res";
@@ -17,12 +17,11 @@ export class JImageView extends JView {
   setDrawable(d: JDrawable | null, invalidateView = true): unknown { return rt.drive(this.setDrawable$(d, invalidateView)); }
   private *setDrawable$(d: JDrawable | null, invalidateView: boolean): Gen {
     const old = this.dr, same = old === d;
-    if (old) yield setDrawableCallback(old, null);
     this.dr = d;
     if (invalidateView) invalidate(this);
+    yield adoptDrawable(this, old, d, Adopt.ALL);
+    if (old && !same && this.attached) yield vcall(old, "setVisible", "(ZZ)Z", 0, 0);
     if (!d) { this.drawableW = this.drawableH = -1; return; }
-    yield setDrawableCallback(d, this);
-    if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
     if (!same) yield vcall(d, "setVisible", "(ZZ)Z", +(this.attached && isShown(this)), 1);
     yield vcall(d, "setLevel", "(I)Z", this.level);
     this.drawableW = yield drawableSize(d, false);

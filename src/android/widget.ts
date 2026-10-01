@@ -1,6 +1,6 @@
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawAt, drawableSize, drawableBounds, rvCsl, colorFor, rvColors, setDrawableCallback } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawAt, drawableSize, drawableBounds, rvCsl, colorFor, rvColors, adoptDrawable, Adopt } from "./drawable";
 import { rt, type JObj, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue, themeOf } from "./res";
 import { TV } from "./axml";
@@ -46,10 +46,20 @@ class JProgressBar extends JView {
   override drawables(): (JDrawable | null)[] { return [...super.drawables(), this.progressD, this.indetD]; }
   setIndeterminateDrawable(d: JDrawable | null): unknown { return rt.drive(this.setIndeterminateDrawable$(d)); }
   private *setIndeterminateDrawable$(d: JDrawable | null): Gen {
-    if (this.indetD) yield setDrawableCallback(this.indetD, null);
+    if (this.indetD === d) return;
+    const old = this.indetD;
     this.indetD = d;
-    if (d) yield setDrawableCallback(d, this);
+    yield adoptDrawable(this, old, d, Adopt.ALL);
     requestLayout(this); invalidate(this);
+  }
+  setProgressDrawable(d: JDrawable | null): unknown { return rt.drive(this.setProgressDrawable$(d)); }
+  private *setProgressDrawable$(d: JDrawable | null): Gen {
+    if (this.progressD === d) return;
+    const old = this.progressD;
+    this.progressD = d;
+    yield adoptDrawable(this, old, d, Adopt.ALL);
+    requestLayout(this); invalidate(this);
+    yield applyProgressTint(this);
   }
 }
 /** ProgressBar.updateDrawableBounds and drawTrack for the indeterminate drawable: a spinner keeps
@@ -103,8 +113,8 @@ const initProgressBar = driven(function* initProgressBar(this: JProgressBar, c: 
   const a = obtainStyled(res, this.theme, set, ["progressDrawable", "indeterminateDrawable", "indeterminate", "indeterminateOnly", "min", "max", "progress",
     "secondaryProgress", "minWidth", "maxWidth", "minHeight", "maxHeight", "progressTint", "indeterminateTint", "indeterminateDuration", "indeterminateBehavior"].map(AID), style, def);
   const g = (i: number) => a.vals[i], px = (i: number, v: number) => g(i) ? Math.trunc(rvDimen(res, g(i), v)) : v;
-  if (g(0)) this.progressD = yield loadDrawableRV(res, g(0)!, this.theme);
-  if (g(1)) this.setIndeterminateDrawable(yield loadDrawableRV(res, g(1)!, this.theme));
+  if (g(0)) yield this.setProgressDrawable(yield loadDrawableRV(res, g(0)!, this.theme));
+  if (g(1)) yield this.setIndeterminateDrawable(yield loadDrawableRV(res, g(1)!, this.theme));
   this.duration = rvInt(res, g(14), this.duration) || this.duration;
   this.behavior = rvInt(res, g(15), this.behavior);
   this.minWidth = px(8, this.minWidth); this.maxWidth = px(9, this.maxWidth); this.minHeight = px(10, this.minHeight); this.maxHeight = px(11, this.maxHeight);
@@ -139,11 +149,8 @@ rt.register({
     "setIndeterminate(Z)V": function (this: JProgressBar, on: number) {
       if ((!this.onlyIndeterminate || !this.indeterminate) && !!on !== this.indeterminate) { this.indeterminate = !!on; invalidate(this); }
     },
-    "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) {
-      this.progressD = d; requestLayout(this); invalidate(this);
-      return applyProgressTint(this);
-    },
-    "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.setIndeterminateDrawable(d); },
+    "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { return this.setProgressDrawable(d); },
+    "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { return this.setIndeterminateDrawable(d); },
     "setProgressTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(this); return applyProgressTint(this); },
     "setIndeterminateTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) {
       this.indetTint = c; invalidate(this);
@@ -192,21 +199,15 @@ class JSeekBar extends JAbsSeekBar {
   thumbW = 0; thumbH = 0; thumbOffset = 0;
   override drawables(): (JDrawable | null)[] { return [...super.drawables(), this.thumb]; }
   changeListener: unknown = null;
-  setTrack(d: JDrawable | null): unknown { return rt.drive(this.setTrack$(d)); }
-  *setTrack$(d: JDrawable | null): Gen {
-    if (this.progressD) yield setDrawableCallback(this.progressD, null);
-    this.progressD = d;
-    if (d) { yield setDrawableCallback(d, this); yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
-    requestLayout(this); invalidate(this);
-  }
   setThumb(d: JDrawable | null): unknown { return rt.drive(this.setThumb$(d)); }
   *setThumb$(d: JDrawable | null): Gen {
-    if (this.thumb) yield setDrawableCallback(this.thumb, null);
+    const old = this.thumb;
     this.thumb = d;
     this.thumbW = d ? Math.max(0, yield drawableSize(d, false)) : 0;
     this.thumbH = d ? Math.max(0, yield drawableSize(d, true)) : 0;
     this.thumbOffset = Math.trunc(this.thumbW / 2);
-    if (d) { yield setDrawableCallback(d, this); yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    // AbsSeekBar.setThumb lets the old thumb go only for another, and leaves it scheduled
+    yield adoptDrawable(this, old !== d ? old : null, d, Adopt.DIRECTION | Adopt.STATE);
     requestLayout(this); invalidate(this);
   }
   updateProgress(value: number, fromUser = false): unknown { return rt.drive(this.updateProgress$(value, fromUser)); }
@@ -224,7 +225,7 @@ const initSeekBar = driven(function* initSeekBar(this: JSeekBar, c: unknown, att
   this.min = rvInt(this.jres, a.vals[3], 0); this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], 100));
   this.progress = this.clamp(rvInt(this.jres, a.vals[5], 0));
   this.secondary = rvInt(this.jres, a.vals[6], 0);
-  if (a.vals[0]) yield this.setTrack(yield loadDrawableRV(this.jres, a.vals[0], this.theme));
+  if (a.vals[0]) yield this.setProgressDrawable(yield loadDrawableRV(this.jres, a.vals[0], this.theme));
   if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme));
   if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
 });
@@ -235,7 +236,6 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initSeekBar,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": initSeekBar,
   "setThumb(Landroid/graphics/drawable/Drawable;)V": function (this: JSeekBar, d: JDrawable | null) { return this.setThumb(d); },
-  "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JSeekBar, d: JDrawable | null) { return this.setTrack(d); },
   "getThumb()Landroid/graphics/drawable/Drawable;": function (this: JSeekBar) { return this.thumb; },
   "getThumbOffset()I": function (this: JSeekBar) { return this.thumbOffset; },
   "setThumbOffset(I)V": function (this: JSeekBar, offset: number) { this.thumbOffset = offset; invalidate(this); },
@@ -303,13 +303,6 @@ export function themeAccent(v: JView): number {
   return rv && v.jres ? rvColor(v.jres, rv, -10011977) : -10011977;
 }
 
-/** a drawable a view owns: callback wired, handed the view's current state */
-const adopt = driven(function* adopt(v: JView, old: JDrawable | null, d: JDrawable | null): Gen {
-  if (old && old !== d) yield setDrawableCallback(old, null);
-  if (!d) return;
-  yield setDrawableCallback(d, v);
-  if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
-});
 const drawableRes = (v: JView, id: number) => id ? vcall(v.ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
 /** AOSP applies an explicit tint list to a mutated copy and re-states it */
 const applyTint = driven(function* applyTint(v: JView, d: JDrawable | null, tint: JColorStateList | null, hasTint: boolean, mode: JSimpleEnum | null): Gen {
@@ -340,8 +333,10 @@ class JCompoundButton extends JButton {
   setButton(d: JDrawable | null): unknown { return rt.drive(this.setButton$(d)); }
   *setButton$(d: JDrawable | null): Gen {
     if (d === this.buttonD) return;
-    yield adopt(this, this.buttonD, d);
+    const old = this.buttonD;
     this.buttonD = d;
+    yield adoptDrawable(this, old, d, Adopt.ALL);
+    if (d) yield vcall(d, "setVisible", "(ZZ)Z", +(this.visibility === 0), 0);
     this.buttonW = d ? Math.max(0, yield drawableSize(d, false)) : 0;
     // AOSP sizes the view to its button: setMinHeight(getIntrinsicHeight())
     if (d) yield vcall(this, "setMinHeight", "(I)V", yield drawableSize(d, true));
@@ -514,9 +509,12 @@ const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;
 const viewTouch = (v: JView, ev: JMotionEvent) => (rt.link("android/view/View").ctor.prototype[M_onTouchEvent] as (e: JMotionEvent) => unknown).call(v, ev);
 function switchPadRight(this: JSwitch) { return compoundPadR.call(this) + this.switchW + (this.text ? this.switchPadding : 0); }
 syncCompoundPads.add(switchPadRight);
+// Switch's setters only swap the callback; the state AOSP's attach-time refreshDrawableState would
+// give a new thumb or track is given here, as nothing refreshes it on attach
 const setSwitchDrawable = (which: "thumb" | "track") => driven(function* (this: JSwitch, d: JDrawable | null): Gen {
-  yield adopt(this, this[which], d);
+  const old = this[which];
   this[which] = d;
+  yield adoptDrawable(this, old, d, Adopt.STATE);
   yield applySwitchTints(this);
   requestLayout(this);
 });
@@ -544,7 +542,7 @@ rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget
     const g = (i: number) => a.vals[i];
     if (g(0)) v.thumb = yield loadDrawableRV(res, g(0)!, v.theme);
     if (g(1)) v.track = yield loadDrawableRV(res, g(1)!, v.theme);
-    yield adopt(v, null, v.thumb); yield adopt(v, null, v.track);
+    yield adoptDrawable(v, null, v.thumb, Adopt.STATE); yield adoptDrawable(v, null, v.track, Adopt.STATE);
     if (g(2)) v.textOn = rvString(res, res.resolveRefs(g(2)!)) ?? "";
     if (g(3)) v.textOff = rvString(res, res.resolveRefs(g(3)!)) ?? "";
     v.thumbTextPadding = Math.trunc(rvDimen(res, g(4), 0));
@@ -808,11 +806,12 @@ class JCheckedTextView extends JTextView {
   applyTint(): unknown { return applyTint(this, this.checkMark, this.checkMarkTint, this.hasCheckMarkTint, this.checkMarkTintMode); }
   setCheckMark(d: JDrawable | null): unknown { return rt.drive(this.setCheckMark$(d)); }
   *setCheckMark$(d: JDrawable | null): Gen {
-    if (this.checkMark && this.checkMark !== d) yield setDrawableCallback(this.checkMark, null);
+    const old = this.checkMark;
     this.checkMark = d;
     this.checkMarkW = 0;
+    yield adoptDrawable(this, old, d, Adopt.UNSCHEDULE);
     if (d) {
-      yield setDrawableCallback(d, this);
+      yield vcall(d, "setVisible", "(ZZ)Z", +(this.visibility === 0), 0);
       // AOSP records the mark's size in its checked state
       yield vcall(d, "setState", "([I)Z", Int32Array.of(ST.checked));
       yield vcall(this, "setMinHeight", "(I)V", yield drawableSize(d, true));

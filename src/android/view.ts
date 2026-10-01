@@ -10,7 +10,7 @@ import { setInvalidateHook } from "./rendernode";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, after, construct, idHash, curThread, type JThread } from "../jvm/natives/jlang";
 import { boxFloat, unboxAs } from "../jvm/natives/jbox";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback, drawAt } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawableSize, adoptDrawable, Adopt, drawAt } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, attrSet } from "./res";
@@ -223,17 +223,11 @@ const performClick = driven(function* performClick(this: JView): Gen {
 /** AOSP setBackgroundDrawable; a background appearing or going away re-measures the view */
 const setBackground = driven(function* setBackground(this: JView, d: JDrawable | null): Gen {
   if (d === this.background) return;
-  const relayout = !this.background !== !d;
-  if (this.background) yield setDrawableCallback(this.background, null);
+  const relayout = !this.background !== !d, old = this.background;
   this.background = d;
   this.outlineDirty = true;
-  // AOSP hands a fresh background the view's current state; without it a stateful drawable
-  // paints its "no state at all" entry until something else happens to the view
-  if (d) {
-    yield setDrawableCallback(d, this);
-    if (yield vcall(d, "isStateful", "()Z")) yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
-    yield applyBackgroundTint(this);
-  }
+  yield adoptDrawable(this, old, d, Adopt.ALL);
+  if (d) yield applyBackgroundTint(this);
   if (relayout) requestLayoutVirtual(this);
   yield invalidateVirtual(this);
 });
@@ -1113,9 +1107,9 @@ const viewMethods: NativeSpec["methods"] = {
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.background; },
   "setForeground(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JView, d: JDrawable | null): Gen {
     if (this.foreground === d) return;
-    if (this.foreground) yield setDrawableCallback(this.foreground, null);
+    const old = this.foreground;
     this.foreground = d; this.foregroundW = -1;
-    if (d) { yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); yield setDrawableCallback(d, this); }
+    yield adoptDrawable(this, old, d, Adopt.ALL);
     requestLayoutVirtual(this); yield invalidateVirtual(this);
   }),
   "onDrawForeground(Landroid/graphics/Canvas;)V": drawForeground,
