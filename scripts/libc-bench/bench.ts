@@ -1,9 +1,8 @@
-// Stage E1's libc micro-benchmark: ns and guest instructions per call of each b_* loop in
-// libbench.so (bench.c), called from guest code through its PLT into the process's libc.
+// libc micro-benchmark: ns and guest instructions per call of each b_* loop in libbench.so
+// (bench.c), called from guest code through its PLT into a 64-bit process's bionic.
 //   NDK=<ndk>/toolchains/llvm/prebuilt/darwin-x86_64/bin
-//   $NDK/aarch64-linux-android30-clang -O2 -shared -fPIC -o scripts/libc-ab/libbench.so scripts/libc-ab/bench.c -lm
-//   bun scripts/libc-ab/bench.ts                        # HLE libc
-//   WEBDROID_LIBC=bionic bun scripts/libc-ab/bench.ts   # the reference build's bionic
+//   $NDK/aarch64-linux-android30-clang -O2 -shared -fPIC -o scripts/libc-bench/libbench.so scripts/libc-bench/bench.c -lm
+//   bun scripts/libc-bench/bench.ts
 
 const { mountLocalPlatformData } = await import("../../scripts/lib");
 const { rt } = await import("../../src/jvm/runtime");
@@ -27,5 +26,5 @@ for (const name of ["b_malloc", "b_malloc_hold", "b_snprintf", "b_strtod", "b_me
   for (;;) { const i0 = perf.nativeInstr, t0 = performance.now(); await cpu.call(fn, [n]); ms = performance.now() - t0; instr[name] = Math.round((perf.nativeInstr - i0) / n); if (ms > 300 || n > 5e7) break; n *= 4; }
   out[name] = Math.round(ms * 1e6 / n);
 }
-console.log(JSON.stringify({ libc: process.env.WEBDROID_LIBC ?? "hle", nsPerOp: out, instrPerOp: instr }));
+console.log(JSON.stringify({ nsPerOp: out, instrPerOp: instr }));
 process.exit(0);

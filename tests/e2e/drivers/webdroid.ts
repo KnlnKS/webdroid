@@ -10,8 +10,6 @@ import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, type Act, t
 // bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
 // is how a cut becomes a measurement rather than an edit and a rebuild.
 const CUT = process.env.WEBDROID_BYTECODE;
-/** WEBDROID_LIBC=bionic runs 64-bit native code over the reference build's bionic (src/native/bionic.ts) */
-const LIBC = process.env.WEBDROID_LIBC;
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
 export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
@@ -21,7 +19,6 @@ export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
 function pageUrl(screen: CaptureScreen, controlled: boolean): string {
   const u = new URL(BASE_URL);
   if (CUT) u.searchParams.set("bytecode", CUT);
-  if (LIBC) u.searchParams.set("libc", LIBC);
   u.searchParams.set("screen", screenParam(screen));
   u.searchParams.set("statusBarDp", String(screen.statusBarDp));
   if (controlled) u.searchParams.set("testClock", "controlled");

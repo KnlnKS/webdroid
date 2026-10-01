@@ -14,7 +14,7 @@ import { ndkInit } from "./libandroid";
 import { bitmapInit } from "./bitmap";
 import { cpuFor, cpuOf, cpus, setA64, isA64, type Cpu } from "./cpu";
 import { procMemory } from "../shell/procfs";
-import { bionicRequested, bootBionic } from "./bionic";
+import { bootBionic } from "./bionic";
 
 const hex = (n: number) => n.toString(16).padStart(8, "0");
 /** /proc/self/maps: each image, then each thread's stack, the main thread's named as the kernel names it */
@@ -58,9 +58,9 @@ setNativeMemorySizer(() => {
 });
 
 let bionic: Promise<void> | null = null;
-/** the process's libc: bionic's libraries load and initialize before the first image that needs them */
+/** a 64-bit process's libc: bionic's libraries load and initialize before the first image that needs them */
 function libcReady(cpu: Cpu): Promise<void> | null {
-  if (!bionicRequested || !isA64()) return null;
+  if (!isA64()) return null;
   return (bionic ??= bootBionic(cpu));
 }
 

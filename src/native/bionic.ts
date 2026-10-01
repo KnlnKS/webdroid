@@ -1,5 +1,6 @@
-// The reference build's bionic run as guest code, the alternative Stage E compares with the HLE
-// libc. dl.ts is the dynamic linker, so the linker's share of process and thread setup is here:
+// The reference build's bionic, the libc of every 64-bit process, run as guest code. The build
+// ships no 32-bit bionic (its ABI list is arm64-v8a alone), so an armeabi-v7a process keeps the
+// HLE libc. dl.ts is the dynamic linker, so the linker's share of process and thread setup is here:
 // libc_shared_globals, the auxiliary vector, the static TLS layout and each thread's TCB,
 // pthread_internal_t and bionic_tls. Offsets are this build's (checked against libc.so's own
 // code: __errno, getauxval, __init_static_tls, __allocate_thread_mapping, pthread_getattr_np).
@@ -15,12 +16,6 @@ import type { Module } from "./elf";
 import { processEnv } from "../shell/environment";
 import { procIdentity } from "../shell/procfs";
 import { targetSdkVersion } from "../jvm/natives/jreflect";
-
-/** `?libc=bionic` (headless: WEBDROID_LIBC=bionic) runs the device's libc, libm, libdl, libc++,
- *  liblog and libz in a 64-bit process in place of the HLE libc. The reference build ships no
- *  32-bit bionic (its ABI list is arm64-v8a alone), so an armeabi-v7a process keeps the HLE. */
-export const bionicRequested = (typeof location !== "undefined" ? new URLSearchParams(location.search).get("libc")
-  : typeof process !== "undefined" ? process.env.WEBDROID_LIBC : null) === "bionic";
 
 /** device paths, in the order the linker initializes them (dependencies first) */
 const BIONIC_LIBS = ["/apex/com.android.runtime/lib64/bionic/libdl.so", "/apex/com.android.runtime/lib64/bionic/libc.so",
