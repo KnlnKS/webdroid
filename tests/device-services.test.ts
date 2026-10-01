@@ -14,6 +14,9 @@ import { appResources } from "./java";
 const pkg = "org.webdroid.test.services";
 const attr = (name: string, str: string | null, data = 0): XmlAttr => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
 let app: JApplication, phone: JObj, subscriptions: JObj, wifi: JObj;
+/** the Java exception a call throws, as "class: message", or null */
+const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
+  .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
 rt.register({ name: "webdroid/test/CallState", ctor: class extends JObj {}, sup: "android/telephony/TelephonyCallback",
   ifaces: ["android/telephony/TelephonyCallback$CallStateListener"], methods: { "onCallStateChanged(I)V": () => {} } });
 rt.register({ name: "webdroid/test/Inline", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/Executor"],
@@ -51,8 +54,7 @@ describe("telephony", () => {
   test("a call-state callback needs READ_PHONE_STATE after R", async () => {
     const register = async () => vcall(phone, "registerTelephonyCallback", "(Ljava/util/concurrent/Executor;Landroid/telephony/TelephonyCallback;)V",
       await newObj("webdroid/test/Inline"), await newObj("webdroid/test/CallState"));
-    const thrown = await register().then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
-    expect(thrown).toBe("java/lang/SecurityException");
+    expect(await thrown(register)).toMatch(/^java\/lang\/SecurityException/);
     grantPermissions(["android.permission.READ_PHONE_STATE"]);
     await register();
   });
@@ -103,9 +105,8 @@ describe("system health", () => {
     const stats = await vcall(health, "takeMyUidSnapshot", "()Landroid/os/health/HealthStats;");
     expect(await vcall(stats, "getDataType", "()Ljava/lang/String;")).toBe("UidHealthStats");
     expect(await vcall(stats, "getMeasurementKeyCount", "()I")).toBe(0);
-    const thrown = await vcall(health, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", 1000)
-      .then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
-    expect(thrown).toBe("java/lang/SecurityException");
+    expect(await thrown(() => vcall(health, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", 1000)))
+      .toBe(`java/lang/SecurityException: Neither user ${packageUid(pkg)} nor current process has android.permission.BATTERY_STATS.`);
   });
 });
 
@@ -116,9 +117,9 @@ describe("storage stats", () => {
     const own = await vcall(stats, "queryStatsForPackage", "(Ljava/util/UUID;Ljava/lang/String;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;",
       await staticField("android/os/storage/StorageManager", "UUID_DEFAULT"), pkg, user);
     expect(typeof await vcall(own, "getDataBytes", "()J")).toBe("bigint");
-    const thrown = await vcall(stats, "queryStatsForUser", "(Ljava/util/UUID;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;",
-      await staticField("android/os/storage/StorageManager", "UUID_DEFAULT"), user).then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
-    expect(thrown).toBe("java/lang/SecurityException");
+    const uuid = await staticField("android/os/storage/StorageManager", "UUID_DEFAULT");
+    expect(await thrown(() => vcall(stats, "queryStatsForUser", "(Ljava/util/UUID;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;", uuid, user)))
+      .toMatch(/^java\/lang\/SecurityException: Caller does not have android.permission.PACKAGE_USAGE_STATS/);
   });
 });
 
@@ -145,9 +146,8 @@ describe("device policy", () => {
 
 describe("permission controller", () => {
   test("no PermissionController package is installed, so its manager cannot be made", async () => {
-    const thrown = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "permission_controller")
-      .then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
-    expect(thrown).toBe("java/lang/IllegalStateException");
+    expect(await thrown(() => vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "permission_controller")))
+      .toMatch(/^java\/lang\/IllegalStateException/);
   });
 });
 
@@ -157,6 +157,15 @@ describe("network stats", () => {
     const stats = await vcall(manager, "querySummary", "(ILjava/lang/String;JJ)Landroid/app/usage/NetworkStats;", 1, null, 0n, 1n);
     expect(await vcall(stats, "hasNextBucket", "()Z")).toBe(0);
     await vcall(stats, "close", "()V");
+  });
+});
+
+describe("camera", () => {
+  test("cameraserver is disabled: no camera is listed and none has characteristics", async () => {
+    const camera = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "camera");
+    expect(await vcall(camera, "getCameraIdList", "()[Ljava/lang/String;")).toHaveLength(0);
+    expect(await thrown(() => vcall(camera, "getCameraCharacteristics", "(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;", "0")))
+      .toBe("java/lang/IllegalArgumentException: No cameras available on device");
   });
 });
 

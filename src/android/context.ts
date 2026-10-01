@@ -163,7 +163,6 @@ const SERVICE_CLASS: Record<string, string> = {
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   captioning: "android/view/accessibility/CaptioningManager",
-  camera: "android/hardware/camera2/CameraManager",
   autofill: "android/view/autofill/AutofillManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
 };
@@ -261,6 +260,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
       "(Landroid/os/IBinder;)Landroid/net/INetworkStatsService;", await hostedService("netstats")))],
   servicediscovery: ["android/net/nsd/NsdManager", async (ctx) => newObj("android/net/nsd/NsdManager", "(Landroid/content/Context;Landroid/net/nsd/INsdManager;)V",
     ctx, await scall("android/net/nsd/INsdManager$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/net/nsd/INsdManager;", await hostedService("servicediscovery")))],
+  camera: ["android/hardware/camera2/CameraManager", (ctx) => newObj("android/hardware/camera2/CameraManager", "(Landroid/content/Context;)V", ctx)],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

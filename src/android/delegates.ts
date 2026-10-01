@@ -663,6 +663,8 @@ const deviceProperties: Record<string, () => string> = {
   // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
   // mode) rather than over a FileBridge socket, which needs a server thread there is none of
   "fw.revocable_fd": () => "true",
+  // a product without a camera disables cameraserver, so CameraManager lists no camera
+  "config.disable_cameraservice": () => "true",
 };
 /** android_os_SystemProperties.cpp's readers: an absent or unparsable value is the default */
 const propValue = (key: string) => deviceProperties[key]?.() ?? null;

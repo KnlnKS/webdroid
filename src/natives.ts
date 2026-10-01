@@ -103,7 +103,6 @@ import "./android/vibrator";
 import "./android/audio";
 import "./android/backup";
 import "./android/adservices";
-import "./android/camera2";
 import "./android/netstats";
 import "./android/storagestats";
 import "./android/popup";
