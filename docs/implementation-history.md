@@ -1761,8 +1761,9 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     (189 before the core served svc 113), sin+exp 37/180, qsort of 1,000 ints 26.6 ms/0.27 ms.
     Cut the Rope is armeabi-v7a only and the reference build has no 32-bit bionic.
   - Adopted for every arm64 process (decision record `docs/decisions/0001-bionic-libc.md`); the HLE
-    libc is ARM32-only and its LP64 paths are gone except what the syscall layer, the heap and the
-    mem/str intrinsics still reach. The gate matrix under bionic found what the HLE had masked:
+    libc is ARM32-only and a 64-bit process no longer registers it: the kernel layer had served
+    syscalls by looking up HLE libc bodies by name, so bionic had to hide a libc it never used;
+    syscall bodies are now module-level records the syscall table references directly. The gate matrix under bionic found what the HLE had masked:
     `Args64` read a host function's stack arguments from plane 0, and bionic's pthread_create
     puts thread stacks in higher planes, so Flutter's ninth glTexSubImage2D argument (pixels) read
     as NULL (Lichess drew no text) and TikTok's player passed a string as a pointer to

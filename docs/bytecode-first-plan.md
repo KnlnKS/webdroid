@@ -610,8 +610,11 @@ ends), ld-android.so's `__loader_*`, the CFI shadow, the abort message, and the 
 (`/dev/__properties__`, init's pre-split prop_area from `src/shell/properties.ts`, which Java's
 SystemProperties and the ARM32 HLE also read). Offsets are this build's, each checked against
 libc.so's disassembly; a new reference build must recheck them. The host keeps the core's
-mem*/str* primitives and the heap (through bionic's malloc dispatch table); `src/native/syscall.ts`
-is the kernel boundary both libcs reach, `src/native/unix.ts` serves logd and netd's dnsproxyd.
+mem*/str* primitives and the heap (through bionic's malloc dispatch table). The kernel both libcs
+reach is `kernelInit` in `src/native/syscall.ts`: each syscall number dispatches by reference to a
+body in its owning module's `*_SYSCALLS` record (`fs.ts` holds the descriptor table and file
+system), and `src/native/unix.ts` serves logd and netd's dnsproxyd. Only an ARM32 process
+registers the HLE libc (`libcInit`).
 `scripts/libc-bench/` times libc calls from guest code.
 
 **Open:**
