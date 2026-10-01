@@ -2,7 +2,7 @@
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
-import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
+import { parcelCreator, readObject, writeObject, unparcelBundle, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
@@ -22,7 +22,7 @@ import { vfs } from "../shell/vfs";
 import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
+import { newArrayList, newStringSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 
@@ -226,11 +226,23 @@ rt.register({
     },
   },
 });
+/** a Bundle's wire form while it is unread: the bytes after BUNDLE_MAGIC and their binders */
+export type ParcelledBundle = { bytes: Uint8Array<ArrayBuffer>; objects: [number, unknown][] };
 export class JBaseBundle extends JObj {
-  map = new Map<string, unknown>();
+  private values = new Map<string, unknown>();
   loader: unknown = null;
-  /** FLAG_DEFUSABLE: values here are read as they are unparcelled, so a bad one has already thrown */
+  /** mParcelledData: a bundle read from a parcel stays in wire form until something reads it */
+  parcelled: ParcelledBundle | null = null;
+  unparcelling: Promise<void> | null = null;
+  /** FLAG_DEFUSABLE */
   defusable = false;
+  allowFds = true;
+  /** the values; a parcelled bundle has to be unparcelled (`unparcel`) first */
+  get map(): Map<string, unknown> {
+    if (this.parcelled) throw new Error("Bundle read while parcelled");
+    return this.values;
+  }
+  set map(values: Map<string, unknown>) { this.values = values; this.parcelled = null; }
 }
 export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
@@ -270,12 +282,31 @@ export function bundleTyped(b: JBaseBundle, k: string, cls: unknown, ret: string
   const v = boxObject(b.map.get(k) ?? null), single = ret === "Ljava/lang/Object;" || ret === "Ljava/io/Serializable;";
   return single && v !== null && !vcall(cls, "isInstance", "(Ljava/lang/Object;)Z", v) ? null : v;
 }
-function copyBundle(this: JBaseBundle, b: JBaseBundle | null) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } }
+/** BaseBundle.unparcel: read a parcelled bundle's values, once */
+export function unparcel(b: JBaseBundle): void | Promise<void> {
+  if (!b.parcelled) return;
+  return b.unparcelling ??= unparcelBundle(b).finally(() => { b.unparcelling = null; });
+}
+/** a Bundle method that reads values: it unparcels first, as BaseBundle's accessors do */
+const unparcelled = (f: (this: JBaseBundle, ...a: unknown[]) => unknown) =>
+  function (this: JBaseBundle, ...a: unknown[]): unknown { return this.parcelled ? rt.drive(unparcelThen(this, f, a)) : f.apply(this, a); };
+function* unparcelThen(b: JBaseBundle, f: (this: JBaseBundle, ...a: unknown[]) => unknown, a: unknown[]): Gen {
+  yield unparcel(b);
+  return f.apply(b, a);
+}
+function copyBundle(this: JBaseBundle, b: JBaseBundle | null) {
+  if (!b) return;
+  this.loader = b.loader;
+  if (b.parcelled) this.parcelled = b.parcelled;
+  else this.map = new Map(b.map);
+}
 function putAll(this: JBaseBundle, b: JBaseBundle) { for (const [k, v] of b.map) this.map.set(k, v); }
-/** BaseBundle's deep copy: nested bundles and arrays are copied too, other values are shared */
+/** BaseBundle's deep copy: nested bundles and arrays are copied too, other values are shared; a
+ *  parcelled bundle copies its wire form */
 function deepCopy(this: JBaseBundle): JBaseBundle {
   const copy = new (this.constructor as new () => JBaseBundle)();
   copy.loader = this.loader;
+  if (this.parcelled) { copy.parcelled = this.parcelled; return copy; }
   for (const [k, v] of this.map) copy.map.set(k, v instanceof JBaseBundle ? deepCopy.call(v)
     : Array.isArray(v) ? Object.assign(v.slice(), { $t: (v as { $t?: string }).$t }) : ArrayBuffer.isView(v) ? (v as Uint8Array).slice() : v);
   return copy;
@@ -286,15 +317,22 @@ const bundleMethods: NativeSpec["methods"] = {
   "<init>(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
   "clone()Ljava/lang/Object;": function (this: JBundle) {
     const copy = new (this.constructor as typeof JBundle)();
-    copy.map = new Map(this.map); copy.loader = this.loader;
+    copyBundle.call(copy, this);
     return copy;
   },
   ...noops("<init>()V", "<init>(I)V"),
   ...stubs(0, "describeContents()I"),
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBundle, parcel: JParcel): Gen { yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this); }),
   "readFromParcel(Landroid/os/Parcel;)V": driven(function* (this: JBundle, parcel: JParcel): Gen {
-    this.map = (yield vcall(parcel, "readBundle", "(Ljava/lang/ClassLoader;)Landroid/os/Bundle;", this.loader))?.map ?? new Map();
+    const read: JBundle | null = yield vcall(parcel, "readBundle", "(Ljava/lang/ClassLoader;)Landroid/os/Bundle;", this.loader);
+    this.map = new Map();
+    if (read) copyBundle.call(this, read);
   }),
+  "isParcelled()Z": function (this: JBundle) { return +!!this.parcelled; },
+  // an empty bundle is never kept parcelled
+  "isDefinitelyEmpty()Z": function (this: JBundle) { return +(!this.parcelled && !this.map.size); },
+  "getSize()I": function (this: JBundle) { return this.parcelled ? this.parcelled.bytes.length : 0; },
+  "setAllowFds(Z)Z": function (this: JBundle, allow: number) { const previous = this.allowFds; this.allowFds = !!allow; return +previous; },
   "size()I": function (this: JBundle) { return this.map.size; },
   // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
   // caller that reaches for Object then calls toString()/instanceof Number needs the box.
@@ -323,12 +361,31 @@ for (const [t, d] of BUNDLE_TYPES) {
 for (const [t, d] of BUNDLE_TYPED) {
   bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string, cls: unknown) { return bundleTyped(this, k, cls, d); };
 }
+bundleMethods["hasFileDescriptors()Z"] = driven(function* (this: JBundle): Gen {
+  // nothing here marshals a file descriptor, so a parcelled bundle carries none
+  if (this.parcelled) return 0;
+  for (const v of this.map.values()) if (yield* hasFds(v)) return 1;
+  return 0;
+});
+/** Bundle.hasFileDescriptors' walk: a Parcelable reporting CONTENTS_FILE_DESCRIPTOR, in a list, array or bundle */
+function* hasFds(v: unknown): Gen<boolean> {
+  if (v instanceof JBundle) return !!(yield vcall(v, "hasFileDescriptors", "()Z"));
+  if (Array.isArray(v)) { for (const x of v) if (yield* hasFds(x)) return true; return false; }
+  if (rt.iof(v, "android/os/Parcelable")) return !!((yield vcall(v, "describeContents", "()I")) as number & 1);
+  if (rt.iof(v, "java/util/List")) for (const x of (yield toJsArray(v)) as unknown[]) if (yield* hasFds(x)) return true;
+  return false;
+}
+const PARCELLED_OK = new Set(["<init>(Landroid/os/Bundle;)V", "<init>(Landroid/os/PersistableBundle;)V", "<init>(Ljava/lang/ClassLoader;)V",
+  "<init>()V", "<init>(I)V", "clone()Ljava/lang/Object;", "describeContents()I", "writeToParcel(Landroid/os/Parcel;I)V",
+  "readFromParcel(Landroid/os/Parcel;)V", "setClassLoader(Ljava/lang/ClassLoader;)V", "getClassLoader()Ljava/lang/ClassLoader;",
+  "isParcelled()Z", "isDefinitelyEmpty()Z", "getSize()I", "setAllowFds(Z)Z", "hasFileDescriptors()Z"]);
+for (const [k, f] of Object.entries(bundleMethods)) if (typeof f === "function" && !PARCELLED_OK.has(k)) bundleMethods[k] = unparcelled(f as never);
 /** what only Bundle holds (PersistableBundle keeps to strings, numbers and nested PersistableBundles) */
 const PARCEL_STEMS = new Set(["Binder", "Bundle", "IBinder", "Parcelable", "ParcelableArray", "ParcelableArrayList", "Size", "SizeF", "SparseParcelableArray"]);
 const bundleOnly = [
   ...BUNDLE_TYPES.filter(([t]) => PARCEL_STEMS.has(t)).flatMap(([t, d]) => [`put${t}(Ljava/lang/String;${d})V`, `get${t}(Ljava/lang/String;)${d}`]),
   ...BUNDLE_TYPED.filter(([t]) => PARCEL_STEMS.has(t)).map(([t, d]) => `get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`),
-  "putAll(Landroid/os/Bundle;)V", "readFromParcel(Landroid/os/Parcel;)V",
+  "putAll(Landroid/os/Bundle;)V", "readFromParcel(Landroid/os/Parcel;)V", "getSize()I", "setAllowFds(Z)Z", "hasFileDescriptors()Z",
 ];
 const persistableOnly = ["putPersistableBundle(Ljava/lang/String;Landroid/os/PersistableBundle;)V", "getPersistableBundle(Ljava/lang/String;)Landroid/os/PersistableBundle;"];
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: without(bundleMethods, bundleOnly, persistableOnly,

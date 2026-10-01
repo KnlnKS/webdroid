@@ -1,5 +1,5 @@
 import { JIntent } from "./intent";
-import { JBundle } from "./os";
+import { JBundle, unparcel } from "./os";
 import { rt } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JParcel } from "./parcel";
@@ -34,6 +34,6 @@ export async function decodeIntent(data: IntentData, extras = true): Promise<JIn
   if (data.selector) intent.selector = await decodeIntent(data.selector, extras);
   if (data.originalIntent) intent.originalIntent = await decodeIntent(data.originalIntent, extras);
   if (extras && data.clipData) intent.clipData = await vcall(importParcel(data.clipData), "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
-  if (extras) intent.extras = await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;");
+  if (extras) { intent.extras = await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;"); await unparcel(intent.extras); }
   return intent;
 }

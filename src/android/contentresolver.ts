@@ -6,7 +6,7 @@ import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle } from "./os";
+import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle, unparcel } from "./os";
 import { newFile, streamOf } from "../jvm/natives/jio";
 import { mkAssetFd, rawResourceBytes } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
@@ -276,6 +276,7 @@ const resolverMethods: NativeSpec["methods"] = {
   "query(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
     driven(function* (this: JObj, u: JUri, proj: string[] | null, queryArgs: JBundle | null, cancellation: unknown): Gen {
       if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
+      if (queryArgs) yield unparcel(queryArgs);
       const values = queryArgs?.map;
       const selection = values?.get("android:query-arg-sql-selection") as string | null | undefined;
       const args = values?.get("android:query-arg-sql-selection-args") as string[] | null | undefined;

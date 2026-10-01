@@ -173,12 +173,23 @@ async function readParcelable(p: JParcel, loader: unknown) {
 }
 async function writeBundle(p: JParcel, b: JBaseBundle | null) {
   if (!b) return writeInt(p, -1);
+  const parcelled = b.parcelled;
+  if (parcelled) {
+    // BaseBundle.writeToParcelInner: an unread bundle is copied in its wire form
+    writeInt(p, parcelled.bytes.length); writeInt(p, BNDL);
+    reserve(p, parcelled.bytes.length);
+    const at = advance(p, parcelled.bytes.length);
+    p.buf.set(parcelled.bytes, at);
+    for (const [offset, o] of parcelled.objects) p.objects.set(at + offset, o);
+    return;
+  }
   if (!b.map.size) return writeInt(p, 0);
   const lenAt = p.pos;
   writeInt(p, 0); writeInt(p, BNDL); writeInt(p, b.map.size);
   for (const [k, v] of b.map) { writeString(p, k); await writeValue(p, v); }
   p.view.setInt32(lenAt, p.pos - lenAt - 8, true);
 }
+/** BaseBundle.readFromParcelInner: the values stay in wire form until the bundle is read */
 async function readBundle(p: JParcel, loader: unknown, persistable = false) {
   const len = readInt(p);
   if (len < 0) return null;
@@ -187,8 +198,28 @@ async function readBundle(p: JParcel, loader: unknown, persistable = false) {
   b.loader = loader;
   if (len === 0) return b;
   if (readInt(p) !== BNDL) throw rt.mkThrowable("java/lang/IllegalStateException", "Bad magic number for Bundle");
-  for (let n = readInt(p); n > 0; n--) { const k = readString(p)!; b.map.set(k, await readValue(p, loader)); }
+  const start = p.pos, end = start + len;
+  if (end > p.size) throw rt.mkThrowable("android/os/BadParcelableException", "Bundle length " + len + " past the parcel's end");
+  const objects: [number, unknown][] = [];
+  for (const [at, o] of p.objects) if (at >= start && at < end) objects.push([at - start, o]);
+  b.parcelled = { bytes: p.buf.slice(start, end), objects };
+  p.pos = end;
   return b;
+}
+/** BaseBundle.unparcel's read of the values a bundle kept in wire form */
+export async function unparcelBundle(b: JBaseBundle): Promise<void> {
+  const parcelled = b.parcelled!;
+  rt.link("android/os/Parcel");
+  const p = new JParcel();
+  p.buf = parcelled.bytes; p.view = new DataView(p.buf.buffer, p.buf.byteOffset, p.buf.byteLength); p.size = p.buf.length;
+  p.objects = new Map(parcelled.objects);
+  const values = new Map<string, unknown>();
+  try {
+    for (let n = readInt(p); n > 0; n--) { const k = readString(p)!; values.set(k, await readValue(p, b.loader)); }
+  } finally {
+    // as AOSP's finally: the wire form is dropped whether or not every value read
+    b.map = values;
+  }
 }
 async function writeList(p: JParcel, list: unknown) {
   if (list === null) return writeInt(p, -1);

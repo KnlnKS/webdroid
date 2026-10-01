@@ -29,6 +29,29 @@ describe("activity-main-queue", () => {
   });
 });
 
+describe("bundle-parcel", () => {
+  test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
+    await loadLibcore(); await loadFrameworkJar();
+    rt.linkNatives();
+    const P = "Landroid/os/Parcel;", parcel = await scall("android/os/Parcel", "obtain", `()${P}`);
+    const bundle = await newObj("android/os/Bundle");
+    await vcall(bundle, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", "s", "text");
+    await vcall(bundle, "putLong", "(Ljava/lang/String;J)V", "l", 7n);
+    await vcall(parcel, "writeBundle", `(Landroid/os/Bundle;)V`, bundle);
+    const bytes = await vcall(parcel, "marshall", "()[B") as Int8Array;
+    await vcall(parcel, "setDataPosition", "(I)V", 0);
+    const read = await vcall(parcel, "readBundle", "()Landroid/os/Bundle;");
+    expect(await vcall(read, "isParcelled", "()Z")).toBe(1);
+    expect(await vcall(read, "getSize", "()I")).toBe(bytes.length - 8);
+    const copy = await scall("android/os/Parcel", "obtain", `()${P}`);
+    await vcall(copy, "writeBundle", `(Landroid/os/Bundle;)V`, read);
+    expect([...await vcall(copy, "marshall", "()[B") as Int8Array]).toEqual([...bytes]);
+    expect(await vcall(read, "getLong", "(Ljava/lang/String;)J", "l")).toBe(7n);
+    expect(await vcall(read, "isParcelled", "()Z")).toBe(0);
+    expect(await vcall(read, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "s")).toBe("text");
+  });
+});
+
 describe("bitmap-parcel", () => {
   test("a Bitmap survives a Parcel round trip with its flags, geometry and pixels", async () => {
     await loadLibcore(); await loadFrameworkJar();

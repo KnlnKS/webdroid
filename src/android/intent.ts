@@ -1,6 +1,6 @@
 import { parcelledClip } from "./clipboard";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
-import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
+import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME, unparcel } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
 import { JRect } from "./graphics";
@@ -95,7 +95,7 @@ async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> 
   for (let i = 0; i < count; i++) { const category = readString8(p); if (category !== null) intent.categories.add(category); }
   intent.selector = readInt(p) ? await readIntent(p) : null;
   intent.clipData = readInt(p) ? await parcelledClip(p) : null; intent.contentUserHint = readInt(p);
-  intent.extras = await vcall(p, "readBundle", "()Landroid/os/Bundle;") ?? new JBundle();
+  intent.extras = await vcall(p, "readBundle", "()Landroid/os/Bundle;") ?? new JBundle(); await unparcel(intent.extras);
   intent.originalIntent = readInt(p) ? await readIntent(p) : null;
   return intent;
 }
