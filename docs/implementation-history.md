@@ -1502,8 +1502,20 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Many system services gained the methods apps reached, each answering as this device does
     (blur, screen recording/capture, media projection, backup, WebView update, status bar
     tiles, window contexts, URI permissions, audio mode, Wi-Fi reconnects).
+  - The activity starter honours launch modes and CLEAR_TOP/SINGLE_TOP/REORDER_TO_FRONT/CLEAR_TASK
+    (every start had pushed a new instance), and an activity's translucency comes from its theme
+    as AttributeCache reads it. Before, only convertToTranslucent set it, so dialog-themed
+    activities stopped what they covered and the broker hid the process beneath a translucent
+    one.
+  - The latency gate passes under Stage D, cold and warm (FitNotes, Calculator M, Mihon, taps
+    9-51 ms on a loaded host). Its FitNotes scenario had tapped TS-layout coordinates that miss
+    AOSP's dialog. D-mode launches compile about 45% more classes and run about twice the cold
+    calls of TS mode (FitNotes first frame 2.8 s vs 1.9 s, loaded host). The framework's bodies
+    now persist in one store shared by all packages, so an app's first launch after any other
+    app's is warm in framework code (Calculator M 1.95 s → 1.28 s after FitNotes).
   Limits: Clash of Clans and Clash Royale fail their anti-tamper checks in both modes; Resy and
-  TikTok fail their live flows in both modes. Reddit's sheet steps are timing-sensitive under D.
+  TikTok fail their live flows in both modes. Reddit's flow is timing-sensitive under D: microG's
+  One Tap sheet arrives in its own process during the launch and takes the next taps.
 
 ## Java, storage and framework semantics
 
