@@ -897,7 +897,9 @@ export class Runtime {
       settle();
       info.state = 3;
       const t = this.jx(e);
-      console.warn("[webdroid clinit-failed]", info.name, t);
+      const what = (x: unknown): string => { const o = x as { constructor?: { $i?: { name: string } }; msg?: unknown; cause?: unknown } | null;
+        return o ? `${o.constructor?.$i?.name ?? "?"}: ${o.msg}${o.cause && o.cause !== o ? " <- " + what(o.cause) : ""}` : String(x); };
+      console.warn("[webdroid clinit-failed]", info.name, what(t), (t as { jsErr?: Error }).jsErr?.stack?.split("\n").slice(1, 6).join(" | ") ?? "");
       return info.initError = this.iof(t, "java/lang/Error") ? t : Object.assign(this.mkThrowable("java/lang/ExceptionInInitializerError", null), { cause: t });
     };
     /** hand the remaining steps to the microtask queue, from the one that yielded */

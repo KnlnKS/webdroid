@@ -1,0 +1,212 @@
+// WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
+// frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
+// device's bars give, a surface per window on the display's layer tree, and an input channel each.
+import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
+import { newObj, vcall, scall } from "../../jvm/natives/jlang";
+import { hostStub } from "../binder";
+import { device } from "../../shell/config";
+import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger";
+import { type Channel } from "../inputchannel";
+import { deref } from "../handles";
+import { javaConfiguration } from "../resources";
+import { deviceConfiguration } from "../resnative";
+
+const VISIBLE = 0;
+const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
+const RELAYOUT_RES_FIRST_TIME = 1, RELAYOUT_RES_SURFACE_CHANGED = 2;
+const WINDOWING_MODE_FULLSCREEN = 1, ACTIVITY_TYPE_STANDARD = 1;
+
+/** WindowManagerPolicy.getWindowLayerFromTypeLw: the display's band for a window type */
+function windowLayer(type: number): number {
+  if (type >= 1 && type <= 99) return 2;
+  switch (type) {
+    case 2013: return 1;                         // wallpaper
+    case 2002: return 3;                         // phone
+    case 2001: return 4;                         // search bar
+    case 2003: return 9;                         // system alert
+    case 2038: return 12;                        // application overlay
+    case 2005: return 8;                         // toast
+    case 2011: return 15;                        // input method
+    case 2012: return 16;                        // input method dialog
+    case 2000: return 17;                        // status bar
+    default: return 2;
+  }
+}
+/** WindowManagerPolicy.getSubWindowLayerFromTypeLw: a sub-window against its parent */
+const SUB_LAYERS: Record<number, number> = { 1000: 1, 1001: -2, 1002: 2, 1003: 1, 1004: -1, 1005: 3 };
+const isSubWindow = (type: number) => type >= 1000 && type <= 1999;
+
+class WindowState {
+  layer: Layer;
+  channel: Channel | null = null;
+  visibility = 8;
+  requestedVisibleTypes = 0;
+  backCallback: JObj | null = null;
+  javaSurface: JObj | null = null;
+  constructor(readonly client: JObj, readonly attrs: JObj, readonly parent: WindowState | null, name: string, type: number, seq: number) {
+    if (parent) {
+      this.layer = displayLayer(name, 0);
+      this.layer.layerStack = -1;
+      this.layer.reparent(parent.layer);
+      this.layer.z = SUB_LAYERS[type] ?? 1;
+    } else this.layer = displayLayer(name, windowLayer(type) * 100000 + seq);
+  }
+}
+const windows = new Map<JObj, WindowState>();
+let seq = 0;
+const LP = "android/view/WindowManager$LayoutParams";
+const field = (name: string) => declaredField(LP, name);
+const lp = <T>(attrs: JObj, name: string) => (attrs as unknown as Record<string, T>)[field(name)];
+
+const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/Rect", "(IIII)V", l, t, r, b);
+const displayRect = () => rect(0, 0, device.width, device.height);
+const insetsType = async (name: string): Promise<number> => scall("android/view/WindowInsets$Type", name, "()I");
+
+/** the display's insets: the status bar (when the profile has one) and the gesture navigation bar */
+async function insetsState(): Promise<JObj> {
+  const state = await newObj("android/view/InsetsState", "()V");
+  await vcall(state, "setDisplayFrame", "(Landroid/graphics/Rect;)V", await displayRect());
+  const { width: w, height: h, statusBar, navBar } = device;
+  const add = async (index: number, type: number, l: number, t: number, r: number, b: number) => {
+    const id = await scall("android/view/InsetsSource", "createId", "(Ljava/lang/Object;II)I", null, index, type);
+    const source = await newObj("android/view/InsetsSource", "(II)V", id, type);
+    await vcall(source, "setFrame", "(IIII)Landroid/view/InsetsSource;", l, t, r, b);
+    await vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
+  };
+  if (statusBar) await add(0, await insetsType("statusBars"), 0, 0, w, statusBar);
+  if (navBar) {
+    await add(0, await insetsType("navigationBars"), 0, h - navBar, w, h);
+    await add(1, await insetsType("mandatorySystemGestures"), 0, h - navBar, w, h);
+  }
+  return state;
+}
+
+/** the configuration a window is laid out against: the device's, in a full-screen window */
+async function mergedConfiguration(out: JObj): Promise<void> {
+  const global = await javaConfiguration(deviceConfiguration());
+  const override = await newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
+  const windowConfig = (override as unknown as Record<string, JObj>)[declaredField("android/content/res/Configuration", "windowConfiguration")];
+  const bounds = await displayRect();
+  for (const set of ["setBounds", "setAppBounds", "setMaxBounds"]) await vcall(windowConfig, set, "(Landroid/graphics/Rect;)V", bounds);
+  await vcall(windowConfig, "setWindowingMode", "(I)V", WINDOWING_MODE_FULLSCREEN);
+  await vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);
+  const rotation = device.width > device.height ? 1 : 0;
+  await vcall(windowConfig, "setRotation", "(I)V", rotation);
+  await vcall(windowConfig, "setDisplayRotation", "(I)V", rotation);
+  await vcall(out, "setConfiguration", "(Landroid/content/res/Configuration;Landroid/content/res/Configuration;)V", global, override);
+}
+
+async function addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: JObj | null, outState: JObj | null, outFrame: JObj | null, outScale: Float32Array | null): Promise<number> {
+  const copy = await newObj(LP, "()V");
+  await vcall(copy, "copyFrom", `(L${LP};)I`, attrs);
+  const type = lp<number>(attrs, "type"), token = lp<JObj | null>(attrs, "token");
+  const parent = isSubWindow(type) && token ? windows.get(token) ?? null : null;
+  const title = String(await vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;") ?? "");
+  const ws = new WindowState(window, copy, parent, title, type, ++seq);
+  ws.visibility = visibility;
+  ws.requestedVisibleTypes = await insetsType("defaultVisible");
+  windows.set(window, ws);
+  if (outChannel) {
+    const pair: JObj[] = await scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
+    ws.channel = deref<Channel>((pair[0] as unknown as Record<string, bigint>)[declaredField("android/view/InputChannel", "mPtr")]);
+    await vcall(pair[1], "copyTo", "(Landroid/view/InputChannel;)V", outChannel);
+  }
+  if (outState) await vcall(outState, "set", "(Landroid/view/InsetsState;)V", await insetsState());
+  if (outFrame) await vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
+  if (outScale) outScale[0] = 1;
+  return ADD_OKAY | ADD_FLAG_IN_TOUCH_MODE | ADD_FLAG_APP_VISIBLE;
+}
+
+async function relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: Record<string, JObj>): Promise<number> {
+  const ws = windows.get(window);
+  if (!ws) return 0;
+  if (attrs) await vcall(ws.attrs, "copyFrom", `(L${LP};)I`, attrs);
+  const R = (name: string) => result[declaredField("android/view/WindowRelayoutResult", name)];
+  const state = await insetsState(), display = await displayRect();
+  await vcall(await newObj("android/view/WindowLayout", "()V"), "computeFrames",
+    `(L${LP};Landroid/view/InsetsState;Landroid/graphics/Rect;Landroid/graphics/Rect;IIIIFLandroid/window/ClientWindowFrames;)V`,
+    ws.attrs, state, display, display, WINDOWING_MODE_FULLSCREEN, width, height, ws.requestedVisibleTypes, 1, R("frames"));
+  await mergedConfiguration(R("mergedConfiguration"));
+  await vcall(R("insetsState"), "set", "(Landroid/view/InsetsState;)V", state);
+  const frame = (R("frames") as unknown as Record<string, Record<string, number>>)[declaredField("android/window/ClientWindowFrames", "frame")];
+  let res = 0;
+  const firstTime = ws.visibility !== VISIBLE && visibility === VISIBLE;
+  ws.visibility = visibility;
+  if (visibility === VISIBLE) {
+    if (!ws.javaSurface) { ws.javaSurface = await javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
+    await vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
+    if (!ws.parent) { ws.layer.x = frame.left; ws.layer.y = frame.top; }
+    else { ws.layer.x = frame.left - ws.parent.layer.x; ws.layer.y = frame.top - ws.parent.layer.y; }
+  } else {
+    await vcall(R("surfaceControl"), "release", "()V");
+  }
+  ws.layer.hidden = visibility !== VISIBLE;
+  scheduleComposite();
+  return res | (firstTime ? RELAYOUT_RES_FIRST_TIME : 0);
+}
+
+function removeWindow(window: JObj): void {
+  const ws = windows.get(window);
+  if (!ws) return;
+  windows.delete(window);
+  removeLayer(ws.layer);
+}
+
+const SESSION = "Landroid/view/IWindow;";
+rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: "android/view/IWindowSession$Stub", methods: {
+  [`addToDisplayAsUser(${SESSION}L${LP};IIIILandroid/view/InputChannel;Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;Landroid/graphics/Rect;[F)I`]:
+    (window: JObj, attrs: JObj, visibility: number, _display: number, _user: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
+      addWindow(window, attrs, visibility, channel, state, frame, scale),
+  [`addToDisplay(${SESSION}L${LP};IIILandroid/view/InputChannel;Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;Landroid/graphics/Rect;[F)I`]:
+    (window: JObj, attrs: JObj, visibility: number, _display: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
+      addWindow(window, attrs, visibility, channel, state, frame, scale),
+  [`addToDisplayWithoutInputChannel(${SESSION}L${LP};IILandroid/view/InsetsState;Landroid/graphics/Rect;[F)I`]:
+    (window: JObj, attrs: JObj, visibility: number, _display: number, state: JObj | null, frame: JObj | null, scale: Float32Array | null) =>
+      addWindow(window, attrs, visibility, null, state, frame, scale),
+  [`relayout(${SESSION}L${LP};IIIIIILandroid/view/WindowRelayoutResult;)I`]:
+    (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number, _flags: number, _seq: number, _sync: number, result: Record<string, JObj>) =>
+      relayout(window, attrs, w, h, visibility, result),
+  [`relayoutAsync(${SESSION}L${LP};IIIIII)V`]: async (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number) => {
+    const result = await newObj("android/view/WindowRelayoutResult", "()V");
+    await relayout(window, attrs, w, h, visibility, result);
+  },
+  [`finishDrawing(${SESSION}Landroid/view/SurfaceControl$Transaction;I)V`]: async (window: JObj, transaction: JObj | null) => {
+    if (transaction) await vcall(transaction, "apply", "()V");
+    scheduleComposite();
+  },
+  "remove(Landroid/os/IBinder;)V": removeWindow,
+  [`updateRequestedVisibleTypes(${SESSION}I)V`]: (window: JObj, types: number) => { const ws = windows.get(window); if (ws) ws.requestedVisibleTypes = types; },
+  [`setOnBackInvokedCallbackInfo(${SESSION}Landroid/window/OnBackInvokedCallbackInfo;)V`]: (window: JObj, info: JObj | null) => {
+    const ws = windows.get(window); if (ws) ws.backCallback = info;
+  },
+  [`cancelDraw(${SESSION})Z`]: () => 0,
+  [`outOfMemory(${SESSION})Z`]: () => 0,
+  "performHapticFeedback(IZZ)Z": () => 0,
+  ...noops(`setInsets(${SESSION}ILandroid/graphics/Rect;Landroid/graphics/Rect;Landroid/graphics/Region;)V`,
+    `clearTouchableRegion(${SESSION})V`, "pokeDrawLock(Landroid/os/IBinder;)V", "performHapticFeedbackAsync(IZZ)V",
+    "onRectangleOnScreenRequested(Landroid/os/IBinder;Landroid/graphics/Rect;)V",
+    `reportSystemGestureExclusionChanged(${SESSION}Ljava/util/List;)V`, `reportKeepClearAreasChanged(${SESSION}Ljava/util/List;Ljava/util/List;)V`,
+    `reportDecorViewGestureInterceptionChanged(${SESSION}Z)V`, `updateTapExcludeRegion(${SESSION}Landroid/graphics/Region;)V`),
+  ...stubs(null, "getWindowId(Landroid/os/IBinder;)Landroid/view/IWindowId;"),
+} });
+
+rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
+  "openSession(Landroid/view/IWindowSessionCallback;)Landroid/view/IWindowSession;": () => newObj("webdroid/WindowSession"),
+  "getCurrentAnimatorScale()F": () => 1,
+  "getWindowInsets(ILandroid/os/IBinder;Landroid/view/InsetsState;)Z": async (_display: number, _token: JObj, out: JObj) => {
+    await vcall(out, "set", "(Landroid/view/InsetsState;)V", await insetsState()); return 0;
+  },
+  "hasNavigationBar(I)Z": () => +(device.navBar > 0),
+  "getDefaultDisplayRotation()I": () => device.width > device.height ? 1 : 0,
+  "watchRotation(Landroid/view/IRotationWatcher;I)I": () => device.width > device.height ? 1 : 0,
+  "removeRotationWatcher(Landroid/view/IRotationWatcher;)V": () => {},
+  "isInTouchMode(I)Z": () => 1,
+  ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
+  "getInitialDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
+  "getBaseDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
+  "getInitialDisplayDensity(I)I": () => device.densityDpi,
+  "getBaseDisplayDensity(I)I": () => device.densityDpi,
+} });
+
+/** WindowManagerGlobal's IWindowManager, for an app whose windows AOSP's ViewRootImpl manages */
+export function hostWindowManager(): void { hostStub("window", "webdroid/WindowManager"); }

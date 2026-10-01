@@ -140,10 +140,6 @@ abstract class RenderAnimator {
 const active = new Set<RenderAnimator>();
 /** the render thread's part of the frame at `now` (ms): true while anything animates, which the
  *  frame must then draw */
-// Render-thread animations always run here; a client may only leave them on (the default divisor)
-rt.registerJni("android/graphics/HardwareRenderer", "nSetRtAnimationsEnabled(Z)V", (enabled: number) => {
-  if (!enabled) rt.noteMissing("android/graphics/HardwareRenderer.nSetRtAnimationsEnabled(false)");
-});
 export function animateRenderThread(now: number): boolean {
   if (!active.size) return false;
   for (const a of [...active]) {

@@ -471,8 +471,12 @@ rt.register({
     // ART counts native bytes to pace its collections; the JS engine paces its own
     "registerNativeAllocation(J)V": () => {},
     "registerNativeFree(J)V": () => {},
-    // no hidden-API policy is enforced here, so every exemption already holds
+    // no hidden-API policy is enforced here, so every exemption already holds and no access is reported
     "setHiddenApiExemptions([Ljava/lang/String;)V": () => {},
+    "static setNonSdkApiUsageConsumer(Ljava/util/function/Consumer;)V": () => {},
+    "static setDedupeHiddenApiWarnings(Z)V": () => {},
+    "static setHiddenApiUsageLogger(Ldalvik/system/VMRuntime$HiddenApiUsageLogger;)V": () => {},
+    "setHiddenApiAccessLogSamplingRate(I)V": () => {},
     // what System.<clinit> reads of the runtime: the zygote's class paths, ART's version, and the
     // -D options AndroidRuntime starts it with (the locale from persist.sys.locale)
     "bootClassPath()Ljava/lang/String;": () => BOOT_JAR_PATHS.join(":"),
@@ -481,6 +485,9 @@ rt.register({
     "properties()[Ljava/lang/String;": () => jarray([`user.locale=${device.locale}`], "Ljava/lang/String;"),
   },
 });
+
+// DDMS chunks go to an attached debugger, and ART drops them when none is (there never is here)
+rt.registerJni("org/apache/harmony/dalvik/ddmc/DdmServer", "nativeSendChunk(I[BII)V", () => {});
 
 // ── Unsafe: sun.misc's for kotlinx-coroutines' artificial stack frames, and jdk.internal.misc's for
 // libcore's atomics, CAS loops and LockSupport. A realm is one thread, so every memory order is

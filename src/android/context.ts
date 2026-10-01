@@ -105,6 +105,15 @@ export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSION
 export const permissionGranted = (pkg: string, name: string): boolean =>
   !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!packages.get(pkg)?.grants.has(name);
 const permissionState = (name: string) => permissionGranted(appHost?.pkg ?? "", name) ? 0 : -1;
+/** PermissionManagerService.checkUidPermission: root and system hold every permission; an app's
+ *  uid holds one its package requested and, if it is a runtime permission, was granted */
+export function uidPermissionState(name: string, uid: number): number {
+  if (uid === 0 || uid === 1000) return 0;
+  for (const record of packages.values()) {
+    if (record.uid === uid && record.permissions.has(name) && permissionGranted(record.pkg, name)) return 0;
+  }
+  return -1;
+}
 export function grantPermissions(names: string[]): Int32Array {
   permissionStore.grant(appHost?.pkg ?? "", names);
   return new Int32Array(names.length);

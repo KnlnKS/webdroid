@@ -63,6 +63,7 @@ export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel 
 }
 
 const callers = new WeakMap<JThread, Caller>();
+const strictModePolicies = new WeakMap<JThread, number>();
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 const oneWay = new Map<number, Promise<unknown>>();
@@ -114,6 +115,9 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   // a stability label for binders crossing partitions; every binder here shares one build
   "markVintfStability()V": () => {},
   "static getCallingUid()I": () => callingIdentity().uid,
+  // IPCThreadState's per-thread StrictMode policy, which a call carries to its binder thread
+  "static setThreadStrictModePolicy(I)V": (mask: number) => { strictModePolicies.set(curThread, mask); },
+  "static getThreadStrictModePolicy()I": () => strictModePolicies.get(curThread) ?? 0,
   "static getCallingPid()I": () => callingIdentity().pid,
   // IPCThreadState packs the caller into the token, so clearing twice gives the same one
   "static clearCallingIdentity()J": () => {

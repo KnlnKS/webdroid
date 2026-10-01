@@ -19,9 +19,16 @@
 const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode")
   : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
+/** Stage D's coupled set: the application framework (ActivityThread, Activity, ContextImpl), the
+ *  view stack, windows and the framework side of android.content, over TS system services */
+const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/content/", "android/window/", "android/transition/",
+  "android/preference/", "android/inputmethodservice/", "android/accessibilityservice/", "com/android/internal/policy/"];
+
 /** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
- *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone) */
-export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean) : [];
+ *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). `stage-d`
+ *  names the STAGE_D group. */
+export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean)
+  .flatMap((p) => p === "stage-d" ? STAGE_D : [p]) : [];
 
 export function isBytecode(name: string): boolean {
   for (const p of BYTECODE) if (name.startsWith(p) || p.endsWith("$") && name === p.slice(0, -1)) return true;

@@ -57,7 +57,10 @@ export function recordVsync(time: number): boolean {
   deliverVsync();
   return true;
 }
-export const vsyncScheduled = (): boolean => scheduled.size > 0;
+export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
+let vsyncHooks: (() => void)[] = [];
+/** run `fn` at the next vsync: a renderer drawing on its own cadence */
+export function onNextVsync(fn: () => void): void { vsyncHooks.push(fn); }
 /** a vsync now, outside the display's pacing: a test harness stepping frames on a controlled clock */
 export function deliverVsync(): void {
   latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
@@ -70,6 +73,9 @@ export function deliverVsync(): void {
     });
   }
   scheduled.clear();
+  const hooks = vsyncHooks;
+  vsyncHooks = [];
+  for (const fn of hooks) fn();
   flushVsyncWaiters();
 }
 

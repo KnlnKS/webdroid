@@ -1,0 +1,296 @@
+// SurfaceFlinger: the layer tree windows and surfaces compose into, and the client natives that
+// build it — SurfaceSession, SurfaceControl and its Transaction, BLASTBufferQueue and Surface. A
+// BLAST surface's buffer is an OffscreenCanvas the renderer draws into; queueing it latches the
+// buffer on its layer, and the display composes every visible layer of layer stack 0 into the
+// page's frame at the end of the JS turn that changed one.
+import { rt, type JObj, declaredField } from "../jvm/runtime";
+import { newObj, vcall } from "../jvm/natives/jlang";
+import { handle, deref, release, FINALIZER } from "./handles";
+import { canvasOf } from "./canvas";
+import { perf } from "../perf";
+
+// SurfaceControl.Builder's creation flags
+const HIDDEN = 0x4, OPAQUE = 0x400, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
+// Transaction.setFlags's layer state flags
+const LAYER_HIDDEN = 0x1, LAYER_OPAQUE = 0x2;
+
+let nextLayerId = 1;
+export class Layer {
+  readonly id = nextLayerId++;
+  parent: Layer | null = null;
+  readonly children: Layer[] = [];
+  z = 0; layerStack = -1;
+  x = 0; y = 0;
+  /** dsdx, dtdx, dtdy, dsdy */
+  matrix: [number, number, number, number] | null = null;
+  alpha = 1; hidden: boolean; opaque: boolean;
+  crop: { l: number; t: number; r: number; b: number } | null = null;
+  cornerRadius = 0;
+  /** an effect layer's solid color, r g b in 0..1 */
+  color: [number, number, number] | null = null;
+  /** the latched buffer */
+  buffer: OffscreenCanvas | null = null;
+  removed = false;
+  constructor(readonly name: string, public width: number, public height: number, flags: number) {
+    this.hidden = !!(flags & HIDDEN);
+    this.opaque = !!(flags & OPAQUE);
+    if ((flags & FX_SURFACE_MASK) === FX_SURFACE_EFFECT) this.color = [0, 0, 0];
+  }
+  reparent(parent: Layer | null): void {
+    if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = parent;
+    parent?.children.push(this);
+  }
+}
+const roots = new Set<Layer>();
+
+// ── composition
+let target: { ctx: OffscreenCanvasRenderingContext2D; present: () => void } | null = null;
+/** where the display composes: the realm's frame, and what shows it */
+export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: () => void): void { target = { ctx, present }; }
+let composing = false;
+/** compose the display once the current turn's transactions and draws are done */
+export function scheduleComposite(): void {
+  if (composing) return;
+  composing = true;
+  queueMicrotask(composite);
+}
+function composite(): void {
+  composing = false;
+  if (!target) return;
+  const { ctx } = target, t0 = performance.now();
+  ctx.save();
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  for (const layer of [...roots].filter((l) => l.layerStack === 0).sort((a, b) => a.z - b.z)) drawLayer(ctx, layer);
+  ctx.restore();
+  perf.drawMs += performance.now() - t0;
+  target.present();
+}
+function drawLayer(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void {
+  if (layer.hidden || layer.alpha <= 0 || layer.removed) return;
+  ctx.save();
+  ctx.translate(layer.x, layer.y);
+  if (layer.matrix) { const [a, b, c, d] = layer.matrix; ctx.transform(a, b, c, d, 0, 0); }
+  ctx.globalAlpha *= layer.alpha;
+  const crop = layer.crop;
+  if (crop) { ctx.beginPath(); ctx.roundRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t, layer.cornerRadius); ctx.clip(); }
+  if (layer.color) {
+    const [r, g, b] = layer.color;
+    ctx.fillStyle = `rgb(${r * 255},${g * 255},${b * 255})`;
+    if (crop) ctx.fillRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t);
+    else ctx.fillRect(-layer.x, -layer.y, ctx.canvas.width, ctx.canvas.height);
+  }
+  if (layer.buffer) ctx.drawImage(layer.buffer, 0, 0);
+  for (const child of layer.children.slice().sort((a, b) => a.z - b.z)) drawLayer(ctx, child);
+  ctx.restore();
+}
+
+// ── SurfaceControl and its Transaction
+/** a client's reference to a layer: copies share the layer, each with its own native object */
+interface Control { layer: Layer }
+const control = (h: bigint) => deref<Control>(h);
+const layerOf = (h: bigint) => control(h).layer;
+type Op = () => void;
+interface Transaction { ops: Op[] }
+const tx = (h: bigint) => deref<Transaction>(h);
+const op = (fn: (layer: Layer, ...a: never[]) => void) => (t: bigint, sc: bigint, ...a: never[]) => {
+  const layer = layerOf(sc);
+  tx(t).ops.push(() => fn(layer, ...a));
+};
+export function applyOps(t: Transaction): void {
+  const ops = t.ops.splice(0);
+  for (const fn of ops) fn();
+  if (ops.length) scheduleComposite();
+}
+/** a Java SurfaceControl over `layer` */
+export async function javaSurfaceControl(layer: Layer, callsite: string): Promise<JObj> {
+  const sc = await newObj("android/view/SurfaceControl", "()V");
+  await vcall(sc, "assignNativeObject", "(JLjava/lang/String;)V", handle({ layer } satisfies Control), callsite);
+  return sc;
+}
+/** a root layer on the display: what a window's surface hangs from */
+export function displayLayer(name: string, z: number): Layer {
+  const layer = new Layer(name, 0, 0, 0);
+  layer.layerStack = 0; layer.z = z;
+  roots.add(layer);
+  return layer;
+}
+export function removeLayer(layer: Layer): void {
+  layer.removed = true;
+  layer.reparent(null);
+  roots.delete(layer);
+  scheduleComposite();
+}
+
+rt.registerJnis("android/view/SurfaceSession", {
+  "nativeCreate()J": () => handle({}),
+  "nativeDestroy(J)V": (h: bigint) => release(h),
+});
+rt.registerJnis("android/view/SurfaceControl", {
+  "nativeCreate(Landroid/view/SurfaceSession;Ljava/lang/String;IIIIJLandroid/os/Parcel;)J":
+    (_session: JObj, name: string, w: number, h: number, _format: number, flags: number, parent: bigint) => {
+      const layer = new Layer(name, w, h, flags);
+      if (parent) layer.reparent(layerOf(parent)); else roots.add(layer);
+      return handle({ layer } satisfies Control);
+    },
+  "nativeGetNativeSurfaceControlFinalizer()J": () => FINALIZER,
+  "nativeGetNativeTransactionFinalizer()J": () => FINALIZER,
+  "nativeDisconnect(J)V": () => {},
+  "nativeCopyFromSurfaceControl(J)J": (h: bigint) => handle({ layer: layerOf(h) } satisfies Control),
+  "nativeGetHandle(J)J": (h: bigint) => BigInt(layerOf(h).id),
+  "nativeGetLayerId(J)I": (h: bigint) => layerOf(h).id,
+  "nativeGetTransformHint(J)I": () => 0,
+  "nativeSetTransformHint(JI)V": () => {},
+  "nativeUpdateDefaultBufferSize(JII)V": (h: bigint, w: number, ht: number) => { const l = layerOf(h); l.width = w; l.height = ht; },
+  "nativeMirrorSurface(J)J": (h: bigint) => handle({ layer: new Layer(layerOf(h).name + " mirror", 0, 0, 0) } satisfies Control),
+  "nativeCreateTransaction()J": () => handle({ ops: [] } satisfies Transaction),
+  "nativeApplyTransaction(JZZ)V": (t: bigint) => applyOps(tx(t)),
+  "nativeMergeTransaction(JJ)V": (t: bigint, other: bigint) => { tx(t).ops.push(...tx(other).ops.splice(0)); },
+  "nativeClearTransaction(J)V": (t: bigint) => { tx(t).ops.length = 0; },
+  "nativeGetTransactionId(J)J": (t: bigint) => t,
+  "nativeSetAnimationTransaction(J)V": () => {},
+  "nativeSetEarlyWakeupStart(J)V": () => {}, "nativeSetEarlyWakeupEnd(J)V": () => {},
+  "nativeSetFrameTimelineVsync(JJ)V": () => {},
+  "nativeSetLayer(JJI)V": op((l, z: number) => { l.z = z; }),
+  "nativeSetRelativeLayer(JJJI)V": (t: bigint, sc: bigint, _relativeTo: bigint, z: number) => {
+    const layer = layerOf(sc);
+    tx(t).ops.push(() => { layer.z = z; });
+  },
+  "nativeSetPosition(JJFF)V": op((l, x: number, y: number) => { l.x = x; l.y = y; }),
+  "nativeSetScale(JJFF)V": op((l, sx: number, sy: number) => { l.matrix = [sx, 0, 0, sy]; }),
+  "nativeSetMatrix(JJFFFF)V": op((l, dsdx: number, dtdx: number, dtdy: number, dsdy: number) => { l.matrix = [dsdx, dtdx, dtdy, dsdy]; }),
+  "nativeSetAlpha(JJF)V": op((l, a: number) => { l.alpha = a; }),
+  "nativeSetColor(JJ[F)V": op((l, c: Float32Array) => { l.color = [c[0], c[1], c[2]]; }),
+  "nativeSetWindowCrop(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
+    l.crop = right > left && bottom > top ? { l: left, t: top, r: right, b: bottom } : null;
+  }),
+  "nativeSetCornerRadius(JJF)V": op((l, r: number) => { l.cornerRadius = r; }),
+  "nativeSetFlags(JJII)V": op((l, flags: number, mask: number) => {
+    if (mask & LAYER_HIDDEN) l.hidden = !!(flags & LAYER_HIDDEN);
+    if (mask & LAYER_OPAQUE) l.opaque = !!(flags & LAYER_OPAQUE);
+  }),
+  "nativeSetLayerStack(JJI)V": op((l, stack: number) => { l.layerStack = stack; }),
+  "nativeReparent(JJJ)V": (t: bigint, sc: bigint, parent: bigint) => {
+    const layer = layerOf(sc), to = parent ? layerOf(parent) : null;
+    tx(t).ops.push(() => {
+      layer.reparent(to);
+      if (to) roots.delete(layer); else roots.add(layer);
+    });
+  },
+  // properties the display composes without: the browser canvas has one color space, no HDR,
+  // no frame-rate voting, no blur or shadows on layers, and input routing is the window manager's
+  ...Object.fromEntries([
+    "nativeSetBufferTransform(JJI)V", "nativeSetDataSpace(JJI)V", "nativeSetColorSpaceAgnostic(JJZ)V", "nativeSetFrameRate(JJFII)V",
+    "nativeSetFrameRateCategory(JJIZ)V", "nativeSetFrameRateSelectionPriority(JJI)V", "nativeSetFrameRateSelectionStrategy(JJI)V",
+    "nativeSetDefaultFrameRateCompatibility(JJI)V", "nativeSetFixedTransformHint(JJI)V", "nativeSetInputWindowInfo(JJLandroid/view/InputWindowHandle;)V",
+    "nativeSetTrustedOverlay(JJI)V", "nativeSetDropInputMode(JJI)V", "nativeSetDamageRegion(JJLandroid/graphics/Region;)V",
+    "nativeSetTransparentRegionHint(JJLandroid/graphics/Region;)V", "nativeSetMetadata(JJILandroid/os/Parcel;)V", "nativeSetCachingHint(JJI)V",
+    "nativeSetDimmingEnabled(JJZ)V", "nativeSetCanOccludePresentation(JJZ)V", "nativeSetDesiredPresentTimeNanos(JJ)V", "nativeSetFrameTimeline(JJ)V",
+    "nativeSanitize(JII)V", "nativeSetShadowRadius(JJF)V", "nativeSetBackgroundBlurRadius(JJI)V", "nativeSetExtendedRangeBrightness(JJFF)V",
+    "nativeSetDesiredHdrHeadroom(JJF)V",
+  ].map((sig) => [sig, () => {}])),
+  "nativeAddTransactionCommittedListener(JLandroid/view/SurfaceControl$TransactionCommittedListener;)V": (t: bigint, listener: JObj) => {
+    tx(t).ops.push(() => queueMicrotask(() => void vcall(listener, "onTransactionCommitted", "()V")));
+  },
+  "nativeAddTransactionCompletedListener(JLjava/util/function/Consumer;)V": (t: bigint, consumer: JObj) => {
+    tx(t).ops.push(() => queueMicrotask(() => void vcall(consumer, "accept", "(Ljava/lang/Object;)V", null)));
+  },
+});
+
+// ── BLASTBufferQueue and Surface: a window's buffers
+interface Queue { name: string; control: Control | null; width: number; height: number; canvas: OffscreenCanvas | null; frame: bigint;
+  sync: JObj | null; acquireSingle: boolean; pending: Transaction[] }
+interface Surface { queue: Queue | null; layer: Layer | null }
+const queue = (h: bigint) => deref<Queue>(h);
+/** the buffer a surface's next frame draws into, sized to its queue */
+export function surfaceBuffer(s: Surface): OffscreenCanvas | null {
+  const q = s.queue;
+  if (!q || q.width <= 0 || q.height <= 0) return null;
+  if (!q.canvas) q.canvas = new OffscreenCanvas(q.width, q.height);
+  else if (q.canvas.width !== q.width || q.canvas.height !== q.height) { q.canvas.width = q.width; q.canvas.height = q.height; }
+  return q.canvas;
+}
+/** BLASTBufferQueue's onFrameAvailable: the drawn buffer latches on the queue's layer, through the
+ *  transaction a sync asked for if one is waiting, else at once */
+export async function queueBuffer(s: Surface): Promise<void> {
+  const q = s.queue, layer = q?.control?.layer;
+  if (!q || !layer) return;
+  q.frame++;
+  const buffer = q.canvas, latch: Transaction = { ops: [...q.pending.flatMap((t) => t.ops.splice(0))] };
+  q.pending.length = 0;
+  latch.ops.push(() => { layer.buffer = buffer; });
+  const sync = q.sync;
+  if (sync) {
+    if (q.acquireSingle) q.sync = null;
+    const t = await newObj("android/view/SurfaceControl$Transaction", "()V");
+    tx((t as Record<string, bigint>)[transactionField()]).ops.push(...latch.ops);
+    await vcall(sync, "accept", "(Ljava/lang/Object;)V", t);
+  } else applyOps(latch);
+}
+let txField: string | null = null;
+const transactionField = () => txField ??= declaredField("android/view/SurfaceControl$Transaction", "mNativeObject");
+const surfaceField = () => declaredField("android/view/Surface", "mNativeObject");
+export const nativeSurface = (javaSurface: JObj | null): Surface | null => {
+  const h = javaSurface ? (javaSurface as Record<string, bigint>)[surfaceField()] : 0n;
+  return h ? deref<Surface>(h) : null;
+};
+
+rt.registerJnis("android/graphics/BLASTBufferQueue", {
+  "nativeCreate(Ljava/lang/String;Z)J": (name: string) =>
+    handle({ name, control: null, width: 0, height: 0, canvas: null, frame: 0n, sync: null, acquireSingle: true, pending: [] } satisfies Queue),
+  "nativeDestroy(J)V": (h: bigint) => release(h),
+  "nativeUpdate(JJJJI)V": (h: bigint, sc: bigint, w: bigint, ht: bigint) => {
+    const q = queue(h);
+    q.control = control(sc); q.width = Number(w); q.height = Number(ht);
+  },
+  "nativeGetSurface(JZ)Landroid/view/Surface;": (h: bigint) =>
+    newObj("android/view/Surface", "(J)V", handle({ queue: queue(h), layer: null } satisfies Surface)),
+  "nativeSyncNextTransaction(JLjava/util/function/Consumer;Z)Z": (h: bigint, callback: JObj, acquireSingle: number) => {
+    const q = queue(h);
+    q.sync = callback; q.acquireSingle = !!acquireSingle;
+    return 1;
+  },
+  "nativeStopContinuousSyncTransaction(J)V": (h: bigint) => { queue(h).sync = null; },
+  "nativeClearSyncTransaction(J)V": (h: bigint) => { queue(h).sync = null; },
+  "nativeMergeWithNextTransaction(JJJ)V": (h: bigint, t: bigint) => { queue(h).pending.push({ ops: tx(t).ops.splice(0) }); },
+  "nativeApplyPendingTransactions(JJ)V": (h: bigint) => {
+    for (const t of queue(h).pending.splice(0)) applyOps(t);
+  },
+  "nativeGatherPendingTransactions(JJ)Landroid/view/SurfaceControl$Transaction;": async (h: bigint) => {
+    const t = await newObj("android/view/SurfaceControl$Transaction", "()V");
+    tx((t as Record<string, bigint>)[transactionField()]).ops.push(...queue(h).pending.splice(0).flatMap((p) => p.ops));
+    return t;
+  },
+  "nativeGetLastAcquiredFrameNum(J)J": (h: bigint) => queue(h).frame,
+  "nativeIsSameSurfaceControl(JJ)Z": (h: bigint, sc: bigint) => +(queue(h).control?.layer === layerOf(sc)),
+  "nativeSetTransactionHangCallback(JLandroid/graphics/BLASTBufferQueue$TransactionHangCallback;)V": () => {},
+});
+
+const surface = (h: bigint) => deref<Surface>(h);
+rt.registerJnis("android/view/Surface", {
+  "nativeCreateFromSurfaceControl(J)J": (sc: bigint) => handle({ queue: null, layer: layerOf(sc) } satisfies Surface),
+  "nativeGetFromSurfaceControl(JJ)J": (_h: bigint, sc: bigint) => handle({ queue: null, layer: layerOf(sc) } satisfies Surface),
+  "nativeGetFromBlastBufferQueue(JJ)J": (h: bigint, q: bigint) => h && surface(h).queue === queue(q) ? h : handle({ queue: queue(q), layer: null } satisfies Surface),
+  "nativeRelease(J)V": (h: bigint) => release(h),
+  "nativeDestroy(J)V": (h: bigint) => release(h),
+  "nativeIsValid(J)Z": (h: bigint) => +!!(h && (surface(h).queue || surface(h).layer)),
+  "nativeGetWidth(J)I": (h: bigint) => surface(h).queue?.width ?? 0,
+  "nativeGetHeight(J)I": (h: bigint) => surface(h).queue?.height ?? 0,
+  "nativeGetNextFrameNumber(J)J": (h: bigint) => (surface(h).queue?.frame ?? 0n) + 1n,
+  "nativeIsConsumerRunningBehind(J)Z": () => 0,
+  "nativeAllocateBuffers(J)V": () => {},
+  "nativeSetScalingMode(JI)I": () => 0,
+  "nativeSetFrameRate(JFII)I": () => 0,
+  "nativeForceScopedDisconnect(J)I": () => 0,
+  "nativeSetAutoRefreshEnabled(JZ)I": () => 0,
+  "nativeSetSharedBufferModeEnabled(JZ)I": () => 0,
+  // the software path: a Canvas over the next buffer, posted on unlock
+  "nativeLockCanvas(JLandroid/graphics/Canvas;Landroid/graphics/Rect;)J": (h: bigint, canvas: JObj) => {
+    const s = surface(h), buffer = surfaceBuffer(s);
+    if (!buffer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Surface has no buffer to lock");
+    canvasOf(canvas).setTarget(buffer.getContext("2d")!, buffer.width, buffer.height, null);
+    return h;
+  },
+  "nativeUnlockCanvasAndPost(JLandroid/graphics/Canvas;)V": (h: bigint) => queueBuffer(surface(h)),
+});

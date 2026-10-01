@@ -32,7 +32,7 @@ defineException("android/os/DeadObjectException", "android/os/RemoteException");
 defineException("android/os/OperationCanceledException", "java/lang/RuntimeException");
 
 const RUNTIME_STATS = ["art.gc.gc-count", "art.gc.gc-time", "art.gc.bytes-allocated", "art.gc.bytes-freed", "art.gc.blocking-gc-count", "art.gc.blocking-gc-time", "art.gc.gc-count-rate-histogram", "art.gc.blocking-gc-count-rate-histogram"];
-// ── SystemClock / Build / Process / Trace / Debug / StrictMode
+// ── SystemClock / Build / Process / Trace / Debug
 class JSystemClock extends JObj {}
 rt.register({
   name: "android/os/SystemClock", ctor: JSystemClock,
@@ -224,51 +224,6 @@ rt.register({
     },
   },
 });
-{
-  const chain = (name: string, methods: string[], buildRet?: string) => {
-    class C extends JObj {}
-    const m: NativeSpec["methods"] = { "<init>()V": function () {} };
-    for (const mm of methods) m[mm] = function (this: C) { return this; };
-    if (buildRet) {
-      const info = () => rt.link(buildRet);
-      m[`build()L${buildRet};`] = () => new (info().ctor)();
-      m[`<init>(L${buildRet};)V`] = function () {}; // Builder(existing policy) — nothing is enforced, so nothing to copy
-    }
-    rt.register({ name, ctor: C, methods: m });
-  };
-  // Nothing is enforced, so a policy is only what was last set, and LAX until then.
-  const THREAD = "android/os/StrictMode$ThreadPolicy", VM = "android/os/StrictMode$VmPolicy";
-  const lax: Record<string, JObj> = {}, current: Record<string, unknown> = {};
-  const laxPolicy = (cls: string) => lax[cls] ??= rt.make(cls);
-  const policy = (cls: string) => () => current[cls] ?? laxPolicy(cls);
-  for (const cls of [THREAD, VM]) rt.register({ name: cls, ctor: class extends JObj {}, statics: { get LAX() { return laxPolicy(cls); } } });
-  // every detect*/permit*/penalty* of the API-34 builders: nothing is enforced, so each returns the builder
-  const TB = "Landroid/os/StrictMode$ThreadPolicy$Builder;", VB = "Landroid/os/StrictMode$VmPolicy$Builder;";
-  const flags = (ret: string, kinds: string[], extra: string[]) => [...kinds.map((k) => `${k}()${ret}`), ...extra.map((e) => e + ret)];
-  chain("android/os/StrictMode$ThreadPolicy$Builder",
-    flags(TB, ["All", "CustomSlowCalls", "DiskReads", "DiskWrites", "ExplicitGc", "Network", "ResourceMismatches", "UnbufferedIo"].flatMap((k) => ["detect" + k, "permit" + k]),
-      ["penaltyDeath()", "penaltyDeathOnNetwork()", "penaltyDialog()", "penaltyDropBox()", "penaltyFlashScreen()", "penaltyLog()",
-        "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnThreadViolationListener;)"]),
-    "android/os/StrictMode$ThreadPolicy");
-  chain("android/os/StrictMode$VmPolicy$Builder",
-    flags(VB, ["ActivityLeaks", "All", "CleartextNetwork", "ContentUriWithoutPermission", "CredentialProtectedWhileLocked", "FileUriExposure", "ImplicitDirectBoot",
-      "IncorrectContextUse", "LeakedClosableObjects", "LeakedRegistrationObjects", "LeakedSqlLiteObjects", "NonSdkApiUsage", "UnsafeIntentLaunch", "UntaggedSockets"].map((k) => "detect" + k),
-      ["permitNonSdkApiUsage()", "permitUnsafeIntentLaunch()", "penaltyDeath()", "penaltyDeathOnCleartextNetwork()", "penaltyDeathOnFileUriExposure()", "penaltyDropBox()", "penaltyLog()",
-        "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnVmViolationListener;)", "setClassInstanceLimit(Ljava/lang/Class;I)"]),
-    "android/os/StrictMode$VmPolicy");
-  rt.register({
-    name: "android/os/StrictMode", ctor: class extends JObj {},
-    methods: {
-      ...noops("static noteSlowCall(Ljava/lang/String;)V"),
-      "static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V": (p: unknown) => { current[THREAD] = p; },
-      "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V": (p: unknown) => { current[VM] = p; },
-      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": policy(VM),
-      // the allow* calls hand back the policy to restore, which nothing here changed
-      ...Object.fromEntries(["getThreadPolicy", "allowThreadDiskReads", "allowThreadDiskWrites"].map((m) => [`static ${m}()L${THREAD};`, policy(THREAD)])),
-    },
-  });
-}
-
 export class JBaseBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;

@@ -18,7 +18,7 @@ import { deviceConfiguration } from "./resnative";
 import { hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
-import { isRuntimePermission, permissionGranted } from "./context";
+import { isRuntimePermission, permissionGranted, uidPermissionState } from "./context";
 import { stickyBroadcasts } from "./broadcast";
 
 class JRunningAppProcessInfo extends JObj {
@@ -77,7 +77,11 @@ const activityManager: NativeSpec["methods"] = {
   "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () =>
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
+  "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
+  "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
   "isUserAMonkey()Z": () => 0,
+  // the render thread's tid, for scheduling: everything here shares the page's one thread
+  "setRenderThread(I)V": () => {},
 };
 rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub", methods: activityManager });
 

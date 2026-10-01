@@ -28,6 +28,8 @@ export class JLocaleList extends JObj { values: JLocale[] = []; tags: string[] =
 const emptyLocaleList = new JLocaleList();
 /** the device's languages, from boot (initDeviceLocales) */
 let localeList = emptyLocaleList;
+/** LocaleList.setDefault's list, once the process set one */
+let defaultList: JLocaleList | null = null;
 function withTags(values: JLocale[]): JLocaleList | Promise<JLocaleList> {
   const tags = values.map(localeTag), list = (tags: string[]) => Object.assign(new JLocaleList(), { values, tags });
   return tags.some((tag) => tag instanceof Promise) ? Promise.all(tags).then(list) : list(tags as string[]);
@@ -98,7 +100,17 @@ rt.register({
         this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
       });
     },
-    "static getDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => theConfig.locales),
+    "static getDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => defaultList ?? theConfig.locales),
+    // the process default ActivityThread sets from its configuration, with its best locale first
+    "static setDefault(Landroid/os/LocaleList;I)V": (list: JLocaleList | null, index: number) => {
+      if (!list) throw rt.mkThrowable("java/lang/NullPointerException", "locales is null");
+      if (list.values.length === 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "locales is empty");
+      defaultList = list;
+      return scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", list.values[index]);
+    },
+    "static setDefault(Landroid/os/LocaleList;)V": function (list: JLocaleList | null) {
+      return vcall(rt.link("android/os/LocaleList").ctor, "setDefault", "(Landroid/os/LocaleList;I)V", list, 0);
+    },
     "static getAdjustedDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => theConfig.locales),
     "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
     "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen {

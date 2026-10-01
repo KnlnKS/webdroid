@@ -657,11 +657,11 @@ const absListViewMethods: NonNullable<NativeSpec["methods"]> = {
   "clearChoices()V": function (this: JListView) { this.checked.clear(); return showCheckStates(this); },
   "getCheckedItemCount()I": function (this: JListView) { return this.checked.size; },
   "getCheckedItemIds()[J": function (this: JListView) { return BigInt64Array.from([...this.checked].map((c) => BigInt(c))); },
-  "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": function (this: JListView) {
-    const sa = rt.make("android/util/SparseBooleanArray");
-    for (const c of this.checked) sa.m.set(c, 1);
+  "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": driven(function* (this: JListView): Gen {
+    const sa = yield newObj("android/util/SparseBooleanArray", "()V");
+    for (const c of this.checked) yield vcall(sa, "put", "(IZ)V", c, 1);
     return sa;
-  },
+  }),
   "pointToPosition(II)I": function (this: JListView, x: number, y: number) { return this.itemIndexAt(y + this.scrollY); },
   "layoutChildren()V": function (this: JListView) { requestLayout(this); },
   "invalidateViews()V": function (this: JListView) { void this.rebuild(); },

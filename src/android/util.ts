@@ -1,6 +1,6 @@
-// android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics and TypedValue.
+// android.util.* natives: Log, Property, DisplayMetrics and TypedValue.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj } from "../jvm/runtime";
 import { intBitsToFloat } from "../jvm/abi";
 import { device } from "../shell/config";
 import { vcall } from "../jvm/natives/jlang";
@@ -35,80 +35,6 @@ rt.register({
     "static println_native(IILjava/lang/String;Ljava/lang/String;)I": (_buffer: number, p: number, tag: string, msg: string) => logAt(p)(tag, msg),
   },
 });
-class JSparseArray extends JObj {
-  m = new Map<number | bigint, unknown>();
-  sorted: (number | bigint)[] | null = null;
-  /** keys in index order (Android keeps them sorted ascending) */
-  keys(): (number | bigint)[] { return this.sorted ??= [...this.m.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0); }
-  set(k: number | bigint, v: unknown) { if (!this.m.has(k)) this.sorted = null; this.m.set(k, v); }
-  del(k: number | bigint) { if (this.m.delete(k)) this.sorted = null; }
-  reset() { this.m.clear(); this.sorted = null; }
-}
-const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/SparseArray", key = "I"): NativeSpec["methods"] => ({
-  "<init>()V": function () {},
-  [`clone()L${cls};`]: function (this: JSparseArray) { const c = new (this.constructor as new () => JSparseArray)(); for (const [k, v] of this.m) c.set(k, v); return c; },
-  "<init>(I)V": function () {},
-  [`get(${key})${valDesc}`]: function (this: JSparseArray, k: number | bigint) { return this.m.get(k) ?? dflt; },
-  [`get(${key}${valDesc})${valDesc}`]: function (this: JSparseArray, k: number | bigint, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
-  [`put(${key}${valDesc})V`]: function (this: JSparseArray, k: number | bigint, v: unknown) { this.set(k, v); },
-  [`append(${key}${valDesc})V`]: function (this: JSparseArray, k: number | bigint, v: unknown) { this.set(k, v); },
-  "size()I": function (this: JSparseArray) { return this.m.size; },
-  [`keyAt(I)${key}`]: function (this: JSparseArray, i: number) { return this.keys()[i]; },
-  [`valueAt(I)${valDesc}`]: function (this: JSparseArray, i: number) { return this.m.get(this.keys()[i]) ?? dflt; },
-  [`delete(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
-  // only the object-valued arrays name remove(key) besides delete(key)
-  ...valDesc === "Ljava/lang/Object;" ? { [`remove(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); } } : {},
-  "removeAt(I)V": function (this: JSparseArray, i: number) { this.del(this.keys()[i]); },
-  "clear()V": function (this: JSparseArray) { this.reset(); },
-  [`indexOfKey(${key})I`]: function (this: JSparseArray, k: number | bigint) { const keys = this.keys(); let lo = 0, hi = keys.length; while (lo < hi) { const mid = (lo + hi) >>> 1; if (keys[mid] < k) lo = mid + 1; else hi = mid; } return keys[lo] === k ? lo : ~lo; },
-  [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return this.keys().findIndex(k => this.m.get(k) === v); },
-});
-rt.register({ name: "android/util/SparseArray", ctor: JSparseArray, methods: sparseMethods("Ljava/lang/Object;", null) });
-rt.register({ name: "android/util/SparseIntArray", ctor: class extends JSparseArray {}, methods: sparseMethods("I", 0, "android/util/SparseIntArray") });
-rt.register({ name: "android/util/SparseBooleanArray", ctor: class extends JSparseArray {}, methods: sparseMethods("Z", 0, "android/util/SparseBooleanArray") });
-rt.register({ name: "android/util/SparseLongArray", ctor: class extends JSparseArray {}, methods: sparseMethods("J", 0n, "android/util/SparseLongArray") });
-rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseArray {},
-  methods: sparseMethods("Ljava/lang/Object;", null, "android/util/LongSparseArray", "J") });
-
-// android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
-// must be absent), 0 terminates either array; both wildcards are answered by the constants.
-const isWild = (s: Int32Array) => s.length === 0 || s[0] === 0;
-export function stateSetMatches(spec: Int32Array | null, set: ArrayLike<number> | null): boolean {
-  if (set === null) return spec === null || isWild(spec);
-  for (let i = 0; i < spec!.length; i++) {
-    let want = spec![i];
-    if (want === 0) return true;
-    const must = want > 0;
-    if (!must) want = -want;
-    let found = false;
-    for (let j = 0; j < set.length; j++) {
-      const st = set[j];
-      if (st === 0) { if (must) return false; break; }
-      if (st === want) { if (!must) return false; found = true; break; }
-    }
-    if (must && !found) return false;
-  }
-  return true;
-}
-rt.register({
-  name: "android/util/StateSet", ctor: class extends JObj {},
-  statics: { WILD_CARD: new Int32Array(0), NOTHING: Int32Array.of(0) },
-  methods: {
-    "static isWildCard([I)Z": (s: Int32Array) => isWild(s) ? 1 : 0,
-    "static stateSetMatches([I[I)Z": (spec: Int32Array, set: Int32Array | null) => stateSetMatches(spec, set) ? 1 : 0,
-    "static stateSetMatches([II)Z": (spec: Int32Array, state: number) => {
-      for (let i = 0; i < spec.length; i++) {
-        const want = spec[i];
-        if (want === 0) return 1;
-        if (want > 0 ? state !== want : state === -want) return 0;
-      }
-      return 1;
-    },
-    "static trimStateSet([II)[I": (s: Int32Array, n: number) => s.length === n ? s : s.slice(0, n),
-    "static dump([I)Ljava/lang/String;": (s: Int32Array) => Array.from(s, (v) => v.toString(16)).join(" "),
-  },
-});
-
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
 export class JProperty extends JObj { type: unknown = null; name = ""; }
