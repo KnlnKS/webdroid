@@ -195,7 +195,7 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     if (acc !== 0) return fail(cpu, E.ISDIR);
     return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
   }
-  if (flags & O_DIRECTORY) return fail(cpu, E.NOTDIR);
+  if (flags & O_DIRECTORY) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
   const existing = vfs.open(path), fifo = existing && fifos.get(existing);
   if (fifo) {
     if (acc !== 0) { fifo.writers++; fifo.closed = false; }
