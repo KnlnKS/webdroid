@@ -1457,6 +1457,16 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     twice. The pixel rule now waits while ATM counts a transition, and a controlled clock runs
     through the pixel rule's sampling window as a real clock does. Text toasts queue as
     NotificationManagerService does and draw through ToastPresenter, as SystemUI's ToastUI does.
+  - The remaining managers SystemServiceRegistry builds (telephony, Wi-Fi, Bluetooth/NFC, camera,
+    device policy, app widgets, media router/metrics, storage stats, health, netstats, NSD,
+    performance hints, adservices, captioning, biometrics callbacks) run from bytecode over hosted
+    services that answer as a device without that hardware or backing package; each commit
+    message records its device evidence. Their unit tests replace TS-spec tests: a TS manager
+    test with null arguments hung once AOSP's MeasurementManager ran (its binder lookup waits),
+    so a test of a deleted spec must go with it. The page's main Looper starts as the zygote
+    before the app's uid is set, and Looper.loop captures its calling-identity token once, so
+    every message logged "Thread identity changed" (a stack trace and an AMS call each); this
+    process's own identity is now one token whatever its uid.
 
 ## Java, storage and framework semantics
 

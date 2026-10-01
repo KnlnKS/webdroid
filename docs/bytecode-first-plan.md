@@ -588,7 +588,133 @@ Stage B or C, the newer ones supersede them. Each commit message states what it 
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings.
 
-### Latest handoff (2026-10-02): Stage D in progress, start here
+### Latest handoff (2026-10-03): Stage D in progress, start here
+
+Branch `knlnks/bytecode` (not pushed). Every commit on it passed typecheck, `bun run test`, the
+FitNotes smoke and the default fast e2e when it landed. Findings and failure mechanisms are in
+implementation-history.md: the 2026-10-02 PackageManager/Intent/Settings entries and the two
+2026-10-03 Stage D entries ("Stage D boots apps"; "providers, WebView, the IME and the harness").
+The architecture is in the previous handoff, below. No worktree agents are running; the
+`webdroid-stage-e1` / `webdroid-e1-base` worktrees belong to a separate Stage E1 session; leave them
+alone. `../webdroid-gate` is a scratch baseline checkout (detached at dc214e2b, server port 4312).
+
+**State.** Default mode: fast e2e 7/7 with no reported gaps; `--live` passes everything except resy
+and, intermittently, youtube/tiktok. Both fail on live content the same way on the baseline
+(compare one flow at a time; parallel live runs wedge under load). Komikku's `16 populated-library` and the
+browser-fixture unit tests time out only under heavy parallel load. Under `?bytecode=stage-d`
+(`WEBDROID_BYTECODE=stage-d bun run e2e`): FitNotes (all 39 steps), CalculatorM, FlappyBird and
+DoodleJump pass; Mihon (both flows) and Komikku do not (below). D-mode launch costs about 1.1× TS
+mode (FitNotes launch step 2.7 s vs 2.4 s; 2,864 vs 2,083 classes compiled). The latency gate has
+not been run in D-mode.
+
+**What Stage D runs now** (beyond the previous handoff's core):
+- **App components** (`server/am.ts`, `atm.ts`, `activeservices.ts`, `broadcastqueue.ts`):
+  - `startActivityThread` replays ActivityThread.main, without prepareMainLooper/loop (the main
+    looper already runs from zygoteInit): AndroidOs, Environment, mainline modules, sMainThreadHandler.
+  - Activities: start, finish, results (local, cross-process through the broker, and from the
+    platform package's browser-backed pickers/share/VIEW), navigateUpTo, finishActivityAffinity,
+    configuration changes, orientation requests and the broker's visibility phases.
+  - Configuration changes: ConfigurationChangeItem to the process; then each activity gets either
+    ActivityConfigurationChangeItem or ActivityRelaunchItem by its configChanges, the hidden ones
+    when they next resume; then each window gets `IWindow.resized`. Rotation, night mode and
+    locales feed it through device.ts `applyConfigChange`.
+  - Services and broadcasts go through ActivityThread's schedule* calls. Providers across
+    processes go through the broker. PendingIntents are dispatched.
+- **Windows and input** (`server/wm.ts`, `inputchannel.ts`, `server/imm.ts`):
+  - Windows stack by activity token, with the base window below that token's dialogs.
+  - Focus, touch and back key routing.
+  - The browser keyboard serves as the IME through IInputMethodSession/IRemoteInputConnection,
+    with ime insets visibility.
+  - Toasts go through NotificationManagerService's queue and SystemUI's ToastPresenter.
+- **Rendering** (`surfaceflinger.ts`, `hwui.ts`, `texturelayer.ts`, `webfunctor.ts`):
+  - SurfaceView, TextureView and GL surfaces are composed as layers.
+  - WebView runs over a TS WebViewProvider in both modes; its frame position comes from the
+    draw functor.
+  - PixelCopy is supported.
+  - Transaction completion carries a signalled present fence.
+  - Frame telemetry: a frame runs from the main looper's vsync to hwui's draw.
+- **Platform services**: nearly every manager SystemServiceRegistry builds now runs from bytecode
+  over a hosted AIDL service, whose answers are a device without that hardware or package
+  (where a TS spec under a bytecode caller would break with `unsafe-fallthrough <init>`):
+  - telephony, Wi-Fi, Bluetooth/NFC, camera (cameraserver disabled), audio, storage, sensors,
+    haptics
+  - device policy, app widgets, media router/metrics, storage stats/health
+  - netstats/NSD, performance hints, adservices, captioning, uri grants, permission checker,
+    sensitive content protection, voice interaction/content capture/text classification/network
+    management.
+  The provenance stage-D set also covers `android/opengl/GLSurfaceView` and `android/gesture/`.
+- **Harness** (`tests/e2e/lib/probe.ts`, `shell/uiautomator.ts`, `src/main.ts`):
+  - `wd.uiTree`/`locateText` dump windows in Z order from AccessibilityNodeInfos.
+  - `wd.pendingTransitions` counts ATM starts and finishes in flight; the pixel rule waits on it.
+  - A controlled clock runs through the pixel rule's sampling window.
+  - `wd.tap` holds for 60 guest ms.
+
+**Next, in order:**
+1. **Mihon in D-mode composes black.** Both Mihon flows reach their semantic checkpoints (the
+   accessibility tree is right), but every visual capture is 100% black
+   (`tests/e2e/actual-fast/mihon-*/…png`). FitNotes and CalculatorM capture fine. Suspects: a
+   Compose/edge-to-edge window property (translucent or non-opaque surface, `setDecorFitsSystemWindows`,
+   a hardware layer or RenderEffect on the root, a SurfaceControl reparented or hidden by a sync
+   transaction). Inspect the layer tree in `surfaceflinger.ts` (`roots`, `drawTree`) while Mihon is
+   up, and compare `wd.dshot()`/`#screen` with `scratch-d.ts SCREEN=1`.
+2. **Komikku in D-mode times out** at `03 select-storage` (the storage picker step) and
+   `16 populated-library`. The picker result already reaches the app (system activities and
+   IUriGrantsManager work). Find which wait never settles with `--full --shots`.
+3. **`graphicsstats` is not hosted.** Every D-mode flow reports it (from ThreadedRenderer /
+   GraphicsStatsService).
+4. **Run the wider D-mode matrix**: `--live`, `--full --jobs 1` and `bun run corpus` with
+   `WEBDROID_BYTECODE=stage-d`. Bring each flow to its previous depth.
+5. **Lifecycle differential (§5.3).** ActivityThread writes `wm_on_*_called` EventLog tags in
+   D-mode (they reach the page log as `[I/EventLog] <tag> [...]`). Compare them per flow with
+   `adb logcat -b events` from the reference AVD.
+6. **Latency gate in D-mode**: `bun run lat` and `lat --warm`, with no agents loading the host.
+   Then the D-mode performance pass: D-mode compiles about 40% more classes at launch, so look at
+   §4's AOT/boot-image work for the stage-D prefixes.
+7. **Flip the default to stage-d, then Stage F**: delete the TS view, widget, app, policy, webkit
+   and manager stacks that D-mode no longer reaches (`provideripc.ts` is TS-mode only), and the TS
+   paths in device.ts, processes.ts, apphost.ts and the harness's `wd.app().stack` uses.
+
+**Known limits in D-mode:**
+- **Activities:** single task per process; no recents; startActivityForResult between apps relies
+  on the broker; the resolver/chooser activity is browser-backed. Service timeouts, START_STICKY
+  restarts and app-sent sticky broadcasts are missing.
+- **IME:** zero-height insets (the browser keyboard sits outside the canvas, so adjustResize never
+  shrinks); back with the keyboard shown reaches the app; no auto-show for SOFT_INPUT_STATE_VISIBLE;
+  no hardware keys beyond Enter.
+- **WebView:** clipped by shrinking the iframe; no Safe Browsing or saveState; touch reaches the
+  iframe directly.
+- **Audio devices and ports** are not modelled.
+
+**How to work here:**
+- **Commits:** one focused `area: sentence` commit per unit, gated first; never push.
+- **Worktree agents:** parallelise disjoint units with worktree agents. A fresh worktree may start
+  at an old commit: `git reset --hard knlnks/bytecode` while it is clean, and symlink `apks`,
+  `node_modules`, `vendor/aosp`, `vendor/microg` and `vendor/sql.js/dist`. Give each agent its own
+  server port. Merge by cherry-pick, re-gate, then remove the worktree and branch.
+- **Never** `pkill -f server.ts` or `pkill -f e2e`: other sessions' servers and runs share the host.
+- **Gate:** `bun run typecheck`; `bun run test`; `bun run smoke apks/FitNotes.apk`;
+  `PORT=4311 bun run server.ts`; then `WEBDROID_URL=http://localhost:4311 bun run e2e` with and
+  without `WEBDROID_BYTECODE=stage-d`.
+- **Debugging D-mode:**
+  - `bun scratch-d.ts '<page expr>'` (repo root, uncommitted) drives `?bytecode=stage-d`. Env:
+    `URL`, `T`/`WAIT`, `LEN`, `ALL=1` for the full console, `SCREEN=1` for a `#screen` PNG in
+    the scratchpad.
+  - `wd.looperDump()` shows the looper state.
+  - e2e `run.json` has `browserErrors`: every page console.error in order, not de-duplicated
+    the way `newErrors` is. Temporary `console.error` probes show up there.
+  - `--full --shots <dir>` saves every presented frame per step.
+- **AOSP evidence:** `bun run dis vendor/aosp/framework.jar <class> [method]`. Server-side classes
+  (services.jar) are not vendored; pull them from the reference AVD with
+  `adb pull /system/framework/services.jar`.
+- **Gotchas:**
+  - Under Stage D, ATM must not hold a client's synchronous binder call while it waits for that
+    client's main-looper work.
+  - Static Java methods on Stub classes go through `scall`.
+  - A TS view or manager spec under a bytecode caller fails with `unsafe-fallthrough`. Move it to
+    bytecode, or behind AOSP's extension point.
+  - `rt.markers` classes shadow bytecode.
+
+### Previous handoff (2026-10-02): Stage D architecture
 
 **Done and the default** (each commit message records its gates):
 - **Looper** (`mainloop.ts`): AOSP's Looper, MessageQueue, Handler, Message, HandlerThread,
@@ -631,30 +757,10 @@ Activity, PhoneWindow, ViewRootImpl and widgets run unchanged over TS system ser
   queue, and keeps render-thread animators drawing on vsync. This is the hardware path on purpose:
   unchanged views keep their display lists, so a frame re-runs no Java onDraw for them.
 - `inputchannel.ts`: channel pairs, receivers on their looper, focus events. `server/imm.ts`:
-  IInputMethodManager as a device with no IME (the browser keyboard IME is still to build).
+  IInputMethodManager, with the browser keyboard as the input method (see the latest handoff).
 - `shell/uiautomator.ts`: the harness's tree from AccessibilityNodeInfos (uiautomator's view).
 - Verified: an AOSP TextView window added through WindowManagerGlobal from `systemMain()`'s
   context lays out, draws and dumps (`[0,0,1080,2088]` above the 72 px gesture inset).
-
-**Landed since** (2026-10-03; findings in the history's "Stage D boots apps" entry): PackageManager,
-notifications, input events, Intent and Settings on bytecode; AudioManager, Environment/StorageManager,
-SensorManager and haptics over hosted services; services, broadcasts and PendingIntents through
-ActivityThread (`server/activeservices.ts`, `server/broadcastqueue.ts`) and the broker; SurfaceView,
-TextureView and GL surfaces as layers (`texturelayer.ts`); windows ordered by activity token; PixelCopy;
-navigateUpTo; the platform package's picker/share/browser activities; `startActivityThread` replays
-ActivityThread.main. Under `?bytecode=stage-d`, FitNotes runs to its first text entry, CalculatorM
-matches its golden, DoodleJump plays; default mode stays 7/7.
-
-**In flight on worktree agents:** the browser IME behind IInputMethodManager (FitNotes' next step);
-cross-process content providers (microG's settings cursor fails in every D-mode flow); WebView over
-a TS WebViewProvider (FlappyBird's AdMob); the remaining TS managers SystemServiceRegistry builds
-(TelephonyManager blocks Mihon and Komikku).
-
-**Next:** run the D-mode matrix (`WEBDROID_BYTECODE=stage-d bun run e2e`, then `--live` and corpus)
-to each flow's previous depth; cross-process activity results and the broker's `visible` phase;
-config changes and rotation; `media.ts` on `windowSurface`; the lifecycle trace differential and
-latency gate in D-mode; then flip the default and delete the TS view, widget, app and policy stacks
-(Stage F for these prefixes).
 
 ### Latest handoff (2026-10-01, night): Stage C is complete, history
 
