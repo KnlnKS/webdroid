@@ -10,7 +10,7 @@ import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
 import { csText } from "../jvm/natives/jchars";
 
 const enum V { NULL = -1, STRING = 0, INTEGER = 1, MAP = 2, BUNDLE = 3, PARCELABLE = 4, SHORT = 5, LONG = 6, FLOAT = 7, DOUBLE = 8, BOOLEAN = 9,
-  CHARSEQUENCE = 10, LIST = 11, BYTEARRAY = 13, STRINGARRAY = 14, IBINDER = 15, PARCELABLEARRAY = 16, OBJECTARRAY = 17, INTARRAY = 18, LONGARRAY = 19,
+  CHARSEQUENCE = 10, LIST = 11, SPARSEARRAY = 12, BYTEARRAY = 13, STRINGARRAY = 14, IBINDER = 15, PARCELABLEARRAY = 16, OBJECTARRAY = 17, INTARRAY = 18, LONGARRAY = 19,
   BYTE = 20, SERIALIZABLE = 21, BOOLEANARRAY = 23, DOUBLEARRAY = 28, CHAR = 29, SHORTARRAY = 30, CHARARRAY = 31, FLOATARRAY = 32 }
 const BNDL = 0x4c444e42;
 const P = "Landroid/os/Parcel;";
@@ -251,6 +251,21 @@ async function readMap(p: JParcel, loader: unknown) {
   for (let i = 0; i < n; i++) await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", await readValue(p, loader), await readValue(p, loader));
   return m;
 }
+async function writeSparseArray(p: JParcel, a: unknown) {
+  const n: number = await vcall(a, "size", "()I");
+  writeInt(p, n);
+  for (let i = 0; i < n; i++) {
+    writeInt(p, await vcall(a, "keyAt", "(I)I", i));
+    await writeValue(p, await vcall(a, "valueAt", "(I)Ljava/lang/Object;", i));
+  }
+}
+async function readSparseArray(p: JParcel, loader: unknown) {
+  const n = readInt(p);
+  if (n < 0) return null;
+  const a = await newObj("android/util/SparseArray", "(I)V", n);
+  for (let i = 0; i < n; i++) await vcall(a, "append", "(ILjava/lang/Object;)V", readInt(p), await readValue(p, loader));
+  return a;
+}
 const writePrimArray = (p: JParcel, a: ArrayLike<number | bigint> | null, one: (v: never) => void) => {
   if (!a) return writeInt(p, -1);
   writeInt(p, a.length);
@@ -301,6 +316,7 @@ async function writeValue(p: JParcel, v: unknown) {
   if (v instanceof JBundle) { tag(V.BUNDLE); return writeBundle(p, v); }
   if (rt.iof(v, "android/os/Parcelable")) { tag(V.PARCELABLE); return writeParcelable(p, v as JObj, 0); }
   if (rt.iof(v, "java/util/Map")) { tag(V.MAP); return writeMap(p, v); }
+  if (rt.iof(v, "android/util/SparseArray")) { tag(V.SPARSEARRAY); return writeSparseArray(p, v); }
   if (rt.iof(v, "java/util/List")) { tag(V.LIST); return writeList(p, v); }
   if (rt.iof(v, "java/lang/CharSequence")) { tag(V.CHARSEQUENCE); return writeString(p, await csText(v)); }
   if (rt.iof(v, "android/os/IBinder")) { tag(V.IBINDER); return writeObject(p, v); }
@@ -332,6 +348,7 @@ async function readValue(p: JParcel, loader: unknown): Promise<unknown> {
     case V.BUNDLE: return readBundle(p, loader);
     case V.PARCELABLE: return readParcelable(p, loader);
     case V.MAP: return readMap(p, loader);
+    case V.SPARSEARRAY: return readSparseArray(p, loader);
     case V.LIST: return readList(p, loader);
     case V.IBINDER: return readObject(p);
     case V.SERIALIZABLE: return readSerializable(p);
