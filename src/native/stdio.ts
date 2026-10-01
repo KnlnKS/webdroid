@@ -1168,7 +1168,7 @@ export function stdioInit(): void {
     // malloc'd dirent, sorted by the guest's comparator (over dirent**) into a malloc'd array
     scandir: async (cpu, a) => {
       const path = vfs.norm(a.str()), out = a.p(), filter = a.p(), compar = a.p();
-      if (!vfs.isDir(path)) return fail(cpu, E.NOTDIR);
+      if (!vfs.isDir(path)) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
       const kept: number[] = [];
       for (const name of [".", "..", ...vfs.list(path)]) {
         const de = mem.malloc(LAYOUT.DIRENT_SIZE);
