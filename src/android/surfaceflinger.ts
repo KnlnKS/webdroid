@@ -8,6 +8,7 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { canvasOf } from "./canvas";
 import { perf } from "../perf";
+import { uptimeMillis } from "../guest-clock";
 
 // SurfaceControl.Builder's creation flags
 const HIDDEN = 0x4, OPAQUE = 0x400, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
@@ -193,9 +194,26 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeAddTransactionCommittedListener(JLandroid/view/SurfaceControl$TransactionCommittedListener;)V": (t: bigint, listener: JObj) => {
     tx(t).ops.push(() => queueMicrotask(() => void vcall(listener, "onTransactionCommitted", "()V")));
   },
+  // composition is synchronous, so the present fence has signaled by the time the stats arrive
   "nativeAddTransactionCompletedListener(JLjava/util/function/Consumer;)V": (t: bigint, consumer: JObj) => {
-    tx(t).ops.push(() => queueMicrotask(() => void vcall(consumer, "accept", "(Ljava/lang/Object;)V", null)));
+    tx(t).ops.push(() => queueMicrotask(async () => {
+      const now = BigInt(Math.round(uptimeMillis() * 1e6));
+      const stats = await newObj("android/view/SurfaceControl$TransactionStats", "(JJ)V", now, handle({ signaled: now, refs: 1 }));
+      await vcall(consumer, "accept", "(Ljava/lang/Object;)V", stats);
+    }));
   },
+});
+
+// SyncFence over a fence that has signaled: a reference count and its signal time
+interface Fence { signaled: bigint; refs: number }
+const fence = (h: bigint) => deref<Fence>(h);
+const FENCE_RELEASE = handle((h: bigint) => { if (--fence(h).refs === 0) release(h); });
+rt.registerJnis("android/hardware/SyncFence", {
+  "nGetDestructor()J": () => FENCE_RELEASE,
+  "nIncRef(J)V": (h: bigint) => { fence(h).refs++; },
+  "nIsValid(J)Z": (h: bigint) => +!!h,
+  "nWait(JJ)Z": () => 1,
+  "nGetSignalTime(J)J": (h: bigint) => fence(h).signaled,
 });
 
 // ── BLASTBufferQueue and Surface: a window's buffers
