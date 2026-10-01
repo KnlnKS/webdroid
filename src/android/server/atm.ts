@@ -10,7 +10,7 @@ import { configurations } from "./wm";
 import { hostedService } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
-import { activityTransport } from "../intent";
+import { activityTransport, intentQuery, systemActivity, SYSTEM_ACTIVITY, type SystemHandler } from "../intent";
 import { field } from "../pm";
 import { thisApp, userLaunched } from "./am";
 
@@ -112,6 +112,9 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
   const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
     intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
   const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
+  const q = await intentQuery(intent), system = systemActivity(q, false) ??
+    (info && field<string>(info, AI, "packageName") === "android" && field<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
+  if (system) { void runSystemActivity(system, intent, byToken(resultTo), resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
   if (!info) return START_INTENT_NOT_RESOLVED;
   const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
@@ -122,6 +125,17 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
   else if (activityTransport.launch) await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy);
   else return START_INTENT_NOT_RESOLVED;
   return START_SUCCESS;
+}
+const RESULT_OK = -1;
+/** an activity the platform package answers over the browser (DocumentsUI's pickers, share, the
+ *  browser): it covers its caller, which resumes with any result it asked for */
+async function runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Promise<void> {
+  const caller = resultTo ?? stack.at(-1);
+  let data: JObj | null = null;
+  try { data = await run(intent); } catch (error) { reportUncaught(error); }
+  if (resultTo && requestCode >= 0)
+    resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data));
+  if (caller && stack.at(-1) === caller) { await pause(caller); await resume(caller); }
 }
 /** the broker's launch of one of this process's activities for another process */
 export async function startActivityInProcess(component: string, intent: JObj, remoteId: number): Promise<void> {

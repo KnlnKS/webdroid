@@ -105,7 +105,7 @@ const RESULT_OK = -1, RESULT_CANCELED = 0;
  * DocumentsUI; here they are the browser's own pickers. Each answers with the result Intent, or
  * null for "the user backed out" — which is RESULT_CANCELED, not an error.
  */
-type SystemHandler = (intent: JIntent) => Promise<JIntent | null>;
+export type SystemHandler = (intent: JIntent) => Promise<JIntent | null>;
 const systemActivities = new Map<string, { run: SystemHandler; schemes?: string[] }[]>();
 /** `schemes` scopes a handler to intents whose data has one of them; such a handler yields to
  *  any installed activity that matches, as a default browser does to an app's own links. */
