@@ -49,8 +49,6 @@ const THREAD_DETACHED = 3;
 const TCB_SIZE = 80, TP = 16, SLOT_DTV = 0, SLOT_THREAD = 8, SLOT_GUARD = 0x28, SLOT_BIONIC_TLS = -8, BIONIC_TLS_SIZE = 0x3000;
 
 let globals = 0, tlsSize = 0, bionicTls = 0, zeroDtv = 0, stackGuard = 0n;
-/** threads attach() made: their static TLS blocks, which hold their bionic_tcb */
-const hostThreads = new Map<Cpu, number>();
 const staticModules: Module[] = [];
 
 /** The linker's work before any guest instruction runs: map the libraries, lay out static TLS,
@@ -91,16 +89,18 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   stackGuard = BigInt.asUintN(64, mem.ld64(auxv().find(([type]) => type === 25)![1]));
   // libc's own initializer adds the thread running it to the thread list as the process's first
   attach(cpu);
-  // pthread_exit's teardown, but for the stack, which the Cpu owns
-  setThreadHooks(async (c) => { attach(c); await c.call(add, [c.pthreadSelf]); }, async (c) => {
-    const block = hostThreads.get(c);
-    if (!block) return;
-    hostThreads.delete(c);
-    await c.call(finalize, [], "thread_local destructors");
-    await c.call(keyCleanAll, [], "key destructors");
-    await c.call(freeDynamicTls, [block]);
-    await c.call(remove, [c.pthreadSelf]);
-    mem.free(c.pthreadSelf); mem.free(block);
+  setThreadHooks({
+    start: async (c) => { attach(c); await c.call(add, [c.pthreadSelf]); },
+    // pthread_exit's teardown, but for the stack, which the Cpu owns; the static TLS block starts
+    // with the bionic_tcb, TP below the thread pointer
+    end: async (c) => {
+      const block = c.tlsBase - TP;
+      await c.call(finalize, [], "thread_local destructors");
+      await c.call(keyCleanAll, [], "key destructors");
+      await c.call(freeDynamicTls, [block]);
+      await c.call(remove, [c.pthreadSelf]);
+      mem.free(c.pthreadSelf); mem.free(block);
+    },
   });
   linkerHooks.linked = (mod, c) => cfiAdd([mod], c);
   // abort_msg_t {size, msg[]}, which android_set_abort_message maps for the crash reporter
@@ -186,7 +186,6 @@ function attach(cpu: Cpu): void {
   mem.st64(thread + T_STACK_TOP, BigInt(cpu.stackTop));
   stp(thread + T_BIONIC_TLS, block + bionicTls);
   cpu.bindThread(tp, thread, thread + T_ERRNO);
-  hostThreads.set(cpu, block);
 }
 
 function writeGlobals(): void {

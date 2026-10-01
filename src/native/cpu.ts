@@ -420,13 +420,14 @@ export class Cpu {
   }
   /** CLONE_CHILD_CLEARTID's word, cleared and woken when the thread exits */
   clearChildTid = 0n;
-  /** whether the guest libc knows this thread (bionic: its TCB and pthread_internal_t exist) */
-  attached = false;
-  /** the thread as the guest libc lays it out: TPIDR, pthread_self() and errno's address */
+  /** who made this thread known to a guest libc (bionic): no one yet, the host (threadHooks, for
+   *  a Java thread entering native code) or the guest itself (clone) */
+  libc: "none" | "host" | "guest" = "none";
+  /** the host's binding of this thread to the guest libc: TPIDR, pthread_self() and errno's address */
   bindThread(tp: number, self: number, errno: number): void {
     this.tlsBase = tp; this.pthreadSelf = self;
     this.errnoAddr = errno; this.u32[OFF_ERRNO >> 2] = errno;
-    this.attached = true;
+    this.libc = "host";
   }
 
   ensureStack(): void {
@@ -525,11 +526,11 @@ export class Cpu {
   retD(): number { return bitsd(retPair(this.retFp0, this.retFp1)); }
 
   /** the guest libc's teardown of this thread, once its Java thread has ended */
-  endThread(): Promise<void> { return threadEndHook?.(this) ?? Promise.resolve(); }
+  endThread(): Promise<void> { return this.libc === "host" && threadHooks ? threadHooks.end(this) : Promise.resolve(); }
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
   async run(): Promise<void> {
-    if (!this.attached && threadHook) { this.attached = true; await threadHook(this); }
+    if (this.libc === "none" && threadHooks) await threadHooks.start(this);
     this.loops++;
     try { await this.loop(); } finally { this.loops--; }
   }
@@ -750,10 +751,10 @@ export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRe
 const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
 /** makes a Cpu the host created known to the guest libc before its first guest instruction */
-type ThreadHook = (cpu: Cpu) => Promise<void>;
-let threadHook: ThreadHook | null = null, threadEndHook: ThreadHook | null = null;
-/** the guest libc's state for a thread the host created: made at its first run(), torn down when its Java thread ends */
-export function setThreadHooks(start: ThreadHook, end: ThreadHook): void { threadHook = start; threadEndHook = end; }
+/** the guest libc's state for a thread the host created: `start` binds it (bindThread) before its
+ *  first instruction, `end` tears it down when its Java thread ends */
+let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void> } | null = null;
+export function setThreadHooks(hooks: NonNullable<typeof threadHooks>): void { threadHooks = hooks; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();
 
