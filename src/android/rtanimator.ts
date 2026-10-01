@@ -4,11 +4,8 @@
 // PropertyValuesAnimatorSet whose property holders write a VectorDrawable tree. Each follows
 // BaseRenderNodeAnimator: requests staged from Java resolve on the next frame, which animates at
 // the frame's time and reports a finish to the Java listener.
-//
-// The TS view stack has no RenderNodes, so a window's RecordingCanvas stands on one root node an
-// attached AnimationHost owns (windowRoot): what AOSP's animators target and check is attached.
 
-import { rt, JObj, declaredField } from "../jvm/runtime";
+import { rt } from "../jvm/runtime";
 import { scall } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { type NativePaint } from "./paint";
@@ -235,25 +232,6 @@ rt.registerJnis("android/graphics/animation/RenderNodeAnimator", {
   "nStart(J)V": (h: bigint) => nodeAnimator(h).request(START, RUNNING),
   "nEnd(J)V": (h: bigint) => nodeAnimator(h).request(END, FINISHED),
 });
-
-// ── The window's root node and its AnimationHost: attached while the window draws
-const HOST = "android/graphics/RenderNode$AnimationHost";
-rt.register({ name: "webdroid/WindowAnimationHost", ctor: class extends JObj {}, ifaces: [HOST], methods: {
-  "isAttached()Z": () => 1,
-  // these animators run from the frame loop once started, wherever they were registered
-  "registerAnimatingRenderNode(Landroid/graphics/RenderNode;Landroid/animation/Animator;)V": () => {},
-  "registerVectorDrawableAnimator(Landroid/view/NativeVectorDrawableAnimator;)V": () => {},
-} });
-let root: JObj | null = null;
-/** the RenderNode a window's RecordingCanvas records for, made as RenderNode.create(name, host)
- *  would make it but without a constructor, so it never suspends */
-export function windowRoot(): JObj {
-  if (root) return root;
-  const n = root = rt.make("android/graphics/RenderNode") as JObj & Record<string, unknown>;
-  n[declaredField("android/graphics/RenderNode", "mNativeRenderNode")] = handle(new NativeRenderNode("window"));
-  n[declaredField("android/graphics/RenderNode", "mAnimationHost")] = rt.make("webdroid/WindowAnimationHost");
-  return n;
-}
 
 // ── PropertyValuesHolder.cpp
 type Evaluator = (from: number, to: number, f: number) => number;

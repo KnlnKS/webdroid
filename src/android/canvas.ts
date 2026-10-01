@@ -13,7 +13,7 @@ import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { windowRoot } from "./rtanimator";
+import { windowRoot } from "./rendernode";
 import { type JRect, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
 import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 

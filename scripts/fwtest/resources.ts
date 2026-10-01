@@ -7,7 +7,8 @@ import { Resources } from "../../src/android/res";
 import { PackageRecord, packages } from "../../src/android/packages";
 import { parseAXML } from "../../src/android/axml";
 import { installFramework } from "../../src/android/framework";
-import { animateRenderThread, windowRoot } from "../../src/android/rtanimator";
+import { animateRenderThread } from "../../src/android/rtanimator";
+import { windowRoot } from "../../src/android/rendernode";
 import { openInstall } from "../../src/shell/install";
 import { exercise, same, vectorProbeLines } from "./harness";
 
