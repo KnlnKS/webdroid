@@ -27,8 +27,8 @@ const DEFAULT_FLAGS = 0x503;
 /** nSetElegantTextHeight's value for elegant metrics: Paint passes 0 for true, 1 for false and -1
  *  (unset, the default under the compat change) for neither */
 const ELEGANT = 0;
-const CAPS: readonly CanvasLineCap[] = ["butt", "round", "square"];
-const JOINS: readonly CanvasLineJoin[] = ["miter", "round", "bevel"];
+export const CAPS: readonly CanvasLineCap[] = ["butt", "round", "square"];
+export const JOINS: readonly CanvasLineJoin[] = ["miter", "round", "bevel"];
 
 /** hwui's Paint. The Java side keeps its own copies of the objects it was given (mShader,
  *  mTypeface, mColor as a ColorLong, the shadow layer); this is what a draw and a measure read. */

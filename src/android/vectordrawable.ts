@@ -8,11 +8,11 @@ import { deref, ownedHandle, release, weakHandle } from "./handles";
 import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp } from "./graphics";
 import type { NativeCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
+import { CAPS, JOINS } from "./paint";
 import { NativePath, PathMeasure } from "./path";
 import { PathData, parsePathData, verbsToPath } from "./pathparser";
 
 type Ctx = OffscreenCanvasRenderingContext2D;
-const CAPS: CanvasLineCap[] = ["butt", "round", "square"], JOINS: CanvasLineJoin[] = ["miter", "round", "bevel"];
 /** hwui's applyAlpha: the colour's alpha byte scaled, truncated as SkColorSetA takes it */
 const applyAlpha = (color: number, alpha: number) => ((((color >>> 24) * alpha) & 255) << 24 | (color & 0xffffff)) | 0;
 
@@ -134,7 +134,7 @@ export class FullPath extends VPath {
   /** a gradient paints black at the path's alpha through its shader; a colour at its own alpha */
   private style(ctx: Ctx, shader: NativeShader | null, color: number, alpha: number): string | CanvasGradient | CanvasPattern {
     if (shader) {
-      const style = shader.deferredPattern()?.(ctx) ?? shader.pattern(ctx);
+      const style = shader.pattern(ctx);
       if (style) { ctx.globalAlpha = ((255 * alpha) & 255) / 255; return style; }
     }
     ctx.globalAlpha = 1;
