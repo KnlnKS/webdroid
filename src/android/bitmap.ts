@@ -314,7 +314,7 @@ function toSrgb(space: NativeColorSpace, rgb: number[]): number[] {
   });
 }
 /** a ColorLong (android.graphics.Color's packing) as an ARGB int in sRGB */
-export function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
+function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
   if (!(color & 0x3fn)) return Number(BigInt.asUintN(32, color >> 32n)) | 0;
   const half = (s: bigint) => fromHalf(Number((color >> s) & 0xffffn));
   const [r, g, b] = toSrgb(space ?? { transfer: SRGB_TF, xyz: Float32Array.from(SRGB_D50) }, [half(48n), half(32n), half(16n)]);
@@ -322,6 +322,8 @@ export function colorLongArgb(color: bigint, space: NativeColorSpace | null): nu
   const byte = (v: number) => Math.round(v * 255);
   return (byte(a) << 24 | byte(r) << 16 | byte(g) << 8 | byte(b)) | 0;
 }
+/** a ColorLong in the colour space a ColorSpace.Rgb.Native handle names (0 for sRGB), as sRGB ARGB */
+export const colorLongAt = (color: bigint, cs: bigint) => colorLongArgb(color, cs ? deref<NativeColorSpace>(cs) : null);
 const COLOR_SPACE = "android/graphics/ColorSpace";
 const namedSpace = (index: number) => scall(COLOR_SPACE, "get", "(I)Landroid/graphics/ColorSpace;", index);
 /** GraphicsJNI::getColorSpace: a named space where the pixels' space is one, else the match or an "Unknown" Rgb */
@@ -414,7 +416,7 @@ rt.registerJnis(BITMAP, {
     return 1;
   }),
   "nativeErase(JI)V": (h: bigint, c: number) => erase(bmp(h), c),
-  "nativeErase(JJJ)V": (h: bigint, cs: bigint, color: bigint) => erase(bmp(h), colorLongArgb(color, cs ? deref<NativeColorSpace>(cs) : null)),
+  "nativeErase(JJJ)V": (h: bigint, cs: bigint, color: bigint) => erase(bmp(h), colorLongAt(color, cs)),
   "nativeRowBytes(J)I": (h: bigint) => bmp(h).rowBytes,
   "nativeConfig(J)I": (h: bigint) => bmp(h).config,
   "nativeGetPixel(JII)I": (h: bigint, x: number, y: number) => { const b = bmp(h); return argbAt(b.pixels(), (y * b.w + x) * 4); },

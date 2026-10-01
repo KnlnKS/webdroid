@@ -11,7 +11,7 @@ import { device } from "../shell/config";
 import { perf } from "../perf";
 import { type FaceMetrics, type NativeTypeface, type FakedFont, SYSTEM_FONT, resolveDefault, FAKE_BOLD } from "./fonts";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
-import { NativeBitmap, ALPHA_8, PREMUL, colorLongArgb, type NativeColorSpace } from "./bitmap";
+import { NativeBitmap, ALPHA_8, PREMUL, colorLongAt } from "./bitmap";
 import { NativePath, PathMeasure, VerbIterator, walkPath } from "./path";
 import { shapeTextRun, layoutOutlines, hasGlyph } from "./shaping";
 import { strokeCommands } from "./skia-text";
@@ -769,8 +769,6 @@ function textPath(p: NativePaint, bidi: number, text: string, x: number, y: numb
   return after(shapeTextRun(text, 0, text.length, 0, text.length, isRtl(bidi, text), p), (layout) =>
     layoutOutlines(layout, p, x - (p.textAlignN === 1 ? layout.advance / 2 : p.textAlignN === 2 ? layout.advance : 0), y, dst));
 }
-/** SkColor4f through the colour space a ColorLong names, as sRGB ARGB */
-const colorOf = (cs: bigint, c: bigint) => colorLongArgb(c, cs ? deref<NativeColorSpace>(cs) : null);
 rt.registerJnis(PAINT, {
   "nInit()J": () => handle(new NativePaint()),
   "nInitWithPaint(J)J": (h: bigint) => { const p = new NativePaint(); copyPaint(paintAt(h), p); return handle(p); },
@@ -780,7 +778,7 @@ rt.registerJnis(PAINT, {
   "nSet(JJ)V": (h: bigint, src: bigint) => copyPaint(paintAt(src), paintAt(h)),
 
   "nSetColor(JI)V": (h: bigint, c: number) => { paintAt(h).color = c; },
-  "nSetColor(JJJ)V": (h: bigint, cs: bigint, c: bigint) => { paintAt(h).color = colorOf(cs, c); },
+  "nSetColor(JJJ)V": (h: bigint, cs: bigint, c: bigint) => { paintAt(h).color = colorLongAt(c, cs); },
   "nSetAlpha(JI)V": (h: bigint, a: number) => paintAt(h).setAlpha(a),
   "nSetStyle(JI)V": (h: bigint, v: number) => { paintAt(h).style = v; },
   "nGetStyle(J)I": (h: bigint) => paintAt(h).style,
@@ -817,7 +815,7 @@ rt.registerJnis(PAINT, {
   // a BlurDrawLooper: any positive radius, whatever the colour
   "nSetShadowLayer(JFFFJJ)V": (h: bigint, radius: number, dx: number, dy: number, cs: bigint, color: bigint) => {
     const p = paintAt(h);
-    if (radius > 0) { p.shadowRadius = radius; p.shadowDx = dx; p.shadowDy = dy; p.shadowColor = colorOf(cs, color); }
+    if (radius > 0) { p.shadowRadius = radius; p.shadowDx = dx; p.shadowDy = dy; p.shadowColor = colorLongAt(color, cs); }
     else p.shadowRadius = p.shadowDx = p.shadowDy = p.shadowColor = 0;
   },
   "nHasShadowLayer(J)Z": (h: bigint) => +(paintAt(h).shadowRadius > 0),
