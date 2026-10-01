@@ -1,7 +1,7 @@
 import { JContextWrapper, JContextThemeWrapper, attributionSource, systemService, wrapperMethods, themeWrapperMethods, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
-  type JIntent, activityTransport, launchIntent, mkComponentName, newIntent,
+  type JIntent, activityTransport, launchIntent, mkComponentName, newIntent, putExtra, registerSystemActivity,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -557,6 +557,16 @@ const currentApplication = () => appHost?.application ?? null;
 const intCoreSetting = (_k: string, def: number) => def;
 class JActivityThread extends JObj {}
 let activityThread: JActivityThread | null = null;
+// GrantPermissionsActivity, which Stage D's Activity.requestPermissions starts: as above, asking
+// grants, and the answer is the names with their results
+const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
+registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", async (intent) => {
+  const names: string[] = await vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES") ?? jarray([], "Ljava/lang/String;");
+  const result = await newIntent();
+  await putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
+  await putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
+  return result;
+});
 rt.register({
   name: "android/app/ActivityThread", ctor: JActivityThread,
   methods: {
