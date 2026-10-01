@@ -1386,8 +1386,52 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   SettingsProvider.apk); resets, sync-disabled mode and the config monitor callback are
   unimplemented for the callers allowed to use them; observers hear changes made in other
   processes only through the store, not other apps' providers' notifyChange; registerContentObserver
-  does not check that the authority exists; under `?bytecode=stage-d` boot stops in
-  handleBindApplication before Settings is reached, so the D-mode path is covered by unit tests only.
+  does not check that the authority exists.
+- 2026-10-03, Stage D boots apps. With Settings in place FitNotes, CalculatorM and DoodleJump reach
+  their first frames under `?bytecode=stage-d` through ActivityThread, ViewRootImpl and hwui.
+  Flipping a TS spec to bytecode exposes the service methods the real class calls and the TS one
+  never did (View.playSoundEffect → IAudioService.playSoundEffect, StorageManager.getVolumeList →
+  ActivityThread.currentOpPackageName), and one failure hides the next (CalculatorM's Environment
+  crash hid a null TransactionStats). What changed and why:
+  - Data classes a framework caller casts (RunningAppProcessInfo, RecentTaskInfo) must be AOSP's
+    own: the TS specs shadowed them and Firebase's provider failed its cast, which aborted
+    bindApplication and surfaced as Injekt's "No registered instance" in Mihon and Komikku.
+    `setDeclared` fills a framework object's fields.
+  - Hosted services that wait on work queued to a client's main looper must not hold that client's
+    synchronous binder call: startActivity/finishActivity awaited the pause item the parked main
+    thread had to run, so an activity starting another from onCreate deadlocked. ATM now returns
+    once the start is under way, as ActivityStarter does. A static Java method on a Stub class must
+    be reached with `scall` (`IIntentSender$Stub.asInterface`); `vcall` on its constructor fails.
+  - Managers now on bytecode: AudioManager/Spatializer over IAudioService (`audio.ts`: the AVD's
+    stream volumes and aliases, MediaFocusControl's focus stack, AudioSystem natives for Web Audio),
+    Environment/StorageManager/StorageVolume over IStorageManager (`storage.ts`: emulated;0 at
+    /sdcard, vold's mkdirs rule), SensorManager over SystemSensorManager natives (the profile has no
+    sensors), haptics as VibratorManagerService maps them (`HapticFeedbackVibrationProvider` and
+    VibrationSettings' fallbacks from framework-res; services.jar is not vendored, so these were
+    decoded from the AVD's copy). Under AOSP, isExternalStorageManager follows appops and the
+    permission check (TS answered 1) and isExternalStorageLegacy the OP_LEGACY_STORAGE default.
+  - App components under Stage D (`server/activeservices.ts`, `server/broadcastqueue.ts`): services
+    are brought up and down through scheduleCreateService/ServiceArgs/BindService/UnbindService/
+    StopService in ActiveServices' order; registered receivers get scheduleRegisteredReceiver and
+    manifest receivers scheduleReceiver, with ordered results, abort and NOT_EXPORTED enforced;
+    PendingIntents and the broker's service, broadcast and activity requests take these paths. A
+    process the broker spawns for a service must not start its launcher activity.
+    ensurePrivateDirExists chowns to the cache gid and tolerates a failing setxattr (EOPNOTSUPP).
+  - Composition: SurfaceView is not under its window by tree order but a child of ViewRootImpl's
+    bounds layer at relative Z -2, shown through the view's punched hole; its position arrives only
+    through hwui's RenderNode position callbacks merged into the window's next buffer. GL window
+    surfaces on a BLAST queue present through queueBuffer; a frame belongs to the layer that latched
+    it, which closes it on the next latch (closing in eglDestroySurface left a closed bitmap drawn).
+    TextureView draws through TextureLayer natives. GLSurfaceView runs from bytecode under Stage D
+    because the TS one subclassed the TS SurfaceView. DoodleJump plays at about 32 GL fps in D-mode;
+    TS-mode GL throughput is unchanged (4,231 vs 4,187 frames in 60 s). Transaction completion
+    carries a present fence that has signaled (composition is synchronous).
+  - The device has no PermissionController module: getPermissionControllerPackageName is null and
+    AOSP's PermissionControllerManager reports it (Log.wtf, IllegalStateException), which
+    LeakCanary's getSystemService catches; the empty TS marker class had hidden this.
+  Limits: cross-process content providers, the IME, WebView, cross-process activity results,
+  service timeouts and restarts, app-sent sticky broadcasts and audio devices/ports are not done in
+  D-mode; `media.ts` resolves a SurfaceHolder display synchronously, so D-mode video shows nothing.
 
 ## Java, storage and framework semantics
 
