@@ -16,7 +16,7 @@ const CAPS: CanvasLineCap[] = ["butt", "round", "square"], JOINS: CanvasLineJoin
 /** hwui's applyAlpha: the colour's alpha byte scaled, truncated as SkColorSetA takes it */
 const applyAlpha = (color: number, alpha: number) => ((((color >>> 24) * alpha) & 255) << 24 | (color & 0xffffff)) | 0;
 
-export abstract class Node {
+abstract class Node {
   name = "";
   tree: Tree | null = null;
   changed(): void { if (this.tree) this.tree.dirty = true; }
@@ -26,7 +26,7 @@ export abstract class Node {
 
 // Groups: rotate, pivotX, pivotY, scaleX, scaleY, translateX, translateY (GroupProperties::Property)
 const ROTATE = 0, PIVOT_X = 1, PIVOT_Y = 2, SCALE_X = 3, SCALE_Y = 4, TRANSLATE_X = 5, TRANSLATE_Y = 6;
-class Group extends Node {
+export class Group extends Node {
   readonly props = Float32Array.of(0, 0, 0, 1, 1, 0, 0);
   readonly children: Node[] = [];
   set(id: number, v: number): void {
@@ -48,7 +48,7 @@ class Group extends Node {
   }
 }
 
-abstract class VPath extends Node {
+export abstract class VPath extends Node {
   data = new PathData();
   protected readonly path = new NativePath();
   protected pathDirty = true;
@@ -67,7 +67,7 @@ class ClipPath extends VPath {
 const STROKE_WIDTH = 0, STROKE_COLOR = 1, STROKE_ALPHA = 2, FILL_COLOR = 3, FILL_ALPHA = 4, TRIM_START = 5, TRIM_END = 6,
   TRIM_OFFSET = 7, CAP = 8, JOIN = 9, MITER = 10, FILL_TYPE = 11, FULL_PATH_FIELDS = 12;
 const INT_FIELD = [false, true, false, true, false, false, false, false, true, true, false, true];
-class FullPath extends VPath {
+export class FullPath extends VPath {
   readonly props: number[] = [0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 4, 0];
   fillGradient: NativeShader | null = null;
   strokeGradient: NativeShader | null = null;
@@ -192,7 +192,7 @@ function copyNode<T extends VPath>(n: T, from: T): bigint {
   return created(n);
 }
 /** a tree's native state goes with its last strong reference (VirtualRefBasePtr) */
-export function newTree(t: Tree): bigint { unattached.delete(t.root); return ownedHandle(t); }
+function newTree(t: Tree): bigint { unattached.delete(t.root); return ownedHandle(t); }
 
 const pathProperty = (id: number) => ({
   [`nGet${PATH_PROPERTY_NAMES[id]}(J)${INT_FIELD[id] ? "I" : "F"}`]: (h: bigint) => full(h).props[id],
@@ -280,5 +280,3 @@ rt.registerJnis("com/android/internal/util/VirtualRefBasePtr", {
   "nIncStrong(J)V": (h: bigint) => { const o = deref<{ refs?: number }>(h); if (o) o.refs = (o.refs ?? 0) + 1; },
   "nDecStrong(J)V": (h: bigint) => { const o = deref<{ refs?: number }>(h); if (o && !(o.refs = (o.refs ?? 1) - 1)) release(h); },
 });
-
-export { Group, FullPath, VPath };

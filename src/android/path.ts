@@ -57,7 +57,8 @@ function rrRadii(op: PathOp, w: number, h: number): number[] {
   fit(q[0] + q[2], w); fit(q[3] + q[5], h); fit(q[4] + q[6], w); fit(q[7] + q[1], h);
   return f < 1 ? q.map((v) => v * f) : q;
 }
-const snap = (v: number) => (Math.abs(v) <= NEARLY_ZERO ? 0 : v);
+/** SkScalarSinSnapToZero / CosSnapToZero */
+export const snap = (v: number) => (Math.abs(v) <= NEARLY_ZERO ? 0 : v);
 const nearly = (a: number, b: number) => Math.abs(a - b) <= NEARLY_ZERO;
 
 /**

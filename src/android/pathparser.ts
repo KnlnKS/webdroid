@@ -4,7 +4,7 @@
 
 import { rt } from "../jvm/runtime";
 import { deref, ownedHandle, release } from "./handles";
-import type { NativePath } from "./path";
+import { type NativePath, snap } from "./path";
 
 export class PathData {
   verbs: string[] = [];
@@ -83,7 +83,7 @@ export function parsePathData(data: PathData, s: string | null, len: number): st
   return "";
 }
 
-export const canMorph = (a: PathData, b: PathData): boolean =>
+const canMorph = (a: PathData, b: PathData): boolean =>
   a.verbs.length === b.verbs.length && a.verbs.every((v, i) => v === b.verbs[i] && a.sizes[i] === b.sizes[i]);
 /** VectorDrawableUtils::interpolatePaths: `from`'s verbs over points `fraction` of the way to `to` */
 export function interpolatePaths(out: PathData, from: PathData, to: PathData, fraction: number): void {
@@ -182,8 +182,6 @@ export function verbsToPath(path: NativePath, data: PathData): void {
   }
 }
 const f32 = Math.fround;
-/** SkScalarSinSnapToZero / CosSnapToZero */
-const snap = (v: number) => Math.abs(v) <= 1 / 4096 ? 0 : v;
 /** SkPath::arcTo's SVG form (which PathResolver resolves 'a' with): the arc from the last point to
  *  (x, y) as conics of at most a third of a turn, radii scaled up to reach it, the end point exact */
 function arcTo(p: NativePath, rx: number, ry: number, angle: number, large: boolean, sweep: boolean, x: number, y: number): void {
