@@ -180,7 +180,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await vfs.prepare(pkg);
   // installd's createAppData: the data directory with its cache directories, which apps stat
   // before ContextImpl ever creates them
-  for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${pkg}${dir}`);
+  for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
   if (stageD()) writePrefsFiles(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
   const appCls = (attrStr(appNode!, "name") ?? "android.app.Application").replace(/^\./, pkg + ".").replace(/\./g, "/");
