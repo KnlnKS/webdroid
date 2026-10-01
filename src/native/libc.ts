@@ -340,7 +340,26 @@ export function libcInit(): void {
       syncShared(va, n, true);
       return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL);
     },
-    mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
+    // a private mapping shrinks in place or, with MREMAP_MAYMOVE, grows by moving; growing in place,
+    // MREMAP_FIXED and moving a shared file mapping are not supported
+    mremap: (cpu, a) => {
+      const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i();
+      const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
+      const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
+      if (old & BigInt(PAGE_SIZE - 1) || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return failed(E.INVAL);
+      if (flags & 2) return failed(E.NOSYS);
+      if (page(size) <= page(oldSize)) {
+        if (page(size) < page(oldSize)) mem.unmapVa(old + BigInt(page(size)), page(oldSize) - page(size));
+        return PTR === 8 ? old : Number(old);
+      }
+      if (!(flags & 1)) return failed(E.NOMEM);
+      if (isShared(old, oldSize)) return failed(E.NOSYS);
+      const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
+      if (!moved) return failed(E.NOMEM);
+      mem.write(guestAt(moved), mem.bytes(mem.txVa(old), oldSize));
+      mem.unmapVa(old, page(oldSize));
+      return moved;
+    },
     // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
     // cache, which already holds its stores, so its contents stay
     madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4 && !isShared(va, n)) mem.dropVa(va, n); return 0; },
