@@ -1,4 +1,5 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { stageD } from "../jvm/provenance";
 import { type JComponentName, type JIntent, componentParts, intentQuery, intentQuery$, mkComponentName, newIntent } from "./intent";
 import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
@@ -246,10 +247,16 @@ export async function bindAsSystem(component: JComponentName, key: string, actio
   const parts = (await componentParts(component))!;
   const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
   const node = owner?.components.service.get(cls), ctx = appHost?.application;
-  if (!owner || !node || !ctx) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
+  if (!owner || !node || !appHost || !ctx && !stageD()) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
   const intent = await newIntent(action);
   await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(owner.pkg, cls));
   const process = owner.process(node);
-  if (owner.pkg === ctx.$host.pkg && process === (PROCESS_NAME || owner.pkg)) return { binder: await bindLocalService(ctx, intent, key) as JObj, unbind: () => unbindLocalService(key) };
+  if (owner.pkg === appHost.pkg && process === (PROCESS_NAME || owner.pkg)) {
+    if (!ctx) {
+      const { hostedServices } = await import("./server/activeservices");
+      return { binder: (await hostedServices.bind(intent, key))!, unbind: async () => { await hostedServices.unbind(key); } };
+    }
+    return { binder: await bindLocalService(ctx, intent, key) as JObj, unbind: () => unbindLocalService(key) };
+  }
   return { binder: await serviceTransport.bind(owner, process, intent, key) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
 }
