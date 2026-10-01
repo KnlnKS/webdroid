@@ -100,23 +100,6 @@ rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends J
 hostStub("activity", "webdroid/ActivityManagerService");
 hostStub("activity_task", "webdroid/ActivityTaskManagerService");
 
-// IAudioService: codec loudness only. A codec's loudness parameters are the reference AVD's for its
-// output (the speaker): the target reference level, and the DRC setting for the metadata type.
-rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "android/media/IAudioService$Stub", methods: {
-  "getLoudnessParams(Landroid/media/LoudnessCodecInfo;)Landroid/os/PersistableBundle;": async (info: Record<string, number>) => {
-    const bundle = await newObj("android/os/PersistableBundle"), type = info[declaredField("android/media/LoudnessCodecInfo", "metadataType")];
-    await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-target-ref-level", 64);
-    if (type === 1) await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-heavy-compression", 1);
-    if (type === 2) await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-effect-type", 3);
-    return bundle;
-  },
-  // the output never changes, so no updated parameters are ever dispatched
-  ...noops("registerLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V",
-    "unregisterLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V", "startLoudnessCodecUpdates(I)V",
-    "stopLoudnessCodecUpdates(I)V", "addLoudnessCodecInfo(IILandroid/media/LoudnessCodecInfo;)V",
-    "removeLoudnessCodecInfo(ILandroid/media/LoudnessCodecInfo;)V"),
-} });
-
 // IWindowManager: what WindowManagerGlobal and screen recording callbacks ask of it. Animations run
 // at the default duration scale, and nothing records the page, so a registration reports "not
 // recorded" and that never changes. The keyguard is never shown and has no secure lock, as on the
@@ -135,7 +118,6 @@ rt.register({ name: "webdroid/TrustManagerService", ctor: class extends JObj {},
   ...stubs(0, "isDeviceLocked(II)Z", "isDeviceSecure(II)Z"),
 } });
 
-hostStub("audio", "webdroid/AudioService");
 hostStub("window", "webdroid/WindowManagerService");
 hostStub("trust", "webdroid/TrustManagerService");
 

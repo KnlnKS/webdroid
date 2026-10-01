@@ -97,6 +97,7 @@ import "./android/decor";
 import "./android/fragment";
 import "./android/app";
 import "./android/vibrator";
+import "./android/audio";
 import "./android/backup";
 import "./android/adservices";
 import "./android/camera2";

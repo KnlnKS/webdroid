@@ -24,7 +24,6 @@ import { csText } from "../jvm/natives/jchars";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { startIntentSender } from "./pendingintent";
 import { svcStop, svcFg } from "./runningservices";
-import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { packageManagerService, permissionManagerService, packageResources } from "./pm";
 import { hostStub, transactionCaller } from "./binder";
 import { packages } from "./packages";
@@ -595,7 +594,6 @@ rt.register({
   ifaces: ["android/content/ComponentCallbacks"],
 });
 
-let audioCapturePolicy = 1;
 class JAccessibilityServiceInfo extends JObj {
   eventTypes = 0;
   feedbackType = 0;
@@ -641,52 +639,6 @@ for (const [name, methods, statics] of [
   }],
   ["android/nfc/NfcManager", { "getDefaultAdapter()Landroid/nfc/NfcAdapter;": () => null }],
   ["android/nfc/NfcAdapter", { "static getDefaultAdapter(Landroid/content/Context;)Landroid/nfc/NfcAdapter;": () => null }],
-  ["android/media/AudioManager", {
-    "getAllowedCapturePolicy()I": () => audioCapturePolicy,
-    "setAllowedCapturePolicy(I)V": (policy: number) => {
-      if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid capture policy");
-      audioCapturePolicy = policy;
-    },
-    "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
-    "getStreamVolume(I)I": () => 5,
-    "getStreamMaxVolume(I)I": () => 10,
-    "getStreamMinVolume(I)I": () => 0,
-    "generateAudioSessionId()I": newAudioSessionId,
-    "getRingerMode()I": () => 2,
-    "isMusicActive()Z": isMusicActive,
-    // the output path is the Web Audio context: its rate is real, its buffer size is not a fixed number of frames
-    "getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => (k === "android.media.property.OUTPUT_SAMPLE_RATE" ? String(outputSampleRate()) : null),
-    "getDevices(I)[Landroid/media/AudioDeviceInfo;": () => jarray([], "Landroid/media/AudioDeviceInfo;"),
-    "getAudioDevicesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
-    "getDirectProfilesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
-    "static getDirectPlaybackSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I": (format: unknown, attrs: unknown) => {
-      if (format == null || attrs == null) return rt.npe();
-      return 0;
-    },
-    ...noops("setStreamVolume(III)V",
-      "registerAudioDeviceCallback(Landroid/media/AudioDeviceCallback;Landroid/os/Handler;)V",
-      "unregisterAudioDeviceCallback(Landroid/media/AudioDeviceCallback;)V"),
-    ...stubs(1, "requestAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;II)I",
-      "requestAudioFocus(Landroid/media/AudioFocusRequest;)I",
-      "abandonAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;)I",
-      "abandonAudioFocusRequest(Landroid/media/AudioFocusRequest;)I"),
-    // every stream reports a non-zero volume, so none is muted
-    ...stubs(0, "isStreamMute(I)Z", "getMode()I", "isSpeakerphoneOn()Z", "isBluetoothA2dpOn()Z", "isWiredHeadsetOn()Z",
-      "static getPlaybackOffloadSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I",
-      "static isOffloadedPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z"),
-    ...stubs("", "getParameters(Ljava/lang/String;)Ljava/lang/String;"),
-  }, {
-    MODE_NORMAL: 0, MODE_RINGTONE: 1, MODE_IN_CALL: 2, MODE_IN_COMMUNICATION: 3,
-    DIRECT_PLAYBACK_NOT_SUPPORTED: 0, DIRECT_PLAYBACK_OFFLOAD_SUPPORTED: 1,
-    DIRECT_PLAYBACK_OFFLOAD_GAPLESS_SUPPORTED: 3, DIRECT_PLAYBACK_BITSTREAM_SUPPORTED: 4,
-    RINGER_MODE_SILENT: 0, RINGER_MODE_VIBRATE: 1, RINGER_MODE_NORMAL: 2,
-    GET_DEVICES_INPUTS: 1, GET_DEVICES_OUTPUTS: 2, GET_DEVICES_ALL: 3,
-    PROPERTY_OUTPUT_SAMPLE_RATE: "android.media.property.OUTPUT_SAMPLE_RATE", PROPERTY_OUTPUT_FRAMES_PER_BUFFER: "android.media.property.OUTPUT_FRAMES_PER_BUFFER",
-    STREAM_VOICE_CALL: 0, STREAM_SYSTEM: 1, STREAM_RING: 2, STREAM_MUSIC: 3, STREAM_ALARM: 4, STREAM_NOTIFICATION: 5,
-    AUDIOFOCUS_GAIN: 1, AUDIOFOCUS_LOSS: -1, AUDIOFOCUS_REQUEST_GRANTED: 1, AUDIOFOCUS_REQUEST_FAILED: 0,
-    // AOSP's getService() caches the audio service binder here, which servicemanager answers for
-    sService: null,
-  }],
   // the CellLocation family an app type-checks a (null) cell against; a device with no radio reports none
   ["android/telephony/CellLocation", {
     "static getEmpty()Landroid/telephony/CellLocation;": () => null,

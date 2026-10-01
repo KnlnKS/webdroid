@@ -8,6 +8,7 @@ import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { mkAssetFd } from "../src/android/resnative";
+import { hostedService } from "../src/android/binder";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -30,7 +31,7 @@ describe("audio-attributes", () => {
     await expect(vcallAsync(builder, "setLegacyStreamType", "(I)Landroid/media/AudioAttributes$Builder;", 10)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
   });
 
-  test("AudioFocusRequest retains builder state and AudioManager grants focus", async () => {
+  test("AudioFocusRequest retains builder state", async () => {
     const listener = rt.make("java/lang/Object");
     const builder = await newObj("android/media/AudioFocusRequest$Builder", "(I)V", 1);
     expect(await vcall(builder, "setAcceptsDelayedFocusGain", "(Z)Landroid/media/AudioFocusRequest$Builder;", 1)).toBe(builder);
@@ -41,7 +42,24 @@ describe("audio-attributes", () => {
     expect(await vcall(request, "acceptsDelayedFocusGain", "()Z")).toBe(1);
     expect(await vcall(request, "willPauseWhenDucked", "()Z")).toBe(1);
     expect(await vcall(request, "getOnAudioFocusChangeListener", "()Landroid/media/AudioManager$OnAudioFocusChangeListener;")).toBe(listener);
-    expect(await vcall(rt.make("android/media/AudioManager"), "requestAudioFocus", "(Landroid/media/AudioFocusRequest;)I", request)).toBe(1);
+  });
+
+  test("the audio service's focus stack tells holders of their loss and return", async () => {
+    const changes: [string, number][] = [];
+    class Dispatcher extends JObj {
+      [mangleMethod("dispatchAudioFocusChange", "(ILjava/lang/String;)V")](change: number, id: string) { changes.push([id, change]); }
+    }
+    const audio = await hostedService("audio");
+    const request = (gain: number, id: string) => vcall(audio, "requestAudioFocus",
+      "(Landroid/media/AudioAttributes;ILandroid/os/IBinder;Landroid/media/IAudioFocusDispatcher;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILandroid/media/audiopolicy/IAudioPolicyCallback;I)I",
+      null, gain, null, new Dispatcher(), id, "p", null, 0, null, 35);
+    const abandon = (id: string) => vcall(audio, "abandonAudioFocus", "(Landroid/media/IAudioFocusDispatcher;Ljava/lang/String;Landroid/media/AudioAttributes;Ljava/lang/String;)I", null, id, null, "p");
+    expect(await request(1, "music")).toBe(1);
+    expect(await request(3, "nav")).toBe(1);
+    expect(await abandon("nav")).toBe(1);
+    expect(await request(1, "other")).toBe(1);
+    await onMain(() => {});
+    expect(changes).toEqual([["music", -3], ["music", 1], ["music", -1]]);
   });
 
   test("AudioFocusRequest rejects invalid gains and null listeners", async () => {

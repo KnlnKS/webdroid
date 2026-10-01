@@ -15,8 +15,9 @@ import { mkUri, uriParts, type JUri } from "./net";
 import { csText } from "../jvm/natives/jchars";
 import { scannedMediaUri } from "./mediastore";
 import { presentSurface, surfaceTarget } from "./glview";
+import { streamVolume, streamMaxVolume } from "./audio";
 
-rt.markers("android/media/AudioManager$OnAudioFocusChangeListener", "android/media/ImageReader$OnImageAvailableListener");
+rt.markers("android/media/ImageReader$OnImageAvailableListener");
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 let audioSession = 0;
@@ -243,11 +244,25 @@ const PRODUCT_STRATEGIES: [string, number, [number, number, [number, number, num
   ["STRATEGY_PATCH", 26, [[9, 13, [[0, 0, 0, "reserved_internal_strategy"]]]]],
 ];
 const AAB = "Landroid/media/AudioAttributes$Builder;";
-// the audio framework's channel and sample rate limits, as the reference AVD reports them
+// AudioSystem: the audio framework's channel and sample rate limits, as the reference AVD reports
+// them, and the Web Audio output. Its buffer is not a fixed number of frames, so the primary output
+// reports no frame count. No device ports or patches are modelled, nothing is connected (no wired
+// headset or A2DP), and nothing plays direct or offloaded.
+const listNone = (_list: unknown, generation: Int32Array) => { generation[0] = 1; return 0; };
 rt.registerJnis("android/media/AudioSystem", {
   "native_getMaxChannelCount()I": () => 12,
   "native_getMaxSampleRate()I": () => 192000,
   "native_getMinSampleRate()I": () => 4000,
+  "newAudioSessionId()I": newAudioSessionId,
+  "getPrimaryOutputSamplingRate()I": outputSampleRate,
+  "getPrimaryOutputFrameCount()I": () => 0,
+  "listAudioPorts(Ljava/util/ArrayList;[I)I": listNone,
+  "listAudioPatches(Ljava/util/ArrayList;[I)I": listNone,
+  "getDeviceConnectionState(ILjava/lang/String;)I": () => 0,
+  "getParameters(Ljava/lang/String;)Ljava/lang/String;": () => "",
+  "getDirectProfilesForAttributes(Landroid/media/AudioAttributes;Ljava/util/ArrayList;)I": () => 0,
+  "getDirectPlaybackSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I": () => 0,
+  "native_get_offload_support(IIIII)I": () => 0,
 });
 rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
   "native_list_audio_product_strategies(Ljava/util/ArrayList;)I": async (list: unknown) => {
@@ -897,11 +912,6 @@ rt.register({ name: "android/media/PlaybackParams", ctor: JPlaybackParams, metho
 class JRouteInfo extends JObj { tag: unknown = null; }
 class JRouteCategory extends JObj { name: unknown = ""; groupable = false; }
 const theRoute = new JRouteInfo();
-let routeAudio: JObj | null = null;
-function routeVolume(method: string): Promise<unknown> {
-  routeAudio ??= new (rt.link("android/media/AudioManager").ctor)();
-  return vcall(routeAudio, method, "(I)I", 3);
-}
 rt.register({
   name: "android/media/MediaRouter", ctor: class extends JObj {},
   statics: { ROUTE_TYPE_LIVE_AUDIO: 1, ROUTE_TYPE_LIVE_VIDEO: 2, ROUTE_TYPE_USER: 0x800000, CALLBACK_FLAG_PERFORM_ACTIVE_SCAN: 1, CALLBACK_FLAG_UNFILTERED_EVENTS: 2 },
@@ -961,8 +971,8 @@ rt.register({
     "getSupportedTypes()I": () => 3,
     "getPlaybackType()I": () => 0,
     "getPlaybackStream()I": () => 3,
-    "getVolume()I": () => routeVolume("getStreamVolume"),
-    "getVolumeMax()I": () => routeVolume("getStreamMaxVolume"),
+    "getVolume()I": () => streamVolume(3),
+    "getVolumeMax()I": () => streamMaxVolume(3),
     "getVolumeHandling()I": () => 1,
     "isConnecting()Z": () => 0,
     "getDescription()Ljava/lang/CharSequence;": () => null,
@@ -1018,22 +1028,3 @@ rt.register({
   },
 });
 
-export class JSpatializer extends JObj {}
-rt.register({
-  name: "android/media/Spatializer", ctor: JSpatializer,
-  statics: { SPATIALIZER_IMMERSIVE_LEVEL_NONE: 0 },
-  methods: {
-    ...stubs(0, "getImmersiveAudioLevel()I", "isAvailable()Z", "isEnabled()Z",
-      "canBeSpatialized(Landroid/media/AudioAttributes;Landroid/media/AudioFormat;)Z"),
-    ...noops("addOnSpatializerStateChangedListener(Ljava/util/concurrent/Executor;Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V",
-      "removeOnSpatializerStateChangedListener(Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V"),
-  },
-});
-rt.markers("android/media/Spatializer$OnSpatializerStateChangedListener");
-
-rt.register({
-  name: "android/media/AudioDeviceCallback", ctor: class extends JObj {},
-  methods: {
-    ...noops("<init>()V"),
-  },
-});

@@ -155,7 +155,6 @@ const SERVICE_CLASS: Record<string, string> = {
   media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   media_metrics: "android/media/metrics/MediaMetricsManager",
-  audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
   captioning: "android/view/accessibility/CaptioningManager",
   camera: "android/hardware/camera2/CameraManager",
@@ -231,6 +230,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   batterymanager: ["android/os/BatteryManager", async (ctx) => newObj("android/os/BatteryManager",
     "(Landroid/content/Context;Lcom/android/internal/app/IBatteryStats;Landroid/os/IBatteryPropertiesRegistrar;)V",
     ctx, await hostedService("batterystats"), await hostedService("batteryproperties"))],
+  audio: ["android/media/AudioManager", (ctx) => newObj("android/media/AudioManager", "(Landroid/content/Context;)V", ctx)],
   sensor: ["android/hardware/SensorManager", async (ctx) =>
     newObj("android/hardware/SystemSensorManager", "(Landroid/content/Context;Landroid/os/Looper;)V", ctx, await mainLooper())],
   storage: ["android/os/storage/StorageManager", async (ctx) =>
