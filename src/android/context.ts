@@ -166,7 +166,6 @@ const SERVICE_CLASS: Record<string, string> = {
   camera: "android/hardware/camera2/CameraManager",
   autofill: "android/view/autofill/AutofillManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
-  servicediscovery: "android/net/nsd/NsdManager",
 };
 const mainLooper = () => vcall(mainHandler(), "getLooper", "()Landroid/os/Looper;");
 /** managers AOSP's bytecode serves over the services hosted behind binder, constructed as
@@ -260,6 +259,8 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   netstats: ["android/app/usage/NetworkStatsManager", async (ctx) => newObj("android/app/usage/NetworkStatsManager",
     "(Landroid/content/Context;Landroid/net/INetworkStatsService;)V", ctx, await scall("android/net/INetworkStatsService$Stub", "asInterface",
       "(Landroid/os/IBinder;)Landroid/net/INetworkStatsService;", await hostedService("netstats")))],
+  servicediscovery: ["android/net/nsd/NsdManager", async (ctx) => newObj("android/net/nsd/NsdManager", "(Landroid/content/Context;Landroid/net/nsd/INsdManager;)V",
+    ctx, await scall("android/net/nsd/INsdManager$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/net/nsd/INsdManager;", await hostedService("servicediscovery")))],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

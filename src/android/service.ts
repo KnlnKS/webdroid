@@ -4,9 +4,8 @@
 import { rt, JObj, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { hostStub } from "./binder";
-import { JUserHandle, PARCELABLE, reportUncaught, userHandleForUid } from "./os";
-import { onMain } from "./mainloop";
+import { hostStub, newStub } from "./binder";
+import { JUserHandle, PARCELABLE, userHandleForUid } from "./os";
 
 // ── UserHandle: handles are canonical per Android user id.
 rt.register({
@@ -38,25 +37,29 @@ rt.register({ name: "webdroid/RestrictionsManagerService", ctor: class extends J
 } });
 hostStub("restrictions", "webdroid/RestrictionsManagerService");
 
-// The browser cannot join the local multicast groups required by DNS-SD. Keep the Android
-// service present, but report that discovery could not start instead of inventing devices.
-rt.markers("android/net/nsd/NsdManager$DiscoveryListener");
-rt.register({
-  name: "android/net/nsd/NsdManager", ctor: class extends JObj {},
-  statics: { PROTOCOL_DNS_SD: 1, FAILURE_INTERNAL_ERROR: 0, FAILURE_ALREADY_ACTIVE: 3, FAILURE_MAX_LIMIT: 4 },
-  methods: {
-    "discoverServices(Ljava/lang/String;ILandroid/net/nsd/NsdManager$DiscoveryListener;)V":
-      (serviceType: string, _protocol: number, listener: unknown) => {
-        if (!listener) return rt.npe();
-        void onMain(() => vcall(listener, "onStartDiscoveryFailed", "(Ljava/lang/String;I)V", serviceType, 0)).catch(reportUncaught);
-      },
-    "stopServiceDiscovery(Landroid/net/nsd/NsdManager$DiscoveryListener;)V":
-      (listener: unknown) => {
-        if (!listener) return rt.npe();
-        throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener not registered");
-      },
+// INsdManager, under AOSP's NsdManager: the browser cannot join the multicast groups DNS-SD needs,
+// so NsdService is present but every discovery, registration and resolution fails with
+// FAILURE_INTERNAL_ERROR on the client's callback instead of inventing services.
+const NSD = "android/net/connectivity/android/net/nsd/", NSD_INFO = "Landroid/net/nsd/NsdServiceInfo;", FAILURE_INTERNAL_ERROR = 0;
+class JNsdConnector extends JObj { callback: JObj | null = null; }
+const nsdFailure = (callback: string) => function (this: JNsdConnector, key: number) {
+  return vcall(this.callback, callback, "(II)V", key, FAILURE_INTERNAL_ERROR);
+};
+rt.register({ name: "webdroid/NsdServiceConnector", ctor: JNsdConnector, sup: NSD + "INsdServiceConnector$Stub", methods: {
+  "discoverServices(ILandroid/net/nsd/DiscoveryRequest;)V": nsdFailure("onDiscoverServicesFailed"),
+  [`registerService(IL${NSD}AdvertisingRequest;)V`]: nsdFailure("onRegisterServiceFailed"),
+  [`resolveService(I${NSD_INFO})V`]: nsdFailure("onResolveServiceFailed"),
+  [`registerServiceInfoCallback(I${NSD_INFO})V`]: nsdFailure("onServiceInfoCallbackRegistrationFailed"),
+  ...noops("startDaemon()V"),
+} });
+rt.register({ name: "webdroid/NsdService", ctor: class extends JObj {}, sup: "android/net/nsd/INsdManager$Stub", methods: {
+  [`connect(L${NSD}INsdManagerCallback;Z)L${NSD}INsdServiceConnector;`]: async (callback: JObj) => {
+    const connector = await newStub("webdroid/NsdServiceConnector") as JNsdConnector;
+    connector.callback = callback;
+    return connector;
   },
-});
+} });
+hostStub("servicediscovery", "webdroid/NsdService");
 
 // IDropBoxManagerService, under AOSP's DropBoxManager: tags are enabled, as by default on a device,
 // and entries are accepted; reading them back needs READ_LOGS, which no app holds, so there are none
