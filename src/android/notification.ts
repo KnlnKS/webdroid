@@ -19,7 +19,7 @@ import { JParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
 import { appHost } from "./apphost";
-import { permissionGranted, grantPrompted } from "./context";
+import { permissionGranted, grantPrompted, serviceContext } from "./context";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const LIST = "android/content/pm/ParceledListSlice";
@@ -121,7 +121,7 @@ function hasPermission(uid: number): boolean {
   return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
 }
 /** the system's view of packages: the application's PackageManager over the hosted service */
-const getPM = async (): Promise<JObj> => vcall(appHost!.application, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+const getPM = async (): Promise<JObj> => vcall(await serviceContext(), "getPackageManager", "()Landroid/content/pm/PackageManager;");
 const appInfo = async (pkg: string): Promise<JObj> =>
   vcall(await getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
 
@@ -404,7 +404,7 @@ async function addAutoGroupSummary(trigger: PostedNotification, flags: number, m
   const pk = packageKey(trigger.userId, trigger.pkg);
   if (notificationStore.autobundled.has(pk)) return;
   const look = await summaryLook(trigger.pkg, members);
-  const context = appHost?.application;
+  const context = await serviceContext();
   const triggering = await fromParcel(N, trigger.data);
   let builder = await newObj(`${N}$Builder`, "(Landroid/content/Context;Ljava/lang/String;)V", context, trigger.channel);
   const B = `L${N}$Builder;`;
@@ -614,7 +614,7 @@ async function showToast(service: JObj, t: ToastRecord): Promise<void> {
   const windowToken = await newObj("android/os/Binder", "()V");
   if (t.custom) await vcall(t.custom, "show", "(Landroid/os/IBinder;)V", windowToken);
   else {
-    const ctx = await scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+    const ctx = await serviceContext();
     const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
     const id = (name: string, type: string) => vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
     const gravity: number = await vcall(res, "getInteger", "(I)I", await id("config_toastDefaultGravity", "integer"));
