@@ -15,7 +15,7 @@ import { mkUri, uriParts, type JUri } from "./net";
 import { csText } from "../jvm/natives/jchars";
 import { scannedMediaUri } from "./mediastore";
 import { presentSurface, windowSurface, type GlSurface } from "./glview";
-import { streamVolume, streamMaxVolume } from "./audio";
+import { hostStub } from "./binder";
 
 rt.markers("android/media/ImageReader$OnImageAvailableListener");
 /** the rate the Web Audio output actually runs at */
@@ -912,35 +912,18 @@ rt.register({ name: "android/media/PlaybackParams", ctor: JPlaybackParams, metho
   "getAudioFallbackMode()I": function (this: JPlaybackParams) { return this.fallback; },
 } });
 
-// ── MediaRouter: one route, the device's own display, with no presentation display behind it
-class JRouteInfo extends JObj { tag: unknown = null; }
-class JRouteCategory extends JObj { name: unknown = ""; groupable = false; }
-const theRoute = new JRouteInfo();
-rt.register({
-  name: "android/media/MediaRouter", ctor: class extends JObj {},
-  statics: { ROUTE_TYPE_LIVE_AUDIO: 1, ROUTE_TYPE_LIVE_VIDEO: 2, ROUTE_TYPE_USER: 0x800000, CALLBACK_FLAG_PERFORM_ACTIVE_SCAN: 1, CALLBACK_FLAG_UNFILTERED_EVENTS: 2 },
-  methods: {
-    "createRouteCategory(Ljava/lang/CharSequence;Z)Landroid/media/MediaRouter$RouteCategory;": (name: unknown, groupable: number) => {
-      rt.link("android/media/MediaRouter$RouteCategory");
-      const category = new JRouteCategory(); category.name = name; category.groupable = !!groupable; return category;
-    },
-    "getSelectedRoute(I)Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
-    "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
-    "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
-    ...stubs(1, "getRouteCount()I"),
-    // the only route is already the selected one
-    ...noops("selectRoute(ILandroid/media/MediaRouter$RouteInfo;)V", "addCallback(ILandroid/media/MediaRouter$Callback;)V",
-      "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
-  },
-});
-rt.markers("android/media/MediaRouter$Callback");
-rt.register({ name: "android/media/MediaRouter$VolumeCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-rt.register({ name: "android/media/MediaRouter$RouteCategory", ctor: JRouteCategory, methods: {
-  "getName()Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
-  "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
-  "getSupportedTypes()I": () => 0x800000,
-  "isGroupable()Z": function (this: JRouteCategory) { return this.groupable ? 1 : 0; },
+// IMediaRouterService, under AOSP's MediaRouter: no remote display provider is installed, so the
+// global state holds no routes (dumpsys media_router on the reference AVD: routes=[]) and an app
+// has only the default audio and video route MediaRouter makes itself
+const MRC = "Landroid/media/IMediaRouterClient;";
+rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, sup: "android/media/IMediaRouterService$Stub", methods: {
+  [`getState(${MRC})Landroid/media/MediaRouterClientState;`]: () => newObj("android/media/MediaRouterClientState"),
+  // AudioPlayerStateMonitor's view of the client's uid: its own players
+  [`isPlaybackActive(${MRC})Z`]: isMusicActive,
+  ...noops(`registerClientAsUser(${MRC}Ljava/lang/String;I)V`, `unregisterClient(${MRC})V`, `setDiscoveryRequest(${MRC}IZ)V`,
+    `setSelectedRoute(${MRC}Ljava/lang/String;Z)V`),
 } });
+hostStub("media_router", "webdroid/MediaRouterService");
 class JCaptionStyle extends JObj {
   foregroundColor = -1; backgroundColor = -16777216; edgeType = 0; edgeColor = -16777216; windowColor = 0xff;
   typeface: unknown = null;
@@ -964,26 +947,6 @@ rt.register({ name: "android/view/accessibility/CaptioningManager", ctor: class 
   "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
 } });
 rt.markers("android/view/accessibility/CaptioningManager$CaptioningChangeListener");
-rt.register({
-  name: "android/media/MediaRouter$RouteInfo", ctor: JRouteInfo,
-  methods: {
-    "getTag()Ljava/lang/Object;": function (this: JRouteInfo) { return this.tag; },
-    "setTag(Ljava/lang/Object;)V": function (this: JRouteInfo, tag: unknown) { this.tag = tag; },
-    "getPresentationDisplay()Landroid/view/Display;": () => null,
-    "getName()Ljava/lang/CharSequence;": () => "Phone",
-    "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": () => "Phone",
-    "getSupportedTypes()I": () => 3,
-    "getPlaybackType()I": () => 0,
-    "getPlaybackStream()I": () => 3,
-    "getVolume()I": () => streamVolume(3),
-    "getVolumeMax()I": () => streamMaxVolume(3),
-    "getVolumeHandling()I": () => 1,
-    "isConnecting()Z": () => 0,
-    "getDescription()Ljava/lang/CharSequence;": () => null,
-    "getDeviceType()I": () => 0,
-    "isEnabled()Z": () => 1,
-  },
-});
 
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 

@@ -160,7 +160,6 @@ export const grantPrompted = (pkg: string, name: string): void => permissionStor
 const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
   input_method: "android/view/inputmethod/InputMethodManager",
-  media_router: "android/media/MediaRouter",
   print: "android/print/PrintManager",
   captioning: "android/view/accessibility/CaptioningManager",
   autofill: "android/view/autofill/AutofillManager",
@@ -262,6 +261,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   camera: ["android/hardware/camera2/CameraManager", (ctx) => newObj("android/hardware/camera2/CameraManager", "(Landroid/content/Context;)V", ctx)],
   measurement_service: ["android/adservices/measurement/MeasurementManager", (ctx) =>
     newObj("android/adservices/measurement/MeasurementManager", "(Landroid/content/Context;)V", ctx)],
+  media_router: ["android/media/MediaRouter", (ctx) => newObj("android/media/MediaRouter", "(Landroid/content/Context;)V", ctx)],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],

@@ -82,6 +82,8 @@ rt.register({ name: "webdroid/DisplayManagerService", ctor: class extends JObj {
   "getStableDisplaySize()Landroid/graphics/Point;": () =>
     newObj("android/graphics/Point", "(II)V", Math.min(device.width, device.height), Math.max(device.width, device.height)),
   "getBrightness(I)F": () => BRIGHTNESS,
+  // no Wi-Fi display adapter, as on the reference AVD: the feature is unavailable
+  "getWifiDisplayStatus()Landroid/hardware/display/WifiDisplayStatus;": () => newObj("android/hardware/display/WifiDisplayStatus"),
   "registerCallback(Landroid/hardware/display/IDisplayManagerCallback;)V": register,
   "registerCallbackWithEventMask(Landroid/hardware/display/IDisplayManagerCallback;J)V": register,
   ...noops("disableConnectedDisplay(I)V"),

@@ -21,8 +21,8 @@ const volumeOf = (stream: number) => {
   return v;
 };
 const rescale = (index: number, from: number, to: number) => Math.floor((index * VOLUMES[to][1] + (VOLUMES[from][1] >> 1)) / VOLUMES[from][1]);
-export const streamVolume = (stream: number): number => volumeOf(stream)[2];
-export const streamMaxVolume = (stream: number): number => volumeOf(stream)[1];
+const streamVolume = (stream: number): number => volumeOf(stream)[2];
+const streamMaxVolume = (stream: number): number => volumeOf(stream)[1];
 function setStreamVolume(stream: number, index: number): void {
   const [min, max] = volumeOf(stream), alias = ALIAS[stream];
   const set = rescale(Math.min(max, Math.max(min, index)), stream, alias);
@@ -72,7 +72,7 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
   "isMusicActive(Z)Z": isMusicActive,
   // RINGER_MODE_NORMAL, MODE_NORMAL
   ...stubs(2, "getRingerModeExternal()I", "getRingerModeInternal()I"),
-  ...stubs(0, "getMode()I", "isStreamMute(I)Z", "isMasterMute()Z", "isSpeakerphoneOn()Z", "isBluetoothScoOn()Z", "isVolumeFixed()Z",
+  ...stubs(0, "getMode()I", "isStreamMute(I)Z", "isMasterMute()Z", "isSpeakerphoneOn()Z", "isBluetoothScoOn()Z", "isBluetoothA2dpOn()Z", "isVolumeFixed()Z",
     "isSpatializerEnabled()Z", "isSpatializerAvailable()Z", "getSpatializerImmersiveAudioLevel()I",
     "canBeSpatialized(Landroid/media/AudioAttributes;Landroid/media/AudioFormat;)Z"),
   ...noops("registerSpatializerCallback(Landroid/media/ISpatializerCallback;)V", "unregisterSpatializerCallback(Landroid/media/ISpatializerCallback;)V"),
@@ -80,6 +80,8 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
   // device has no /system/media/audio/ui
   "areNavigationRepeatSoundEffectsEnabled()Z": () => 0,
   "playSoundEffect(II)V": () => {},
+  // the one output is the speaker (AudioRoutesInfo.MAIN_SPEAKER), and it never changes
+  "startWatchingRoutes(Landroid/media/IAudioRoutesObserver;)Landroid/media/AudioRoutesInfo;": () => newObj("android/media/AudioRoutesInfo"),
   "getAllowedCapturePolicy()I": () => capturePolicy,
   // AudioService validates the policy as AudioAttributes does
   "setAllowedCapturePolicy(I)I": async (policy: number) => {

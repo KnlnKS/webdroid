@@ -185,6 +185,16 @@ describe("measurement", () => {
   });
 });
 
+describe("media router", () => {
+  test("the only route is MediaRouter's own default, selected for live audio", async () => {
+    const router = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "media_router");
+    expect(await vcall(router, "getRouteCount", "()I")).toBe(1);
+    const route = await vcall(router, "getSelectedRoute", "(I)Landroid/media/MediaRouter$RouteInfo;", 1);
+    expect(route).toBe(await vcall(router, "getDefaultRoute", "()Landroid/media/MediaRouter$RouteInfo;"));
+    expect(await vcall(route, "getPresentationDisplay", "()Landroid/view/Display;")).toBeNull();
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");
