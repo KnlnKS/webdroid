@@ -333,6 +333,11 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   // the compositor draws no blur behind or across windows, so cross-window blur is never enabled
   "registerCrossWindowBlurEnabledListener(Landroid/view/ICrossWindowBlurEnabledListener;)Z": () => 0,
   "unregisterCrossWindowBlurEnabledListener(Landroid/view/ICrossWindowBlurEnabledListener;)V": () => {},
+  // a WindowContext's windows go on the one display, under its configuration
+  ...Object.fromEntries([`attachWindowContextToDisplayArea(Landroid/app/IApplicationThread;Landroid/os/IBinder;IILandroid/os/Bundle;)`,
+    `attachWindowContextToDisplayContent(Landroid/app/IApplicationThread;Landroid/os/IBinder;I)`].map((sig) =>
+    [sig + "Landroid/window/WindowContextInfo;", async () => newObj("android/window/WindowContextInfo", "(Landroid/content/res/Configuration;I)V", (await configurations()).global, 0)])),
+  "detachWindowContext(Landroid/os/IBinder;)V": () => {},
   // nothing records the screen
   "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
   "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
