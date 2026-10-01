@@ -21,7 +21,7 @@ import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplic
 import { setAppHost, type AppHost } from "../android/apphost";
 import { loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk } from "../android/assetmanager";
-import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
+import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM } from "../android/pm";
 import { windowDim, windowParams } from "../android/window";
 import { absGravity, gravityApply } from "../android/gravity";
 import { JActivity, dispatchSplashExit } from "../android/app";
@@ -34,7 +34,7 @@ import {
   booted, setBootedApp, aliasTargets, activityHost, launchMain, recreateActivity, invalidateWindow, visibleActivities,
   atHome, activityVisibility0, startWin, dropStartingWindow, type BootedApp,
 } from "./activities";
-import { packageUid, packages } from "../android/packages";
+import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain, mainDbg, mainLooper, fnRunnable, type JFnRunnable } from "../android/mainloop";
 import { mainChoreographer, deliverVsync, CALLBACK_TRAVERSAL } from "../android/vsync";
 import { JView, JViewGroup, uiState, setFrameRequester, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, guardCall } from "../android/view";

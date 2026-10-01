@@ -21,7 +21,7 @@ import { type JIntent, launchIntent } from "./intent";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
-import { packages } from "./packages";
+import { packages, usesSdk } from "./packages";
 import { hostedService } from "./binder";
 
 const privDir = (p: string) => { vfs.mkdir(p); return newFile(p); };
@@ -115,9 +115,14 @@ export function uidPermissionState(name: string, uid: number): number {
   return -1;
 }
 export function grantPermissions(names: string[]): Int32Array {
-  permissionStore.grant(appHost?.pkg ?? "", names);
-  return new Int32Array(names.length);
+  const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
+  // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
+  const asked = record && usesSdk(record.root).target < 33 ? names.filter((name) => name !== "android.permission.POST_NOTIFICATIONS") : names;
+  permissionStore.grant(pkg, asked);
+  return Int32Array.from(names, (name) => permissionGranted(pkg, name) ? 0 : -1);
 }
+/** a permission the system's own prompt asked for, answered by the same policy */
+export const grantPrompted = (pkg: string, name: string): void => permissionStore.grant(pkg, [name]);
 
 // Context.XXX_SERVICE name → the manager class; getSystemService(Class) walks it backwards.
 const SERVICE_CLASS: Record<string, string> = {
@@ -130,7 +135,6 @@ const SERVICE_CLASS: Record<string, string> = {
   media_metrics: "android/media/metrics/MediaMetricsManager",
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
-  notification: "android/app/NotificationManager",
   captioning: "android/view/accessibility/CaptioningManager",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
@@ -169,6 +173,7 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   clipboard: ["android/content/ClipboardManager", (ctx) => newObj("android/content/ClipboardManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   vibrator_manager: ["android/os/VibratorManager", (ctx) => newObj("android/os/SystemVibratorManager", "(Landroid/content/Context;)V", ctx)],
   vibrator: ["android/os/Vibrator", (ctx) => newObj("android/os/SystemVibrator", "(Landroid/content/Context;)V", ctx)],
+  notification: ["android/app/NotificationManager", (ctx) => newObj("android/app/NotificationManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   keyguard: ["android/app/KeyguardManager", (ctx) => newObj("android/app/KeyguardManager", "(Landroid/content/Context;)V", ctx)],
   usagestats: ["android/app/usage/UsageStatsManager", async (ctx) => newObj("android/app/usage/UsageStatsManager",
     "(Landroid/content/Context;Landroid/app/usage/IUsageStatsManager;)V", ctx, await hostedService("usagestats"))],

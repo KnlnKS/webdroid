@@ -20,7 +20,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { JIntent, type JComponentName, componentState, systemActivity, SYSTEM_ACTIVITY } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
 import type { JActivity } from "./app";
-import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
+import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, usesSdk, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
 import { parcelCreator, readInt, readString8, writeInt, writeString8, type JParcel } from "./parcel";
 import { readApplicationInfo, readPackageInfo, writeApplicationInfo, writePackageInfo } from "./pm-parcel";
@@ -1016,12 +1016,6 @@ export function registerPackage(archive: PackageArchive, path = installedPath(ar
     if (name) signaturePermissions.add(name);
   }
   return record;
-}
-/** <uses-sdk>: targetSdkVersion defaults to minSdkVersion, which defaults to 1 */
-export function usesSdk(root: XmlNode): { min: number; target: number } {
-  const sdk = root.children.find((c) => c.name === "uses-sdk");
-  const min = sdk && attr(sdk, "minSdkVersion")?.data || 1;
-  return { min, target: sdk && attr(sdk, "targetSdkVersion")?.data || min };
 }
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;

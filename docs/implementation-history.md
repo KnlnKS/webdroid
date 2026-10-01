@@ -1237,6 +1237,38 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   reaches it); SparseArray lacked setValueAt. Limits: the TS scrollers and GestureDetector keep
   their per-frame EWMA velocity; IInputManager hosts only what InputDevice, KeyCharacterMap and
   VelocityTracker reach; no InputChannel/InputEventReceiver yet.
+- 2026-10-02, Stage D notifications on bytecode: Notification (every Builder, Style and Action
+  class), Person, NotificationChannel(Group), NotificationManager and RemoteViews run from
+  framework.jar over a hosted INotificationManager (notification.ts) ported from the reference
+  AVD's services.jar (NotificationManagerService, PreferencesHelper, GroupHelper, checked with a
+  probe app at targetSdk 25, 32 and 35; its logs match webdroid's line for line apart from the
+  uid in notification keys, which orders ArrayMap iteration). Findings:
+  - Posting needs POST_NOTIFICATIONS (areNotificationsEnabled, getImportance 0/3); a missing or
+    deleted channel drops the post (only a conversation post restores a deleted channel); an app
+    reads back parcel copies; config_autoGroupAtCount is 2, so two ungrouped posts add the
+    system's `ranker_group` summary (key suffix `|ranker_group`, flags 1792), which cancel() cannot
+    remove (FLAG_AUTOGROUP_SUMMARY is in its must-not-have flags) and which leaves with its last
+    member or the channel.
+  - An app targeting below 33 cannot request POST_NOTIFICATIONS (the dialog answers -1); it gets
+    the permission implicitly (CompatibilityPermissionInfo) and PermissionPolicyService prompts on
+    a launcher launch once a channel exists at launch time — not when onCreate creates the first
+    one. Below 26 the `miscellaneous` channel ("Uncategorized", importance -1000) exists from the
+    first NotificationManager call; it is not a channel the prompt counts on a fresh install.
+  - Recreating a channel renames and re-describes it and only lowers its importance; bypassDnd,
+    lockscreen visibility and allowBubbles are reset to the package's defaults on creation.
+  - Do Not Disturb is off (filter 1) with the AVD's policy (380, 2, 2, 157, 0, 2); every zen
+    write, rule read and filter change throws "Notification policy access denied".
+  - Device flags (app_process probe): lifetimeExtensionRefactor, checkAutogroupBeforePost and
+    secureAllowlistToken are off, modesApi and autogroupSummaryIconUpdate on.
+  Found while gating: ServiceManager logs a slow lookup through EventLog.writeEvent, which had no
+  native, so a loaded page's Choreographer threw from DisplayManagerGlobal; Parcel lacked class
+  cookies and PendingIntent its marshal listeners (Notification.writeToParcel uses both), Binder
+  isDirectlyHandlingTransaction (Parcel's string-array bound) and UserHandle.of.
+  Limits: nothing is shown (no shade, sound, vibration or listener service; listener and
+  assistant access stay ungranted); toasts are still the TS Toast; snoozing, notification
+  history, bubbles, conversations' shortcut checks, the immutable-PendingIntent checks for
+  remote-input actions and user-initiated jobs are not modelled; the foreground service
+  notification follows ActiveServices from source, not a device probe.
 
 ## Java, storage and framework semantics
 

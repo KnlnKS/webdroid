@@ -1,544 +1,772 @@
-// android.app.Notification and everything that feeds it. There is no notification shade
-// here, so nothing is posted and nothing is drawn. The contract these classes have to keep
-// is narrower and entirely mechanical: they must LINK, every fluent setter must hand back
-// the right receiver, and build() must yield a Notification whose PUBLIC FIELDS read back
-// what was set — androidx's NotificationCompat writes and re-reads `n.flags`, `n.when`,
-// `n.extras` and friends directly rather than through getters.
-
+// INotificationManager: NotificationManagerService's app-facing half, under AOSP's NotificationManager
+// and Notification classes, which run from bytecode. Channels, groups and the notification delegate
+// persist per package as PreferencesHelper keeps them, each channel or group as its parcel, in the
+// preference store every process shares. Posted notifications are the broker's (NotificationStore),
+// each held as the Notification's parcel, as system_server holds a NotificationRecord: an app reads
+// back copies, never its own object. Nothing presents them; there is no shade, sound or listener.
+// Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
+// GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
+import { JObj, rt, declaredField } from "../jvm/runtime";
+import { mangleStaticField } from "../jvm/abi";
+import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
-import { rt, JObj, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, scall, after } from "../jvm/natives/jlang";
-import { PARCELABLE, type JBundle } from "./os";
-import { type JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
-import { preferenceStore } from "./sharedprefs";
-import { appHost } from "./apphost";
 import { csText } from "../jvm/natives/jchars";
+import { hostStub, callingIdentity, exportParcel, importParcel, type ParcelData } from "./binder";
+import { JParcel } from "./parcel";
+import { preferenceStore } from "./sharedprefs";
+import { packages, usesSdk } from "./packages";
+import { getPM } from "./pm";
+import { appHost } from "./apphost";
+import { permissionGranted, grantPrompted } from "./context";
 
-type Impl = (...a: never[]) => unknown;
-const mkBundle = () => new (rt.link("android/os/Bundle").ctor as new () => JBundle)();
-/** `desc` here is "name(args)" — the return descriptor is appended by the caller. */
-const self = (ms: Record<string, Impl>, sigs: string[], ret: string) => {
-  for (const s of sigs) ms[s + ret] = function (this: object) { return this; };
-};
+const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
+const LIST = "android/content/pm/ParceledListSlice";
+const DEFAULT_CHANNEL = "miscellaneous", RANKER_GROUP = "ranker_group";
+const POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS";
+const IMPORTANCE_NONE = 0, IMPORTANCE_DEFAULT = 3, IMPORTANCE_UNSPECIFIED = -1000;
+const FLAG_ONGOING_EVENT = 2, FLAG_AUTO_CANCEL = 16, FLAG_NO_CLEAR = 32, FLAG_FOREGROUND_SERVICE = 64;
+const FLAG_LOCAL_ONLY = 256, FLAG_GROUP_SUMMARY = 512, FLAG_AUTOGROUP_SUMMARY = 1024, FLAG_CAN_COLORIZE = 2048;
+const FLAG_NO_DISMISS = 8192, FLAG_FSI_REQUESTED_BUT_DENIED = 16384, FLAG_USER_INITIATED_JOB = 32768;
+/** cancel(): an app cannot remove a foreground service's, a user-initiated job's or an autogroup summary */
+const CANCEL_MUST_NOT_HAVE = FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB | FLAG_AUTOGROUP_SUMMARY;
+const CANCEL_ALL_MUST_NOT_HAVE = FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB;
+const REASON_APP_CANCEL = 8;
+/** config_autoGroupAtCount */
+const AUTOGROUP_AT_COUNT = 2;
+const MAX_PACKAGE_NOTIFICATIONS = 50, MAX_PACKAGE_ENQUEUE_RATE = 5;
 
-// ── android.widget.RemoteViews: describes a view hierarchy for a process we don't have.
-// Recording the calls is the whole implementation; nothing ever inflates them.
-class JRemoteViews extends JObj {
-  pkg: string | null = null; layoutId = 0;
-  ops: unknown[][] = [];
+/** a posted notification as its NotificationRecord: what the rules read, and the Notification's parcel */
+export interface PostedNotification {
+  key: string; pkg: string; opPkg: string; id: number; tag: string | null; uid: number; pid: number; userId: number;
+  postTime: bigint; channel: string; flags: number; group: string | null; sortKey: string | null;
+  /** the group key an adjustment overrides the app's with (GroupHelper's autogroup) */
+  override: string | null;
+  data: ParcelData;
 }
-const initRemoteViews = function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; };
-const rvMethods: Record<string, Impl> = {
-  "<init>()V": function () {},
-  "<init>(Ljava/lang/String;I)V": initRemoteViews,
-  "<init>(Ljava/lang/String;II)V": initRemoteViews,
-  "<init>(Landroid/widget/RemoteViews;Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { this.pkg = a?.pkg ?? null; this.layoutId = a?.layoutId ?? 0; },
-  "<init>(Ljava/util/Map;)V": function () {},
-  "<init>(Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { copyRemoteViews(this, a); },
-  "getLayoutId()I": function (this: JRemoteViews) { return this.layoutId; },
-  "getPackage()Ljava/lang/String;": function (this: JRemoteViews) { return this.pkg; },
-  "clone()Landroid/widget/RemoteViews;": function (this: JRemoteViews) { return copyRemoteViews(new JRemoteViews(), this); },
-  "describeContents()I": () => 0,
-  // the recorded actions travel as values; nothing here inflates them yet
-  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JRemoteViews, parcel: JParcel): Gen {
-    writeString(parcel, this.pkg); writeInt(parcel, this.layoutId); writeInt(parcel, this.ops.length);
-    for (const [name, ...args] of this.ops) {
-      writeString(parcel, name as string); writeInt(parcel, args.length);
-      for (const arg of args) yield vcall(parcel, "writeValue", "(Ljava/lang/Object;)V", arg);
+/** GroupHelper's view of an ungrouped notification; `icon` identifies its small icon as Icon.sameAs compares */
+interface Ungrouped { flags: number; icon: string; color: number; visibility: number }
+/** NotificationManagerService's notification list and the state its posting rules keep, shared by
+ *  every process through the broker */
+export class NotificationStore {
+  readonly posted: PostedNotification[] = [];
+  readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
+  /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */
+  readonly autobundled = new Map<string, string>();
+  /** userId|pkg → its ungrouped notifications by key (GroupHelper.mUngroupedNotifications) */
+  readonly ungrouped = new Map<string, Map<string, Ungrouped>>();
+  /** pkg|id of each foreground service's notification (ActiveServices' ServiceRecord.foregroundId) */
+  readonly foreground = new Set<string>();
+}
+export let notificationStore = new NotificationStore();
+export function useNotificationStore(store: NotificationStore): void { notificationStore = store; }
+
+const fail = (cls: string, message: string | null): never => { throw rt.mkThrowable(cls, message); };
+const field = (cls: string, name: string) => declaredField(cls, name);
+const get = (o: JObj, cls: string, name: string): any => (o as unknown as Record<string, unknown>)[field(cls, name)];
+const set = (o: JObj, cls: string, name: string, value: unknown) => { (o as unknown as Record<string, unknown>)[field(cls, name)] = value; };
+/** String.hashCode, the order an ArrayMap keyed by strings iterates in */
+function javaHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h, 31) + s.charCodeAt(i) | 0;
+  return h;
+}
+const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
+  items.map((item, i) => ({ item, hash: javaHash(key(item)), i })).sort((a, b) => a.hash - b.hash || a.i - b.i).map(({ item }) => item);
+
+async function parcelOf(o: JObj): Promise<ParcelData> {
+  const parcel = new JParcel();
+  await vcall(o, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
+  return exportParcel(parcel);
+}
+async function fromParcel(cls: string, data: ParcelData): Promise<JObj> {
+  const creator = (await linkInit(cls)).ctor[mangleStaticField("CREATOR")];
+  return vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", importParcel(data));
+}
+/** what a binder call hands the service: a copy of the caller's object */
+const copyOf = async (cls: string, o: JObj) => fromParcel(cls, await parcelOf(o));
+const listSlice = (items: unknown[]) => newObj(LIST, "(Ljava/util/List;)V", newArrayList(items));
+const sliceItems = async (slice: JObj | null): Promise<JObj[]> =>
+  slice ? await toJsArray(await vcall(slice, "getList", "()Ljava/util/List;")) as JObj[] : fail("java/lang/NullPointerException", null);
+
+// ── callers
+const SYSTEM_UIDS = new Set([0, 1000, 1001]);
+const ownsPackage = (pkg: string | null, uid: number) => pkg !== null && packages.get(pkg)?.uid === uid;
+function checkCallerIsSameApp(pkg: string | null, uid = callingIdentity().uid): void {
+  if (!(uid === 0 && pkg === "root") && !ownsPackage(pkg, uid)) fail("java/lang/SecurityException", `Package ${pkg} is not owned by uid ${uid}`);
+}
+function checkCallerIsSystemOrSameApp(pkg: string | null): void {
+  if (!SYSTEM_UIDS.has(callingIdentity().uid)) checkCallerIsSameApp(pkg);
+}
+/** a permission no app holds here: Context.enforceCallingPermission's failure */
+function denyPermission(permission: string, message: string): never {
+  return fail("java/lang/SecurityException", `${message}: Neither user ${callingIdentity().uid} nor current process has ${permission}.`);
+}
+function enforceSystemOrSystemUIOrSamePackage(pkg: string | null, message: string): void {
+  if (SYSTEM_UIDS.has(callingIdentity().uid) || ownsPackage(pkg, callingIdentity().uid)) return;
+  denyPermission("android.permission.STATUS_BAR_SERVICE", message);
+}
+function enforceSystemOrSystemUI(message: string): void {
+  if (!SYSTEM_UIDS.has(callingIdentity().uid)) denyPermission("android.permission.STATUS_BAR_SERVICE", message);
+}
+/** Do Not Disturb policy access: granted only in Settings, which no app here can reach */
+function denyPolicyAccess(): never { return fail("java/lang/SecurityException", "Notification policy access denied"); }
+const targetSdk = (pkg: string) => { const record = packages.get(pkg); return record ? usesSdk(record.root).target : 10000; };
+const packageOf = (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null;
+/** PermissionHelper.hasPermission: the uid holds POST_NOTIFICATIONS */
+function hasPermission(uid: number): boolean {
+  if (SYSTEM_UIDS.has(uid)) return true;
+  const pkg = packageOf(uid);
+  return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
+}
+const appInfo = (pkg: string): Promise<JObj> =>
+  vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
+
+// ── PreferencesHelper: a package's channels, groups and delegate
+const policyFile = (pkg: string) => "android:notification-policy:" + pkg;
+const CHANNEL_KEY = "channel:", GROUP_KEY = "group:", DELEGATE_KEY = "delegate";
+const toBase64 = (bytes: Uint8Array) => {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const parcelData = (stored: string): ParcelData => ({ bytes: Uint8Array.from(atob(stored), (c) => c.charCodeAt(0)), objects: [] });
+class Preferences {
+  readonly values: Map<string, unknown>;
+  constructor(readonly pkg: string) { this.values = preferenceStore.open(policyFile(pkg)); }
+  ids(prefix: string): string[] {
+    return hashOrder([...this.values.keys()].filter((k) => k.startsWith(prefix)), (k) => k.slice(prefix.length)).map((k) => k.slice(prefix.length));
+  }
+  has(prefix: string, id: string): boolean { return this.values.has(prefix + id); }
+  async read(prefix: string, id: string): Promise<JObj | null> {
+    const stored = this.values.get(prefix + id);
+    return typeof stored === "string" ? fromParcel(prefix === CHANNEL_KEY ? CHANNEL : GROUP, parcelData(stored)) : null;
+  }
+  async write(prefix: string, id: string, o: JObj): Promise<void> {
+    this.values.set(prefix + id, toBase64((await parcelOf(o)).bytes));
+    this.save();
+  }
+  remove(key: string): void { this.values.delete(key); this.save(); }
+  save(): void { preferenceStore.persist(policyFile(this.pkg), this.values as Map<string, string>); }
+  async channels(includeDeleted: boolean): Promise<JObj[]> {
+    const all: JObj[] = [];
+    for (const id of this.ids(CHANNEL_KEY)) {
+      const channel = (await this.read(CHANNEL_KEY, id))!;
+      if (includeDeleted || !await vcall(channel, "isDeleted", "()Z")) all.push(channel);
     }
-  }),
-};
-function copyRemoteViews(to: JRemoteViews, from: JRemoteViews | null): JRemoteViews {
-  to.pkg = from?.pkg ?? null; to.layoutId = from?.layoutId ?? 0; to.ops = from?.ops.map((op) => [...op]) ?? [];
-  return to;
-}
-const readRemoteViews = async (parcel: JParcel): Promise<JRemoteViews> => {
-  rt.link("android/widget/RemoteViews");
-  const views = new JRemoteViews();
-  views.pkg = readString(parcel); views.layoutId = readInt(parcel);
-  for (let n = readInt(parcel); n > 0; n--) {
-    const op: unknown[] = [readString(parcel)];
-    for (let argc = readInt(parcel); argc > 0; argc--) op.push(await vcall(parcel, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
-    views.ops.push(op);
+    return all;
   }
-  return views;
-};
-for (const sig of [
-  "addStableView(ILandroid/widget/RemoteViews;I)", "addView(ILandroid/widget/RemoteViews;)", "removeAllViews(I)",
-  "setBitmap(ILjava/lang/String;Landroid/graphics/Bitmap;)", "setBlendMode(ILjava/lang/String;Landroid/graphics/BlendMode;)",
-  "setBoolean(ILjava/lang/String;Z)", "setBundle(ILjava/lang/String;Landroid/os/Bundle;)",
-  "setByte(ILjava/lang/String;B)", "setChar(ILjava/lang/String;C)",
-  "setCharSequence(ILjava/lang/String;I)", "setCharSequence(ILjava/lang/String;Ljava/lang/CharSequence;)",
-  "setCharSequenceAttr(ILjava/lang/String;I)", "setChronometer(IJLjava/lang/String;Z)",
-  "setChronometerCountDown(IZ)", "setColor(ILjava/lang/String;I)", "setColorAttr(ILjava/lang/String;I)",
-  "setColorInt(ILjava/lang/String;II)", "setColorStateList(ILjava/lang/String;I)",
-  "setColorStateList(ILjava/lang/String;Landroid/content/res/ColorStateList;)",
-  "setColorStateList(ILjava/lang/String;Landroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)",
-  "setColorStateListAttr(ILjava/lang/String;I)", "setContentDescription(ILjava/lang/CharSequence;)",
-  "setDouble(ILjava/lang/String;D)", "setFloat(ILjava/lang/String;F)",
-  "setFloatDimen(ILjava/lang/String;FI)", "setFloatDimen(ILjava/lang/String;I)", "setFloatDimenAttr(ILjava/lang/String;I)",
-  "setIcon(ILjava/lang/String;Landroid/graphics/drawable/Icon;)",
-  "setIcon(ILjava/lang/String;Landroid/graphics/drawable/Icon;Landroid/graphics/drawable/Icon;)",
-  "setImageViewBitmap(ILandroid/graphics/Bitmap;)", "setImageViewIcon(ILandroid/graphics/drawable/Icon;)",
-  "setImageViewResource(II)", "setImageViewUri(ILandroid/net/Uri;)",
-  "setInt(ILjava/lang/String;I)", "setIntDimen(ILjava/lang/String;FI)", "setIntDimen(ILjava/lang/String;I)",
-  "setIntDimenAttr(ILjava/lang/String;I)", "setLong(ILjava/lang/String;J)",
-  "setOnClickFillInIntent(ILandroid/content/Intent;)", "setOnClickPendingIntent(ILandroid/app/PendingIntent;)",
-  "setPendingIntentTemplate(ILandroid/app/PendingIntent;)", "setProgressBar(IIIZ)",
-  "setRemoteAdapter(ILandroid/content/Intent;)", "setShort(ILjava/lang/String;S)",
-  "setString(ILjava/lang/String;Ljava/lang/String;)", "setTextColor(II)",
-  "setTextColor(ILandroid/content/res/ColorStateList;)", "setTextViewCompoundDrawables(IIIII)",
-  "setTextViewText(ILjava/lang/CharSequence;)", "setTextViewTextSize(IIF)",
-  "setViewLayoutHeight(IFI)", "setViewLayoutHeightDimen(II)", "setViewLayoutMargin(IIFI)",
-  "setViewLayoutWidth(IFI)", "setViewLayoutWidthDimen(II)",
-  "setViewOutlinePreferredRadius(IFI)", "setViewOutlinePreferredRadiusDimen(II)",
-  "setViewPadding(IIIII)", "setViewVisibility(II)",
-]) {
-  const name = sig.slice(0, sig.indexOf("("));
-  rvMethods[sig + "V"] = function (this: JRemoteViews, ...a: unknown[]) { this.ops.push([name, ...a]); };
 }
-rt.register({ name: "android/widget/RemoteViews", ctor: JRemoteViews, ifaces: ["android/os/Parcelable"], methods: rvMethods,
-  statics: { get CREATOR() { return parcelCreator("android/widget/RemoteViews", readRemoteViews); } } });
-// Apps subclass RemoteViewsService, so its JS ctor has to really extend Service's — a
-// plain JObj shell would drop every inherited Service method off the prototype chain.
-rt.register({
-  name: "android/widget/RemoteViewsService", sup: "android/app/Service",
-  ctor: class extends (rt.link("android/app/Service").ctor as new () => JObj) {},
-  methods: { "<init>()V": function () {} },
-});
-rt.markers("android/widget/RemoteViewsService$RemoteViewsFactory");
+/** getOrCreatePackagePreferencesLocked: an app targeting below O has the default channel, which
+ *  goes once it targets O */
+async function preferences(pkg: string): Promise<Preferences> {
+  const prefs = new Preferences(pkg), legacy = targetSdk(pkg) < 26;
+  if (legacy && !prefs.has(CHANNEL_KEY, DEFAULT_CHANNEL)) {
+    const system = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+    const label = await vcall(system, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "default_notification_channel_label", "string", "android");
+    const channel = await newObj(CHANNEL, "(Ljava/lang/String;Ljava/lang/CharSequence;I)V", DEFAULT_CHANNEL,
+      await vcall(system, "getString", "(I)Ljava/lang/String;", label), IMPORTANCE_UNSPECIFIED);
+    await prefs.write(CHANNEL_KEY, DEFAULT_CHANNEL, channel);
+  } else if (!legacy && prefs.has(CHANNEL_KEY, DEFAULT_CHANNEL)) prefs.remove(CHANNEL_KEY + DEFAULT_CHANNEL);
+  return prefs;
+}
+const str = async (cs: unknown) => cs == null ? null : csText(cs);
 
-// ── android.app.Notification. Every one of these is a PUBLIC field in AOSP.
-const NFIELDS: Record<string, unknown> = {
-  when: 0n, icon: 0, iconLevel: 0, number: 0, flags: 0, defaults: 0,
-  ledARGB: 0, ledOnMS: 0, ledOffMS: 0, audioStreamType: -1, priority: 0, visibility: 0, color: 0,
-  contentIntent: null, deleteIntent: null, fullScreenIntent: null,
-  tickerText: null, tickerView: null, contentView: null, bigContentView: null, headsUpContentView: null,
-  largeIcon: null, sound: null, audioAttributes: null, vibrate: null,
-  actions: null, category: null, publicVersion: null,
-};
-class JNotification extends JObj {
-  [k: string]: unknown;
-  extras = mkBundle();
-  channelId: string | null = null;
-  group: string | null = null;
-  sortKey: string | null = null;
-  groupAlertBehavior = 0; badgeIcon = 0; shortcutId: string | null = null; locusId: unknown = null;
-  timeoutAfter = 0n; allowSystemActions = 1; bubbleMetadata: unknown = null;
-  constructor() { super(); Object.assign(this, NFIELDS); }
+/** PreferencesHelper.createNotificationChannel for the app itself (no Do Not Disturb access) */
+async function createChannel(prefs: Preferences, channel: JObj): Promise<boolean> {
+  const id: string | null = await vcall(channel, "getId", "()Ljava/lang/String;");
+  if (id === null) fail("java/lang/NullPointerException", null);
+  if (!await str(await vcall(channel, "getName", "()Ljava/lang/CharSequence;"))) fail("java/lang/IllegalArgumentException", null);
+  const importance: number = await vcall(channel, "getImportance", "()I");
+  if (importance < IMPORTANCE_NONE || importance > 5) fail("java/lang/IllegalArgumentException", "Invalid importance level");
+  const group: string | null = await vcall(channel, "getGroup", "()Ljava/lang/String;");
+  if (group !== null && !prefs.has(GROUP_KEY, group)) fail("java/lang/IllegalArgumentException", "NotificationChannelGroup doesn't exist");
+  if (id === DEFAULT_CHANNEL) fail("java/lang/IllegalArgumentException", "Reserved id");
+  const existing = await prefs.read(CHANNEL_KEY, id!);
+  if (existing) {
+    // the app may rename, describe and downgrade its channel; the user's settings stay
+    let changed = false;
+    if (await vcall(existing, "isDeleted", "()Z")) {
+      await vcall(existing, "setDeleted", "(Z)V", 0); await vcall(existing, "setDeletedTimeMs", "(J)V", -1n); changed = true;
+    }
+    const name = await str(await vcall(channel, "getName", "()Ljava/lang/CharSequence;"));
+    if (name !== await str(await vcall(existing, "getName", "()Ljava/lang/CharSequence;"))) { await vcall(existing, "setName", "(Ljava/lang/CharSequence;)V", name); changed = true; }
+    const description: string | null = await vcall(channel, "getDescription", "()Ljava/lang/String;");
+    if (description !== await vcall(existing, "getDescription", "()Ljava/lang/String;")) { await vcall(existing, "setDescription", "(Ljava/lang/String;)V", description); changed = true; }
+    const blockable: number = await vcall(channel, "isBlockable", "()Z");
+    if (blockable !== await vcall(existing, "isBlockable", "()Z")) { await vcall(existing, "setBlockable", "(Z)V", blockable); changed = true; }
+    if (group !== null && await vcall(existing, "getGroup", "()Ljava/lang/String;") === null) { await vcall(existing, "setGroup", "(Ljava/lang/String;)V", group); changed = true; }
+    if (await vcall(existing, "getUserLockedFields", "()I") === 0 && importance < await vcall(existing, "getImportance", "()I")) {
+      await vcall(existing, "setImportance", "(I)V", importance); changed = true;
+    }
+    if (await vcall(existing, "getOriginalImportance", "()I") === IMPORTANCE_UNSPECIFIED) { await vcall(existing, "setOriginalImportance", "(I)V", importance); changed = true; }
+    if (changed) await prefs.write(CHANNEL_KEY, id!, existing);
+    return changed;
+  }
+  if (prefs.ids(CHANNEL_KEY).length >= 5000) fail("java/lang/IllegalStateException", "Limit exceed; cannot create more channels");
+  // fields only the user sets start at the package's defaults
+  await vcall(channel, "setBypassDnd", "(Z)V", 0);
+  await vcall(channel, "setLockscreenVisibility", "(I)V", IMPORTANCE_UNSPECIFIED);
+  await vcall(channel, "setAllowBubbles", "(I)V", -1);
+  await vcall(channel, "setImportantConversation", "(Z)V", 0);
+  await vcall(channel, "unlockFields", "(I)V", await vcall(channel, "getUserLockedFields", "()I"));
+  await vcall(channel, "setImportanceLockedByCriticalDeviceFunction", "(Z)V", 0);
+  await vcall(channel, "setOriginalImportance", "(I)V", importance);
+  const parent: string | null = await vcall(channel, "getParentChannelId", "()Ljava/lang/String;");
+  if (parent !== null && !prefs.has(CHANNEL_KEY, parent)) fail("java/lang/IllegalArgumentException", "Tried to create a conversation channel without a preexisting parent");
+  await prefs.write(CHANNEL_KEY, id!, channel);
+  return true;
 }
-const FLAG_ONGOING_EVENT = 2, FLAG_AUTO_CANCEL = 16, FLAG_ONLY_ALERT_ONCE = 8;
-const FLAG_LOCAL_ONLY = 256, FLAG_GROUP_SUMMARY = 512, FLAG_HIGH_PRIORITY = 128;
-// JNI looks up these public fields even when Java bytecode inlines their values.
-const NOTIFICATION_EXTRAS = {
-  EXTRA_ANSWER_COLOR: "android.answerColor", EXTRA_ANSWER_INTENT: "android.answerIntent",
-  EXTRA_AUDIO_CONTENTS_URI: "android.audioContents", EXTRA_BACKGROUND_IMAGE_URI: "android.backgroundImageUri",
-  EXTRA_BIG_TEXT: "android.bigText", EXTRA_CALL_IS_VIDEO: "android.callIsVideo",
-  EXTRA_CALL_PERSON: "android.callPerson", EXTRA_CHANNEL_GROUP_ID: "android.intent.extra.CHANNEL_GROUP_ID",
-  EXTRA_CHANNEL_ID: "android.intent.extra.CHANNEL_ID", EXTRA_CHRONOMETER_COUNT_DOWN: "android.chronometerCountDown",
-  EXTRA_COLORIZED: "android.colorized", EXTRA_COMPACT_ACTIONS: "android.compactActions",
-  EXTRA_CONVERSATION_TITLE: "android.conversationTitle", EXTRA_DECLINE_COLOR: "android.declineColor",
-  EXTRA_DECLINE_INTENT: "android.declineIntent", EXTRA_HANG_UP_INTENT: "android.hangUpIntent",
-  EXTRA_HISTORIC_MESSAGES: "android.messages.historic", EXTRA_INFO_TEXT: "android.infoText",
-  EXTRA_IS_GROUP_CONVERSATION: "android.isGroupConversation", EXTRA_LARGE_ICON: "android.largeIcon",
-  EXTRA_LARGE_ICON_BIG: "android.largeIcon.big", EXTRA_MEDIA_SESSION: "android.mediaSession",
-  EXTRA_MESSAGES: "android.messages", EXTRA_MESSAGING_PERSON: "android.messagingUser",
-  EXTRA_NOTIFICATION_ID: "android.intent.extra.NOTIFICATION_ID", EXTRA_NOTIFICATION_TAG: "android.intent.extra.NOTIFICATION_TAG",
-  EXTRA_PEOPLE: "android.people", EXTRA_PEOPLE_LIST: "android.people.list",
-  EXTRA_PICTURE: "android.picture", EXTRA_PICTURE_CONTENT_DESCRIPTION: "android.pictureContentDescription",
-  EXTRA_PICTURE_ICON: "android.pictureIcon", EXTRA_PROGRESS: "android.progress",
-  EXTRA_PROGRESS_INDETERMINATE: "android.progressIndeterminate", EXTRA_PROGRESS_MAX: "android.progressMax",
-  EXTRA_REMOTE_INPUT_DRAFT: "android.remoteInputDraft", EXTRA_REMOTE_INPUT_HISTORY: "android.remoteInputHistory",
-  EXTRA_SELF_DISPLAY_NAME: "android.selfDisplayName", EXTRA_SHOW_BIG_PICTURE_WHEN_COLLAPSED: "android.showBigPictureWhenCollapsed",
-  EXTRA_SHOW_CHRONOMETER: "android.showChronometer", EXTRA_SHOW_WHEN: "android.showWhen",
-  EXTRA_SMALL_ICON: "android.icon", EXTRA_SUB_TEXT: "android.subText", EXTRA_SUMMARY_TEXT: "android.summaryText",
-  EXTRA_TEMPLATE: "android.template", EXTRA_TEXT: "android.text", EXTRA_TEXT_LINES: "android.textLines",
-  EXTRA_TITLE: "android.title", EXTRA_TITLE_BIG: "android.title.big",
-  EXTRA_VERIFICATION_ICON: "android.verificationIcon", EXTRA_VERIFICATION_TEXT: "android.verificationText",
+async function createGroup(prefs: Preferences, group: JObj): Promise<void> {
+  const id: string | null = await vcall(group, "getId", "()Ljava/lang/String;");
+  if (id === null) fail("java/lang/NullPointerException", null);
+  if (!await str(await vcall(group, "getName", "()Ljava/lang/CharSequence;"))) fail("java/lang/IllegalArgumentException", "group.getName() can't be empty");
+  if (prefs.ids(GROUP_KEY).length >= 6000) fail("java/lang/IllegalStateException", "Limit exceed; cannot create more groups");
+  await vcall(group, "setBlocked", "(Z)V", 0);
+  const existing = await prefs.read(GROUP_KEY, id!);
+  if (existing) {
+    await vcall(group, "setChannels", "(Ljava/util/List;)V", await vcall(existing, "getChannels", "()Ljava/util/List;"));
+    await vcall(group, "setBlocked", "(Z)V", await vcall(existing, "isBlocked", "()Z"));
+    await vcall(group, "unlockFields", "(I)V", await vcall(group, "getUserLockedFields", "()I"));
+    await vcall(group, "lockFields", "(I)V", await vcall(existing, "getUserLockedFields", "()I"));
+  }
+  await prefs.write(GROUP_KEY, id!, group);
+}
+/** getNotificationChannelGroupWithChannels */
+async function groupWithChannels(prefs: Preferences, id: string | null, includeDeleted: boolean): Promise<JObj | null> {
+  const group = id === null ? null : await prefs.read(GROUP_KEY, id);
+  if (!group) return null;
+  await vcall(group, "setChannels", "(Ljava/util/List;)V", newArrayList());
+  for (const channel of await prefs.channels(includeDeleted)) {
+    if (await vcall(channel, "getGroup", "()Ljava/lang/String;") === id) await vcall(group, "addChannel", "(Landroid/app/NotificationChannel;)V", channel);
+  }
+  return group;
+}
+/** getConversationNotificationChannel without a conversation: the channel a notification posts to */
+async function channelFor(prefs: Preferences, id: string | null, includeDeleted = false): Promise<JObj | null> {
+  const channel = await prefs.read(CHANNEL_KEY, id ?? DEFAULT_CHANNEL);
+  return channel && (includeDeleted || !await vcall(channel, "isDeleted", "()Z")) ? channel : null;
+}
+async function deleteChannel(prefs: Preferences, channel: JObj): Promise<void> {
+  if (await vcall(channel, "isDeleted", "()Z")) return;
+  await vcall(channel, "setDeleted", "(Z)V", 1);
+  await vcall(channel, "setDeletedTimeMs", "(J)V", BigInt(Date.now()));
+  await prefs.write(CHANNEL_KEY, await vcall(channel, "getId", "()Ljava/lang/String;"), channel);
+}
+function enforceNoForegroundService(pkg: string, userId: number, channel: string): void {
+  if (notificationStore.posted.some((r) => r.pkg === pkg && r.userId === userId && r.channel === channel && r.flags & FLAG_FOREGROUND_SERVICE))
+    fail("java/lang/SecurityException", `Not allowed to delete channel ${channel} with a foreground service`);
+}
+
+/** PermissionPolicyService's notification prompt for an app targeting 6.0 to 12L, which cannot ask
+ *  for POST_NOTIFICATIONS itself: once it has a channel, the system asks when a launcher task is in
+ *  front. The dialog's answer follows the grant policy runtime permissions follow (context.ts). */
+function promptNeeded(pkg: string): boolean {
+  const record = packages.get(pkg), target = targetSdk(pkg);
+  return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
+    && !permissionGranted(pkg, POST_NOTIFICATIONS) && new Preferences(pkg).ids(CHANNEL_KEY).length > 0;
+}
+async function showNotificationPrompt(pkg: string): Promise<void> {
+  grantPrompted(pkg, POST_NOTIFICATIONS);
+  const activity = appHost?.currentActivity();
+  if (activity) await appHost!.roundTrip(activity);
+}
+/** an activity launched from the launcher (PermissionPolicyService's ActivityInterceptorCallback):
+ *  decided by the channels the app has as it launches, shown once its activity is in front */
+export function notificationPromptOnLaunch(pkg: string): () => Promise<void> {
+  const needed = promptNeeded(pkg);
+  return async () => { if (needed && promptNeeded(pkg)) await showNotificationPrompt(pkg); };
+}
+
+// ── the notification list
+const keyOf = (userId: number, pkg: string, id: number, tag: string | null, uid: number) => `${userId}|${pkg}|${id}|${tag}|${uid}`;
+const packageKey = (userId: number, pkg: string) => `${userId}|${pkg}`;
+const isAppGroup = (r: PostedNotification) => r.group !== null || r.sortKey !== null;
+const isGroup = (r: PostedNotification) => r.override !== null || isAppGroup(r);
+const isGroupSummary = (r: PostedNotification) => r.group !== null && (r.flags & FLAG_GROUP_SUMMARY) !== 0;
+/** StatusBarNotification.groupKey */
+function groupKey(r: PostedNotification): string {
+  if (r.override !== null) return `${r.userId}|${r.pkg}|g:${r.override}`;
+  if (!isAppGroup(r)) return r.key;
+  return `${r.userId}|${r.pkg}|${r.group === null ? "c:" + r.channel : "g:" + r.group}`;
+}
+const find = (pkg: string, tag: string | null, id: number, userId: number) =>
+  notificationStore.posted.find((r) => r.pkg === pkg && r.tag === tag && r.id === id && r.userId === userId) ?? null;
+async function statusBarNotification(r: PostedNotification): Promise<JObj> {
+  const notification = await fromParcel(N, r.data);
+  const user = await scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", r.userId);
+  return newObj("android/service/notification/StatusBarNotification",
+    "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;IILandroid/app/Notification;Landroid/os/UserHandle;Ljava/lang/String;J)V",
+    r.pkg, r.opPkg, r.id, r.tag, r.uid, r.pid, notification, user, r.override, r.postTime);
+}
+/** cancelNotificationLocked: off the list, out of GroupHelper's view */
+async function removeRecords(removed: PostedNotification[]): Promise<void> {
+  if (!removed.length) return;
+  const list = notificationStore.posted;
+  for (const r of removed) {
+    const i = list.indexOf(r);
+    if (i >= 0) list.splice(i, 1);
+    const pk = packageKey(r.userId, r.pkg);
+    if (notificationStore.autobundled.get(pk) === r.key) notificationStore.autobundled.delete(pk);
+  }
+  for (const r of removed) await groupHelperUngroup(r, true);
+}
+/** cancelGroupChildrenLocked: a summary's children go with it, except those `keep` spares */
+function groupChildren(summary: PostedNotification, keep: (flags: number) => boolean): PostedNotification[] {
+  if (!isGroupSummary(summary)) return [];
+  const key = groupKey(summary);
+  return notificationStore.posted.filter((r) => r.pkg === summary.pkg && r.userId === summary.userId && r !== summary
+    && isGroup(r) && !isGroupSummary(r) && groupKey(r) === key && !keep(r.flags));
+}
+/** CancelNotificationRunnable */
+async function cancelNotification(pkg: string, tag: string | null, id: number, mustHave: number, mustNotHave: number, userId: number, reason: number): Promise<void> {
+  const r = find(pkg, tag, id, userId);
+  if (!r || (r.flags & mustHave) !== mustHave || r.flags & mustNotHave) return;
+  const spared = (flags: number) => reason === REASON_APP_CANCEL && (flags & (FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB)) !== 0 || (flags & mustNotHave) !== 0;
+  await removeRecords([r, ...groupChildren(r, spared)]);
+}
+/** cancelAllNotificationsInt for a package, optionally one channel's */
+async function cancelAll(pkg: string, channel: string | null, mustNotHave: number, userId: number): Promise<void> {
+  await removeRecords(notificationStore.posted.filter((r) => r.pkg === pkg && r.userId === userId
+    && (channel === null || r.channel === channel) && !(r.flags & mustNotHave)));
+}
+
+// ── GroupHelper: two or more ungrouped notifications are bundled under a summary the system posts
+async function iconIdentity(icon: JObj | null): Promise<string> {
+  if (!icon) return "none";
+  const type: number = await vcall(icon, "getType", "()I");
+  if (type === 2) return `res:${await vcall(icon, "getResPackage", "()Ljava/lang/String;")}:${await vcall(icon, "getResId", "()I")}`;
+  if (type === 4 || type === 6) return `uri:${type}:${await vcall(icon, "getUriString", "()Ljava/lang/String;")}`;
+  return `object:${nextIcon++}`;
+}
+let nextIcon = 0;
+const summaryFlags = (members: Map<string, Ungrouped>) => {
+  let all = members.size > 0, ongoing = 0;
+  for (const m of members.values()) { if (!(m.flags & FLAG_AUTO_CANCEL)) all = false; ongoing |= m.flags & (FLAG_ONGOING_EVENT | FLAG_NO_CLEAR); }
+  return (all ? FLAG_AUTO_CANCEL : 0) | FLAG_AUTOGROUP_SUMMARY | FLAG_GROUP_SUMMARY | FLAG_LOCAL_ONLY | ongoing;
 };
-rt.register({
-  name: "android/app/Notification", ctor: JNotification, ifaces: ["android/os/Parcelable"],
-  fields: Object.fromEntries([...Object.keys(NFIELDS), "extras"].map((k) => [k, k])),
-  statics: {
-    FLAG_SHOW_LIGHTS: 1, FLAG_ONGOING_EVENT, FLAG_INSISTENT: 4, FLAG_ONLY_ALERT_ONCE,
-    FLAG_AUTO_CANCEL, FLAG_NO_CLEAR: 32, FLAG_FOREGROUND_SERVICE: 64, FLAG_HIGH_PRIORITY,
-    FLAG_LOCAL_ONLY, FLAG_GROUP_SUMMARY, FLAG_BUBBLE: 4096,
-    DEFAULT_ALL: -1, DEFAULT_SOUND: 1, DEFAULT_VIBRATE: 2, DEFAULT_LIGHTS: 4,
-    PRIORITY_DEFAULT: 0, PRIORITY_LOW: -1, PRIORITY_MIN: -2, PRIORITY_HIGH: 1, PRIORITY_MAX: 2,
-    VISIBILITY_PUBLIC: 1, VISIBILITY_PRIVATE: 0, VISIBILITY_SECRET: -1,
-    GROUP_ALERT_ALL: 0, GROUP_ALERT_SUMMARY: 1, GROUP_ALERT_CHILDREN: 2, BADGE_ICON_NONE: 0, BADGE_ICON_SMALL: 1, BADGE_ICON_LARGE: 2,
-    ...NOTIFICATION_EXTRAS,
-    // object-typed, so unlike the int constants it survives as a real field ref
-    AUDIO_ATTRIBUTES_DEFAULT: null,
-  },
-  methods: {
-    "<init>()V": function () {},
-    "<init>(ILjava/lang/CharSequence;J)V": function (this: JNotification, i: number, t: unknown, w: bigint) {
-      this.icon = i; this.tickerText = t; this.when = w;
+/** getAutobundledSummaryAttributes: the members' shared icon and color, public if any member is */
+async function summaryLook(pkg: string, members: Ungrouped[]): Promise<{ icon: JObj; color: number; visibility: number }> {
+  const sameIcon = members.every((m) => m.icon === members[0].icon && !m.icon.startsWith("object:"));
+  const color = members.every((m) => m.color === members[0].color) ? members[0].color : 0;
+  const visibility = members.some((m) => m.visibility === 1) ? 1 : 0;
+  let icon: JObj | null = null;
+  if (sameIcon) {
+    const holder = notificationStore.posted.find((r) => notificationStore.ungrouped.get(packageKey(r.userId, r.pkg))?.get(r.key)?.icon === members[0].icon);
+    if (holder) icon = await vcall(await fromParcel(N, holder.data), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
+  }
+  return { icon: icon ?? await monochromeAppIcon(pkg), color, visibility };
+}
+async function monochromeAppIcon(pkg: string): Promise<JObj> {
+  const drawable = await vcall(getPM(), "getApplicationIcon", "(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;", pkg);
+  if (rt.iof(drawable, "android/graphics/drawable/AdaptiveIconDrawable") && await vcall(drawable, "getMonochrome", "()Landroid/graphics/drawable/Drawable;")) {
+    const inset: number = await scall("android/graphics/drawable/AdaptiveIconDrawable", "getExtraInsetFraction", "()F");
+    return scall("android/graphics/drawable/Icon", "createWithResourceAdaptiveDrawable", "(Ljava/lang/String;IZF)Landroid/graphics/drawable/Icon;",
+      pkg, await vcall(drawable, "getSourceDrawableResId", "()I"), 1, inset * -2);
+  }
+  const system = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id = await vcall(system, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ic_menu_cut_holo_light", "drawable", "android");
+  return scall("android/graphics/drawable/Icon", "createWithResource", "(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;", "android", id);
+}
+async function groupHelperPosted(r: PostedNotification, notification: JObj): Promise<void> {
+  const pk = packageKey(r.userId, r.pkg), hasSummary = notificationStore.autobundled.has(pk);
+  if (isAppGroup(r)) return groupHelperUngroup(r, false);
+  let members = notificationStore.ungrouped.get(pk);
+  if (!members) notificationStore.ungrouped.set(pk, members = new Map());
+  const icon = await iconIdentity(await vcall(notification, "getSmallIcon", "()Landroid/graphics/drawable/Icon;"));
+  members.set(r.key, { flags: r.flags, icon, color: get(notification, N, "color"), visibility: get(notification, N, "visibility") });
+  if (members.size < AUTOGROUP_AT_COUNT && !hasSummary) return;
+  const flags = summaryFlags(members), keys = [...members.keys()];
+  if (hasSummary) await updateAutobundledSummary(r, flags, [...members.values()]);
+  else await addAutoGroupSummary(r, flags, [...members.values()]);
+  for (const key of keys) {
+    const member = notificationStore.posted.find((m) => m.key === key);
+    if (member && member.override === null) member.override = RANKER_GROUP;
+  }
+}
+async function groupHelperUngroup(r: PostedNotification, removed: boolean): Promise<void> {
+  const pk = packageKey(r.userId, r.pkg), members = notificationStore.ungrouped.get(pk), member = members?.get(r.key);
+  if (!members?.size || !member) return;
+  members.delete(r.key);
+  if (!members.size) {
+    const summary = notificationStore.autobundled.get(pk);
+    notificationStore.autobundled.delete(pk);
+    const record = summary && notificationStore.posted.find((s) => s.key === summary);
+    if (record) await removeRecords([record]);
+  } else if (member.flags & (FLAG_ONGOING_EVENT | FLAG_NO_CLEAR)) await updateAutobundledSummary(r, summaryFlags(members), [...members.values()]);
+  if (!removed && r.override !== null) r.override = null;
+}
+/** createAutoGroupSummary, posted as the app's own notification */
+async function addAutoGroupSummary(trigger: PostedNotification, flags: number, members: Ungrouped[]): Promise<void> {
+  const pk = packageKey(trigger.userId, trigger.pkg);
+  if (notificationStore.autobundled.has(pk)) return;
+  const look = await summaryLook(trigger.pkg, members);
+  const context = appHost?.application;
+  const triggering = await fromParcel(N, trigger.data);
+  let builder = await newObj(`${N}$Builder`, "(Landroid/content/Context;Ljava/lang/String;)V", context, trigger.channel);
+  const B = `L${N}$Builder;`;
+  builder = await vcall(builder, "setSmallIcon", `(Landroid/graphics/drawable/Icon;)${B}`, look.icon);
+  builder = await vcall(builder, "setGroupSummary", `(Z)${B}`, 1);
+  builder = await vcall(builder, "setGroupAlertBehavior", `(I)${B}`, 2);
+  builder = await vcall(builder, "setGroup", `(Ljava/lang/String;)${B}`, RANKER_GROUP);
+  builder = await vcall(builder, "setFlag", `(IZ)${B}`, flags, 1);
+  builder = await vcall(builder, "setColor", `(I)${B}`, look.color);
+  builder = await vcall(builder, "setVisibility", `(I)${B}`, look.visibility);
+  const summary = await vcall(builder, "build", `()L${N};`);
+  const extras = get(summary, N, "extras");
+  await vcall(extras, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "android.appInfo",
+    await vcall(get(triggering, N, "extras"), "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "android.appInfo"));
+  const launch = await vcall(getPM(), "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;", trigger.pkg);
+  if (launch && context) set(summary, N, "contentIntent", await scall("android/app/PendingIntent", "getActivity",
+    "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 0, launch, 0x4000000));
+  const record: PostedNotification = {
+    ...trigger, key: `${keyOf(trigger.userId, trigger.pkg, 0x7fffffff, RANKER_GROUP, trigger.uid)}|${RANKER_GROUP}`, id: 0x7fffffff, tag: RANKER_GROUP,
+    postTime: BigInt(Date.now()), flags: get(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: await parcelOf(summary),
+  };
+  notificationStore.autobundled.set(pk, record.key);
+  if (!hasPermission(record.uid) || await channelImportance(record) === IMPORTANCE_NONE) return;
+  await insert(record);
+}
+/** updateAutobundledSummaryLocked: the summary follows its members' flags and look */
+async function updateAutobundledSummary(trigger: PostedNotification, flags: number, members: Ungrouped[]): Promise<void> {
+  const key = notificationStore.autobundled.get(packageKey(trigger.userId, trigger.pkg));
+  const record = key && notificationStore.posted.find((r) => r.key === key);
+  if (!record) return;
+  const summary = await fromParcel(N, record.data), look = await summaryLook(trigger.pkg, members);
+  const sameLook = await iconIdentity(await vcall(summary, "getSmallIcon", "()Landroid/graphics/drawable/Icon;")) === await iconIdentity(look.icon)
+    && get(summary, N, "color") === look.color && get(summary, N, "visibility") === look.visibility;
+  if (record.flags === flags && sameLook) return;
+  set(summary, N, "flags", flags);
+  await vcall(summary, "setSmallIcon", "(Landroid/graphics/drawable/Icon;)V", look.icon);
+  set(summary, N, "color", look.color);
+  set(summary, N, "visibility", look.visibility);
+  record.flags = flags;
+  record.data = await parcelOf(summary);
+}
+async function channelImportance(r: PostedNotification): Promise<number> {
+  const channel = await channelFor(new Preferences(r.pkg), r.channel, true);
+  return channel ? vcall(channel, "getImportance", "()I") : IMPORTANCE_NONE;
+}
+/** PostNotificationRunnable's list update: a new key is added, an existing one replaced in place */
+async function insert(r: PostedNotification): Promise<PostedNotification | null> {
+  const list = notificationStore.posted, i = list.findIndex((o) => o.key === r.key);
+  if (i < 0) { list.push(r); return null; }
+  const old = list[i];
+  list[i] = r;
+  return old;
+}
+
+// ── posting
+/** NotificationManagerService.fixNotification: what the service corrects in what an app sends */
+async function fixNotification(n: JObj, pkg: string, foreground: boolean): Promise<void> {
+  const info = await appInfo(pkg);
+  await scall(N, "addFieldsFromContext", "(Landroid/content/pm/ApplicationInfo;Landroid/app/Notification;)V", info, n);
+  const target = targetSdk(pkg);
+  let flags: number = get(n, N, "flags");
+  // only ActivityManagerService's foreground services and JobScheduler's user-initiated jobs carry
+  // these, and their notifications do not cancel on a tap
+  flags &= ~FLAG_USER_INITIATED_JOB;
+  flags = foreground ? flags & ~FLAG_AUTO_CANCEL | FLAG_FOREGROUND_SERVICE : flags & ~FLAG_FOREGROUND_SERVICE;
+  const media: number = await vcall(n, "isMediaNotification", "()Z");
+  const call: number = await vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`));
+  flags = flags & FLAG_ONGOING_EVENT && (media || call) ? flags | FLAG_NO_DISMISS : flags & ~FLAG_NO_DISMISS;
+  flags &= ~(FLAG_CAN_COLORIZE | FLAG_FSI_REQUESTED_BUT_DENIED);
+  const extras: JObj = get(n, N, "extras");
+  for (const key of ["android.allowDuringSetup", "android.substName"]) await vcall(extras, "remove", "(Ljava/lang/String;)V", key);
+  if (get(n, N, "fullScreenIntent") && !canUseFullScreenIntent(pkg, target)) {
+    // makeStickyHun: the full-screen intent becomes the content intent of a persistent heads-up
+    if (packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT")) flags |= FLAG_FSI_REQUESTED_BUT_DENIED;
+    if (!get(n, N, "contentIntent")) set(n, N, "contentIntent", get(n, N, "fullScreenIntent"));
+    set(n, N, "fullScreenIntent", null);
+  }
+  const actions = get(n, N, "actions") as (JObj | null)[] | null;
+  if (actions?.includes(null)) {
+    const kept = actions.filter((a) => a !== null);
+    set(n, N, "actions", kept.length ? Object.assign(kept, { $t: `L${N}$Action;` }) : null);
+  }
+  if (await vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$MediaStyle`)) || await vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$DecoratedMediaCustomViewStyle`))) {
+    for (const key of ["android.mediaRemoteDevice", "android.mediaRemoteIcon", "android.mediaRemoteIntent"]) await vcall(extras, "remove", "(Ljava/lang/String;)V", key);
+    // MEDIA_STYLE_NOTIFICATION_NOT_DISMISSABLE, from Android 14
+    if (target >= 34) flags |= FLAG_NO_CLEAR;
+  }
+  set(n, N, "flags", flags);
+}
+/** checkUseFullScreenIntentPermission: free below Android 10, then USE_FULL_SCREEN_INTENT and its app op */
+function canUseFullScreenIntent(pkg: string, target: number): boolean {
+  return target < 29 || !!packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT");
+}
+/** a package's enqueue rate (NotificationUsageStats' RateEstimator), updated per accepted enqueue */
+function enqueueRate(pkg: string, now: number, update: boolean): number {
+  let rate = notificationStore.enqueueRates.get(pkg);
+  if (!rate) notificationStore.enqueueRates.set(pkg, rate = { interarrival: 1000, last: null });
+  const estimate = () => rate.interarrival * 0.7 + Math.max((now - rate.last!) / 1000, 0.0005) * 0.3;
+  if (!update) return rate.last === null ? 0 : 1 / estimate();
+  if (rate.last !== null) rate.interarrival = estimate();
+  rate.last = now;
+  return 0;
+}
+async function enqueueNotification(pkg: string | null, opPkg: string | null, tag: string | null, id: number, notification: JObj | null, userId: number,
+  fromService = false): Promise<void> {
+  if (pkg === null || notification === null) fail("java/lang/IllegalArgumentException", `null not allowed: pkg=${pkg} id=${id} notification=${notification === null ? "null" : await vcall(notification, "toString", "()Ljava/lang/String;")}`);
+  const { uid, pid } = callingIdentity();
+  if (userId === -1) userId = 0;
+  const notifyUid = resolveNotificationUid(opPkg, pkg!, uid, userId);
+  const n = await copyOf(N, notification!);
+  // applyForegroundServiceNotification: the app may update its foreground service's notification
+  const foreground = fromService || tag === null && notificationStore.foreground.has(foregroundKey(pkg!, id)) && (get(n, N, "flags") & FLAG_FOREGROUND_SERVICE) !== 0;
+  await fixNotification(n, pkg!, foreground);
+  const prefs = await preferences(pkg!);
+  const channelId: string | null = await vcall(n, "getChannelId", "()Ljava/lang/String;");
+  const shortcut: string | null = await vcall(n, "getShortcutId", "()Ljava/lang/String;");
+  const channel = await channelFor(prefs, channelId, shortcut !== null);
+  if (!channel) {
+    console.warn(`[notification] No Channel found for pkg=${pkg}, channelId=${channelId}, id=${id}, tag=${tag}, opPkg=${opPkg}, callingUid=${uid}, userId=${userId}`);
+    return;
+  }
+  const key = keyOf(userId, pkg!, id, tag, notifyUid), old = notificationStore.posted.find((r) => r.key === key) ?? null;
+  // checkDisqualifyingFeatures
+  if (!SYSTEM_UIDS.has(notifyUid)) {
+    if (old && !await vcall(n, "hasCompletedProgress", "()Z") && enqueueRate(pkg!, performance.now(), false) > MAX_PACKAGE_ENQUEUE_RATE) return;
+    const count = notificationStore.posted.filter((r) => r.pkg === pkg && r.userId === userId && !(r.id === id && r.tag === tag)).length;
+    if (!foreground && count >= MAX_PACKAGE_NOTIFICATIONS) {
+      console.warn(`[notification] Package has already posted or enqueued ${count} notifications.  Not showing more.  package=${pkg}`);
+      return;
+    }
+  }
+  if (!foreground && await vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`)) && !get(n, N, "fullScreenIntent") && !(get(n, N, "flags") & FLAG_FSI_REQUESTED_BUT_DENIED))
+    fail("java/lang/IllegalArgumentException", `${key} Not posted. CallStyle notifications must be for a foreground service or user initated job or use a fullScreenIntent.`);
+  // a media notification is posted even when its app may not post others
+  const media: number = await vcall(n, "isMediaNotification", "()Z");
+  if (!media && (!hasPermission(notifyUid) || await vcall(channel, "getImportance", "()I") === IMPORTANCE_NONE)) return;
+  enqueueRate(pkg!, performance.now(), true);
+  // handleGroupedNotificationLocked: a summary flag without an app group is dropped
+  let flags: number = get(n, N, "flags");
+  const group: string | null = await vcall(n, "getGroup", "()Ljava/lang/String;"), sortKey: string | null = await vcall(n, "getSortKey", "()Ljava/lang/String;");
+  if (flags & FLAG_GROUP_SUMMARY && group === null && sortKey === null) flags &= ~FLAG_GROUP_SUMMARY;
+  if (old) flags |= old.flags & FLAG_FOREGROUND_SERVICE;
+  if (flags & FLAG_FOREGROUND_SERVICE) flags |= FLAG_NO_CLEAR;
+  set(n, N, "flags", flags);
+  const record: PostedNotification = {
+    key, pkg: pkg!, opPkg: opPkg ?? pkg!, id, tag, uid: notifyUid, pid, userId, postTime: BigInt(Date.now()),
+    channel: await vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: await parcelOf(n),
+  };
+  if (old && isGroupSummary(old) && (!isGroupSummary(record) || groupKey(old) !== groupKey(record)))
+    await removeRecords(groupChildren(old, (f) => (f & (FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB)) !== 0));
+  await insert(record);
+  // GroupHelper sees a post that is new or changed its group or flags
+  if (await vcall(n, "getSmallIcon", "()Landroid/graphics/drawable/Icon;") && (!old || old.group !== record.group || old.flags !== record.flags))
+    await groupHelperPosted(record, n);
+}
+/** resolveNotificationUid: an app posts as itself, or for a package that made it its delegate */
+function resolveNotificationUid(opPkg: string | null, pkg: string, uid: number, userId: number): number {
+  if (ownsPackage(pkg, uid) && (opPkg === pkg || ownsPackage(opPkg, uid))) return uid;
+  const owner = packages.get(pkg);
+  if (owner && (SYSTEM_UIDS.has(uid) && pkg === "android" || delegateOf(pkg) === opPkg && ownsPackage(opPkg, uid))) return owner.uid;
+  return fail("java/lang/SecurityException", `Caller ${opPkg}:${uid} cannot post for pkg ${pkg} in user ${userId}`);
+}
+function delegateOf(pkg: string): string | null {
+  const delegate = new Preferences(pkg).values.get(DELEGATE_KEY);
+  return typeof delegate === "string" ? delegate : null;
+}
+
+// ── ActiveServices: a foreground service's notification
+const foregroundKey = (pkg: string, id: number) => `${pkg}|${id}`;
+/** Service.startForeground: the notification posts under the service's id, as the app's, with
+ *  FLAG_FOREGROUND_SERVICE, which no app may set itself */
+export async function startForegroundNotification(id: number, notification: JObj | null): Promise<void> {
+  const pkg = appHost?.pkg;
+  if (!pkg || !id) return;
+  if (notification === null) fail("java/lang/IllegalArgumentException", "null notification");
+  notificationStore.foreground.add(foregroundKey(pkg, id));
+  await enqueueNotification(pkg, pkg, null, id, notification, 0, true);
+}
+/** stopForeground, and the service's end: removed, or left behind without FLAG_FOREGROUND_SERVICE */
+export async function stopForegroundNotification(id: number, remove: boolean): Promise<void> {
+  const pkg = appHost?.pkg;
+  if (!pkg) return;
+  notificationStore.foreground.delete(foregroundKey(pkg, id));
+  const r = find(pkg, null, id, 0);
+  if (!r) return;
+  if (remove) return removeRecords([r]);
+  const n = await fromParcel(N, r.data);
+  set(n, N, "flags", r.flags &= ~FLAG_FOREGROUND_SERVICE);
+  r.data = await parcelOf(n);
+}
+
+const POLICY = "android/app/NotificationManager$Policy";
+/** the reference AVD's Do Not Disturb policy: alarms, media, messages, calls, repeat callers and
+ *  conversations; starred senders and important conversations; effects suppressed but for the
+ *  status bar, badges and notification list */
+const policy = () => newObj(POLICY, "(IIIIII)V", 380, 2, 2, 157, 0, 2);
+const ZEN_MODE_OFF = 0;
+
+rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends JObj {}, sup: "android/app/INotificationManager$Stub", methods: {
+  "enqueueNotificationWithTag(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILandroid/app/Notification;I)V": enqueueNotification,
+  "cancelNotificationWithTag(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V":
+    async (pkg: string, opPkg: string | null, tag: string | null, id: number, userId: number) => {
+      const { uid } = callingIdentity();
+      if (userId === -1) userId = 0;
+      resolveNotificationUid(opPkg, pkg, uid, userId);
+      if (pkg !== opPkg) {
+        const r = find(pkg, tag, id, userId);
+        if (r && r.opPkg !== opPkg) fail("java/lang/SecurityException", `${opPkg} does not have permission to cancel a notification they did not post ${tag} ${id}`);
+      }
+      await cancelNotification(pkg, tag, id, 0, SYSTEM_UIDS.has(uid) ? 0 : CANCEL_MUST_NOT_HAVE, userId, REASON_APP_CANCEL);
     },
-    "clone()Landroid/app/Notification;": function (this: JNotification) { return Object.assign(new JNotification(), this); },
-    ...fieldGetters({ "getChannelId()Ljava/lang/String;": "channelId", "getChannel()Ljava/lang/String;": "channelId",
-      "getGroup()Ljava/lang/String;": "group", "getSortKey()Ljava/lang/String;": "sortKey",
-      "getGroupAlertBehavior()I": "groupAlertBehavior", "getBadgeIconType()I": "badgeIcon",
-      "getShortcutId()Ljava/lang/String;": "shortcutId", "getLocusId()Landroid/content/LocusId;": "locusId",
-      "getTimeoutAfter()J": "timeoutAfter", "getAllowSystemGeneratedContextualActions()Z": "allowSystemActions",
-      "getBubbleMetadata()Landroid/app/Notification$BubbleMetadata;": "bubbleMetadata" }),
-    "getSettingsText()Ljava/lang/CharSequence;": function (this: JNotification) { return this.extras.map.get("android.settingsText") ?? null; },
-    ...PARCELABLE,
+  "cancelAllNotifications(Ljava/lang/String;I)V": async (pkg: string, userId: number) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    await cancelAll(pkg, null, CANCEL_ALL_MUST_NOT_HAVE, userId === -1 ? 0 : userId);
   },
-});
+  "getAppActiveNotifications(Ljava/lang/String;I)Landroid/content/pm/ParceledListSlice;": async (pkg: string, userId: number) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    if (userId === -1) userId = 0;
+    const mine = notificationStore.posted.filter((r) => r.userId === userId && (r.pkg === pkg || r.opPkg === pkg));
+    const sbns: JObj[] = [];
+    for (const r of hashOrder(mine, (r) => r.key)) sbns.push(await statusBarNotification(r));
+    return listSlice(sbns);
+  },
 
-// ── Notification.Builder. One table per kind of setter; the fluent chain matters, the
-// values only have to survive to build().
-class JNBuilder extends JObj {
-  n = new JNotification();
-  extras = mkBundle();
-  style: JNStyle | null = null;
-}
-const B = "Landroid/app/Notification$Builder;";
-const setFlag = (n: JNotification, bit: number, on: unknown) => { n.flags = on ? (n.flags as number) | bit : (n.flags as number) & ~bit; };
-function buildNotification(this: JNBuilder) {
-  rt.link("android/app/Notification");
-  for (const [k, v] of this.extras.map) this.n.extras.map.set(k, v);
-  if (this.style instanceof JNMediaStyle) {
-    if (this.style.token) this.n.extras.map.set("android.mediaSession", this.style.token);
-    if (this.style.compactActions) this.n.extras.map.set("android.compactActions", this.style.compactActions);
-    this.n.category ??= "transport";
-  }
-  return this.n;
-}
-const bMethods: Record<string, Impl> = {
-  "<init>(Landroid/content/Context;)V": function () {},
-  "<init>(Landroid/content/Context;Ljava/lang/String;)V": function (this: JNBuilder, _c: unknown, ch: string) { this.n.channelId = ch; },
-  "build()Landroid/app/Notification;": buildNotification,
-  "getNotification()Landroid/app/Notification;": buildNotification,
-  "getExtras()Landroid/os/Bundle;": function (this: JNBuilder) { return this.extras; },
-  ["setExtras(Landroid/os/Bundle;)" + B]: function (this: JNBuilder, b: JBundle | null) {
-    if (b) this.extras = b;
-    return this;
+  "createNotificationChannelGroups(Ljava/lang/String;Landroid/content/pm/ParceledListSlice;)V": async (pkg: string, slice: JObj | null) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    const prefs = await preferences(pkg);
+    for (const group of await sliceItems(slice)) await createGroup(prefs, group ? await copyOf(GROUP, group) : fail("java/lang/NullPointerException", null));
   },
-  ["addExtras(Landroid/os/Bundle;)" + B]: function (this: JNBuilder, b: JBundle | null) {
-    if (b) for (const [key, value] of b.map) this.extras.map.set(key, value);
-    return this;
+  "createNotificationChannels(Ljava/lang/String;Landroid/content/pm/ParceledListSlice;)V": async (pkg: string, slice: JObj | null) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    const prefs = await preferences(pkg), had = prefs.ids(CHANNEL_KEY).length > 0;
+    let created = false;
+    for (const channel of await sliceItems(slice)) {
+      if (!channel) fail("java/lang/NullPointerException", "channel in list is null");
+      created = await createChannel(prefs, await copyOf(CHANNEL, channel)) || created;
+    }
+    // the prompt shows over a launcher task the user can see; a task still starting gets it at its next launch
+    if (created && !had && appHost?.currentActivity()?.resumed && promptNeeded(pkg)) await showNotificationPrompt(pkg);
   },
-  "getStyle()Landroid/app/Notification$Style;": function (this: JNBuilder) { return this.style; },
-  ["setStyle(Landroid/app/Notification$Style;)" + B]: function (this: JNBuilder, s: JNStyle) {
-    this.style = s; if (s) s.builder = this; return this;
+  "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
+    async (callingPkg: string, userId: number, pkg: string, channelId: string | null) => {
+      if (!canNotifyAsPackage(callingPkg, pkg, userId)) fail("java/lang/SecurityException", `Pkg ${callingPkg} cannot read channels for ${pkg} in ${userId}`);
+      return channelFor(await preferences(pkg), channelId);
+    },
+  "getNotificationChannels(Ljava/lang/String;Ljava/lang/String;I)Landroid/content/pm/ParceledListSlice;": async (callingPkg: string, pkg: string, userId: number) => {
+    if (!canNotifyAsPackage(callingPkg, pkg, userId)) fail("java/lang/SecurityException", `Pkg ${callingPkg} cannot read channels for ${pkg} in ${userId}`);
+    return listSlice(await (await preferences(pkg)).channels(false));
   },
-  ["setFlag(IZ)" + B]: function (this: JNBuilder, bit: number, on: number) { setFlag(this.n, bit, on); return this; },
-  ["setSmallIcon(II)" + B]: function (this: JNBuilder, i: number, lvl: number) { this.n.iconLevel = lvl; return vcall(this, "setSmallIcon", "(I)" + B, i); },
-  ["setLights(III)" + B]: function (this: JNBuilder, argb: number, on: number, off: number) {
-    this.n.ledARGB = argb; this.n.ledOnMS = on; this.n.ledOffMS = off; return this;
+  "deleteNotificationChannel(Ljava/lang/String;Ljava/lang/String;)V": async (pkg: string, channelId: string) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    if (channelId === DEFAULT_CHANNEL) fail("java/lang/IllegalArgumentException", "Cannot delete default channel");
+    enforceNoForegroundService(pkg, 0, channelId);
+    await cancelAll(pkg, channelId, 0, 0);
+    const prefs = await preferences(pkg), channel = await prefs.read(CHANNEL_KEY, channelId);
+    if (channel) await deleteChannel(prefs, channel);
   },
-  ["setSound(Landroid/net/Uri;Landroid/media/AudioAttributes;)" + B]: function (this: JNBuilder, u: unknown, aa: unknown) {
-    this.n.sound = u; this.n.audioAttributes = aa; return this;
+  "getNotificationChannelGroup(Ljava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannelGroup;": async (pkg: string, groupId: string | null) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    return groupWithChannels(await preferences(pkg), groupId, false);
   },
-  ["setSound(Landroid/net/Uri;I)" + B]: function (this: JNBuilder, u: unknown, st: number) {
-    this.n.sound = u; this.n.audioStreamType = st; return this;
+  /** getNotificationChannelGroups: every group, holding its channels, in its id's ArrayMap order */
+  "getNotificationChannelGroups(Ljava/lang/String;)Landroid/content/pm/ParceledListSlice;": async (pkg: string) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    const prefs = await preferences(pkg), groups = new Map<string, JObj>();
+    for (const channel of await prefs.channels(false)) {
+      const id: string | null = await vcall(channel, "getGroup", "()Ljava/lang/String;");
+      if (id === null || !prefs.has(GROUP_KEY, id)) continue;
+      let group = groups.get(id);
+      if (!group) { group = (await prefs.read(GROUP_KEY, id))!; await vcall(group, "setChannels", "(Ljava/util/List;)V", newArrayList()); groups.set(id, group); }
+      await vcall(group, "addChannel", "(Landroid/app/NotificationChannel;)V", channel);
+    }
+    for (const id of prefs.ids(GROUP_KEY)) if (!groups.has(id)) groups.set(id, (await prefs.read(GROUP_KEY, id))!);
+    return listSlice(hashOrder([...groups], ([id]) => id).map(([, group]) => group));
   },
-  ["setTicker(Ljava/lang/CharSequence;Landroid/widget/RemoteViews;)" + B]: function (this: JNBuilder, t: unknown, v: unknown) {
-    this.n.tickerView = v; return vcall(this, "setTicker", "(Ljava/lang/CharSequence;)" + B, t);
+  "deleteNotificationChannelGroup(Ljava/lang/String;Ljava/lang/String;)V": async (pkg: string, groupId: string | null) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    const prefs = await preferences(pkg), group = await groupWithChannels(prefs, groupId, false);
+    if (!group) return;
+    for (const channel of await toJsArray(await vcall(group, "getChannels", "()Ljava/util/List;")) as JObj[])
+      enforceNoForegroundService(pkg, 0, await vcall(channel, "getId", "()Ljava/lang/String;"));
+    prefs.remove(GROUP_KEY + groupId);
+    for (const channel of await prefs.channels(true)) {
+      if (await vcall(channel, "getGroup", "()Ljava/lang/String;") !== groupId) continue;
+      await deleteChannel(prefs, channel);
+      await cancelAll(pkg, await vcall(channel, "getId", "()Ljava/lang/String;"), 0, 0);
+    }
   },
-  ["setFullScreenIntent(Landroid/app/PendingIntent;Z)" + B]: function (this: JNBuilder, pi: unknown, hi: number) {
-    this.n.fullScreenIntent = pi;
-    setFlag(this.n, FLAG_HIGH_PRIORITY, hi);
-    return this;
-  },
-  ["setProgress(IIZ)" + B]: function (this: JNBuilder, max: number, cur: number, ind: number) {
-    const e = (this.n.extras as JBundle).map;
-    e.set("android.progressMax", max); e.set("android.progress", cur); e.set("android.progressIndeterminate", ind);
-    return this;
-  },
-  ["addAction(Landroid/app/Notification$Action;)" + B]: function (this: JNBuilder, a: unknown) {
-    ((this.n.actions ??= mkActionArray()) as unknown[]).push(a); return this;
-  },
-  ["addAction(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)" + B]: function (this: JNBuilder, i: number, t: unknown, pi: unknown) {
-    const a = new JNAction(); a.icon = i; a.title = t; a.actionIntent = pi;
-    ((this.n.actions ??= mkActionArray()) as unknown[]).push(a); return this;
-  },
-};
-// setter → the public Notification field it lands in
-for (const [sig, f] of Object.entries({
-  "setWhen(J)": "when",
-  "setSmallIcon(I)": "icon",
-  "setNumber(I)": "number",
-  "setDefaults(I)": "defaults",
-  "setPriority(I)": "priority",
-  "setVisibility(I)": "visibility",
-  "setColor(I)": "color",
-  "setCategory(Ljava/lang/String;)": "category",
-  "setVibrate([J)": "vibrate",
-  "setSound(Landroid/net/Uri;)": "sound",
-  "setTicker(Ljava/lang/CharSequence;)": "tickerText",
-  "setContentIntent(Landroid/app/PendingIntent;)": "contentIntent",
-  "setDeleteIntent(Landroid/app/PendingIntent;)": "deleteIntent",
-  "setContent(Landroid/widget/RemoteViews;)": "contentView",
-  "setCustomContentView(Landroid/widget/RemoteViews;)": "contentView",
-  "setCustomBigContentView(Landroid/widget/RemoteViews;)": "bigContentView",
-  "setCustomHeadsUpContentView(Landroid/widget/RemoteViews;)": "headsUpContentView",
-  "setLargeIcon(Landroid/graphics/Bitmap;)": "largeIcon",
-  "setLargeIcon(Landroid/graphics/drawable/Icon;)": "largeIcon",
-  "setSmallIcon(Landroid/graphics/drawable/Icon;)": "smallIcon",
-  "setPublicVersion(Landroid/app/Notification;)": "publicVersion",
-  "setGroup(Ljava/lang/String;)": "group",
-  "setSortKey(Ljava/lang/String;)": "sortKey",
-  "setChannelId(Ljava/lang/String;)": "channelId",
-  "setGroupAlertBehavior(I)": "groupAlertBehavior",
-  "setBadgeIconType(I)": "badgeIcon",
-  "setShortcutId(Ljava/lang/String;)": "shortcutId",
-  "setLocusId(Landroid/content/LocusId;)": "locusId",
-  "setTimeoutAfter(J)": "timeoutAfter",
-  "setAllowSystemGeneratedContextualActions(Z)": "allowSystemActions",
-  "setBubbleMetadata(Landroid/app/Notification$BubbleMetadata;)": "bubbleMetadata",
-})) bMethods[sig + B] = function (this: JNBuilder, v: unknown) { this.n[f] = v; return this; };
-// AOSP: a silent notification alerts through its group summary (children, for a summary),
-// drops sound and vibration, and joins the "silent" group when it has none
-bMethods["setSilent(Z)" + B] = driven(function* (this: JNBuilder, silent: number): Gen {
-  if (!silent) return this;
-  const n = this.n;
-  yield vcall(this, "setGroupAlertBehavior", "(I)" + B, (n.flags as number) & FLAG_GROUP_SUMMARY ? 2 : 1);
-  yield vcall(this, "setVibrate", "([J)" + B, null);
-  yield vcall(this, "setSound", "(Landroid/net/Uri;)" + B, null);
-  yield vcall(this, "setDefaults", "(I)" + B, (n.defaults as number) & ~3);
-  if (!n.group) yield vcall(this, "setGroup", "(Ljava/lang/String;)" + B, "silent");
-  return this;
-});
-// the older overloads forward to their replacements, as AOSP's do
-bMethods["setContent(Landroid/widget/RemoteViews;)" + B] = function (this: JNBuilder, v: unknown) {
-  return vcall(this, "setCustomContentView", "(Landroid/widget/RemoteViews;)" + B, v);
-};
-// setter → the flags bit it toggles
-for (const [sig, bit] of Object.entries({
-  "setOngoing(Z)": FLAG_ONGOING_EVENT, "setAutoCancel(Z)": FLAG_AUTO_CANCEL,
-  "setOnlyAlertOnce(Z)": FLAG_ONLY_ALERT_ONCE, "setLocalOnly(Z)": FLAG_LOCAL_ONLY,
-  "setGroupSummary(Z)": FLAG_GROUP_SUMMARY,
-})) bMethods[sig + B] = function (this: JNBuilder, on: number) { setFlag(this.n, bit, on); return this; };
-// setter → the extras key AOSP records it under, which is where androidx reads it back
-for (const [sig, key] of Object.entries({
-  "setContentTitle(Ljava/lang/CharSequence;)": "android.title",
-  "setContentText(Ljava/lang/CharSequence;)": "android.text",
-  "setSubText(Ljava/lang/CharSequence;)": "android.subText",
-  "setContentInfo(Ljava/lang/CharSequence;)": "android.infoText",
-  "setSettingsText(Ljava/lang/CharSequence;)": "android.settingsText",
-  "setRemoteInputHistory([Ljava/lang/CharSequence;)": "android.remoteInputHistory",
-  "setShowWhen(Z)": "android.showWhen",
-  "setUsesChronometer(Z)": "android.showChronometer",
-  "setChronometerCountDown(Z)": "android.chronometerCountDown",
-  "setColorized(Z)": "android.colorized",
-})) bMethods[sig + B] = function (this: JNBuilder, v: unknown) { (this.n.extras as JBundle).map.set(key, v); return this; };
-// accepted and dropped: no shade reads these, but the chain must not break
-self(bMethods, [
-  "addPerson(Ljava/lang/String;)", "addPerson(Landroid/app/Person;)", "setForegroundServiceBehavior(I)",
-], B);
-bMethods["setActions([Landroid/app/Notification$Action;)" + B] = function (this: JNBuilder, actions: unknown[]) {
-  this.n.actions = Object.assign(mkActionArray(), [...actions]); return this;
-};
-bMethods["extend(Landroid/app/Notification$Extender;)" + B] = driven(function* (this: JNBuilder, extender: unknown): Gen {
-  yield vcall(extender, "extend", "(" + B + ")" + B, this); return this;
-});
-rt.register({ name: "android/app/Notification$Builder", ctor: JNBuilder, methods: bMethods });
 
-// ── Notification.Style: BigTextStyle et al. exist to be handed to Builder.setStyle, and
-// their setters return the SUBCLASS, so each subclass needs its own descriptors.
-class JNStyle extends JObj { builder: JNBuilder | null = null; }
-/** AOSP's Style.setBuilder, which its Style(Builder) ctor also calls: the style is live on the
- *  builder before any of the fluent setters run */
-const attachStyle = function (this: JNStyle, b: JNBuilder) { this.builder = b; if (b) b.style = this; };
-rt.register({
-  name: "android/app/Notification$Style", ctor: JNStyle,
-  methods: {
-    "<init>()V": function () {},
-    "setBuilder(Landroid/app/Notification$Builder;)V": attachStyle,
-    "build()Landroid/app/Notification;": function (this: JNStyle) { return this.builder?.n ?? null; },
+  "areNotificationsEnabled(Ljava/lang/String;)Z": (pkg: string) => areNotificationsEnabledForPackage(pkg, callingIdentity().uid),
+  "areNotificationsEnabledForPackage(Ljava/lang/String;I)Z": areNotificationsEnabledForPackage,
+  "getPackageImportance(Ljava/lang/String;)I": (pkg: string) => {
+    checkCallerIsSystemOrSameApp(pkg);
+    return hasPermission(callingIdentity().uid) ? IMPORTANCE_DEFAULT : IMPORTANCE_NONE;
   },
-});
-class JNMediaStyle extends JNStyle {
-  token: unknown = null;
-  compactActions: Int32Array | null = null;
-}
-const MEDIA_STYLE = "Landroid/app/Notification$MediaStyle;";
-rt.register({ name: "android/app/Notification$MediaStyle", ctor: JNMediaStyle, sup: "android/app/Notification$Style", methods: {
-  "<init>()V": function () {},
-  "<init>(Landroid/app/Notification$Builder;)V": attachStyle,
-  ["setMediaSession(Landroid/media/session/MediaSession$Token;)" + MEDIA_STYLE]: function (this: JNMediaStyle, token: unknown) {
-    this.token = token; return this;
+  // bubbles are on for the device and allowed for no app until the user allows one
+  "areBubblesAllowed(Ljava/lang/String;)Z": (pkg: string) => { enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package"); return 0; },
+  "areBubblesEnabled(Landroid/os/UserHandle;)Z": () => 1,
+  "getBubblePreferenceForPackage(Ljava/lang/String;I)I": (pkg: string) => { enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package"); return 0; },
+  // no package is suspended or paused here
+  "isPackagePaused(Ljava/lang/String;)Z": (pkg: string) => { checkCallerIsSameApp(pkg); return 0; },
+  "canNotifyAsPackage(Ljava/lang/String;Ljava/lang/String;I)Z": (callingPkg: string, pkg: string, userId: number) => +canNotifyAsPackage(callingPkg, pkg, userId),
+  "canUseFullScreenIntent(Landroid/content/AttributionSource;)Z": async (source: JObj) => {
+    const pkg: string | null = await vcall(source, "getPackageName", "()Ljava/lang/String;"), uid: number = await vcall(source, "getUid", "()I");
+    checkCallerIsSameApp(pkg, uid);
+    return +canUseFullScreenIntent(pkg!, targetSdk(pkg!));
   },
-  ["setShowActionsInCompactView([I)" + MEDIA_STYLE]: function (this: JNMediaStyle, actions: Int32Array | null) {
-    this.compactActions = actions; return this;
+  "setNotificationDelegate(Ljava/lang/String;Ljava/lang/String;)V": async (pkg: string, delegate: string | null) => {
+    checkCallerIsSameApp(pkg);
+    const prefs = new Preferences(pkg);
+    if (delegate === null) prefs.remove(DELEGATE_KEY);
+    else if (packages.has(delegate)) { prefs.values.set(DELEGATE_KEY, delegate); prefs.save(); }
+  },
+  "getNotificationDelegate(Ljava/lang/String;)Ljava/lang/String;": (pkg: string) => { checkCallerIsSystemOrSameApp(pkg); return delegateOf(pkg); },
+
+  // Do Not Disturb is off, and no app has the access that changes it
+  "getZenMode()I": () => ZEN_MODE_OFF,
+  "getNotificationPolicy(Ljava/lang/String;)Landroid/app/NotificationManager$Policy;": policy,
+  "getConsolidatedNotificationPolicy()Landroid/app/NotificationManager$Policy;": policy,
+  "isNotificationPolicyAccessGranted(Ljava/lang/String;)Z": () => 0,
+  "isNotificationPolicyAccessGrantedForPackage(Ljava/lang/String;)Z": (pkg: string) => {
+    enforceSystemOrSystemUIOrSamePackage(pkg, "request policy access status for another package"); return 0;
+  },
+  "setInterruptionFilter(Ljava/lang/String;IZ)V": (pkg: string) => { checkCallerIsSameApp(pkg); denyPolicyAccess(); },
+  "setNotificationPolicy(Ljava/lang/String;Landroid/app/NotificationManager$Policy;Z)V": (pkg: string) => { checkCallerIsSameApp(pkg); denyPolicyAccess(); },
+  "getZenRules()Ljava/util/List;": denyPolicyAccess,
+  "getAutomaticZenRules()Ljava/util/Map;": denyPolicyAccess,
+  "getAutomaticZenRule(Ljava/lang/String;)Landroid/app/AutomaticZenRule;": (id: string | null) => id === null ? fail("java/lang/NullPointerException", "Id is null") : denyPolicyAccess(),
+  "getAutomaticZenRuleState(Ljava/lang/String;)I": (id: string | null) => id === null ? fail("java/lang/NullPointerException", "id is null") : denyPolicyAccess(),
+  "removeAutomaticZenRule(Ljava/lang/String;Z)Z": (id: string | null) => id === null ? fail("java/lang/NullPointerException", "Id is null") : denyPolicyAccess(),
+  "addAutomaticZenRule(Landroid/app/AutomaticZenRule;Ljava/lang/String;Z)Ljava/lang/String;": (rule: JObj | null, pkg: string) => {
+    if (rule === null) fail("java/lang/NullPointerException", "automaticZenRule is null");
+    checkCallerIsSameApp(pkg); denyPolicyAccess();
+  },
+  "updateAutomaticZenRule(Ljava/lang/String;Landroid/app/AutomaticZenRule;Z)Z": (_id: string, rule: JObj | null) =>
+    rule === null ? fail("java/lang/NullPointerException", "automaticZenRule is null") : denyPolicyAccess(),
+  "setAutomaticZenRuleState(Ljava/lang/String;Landroid/service/notification/Condition;)V": (id: string | null, condition: JObj | null) =>
+    id === null ? fail("java/lang/NullPointerException", "id is null") : condition === null ? fail("java/lang/NullPointerException", "Condition is null") : denyPolicyAccess(),
+  "getEffectsSuppressor()Landroid/content/ComponentName;": () => null,
+  "getRuleInstanceCount(Landroid/content/ComponentName;)I": () => enforceSystemOrSystemUI("getRuleInstanceCount"),
+
+  // no listener or assistant is enabled: access to either is granted in Settings
+  "isNotificationListenerAccessGranted(Landroid/content/ComponentName;)Z": async (component: JObj | null) => {
+    if (!component) fail("java/lang/NullPointerException", null);
+    checkCallerIsSystemOrSameApp(await vcall(component, "getPackageName", "()Ljava/lang/String;"));
+    return 0;
+  },
+  "isNotificationAssistantAccessGranted(Landroid/content/ComponentName;)Z": async (component: JObj | null) => {
+    if (!component) fail("java/lang/NullPointerException", null);
+    checkCallerIsSystemOrSameApp(await vcall(component, "getPackageName", "()Ljava/lang/String;"));
+    return 0;
+  },
+  "shouldHideSilentStatusIcons(Ljava/lang/String;)Z": (pkg: string) => {
+    checkCallerIsSameApp(pkg);
+    return SYSTEM_UIDS.has(callingIdentity().uid) ? 0 : fail("java/lang/SecurityException", "Only available for notification listeners");
   },
 } });
-for (const [name, extra] of Object.entries({
-  BigTextStyle: ["bigText(Ljava/lang/CharSequence;)"],
-  BigPictureStyle: ["bigPicture(Landroid/graphics/Bitmap;)", "bigPicture(Landroid/graphics/drawable/Icon;)",
-    "bigLargeIcon(Landroid/graphics/Bitmap;)", "bigLargeIcon(Landroid/graphics/drawable/Icon;)",
-    "setContentDescription(Ljava/lang/CharSequence;)", "showBigPictureWhenCollapsed(Z)"],
-  InboxStyle: ["addLine(Ljava/lang/CharSequence;)"],
-})) {
-  const cls = "android/app/Notification$" + name;
-  const ms: Record<string, Impl> = {
-    "<init>()V": function () {},
-    "<init>(Landroid/app/Notification$Builder;)V": attachStyle,
-  };
-  self(ms, ["setBigContentTitle(Ljava/lang/CharSequence;)", "setSummaryText(Ljava/lang/CharSequence;)", ...extra], "L" + cls + ";");
-  rt.register({ name: cls, ctor: class extends JNStyle {}, sup: "android/app/Notification$Style", methods: ms });
-}
-rt.register({ name: "android/app/Notification$DecoratedCustomViewStyle", ctor: class extends JNStyle {}, sup: "android/app/Notification$Style",
-  methods: { "<init>()V": function () {} } });
+hostStub("notification", "webdroid/NotificationManagerService");
 
-// ── Notification.Action (+ its Builder)
-class JNAction extends JObj {
-  icon = 0; title: unknown = null; actionIntent: unknown = null;
-  ico: JObj | null = null; extras = mkBundle(); semantic = 0; contextual = 0;
+function areNotificationsEnabledForPackage(pkg: string, uid: number): number {
+  enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");
+  return +hasPermission(uid);
 }
-const mkActionArray = () => Object.assign([] as unknown[], { $t: "Landroid/app/Notification$Action;" });
-rt.register({
-  name: "android/app/Notification$Action", ctor: JNAction, ifaces: ["android/os/Parcelable"],
-  fields: ["icon", "title", "actionIntent"],
-  methods: {
-    "<init>(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V": function (this: JNAction, i: number, t: unknown, pi: unknown) {
-      this.icon = i; this.title = t; this.actionIntent = pi;
-    },
-    "getIcon()Landroid/graphics/drawable/Icon;": function (this: JNAction) {
-      if (this.ico || !this.icon) return this.ico;
-      return after(scall("android/graphics/drawable/Icon", "createWithResource", "(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;", "", this.icon),
-        (ico: JObj) => this.ico = ico);
-    },
-    "getRemoteInputs()[Landroid/app/RemoteInput;": () => null,
-    "getDataOnlyRemoteInputs()[Landroid/app/RemoteInput;": () => null,
-    "getAllowGeneratedReplies()Z": () => 1,
-    ...fieldGetters({ "getExtras()Landroid/os/Bundle;": "extras", "getSemanticAction()I": "semantic", "isContextual()Z": "contextual" }),
-    "isAuthenticationRequired()Z": () => 0,
-    "clone()Landroid/app/Notification$Action;": function (this: JNAction) { return Object.assign(new JNAction(), this); },
-    ...PARCELABLE,
-  },
-});
-class JNActionBuilder extends JObj { a = new JNAction(); }
-const AB = "Landroid/app/Notification$Action$Builder;";
-const abMethods: Record<string, Impl> = {
-  "<init>(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V": function (this: JNActionBuilder, i: number, t: unknown, pi: unknown) {
-    this.a.icon = i; this.a.title = t; this.a.actionIntent = pi;
-  },
-  "<init>(Landroid/graphics/drawable/Icon;Ljava/lang/CharSequence;Landroid/app/PendingIntent;)V":
-    driven(function* (this: JNActionBuilder, ic: JObj | null, t: unknown, pi: unknown): Gen {
-      // Action's constructor keeps a resource icon's id as its legacy int icon
-      const resource = ic && (yield vcall(ic, "getType", "()I")) === 2;
-      this.a.ico = ic; this.a.icon = resource ? yield vcall(ic, "getResId", "()I") : 0; this.a.title = t; this.a.actionIntent = pi;
-    }),
-  "<init>(Landroid/app/Notification$Action;)V": function (this: JNActionBuilder, a: JNAction) { if (a) this.a = Object.assign(new JNAction(), a); },
-  "build()Landroid/app/Notification$Action;": function (this: JNActionBuilder) { return this.a; },
-  ["addExtras(Landroid/os/Bundle;)" + AB]: function (this: JNActionBuilder, b: JBundle) {
-    if (b) for (const [k, v] of b.map) this.a.extras.map.set(k, v);
-    return this;
-  },
-  ["setSemanticAction(I)" + AB]: function (this: JNActionBuilder, v: number) { this.a.semantic = v; return this; },
-  ["setContextual(Z)" + AB]: function (this: JNActionBuilder, v: number) { this.a.contextual = v; return this; },
-};
-self(abMethods, ["addRemoteInput(Landroid/app/RemoteInput;)", "setAllowGeneratedReplies(Z)",
-  "setAuthenticationRequired(Z)",
-  "extend(Landroid/app/Notification$Action$Extender;)"], AB);
-rt.register({ name: "android/app/Notification$Action$Builder", ctor: JNActionBuilder, methods: abMethods });
-
-// ── android.app.Person: only ever handed straight back to Notification.Builder.
-class JPerson extends JObj {
-  [k: string]: unknown;
-  name: unknown = null; key: string | null = null; uri: string | null = null; ico: JObj | null = null;
+/** canNotifyAsPackage: an app may act for itself, or for a package that made it its delegate */
+function canNotifyAsPackage(callingPkg: string, pkg: string, userId: number): boolean {
+  checkCallerIsSameApp(callingPkg);
+  if (userId !== 0) denyPermission("android.permission.INTERACT_ACROSS_USERS", `canNotifyAsPackage for user ${userId}`);
+  return callingPkg === pkg || delegateOf(pkg) === callingPkg;
 }
-rt.register({
-  name: "android/app/Person", ctor: JPerson, ifaces: ["android/os/Parcelable"],
-  methods: {
-    ...fieldGetters({ "getName()Ljava/lang/CharSequence;": "name", "getKey()Ljava/lang/String;": "key",
-      "getUri()Ljava/lang/String;": "uri", "getIcon()Landroid/graphics/drawable/Icon;": "ico" }),
-    "isBot()Z": () => 0, "isImportant()Z": () => 0,
-    ...PARCELABLE,
-  },
-});
-class JPersonBuilder extends JObj { p = new JPerson(); }
-{
-  const PB = "Landroid/app/Person$Builder;";
-  const pbMethods: Record<string, Impl> = {
-    "<init>()V": function () {},
-    "build()Landroid/app/Person;": function (this: JPersonBuilder) { return this.p; },
-  };
-  for (const [sig, f] of Object.entries({
-    "setName(Ljava/lang/CharSequence;)": "name", "setKey(Ljava/lang/String;)": "key",
-    "setUri(Ljava/lang/String;)": "uri", "setIcon(Landroid/graphics/drawable/Icon;)": "ico",
-  })) pbMethods[sig + PB] = function (this: JPersonBuilder, v: unknown) { this.p[f] = v; return this; };
-  self(pbMethods, ["setBot(Z)", "setImportant(Z)"], PB);
-  rt.register({ name: "android/app/Person$Builder", ctor: JPersonBuilder, methods: pbMethods });
-}
-
-// ── NotificationChannel / NotificationChannelGroup / NotificationManager. Nothing is ever
-// shown; a channel keeps what apps read back out of it.
-class JNotificationChannel extends JObj { id = ""; nm: unknown = null; imp = 3; bypassDnd = 0; bubbles = 0; }
-rt.register({
-  name: "android/app/NotificationChannel", ctor: JNotificationChannel,
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/CharSequence;I)V": function (this: JNotificationChannel, id: string, nm: unknown, imp: number) {
-      this.id = id; this.nm = nm; this.imp = imp;
-    },
-    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getName()Ljava/lang/CharSequence;": "nm",
-      "getImportance()I": "imp", "canBypassDnd()Z": "bypassDnd", "canBubble()Z": "bubbles" }),
-    ...fieldSetters({ "setName(Ljava/lang/CharSequence;)V": "nm", "setBypassDnd(Z)V": "bypassDnd",
-      "setAllowBubbles(Z)V": "bubbles" }),
-    ...stubs(null, "getGroup()Ljava/lang/String;", "getSound()Landroid/net/Uri;"),
-    ...stubs(0, "shouldVibrate()Z"),
-    ...stubs(1, "canShowBadge()Z"),
-    ...noops("setDescription(Ljava/lang/String;)V", "setGroup(Ljava/lang/String;)V", "setShowBadge(Z)V",
-      "setSound(Landroid/net/Uri;Landroid/media/AudioAttributes;)V", "enableLights(Z)V", "enableVibration(Z)V",
-      "setLockscreenVisibility(I)V", "setLightColor(I)V", "setVibrationPattern([J)V"),
-  },
-});
-class JNotificationGroup extends JObj { id = ""; name: unknown = null; description: string | null = null; }
-const groupStoreName = () => "android:notification-groups:" + (appHost?.pkg ?? "");
-function notificationGroups(): JNotificationGroup[] {
-  rt.link("android/app/NotificationChannelGroup");
-  const groups: JNotificationGroup[] = [];
-  for (const [id, fields] of preferenceStore.open(groupStoreName())) if (Array.isArray(fields)) {
-    const group = new JNotificationGroup(); group.id = id; group.name = fields[0]; group.description = fields[1] ?? null;
-    groups.push(group);
-  }
-  return groups;
-}
-async function createGroup(group: JNotificationGroup): Promise<void> {
-  if (!group) throw rt.mkThrowable("java/lang/NullPointerException", "group");
-  const name = await csText(group.name);
-  if (!group.id || !name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Group id and name must not be empty");
-  const key = groupStoreName(), groups = preferenceStore.open(key);
-  groups.set(group.id, group.description === null ? [name] : [name, group.description]); preferenceStore.persist(key, groups);
-}
-rt.register({
-  name: "android/app/NotificationChannelGroup", ctor: JNotificationGroup,
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/CharSequence;)V": function (this: JNotificationGroup, id: string, name: unknown) { this.id = id; this.name = name; },
-    "setDescription(Ljava/lang/String;)V": function (this: JNotificationGroup, description: string | null) { this.description = description; },
-    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getName()Ljava/lang/CharSequence;": "name", "getDescription()Ljava/lang/String;": "description" }),
-    "isBlocked()Z": () => 0,
-  },
-});
-rt.register({
-  name: "android/app/NotificationManager", ctor: class extends JObj {},
-  methods: {
-    "getNotificationChannels()Ljava/util/List;": () => newArrayList(),
-    "getNotificationChannelGroups()Ljava/util/List;": () => newArrayList(notificationGroups()),
-    "getNotificationChannelGroup(Ljava/lang/String;)Landroid/app/NotificationChannelGroup;": (id: string) => notificationGroups().find(group => group.id === id) ?? null,
-    "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": createGroup,
-    "createNotificationChannelGroups(Ljava/util/List;)V": driven(function* (groups: unknown): Gen {
-      for (const group of yield toJsArray(groups)) {
-        if (!(group instanceof JNotificationGroup)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected NotificationChannelGroup");
-        yield createGroup(group);
-      }
-    }),
-    "deleteNotificationChannelGroup(Ljava/lang/String;)V": (id: string) => {
-      const key = groupStoreName(), groups = preferenceStore.open(key); groups.delete(id); preferenceStore.persist(key, groups);
-    },
-    "getActiveNotifications()[Landroid/service/notification/StatusBarNotification;":
-      () => Object.assign([] as unknown[], { $t: "Landroid/service/notification/StatusBarNotification;" }),
-    ...noops("notify(ILandroid/app/Notification;)V", "notify(Ljava/lang/String;ILandroid/app/Notification;)V",
-      "cancel(I)V", "cancel(Ljava/lang/String;I)V", "cancelAll()V", "setNotificationDelegate(Ljava/lang/String;)V",
-      "createNotificationChannel(Landroid/app/NotificationChannel;)V", "createNotificationChannels(Ljava/util/List;)V",
-      "deleteNotificationChannel(Ljava/lang/String;)V"),
-    ...stubs(null, "getNotificationDelegate()Ljava/lang/String;",
-      "getNotificationChannel(Ljava/lang/String;)Landroid/app/NotificationChannel;"),
-    ...stubs(1, "areNotificationsEnabled()Z"),
-  },
-});

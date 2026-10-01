@@ -7,8 +7,7 @@ import { JPendingIntent, pendingId, localPendingIntents } from "./pendingintent"
 import { Alarms } from "../shell/alarms";
 import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
-import { packages } from "./packages";
-import { usesSdk } from "./pm";
+import { packages, usesSdk } from "./packages";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 const localAlarms = new Alarms(localPendingIntents, uptimeMillis, reportUncaught);

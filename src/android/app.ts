@@ -918,10 +918,11 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
     "stopSelf()V": function (this: JObj) { svcStop(jclsNameOf(this)); },
     "stopSelf(I)V": function (this: JObj, startId: number) { svcStop(jclsNameOf(this), startId); },
     "stopSelfResult(I)Z": function (this: JObj, startId: number) { return svcStop(jclsNameOf(this), startId); },
-    "startForeground(ILandroid/app/Notification;)V": function (this: JObj) { svcFg(this, true); },
-    "startForeground(ILandroid/app/Notification;I)V": function (this: JObj) { svcFg(this, true); }, // the type is advisory
-    "stopForeground(Z)V": function (this: JObj) { svcFg(this, false); },
-    "stopForeground(I)V": function (this: JObj) { svcFg(this, false); },
+    "startForeground(ILandroid/app/Notification;)V": function (this: JObj, id: number, n: JObj | null) { return svcFg(this, true, id, n); },
+    // the type is advisory
+    "startForeground(ILandroid/app/Notification;I)V": function (this: JObj, id: number, n: JObj | null) { return svcFg(this, true, id, n); },
+    "stopForeground(Z)V": function (this: JObj, remove: number) { return svcFg(this, false, 0, null, remove ? 1 : 0); },
+    "stopForeground(I)V": function (this: JObj, flags: number) { return svcFg(this, false, 0, null, flags); },
   } });
 rt.register({
   name: "android/media/MediaRoute2ProviderService", ctor: class extends JService {}, sup: "android/app/Service",

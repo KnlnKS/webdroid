@@ -7,6 +7,16 @@ export const qualifyComponent = (name: string, pkg: string): string => {
   return name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name;
 };
 
+/** CompatibilityPermissionInfo.COMPAT_PERMS: permissions later releases split out of default behaviour */
+const COMPAT_PERMISSIONS: [string, number][] = [["android.permission.WRITE_EXTERNAL_STORAGE", 4],
+  ["android.permission.READ_PHONE_STATE", 4], ["android.permission.POST_NOTIFICATIONS", 33]];
+/** <uses-sdk>: targetSdkVersion defaults to minSdkVersion, which defaults to 1 */
+export function usesSdk(root: XmlNode): { min: number; target: number } {
+  const sdk = root.children.find((c) => c.name === "uses-sdk");
+  const min = sdk && attr(sdk, "minSdkVersion")?.data || 1;
+  return { min, target: sdk && attr(sdk, "targetSdkVersion")?.data || min };
+}
+
 export class PackageRecord {
   readonly pkg: string;
   readonly application: XmlNode | null;
@@ -32,6 +42,9 @@ export class PackageRecord {
       const name = attrStr(node, "name");
       if (name) this.permissions.add(name);
     }
+    // ParsingPackageUtils: an app targeting below the release that introduced one of these requests it implicitly
+    const { target } = usesSdk(root);
+    for (const [name, since] of COMPAT_PERMISSIONS) if (target < since) this.permissions.add(name);
   }
 
   process(node: XmlNode): string {

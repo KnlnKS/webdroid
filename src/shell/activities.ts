@@ -17,6 +17,7 @@ import { JView, uiState, requestLayoutAll, dispatchAttached, dispatchDetached } 
 import { detachContextOverlays } from "../android/popup";
 import { setGuestTimeout } from "../guest-clock";
 import { affinityRun } from "./activitytasks";
+import { notificationPromptOnLaunch } from "../android/notification";
 import { applyOrientationRequest } from "./device";
 
 export interface BootedApp {
@@ -58,7 +59,14 @@ export function launchMain(): Promise<void> {
   intent.component = booted.mainActivityCls.replaceAll("/", ".");
   intent.componentPkg = booted.host.pkg;
   intent.flags = 0x10000000;
-  return launchActivity(booted.mainActivityCls, intent);
+  const cls = booted.mainActivityCls, pkg = booted.host.pkg;
+  // PermissionPolicyService prompts an older app for its notification permission over a launcher task
+  const run = () => callOn(mainThread, async () => {
+    const prompt = notificationPromptOnLaunch(pkg);
+    await launchActivity(cls, intent);
+    await prompt();
+  });
+  return inMainJob() ? run() : onMain(run);
 }
 function launchActivity(cls: string, intent: JIntent | null, options?: ActivityLaunch): Promise<void> {
   // Startup and Java callbacks already hold the main queue; queuing again would deadlock.

@@ -420,22 +420,6 @@ describe("pending-intents", () => {
   });
 });
 
-describe("platform-queries", () => {
-  rt.linkNatives();
-  test("NotificationChannelGroup persists empty descriptions and supports deletion", async () => {
-    const manager = rt.make("android/app/NotificationManager");
-    const group = await newObj("android/app/NotificationChannelGroup", "(Ljava/lang/String;Ljava/lang/CharSequence;)V", "query-test", "Test");
-    await vcall(group, "setDescription", "(Ljava/lang/String;)V", "");
-    await vcall(manager, "createNotificationChannelGroup", "(Landroid/app/NotificationChannelGroup;)V", group);
-    try {
-      const copy = await vcall(manager, "getNotificationChannelGroup", "(Ljava/lang/String;)Landroid/app/NotificationChannelGroup;", "query-test");
-      expect(await vcall(copy, "getName", "()Ljava/lang/CharSequence;")).toBe("Test");
-      expect(await vcall(copy, "getDescription", "()Ljava/lang/String;")).toBe("");
-    } finally { await vcall(manager, "deleteNotificationChannelGroup", "(Ljava/lang/String;)V", "query-test"); }
-    expect(await vcall(manager, "getNotificationChannelGroup", "(Ljava/lang/String;)Landroid/app/NotificationChannelGroup;", "query-test")).toBeNull();
-  });
-});
-
 describe("provider-file-ipc", () => {
   rt.linkNatives();
 

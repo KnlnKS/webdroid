@@ -8,6 +8,7 @@ import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
 import { getPM } from "./pm";
 import { binderTransport, exportBinder } from "./binder";
+import { startForegroundNotification, stopForegroundNotification } from "./notification";
 
 class JRunningServiceInfo extends JObj {
   service: JComponentName | null = null;
@@ -16,6 +17,8 @@ class JRunningServiceInfo extends JObj {
   activeCount = 0; clientCount = 0; crashCount = 0;
   instance: JContextWrapper | null = null;
   startId = 0;
+  /** the id its foreground notification posted under, until removed or detached */
+  foregroundId = 0;
   bindings = new Map<string, { intent: JIntent; binder: unknown; clients: Set<string>; rebind: boolean }>();
 }
 export const serviceTransport: {
@@ -62,7 +65,8 @@ async function createService(service: JRunningServiceInfo, ctx: JContext): Promi
 /** ActivityThread.handleStopService: the destroyed service stays reachable until a context-cleanup
  *  message queued behind it runs, so what onDestroy posts (androidx's ServiceLifecycleDispatcher
  *  weakly holds the service) still finds it */
-async function destroyService({ instance }: JRunningServiceInfo): Promise<void> {
+async function destroyService({ instance, foregroundId }: JRunningServiceInfo): Promise<void> {
+  if (foregroundId) await stopForegroundNotification(foregroundId, true);
   if (!instance) return;
   await vcallOn(mainThread, instance, "onDestroy", "()V");
   void onMain(() => instance);
@@ -213,10 +217,21 @@ export function svcUnbind(connection: unknown): void {
   }
   void (record.remote ? serviceTransport.unbind(record.owner, record.process, record.key) : onMain(() => unbindLocalService(record.key))).catch(reportUncaught);
 }
-export function svcFg(svc: unknown, fg: boolean) {
+/** Service.startForeground (id) and stopForeground (its STOP_FOREGROUND_* flags), as ActiveServices
+ *  handles the service's notification */
+export async function svcFg(svc: unknown, fg: boolean, id = 0, notification: JObj | null = null, stopFlags = 0): Promise<void> {
   const si = runningServices.get(jclsNameOf(svc));
   if (si) { si.foreground = fg ? 1 : 0; si.flags = fg ? si.flags | 2 : si.flags & ~2; }
+  if (fg) {
+    if (si) si.foregroundId = id;
+    await startForegroundNotification(id, notification);
+  } else if (si?.foregroundId) {
+    const posted = si.foregroundId;
+    if (stopFlags & (STOP_FOREGROUND_REMOVE | STOP_FOREGROUND_DETACH)) si.foregroundId = 0;
+    await stopForegroundNotification(posted, (stopFlags & STOP_FOREGROUND_REMOVE) !== 0);
+  }
 }
+const STOP_FOREGROUND_REMOVE = 1, STOP_FOREGROUND_DETACH = 2;
 /** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
 export async function bindAsSystem(component: JComponentName, key: string, action: string | null = null): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
   const owner = packages.get(component.pkg), cls = qualifyComponent(component.cls, component.pkg);

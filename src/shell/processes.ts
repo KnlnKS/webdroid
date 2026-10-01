@@ -27,6 +27,7 @@ import { toJsArray } from "../jvm/natives/jcoll";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
+import { notificationStore, useNotificationStore } from "../android/notification";
 import { rt } from "../jvm/runtime";
 import { useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
@@ -102,6 +103,7 @@ class ProcessBroker {
   }
   readonly databases = sqliteStore;
   readonly preferences = preferenceStore;
+  readonly notifications = notificationStore;
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
@@ -468,6 +470,7 @@ export function connectProcess(): ProcessEndpoint {
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
+  useNotificationStore(broker.notifications);
   const stopAccounts = useAccountStore(broker.accounts);
   if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopAccounts);
   usePermissionStore(broker.permissions);

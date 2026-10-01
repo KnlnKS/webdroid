@@ -165,14 +165,10 @@ rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}
 rt.register({ name: "webdroid/TrustManagerService", ctor: class extends JObj {}, sup: "android/app/trust/ITrustManager$Stub", methods: {
   ...stubs(0, "isDeviceLocked(II)Z", "isDeviceSecure(II)Z"),
 } });
-// INotificationManager: notifications are still NotificationManager's TS spec (notification.ts);
-// the Stub is here for the managers that bind it at construction (KeyguardManager)
-rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends JObj {}, sup: "android/app/INotificationManager$Stub" });
 
 hostStub("audio", "webdroid/AudioService");
 hostStub("window", "webdroid/WindowManagerService");
 hostStub("trust", "webdroid/TrustManagerService");
-hostStub("notification", "webdroid/NotificationManagerService");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
