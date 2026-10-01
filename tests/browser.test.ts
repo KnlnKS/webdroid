@@ -146,7 +146,7 @@ test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and er
 }, PAGE_TIMEOUT);
 
 test.concurrent("ImageView reports and draws scale-type matrices and copies custom transforms", async () => {
-  const { results, reset, fadedAlpha } = await probe("imageView");
+  const { results, reset, fadedAlpha, verified } = await probe("imageView");
   const expected = [[2, 0, 0, 3, 5, 7], [1, 0, 0, 1, 0, 0], [4.7, 0, 0, 4.7, 0, 0],
     [4.7, 0, 0, 4.7, 0, 12.5], [4.7, 0, 0, 4.7, 0, 25], [1, 0, 0, 1, 37, 31],
     [7.2, 0, 0, 7.2, -25, 0], [1, 0, 0, 1, 37, 31]];
@@ -160,6 +160,7 @@ test.concurrent("ImageView reports and draws scale-type matrices and copies cust
   expect(results[0].pixel).toEqual([0, 255, 0, 255]);
   expect(reset).toEqual([1, 0, 0, 1, 0, 0]);
   expect(fadedAlpha).toBe(128);
+  expect(verified).toEqual([1, 0]);
 }, PAGE_TIMEOUT);
 
 // hwui blurs by Blur::convertRadiusToSigma: sigma = 0.57735 * radius + 0.5, 6.27 for a radius of 10

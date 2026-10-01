@@ -66,6 +66,8 @@ async function probe() {
   await vcall(faded, "setImageAlpha", "(I)V", 128);
   const fadedCtx = new OffscreenCanvas(10, 10).getContext("2d")!;
   await vcall(faded, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(fadedCtx, 10, 10));
-  return { results, reset: await affine(reset), fadedAlpha: fadedCtx.getImageData(5, 5, 1, 1).data[3] };
+  const verified = [await vcall(faded, "verifyDrawable", "(Landroid/graphics/drawable/Drawable;)Z", faded.drawable),
+    await vcall(faded, "verifyDrawable", "(Landroid/graphics/drawable/Drawable;)Z", drawable)];
+  return { results, reset: await affine(reset), fadedAlpha: fadedCtx.getImageData(5, 5, 1, 1).data[3], verified };
 }
 export default probe;

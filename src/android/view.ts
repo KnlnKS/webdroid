@@ -537,7 +537,8 @@ export class JView extends JObj {
   }
   /** AOSP's cached mDrawableState — what onCreateDrawableState last produced, app states included */
   stateCache: number[] | null = null;
-  /** the drawables the view owns, which its visibility and jumpDrawablesToCurrentState reach */
+  /** the drawables the view owns, which verifyDrawable accepts and its visibility, hotspot and
+   *  jumpDrawablesToCurrentState reach */
   drawables(): (JDrawable | null)[] { return [this.background, this.foreground]; }
   drawableState(): number[] { return this.stateCache ?? this.baseState(); }
   refreshDrawableState(): unknown { return rt.drive(this.refreshDrawableState$()); }
@@ -1598,7 +1599,8 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "getDrawingTime()J": () => BigInt(Math.floor(uptimeMillis())),
-  "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return +(d === this.background || d === this.foreground); },
+  // AOSP widgets accept the drawables they own besides View's background and foreground
+  "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: JDrawable | null) { return +this.drawables().includes(d); },
   "onCreateDrawableState(I)[I": viewCreateDrawableState,
   "static mergeDrawableStates([I[I)[I": mergeDrawableStates,
   "getFitsSystemWindows()Z": function (this: JView) { return this.fitsSys ? 1 : 0; },
@@ -1742,9 +1744,10 @@ const viewMethods: NativeSpec["methods"] = {
   "jumpDrawablesToCurrentState()V": driven(function* (this: JView): Gen {
     for (const d of this.drawables()) if (d) yield vcall(d, "jumpToCurrentState", "()V");
   }),
-  // a press starts the background's ripple (and any hotspot-aware drawable) where it lands
+  // a press starts the ripples of the drawables the view owns where it lands, as each AOSP widget
+  // passes the hotspot on (TextView's to the compound drawables it shows)
   "drawableHotspotChanged(FF)V": driven(function* (this: JView, x: number, y: number): Gen {
-    for (const d of [this.background, this.foreground]) if (d) yield vcall(d, "setHotspot", "(FF)V", x, y);
+    for (const d of this.drawables()) if (d) yield vcall(d, "setHotspot", "(FF)V", x, y);
   }),
   // the drawables run (animations, ripples) only while the view can be seen
   "onVisibilityAggregated(Z)V": driven(function* (this: JView, visible: number): Gen {
