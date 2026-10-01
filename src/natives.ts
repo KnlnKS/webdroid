@@ -147,6 +147,7 @@ import "./android/hwui";
 import "./android/inputchannel";
 import "./android/server/imm";
 import "./android/server/wm";
+import "./android/server/content";
 import "./android/keystore";
 import "./android/minikin";
 import "./android/shaping";
