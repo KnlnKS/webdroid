@@ -3,12 +3,13 @@
 // printf/scanf in printf.ts.
 
 import { mem, guestAt, wrote } from "./mem";
-import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, ldLong, stLong, calledMissing } from "./host";
+import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
 import { E, ERRSTR, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
-import { stdioInit, readInto, fdFile, faccessatPath } from "./stdio";
-import { pthreadInit, futex } from "./pthread";
+import { stdioInit, readInto, fdFile } from "./stdio";
+import { pthreadInit } from "./pthread";
+import { rawSyscall } from "./syscall";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
@@ -63,7 +64,7 @@ export function fail(cpu: Cpu | null, e: number): number {
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const randomWord = new Uint32Array(1);
-function fillRandom(p: number, n: number): void {
+export function fillRandom(p: number, n: number): void {
   const bytes = mem.bytes(p, n);
   for (let off = 0; off < n; off += 65536) crypto.getRandomValues(bytes.subarray(off, off + 65536));
   wrote(p, n);
@@ -201,24 +202,15 @@ let r48 = 0x1234abcd330en;
 const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
 const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n); };
 
-/** raw syscall numbers served by the libc function of the same shape (an offset in a register on
- *  LP64 makes mmap direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is here) */
-const SYSCALL_NR64: Record<number, string> = {
-  19: "eventfd", 20: "epoll_create1", 21: "epoll_ctl", 22: "epoll_pwait", 24: "dup3",
-  26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch",
-  85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
-  25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 65: "readv", 66: "writev", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
-  129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
-  124: "sched_yield", 132: "sigaltstack", 167: "prctl", 233: "madvise", 261: "prlimit64",
-  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction", 155: "getpgid", 267: "syncfs",
-};
-const SYSCALL_NR32: Record<number, string> = {
-  316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch", 360: "inotify_init1",
-  350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
-  221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 145: "readv", 146: "writev", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
-  78: "gettimeofday", 91: "munmap", 125: "mprotect",
-  132: "getpgid", 174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
-};
+let atRandom = 0;
+/** The auxiliary vector a process starts with: AT_PAGESZ, AT_HWCAP/AT_HWCAP2, AT_SECURE and
+ *  AT_RANDOM's 16 bytes (the stack guard and setjmp cookie seed). An A64 process's AT_HWCAP has
+ *  HWCAP_CRC32 alone, which the reference build's libc is compiled to assume; the other optional
+ *  features stay unadvertised, steering libraries away from paths the emitter lacks. */
+export function auxv(): [number, number][] {
+  if (!atRandom) { atRandom = mem.hostAlloc(16); fillRandom(atRandom, 16); }
+  return [[6, 4096], [16, PTR === 8 ? 1 << 7 : 0], [26, 0], [23, 0], [25, atRandom]];
+}
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
  *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
  *  scales by mem_unit where the byte counts would not fit */
@@ -231,38 +223,6 @@ export function fillSysinfo(p: number): void {
   put(L * 4, totalRam / unit); put(L * 5, totalRam / (2 * unit));
   mem.st16(p + L * 10, 1);
   mem.st32(p + (L === 8 ? 104 : 52), unit);
-}
-/** syscall(2): what a raw svc/swi and libc's wrapper both reach. Bodies answer the wrapper's
- *  way (-1 with errno set); Cpu.syscallReturn turns that into the kernel's -errno for a raw one. */
-function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostRet> {
-  if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts); }
-  if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
-  if (nr === (PTR === 8 ? 178 : 224)) return cpu.osTid;                    // gettid
-  if (nr === (PTR === 8 ? 172 : 20)) return cpu.pid;                        // getpid
-  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; } // getrandom
-  if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
-  if (nr === (PTR === 8 ? 123 : 242)) { const pid = a.i(), n = a.u(), set = a.p(); if (n < PTR || pid < 0) return fail(cpu, E.INVAL); mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1); return PTR; } // sched_getaffinity
-  if (PTR === 8 && nr === 232) {
-    const addr = a.va(), len = Number(a.va()), vec = a.p();
-    if (addr & BigInt(PAGE_SIZE - 1) || !Number.isSafeInteger(len) || len <= 0) return fail(cpu, E.INVAL);
-    const pages = Math.ceil(len / PAGE_SIZE);
-    for (let i = 0; i < pages; i++) {
-      const resident = mem.residentVa(addr + BigInt(i * PAGE_SIZE));
-      if (resident < 0) return fail(cpu, E.NOMEM);
-      mem.st8(vec + i, resident);
-    }
-    return 0;
-  }
-  if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
-  if (PTR === 8 && nr === 260) return fail(cpu, E.CHILD);                   // wait4: no guest child exists
-  // ARM's raw faccessat has three arguments; libc's faccessat wrapper has a fourth flags argument.
-  if (PTR === 4 && nr === 334) return faccessatPath(cpu, a.i(), a.str(), a.i(), 0);
-  // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
-  // past nr, where those start
-  const name = (PTR === 8 ? SYSCALL_NR64 : SYSCALL_NR32)[nr];
-  if (name) return hostFn("libc.so", name)!(cpu, a);
-  calledMissing.add("syscall " + nr);
-  return fail(cpu, E.NOSYS);
 }
 export function libcInit(): void {
   setRawSyscall(rawSyscall);
@@ -331,7 +291,12 @@ export function libcInit(): void {
     android_get_device_api_level: () => device.sdk,
     // AT_HWCAP and friends: this CPU advertises no optional feature bits, which is true and is
     // also what steers a library away from the paths the emitter has not written.
-    getauxval: (_c, a) => { const t = a.i(); return t === 6 ? 4096 : 0; },   // AT_PAGESZ, else none
+    getauxval: (cpu, a) => {
+      const t = a.ul(), e = auxv().find(([type]) => BigInt(type) === t);
+      if (e) return e[1];
+      fail(cpu, E.NOENT);
+      return 0;
+    },
     // an unset system property: zero length written, zero returned, as bionic does
     __system_property_get: (_c, a) => { a.p(); mem.st8(a.p(), 0); return 0; },
     __system_property_find: () => 0,

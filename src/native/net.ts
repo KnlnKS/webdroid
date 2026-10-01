@@ -7,13 +7,15 @@
 import { ByteQueue, DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists, ipv4Key, ipv4Text, parseIpv4 } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
+import { hostLib, PTR, stp, ldLong, type HostFn, type HostRet, ptr } from "./host";
 import { mem, guestAt } from "./mem";
-import { fail } from "./libc";
+import { fail, LAYOUT } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
+import { unixSocket, isUnixSocket } from "./stdio";
+import { unixConnect } from "./unix";
 const enc = new TextEncoder();
 
-export const AF_UNSPEC = 0, AF_INET = 2, AF_INET6 = 10;
+export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
 const SOCK_STREAM = 1, SOCK_DGRAM = 2, IPPROTO_ICMP = 1, IPPROTO_TCP = 6, IPPROTO_UDP = 17, IPPROTO_ICMPV6 = 58;
 const SOCK_NONBLOCK = 0x800, SOCK_CLOEXEC = 0x80000;
 const F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
@@ -962,7 +964,8 @@ const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (
 const setFd = (set: number, fd: number): void => { mem.st8(set + (fd >>> 3), mem.u8[set + (fd >>> 3)] | (1 << (fd & 7))); };
 
 /** Bionic select(2), sharing readiness and wakeups with poll(2). */
-function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, timeout: number): number | Promise<number> {
+/** select over fd_sets, waiting `ms` (-1: until one is ready) */
+export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, ms: number): number | Promise<number> {
   if (count < 0 || count > FD_SETSIZE) return fail(cpu, E.INVAL);
   const setBytes = Math.ceil(count / (PTR * 8)) * PTR;
   const entries: PollEntry[] = [];
@@ -972,12 +975,6 @@ function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number
     if (fdIsSet(writeSet, fd)) events |= POLLOUT;
     if (fdIsSet(exceptSet, fd)) events |= POLLPRI;
     if (events) entries.push({ fd, events, revents: 0 });
-  }
-  let ms = -1;
-  if (timeout) {
-    const seconds = mem.ld32(timeout), micros = mem.ld32(timeout + PTR);
-    if (seconds < 0 || micros < 0 || micros >= 1_000_000) return fail(cpu, E.INVAL);
-    ms = seconds * 1000 + micros / 1000;
   }
   const setVas = [readSet, writeSet, exceptSet].map((set) => set ? mem.va(set) : 0);
   const finish = (): number => {
@@ -1005,10 +1002,13 @@ function gaiStrerror(code: number): number {
 
 export function netInit(): void {
   const functions: Record<string, HostFn> = {
-    socket: (cpu, args) => { const domain = args.i(), type = args.i(), protocol = args.i(); return domain === AF_INET ? sys(cpu, socketCreate(domain, type, protocol)) : fail(cpu, E.AFNOSUPPORT); },
+    socket: (cpu, args) => {
+      const domain = args.i(), type = args.i(), protocol = args.i();
+      return domain === AF_INET ? sys(cpu, socketCreate(domain, type, protocol)) : domain === AF_UNIX ? unixSocket(type) : fail(cpu, E.AFNOSUPPORT);
+    },
     connect: (cpu, args) => {
       const fd = args.i(), sockaddr = args.p(), length = args.u();
-      if (!sockets.has(fd)) return fail(cpu, E.BADF);
+      if (!sockets.has(fd)) return isUnixSocket(fd) ? unixConnect(cpu, fd, sockaddr, length) : fail(cpu, E.BADF);
       if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return sys(cpu, socketConnect(fd, null) as number);
       const endpoint = readEndpoint(cpu, sockaddr, length);
       return endpoint ? sysAsync(cpu, socketConnect(fd, endpoint)) : -1;
@@ -1057,7 +1057,13 @@ export function netInit(): void {
     inet_pton: (_cpu, args) => { const family = args.i(), text = args.str(), out = args.p(); const bytes = parseIpv4(text); if (family !== AF_INET) return -1; if (!bytes) return 0; mem.write(out, bytes); return 1; },
     inet_ntop: (_cpu, args) => { const family = args.i(), source = args.p(), destination = args.p(), length = args.u(); if (family !== AF_INET || !copyText(ipv4Text(mem.u8.subarray(source, source + 4)), destination, length)) return 0; return ptr(destination); },
     poll: (cpu, args) => nativePoll(cpu, args.p(), args.u(), args.i()),
-    select: (cpu, args) => nativeSelect(cpu, args.i(), args.p(), args.p(), args.p(), args.p()),
+    select: (cpu, args) => {
+      const count = args.i(), r = args.p(), w = args.p(), x = args.p(), timeout = args.p();
+      if (!timeout) return nativeSelect(cpu, count, r, w, x, -1);
+      const seconds = ldLong(timeout + LAYOUT.TS_SEC), micros = ldLong(timeout + LAYOUT.TS_NSEC);
+      if (seconds < 0 || micros < 0 || micros >= 1_000_000) return fail(cpu, E.INVAL);
+      return nativeSelect(cpu, count, r, w, x, seconds * 1000 + micros / 1000);
+    },
   };
   hostLib("libc.so", functions);
 }

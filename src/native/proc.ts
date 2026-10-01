@@ -71,7 +71,16 @@ function capget(cpu: Cpu, header: number, data: number): number {
 }
 
 let abortMessage = "";
-export function abortMessageOr(what: string): string { return abortMessage ? `${what}: ${abortMessage}` : what; }
+/** android_set_abort_message's text: the HLE's own, or what the guest libc keeps (bionic.ts) */
+export const abortMessageSource = { text: (): string => abortMessage };
+export function abortMessageOr(what: string): string { const m = abortMessageSource.text(); return m ? `${what}: ${m}` : what; }
+/** signals whose default action dumps core: with no handler, the process dies of them */
+const CRASH_SIGNALS: Record<number, string> = { 4: "SIGILL", 5: "SIGTRAP", 6: "SIGABRT", 7: "SIGBUS", 8: "SIGFPE", 9: "SIGKILL", 11: "SIGSEGV" };
+/** kill/tgkill/raise's delivery: a crash signal nothing handles ends the process, as the kernel's default does */
+export function signalThread(cpu: Cpu, target: Cpu, sig: number): void {
+  if (!sigHandlers.has(sig) && CRASH_SIGNALS[sig]) cpu.fault(abortMessageOr(`fatal signal ${sig} (${CRASH_SIGNALS[sig]})`));
+  target.kill(sig);
+}
 
 /** one signal's handler exchanged through a struct sigaction laid out at the given offsets */
 function exchangeAction(a: ArgReader, size: number, handlerAt: number, flagsAt: number, maskAt: number, wideMask: boolean): number {
@@ -159,9 +168,9 @@ export function procInit(): void {
       if (r === 0) t!.kill(sig);
       return r;
     },
-    tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); t.kill(sig); return 0; },
-    raise: (cpu, a) => { const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`raise(${sig})`); cpu.kill(sig); return 0; },
-    kill: (cpu, a) => { a.i(); const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`kill(${sig})`); cpu.kill(sig); return 0; },
+    tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; },
+    raise: (cpu, a) => { signalThread(cpu, cpu, a.i()); return 0; },
+    kill: (cpu, a) => { a.i(); signalThread(cpu, cpu, a.i()); return 0; },
     sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), PTR); return e ? fail(cpu, e) : 0; },
     sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
     sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },

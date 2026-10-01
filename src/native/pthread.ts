@@ -1,7 +1,7 @@
 // pthreads over cooperative Cpus: one Cpu per thread, mutex/cond/keys/once, and the sleeping calls.
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
-import { mem, AddrMap, NativeFault } from "./mem";
+import { mem, AddrMap, NativeFault, guestAt } from "./mem";
 import { hostLib, NORET, SERVED, type HostFn, ldp, stp, stpVa, PTR } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
@@ -204,7 +204,7 @@ function semWait(cpu: Cpu, s: { count: number; waiters: (() => void)[] }, ts: nu
   });
 }
 
-export function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
+function newThread(parent: Cpu): Cpu {
   const jt = new JThread();
   jt.jname = `pthread-${++threadSeq}`;
   jt.alive = 1;
@@ -213,39 +213,65 @@ export function startThread(parent: Cpu, start: number, arg: bigint, detached: b
   cpu.signalMask = parent.signalMask;
   cpu.nativeRuntime = parent.nativeRuntime;
   bindCpu(jt, cpu);
+  return cpu;
+}
+/** a new thread's base frame runs on a later turn: `body` drives it and `exit` follows it */
+function launch(cpu: Cpu, body: () => Promise<void>, exit: () => void): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(() => void (async () => {
+    // a thread is signalable before its first instruction runs. A handler delivered in that
+    // window owns the base register file, so the thread's code must wait for it.
+    await cpu.awaitIdleBase();
+    cpu.depth++;
+    try { await body(); } catch (e) { reportUncaught(e); }
+    finally {
+      cpu.signals.length = 0;
+      await cpu.awaitIdleBase();
+      cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
+      cpu.jthread.alive = 0;
+      exit();
+      resolve();
+    }
+  })(), 0));
+}
+
+export function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
+  const cpu = newThread(parent);
   try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
   cpu.w[0] = Number(arg & 0xffffffffn) | 0; cpu.w[1] = Number(arg >> 32n) | 0;
   cpu.w[2 * cpu.lrx] = RET_SENTINEL; cpu.w[2 * cpu.lrx + 1] = 0;
   cpu.setPc(start);
   const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false, storage: 0 };
-  rec.done = new Promise<void>((resolve) => {
-    setTimeout(() => {
-      void (async () => {
-        // pthread_create makes the thread signalable before its start routine runs. A handler
-        // delivered in that window owns the base register file, so the routine must wait for it.
-        await cpu.awaitIdleBase();
-        cpu.depth++;
-        try {
-          await cpu.run();
-          if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);
-          await runCleanupHandlers(cpu);
-          await runKeyDestructors(cpu);
-        } catch (e) { reportUncaught(e); }
-        finally {
-          cpu.signals.length = 0;
-          await cpu.awaitIdleBase();
-          cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
-          jt.alive = 0; rec.exited = true;
-          rec.storage = cpu.dispose(!rec.detached);
-          if (rec.detached) { threads.delete(cpu.tid); handles.delete(cpu.pthreadSelf); }
-          resolve();
-        }
-      })();
-    }, 0);
+  rec.done = launch(cpu, async () => {
+    await cpu.run();
+    if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);
+    await runCleanupHandlers(cpu);
+    await runKeyDestructors(cpu);
+  }, () => {
+    rec.exited = true;
+    rec.storage = cpu.dispose(!rec.detached);
+    if (rec.detached) { threads.delete(cpu.tid); handles.delete(cpu.pthreadSelf); }
   });
   threads.set(cpu.tid, rec);
   handles.set(cpu.pthreadSelf, cpu.tid);
   return cpu;
+}
+
+const CLONE_THREAD = 0x10000, CLONE_SETTLS = 0x80000, CLONE_PARENT_SETTID = 0x100000, CLONE_CHILD_CLEARTID = 0x200000;
+/** clone(2) for a thread (the guest libc's pthread_create): the child continues past the svc with
+ *  the caller's registers, 0 in x0, its own stack and thread pointer. A process fork is ENOSYS. */
+export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: number, tls: number, ctid: number): number {
+  if (!(flags & CLONE_THREAD) || !stack) return fail(parent, E.NOSYS);
+  const cpu = newThread(parent);
+  cpu.forkFrom(parent, stack);
+  if (flags & CLONE_SETTLS) { cpu.tlsBase = tls; cpu.attached = true; }
+  if (flags & CLONE_PARENT_SETTID) mem.st32(ptid, cpu.osTid);
+  if (flags & CLONE_CHILD_CLEARTID) cpu.clearChildTid = BigInt(mem.va(ctid));
+  void launch(cpu, () => cpu.run(), () => {
+    // what pthread_join waits on, unless set_tid_address withdrew it
+    if (cpu.clearChildTid) { const at = guestAt(cpu.clearChildTid); mem.st32(at, 0); futex(cpu, at, 1, 0x7fffffff, 0); }
+    cpu.dispose();
+  });
+  return cpu.osTid;
 }
 
 export function pthreadInit(): void {

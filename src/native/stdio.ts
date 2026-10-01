@@ -28,6 +28,8 @@ interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
+  /** an AF_UNIX socket (unix.ts); a datagram one keeps each write whole */
+  unix?: boolean; dgram?: boolean;
 }
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12, F_DUPFD_CLOEXEC = 0x406;
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
@@ -225,6 +227,24 @@ export function javaShutdownFd(fd: number, how: number): number {
   }
   return 0;
 }
+/** socket(AF_UNIX): unconnected until unix.ts attaches the daemon it names */
+export function unixSocket(type: number): number {
+  const nb = !!(type & O_NONBLOCK);
+  return put({ ...fdBase("socketpair"), unix: true, dgram: (type & 15) === 2, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC));
+}
+export const isUnixSocket = (fd: number): boolean => !!fds.get(fd)?.unix;
+/** connect a unix socket to an in-process peer: each write reaches `receive` whole, and what it
+ *  replies is what the socket reads; -errno when already connected */
+export function attachUnixPeer(fd: number, receive: (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void): number {
+  const f = fds.get(fd)!;
+  if (f.wpipe) return E.ISCONN;
+  const toPeer = newPipe(1), fromPeer = newPipe(1);
+  const reply = (bytes: Uint8Array) => { fromPeer.q.push(bytes); wakeAll(fromPeer); };
+  const drain = () => { while (toPeer.q.length) receive(toPeer.q.shift()!, reply); if (!toPeer.closed) toPeer.wake.push(drain); };
+  toPeer.wake.push(drain);
+  f.wpipe = toPeer; f.rpipe = fromPeer;
+  return 0;
+}
 /** socketpair(2): two connected descriptors, each reading what the other writes */
 export function javaSocketPair(type: number): [number, number] {
   const ab = newPipe(1), ba = newPipe(1), nb = !!(type & O_NONBLOCK);
@@ -342,6 +362,15 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
 }
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
+/** an iovec array's bytes as one buffer: what one datagram carries */
+function gather(iov: number, count: number): Uint8Array {
+  const parts: Uint8Array[] = [];
+  for (let i = 0; i < count; i++) { const entry = iov + i * 2 * PTR; parts.push(mem.bytes(ldp(entry), mem.ld32(entry + PTR) >>> 0)); }
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
 function vectored(cpu: Cpu, iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
   if (count < 0 || count > 1024) return fail(cpu, E.INVAL);
   const from = (i: number, done: number): number | Promise<number> => {
@@ -762,6 +791,7 @@ function syncFd(cpu: Cpu | null, fd: number): number {
   return f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.random || f.log ? fail(cpu, E.INVAL) : 0;
 }
 /** posix_fallocate: grow the file to cover the range; it reports the error number itself */
+export const fdFallocate = (fd: number, offset: number, len: number): number => fallocateFd(fds.get(fd), offset, len);
 function fallocateFd(f: Fd | undefined, offset: number, len: number): number {
   if (!f) return E.BADF;
   if (offset < 0 || len <= 0) return E.INVAL;
@@ -769,6 +799,26 @@ function fallocateFd(f: Fd | undefined, offset: number, len: number): number {
   return 0;
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
+/** getdents64: linux_dirent64 records (bionic's struct dirent on LP64) from the fd's position on */
+export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): number {
+  const f = fds.get(fd);
+  if (!f) return fail(cpu, E.BADF);
+  if (!f.dir) return fail(cpu, E.NOTDIR);
+  const entries = [".", "..", ...vfs.list(f.path)];
+  let at = 0;
+  for (; f.pos < entries.length; f.pos++) {
+    const name = utf8(entries[f.pos]), reclen = (LAYOUT.D_NAME + name.length + 1 + 7) & ~7;
+    if (at + reclen > size) break;
+    const de = buf + at;
+    mem.memset(de, 0, reclen);
+    mem.st64(de + LAYOUT.D_INO, BigInt(f.pos + 1)); mem.st64(de + LAYOUT.D_OFF, BigInt(f.pos + 1));
+    mem.st16(de + LAYOUT.D_RECLEN, reclen);
+    mem.st8(de + LAYOUT.D_TYPE, vfs.isDir(`${f.path}/${entries[f.pos]}`) ? 4 : 8);
+    mem.write(de + LAYOUT.D_NAME, name);
+    at += reclen;
+  }
+  return at || f.pos >= entries.length ? at : fail(cpu, E.INVAL);
+}
 function openDir(path: string): number {
   const h = mem.malloc(16);
   dirs.set(h, { entries: [".", "..", ...vfs.list(path)], i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) });
@@ -916,7 +966,11 @@ export function stdioInit(): void {
     read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
     write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
     readv: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(cpu, fd, p, n)); },
-    writev: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n) => fdWrite(cpu, fd, p, n)); },
+    writev: (cpu, a) => {
+      const fd = a.i(), iov = a.p(), count = a.i();
+      if (fds.get(fd)?.dgram) return writeBytes(cpu, fds.get(fd), gather(iov, count));
+      return vectored(cpu, iov, count, (p, n) => fdWrite(cpu, fd, p, n));
+    },
     pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), offArg(a)),
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), offArg(a)),
     pread64: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), Number(a.l())),

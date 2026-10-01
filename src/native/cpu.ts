@@ -240,12 +240,15 @@ export class Cpu {
   state = "";                                       // which await the run loop is in (wd.native.regs)
   idle: (() => void)[] = [];                        // a run loop waiting for a handler stacked above it to finish
   sigWait: (() => void) | null = null;              // sigsuspend: released when a handler has run
+  sigQueued: (() => void) | null = null;            // sigtimedwait: told of each signal queued
   handling = new Set<number>();                     // signals whose handler is running
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
   kill(sig: number): void {
-    if (this.finished || !sigHandlers.has(sig)) return;
+    // a signal nothing handles is dropped, unless blocked: then it waits for sigwait/sigtimedwait
+    if (this.finished || !sigHandlers.has(sig) && !(this.signalMask & 1n << BigInt(sig - 1))) return;
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
+    this.sigQueued?.();
     if (this.signalInterrupt && !(this.signalMask & 1n << BigInt(sig - 1))) {
       this.deferSignalsUntilResume();
       this.signalInterrupt();
@@ -381,7 +384,7 @@ export class Cpu {
     if (this.loops) throw new Error("[native] cannot dispose a running thread");
     if (!cpus.has(this)) return 0;
     this.finished = true;
-    if (this.stackTop) mem.freeStack(this.stackBase, this.stackTop);
+    if (this.stackBase) mem.freeStack(this.stackBase, this.stackTop);
     for (const p of this.staticTlsBlocks.values()) mem.free(p);
     this.staticTlsBlocks.clear();
     const threadData = retainThreadData ? this.threadData : 0;
@@ -405,6 +408,24 @@ export class Cpu {
     return p;
   }
 
+  /** clone(2)'s child: the caller's architectural state, returning 0 from the svc on `stack` */
+  forkFrom(parent: Cpu, stack: bigint): void {
+    this.bytes.set(parent.bytes.subarray(0, ARCH_SIZE));
+    this.w[0] = 0; this.w[1] = 0;
+    this.w[2 * this.spx] = Number(stack & 0xffffffffn); this.w[2 * this.spx + 1] = Number(stack >> 32n);
+    this.stackTop = Number(stack & 0xffffffffn);                         // the guest's: stackBase stays 0, never freed here
+  }
+  /** CLONE_CHILD_CLEARTID's word, cleared and woken when the thread exits */
+  clearChildTid = 0n;
+  /** whether the guest libc knows this thread (bionic: its TCB and pthread_internal_t exist) */
+  attached = false;
+  /** the thread as the guest libc lays it out: TPIDR, pthread_self() and errno's address */
+  bindThread(tp: number, self: number, errno: number): void {
+    this.tlsBase = tp; this.pthreadSelf = self;
+    this.errnoAddr = errno; this.u32[OFF_ERRNO >> 2] = errno;
+    this.attached = true;
+  }
+
   ensureStack(): void {
     if (!this.stackTop) {
       const s = mem.allocStack(this.jthread === mainThread ? MAIN_STACK_SIZE : STACK_SIZE);
@@ -418,6 +439,7 @@ export class Cpu {
   private savePool: Uint8Array[] = [];
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   async call(fn: number, args: CallArg[] = [], label = "call", resume?: (returned: boolean) => void, stackTop?: bigint): Promise<number> {
+    if (!this.attached && threadHook) { this.attached = true; await threadHook(this); }
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -721,6 +743,9 @@ export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRe
 /** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
 const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
+/** makes a Cpu the host created known to the guest libc before its first guest instruction */
+let threadHook: ((cpu: Cpu) => Promise<void>) | null = null;
+export function setThreadHook(fn: (cpu: Cpu) => Promise<void>): void { threadHook = fn; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();
 
