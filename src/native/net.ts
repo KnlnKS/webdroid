@@ -1,8 +1,8 @@
 // Sockets, shared by bionic (native code) and libcore's Linux natives (Java): one descriptor
 // namespace (fd.ts) and one socket model. A TCP connection to another host is a relay connection;
 // TCP to a listener in this process and UDP between this process's sockets stay in the process.
-// The core answers -errno and takes JS values; the libc functions at the end adapt it to guest
-// memory and errno.
+// The core answers -errno and takes JS values; the kernel's socket calls (NET_SYSCALLS) and the
+// ARM32 libc's resolver functions at the end adapt it to guest memory and errno.
 
 import { ByteQueue, DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists, ipv4Key, ipv4Text, parseIpv4 } from "../shell/relay";
 import { E } from "./abi";
@@ -999,54 +999,59 @@ function gaiStrerror(code: number): number {
   return address;
 }
 
+/** the kernel's socket calls */
+export const NET_SYSCALLS: Record<string, HostFn> = {
+  socket: (cpu, args) => {
+    const domain = args.i(), type = args.i(), protocol = args.i();
+    return domain === AF_INET ? sys(cpu, socketCreate(domain, type, protocol)) : domain === AF_UNIX ? unixSocket(type) : fail(cpu, E.AFNOSUPPORT);
+  },
+  connect: (cpu, args) => {
+    const fd = args.i(), sockaddr = args.p(), length = args.u();
+    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixConnect(cpu, fd, sockaddr, length) : fail(cpu, E.BADF);
+    if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return sys(cpu, socketConnect(fd, null) as number);
+    const endpoint = readEndpoint(cpu, sockaddr, length);
+    return endpoint ? sysAsync(cpu, socketConnect(fd, endpoint)) : -1;
+  },
+  bind: (cpu, args) => {
+    const fd = args.i(), sockaddr = args.p(), length = args.u();
+    if (!sockets.has(fd)) return fail(cpu, E.BADF);
+    const endpoint = readEndpoint(cpu, sockaddr, length);
+    return endpoint ? sys(cpu, socketBind(fd, endpoint)) : -1;
+  },
+  listen: (cpu, args) => { const fd = args.i(); args.i(); return sys(cpu, socketListen(fd)); },
+  accept: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), 0),
+  accept4: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), args.i()),
+  sendto: (cpu, args) => {
+    const fd = args.i(), source = args.p(), length = args.u();
+    args.i(); const destination = args.p(), destinationLength = args.u();
+    if (!isNativeSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : nativeSend(cpu, fd, source, length);
+    if (length && !source) return fail(cpu, E.FAULT);
+    let endpoint: Endpoint | null = null;
+    if (destination || destinationLength) { endpoint = readEndpoint(cpu, destination, destinationLength); if (!endpoint) return -1; }
+    return sys(cpu, socketSend(fd, mem.u8.subarray(source, source + length), endpoint));
+  },
+  recvfrom: (cpu, args) => {
+    const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
+    const source = args.p(), sourceLength = args.p();
+    if (isNativeSocket(fd)) return nativeReceive(cpu, fd, destination, length, flags, source, sourceLength);
+    if (source || sourceLength) return fail(cpu, E.NOTCONN);
+    return nativeRead(cpu, fd, destination, length, !!(flags & MSG_DONTWAIT));
+  },
+  sendmsg: (cpu) => fail(cpu, E.NETUNREACH), recvmsg: (cpu) => fail(cpu, E.NETUNREACH),
+  shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, socketShutdown(fd, how)); },
+  setsockopt: (cpu, args) => nativeSetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.u()),
+  getsockopt: (cpu, args) => nativeGetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.p()),
+  getsockname: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), false),
+  getpeername: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), true),
+};
+
 export function netInit(): void {
   const functions: Record<string, HostFn> = {
-    socket: (cpu, args) => {
-      const domain = args.i(), type = args.i(), protocol = args.i();
-      return domain === AF_INET ? sys(cpu, socketCreate(domain, type, protocol)) : domain === AF_UNIX ? unixSocket(type) : fail(cpu, E.AFNOSUPPORT);
-    },
-    connect: (cpu, args) => {
-      const fd = args.i(), sockaddr = args.p(), length = args.u();
-      if (!sockets.has(fd)) return isUnixSocket(fd) ? unixConnect(cpu, fd, sockaddr, length) : fail(cpu, E.BADF);
-      if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return sys(cpu, socketConnect(fd, null) as number);
-      const endpoint = readEndpoint(cpu, sockaddr, length);
-      return endpoint ? sysAsync(cpu, socketConnect(fd, endpoint)) : -1;
-    },
-    bind: (cpu, args) => {
-      const fd = args.i(), sockaddr = args.p(), length = args.u();
-      if (!sockets.has(fd)) return fail(cpu, E.BADF);
-      const endpoint = readEndpoint(cpu, sockaddr, length);
-      return endpoint ? sys(cpu, socketBind(fd, endpoint)) : -1;
-    },
-    listen: (cpu, args) => { const fd = args.i(); args.i(); return sys(cpu, socketListen(fd)); },
-    accept: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), 0),
-    accept4: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), args.i()),
     send: (cpu, args) => { const fd = args.i(), source = args.p(), length = args.u(); args.i(); return nativeSend(cpu, fd, source, length); },
-    sendto: (cpu, args) => {
-      const fd = args.i(), source = args.p(), length = args.u();
-      args.i(); const destination = args.p(), destinationLength = args.u();
-      if (!isNativeSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : nativeSend(cpu, fd, source, length);
-      if (length && !source) return fail(cpu, E.FAULT);
-      let endpoint: Endpoint | null = null;
-      if (destination || destinationLength) { endpoint = readEndpoint(cpu, destination, destinationLength); if (!endpoint) return -1; }
-      return sys(cpu, socketSend(fd, mem.u8.subarray(source, source + length), endpoint));
-    },
     recv: (cpu, args) => {
       const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
       return isNativeSocket(fd) ? nativeReceive(cpu, fd, destination, length, flags, 0, 0) : nativeRead(cpu, fd, destination, length);
     },
-    recvfrom: (cpu, args) => {
-      const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
-      const source = args.p(), sourceLength = args.p();
-      if (isNativeSocket(fd)) return nativeReceive(cpu, fd, destination, length, flags, source, sourceLength);
-      if (source || sourceLength) return fail(cpu, E.NOTCONN);
-      return nativeRead(cpu, fd, destination, length, !!(flags & MSG_DONTWAIT));
-    },
-    shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, socketShutdown(fd, how)); },
-    setsockopt: (cpu, args) => nativeSetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.u()),
-    getsockopt: (cpu, args) => nativeGetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.p()),
-    getsockname: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), false),
-    getpeername: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), true),
     getaddrinfo: (cpu, args) => nativeGetaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
     freeaddrinfo: (_cpu, args) => { const address = args.p(); if (address) mem.free(address); },
     getifaddrs: (cpu, args) => nativeGetifaddrs(cpu, args.p()),

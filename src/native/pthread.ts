@@ -274,6 +274,13 @@ export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: num
   return cpu.osTid;
 }
 
+/** the kernel's sleeps and yield */
+export const PTHREAD_SYSCALLS: Record<string, HostFn> = {
+  clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
+  nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); return sleepMs(readTs(req)); },
+  sched_yield: () => yieldToLoop().then(() => 0),
+};
+
 export function pthreadInit(): void {
   const M: Record<string, HostFn> = {
     pthread_create: (parent, a) => {
@@ -444,12 +451,8 @@ export function pthreadInit(): void {
     sem_getvalue: (_c, a) => { const s = semOf(a.p()); mem.st32(a.p(), s.count); return 0; },
     sem_timedwait: (cpu, a) => { const s = semOf(a.p()); return semWait(cpu, s, a.p(), 0); },
     sem_clockwait: (cpu, a) => { const s = semOf(a.p()), clk = a.i(); return semWait(cpu, s, a.p(), clk); },
-    clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
-    // sleeping
     usleep: (_c, a) => sleepMs(a.u() / 1000),
     sleep: (_c, a) => sleepMs(a.u() * 1000),
-    nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); return sleepMs(readTs(req)); },
-    sched_yield: () => yieldToLoop().then(() => 0),
   };
   hostLib("libc.so", M);
 }

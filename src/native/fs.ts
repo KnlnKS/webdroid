@@ -6,7 +6,8 @@ import { mem, guestAt } from "./mem";
 import { type HostFn, PTR, stp, ldp, ARG0 } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime } from "./libc";
+import { fail, utf8, logLine, offArg, readTs, clockTime } from "./libc";
+import { KLAYOUT } from "./syscall";
 import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
@@ -549,22 +550,22 @@ export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number)
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
 export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path)): void {
-  mem.memset(buf, 0, LAYOUT.STAT_SIZE);
+  mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + LAYOUT.ST_MODE, isDir ? S_IFDIR | 0o755 : file && fifos.has(file) ? S_IFIFO | 0o600 : S_IFREG | 0o644);
-  mem.st32(buf + LAYOUT.ST_NLINK, 1);
+  mem.st32(buf + KLAYOUT.ST_MODE, isDir ? S_IFDIR | 0o755 : file && fifos.has(file) ? S_IFIFO | 0o600 : S_IFREG | 0o644);
+  mem.st32(buf + KLAYOUT.ST_NLINK, 1);
   const owner = vfs.owner(path);
-  mem.st32(buf + LAYOUT.ST_UID, owner); mem.st32(buf + LAYOUT.ST_GID, owner);
-  mem.st32(buf + LAYOUT.ST_SIZE, size); mem.st32(buf + LAYOUT.ST_SIZE + 4, 0);
-  mem.st32(buf + LAYOUT.ST_BLKSIZE, 4096);
-  mem.st32(buf + LAYOUT.ST_BLOCKS, (size + 511) >> 9);
+  mem.st32(buf + KLAYOUT.ST_UID, owner); mem.st32(buf + KLAYOUT.ST_GID, owner);
+  mem.st32(buf + KLAYOUT.ST_SIZE, size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
+  mem.st32(buf + KLAYOUT.ST_BLKSIZE, 4096);
+  mem.st32(buf + KLAYOUT.ST_BLOCKS, (size + 511) >> 9);
   const sec = Math.floor(mtimeMs / 1000);
-  for (const o of [LAYOUT.ST_ATIME, LAYOUT.ST_MTIME, LAYOUT.ST_CTIME]) stp(buf + o, sec);
-  mem.st32(buf + LAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + LAYOUT.ST_INO, inoOf(path));
+  for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stp(buf + o, sec);
+  mem.st32(buf + KLAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + KLAYOUT.ST_INO, inoOf(path));
 }
 /** statfs: a fixed-size filesystem with room; the LP64 struct is all 64-bit fields at an 8-byte stride */
 function fillStatfs(b: number): void {
-  mem.memset(b, 0, LAYOUT.STATFS_SIZE);
+  mem.memset(b, 0, KLAYOUT.STATFS_SIZE);
   const w = PTR, put = (i: number, v: number) => stp(b + i * w, v);
   put(1, 4096); put(2, 0x100000); put(3, 0x80000); put(4, 0x80000); put(5, 0x10000); put(6, 0x8000);
   if (PTR === 8) { put(8, 255); put(9, 4096); } else { mem.st32(b + 56, 255); mem.st32(b + 60, 4096); }
@@ -645,7 +646,7 @@ function statFd(cpu: Cpu, fd: number, buf: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   fillStat(buf, f.dir, f.content.len, Date.now(), f.path, f.content);
-  mem.st32(buf + LAYOUT.ST_MODE, fdMode(f));
+  mem.st32(buf + KLAYOUT.ST_MODE, fdMode(f));
   return 0;
 }
 /** st_mode of an open file: /dev/null stdio and /dev/random are character devices, and eventfd,
@@ -864,8 +865,8 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const fd = a.i(), flags = a.i(), value = a.p(), old = a.p(), f = fds.get(fd);
     if (!f) return fail(cpu, E.BADF);
     if (!f.timer || flags & ~1) return fail(cpu, E.INVAL);
-    if (!validTime(value) || !validTime(value + LAYOUT.TS_SIZE)) return fail(cpu, E.INVAL);
-    const interval = readTs(value), next = readTs(value + LAYOUT.TS_SIZE);
+    if (!validTime(value) || !validTime(value + KLAYOUT.TS_SIZE)) return fail(cpu, E.INVAL);
+    const interval = readTs(value), next = readTs(value + KLAYOUT.TS_SIZE);
     if (old) timerState(f.timer, old);
     f.timer.interval = interval;
     f.timer.next = next ? next + (flags & 1 ? 0 : clockTime(f.timer.clock)) : 0;

@@ -108,8 +108,38 @@ function exchangeAction(a: ArgReader, { size, handler: handlerAt, flags: flagsAt
 /** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
  *  mask), which is not bionic's */
 const rtSigaction = (a: ArgReader): number => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true });
+const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
+
+/** the kernel's signals, resource limits, capabilities and scheduling policy */
+export const PROC_SYSCALLS: Record<string, HostFn> = {
+  getrlimit: (_cpu, a) => {
+    const current = limit(a.i()), out = a.p();
+    writeLimit(out, current.soft); writeLimit(out + PTR, current.hard);
+    return 0;
+  },
+  setrlimit: (cpu, a) => {
+    const resource = a.i(), next = a.p();
+    return setLimit(cpu, resource, readLimit(next), readLimit(next + PTR));
+  },
+  prlimit64: (cpu, a) => {
+    const pid = a.i(), resource = a.i(), next = a.p(), old = a.p();
+    if (pid !== 0 && pid !== cpu.pid) return fail(cpu, E.SRCH);
+    const previous = limit(resource);
+    if (old) { mem.st64(old, previous.soft); mem.st64(old + 8, previous.hard); }
+    return next ? setLimit(cpu, resource, BigInt.asUintN(64, mem.ld64(next)), BigInt.asUintN(64, mem.ld64(next + 8))) : 0;
+  },
+  sched_getscheduler: () => 0,
+  capget: (cpu, a) => capget(cpu, a.p(), a.p()),
+  // signals: a handler runs on the target thread, at once when it is parked in a host call
+  // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
+  rt_sigaction: (_c, a) => rtSigaction(a),
+  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; },
+  kill: (cpu, a) => { a.i(); signalThread(cpu, cpu, a.i()); return 0; },
+  sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
+  sigaltstack,
+};
+
 export function procInit(): void {
-  resourceLimits.clear();
   const guard = mem.hostAlloc(8);
   mem.st32(guard, (Math.random() * 0x7fffffff) | 0x100); mem.st32(guard + 4, (Math.random() * 0x7fffffff) | 0);
   hostData("libc.so", "__stack_chk_guard", guard);
@@ -122,42 +152,21 @@ export function procInit(): void {
   stp(pw, mem.hostStr(appUserName(uid))); stp(pw + PTR, mem.hostStr("")); mem.st32(pw + 2 * PTR, uid); mem.st32(pw + 2 * PTR + 4, uid);
   stp(pw + 2 * PTR + 8, mem.hostStr("")); stp(pw + 3 * PTR + 8, mem.hostStr("/data")); stp(pw + 4 * PTR + 8, mem.hostStr("/system/bin/sh"));
   const cpuMask = (1 << device.cpu.cores) - 1;
-  const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
   const M: Record<string, HostFn> = {
     sysinfo: (_c, a) => { fillSysinfo(a.p()); return 0; },
-    getrlimit: (_cpu, a) => {
-      const current = limit(a.i()), out = a.p();
-      writeLimit(out, current.soft); writeLimit(out + PTR, current.hard);
-      return 0;
-    },
-    setrlimit: (cpu, a) => {
-      const resource = a.i(), next = a.p();
-      return setLimit(cpu, resource, readLimit(next), readLimit(next + PTR));
-    },
-    prlimit64: (cpu, a) => {
-      const pid = a.i(), resource = a.i(), next = a.p(), old = a.p();
-      if (pid !== 0 && pid !== cpu.pid) return fail(cpu, E.SRCH);
-      const previous = limit(resource);
-      if (old) { mem.st64(old, previous.soft); mem.st64(old + 8, previous.hard); }
-      return next ? setLimit(cpu, resource, BigInt.asUintN(64, mem.ld64(next)), BigInt.asUintN(64, mem.ld64(next + 8))) : 0;
-    },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
     sched_setaffinity: () => 0, sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
     sched_get_priority_max: () => 99, sched_get_priority_min: () => 1,
-    sched_getscheduler: () => 0, sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
-    capget: (cpu, a) => capget(cpu, a.p(), a.p()),
+    sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
     getpwuid: () => pw,
     getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memmove(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
     setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: (cpu) => cpu.pid,
     ptrace: (cpu) => fail(cpu, E.PERM),
-    // signals: a handler runs on the target thread, at once when it is parked in a host call
-    // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
     // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
     __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
     sigaction: (_c, a) => exchangeAction(a, SIGACTION),
-    rt_sigaction: (_c, a) => rtSigaction(a),
     sigaction64: (_c, a) => exchangeAction(a, SIGACTION64),
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
@@ -168,14 +177,11 @@ export function procInit(): void {
       if (r === 0) t!.kill(sig);
       return r;
     },
-    tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; },
     raise: (cpu, a) => { signalThread(cpu, cpu, a.i()); return 0; },
-    kill: (cpu, a) => { a.i(); signalThread(cpu, cpu, a.i()); return 0; },
     sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
     sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
-    sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
     sigwait: () => new Promise<never>(() => {}),
-    sigaltstack, sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); mem.st32(a.p(), Number(mask & 0xffffffffn)); return 0; },
+    sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); mem.st32(a.p(), Number(mask & 0xffffffffn)); return 0; },
     pthread_sigqueue: () => 0, killpg: () => 0,
     openlog: () => {}, closelog: () => {},
     syslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, a)); },
@@ -197,7 +203,6 @@ export function procInit(): void {
     __cxa_thread_atexit_impl: () => 0,
     __gnu_strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, `error ${e}`, n); return ptr(b); },
     __cmsg_nxthdr: () => 0,
-    recvmsg: (cpu) => fail(cpu, E.NETUNREACH), sendmsg: (cpu) => fail(cpu, E.NETUNREACH),
     if_nametoindex: () => 0, if_indextoname: () => 0,
     // sorting and searching call back into the guest for every comparison
     qsort: async (cpu, a) => {

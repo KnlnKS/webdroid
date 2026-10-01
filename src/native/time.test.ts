@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
 import { defineHost, lookupHost, ldp, stp } from "./host";
-import { libcInit, LAYOUT, readTs, writeTs } from "./libc";
+import { libcInit, TM, readTs, writeTs } from "./libc";
+import { KLAYOUT, kernelInit } from "./syscall";
 import { mem } from "./mem";
 
 test("native time fields preserve signed longs and the process ABI width", async () => {
@@ -10,15 +11,16 @@ test("native time fields preserve signed longs and the process ABI width", async
   process.env.TZ = "America/Los_Angeles";
   try {
     for (const a64 of [false, true]) {
-      setA64(a64); libcInit();
-      const cpu = new Cpu(mainThread, "time-test"), value = mem.hostAlloc(16), tm = mem.hostAlloc(LAYOUT.TM_SIZE);
+      setA64(a64); kernelInit();
+      if (!a64) libcInit();
+      const cpu = new Cpu(mainThread, "time-test"), value = mem.hostAlloc(16), tm = mem.hostAlloc(TM.size);
       const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
       try {
         // the tm functions are an ARM32 process's alone; the kernel layer's timespecs are both ABIs'
         if (!a64) {
           mem.st32(value, Date.UTC(2025, 5, 16, 16) / 1000);
           await call("localtime_r", value, tm);
-          expect(mem.ld32(tm + LAYOUT.TM_GMTOFF) | 0).toBe(-25200);
+          expect(mem.ld32(tm + TM.gmtoff) | 0).toBe(-25200);
           expect(mem.ld32(tm + 20)).toBe(125);
         }
         for (const time of [-1, ...(a64 ? [Date.UTC(2140, 0, 1)] : [])]) {
@@ -37,8 +39,8 @@ test("native time fields preserve signed longs and the process ABI width", async
 });
 
 test("POSIX thread timers pass sigval and disarm after a one-shot expiry", async () => {
-  setA64(false); libcInit();
-  const cpu = new Cpu(mainThread, "timer-test"), event = mem.hostAlloc(64), out = mem.hostAlloc(4), value = mem.hostAlloc(2 * LAYOUT.TS_SIZE);
+  setA64(false); kernelInit(); libcInit();
+  const cpu = new Cpu(mainThread, "timer-test"), event = mem.hostAlloc(64), out = mem.hostAlloc(4), value = mem.hostAlloc(2 * KLAYOUT.TS_SIZE);
   const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
   const delivered = Promise.withResolvers<number>();
   let callback: Cpu | undefined, timer = 0;
@@ -48,14 +50,14 @@ test("POSIX thread timers pass sigval and disarm after a one-shot expiry", async
     stp(event + 12, defineHost("test:timer", (thread, args) => { callback = thread; delivered.resolve(args.i()); return 0; }));
     expect(await call("timer_create", 1, event, out)).toBe(0);
     timer = ldp(out);
-    writeTs(value, 0); writeTs(value + LAYOUT.TS_SIZE, -1);
+    writeTs(value, 0); writeTs(value + KLAYOUT.TS_SIZE, -1);
     expect(await call("timer_settime", timer, 0, value, 0)).toBe(-1);
-    writeTs(value + LAYOUT.TS_SIZE, 10);
+    writeTs(value + KLAYOUT.TS_SIZE, 10);
     expect(await call("timer_settime", timer, 0, value, 0)).toBe(0);
     expect(await delivered.promise).toBe(1234);
     while (!callback?.finished) await new Promise(resolve => setTimeout(resolve, 0));
     expect(await call("timer_gettime", timer, value)).toBe(0);
-    expect(readTs(value + LAYOUT.TS_SIZE)).toBe(0);
+    expect(readTs(value + KLAYOUT.TS_SIZE)).toBe(0);
     expect(await call("timer_getoverrun", timer)).toBe(0);
   } finally { if (timer) await call("timer_delete", timer); cpu.dispose(); }
 });

@@ -2,6 +2,7 @@ import { rt, type Runtime } from "../jvm/runtime";
 import { curThread, appNativeAbi, mainThread, type JThread } from "../jvm/natives/jlang";
 import { setNativeMemorySizer } from "../jvm/natives/jnio";
 import { libcInit } from "./libc";
+import { kernelInit } from "./syscall";
 import { dlInit, loadModule, modules, resolveGlobalOrNull } from "./dl";
 import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
@@ -32,6 +33,7 @@ function nativeInit(abi: string): void {
   setA64(wide);
   rt.nativeAbis = NATIVE_ABIS.filter(a => (a === "arm64-v8a") === wide);
   inited = true;
+  kernelInit();
   libcInit();
   dlInit();
   jniInit();

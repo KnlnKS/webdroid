@@ -6,10 +6,11 @@ import { mem, wrote } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { LAYOUT, fail, utf8, logLine, scanSink } from "./libc";
+import { fail, utf8, logLine, scanSink } from "./libc";
 import { format, scan } from "./printf";
+import { KLAYOUT } from "./syscall";
 import { vfs } from "../shell/vfs";
-import { FS_SYSCALLS, fsInit, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdReadFully, fdWrite, fdClose, fdSeek, fdDup2, fdFallocate,
+import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdReadFully, fdWrite, fdClose, fdSeek, fdDup2, fdFallocate,
   statPath, accessPath, faccessatPath, renamePath, mkdirPath, makeFifo, makePipe, epollCreate, truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
 const dec = new TextDecoder();
 
@@ -137,7 +138,7 @@ const FTS = { parent: 4, link: 8, accpath: 20, path: 24, errno: 28, pathlen: 36,
 function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number): number {
   const name = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
   const pathlen = utf8(path).length, namelen = utf8(name).length;
-  const entry = mem.malloc(FTS.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(LAYOUT.STAT_SIZE);
+  const entry = mem.malloc(FTS.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(KLAYOUT.STAT_SIZE);
   walk.allocations.push(entry, pathp, statp);
   mem.memset(entry, 0, FTS.name + namelen + 1);
   stp(entry + FTS.parent, parent); stp(entry + FTS.accpath, pathp); stp(entry + FTS.path, pathp);
@@ -205,7 +206,6 @@ function closeFts(handle: number): number {
 }
 
 export function stdioInit(): void {
-  fsInit();
   // __sF[3]: stdin/stdout/stderr FILE structs, contiguous
   const sF = mem.hostAlloc(FILE.size * 3);
   mem.memset(sF, 0, FILE.size * 3);
@@ -433,5 +433,5 @@ export function stdioInit(): void {
   Object.assign(M, { __openat_2: FS_SYSCALLS.openat, stat64: M.stat, lstat64: M.lstat, fstat64: FS_SYSCALLS.fstat, fstatat64: FS_SYSCALLS.fstatat });
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * FILE.size;
-  hostLib("libc.so", { ...FS_SYSCALLS, ...M });
+  hostLib("libc.so", M);
 }

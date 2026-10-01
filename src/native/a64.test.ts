@@ -414,8 +414,8 @@ describe("raw syscalls", () => {
   });
 
   test("zero-length getrandom does not dereference its buffer", async () => {
-    const { libcInit } = await import("./libc");
-    libcInit();
+    const { kernelInit } = await import("./syscall");
+    kernelInit();
     const c = run([
       0xd28022c8,   // mov x8, #278 (getrandom)
       0xd4000001,   // svc #0
@@ -423,9 +423,9 @@ describe("raw syscalls", () => {
     expect([c.w[0], c.w[1]]).toEqual([0, 0]);
   });
 
-  test("an svc the core does not inline reaches libc's syscall table, and an unknown number answers -ENOSYS", async () => {
-    const { libcInit } = await import("./libc");
-    libcInit();
+  test("an svc the core does not inline reaches the kernel's syscall table, and an unknown number answers -ENOSYS", async () => {
+    const { kernelInit } = await import("./syscall");
+    kernelInit();
     const buf = mem.reserve(0x1000, 0x1000);
     const c = run([
       0xd2801668,   // mov x8, #179 (sysinfo)

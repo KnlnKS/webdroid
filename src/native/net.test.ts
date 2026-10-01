@@ -3,6 +3,7 @@ import { mainThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
 import { ldp, lookupHost } from "./host";
 import { libcInit } from "./libc";
+import { kernelInit } from "./syscall";
 import { mem } from "./mem";
 import { netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, AF_INET, AF_INET6, SOL_SOCKET } from "./net";
 import { E } from "./abi";
@@ -36,7 +37,7 @@ test("a loopback TCP connection stays in the process, with Linux's errors", asyn
 });
 
 test("getifaddrs exposes the same loopback interface as Java networking", async () => {
-  setA64(false); libcInit(); netInit();
+  setA64(false); kernelInit(); libcInit(); netInit();
   const cpu = new Cpu(mainThread, "ifaddrs-test"), result = mem.malloc(4);
   const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
   try {

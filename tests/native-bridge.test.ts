@@ -6,7 +6,8 @@ import { mem } from "../src/native/mem";
 import { mainThread, newObj, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jlang";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi";
 import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host";
-import { stdioInit } from "../src/native/stdio";
+import { libcInit } from "../src/native/libc";
+import { kernelInit } from "../src/native/syscall";
 import { eglInit } from "../src/native/egl";
 import { gl } from "../src/android/gl";
 import { EglContext } from "../src/android/glview";
@@ -72,7 +73,8 @@ describe("native-construction-thread", () => {
 
 describe("native-descriptor-flags", () => {
   test("native duplication keeps close-on-exec per descriptor", async () => {
-    setA64(true); stdioInit();
+    // dup2 is the ARM32 libc's; a 64-bit process reaches dup3 alone
+    setA64(false); kernelInit(); libcInit();
     const cpu = new Cpu(mainThread, "descriptor-flags"), out = mem.malloc(8);
     const call = (name: string, ...args: number[]) => {
       const fn = lookupHost(name, "libc.so");

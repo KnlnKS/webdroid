@@ -1,22 +1,22 @@
-// bionic libc surface: strings, memory, time, ctype, math, process stubs, sockets that fail
-// honestly. An ARM32 process's libc; a 64-bit process runs bionic itself (bionic.ts) and reaches
-// these bodies only through the kernel layer (syscall.ts). Struct layouts live in LAYOUT, chosen
-// by the process ABI. stdio is in stdio.ts, printf/scanf in printf.ts.
+// bionic libc surface: strings, memory, time, ctype, math, process stubs. An ARM32 process's
+// libc (libcInit); a 64-bit process runs bionic itself (bionic.ts). LIBC_SYSCALLS are the kernel's
+// memory mapping, time and identity calls, which both reach (syscall.ts). stdio is in stdio.ts,
+// printf/scanf in printf.ts.
 
 import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
 import { E, ERRSTR, PAGE_SIZE } from "./abi";
-import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
+import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
-import { readInto, fdFile } from "./fs";
-import { pthreadInit } from "./pthread";
-import { rawSyscall } from "./syscall";
+import { FS_SYSCALLS, readInto, fdFile } from "./fs";
+import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread";
+import { KLAYOUT, rawSyscall } from "./syscall";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
-import { procInit, abortMessageOr } from "./proc";
-import { netInit } from "./net";
+import { PROC_SYSCALLS, procInit, abortMessageOr } from "./proc";
+import { NET_SYSCALLS, netInit } from "./net";
 import { device } from "../shell/config";
 import { procIdentity, sysconf } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
@@ -27,26 +27,18 @@ import { isShared, syncShared, trackSharedMap } from "./mappings";
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/** bionic struct offsets/sizes; LAYOUT is the process's, chosen in libcInit. LAYOUT64 overrides
- *  only the structs the kernel layer fills (stat, timespec, statfs): tm is only an ARM32 process's. */
-const LAYOUT32 = {
-  STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
-  ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96,
-  TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65, STATFS_SIZE: 88,
-};
-const LAYOUT64: typeof LAYOUT32 = {
-  ...LAYOUT32,
-  STAT_SIZE: 128, ST_INO32: 8, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8, TS_NSEC: 8, TS_SIZE: 16, STATFS_SIZE: 120,
-};
-export let LAYOUT = LAYOUT32;
+/** the ARM32 struct tm past its nine ints */
+export const TM = { gmtoff: 36, zone: 40, size: 44 };
+/** each of struct utsname's fields */
+const UTSNAME_FIELD = 65;
 /** REALTIME, REALTIME_COARSE and REALTIME_ALARM are the wall clock (core/libc.zig matches) */
 export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? Date.now() : guestNow() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
-export function readTs(p: number, unit = 1e6): number { return ldLong(p + LAYOUT.TS_SEC) * 1000 + ldLong(p + LAYOUT.TS_NSEC) / unit; }
+export function readTs(p: number, unit = 1e6): number { return ldLong(p + KLAYOUT.TS_SEC) * 1000 + ldLong(p + KLAYOUT.TS_NSEC) / unit; }
 export function writeTs(p: number, ms: number, unit = 1e6): void {
   const seconds = Math.floor(ms / 1000);
-  stLong(p + LAYOUT.TS_SEC, seconds);
-  stLong(p + LAYOUT.TS_NSEC, Math.floor((ms - seconds * 1000) * unit));
+  stLong(p + KLAYOUT.TS_SEC, seconds);
+  stLong(p + KLAYOUT.TS_NSEC, Math.floor((ms - seconds * 1000) * unit));
 }
 /** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
 export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
@@ -126,8 +118,8 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   const yday = Math.floor(((utc ? Date.UTC(g.y, g.mo, g.md) : new Date(g.y, g.mo, g.md).getTime()) - jan1) / 86400000);
   const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0];
   for (let i = 0; i < f.length; i++) mem.st32(tm + i * 4, f[i]);
-  mem.st32(tm + LAYOUT.TM_GMTOFF, utc ? 0 : -d.getTimezoneOffset() * 60);
-  stp(tm + LAYOUT.TM_ZONE, tznames[utc ? 0 : 1]);
+  mem.st32(tm + TM.gmtoff, utc ? 0 : -d.getTimezoneOffset() * 60);
+  stp(tm + TM.zone, tznames[utc ? 0 : 1]);
 }
 export function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
 function strftime(fmt: string, tm: number): string {
@@ -208,9 +200,88 @@ export function fillSysinfo(p: number): void {
   mem.st16(p + L * 10, 1);
   mem.st32(p + (L === 8 ? 104 : 52), unit);
 }
+/** the kernel's memory mapping, time and identity calls */
+export const LIBC_SYSCALLS: Record<string, HostFn> = {
+  getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
+  getppid: () => 1,
+  // the process leads its own group, as /proc/self/stat says; no other process is visible
+  getpgid: (cpu, a) => { const pid = a.i(); return pid === 0 || pid === cpu.pid ? cpu.pid : fail(cpu, E.SRCH); },
+  setpriority: () => 0, getpriority: () => 0,
+  uname: (_c, a) => {
+    const p = a.p();
+    const f = ["Linux", "localhost", "3.10.0", "#1 SMP PREEMPT", PTR === 8 ? "aarch64" : "armv7l", "localdomain"];
+    for (let i = 0; i < f.length; i++) mem.putCstr(p + i * UTSNAME_FIELD, f[i], UTSNAME_FIELD);
+    return 0;
+  },
+  // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
+  mprotect: (cpu, a) => {
+    const va = a.va(), n = Number(a.va()), prot = a.i();
+    if (prot & 7) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
+    mem.decommitVa(va, n);
+    return 0;
+  },
+  // File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
+  // MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
+  mmap: (cpu, a) => {
+    const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
+    const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
+    if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
+    const reserve = (flags & 0x20) !== 0 && prot === 0;
+    // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
+    // low and made executable later, as V8's is) must not land in a plane above it.
+    const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
+    if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
+    if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
+    if (fd !== -1 && !(flags & 0x20)) {
+      const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
+      const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
+    }
+    return p;
+  },
+  munmap: (cpu, a) => {
+    const va = a.va(), n = Math.ceil(Number(a.va()) / PAGE_SIZE) * PAGE_SIZE; // whole pages, as the kernel unmaps
+    if (va & BigInt(PAGE_SIZE - 1) || !n) return fail(cpu, E.INVAL);
+    syncShared(va, n, true);
+    return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL);
+  },
+  // a private mapping shrinks in place or, with MREMAP_MAYMOVE, grows by moving; growing in place,
+  // MREMAP_FIXED and moving a shared file mapping are not supported
+  mremap: (cpu, a) => {
+    const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i();
+    const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
+    const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
+    if (old & BigInt(PAGE_SIZE - 1) || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return failed(E.INVAL);
+    if (flags & 2) return failed(E.NOSYS);
+    if (page(size) <= page(oldSize)) {
+      if (page(size) < page(oldSize)) mem.unmapVa(old + BigInt(page(size)), page(oldSize) - page(size));
+      return PTR === 8 ? old : Number(old);
+    }
+    if (!(flags & 1)) return failed(E.NOMEM);
+    if (isShared(old, oldSize)) return failed(E.NOSYS);
+    const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
+    if (!moved) return failed(E.NOMEM);
+    mem.write(guestAt(moved), mem.bytes(mem.txVa(old), oldSize));
+    mem.unmapVa(old, page(oldSize));
+    return moved;
+  },
+  // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
+  // cache, which already holds its stores, so its contents stay
+  madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4 && !isShared(va, n)) mem.dropVa(va, n); return 0; },
+  msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
+  mlock: () => 0, munlock: () => 0,
+  // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
+  prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) { cpu.name = s; cpu.jthread.jname = s; } } return 0; },
+  gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
+  clock_gettime: (_c, a) => {
+    const id = a.i(), ts = a.p();
+    writeTs(ts, clockTime(id)); // MONOTONIC/BOOTTIME: never 0
+    return 0;
+  },
+  clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + KLAYOUT.TS_SEC, 0); stp(ts + KLAYOUT.TS_NSEC, 1000); } return 0; },
+};
+/** an ARM32 process's libc: libc.so, liblog.so, libm.so and libz.so, which expose the kernel's
+ *  calls as well */
 export function libcInit(): void {
-  setRawSyscall(rawSyscall);
-  LAYOUT = PTR === 8 ? LAYOUT64 : LAYOUT32;
   // _ctype_ (257 bytes, index c+1), tzname
   const ct = mem.hostAlloc(384);
   for (let c = 0; c < 256; c++) mem.u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
@@ -263,13 +334,9 @@ export function libcInit(): void {
     __stack_chk_fail: (cpu) => cpu.fault("stack smashing detected"),
     getpid: (cpu) => cpu.pid,
     gettid: (cpu) => cpu.osTid,
-    getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
-    getppid: () => 1,
-    // the process leads its own group, as /proc/self/stat says; no other process is visible
-    getpgid: (cpu, a) => { const pid = a.i(); return pid === 0 || pid === cpu.pid ? cpu.pid : fail(cpu, E.SRCH); },
     getpgrp: (cpu) => cpu.pid,
     bsd_signal: () => 0,
-    nice: () => 0, setpriority: () => 0, getpriority: () => 0,
+    nice: () => 0,
     sysconf: (_c, a) => sysconf(a.i()),
     getpagesize: () => 4096,
     android_get_device_api_level: () => device.sdk,
@@ -279,12 +346,6 @@ export function libcInit(): void {
       const t = a.ul(), e = auxv().find(([type]) => BigInt(type) === t);
       if (e) return e[1];
       fail(cpu, E.NOENT);
-      return 0;
-    },
-    uname: (_c, a) => {
-      const p = a.p();
-      const f = ["Linux", "localhost", "3.10.0", "#1 SMP PREEMPT", PTR === 8 ? "aarch64" : "armv7l", "localdomain"];
-      for (let i = 0; i < f.length; i++) mem.putCstr(p + i * LAYOUT.UTSNAME_FIELD, f[i], LAYOUT.UTSNAME_FIELD);
       return 0;
     },
     getenv: (_c, a) => { const k = a.str(), p = envEntries().find((p) => envKey(p) === k); return p ? p + utf8(k).length + 1 : 0; },
@@ -305,67 +366,9 @@ export function libcInit(): void {
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
-    mprotect: (cpu, a) => {
-      const va = a.va(), n = Number(a.va()), prot = a.i();
-      if (prot & 7) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
-      mem.decommitVa(va, n);
-      return 0;
-    },
-    // File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
-    // MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
-    mmap: (cpu, a) => {
-      const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
-      const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
-      if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
-      const reserve = (flags & 0x20) !== 0 && prot === 0;
-      // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
-      // low and made executable later, as V8's is) must not land in a plane above it.
-      const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
-      if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
-      if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
-      if (fd !== -1 && !(flags & 0x20)) {
-        const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
-        const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
-      }
-      return p;
-    },
-    mmap64: (cpu, a) => M.mmap(cpu, a),
-    munmap: (cpu, a) => {
-      const va = a.va(), n = Math.ceil(Number(a.va()) / PAGE_SIZE) * PAGE_SIZE; // whole pages, as the kernel unmaps
-      if (va & BigInt(PAGE_SIZE - 1) || !n) return fail(cpu, E.INVAL);
-      syncShared(va, n, true);
-      return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL);
-    },
-    // a private mapping shrinks in place or, with MREMAP_MAYMOVE, grows by moving; growing in place,
-    // MREMAP_FIXED and moving a shared file mapping are not supported
-    mremap: (cpu, a) => {
-      const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i();
-      const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
-      const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
-      if (old & BigInt(PAGE_SIZE - 1) || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return failed(E.INVAL);
-      if (flags & 2) return failed(E.NOSYS);
-      if (page(size) <= page(oldSize)) {
-        if (page(size) < page(oldSize)) mem.unmapVa(old + BigInt(page(size)), page(oldSize) - page(size));
-        return PTR === 8 ? old : Number(old);
-      }
-      if (!(flags & 1)) return failed(E.NOMEM);
-      if (isShared(old, oldSize)) return failed(E.NOSYS);
-      const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
-      if (!moved) return failed(E.NOMEM);
-      mem.write(guestAt(moved), mem.bytes(mem.txVa(old), oldSize));
-      mem.unmapVa(old, page(oldSize));
-      return moved;
-    },
-    // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
-    // cache, which already holds its stores, so its contents stay
-    madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4 && !isShared(va, n)) mem.dropVa(va, n); return 0; },
-    msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
-    mlock: () => 0, munlock: () => 0,
+    mmap64: (cpu, a) => LIBC_SYSCALLS.mmap(cpu, a),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     syscall: (cpu, a) => rawSyscall(cpu, a.i(), a),
-    // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
-    prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) { cpu.name = s; cpu.jthread.jname = s; } } return 0; },
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 
@@ -501,13 +504,6 @@ export function libcInit(): void {
     vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(vaList(a.p()))); },
 
     time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) mem.st32(p, t); return t; },
-    gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
-    clock_gettime: (_c, a) => {
-      const id = a.i(), ts = a.p();
-      writeTs(ts, clockTime(id)); // MONOTONIC/BOOTTIME: never 0
-      return 0;
-    },
-    clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },
     clock: () => Math.floor(performance.now() * 1000),
     times: () => Math.floor(performance.now() / 10),
     localtime_r: (_c, a) => ptr(toTm(mem.ld32(a.p()), a.p(), false)),
@@ -555,10 +551,6 @@ export function libcInit(): void {
       return (value % bound) | 0;
     },
 
-    // Native TCP and resolver functions are registered by netInit below. These unsupported
-    // server-side operations stay explicit rather than pretending that a listener exists.
-    listen: (cpu) => fail(cpu, E.NETUNREACH),
-    accept: (cpu) => fail(cpu, E.NETUNREACH),
     gethostbyname: () => 0,
     gethostbyaddr: () => 0,
     gethostname: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "localhost", n); return 0; },
@@ -584,9 +576,9 @@ export function libcInit(): void {
     const d = a.p(), n = a.u(), value = a.i();
     mem.memset(d, value, n);
   };
-  hostLib("libc.so", M);
+  hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...PROC_SYSCALLS, ...M });
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
-  const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
+  const tmBuf = mem.hostAlloc(TM.size);
   const inetBuf = mem.hostAlloc(20);
   const cLocale = mem.hostStr("C");
   const localeConv = mem.hostAlloc(16 * PTR);

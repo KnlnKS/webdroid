@@ -1,22 +1,34 @@
 // The kernel's system call boundary: the numbers a raw svc/swi (bionic's own wrappers) and libc's
-// syscall(2) reach. Most are served by the HLE libc body that takes the same arguments; those
-// answer the wrapper's way (-1 with errno set), which Cpu.syscallReturn turns into -errno. The
-// handlers here are the calls whose kernel shape differs from any libc function's.
+// syscall(2) reach. Most are served by the body of the same name in an owning module's record,
+// which answers the wrapper's way (-1 with errno set); Cpu.syscallReturn turns that into -errno.
+// The handlers here are the calls whose kernel shape differs from any wrapper's.
 
 import { mem, guestAt } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
-import { hostFn, calledMissing, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
+import { calledMissing, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
-import { cpuByOsTid, markProcessExited, type Cpu } from "./cpu";
-import { fail, fillRandom, fillSysinfo, readTs } from "./libc";
-import { faccessatPath, fdFallocate, getdents64 } from "./fs";
-import { futex, cloneThread } from "./pthread";
-import { nativePoll, nativeSelect } from "./net";
+import { cpuByOsTid, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
+import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
+import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
+import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
+import { NET_SYSCALLS, nativePoll, nativeSelect } from "./net";
+import { PROC_SYSCALLS, signalThread } from "./proc";
 import { device } from "../shell/config";
-import { signalThread } from "./proc";
 
-/** served by the libc function of the same arguments (an offset in a register on LP64 makes mmap
- *  direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is in its table) */
+/** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
+const KERNEL32 = {
+  STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
+  ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, STATFS_SIZE: 88,
+};
+const KERNEL64: typeof KERNEL32 = {
+  STAT_SIZE: 128, ST_INO32: 8, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
+  ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, STATFS_SIZE: 120,
+};
+/** the process ABI's kernel structs, chosen by kernelInit */
+export let KLAYOUT = KERNEL32;
+
+/** served by the body of the same arguments (an offset in a register on LP64 makes mmap direct;
+ *  ILP32's mmap2 counts pages and _llseek splits the offset, so neither is in its table) */
 const SAME64: Record<number, string> = {
   17: "getcwd", 19: "eventfd", 20: "epoll_create1", 21: "epoll_ctl", 22: "epoll_pwait", 23: "dup", 24: "dup3", 25: "fcntl",
   26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch", 29: "ioctl", 32: "flock", 34: "mkdirat", 35: "unlinkat",
@@ -31,6 +43,7 @@ const SAME64: Record<number, string> = {
   202: "accept", 203: "connect", 204: "getsockname", 205: "getpeername", 206: "sendto", 207: "recvfrom", 208: "setsockopt",
   209: "getsockopt", 210: "shutdown", 211: "sendmsg", 212: "recvmsg", 215: "munmap", 216: "mremap", 222: "mmap",
   226: "mprotect", 227: "msync", 228: "mlock", 229: "munlock", 233: "madvise", 242: "accept4", 261: "prlimit64", 267: "syncfs",
+  276: "renameat", // renameat2, its flags unread
 };
 const SAME32: Record<number, string> = {
   316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch", 360: "inotify_init1",
@@ -127,7 +140,6 @@ const A64: Record<number, HostFn> = {
     }
     return moved;
   },
-  276: (cpu, a) => hostFn("libc.so", "renameat")!(cpu, a),                       // renameat2, its flags unread
   278: (_c, a) => { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; }, // getrandom
 };
 const A32: Record<number, HostFn> = {
@@ -136,12 +148,28 @@ const A32: Record<number, HostFn> = {
   334: A64[48],
 };
 
+let table: (HostFn | undefined)[] = [];
+
+/** The kernel every process has, whichever libc it runs: the process ABI's struct layouts, its
+ *  syscall table and its file system's first descriptors. */
+export function kernelInit(): void {
+  const wide = PTR === 8;
+  KLAYOUT = wide ? KERNEL64 : KERNEL32;
+  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...PROC_SYSCALLS };
+  table = [];
+  for (const [nr, name] of Object.entries(wide ? SAME64 : SAME32)) {
+    if (!byName[name]) throw new Error(`kernel: no body for ${name}`);
+    table[+nr] = byName[name];
+  }
+  for (const [nr, fn] of Object.entries(wide ? A64 : A32)) table[+nr] = fn;
+  setRawSyscall(rawSyscall);
+  fsInit();
+}
+
 /** syscall(2): what a raw svc/swi and libc's wrapper both reach, the cursor at the first argument */
 export function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostRet> {
-  const own = (PTR === 8 ? A64 : A32)[nr];
-  if (own) return own(cpu, a);
-  const name = (PTR === 8 ? SAME64 : SAME32)[nr];
-  if (name) return hostFn("libc.so", name)!(cpu, a);
+  const fn = table[nr];
+  if (fn) return fn(cpu, a);
   calledMissing.add("syscall " + nr);
   return fail(cpu, E.NOSYS);
 }

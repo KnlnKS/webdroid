@@ -641,7 +641,7 @@ export class Cpu {
     }
   }
   /** the syscalls the host owns, left by the core with their number: the signal mask here, the
-   *  rest through libc's syscall(2) table (a raw svc and the wrapper reach the same bodies) */
+   *  rest through the kernel's table (syscall.ts), which libc's syscall(2) reaches too */
   private syscall(nr: number): void {
     const w = this.w;
     if (hostTrace.on) hostTrace.ring.push(`${this.name}:svc ${nr}(${[0, 1, 2, 3, 4, 5].map((i) => (BigInt(w[2 * i + 1] >>> 0) << 32n | BigInt(w[2 * i] >>> 0)).toString(16)).join(",")}) lr=${symbolizeHook(this.lr >>> 0)}`);
@@ -744,7 +744,7 @@ export class Cpu {
   }
 }
 
-/** libc's syscall(2) dispatcher, installed at init: raw svc/swi numbers the core leaves to the host */
+/** the kernel's syscall dispatcher, installed by kernelInit: raw svc/swi numbers the core leaves to the host */
 let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>) | null = null;
 export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
 /** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */

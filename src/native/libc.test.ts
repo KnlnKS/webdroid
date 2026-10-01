@@ -1,30 +1,34 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
-import { lookupHost } from "./host";
-import { libcInit } from "./libc";
+import { defineHost, lookupHost } from "./host";
+import { LIBC_SYSCALLS, libcInit } from "./libc";
+import { kernelInit, rawSyscall } from "./syscall";
 import { mem } from "./mem";
 import { procIdentity } from "../shell/procfs";
 import { device } from "../shell/config";
 
+/** a 64-bit process has no HLE libc: its calls reach the kernel by number */
+const syscall = defineHost("test:syscall", (cpu, a) => rawSyscall(cpu, a.i(), a));
+
 test("native user IDs match the process identity", async () => {
-  setA64(true); libcInit();
+  setA64(true); kernelInit();
   const cpu = new Cpu(new JThread(), "identity-test");
   try {
     for (const name of ["getuid", "geteuid", "getgid", "getegid"]) {
-      expect(await cpu.call(lookupHost(name, "libc.so")!, [])).toBe(procIdentity.uid);
+      expect(await cpu.call(defineHost(name, LIBC_SYSCALLS[name]), [])).toBe(procIdentity.uid);
     }
   } finally { cpu.dispose(); setA64(false); }
 });
 
 test("sysinfo uses the device RAM in both native ABIs without overrunning its struct", async () => {
   for (const a64 of [false, true]) {
-    setA64(a64); libcInit();
+    setA64(a64); kernelInit();
     const cpu = new Cpu(new JThread(), "sysinfo-test"), out = mem.hostAlloc(128);
     const size = a64 ? 112 : 64;
     mem.st32(out + size, 0xfeedbeef);
     try {
-      expect(await cpu.call(lookupHost("sysinfo", "libc.so")!, [out])).toBe(0);
+      expect(await cpu.call(syscall, [a64 ? 179 : 116, out])).toBe(0);
       const unit = mem.ld32(out + (a64 ? 104 : 52));
       const total = a64 ? Number(mem.ld64(out + 32)) : mem.ld32(out + 16);
       expect(total * unit).toBe(device.cpu.memKb * 1024);
@@ -35,7 +39,7 @@ test("sysinfo uses the device RAM in both native ABIs without overrunning its st
 });
 
 test("sort and search pass pointers in the guest ABI", async () => {
-  setA64(false); libcInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(new JThread(), "comparator-test"), data = mem.malloc(20), cmp = mem.reserve(4096, 4096);
   mem.u32.set([0xe5900000, 0xe5911000, 0xe0400001, 0xe12fff1e], cmp >>> 2);
   mem.i32.set([9, -2, 4, 1, 4], data >>> 2);
@@ -49,7 +53,7 @@ test("sort and search pass pointers in the guest ABI", async () => {
 });
 
 test("memmem searches binary ranges without treating NUL as a terminator", async () => {
-  setA64(false); libcInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(new JThread(), "memmem-test");
   const data = mem.malloc(8);
   mem.u8.set([1, 0, 2, 1, 0, 2, 0, 3], data);
@@ -65,7 +69,7 @@ test("memmem searches binary ranges without treating NUL as a terminator", async
 });
 
 test("ARM EABI memory fill takes the byte count before the value", async () => {
-  setA64(false); libcInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(new JThread(), "aeabi-memset-test"), data = mem.malloc(8);
   try {
     for (const name of ["__aeabi_memset", "__aeabi_memset4", "__aeabi_memset8"]) {
@@ -77,7 +81,7 @@ test("ARM EABI memory fill takes the byte count before the value", async () => {
 });
 
 test("raw ARM faccessat accepts its three kernel arguments", async () => {
-  setA64(false); libcInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(new JThread(), "faccessat-test"), path = mem.malloc(16);
   mem.u8.set(new TextEncoder().encode("/dev/urandom\0"), path);
   try {
@@ -86,10 +90,9 @@ test("raw ARM faccessat accepts its three kernel arguments", async () => {
 });
 
 test("ARM64 syncfs flushes an open filesystem and rejects invalid descriptors", async () => {
-  setA64(true); libcInit();
+  setA64(true); kernelInit();
   const cpu = new Cpu(new JThread(), "syncfs-test");
   try {
-    const syscall = lookupHost("syscall", "libc.so")!;
     expect(await cpu.call(syscall, [267, 0])).toBe(0);
     expect(await cpu.call(syscall, [267, -1])).toBe(-1);
     expect(mem.ld32(cpu.errnoAddr)).toBe(9);
@@ -97,17 +100,16 @@ test("ARM64 syncfs flushes an open filesystem and rejects invalid descriptors", 
 });
 
 test("ARM64 wait4 reports that no guest child exists", async () => {
-  setA64(true); libcInit();
+  setA64(true); kernelInit();
   const cpu = new Cpu(new JThread(), "wait4-test");
   try {
-    const syscall = lookupHost("syscall", "libc.so")!;
     expect(await cpu.call(syscall, [260, -1, 0, 0, 0])).toBe(-1);
     expect(mem.ld32(cpu.errnoAddr)).toBe(10);
   } finally { cpu.dispose(); setA64(false); }
 });
 
 test("timegm64 returns seconds beyond the ARM32 time_t range", async () => {
-  setA64(false); libcInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(new JThread(), "timegm64-test"), tm = mem.malloc(36);
   mem.i32.set([0, 0, 0, 1, 0, 140, 0, 0, 0], tm >>> 2);
   try {
@@ -117,8 +119,8 @@ test("timegm64 returns seconds beyond the ARM32 time_t range", async () => {
 });
 
 test("A64 mmap keeps executable and low-hinted mappings where the core runs code", async () => {
-  setA64(true); libcInit();
-  const cpu = new Cpu(new JThread(), "mmap-test"), mmap = lookupHost("mmap", "libc.so")!, size = 0x1000_0000;
+  setA64(true); kernelInit();
+  const cpu = new Cpu(new JThread(), "mmap-test"), mmap = defineHost("mmap", LIBC_SYSCALLS.mmap), size = 0x1000_0000;
   const anon = async (hint: bigint, prot: number) => {
     const lo = await cpu.call(mmap, [hint, BigInt(size), prot, 0x4022, -1, 0n]);
     return BigInt(cpu.ret1 >>> 0) << 32n | BigInt(lo >>> 0);

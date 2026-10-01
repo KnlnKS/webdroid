@@ -1,6 +1,7 @@
 import { hasProcessExited } from "./cpu";
 import { hostLib, PTR, ldp, stp } from "./host";
-import { clockTime, fail, LAYOUT, readTs, writeTs } from "./libc";
+import { clockTime, fail, readTs, writeTs } from "./libc";
+import { KLAYOUT } from "./syscall";
 import { mem } from "./mem";
 import { startThread } from "./pthread";
 import { E } from "./abi";
@@ -31,7 +32,7 @@ export const disarmClockTimer = (timer: ClockTimer): void => clearGuestTimeout(t
 const arm = (timer: Timer): void => armClockTimer(timer, (count) => { timer.overrun = Math.min(0x7fffffff, count - 1); timer.notify(); });
 /** an itimerspec: the interval, then what remains until the next expiry */
 export function timerState(timer: ClockTimer, out: number): void {
-  writeTs(out, timer.interval); writeTs(out + LAYOUT.TS_SIZE, timer.next ? Math.max(0, timer.next - clockTime(timer.clock)) : 0);
+  writeTs(out, timer.interval); writeTs(out + KLAYOUT.TS_SIZE, timer.next ? Math.max(0, timer.next - clockTime(timer.clock)) : 0);
 }
 export function validTime(p: number): boolean {
   const seconds = PTR === 8 ? mem.ld64(p) : BigInt(mem.ld32(p) | 0);
@@ -58,8 +59,8 @@ export function timersInit(): void {
     },
     timer_settime: (cpu, a) => {
       const timer = timers.get(a.p()), flags = a.i(), value = a.p(), old = a.p();
-      if (!timer || !value || flags & ~1 || !validTime(value) || !validTime(value + LAYOUT.TS_SIZE)) return fail(cpu, E.INVAL);
-      const interval = readTs(value), first = readTs(value + LAYOUT.TS_SIZE);
+      if (!timer || !value || flags & ~1 || !validTime(value) || !validTime(value + KLAYOUT.TS_SIZE)) return fail(cpu, E.INVAL);
+      const interval = readTs(value), first = readTs(value + KLAYOUT.TS_SIZE);
       if (old) timerState(timer, old);
       timer.interval = interval; timer.next = first ? first + (flags & 1 ? 0 : clockTime(timer.clock)) : 0;
       timer.overrun = 0; arm(timer); return 0;

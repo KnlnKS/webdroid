@@ -10,10 +10,10 @@ import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
 import { E } from "../src/native/abi";
 import { Cpu, setA64 } from "../src/native/cpu";
-import { lookupHost } from "../src/native/host";
+import { defineHost } from "../src/native/host";
 import { mem, guestAt } from "../src/native/mem";
-import { javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, renamePath } from "../src/native/fs";
-import { stdioInit } from "../src/native/stdio";
+import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, renamePath } from "../src/native/fs";
+import { kernelInit } from "../src/native/syscall";
 import { BytesFile } from "../src/shell/lazyfile";
 import { mkEnumeration } from "../src/jvm/natives/jcoll";
 import { scall, loadLibcore } from "./java";
@@ -209,14 +209,10 @@ describe("file-input-descriptor", () => {
   });
 
   test("descriptor streams wait for pipe bytes without closing borrowed descriptors", async () => {
-    setA64(true); stdioInit();
+    setA64(true); kernelInit();
     const cpu = new Cpu(mainThread, "input-descriptor-pipe"), buffer = mem.malloc(16);
-    const call = (name: string, ...args: number[]) => {
-      const fn = lookupHost(name, "libc.so");
-      if (fn === undefined) throw new Error(name);
-      return cpu.call(fn, args);
-    };
-    expect(await call("pipe", buffer)).toBe(0);
+    const call = (name: string, ...args: number[]) => cpu.call(defineHost(name, FS_SYSCALLS[name]), args);
+    expect(await call("pipe2", buffer, 0)).toBe(0);
     const fd = await mkFd(mem.ld32(buffer));
     const writer = mem.ld32(buffer + 4);
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
