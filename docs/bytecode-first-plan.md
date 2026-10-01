@@ -582,14 +582,70 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-01 (night). The branch is `knlnks/bytecode-stage-c` in
-`/Users/kunalan/Projects/webdroid-stage-c`, rebased onto `knlnks/bytecode` (not pushed); read
-"Latest handoff" first. The older handoffs below it are history: where they list next steps for
+Last updated 2026-10-02. The branch is `knlnks/bytecode` (not pushed); read "Latest handoff"
+first. The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings.
 
-### Latest handoff (2026-10-01, night): Stage C is complete, start here
+### Latest handoff (2026-10-02): Stage D in progress, start here
+
+**Done and the default** (each commit message records its gates):
+- **Looper** (`mainloop.ts`): AOSP's Looper, MessageQueue, Handler, Message, HandlerThread,
+  AsyncTask, Messenger, ResultReceiver and ContentObserver run from bytecode over a native looper.
+  The main thread sits in `Looper.loop()` from `zygoteInit`; `nativePollOnce` parks it until
+  `nativeWake`, its timeout or a native callback (`NativeLooper.post`, how vsync and input reach a
+  looper), yielding to the browser after a 16 ms macrotask. `onMain(job)` posts a Runnable on the
+  main Handler and waits for `startMainLooper()`; tests get the looper from `loadFrameworkJar()`.
+  `inMainJob()` is "the main thread is outside nativePollOnce".
+- **Vsync and Choreographer** (`vsync.ts`): the host frame loop only paces a virtual vsync and
+  delivers it to DisplayEventReceivers that scheduled one. The TS view stack's frame is a
+  CALLBACK_TRAVERSAL posted when `uiState`'s dirty flags are set (`scheduleTraversal` in
+  device.ts); `wd.testFrame` forces a vsync and awaits that traversal.
+- **Display** (`display.ts`): IDisplayManager hosted as `display`; Display, DisplayManager and
+  DisplayManagerGlobal from bytecode. One CLOCK_MONOTONIC per page (`guest-clock.ts` uptimeMillis).
+- StrictMode, StateSet and the sparse arrays from bytecode.
+
+**The coupled flip, behind `?bytecode=stage-d`** (`STAGE_D` in provenance.ts: android/app,
+view, widget, content, window, transition, preference, inputmethodservice, accessibilityservice
+and com/android/internal/policy; `stageD()` tells the mode). Architecture: AOSP's ActivityThread,
+Activity, PhoneWindow, ViewRootImpl and widgets run unchanged over TS system services:
+- `server/am.ts` (IActivityManager additions): attachApplication → bindApplication → launcher;
+  content provider publish/get. `server/atm.ts`: activity records on one task driven by
+  ClientTransactions (pause → launch+resume → stop on idle; finish → resume below with results →
+  destroy) and IActivityClientController. These method maps are spread into the existing Stubs
+  in services.ts.
+- `server/wm.ts`: IWindowManager.openSession and IWindowSession (add, relayout with frames from
+  AOSP's own WindowLayout, finishDrawing, remove), the device's InsetsState, a display layer per
+  window, focus and touch routing (`dispatchTouch`, used by device.ts's dispatchPointer in D-mode).
+- `surfaceflinger.ts`: layers, SurfaceControl/Transaction/SurfaceSession, BLASTBufferQueue
+  (a buffer is an OffscreenCanvas; sync transactions honoured) and Surface; the display composes
+  layer stack 0 into the page frame at the end of the turn that changed it.
+- `hwui.ts`: HardwareRenderer's RenderProxy replays the root RenderNode (`drawNodeInto`) into the
+  surface buffer at nSyncAndDrawFrame, runs the frame draw/commit/complete callbacks around the
+  queue, and keeps render-thread animators drawing on vsync. This is the hardware path on purpose:
+  unchanged views keep their display lists, so a frame re-runs no Java onDraw for them.
+- `inputchannel.ts`: channel pairs, receivers on their looper, focus events. `server/imm.ts`:
+  IInputMethodManager as a device with no IME (the browser keyboard IME is still to build).
+- `shell/uiautomator.ts`: the harness's tree from AccessibilityNodeInfos (uiautomator's view).
+- Verified: an AOSP TextView window added through WindowManagerGlobal from `systemMain()`'s
+  context lays out, draws and dumps (`[0,0,1080,2088]` above the 72 px gesture inset).
+
+**In flight on worktree agents** (merge by cherry-pick, re-gate, then delete the branch):
+PackageManager over a hosted IPackageManager with AOSP's ApplicationPackageManager and pm data
+classes (D-mode cannot boot an app without it); notifications over INotificationManager; input
+event classes (MotionEvent, KeyEvent, InputDevice, KeyCharacterMap, VelocityTracker) over natives.
+
+**Next, in order:** boot FitNotes in D-mode and fix what it reaches; broadcasts, services and
+cross-process activities/providers in server/am.ts through the broker; back and key dispatch;
+the browser IME as an InputMethodService-equivalent behind IInputMethodManager; WebView over a
+TS WebViewProvider; SurfaceView/TextureView/GL surfaces as layers; e2e harness on
+`uiautomator.ts` and the compositor; then flip the default and delete the TS view, widget, app
+and policy stacks (Stage F for these prefixes). Intent/ComponentName/IntentFilter flip after the
+PackageManager branch lands. The TS-mode services read `appHost`/TS intents and need D-mode
+counterparts as they are reached.
+
+### Latest handoff (2026-10-01, night): Stage C is complete, history
 
 Stage C ran in parallel with the Stage B completion pass on its own branch
 (`knlnks/bytecode-stage-c`, worktree `../webdroid-stage-c`), since rebased onto `knlnks/bytecode`
