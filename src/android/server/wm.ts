@@ -32,6 +32,20 @@ function windowLayer(type: number): number {
     default: return 2;
   }
 }
+/** ActivityRecord.isFirstChildWindowGreaterThanSecond: an activity's windows stack by its token, and
+ *  within it the base application window sits below the rest, a starting window above them, the
+ *  others in the order they were added (a dialog shown in onCreate is added before its activity's
+ *  window, at resume) */
+const TYPE_BASE_APPLICATION = 1, TYPE_APPLICATION_STARTING = 3;
+const tokenOrder = new WeakMap<JObj, number>();
+let tokens = 0;
+function windowZ(type: number, token: JObj | null, seq: number): number {
+  const band = windowLayer(type) * 1e9;
+  if (type > 99 || !token) return band + seq;
+  let order = tokenOrder.get(token);
+  if (order === undefined) tokenOrder.set(token, order = ++tokens);
+  return band + order * 1000 + (type === TYPE_BASE_APPLICATION ? 0 : type === TYPE_APPLICATION_STARTING ? 999 : 1 + seq % 998);
+}
 /** WindowManagerPolicy.getSubWindowLayerFromTypeLw: a sub-window against its parent */
 const SUB_LAYERS: Record<number, number> = { 1000: 1, 1001: -2, 1002: 2, 1003: 1, 1004: -1, 1005: 3 };
 const isSubWindow = (type: number) => type >= 1000 && type <= 1999;
@@ -45,13 +59,13 @@ class WindowState {
   backCallback: JObj | null = null;
   javaSurface: JObj | null = null;
   dim: Layer | null = null;
-  constructor(readonly client: JObj, readonly attrs: JObj, readonly parent: WindowState | null, name: string, type: number, seq: number) {
+  constructor(readonly client: JObj, readonly attrs: JObj, readonly parent: WindowState | null, name: string, type: number, z: number) {
     if (parent) {
       this.layer = displayLayer(name, 0);
       this.layer.layerStack = -1;
       this.layer.reparent(parent.layer);
       this.layer.z = SUB_LAYERS[type] ?? 1;
-    } else this.layer = displayLayer(name, windowLayer(type) * 100000 + seq);
+    } else this.layer = displayLayer(name, z);
   }
 }
 const windows = new Map<JObj, WindowState>();
@@ -103,7 +117,7 @@ async function addWindow(window: JObj, attrs: JObj, visibility: number, outChann
   const type = lp<number>(attrs, "type"), token = lp<JObj | null>(attrs, "token");
   const parent = isSubWindow(type) && token ? windows.get(token) ?? null : null;
   const title = String(await vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;") ?? "");
-  const ws = new WindowState(window, copy, parent, title, type, ++seq);
+  const ws = new WindowState(window, copy, parent, title, type, windowZ(type, token, ++seq));
   ws.visibility = visibility;
   ws.requestedVisibleTypes = await insetsType("defaultVisible");
   windows.set(window, ws);
@@ -199,6 +213,8 @@ function touchedWindow(x: number, y: number): WindowState | null {
 }
 const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
 /** a key from the virtual keyboard (device -1) to the focused window: DOWN, then UP */
+/** the display Z of a ViewRootImpl's window (its IWindow), or -Infinity when not added */
+export const windowZOf = (client: JObj): number => windows.get(client)?.layer.z ?? -Infinity;
 export async function dispatchKey(keyCode: number): Promise<void> {
   const ws = focused;
   if (!ws?.channel) return;

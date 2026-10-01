@@ -1,7 +1,8 @@
 // What `uiautomator dump` sees, for windows AOSP's ViewRootImpl manages: each window's views as
 // AccessibilityNodeInfos, a virtual hierarchy (Compose) through its view's AccessibilityNodeProvider,
 // in screen pixels. The e2e harness diffs this against the device's dump.
-import { rt, type JObj } from "../jvm/runtime";
+import { rt, declaredField, type JObj } from "../jvm/runtime";
+import { windowZOf } from "../android/server/wm";
 import { vcall, scall, newObj } from "../jvm/natives/jlang";
 
 export interface UiNode {
@@ -56,8 +57,13 @@ async function walkView(view: JObj, rect: Record<string, number>, out: UiNode[])
 export async function dumpWindows(): Promise<UiNode[]> {
   const global = await scall("android/view/WindowManagerGlobal", "getInstance", "()Landroid/view/WindowManagerGlobal;");
   const views = await vcall(global, "getWindowViews", "()Ljava/util/ArrayList;");
+  const count: number = await vcall(views, "size", "()I"), roots: { view: JObj; z: number }[] = [];
+  for (let i = 0; i < count; i++) {
+    const view: JObj = await vcall(views, "get", "(I)Ljava/lang/Object;", i);
+    const root = await vcall(view, "getViewRootImpl", "()Landroid/view/ViewRootImpl;") as Record<string, JObj> | null;
+    roots.push({ view, z: root ? windowZOf(root[declaredField("android/view/ViewRootImpl", "mWindow")]) : -Infinity });
+  }
   const rect = await newObj("android/graphics/Rect", "()V"), out: UiNode[] = [];
-  const count: number = await vcall(views, "size", "()I");
-  for (let i = 0; i < count; i++) await walkView(await vcall(views, "get", "(I)Ljava/lang/Object;", i), rect, out);
+  for (const { view } of roots.sort((a, b) => a.z - b.z)) await walkView(view, rect, out);
   return out;
 }
