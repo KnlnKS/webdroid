@@ -10,7 +10,7 @@ import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import { CAPS, JOINS } from "./paint";
 import { NativePath, PathMeasure } from "./path";
-import { PathData, parsePathData, verbsToPath } from "./pathparser";
+import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser";
 
 type Ctx = OffscreenCanvasRenderingContext2D;
 /** hwui's applyAlpha: the colour's alpha byte scaled, truncated as SkColorSetA takes it */
@@ -242,9 +242,10 @@ rt.registerJnis("android/graphics/drawable/VectorDrawable", {
     if (parent.tree) { child.adopt(parent.tree); parent.changed(); }
   },
   "nSetPathString(JLjava/lang/String;I)V": (h: bigint, s: string, len: number) => {
-    const d = new PathData();
-    parsePathData(d, s, len);
+    // setPathString stores what parsed before the exception it raises reaches Java
+    const d = new PathData(), error = parsePathData(d, s, len);
     node<VPath>(h).setData(d);
+    throwParseFailure(error);
   },
   "nSetPathData(JJ)V": (h: bigint, d: bigint) => node<VPath>(h).setData(deref<PathData>(d)),
   "nGetFullPathProperties(J[BI)Z": (h: bigint, out: Int8Array, len: number) => {

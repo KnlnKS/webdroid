@@ -229,10 +229,13 @@ function arcTo(p: NativePath, rx: number, ry: number, angle: number, large: bool
 }
 
 const data = (h: bigint) => deref<PathData>(h);
-/** a parse, or the IllegalArgumentException android_util_PathParser throws for its failure */
-function parsed(s: string, len: number): PathData {
-  const d = new PathData(), error = parsePathData(d, s, len);
+/** the IllegalArgumentException the PathParser and VectorDrawable JNI throw for a failed parse */
+export function throwParseFailure(error: string): void {
   if (error) throw rt.mkThrowable("java/lang/IllegalArgumentException", error);
+}
+function parsed(s: string, len: number): PathData {
+  const d = new PathData();
+  throwParseFailure(parsePathData(d, s, len));
   return d;
 }
 rt.registerJnis("android/util/PathParser", {

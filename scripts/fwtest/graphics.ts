@@ -666,6 +666,9 @@ await exercise("PathParser: parsing, errors, SkPath resolution (device values)",
     const got = await thrown(() => scall(P, "createPathFromPathData", `(${S})Landroid/graphics/Path;`, data));
     if (got !== errors[i]) throw new Error(`${JSON.stringify(data)}: ${got}, not ${errors[i]}`);
   }
+  // VectorDrawable's own path-string JNI raises the same failure
+  const vpath = await vcall(await newObj("android/graphics/drawable/VectorDrawable$VFullPath", "()V"), "getNativePtr", "()J");
+  same("VectorDrawable.nSetPathString", await thrown(() => scall("android/graphics/drawable/VectorDrawable", "nSetPathString", `(J${S}I)V`, vpath, bad[0], bad[0].length)), errors[0]);
   const data = (s: string) => newObj("android/util/PathParser$PathData", `(${S})V`, s);
   const [a, b, c] = [await data("M0 0 L10 10"), await data("M4 4 L20 0"), await data("M0 0 C1 1 2 2 3 3")];
   if (!await scall(P, "canMorph", "(Landroid/util/PathParser$PathData;Landroid/util/PathParser$PathData;)Z", a, b)) throw new Error("canMorph(same verbs)");
