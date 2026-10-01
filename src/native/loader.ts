@@ -1,8 +1,8 @@
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread, appNativeAbi, type JThread } from "../jvm/natives/jlang";
+import { curThread, appNativeAbi, mainThread, type JThread } from "../jvm/natives/jlang";
 import { setNativeMemorySizer } from "../jvm/natives/jnio";
 import { libcInit } from "./libc";
-import { dlInit, loadModule, resolveGlobalOrNull } from "./dl";
+import { dlInit, loadModule, modules, resolveGlobalOrNull } from "./dl";
 import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
 import { gles1Init } from "./gles1";
@@ -12,8 +12,15 @@ import { aaudioInit } from "./aaudio";
 import { mediaInit } from "./media";
 import { ndkInit } from "./libandroid";
 import { bitmapInit } from "./bitmap";
-import { cpuFor, setA64, isA64, type Cpu } from "./cpu";
+import { cpuFor, cpuOf, cpus, setA64, isA64, type Cpu } from "./cpu";
+import { procMemory } from "../shell/procfs";
 import { bionicRequested, bootBionic } from "./bionic";
+
+const hex = (n: number) => n.toString(16).padStart(8, "0");
+/** /proc/self/maps: each image, then each thread's stack, the main thread's named as the kernel names it */
+procMemory.maps = () => [...modules.map((m) => `${hex(m.base)}-${hex(m.end)} r-xp 00000000 00:00 0  ${m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`}`),
+  ...[...cpus].filter((c) => c.stackBase).map((c) => `${hex(c.stackBase)}-${hex(c.stackTop)} rw-p 00000000 00:00 0  ${c.jthread === mainThread ? "[stack]" : `[anon:stack_and_tls:${c.osTid}]`}`)].join("\n") + "\n";
+procMemory.startStack = () => { const main = cpuOf(mainThread); return main?.stackTop ? main.stackTop - 64 : 0; };
 
 let inited = false;
 function nativeInit(abi: string): void {

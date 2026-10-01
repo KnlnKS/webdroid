@@ -20,7 +20,8 @@ const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version ==
 const pointerArg = (cpu: Cpu, address: bigint): number | bigint => cpu.a64 ? address : Number(address);
 const SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
 const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
-const limit = (resource: number) => resourceLimits.get(resource) ?? { soft: 0x100000n, hard: 0x100000n };
+/** RLIMIT_STACK is Android's 8 MiB, the main thread's stack; the rest keep 1 MiB */
+const limit = (resource: number) => resourceLimits.get(resource) ?? (resource === 3 ? { soft: 0x800000n, hard: 0x800000n } : { soft: 0x100000n, hard: 0x100000n });
 const writeLimit = (p: number, value: bigint) => {
   if (PTR === 8) mem.st64(p, value);
   else mem.st32(p, Number(value > 0xffffffffn ? 0xffffffffn : value));

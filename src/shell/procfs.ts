@@ -27,14 +27,15 @@ const SYSCONF: Record<string, [number, () => number]> = {
 const sysconfByName = new Map(Object.values(SYSCONF));
 export function sysconf(name: number): number { return sysconfByName.get(name)?.() ?? -1; }
 
-/** what the guest reads as its resident size; the native heap assigns it */
-export const procMemory = { resident: (): number => 0 };
+/** the guest's memory as /proc reports it, which the native tier assigns: its resident size, the
+ *  maps lines of its images and thread stacks, and the main thread's initial stack pointer */
+export const procMemory = { resident: (): number => 0, maps: (): string => "", startStack: (): number => 0 };
 const comm = () => (procIdentity.name || "app_process").slice(0, 15);
 /** proc(5)'s stat line; CPU time is wall time since page load in USER_HZ (100) ticks */
 function statLine(id: number): string {
   const ticks = Math.floor(performance.now() / 10), bytes = procMemory.resident();
   return `${id} (${comm()}) R 1 ${procIdentity.pid} 0 0 -1 4194560 0 0 0 0 ${ticks} 0 0 0 20 0 1 0 0 ${bytes} ${Math.ceil(bytes / 4096)} ` +
-    "18446744073709551615 0 0 0 0 0 0 0 4612 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+    `18446744073709551615 0 0 ${procMemory.startStack()} 0 0 0 0 4612 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n`;
 }
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
@@ -65,7 +66,7 @@ export function procText(path: string): string | null {
   if (!own || own[1] && +own[1] !== procIdentity.pid) return null;
   const id = own[2] ? +own[2] : procIdentity.pid;
   switch (own[3]) {
-    case "maps": case "smaps": return "";
+    case "maps": case "smaps": return procMemory.maps();
     case "cmdline": return procIdentity.name + "\0";
     case "comm": return comm() + "\n";
     case "stat": return statLine(id);
