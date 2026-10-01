@@ -625,7 +625,8 @@ pub fn Emit(comptime wide: bool) type {
         pub fn address(e: *Self) void {
             const b = e.b;
             b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i32_wrap_i64, tee(L_B), O.i32_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_ });
-            b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_lt_u, get(L_B), c32(256), O.i32_lt_u, O.i32_and, O.if_, wasm.I32, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, get(L_B), get(L_T0), O.i32_wrap_i64, call(F_TX), O.end, O.end, tee(L_A), c32(abi.LOW), O.i32_lt_u });
+            // a plane address: its unit's entry is the backing's buffer offset | 1 once backed
+            b.emit(.{ get(L_T0), c64(21), O.i64_shr_u, O.i32_wrap_i64, c32(@bitCast(mem.UNIT_FIRST)), O.i32_sub, tee(L_R), c32(@bitCast(mem.UNITS)), O.i32_lt_u, O.if_, wasm.I32, get(L_R), c32(2), O.i32_shl, mo(O.i32_load, abi.KERN_UNITS), O.else_, c32(0), O.end, tee(L_NEXT), c32(1), O.i32_and, O.if_, wasm.I32, get(L_NEXT), get(L_T0), O.i32_wrap_i64, c32(@bitCast(mem.UNIT - 1)), O.i32_and, O.i32_add, c32(1), O.i32_sub, O.else_, get(L_B), get(L_T0), O.i32_wrap_i64, call(F_TX), O.end, O.end, tee(L_A), c32(abi.LOW), O.i32_lt_u });
             e.ifv();
             b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
             e.faultExit();

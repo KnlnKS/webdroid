@@ -78,7 +78,7 @@ test("A64 transient mappings stay out of the malloc arena", () => {
   expect(mapping >> 32n).not.toBe(0n);
   expect(reservation >> 32n).not.toBe(0n);
   expect(interleaved.planes).toBe(before.planes + 2);
-  expect(interleaved.chunks).toBe(before.chunks + 1);
+  expect(interleaved.chunks).toBe(before.chunks);                        // backed on first touch
   expect(interleaved.peak - before.peak).toBeLessThan(0x10_0000);
 
   mem.free(allocation);
@@ -102,6 +102,21 @@ test("writable mappings beyond the pool commit on first touch, as Linux overcomm
   expect(mem.u8[mem.txVa(va + 0x3f_ffffn)]).toBe(9);
   expect(mem.txVa(va + 0x10_0000n)).toBe(p);
   expect(mem.unmapVa(va, size)).toBe(true);
+});
+
+test("a reservation commits sparsely, as an allocator's strided regions do", () => {
+  const size = 0x2_1000_0000, va = mem.mapVa(size, true);
+  if (typeof va !== "bigint") throw new Error("reservation refused");
+  const before = mem.stats().chunks;
+  for (let region = 1n; region < 33n; region += 8n) {
+    const at = va + region * 0x1000_0000n + 0x3000n;
+    expect(mem.commitVa(at, 0x4_0000)).toBe(true);
+    mem.st32(mem.txVa(at), Number(region));
+  }
+  for (let region = 1n; region < 33n; region += 8n) expect(mem.ld32(mem.txVa(va + region * 0x1000_0000n + 0x3000n))).toBe(Number(region));
+  expect(mem.stats().chunks - before).toBe(4);
+  expect(mem.unmapVa(va, size)).toBe(true);
+  expect(mem.stats().chunks).toBe(before);
 });
 
 test("mprotect accepts mapped ELF image pages", () => {

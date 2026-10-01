@@ -12,7 +12,7 @@ pub const TRAMP_BASE: u32 = HOST_DATA_END;
 pub const TRAMP_END: u32 = TRAMP_BASE + 0x0007_0000;
 pub const RET_SENTINEL: u32 = TRAMP_END - 8;
 pub const KERN_BASE: u32 = TRAMP_END;
-pub const KERN_END: u32 = KERN_BASE + 0x00c0_0000;
+pub const KERN_END: u32 = KERN_BASE + 0x00e0_0000;
 pub const ARENA_BASE: u32 = KERN_END;
 pub const MEM_SIZE_INITIAL: u32 = 0x1000_0000;
 pub const MEM_SIZE_A32: u32 = 0x8000_0000;
@@ -40,6 +40,8 @@ pub const KERN_DECODED: u32 = KERN_BIG_LEN + PAGE_INDEX_MAX * 4;
 pub const KERN_SLOT_FN: u32 = KERN_DECODED + PAGE_INDEX_MAX * 4;
 pub const KERN_DEAD: u32 = KERN_SLOT_FN + 0x4_0000;
 pub const KERN_DEAD_END: u32 = KERN_DEAD + JIT_SLOTS * 1;
+/// the planes' unit table (mem.zig `units`), 2 MiB of u32 entries
+pub const KERN_UNITS: u32 = KERN_DEAD_END;
 /// The JIT's emit buffer, carved off the top of the kernel region; src/native/abi.ts spells it too.
 pub const JIT_BUF: u32 = KERN_END - 0x0010_0000;
 
