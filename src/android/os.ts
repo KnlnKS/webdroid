@@ -11,7 +11,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall, stringHash } from "../jvm/natives/jlang";
 import { box, boxObject, unboxAs, type BoxDesc } from "../jvm/natives/jbox";
 import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
@@ -21,7 +21,7 @@ import { pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "..
 import { vfs } from "../shell/vfs";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/stdio";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
+import { newLinkedHashSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 
@@ -354,7 +354,11 @@ const bundleMethods: NativeSpec["methods"] = {
   "containsKey(Ljava/lang/String;)Z": function (this: JBundle, k: string) { return this.map.has(k) ? 1 : 0; },
   "remove(Ljava/lang/String;)V": function (this: JBundle, k: string) { this.map.delete(k); },
   "clear()V": function (this: JBundle) { this.map.clear(); },
-  "keySet()Ljava/util/Set;": function (this: JBundle) { return newStringSet(this.map.keys()); },
+  // ArrayMap's order: by key hash, insertion order among equal hashes (androidx.startup runs a
+  // provider's initializers in its meta-data's key order)
+  "keySet()Ljava/util/Set;": function (this: JBundle) {
+    return newLinkedHashSet([...this.map.keys()].sort((a, b) => (a === null ? 0 : stringHash(a)) - (b === null ? 0 : stringHash(b))));
+  },
   "putAll(Landroid/os/Bundle;)V": putAll,
   "putAll(Landroid/os/PersistableBundle;)V": putAll,
   "setClassLoader(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
