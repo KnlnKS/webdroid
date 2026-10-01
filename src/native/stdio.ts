@@ -8,7 +8,7 @@ import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
-import { procIdentity, procMemory, procText } from "../shell/procfs";
+import { procIdentity, procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketAvailable, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd, socketReceive, socketSend } from "./net";
@@ -27,6 +27,8 @@ interface EpollEntry { events: number; data: bigint; pending: number; disabled: 
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
+  /** a writable /proc file, whose writes procWrite takes */
+  proc?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
   /** an AF_UNIX socket (unix.ts); a datagram one keeps each write whole */
   unix?: boolean; dgram?: boolean;
@@ -184,7 +186,11 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     return put({ ...fdBase(path), random: true }, !!(flags & O_CLOEXEC));
   }
   const s = procText(path);
-  if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), content: { path: null, data: b, len: b.length }, synthetic: true }, !!(flags & O_CLOEXEC)); }
+  if (s !== null) {
+    if (acc !== 0 && !procWritable(path)) return fail(cpu, E.ACCES);
+    const b = utf8(s);
+    return put({ ...fdBase(path), content: { path: null, data: b, len: b.length }, synthetic: true, proc: acc !== 0 }, !!(flags & O_CLOEXEC));
+  }
   if (vfs.isDir(path)) {
     if (acc !== 0) return fail(cpu, E.ISDIR);
     return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
@@ -347,6 +353,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
     return n;
   }
   if (f.wpipe) { f.wpipe.q.push(bytes.slice()); wakeAll(f.wpipe); return n; }
+  if (f.proc) return procWrite(f.path, dec.decode(bytes)) ? n : fail(cpu, E.INVAL);
   if (f.timer) return fail(cpu, E.INVAL);
   if (f.event) {
     if (n < 8) return fail(cpu, E.INVAL);
@@ -1161,7 +1168,7 @@ export function stdioInit(): void {
     // malloc'd dirent, sorted by the guest's comparator (over dirent**) into a malloc'd array
     scandir: async (cpu, a) => {
       const path = vfs.norm(a.str()), out = a.p(), filter = a.p(), compar = a.p();
-      if (!vfs.isDir(path)) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
+      if (!vfs.isDir(path)) return fail(cpu, E.NOTDIR);
       const kept: number[] = [];
       for (const name of [".", "..", ...vfs.list(path)]) {
         const de = mem.malloc(LAYOUT.DIRENT_SIZE);

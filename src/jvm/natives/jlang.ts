@@ -1190,6 +1190,9 @@ rt.registerJnis("java/lang/Runtime", {
 export const threadExit = { hook: null as ((t: JThread) => void) | null };
 const liveThreads = new Set<JThread>();
 procTasks.tids = () => [...new Set([procIdentity.pid, ...[...liveThreads].map((t) => processTid(t, t === mainThread))])];
+const taskOf = (tid: number) => { for (const t of liveThreads) if (processTid(t, t === mainThread) === tid) return t; return null; };
+procTasks.name = (tid) => taskOf(tid)?.jname ?? null;
+procTasks.rename = (tid, name) => { const t = taskOf(tid); if (t) t.jname = name; return !!t; };
 export class JThread extends JObj {
   jname = "Thread";
   /** the fields libcore reaches in a Thread, by name or Unsafe offset: ThreadLocalRandom's state and
