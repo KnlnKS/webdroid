@@ -597,8 +597,8 @@ rt.register({
       return p;
     },
     "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.backing ? vfs.stat(this.backing.path)?.size ?? 0 : this.bytes.length); },
-    // A parcel carries a duplicate of the descriptor, as the kernel does; it stays within this
-    // process, since binder IPC here moves no descriptors (provider files travel as bytes).
+    // A parcel carries a duplicate of the descriptor, as the kernel does; another process gets
+    // its bytes and a binder back to it (exportParcel), since binder IPC here moves no descriptors.
     "describeContents()I": () => 1, // CONTENTS_FILE_DESCRIPTOR
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JParcelFileDescriptor, parcel: JParcel, flags: number): Gen {
       writeObject(parcel, yield vcall(this, "dup", "()Landroid/os/ParcelFileDescriptor;"));

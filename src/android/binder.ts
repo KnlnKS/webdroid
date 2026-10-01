@@ -1,14 +1,17 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { callOn, curThread, JThread, construct, vcall, vcallUncaught } from "../jvm/natives/jlang";
-import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
+import { PROCESS_PID, PROCESS_UID, reportUncaught, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
 import { JParcel } from "./parcel";
-import { jarray, mangleMethod } from "../jvm/abi";
+import { jarray, mangleMethod, i8, u8 } from "../jvm/abi";
 
 /** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
 const emptyParcel = (): ParcelData => ({ bytes: new Uint8Array(), objects: [] });
 export type BinderHandle = { pid: number; id: number };
-export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | null][] };
+/** a ParcelFileDescriptor crossing processes, since binder IPC here moves no descriptors: its
+ *  bytes and, for a writable one, the binder that writes them back to the descriptor it came from */
+export type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null };
+export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | null][] };
 /** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
 export type TransactionReply = { handled: number; data: ParcelData };
@@ -52,13 +55,32 @@ export function importBinder(handle: BinderHandle | null): JObj | null {
   }
   return proxy;
 }
+class JFileWriter extends JBinder { pfd: JObj | null = null; }
+function exportObject(o: unknown): BinderHandle | FileHandle | null {
+  const file = parcelFileDescriptorData(o);
+  if (!file) return exportBinder(o);
+  if (!file.writable) return { bytes: file.bytes, writer: null };
+  rt.link("webdroid/FileWriter");
+  const writer = new JFileWriter(); writer.pfd = o as JObj;
+  return { bytes: file.bytes, writer: exportBinder(writer) };
+}
+function importObject(o: BinderHandle | FileHandle | null): unknown {
+  if (!o || !("bytes" in o)) return importBinder(o);
+  const writer = o.writer && importBinder(o.writer);
+  return mkPfd(new Uint8Array(o.bytes), writer && (async (bytes: Uint8Array, closed?: boolean) => {
+    const data = new JParcel();
+    await vcall(data, "writeByteArray", "([B)V", i8(bytes));
+    await vcall(data, "writeInt", "(I)V", +!!closed);
+    await vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
+  }), writer ? `binder:${o.writer!.pid}:${o.writer!.id}` : undefined);
+}
 export function exportParcel(parcel: JParcel): ParcelData {
-  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, exportBinder(o)]) };
+  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, exportObject(o)]) };
 }
 export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel {
   parcel.buf = new Uint8Array(data.bytes); parcel.view = new DataView(parcel.buf.buffer);
   parcel.pos = 0; parcel.size = parcel.buf.length;
-  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, importBinder(handle)]));
+  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, importObject(handle)]));
   return parcel;
 }
 
@@ -112,6 +134,7 @@ rt.markers("android/os/IBinder$DeathRecipient");
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
   // blocking-call warnings are StrictMode reporting, which is not modelled
   "static allowBlocking(Landroid/os/IBinder;)Landroid/os/IBinder;": (binder: unknown) => binder,
+  "static copyAllowBlocking(Landroid/os/IBinder;Landroid/os/IBinder;)V": () => {},
   // a stability label for binders crossing partitions; every binder here shares one build
   "markVintfStability()V": () => {},
   "static getCallingUid()I": () => callingIdentity().uid,
@@ -147,6 +170,15 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, _data: JParcel, reply: JParcel | null): Gen {
     if (code !== INTERFACE_TRANSACTION || !reply) return 0;
     yield vcall(reply, "writeString", "(Ljava/lang/String;)V", this.descriptor); return 1;
+  }),
+} });
+rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/Binder", methods: {
+  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JFileWriter, code: number, data: JParcel): Gen {
+    if (code !== 1) return 0;
+    const bytes: Int8Array = yield vcall(data, "createByteArray", "()[B"), closed: number = yield vcall(data, "readInt", "()I");
+    yield writeParcelFileDescriptor(this.pfd, u8(bytes), !!closed);
+    if (closed) yield vcall(this.pfd, "close", "()V");
+    return 1;
   }),
 } });
 function proxyAlive(this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; }
