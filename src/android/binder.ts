@@ -85,6 +85,7 @@ export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel 
 }
 
 const callers = new WeakMap<JThread, Caller>();
+const SELF_TOKEN = -1n;
 const strictModePolicies = new WeakMap<JThread, number>();
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
@@ -145,15 +146,17 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "static getCallingPid()I": () => callingIdentity().pid,
   // a binder thread is in onTransact for its caller (Parcel bounds what a transaction may allocate)
   "static isDirectlyHandlingTransaction()Z": () => +(transactionCaller() !== undefined),
-  // IPCThreadState packs the caller into the token, so clearing twice gives the same one
+  // IPCThreadState packs the caller into the token, so clearing twice gives the same one. This
+  // process's own identity is one token whatever its uid: the page is the zygote that became the
+  // app, so a Looper that started looping before then still finds its identity unchanged.
   "static clearCallingIdentity()J": () => {
-    const { pid, uid } = callingIdentity();
+    const caller = transactionCaller();
     callers.delete(curThread);
-    return BigInt(uid) << 32n | BigInt(pid >>> 0);
+    return caller ? BigInt(caller.uid) << 32n | BigInt(caller.pid >>> 0) : SELF_TOKEN;
   },
   "static restoreCallingIdentity(J)V": (token: bigint) => {
     const caller = { pid: Number(BigInt.asIntN(32, token)), uid: Number(BigInt.asIntN(32, token >> 32n)) };
-    if (caller.pid === PROCESS_PID && caller.uid === PROCESS_UID) callers.delete(curThread); else callers.set(curThread, caller);
+    if (token === SELF_TOKEN || caller.pid === PROCESS_PID && caller.uid === PROCESS_UID) callers.delete(curThread); else callers.set(curThread, caller);
   },
   "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) { this.owner = owner; this.descriptor = descriptor; },
   "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) { return this.descriptor === descriptor ? this.owner : null; },
