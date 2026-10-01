@@ -427,7 +427,6 @@ export class JView extends JObj {
   contentDesc: string | null = null;
   drawnText: string[] | null = null;
   drawnTextPoints: Float32Array | null = null;
-  drawnTextCount = 0;
   /** nested scrolling: AOSP defaults this on for ScrollView/RecyclerView-shaped children,
    *  and the accepted parent is remembered for the life of one gesture */
   nestedEnabled = true;
@@ -908,7 +907,6 @@ export const drawView = driven(function* drawView(v: JView, cv: JavaCanvas, pare
 const drawSemantic = driven(function* drawSemantic(v: JView, cv: JavaCanvas): Gen {
   const nc = canvasOf(cv), parentOwner = nc.semanticOwner;
   if (v.drawnText) v.drawnText.length = 0;
-  v.drawnTextCount = 0;
   nc.semanticOwner = v;
   try {
     yield drawSelf(v, cv);

@@ -6,7 +6,7 @@
 // projection, stretch and position callbacks are properties kept, not drawn or run; animators run
 // from the frame loop (rtanimator.ts).
 
-import { Recorder, displayListLength, recordOrRun, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
+import { Recorder, displayListLength, recordOrRun, replay, replayingCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { rt } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
@@ -163,7 +163,7 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
       if (surface.width !== w) surface.width = w;
       if (surface.height !== h) surface.height = h;
       const input = surface.getContext("2d")!; input.reset();
-      const recording = replayCanvas(ctx), canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
+      const recording = replayingCanvas(), canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
       canvas.setTarget(input, w, h, null);
       canvas.semanticOwner = recording?.semanticOwner ?? null;
       canvas.semanticBase = recording ? recording.semanticTransform() : null;

@@ -3,7 +3,7 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList, type Recorder } from "./recording";
+import { isRecording, nestedRecording, recordOrRun, replay, replayingCanvas, type Ctx2D, type DisplayList, type Recorder } from "./recording";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
@@ -19,7 +19,8 @@ import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
-type DrawnTextOwner = { drawnText: string[] | null; drawnTextPoints: Float32Array | null; drawnTextCount: number };
+/** what a view's drawn text is recorded on: each run and the window point it landed at (x, y pairs) */
+type DrawnTextOwner = { drawnText: string[] | null; drawnTextPoints: Float32Array | null };
 type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
 type RectLike = { left: number; top: number; right: number; bottom: number };
 /** an open layer: the save count its restore closes, the context drawn into before it, and the close */
@@ -84,30 +85,11 @@ export class NativeCanvas {
     const m = this.ctx.getTransform();
     return this.semanticBase ? this.semanticBase.multiply(m) : m;
   }
+  /** a text run for the harness to find, on the view drawing it; recorded text belongs to the
+   *  view whose canvas replays it */
   recordText(text: string, x: number, y: number, size: number, align: number) {
-    recordOrRun(this.ctx, ctx => {
-      const canvas = replayCanvas(ctx) ?? this;
-      const owner = canvas.semanticOwner;
-      if (!owner) return;
-      (owner.drawnText ??= []).push(text);
-      const i = owner.drawnTextCount++;
-      if (!owner.drawnTextPoints || owner.drawnTextPoints.length < (i + 1) * 2) {
-        const next = new Float32Array(Math.max(8, (i + 1) * 4));
-        if (owner.drawnTextPoints) next.set(owner.drawnTextPoints);
-        owner.drawnTextPoints = next;
-      }
-      const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
-      const m = ctx.getTransform();
-      let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
-      if (canvas.semanticBase) {
-        const b = canvas.semanticBase;
-        const px = sx;
-        sx = b.a * px + b.c * sy + b.e;
-        sy = b.b * px + b.d * sy + b.f;
-      }
-      owner.drawnTextPoints[i * 2] = sx;
-      owner.drawnTextPoints[i * 2 + 1] = sy;
-    });
+    if (isRecording(this.ctx)) recordOrRun(this.ctx, (ctx) => noteText(replayingCanvas() ?? this, ctx, text, x, y, size, align));
+    else noteText(replayingCanvas() ?? this, this.ctx, text, x, y, size, align);
   }
 
   prep(p: NativePaint, stroke: boolean) {
@@ -491,6 +473,28 @@ export class NativeCanvas {
   }
 }
 const paintScratch = new NativePaint();
+/** the run's anchor in window coordinates: `ctx`'s matrix, then the canvas's own placement */
+function noteText(canvas: NativeCanvas, ctx: Ctx2D, text: string, x: number, y: number, size: number, align: number) {
+  const owner = canvas.semanticOwner;
+  if (!owner) return;
+  const i = (owner.drawnText ??= []).push(text) - 1;
+  let points = owner.drawnTextPoints;
+  if (!points || points.length < (i + 1) * 2) {
+    const next = new Float32Array(Math.max(8, (i + 1) * 4));
+    if (points) next.set(points);
+    owner.drawnTextPoints = points = next;
+  }
+  const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
+  const m = ctx.getTransform(), b = canvas.semanticBase;
+  let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
+  if (b) {
+    const px = sx;
+    sx = b.a * px + b.c * sy + b.e;
+    sy = b.b * px + b.d * sy + b.f;
+  }
+  points[i * 2] = sx;
+  points[i * 2 + 1] = sy;
+}
 const pathBox: RectLike = { left: 0, top: 0, right: 0, bottom: 0 };
 /** clip everything away: the context's clip only narrows, so it is intersected with a pixel off the target */
 function clipNothing(ctx: Ctx2D) {
@@ -661,14 +665,10 @@ function closeLayer(target: Ctx2D, { ctx, pool, x, y, w, h }: LayerRaster, style
     target.drawImage(ctx.canvas, x, y, w, h, x, y, w, h);
   } finally { target.restore(); }
 }
-/** `ops` replayed through a layer over `bounds` of the real `target`; recorded text keeps the
- *  semantic owner the target replays for, the layer sharing its device space */
+/** `ops` replayed through a layer over `bounds` of the real `target`, in the target's device space */
 export function drawInLayer(target: Ctx2D, bounds: RectLike | null, style: LayerStyle, ops: DisplayList) {
-  const layer = openLayer(target, bounds, false), outer = replayCanvas(target);
-  try {
-    if (outer) replayWithSemantics(outer, () => replay(layer.ctx, ops), layer.ctx);
-    else replay(layer.ctx, ops);
-  } finally { closeLayer(target, layer, style); }
+  const layer = openLayer(target, bounds, false);
+  try { replay(layer.ctx, ops); } finally { closeLayer(target, layer, style); }
 }
 /** Canvas.saveLayer: draws until the matching restore land in an offscreen raster, composited
  *  then with what the paint said when the layer was opened */
@@ -848,7 +848,7 @@ export const bitmapCanvas = (b: NativeBitmap | null): NativeCanvas => b ? Native
 export function locateDrawnText(owner: DrawnTextOwner, text: string, width: number, height: number): { x: number; y: number } | null {
   const runs = owner.drawnText;
   const points = owner.drawnTextPoints;
-  const count = Math.min(owner.drawnTextCount, runs?.length ?? 0);
+  const count = runs?.length ?? 0;
   const normalize = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const want = normalize(text);
   if (!runs || !points || !count || !want) return null;

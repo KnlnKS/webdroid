@@ -10,7 +10,6 @@ const CALL = 0, SET = 1, DEFER = 2;
 /** where a recording context appends */
 type Recording = { ops: DisplayList };
 const recordings = new WeakMap<Ctx2D, Recording>();
-const replayCanvases = new WeakMap<Ctx2D, NativeCanvas>();
 const mirrors = new WeakMap<Ctx2D, Ctx2D>();
 
 export function isRecording(ctx: Ctx2D): boolean { return recordings.has(ctx); }
@@ -32,13 +31,17 @@ export function replay(ctx: Ctx2D, ops: DisplayList): void {
 }
 export const displayListLength = (ops: DisplayList): number => ops.length / 3;
 
-export function replayCanvas(ctx: Ctx2D): NativeCanvas | undefined { return replayCanvases.get(ctx); }
-/** `draw` with text recorded for replay into `ctx` attributed to `canvas` */
-export function replayWithSemantics(canvas: NativeCanvas, draw: () => void, ctx: Ctx2D = canvas.ctx): void {
-  const previous = replayCanvases.get(ctx);
-  replayCanvases.set(ctx, canvas);
+/** The canvas the display lists being replayed draw for. Replay is synchronous and nests (a node
+ *  in a node, a layer's content, an effect's input), so one variable scoped by replayWithSemantics
+ *  names it for every target a replay reaches. */
+let replaying: NativeCanvas | null = null;
+export function replayingCanvas(): NativeCanvas | null { return replaying; }
+/** `draw`, with the text that what it replays recorded attributed to `canvas` */
+export function replayWithSemantics(canvas: NativeCanvas, draw: () => void): void {
+  const previous = replaying;
+  replaying = canvas;
   try { draw(); }
-  finally { if (previous) replayCanvases.set(ctx, previous); else replayCanvases.delete(ctx); }
+  finally { replaying = previous; }
 }
 
 /** Queries: answered by the mirror, never replayed. */
