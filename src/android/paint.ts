@@ -26,8 +26,8 @@ const DEFAULT_FLAGS = 0x503;
 /** nSetElegantTextHeight's value for elegant metrics: Paint passes 0 for true, 1 for false and -1
  *  (unset, the default under the compat change) for neither */
 const ELEGANT = 0;
-export const CAPS = ["butt", "round", "square"] as const;
-export const JOINS = ["miter", "round", "bevel"] as const;
+const CAPS: readonly CanvasLineCap[] = ["butt", "round", "square"];
+const JOINS: readonly CanvasLineJoin[] = ["miter", "round", "bevel"];
 
 /** hwui's Paint. The Java side keeps its own copies of the objects it was given (mShader,
  *  mTypeface, mColor as a ColorLong, the shadow layer); this is what a draw and a measure read. */
@@ -116,7 +116,7 @@ export class NativePaint {
   /** the face font() draws from, and whether it draws it with fake bold or italic */
   face() { this.font(); return this.fFace; }
   faked(): boolean { this.font(); return this.fFaked; }
-  fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
+  fillStyle(ctx: Ctx2D): string | CanvasGradient | CanvasPattern {
     return this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
   }
   /** the paint's colour through its colour filter */
@@ -259,7 +259,7 @@ export function setFontMetrics(fm: object, int: boolean, top: number, ascent: nu
   o[k[0]] = top; o[k[1]] = ascent; o[k[2]] = descent; o[k[3]] = bottom; o[k[4]] = leading;
 }
 /** Paint.getFontMetrics(Int): the metrics into `fm`, and the line spacing */
-export function fillFontMetrics(p: NativePaint, fm: object | null, int: boolean) {
+function fillFontMetrics(p: NativePaint, fm: object | null, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
   const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;
   if (fm) {
@@ -720,7 +720,7 @@ function fillPath(p: NativePaint, src: NativePath, dst: NativePath): boolean {
     moveTo: (x, y) => cmds.push(0, x, y), lineTo: (x, y) => cmds.push(1, x, y), quadraticCurveTo: (a, b, x, y) => cmds.push(2, a, b, x, y),
     conicTo: (a, b, x, y, w) => cmds.push(3, a, b, x, y, w), bezierCurveTo: (a, b, c, d, x, y) => cmds.push(4, a, b, c, d, x, y), closePath: () => cmds.push(5),
   });
-  const out = strokeCommands(cmds, rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN as never), JOINS.indexOf(p.strokeJoinN as never));
+  const out = strokeCommands(cmds, rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN));
   if (!out) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "stroking a path needs the page's CanvasKit");
   dst.reset();
   for (let i = 0; i < out.length;) {
@@ -794,9 +794,9 @@ rt.registerJnis(PAINT, {
   "nSetStrokeMiter(JF)V": (h: bigint, m: number) => { if (m >= 0) paintAt(h).strokeMiter = m; },
   "nGetStrokeMiter(J)F": (h: bigint) => paintAt(h).strokeMiter,
   "nSetStrokeCap(JI)V": (h: bigint, v: number) => { paintAt(h).strokeCapN = CAPS[v] ?? "butt"; },
-  "nGetStrokeCap(J)I": (h: bigint) => Math.max(0, CAPS.indexOf(paintAt(h).strokeCapN as never)),
+  "nGetStrokeCap(J)I": (h: bigint) => Math.max(0, CAPS.indexOf(paintAt(h).strokeCapN)),
   "nSetStrokeJoin(JI)V": (h: bigint, v: number) => { paintAt(h).strokeJoinN = JOINS[v] ?? "miter"; },
-  "nGetStrokeJoin(J)I": (h: bigint) => Math.max(0, JOINS.indexOf(paintAt(h).strokeJoinN as never)),
+  "nGetStrokeJoin(J)I": (h: bigint) => Math.max(0, JOINS.indexOf(paintAt(h).strokeJoinN)),
 
   "nSetFlags(JI)V": (h: bigint, f: number) => { paintAt(h).flags = f & FLAG_MASK; },
   "nGetFlags(J)I": (h: bigint) => paintAt(h).flags,

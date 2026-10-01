@@ -235,7 +235,7 @@ export class NativeFamily {
 }
 
 /** Register one face under a CSS family. The load is awaited so no text is ever measured against
- *  a face that later swaps in (every width memo in graphics.ts is keyed by font string alone). */
+ *  a face that later swaps in (paint.ts memoizes widths by font string alone). */
 async function registerFace(f: NativeFont, family: string): Promise<void> {
   if (typeof FontFace === "undefined") return;
   const b = f.bytes, vm = f.faceMetrics;

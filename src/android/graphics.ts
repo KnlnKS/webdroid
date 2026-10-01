@@ -97,9 +97,6 @@ export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/
 export class NativeColorFilter {
   constructor(readonly matrix: Float32Array | null, readonly color = 0, readonly mode = "DST") {}
 }
-/** the native instance behind a Java ColorFilter: null for none, and for a base ColorFilter */
-export const colorFilterOf = (f: object | null): NativeColorFilter | null | Promise<NativeColorFilter | null> =>
-  f && after(vcall(f, "getNativeInstance", "()J"), (h: bigint) => deref<NativeColorFilter | undefined>(h) ?? null);
 export type Affine = [number, number, number, number, number, number];
 /** a native shader's local matrix: the 3x3 behind the handle Shader passes, null for identity */
 export function localMatrix(h: bigint): Affine | null {
@@ -110,9 +107,9 @@ export function localMatrix(h: bigint): Affine | null {
  * A Shader's native instance: what it paints, under the local matrix it was created with (null
  * for identity). It never changes; Shader discards it and makes another when the Java side does.
  */
-export class NativeShader {
+export abstract class NativeShader {
   constructor(readonly local: Affine | null) {}
-  pattern(_ctx?: Ctx2D): CanvasGradient | CanvasPattern | null { return null; }
+  abstract pattern(ctx: Ctx2D): CanvasGradient | CanvasPattern | null;
   deferredPattern(): ((ctx: Ctx2D) => CanvasPattern) | null { return null; }
 }
 export const shaderIdentity: Affine = [1, 0, 0, 1, 0, 0];
@@ -161,8 +158,7 @@ export class NativeBitmapShader extends NativeShader {
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     }
   }
-  override pattern(ctx?: Ctx2D): CanvasPattern | null {
-    if (!ctx) return null;
+  override pattern(ctx: Ctx2D): CanvasPattern {
     const matrix = ctx.getTransform(), local = this.local;
     const key = `${this.bitmap.genId}:${ctx.canvas.width},${ctx.canvas.height}:${matrix.toString()}:${local}`;
     if (this.cached && key === this.cacheKey) return this.cached;
@@ -193,8 +189,7 @@ export class NativeComposeShader extends NativeShader {
   private cacheKey = "";
   /** `op` is null for DST, which keeps the destination shader alone */
   constructor(local: Affine | null, readonly dst: NativeShader, readonly src: NativeShader, readonly op: GlobalCompositeOperation | null) { super(local); }
-  override pattern(ctx?: Ctx2D): CanvasPattern | null {
-    if (!ctx) return null;
+  override pattern(ctx: Ctx2D): CanvasPattern {
     const matrix = ctx.getTransform(), { width, height } = ctx.canvas;
     const key = `${width},${height}:${matrix.toString()}:${this.local}`;
     if (this.cached && key === this.cacheKey) return this.cached;
@@ -234,7 +229,6 @@ export function gradient(local: Affine | null, g: CanvasGradient, colors: BigInt
  * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
  */
 export const argbOfColorLong = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n)) | 0;
-export const colorLongOfArgb = (c: number) => BigInt.asIntN(64, BigInt(c >>> 0) << 32n);
 
 // ── Matrix: AOSP's bytecode over the natives in delegates.ts. native_instance is a handle to a
 // row-major 3x3 (MSCALE_X, MSKEW_X, MTRANS_X, MSKEW_Y, MSCALE_Y, MTRANS_Y, MPERSP_0..2) that the
@@ -321,7 +315,7 @@ export class Camera3D {
 export function setAffine(m: Mat, a: number, b: number, c: number, d: number, e: number, f: number): void {
   m[0] = a; m[1] = c; m[2] = e; m[3] = b; m[4] = d; m[5] = f; m[6] = 0; m[7] = 0; m[8] = 1;
 }
-export const affineOf = (m: Mat): [number, number, number, number, number, number] => [m[0], m[3], m[1], m[4], m[2], m[5]];
+const affineOf = (m: Mat): [number, number, number, number, number, number] => [m[0], m[3], m[1], m[4], m[2], m[5]];
 /** concatenate (or with `set`, replace) a 2D context's transform; a perspective row cannot be carried */
 export function applyMatrix(ctx: Ctx2D, m: ArrayLike<number>, set = false): void {
   if (set) ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
@@ -394,7 +388,7 @@ export function matrixColor(k: Float32Array, color: number): number {
 /** Res_png_9patch deserialized, as NinePatch's native chunk holds it; colors are per patch (0 transparent) */
 export interface NinePatchChunk { xDivs: number[]; yDivs: number[]; padding: [left: number, top: number, right: number, bottom: number]; colors: number[] }
 /** Res_png_9patch: flags and counts, int32 offsets and padding (left, right, top, bottom), then xDivs, yDivs and colors */
-export function readNinePatchChunk(chunk: Int8Array): NinePatchChunk | null {
+function readNinePatchChunk(chunk: Int8Array): NinePatchChunk | null {
   if (chunk.length < 32) return null;
   const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   const nx = chunk[1] & 0xff, ny = chunk[2] & 0xff, nc = chunk[3] & 0xff;
@@ -411,14 +405,6 @@ export function validNinePatchChunk(chunk: Int8Array | null): NinePatchChunk {
   const parsed = readNinePatchChunk(chunk);
   if (!parsed) throw rt.mkThrowable("java/lang/RuntimeException", "Array too small for chunk.");
   return parsed;
-}
-let ninePatchProps: { bitmap: string; chunk: string } | null = null;
-/** a Java NinePatch's (Java) bitmap and native chunk, written into `out` */
-export function ninePatchOf<T extends { bmp: object | null; chunk: NinePatchChunk | null }>(patch: object, out: T): T {
-  const p = ninePatchProps ??= { bitmap: declaredField("android/graphics/NinePatch", "mBitmap"), chunk: declaredField("android/graphics/NinePatch", "mNativeChunk") };
-  const o = patch as Record<string, unknown>;
-  out.bmp = o[p.bitmap] as object; out.chunk = deref<NinePatchChunk>(o[p.chunk] as bigint);
-  return out;
 }
 
 // ── nine-patch geometry: SkCanvas::drawImageLattice over NinePatchUtils::SetLatticeDivs

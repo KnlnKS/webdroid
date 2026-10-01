@@ -43,7 +43,7 @@ function atLeast(canvas: OffscreenCanvas, width: number, height: number): Offscr
 }
 /** a `uniform shader`: sampled from a texture of what the child paints over the canvas */
 type Child = { location: WebGLUniformLocation | null; shader: NativeShader | null };
-export type Region = readonly [number, number, number, number];
+type Region = readonly [number, number, number, number];
 type ShaderState = { readonly uniforms: readonly Uniform[]; readonly children: readonly Child[]; readonly local: DOMMatrixReadOnly | null };
 class ShaderProgram {
   private cached: { state: ShaderState; key: string; pattern: CanvasPattern } | null = null;
@@ -229,5 +229,5 @@ export class RuntimeShaderBuilder {
 class NativeRuntimeShader extends NativeShader {
   constructor(local: Affine | null, private readonly draw: (ctx: Ctx2D) => CanvasPattern) { super(local); }
   override deferredPattern(): (ctx: Ctx2D) => CanvasPattern { return this.draw; }
-  override pattern(ctx?: Ctx2D): CanvasPattern | null { return ctx ? this.draw(ctx) : null; }
+  override pattern(ctx: Ctx2D): CanvasPattern { return this.draw(ctx); }
 }

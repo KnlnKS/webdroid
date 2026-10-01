@@ -188,8 +188,8 @@ class ShaderEffect extends NativeRenderEffect {
 /** the input image as a shader in node coordinates, what a runtime shader's child samples */
 class ImageShader extends NativeShader {
   constructor(private readonly f: Filtered) { super(null); }
-  override pattern(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern | null {
-    const p = ctx?.createPattern(this.f.img, "no-repeat") ?? null;
+  override pattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern | null {
+    const p = ctx.createPattern(this.f.img, "no-repeat");
     p?.setTransform(new DOMMatrix([this.f.w / this.f.img.width, 0, 0, this.f.h / this.f.img.height, this.f.x, this.f.y]));
     return p;
   }

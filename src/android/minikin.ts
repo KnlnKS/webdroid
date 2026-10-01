@@ -35,7 +35,7 @@ function clusterStarts(s: string): number[] {
   return Array.from(graphemes.segment(s), (g) => g.index);
 }
 // Advances are a pure function of (font, language, piece). Pieces repeat (they are words), so the
-// cache is capped and cleared wholesale like graphics.ts' width cache.
+// cache is capped and cleared wholesale like paint.ts' width cache.
 const PIECES_MAX = 20000;
 let pieces = new Map<string, Map<string, Float32Array>>(), pieceCount = 0;
 /** One piece's advances: cluster widths by prefix difference, so they sum to the shaped width,

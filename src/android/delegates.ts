@@ -251,7 +251,7 @@ delegate("android/graphics/Matrix", {
   },
 });
 
-// ── ColorFilter and Shader: the native instances the TS Paint draws with ──────────────────────
+// ── ColorFilter and Shader: the native instances a native paint draws with ───────────────────
 // Lighting and ColorMatrix filters change theirs in place; a shader's is fixed, and Shader makes
 // a new one when its Java side changes. `m` is the local matrix's handle, 0 for identity.
 const colorFilter = (h: bigint) => deref<NativeColorFilter>(h);
