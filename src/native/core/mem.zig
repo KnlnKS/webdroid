@@ -311,22 +311,58 @@ fn commitExtent(h: u32, l: u32, n: u64) bool {
     }
     return true;
 }
-/// zero (madvise DONTNEED) or release (decommit, unmap) plane h's extents inside [l, l + n)
+/// zero (madvise DONTNEED) or release (decommit, unmap) plane h's extents inside [l, l + n). A
+/// release returns the whole units it covers to the pool, shrinking or splitting the extent; a
+/// unit it covers only in part stays committed, zeroed.
 fn dropExtents(h: u32, l: u32, n: u64, release_units: bool) void {
+    const end = @as(u64, l) + n;
     for (0..EXTENTS) |i| {
         if (ext_h[i] != h) continue;
         const lo_e: u64 = ext_lo[i];
         const hi_e = lo_e + ext_size[i];
-        if (hi_e <= l or lo_e >= @as(u64, l) + n) continue;
-        if (!release_units) {
-            const a = @max(lo_e, l);
-            const b = @min(hi_e, @as(u64, l) + n);
-            fill(ext_p[i] + @as(u32, @intCast(a - lo_e)), 0, @intCast(b - a));
-        } else if (lo_e >= l and hi_e <= @as(u64, l) + n) {
-            const at = (ext_p[i] - pool_base) / UNIT;
-            @memset(owner[at .. at + ext_size[i] / UNIT], -1);
-            ext_h[i] = 0;
+        if (hi_e <= l or lo_e >= end) continue;
+        const a = @max(lo_e, l);
+        const b = @min(hi_e, end);
+        const ua = if (release_units) (a + UNIT - 1) & ~@as(u64, UNIT - 1) else b;
+        const ub = if (release_units) b & ~@as(u64, UNIT - 1) else b;
+        if (ua >= ub) {
+            zeroExtent(i, a, b);
+            continue;
         }
+        zeroExtent(i, a, ua);
+        zeroExtent(i, ub, b);
+        releaseUnits(i, ua, ub);
+    }
+}
+fn zeroExtent(i: usize, a: u64, b: u64) void {
+    if (a < b) fill(ext_p[i] + @as(u32, @intCast(a - ext_lo[i])), 0, @intCast(b - a));
+}
+/// return extent i's unit-aligned [ua, ub) to the pool; what remains on both sides becomes two extents
+fn releaseUnits(i: usize, ua: u64, ub: u64) void {
+    const lo_e: u64 = ext_lo[i];
+    const hi_e = lo_e + ext_size[i];
+    const first = (ext_p[i] - pool_base) / UNIT + @as(u32, @intCast((ua - lo_e) / UNIT));
+    if (ua > lo_e and ub < hi_e) {
+        const j = for (0..EXTENTS) |k| {
+            if (ext_h[k] == 0) break k;
+        } else {
+            zeroExtent(i, ua, ub); // no slot to split into: the middle stays committed, zeroed
+            return;
+        };
+        ext_h[j] = ext_h[i];
+        ext_lo[j] = @intCast(ub);
+        ext_size[j] = @intCast(hi_e - ub);
+        ext_p[j] = ext_p[i] + @as(u32, @intCast(ub - lo_e));
+    }
+    @memset(owner[first .. first + @as(u32, @intCast((ub - ua) / UNIT))], -1);
+    if (ua == lo_e and ub == hi_e) {
+        ext_h[i] = 0;
+    } else if (ua == lo_e) {
+        ext_p[i] += @intCast(ub - lo_e);
+        ext_lo[i] = @intCast(ub);
+        ext_size[i] = @intCast(hi_e - ub);
+    } else {
+        ext_size[i] = @intCast(ua - lo_e);
     }
 }
 var moves: u32 = 0;

@@ -115,6 +115,14 @@ test("a reservation commits sparsely, as an allocator's strided regions do", () 
   }
   for (let region = 1n; region < 33n; region += 8n) expect(mem.ld32(mem.txVa(va + region * 0x1000_0000n + 0x3000n))).toBe(Number(region));
   expect(mem.stats().chunks - before).toBe(4);
+  // unmapping a unit inside an extent returns it and keeps the units on either side
+  const region = va + 0x1_8000_0000n, unit = 0x20_0000n;
+  expect(mem.commitVa(region, 3 * Number(unit))).toBe(true);
+  mem.st32(mem.txVa(region), 7); mem.st32(mem.txVa(region + 2n * unit), 9);
+  const committed = mem.stats().chunks;
+  expect(mem.unmapVa(region + unit, Number(unit))).toBe(true);
+  expect(mem.stats().chunks).toBe(committed - 1);
+  expect([mem.ld32(mem.txVa(region)), mem.ld32(mem.txVa(region + 2n * unit))]).toEqual([7, 9]);
   expect(mem.unmapVa(va, size)).toBe(true);
   expect(mem.stats().chunks).toBe(before);
 });
