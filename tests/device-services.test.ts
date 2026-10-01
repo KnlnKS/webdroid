@@ -143,6 +143,14 @@ describe("device policy", () => {
   });
 });
 
+describe("permission controller", () => {
+  test("no PermissionController package is installed, so its manager cannot be made", async () => {
+    const thrown = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "permission_controller")
+      .then(() => null, (e: { constructor: { $i?: { name: string } } }) => e.constructor.$i?.name);
+    expect(thrown).toBe("java/lang/IllegalStateException");
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");

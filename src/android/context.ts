@@ -165,7 +165,6 @@ const SERVICE_CLASS: Record<string, string> = {
   captioning: "android/view/accessibility/CaptioningManager",
   camera: "android/hardware/camera2/CameraManager",
   autofill: "android/view/autofill/AutofillManager",
-  permission_controller: "android/permission/PermissionControllerManager",
   netstats: "android/app/usage/NetworkStatsManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
   servicediscovery: "android/net/nsd/NsdManager",
@@ -256,6 +255,9 @@ const AOSP_MANAGERS: Record<string, [cls: string, make: (ctx: unknown) => Promis
   device_policy: ["android/app/admin/DevicePolicyManager", async (ctx) => newObj("android/app/admin/DevicePolicyManager",
     "(Landroid/content/Context;Landroid/app/admin/IDevicePolicyManager;)V", ctx, await scall("android/app/admin/IDevicePolicyManager$Stub", "asInterface",
       "(Landroid/os/IBinder;)Landroid/app/admin/IDevicePolicyManager;", await hostedService("device_policy")))],
+  // with no PermissionController package installed its constructor fails, as on such a device
+  permission_controller: ["android/permission/PermissionControllerManager", (ctx) =>
+    newObj("android/permission/PermissionControllerManager", "(Landroid/content/Context;Landroid/os/Handler;)V", ctx, mainHandler())],
   telecom: ["android/telecom/TelecomManager", (ctx) => newObj("android/telecom/TelecomManager", "(Landroid/content/Context;)V", ctx)],
   telephony_registry: ["android/telephony/TelephonyRegistryManager",
     (ctx) => newObj("android/telephony/TelephonyRegistryManager", "(Landroid/content/Context;)V", ctx)],
