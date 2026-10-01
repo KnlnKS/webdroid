@@ -157,6 +157,31 @@ async function finish(r: ActivityRecord, resultCode: number, data: JObj | null):
   return true;
 }
 
+const LAUNCH_MULTIPLE = 0, FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, RESULT_CANCELED = 0;
+const isComponent = async (r: ActivityRecord, component: JObj | null) => !!component &&
+  field<string>(r.info, AI, "packageName") === await vcall(component, "getPackageName", "()Ljava/lang/String;") &&
+  field<string>(r.info, AI, "name") === await vcall(component, "getClassName", "()Ljava/lang/String;");
+/** ActivityRecord.navigateUpTo: finish up to the nearest instance of the destination below, which
+ *  gets the intent as a new one, or, a standard activity not asked to clear top, is replaced by a
+ *  new instance; with none, only `r` finishes. Returns whether the destination was in the task. */
+async function navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, resultData: JObj | null): Promise<boolean> {
+  const component: JObj | null = await vcall(dest, "getComponent", "()Landroid/content/ComponentName;");
+  let parent: ActivityRecord | null = null;
+  for (let i = stack.indexOf(r) - 1; i >= 0 && !parent; i--) if (await isComponent(stack[i], component)) parent = stack[i];
+  const covered = parent ? stack.slice(stack.indexOf(parent) + 1, stack.indexOf(r)) : [];
+  const reuse = parent && (field<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
+    (await vcall(dest, "getFlags", "()I") & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
+  const restarted = parent && !reuse && await startActivityFor(r.app, dest) === START_SUCCESS;
+  void (async () => {
+    for (const c of covered) await finish(c, RESULT_CANCELED, null);
+    if (reuse) await schedule(parent!.app, await item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", parent!.token,
+      newArrayList([await newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", dest, appHost!.pkg)]), 0), null);
+    if (restarted) await finish(parent!, resultCode, resultData);
+    await finish(r, resultCode, resultData);
+  })().catch(reportUncaught);
+  return reuse || !!restarted;
+}
+
 rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JObj {}, sup: "android/app/IActivityClientController$Stub", methods: {
   "activityPaused(Landroid/os/IBinder;)V": (token: JObj) => {
     const r = byToken(token);
@@ -183,6 +208,14 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     void finish(r, resultCode, data).catch(reportUncaught);
     return 1;
   },
+  "navigateUpTo(Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;ILandroid/content/Intent;)Z":
+    async (token: JObj, dest: JObj, _type: string | null, resultCode: number, data: JObj | null) => {
+      const r = byToken(token);
+      return r ? +await navigateUpTo(r, dest, resultCode, data) : 0;
+    },
+  // the task's affinity is its root activity's
+  "shouldUpRecreateTask(Landroid/os/IBinder;Ljava/lang/String;)Z": (token: JObj, affinity: string | null) =>
+    +(!!byToken(token) && field<string | null>(stack[0].info, AI, "taskAffinity") !== affinity),
   // back on a root activity: AOSP moves a launcher-started task back; one task, so it finishes
   "onBackPressed(Landroid/os/IBinder;Landroid/app/IRequestFinishCallback;)V": (_token: JObj, callback: JObj) =>
     vcall(callback, "requestFinish", "()V"),
