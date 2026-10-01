@@ -1719,6 +1719,48 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   frame waits until `present()` has latched the last one, since `vsync()`'s
   watchdog alone let headless GL queue ~60 frames/s against ~8 shown.
 
+- **Stage E1: the reference build's bionic as guest code** (2026-10-03, branch
+  `knlnks/bytecode-stage-e1`; the plan's §9 "Stage E handoff" has the state and next steps).
+  `?libc=bionic` runs the AVD's libdl/libc/libm/libc++/liblog/libz in arm64 processes, dl.ts
+  doing the linker's part (`src/native/bionic.ts`). What bionic needed from the boundary, each
+  found by running it:
+  - libc_shared_globals, the static TLS layout and each thread's TCB/pthread_internal_t/bionic_tls
+    at this build's offsets, checked against libc.so's code (`__errno` +0x300, `getauxval` auxv
+    at globals+0x418, `__init_static_tls`'s module table at +0x4d0, `__init_tcb` slot 1).
+    Hidden helpers (`__pthread_internal_add`, `zero_dtv`, `__libc_globals`) come from
+    `.symtab`, which the loader now reads (it also symbolizes them; symbolization of images above
+    2 GiB had sorted signed and unsigned addresses together).
+  - Threads the host starts with `run()` (audio, looper, callback threads) must attach too, or
+    `__errno`/`pthread_getspecific` read the HLE's TCB (cronet, libnetd_client). clone's thread
+    pointer must be the 64-bit guest address: a translated buffer offset went stale when its
+    plane moved.
+  - libc calls malloc directly as well as through its PLT, so interposing the allocator by
+    symbol mixed scudo and host chunks; bionic's malloc dispatch table (`__libc_globals`+0x48)
+    covers both paths. Scudo still initializes: its primary reserves 8.25 GiB and commits at a
+    256 MiB stride, it executes crc32cx unconditionally (libc is built with +crc), and its
+    chunk pointers carry a top-byte tag, which is why the core gained extents, CRC32 and TBI.
+  - Since Android 10 getaddrinfo reaches netd only through libnetd_client's `dnsOpenProxy`;
+    bionic's own fallback queries a nameserver over UDP. The CFI-enabled libnetd_client needs the
+    linker's CFI shadow (linker_cfi.cpp's encoding, host trampolines marked unchecked).
+  - Faithful libc behavior surfaced VFS gaps the HLE hid: FORTIFY aborted TikTok on
+    `readdir(NULL)` after `opendir("/proc/self/task")` failed, and `pthread_getattr_np` on the
+    main thread (tid == pid) aborted YouTube with "stack not found in /proc/self/maps".
+    bionic's `abort()` falls back to `_exit(127)` when SIGABRT is ignored, which is how an
+    unhandled crash signal first showed up as a silent exit.
+  - YouTube's libgoogle3 run headless overran a 1 MiB main-thread stack into the core's own data
+    (the pool table), corrupting translations; stack guards and the core's data now fault on store.
+  - Rejected: translating plane memory per 2 MiB unit (sparse by construction, no prefix moves).
+    Units first touched out of order had to be relocated to stay contiguous for host and
+    unaligned accesses, and host operations that hold a buffer offset across an await then
+    wrote to the old place: Unity deadlocked after its first frame (0 GL frames/s vs 19.5).
+    Prefix windows plus extents for commits 64 MiB past the prefix kept parity (19.7).
+  - Measured (headless, one job): Among Us menu 20.5-20.7 GL frames/s HLE vs 22.7-23.2 bionic
+    with less than half the host calls; YouTube and TikTok live flows equal in both (TikTok's
+    known swipe/video wedges in both); per call from guest code (ns, HLE/bionic) malloc+free
+    37/57 (531 with scudo), snprintf 780/2000+, strtod 260/115, mutex 22/68, clock_gettime 46/55
+    (189 before the core served svc 113), sin+exp 37/180, qsort of 1,000 ints 26.6 ms/0.27 ms.
+    Cut the Rope is armeabi-v7a only and the reference build has no 32-bit bionic.
+
 ## App investigations and remaining limits
 
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
