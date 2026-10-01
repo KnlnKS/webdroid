@@ -524,6 +524,9 @@ export class Cpu {
   retF(): number { return bitsf(this.retFp0); }
   retD(): number { return bitsd(retPair(this.retFp0, this.retFp1)); }
 
+  /** the guest libc's teardown of this thread, once its Java thread has ended */
+  endThread(): Promise<void> { return threadEndHook?.(this) ?? Promise.resolve(); }
+
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
   async run(): Promise<void> {
     if (!this.attached && threadHook) { this.attached = true; await threadHook(this); }
@@ -747,8 +750,10 @@ export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRe
 const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
 /** makes a Cpu the host created known to the guest libc before its first guest instruction */
-let threadHook: ((cpu: Cpu) => Promise<void>) | null = null;
-export function setThreadHook(fn: (cpu: Cpu) => Promise<void>): void { threadHook = fn; }
+type ThreadHook = (cpu: Cpu) => Promise<void>;
+let threadHook: ThreadHook | null = null, threadEndHook: ThreadHook | null = null;
+/** the guest libc's state for a thread the host created: made at its first run(), torn down when its Java thread ends */
+export function setThreadHooks(start: ThreadHook, end: ThreadHook): void { threadHook = start; threadEndHook = end; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();
 

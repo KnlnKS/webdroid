@@ -88,7 +88,7 @@ async function runKeyDestructors(cpu: Cpu): Promise<void> {
 threadExit.hook = (t) => {
   const cpu = cpuOf(t);
   if (!cpu || cpu.loops || cpu.depth) return;
-  void runCleanupHandlers(cpu).then(() => runKeyDestructors(cpu)).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
+  void runCleanupHandlers(cpu).then(() => runKeyDestructors(cpu)).then(() => cpu.endThread()).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
 };
 const onceWaiters = new AddrMap<(() => void)[]>();
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
