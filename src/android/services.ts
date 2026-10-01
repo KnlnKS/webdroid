@@ -50,6 +50,7 @@ const activityManager: NativeSpec["methods"] = {
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
   "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () =>
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+  "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
   "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
   "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
