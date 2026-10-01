@@ -43,6 +43,7 @@ class WindowState {
   requestedVisibleTypes = 0;
   backCallback: JObj | null = null;
   javaSurface: JObj | null = null;
+  dim: Layer | null = null;
   constructor(readonly client: JObj, readonly attrs: JObj, readonly parent: WindowState | null, name: string, type: number, seq: number) {
     if (parent) {
       this.layer = displayLayer(name, 0);
@@ -142,22 +143,32 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   }
   ws.frame = { left: frame.left, top: frame.top, right: frame.right, bottom: frame.bottom };
   ws.layer.hidden = visibility !== VISIBLE;
+  updateDim(ws);
   scheduleComposite();
   updateFocus();
   return res | (firstTime ? RELAYOUT_RES_FIRST_TIME : 0);
 }
 
+/** WindowState's dim layer: a black effect layer under a FLAG_DIM_BEHIND window, at its dimAmount */
+function updateDim(ws: WindowState): void {
+  const dim = !!(lp<number>(ws.attrs, "flags") & FLAG_DIM_BEHIND) && ws.visibility === VISIBLE && !ws.parent;
+  if (!dim) { if (ws.dim) { removeLayer(ws.dim); ws.dim = null; } return; }
+  ws.dim ??= displayLayer(ws.layer.name + " dim", ws.layer.z - 0.5);
+  ws.dim.color = [0, 0, 0];
+  ws.dim.alpha = lp<number>(ws.attrs, "dimAmount");
+}
 function removeWindow(window: JObj): void {
   const ws = windows.get(window);
   if (!ws) return;
   windows.delete(window);
   removeLayer(ws.layer);
+  if (ws.dim) removeLayer(ws.dim);
   if (touchTarget === ws) touchTarget = null;
   updateFocus();
 }
 
 // ── input: InputDispatcher's focus and touch-target rules over the windows, top first
-const FLAG_NOT_FOCUSABLE = 0x8, FLAG_NOT_TOUCHABLE = 0x10, FLAG_NOT_TOUCH_MODAL = 0x20;
+const FLAG_DIM_BEHIND = 0x2, FLAG_NOT_FOCUSABLE = 0x8, FLAG_NOT_TOUCHABLE = 0x10, FLAG_NOT_TOUCH_MODAL = 0x20;
 const flags = (ws: WindowState) => lp<number>(ws.attrs, "flags");
 /** visible windows, the topmost first: by display band and order added, a sub-window by its sublayer over its parent */
 function topFirst(): WindowState[] {

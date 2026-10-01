@@ -474,3 +474,14 @@ export function invert(inv: Float32Array, io: number, src: Float32Array, so: num
   inv[io + 15] = (i * bc - j * ac + k * ab) * r;
   return 1;
 }
+
+// GraphicsEnvironment's natives: the GL here is the browser's WebGL, with no updatable driver,
+// ANGLE, or Vulkan/GLES layers to load, and a release build that is not debuggable
+rt.registerJnis("android/os/GraphicsEnvironment", {
+  "isDebuggable()Z": () => 0,
+  "setInjectLayersPrSetDumpable()Z": () => 0,
+  ...Object.fromEntries(["hintActivityLaunch()V", "nativeSetAngleInfo(Ljava/lang/String;ZLjava/lang/String;[Ljava/lang/String;)V",
+    "nativeToggleAngleAsSystemDriver(Z)V", "setDebugLayers(Ljava/lang/String;)V", "setDebugLayersGLES(Ljava/lang/String;)V",
+    "setDriverPathAndSphalLibraries(Ljava/lang/String;Ljava/lang/String;)V", "setGpuStats(Ljava/lang/String;Ljava/lang/String;JJLjava/lang/String;I)V",
+    "setLayerPaths(Ljava/lang/ClassLoader;Ljava/lang/String;)V"].map((sig) => [sig, () => {}])),
+});

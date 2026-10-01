@@ -55,6 +55,7 @@ import { setPixelCopyFrame, latchSurfaces } from "../android/glview";
 import { notePresent } from "../native/cpu";
 import { noteInput } from "../jvm/yield";
 import { stageD } from "../jvm/provenance";
+import { appArchives } from "../jvm/natives/jdex";
 import { hostWindowManager, dispatchTouch } from "../android/server/wm";
 import { startActivityThread } from "../android/server/am";
 import { setDisplayTarget } from "../android/surfaceflinger";
@@ -168,7 +169,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await code;
   const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);
   if (profile) compileProfile(rt, Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]), profile);
-  rt.classLoader = rt.make("dalvik/system/PathClassLoader");
+  // LoadedApk makes the app's class loader under ActivityThread; the TS stack makes it here
+  appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
+  if (!stageD()) rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();
   await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
@@ -246,6 +249,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   }
   return onMain(async () => {
     onStatus("Starting app…");
+    // handleBindApplication names the process, which Process.myProcessName answers
+    await scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", processName ?? pkg);
     const baseCtx = newContextImpl(host);
     // ActivityThread.setupGraphicsSupport: temporary files go to the app's cache directory
     const tmpdir: string = await vcall(await vcall(baseCtx, "getCacheDir", "()Ljava/io/File;"), "getAbsolutePath", "()Ljava/lang/String;");

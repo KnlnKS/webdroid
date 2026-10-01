@@ -462,6 +462,7 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
 rt.register({ name: "android/provider/BaseColumns", ctor: class extends JObj {}, statics: { _ID: "_id", _COUNT: "_count" } });
 rt.register({ name: "android/provider/Settings", ctor: class extends JObj {},
   methods: {
+    "static isInSystemServer()Z": () => 0,
     "static canDrawOverlays(Landroid/content/Context;)Z": (context: unknown) => {
       if (!context) rt.npe();
       return 0;

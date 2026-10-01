@@ -14,6 +14,7 @@ import { uuidFromString } from "../jvm/natives/jvalues";
 import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
 import { box, boxObject, unboxAs, type BoxDesc } from "../jvm/natives/jbox";
 import { E, ERRSTR } from "../native/abi";
+import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
 import { newFile, pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
@@ -52,7 +53,6 @@ rt.register({
 });
 class JBuild extends JObj {}
 const abi32 = jarray(["armeabi-v7a"], "Ljava/lang/String;"), abi64 = jarray(["arm64-v8a"], "Ljava/lang/String;");
-const is64BitProcess = () => rt.nativeAbis.find(abi => Object.keys(rt.classpath).some(path => path.startsWith("lib/" + abi + "/"))) !== "armeabi-v7a";
 rt.register({
   name: "android/os/Build", ctor: JBuild,
   statics: {
@@ -116,41 +116,43 @@ export function setProcessName(name: string): void { PROCESS_NAME = name; procId
 const killProcess = (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); };
 // System.exit and Runtime.halt end the process as killProcess does
 rt.registerJni("java/lang/Runtime", "nativeExit(I)V", () => killProcess(PROCESS_PID));
-rt.register({
-  name: "android/os/Process", ctor: class extends JObj {},
-  statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
-  methods: {
-    "static myPid()I": () => PROCESS_PID,
-    "static myProcessName()Ljava/lang/String;": () => PROCESS_NAME,
-    "static is64Bit()Z": () => is64BitProcess() ? 1 : 0,
-    "static killProcess(I)V": killProcess,
-    // androidx's startup tracing asks how long ago this process began; there is no earlier
-    // moment here than the page's own timeOrigin
-    "static getStartUptimeMillis()J": () => 0n,
-    "static getStartRequestedUptimeMillis()J": () => 0n,
-    "static getStartRequestedElapsedRealtime()J": () => 0n,
-    "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
-    "static myTid()I": () => threadTid(curThread),
-    "static myUid()I": () => PROCESS_UID,
-    "static myUserHandle()Landroid/os/UserHandle;": () => userHandleForUid(PROCESS_UID),
-    "static isApplicationUid(I)Z": (uid: number) => { const appId = uid % 100000; return appId >= 10000 && appId <= 19999 ? 1 : 0; },
-    "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
-      if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      return androidGroupId(name);
-    },
-    ...stubs(0n, "static getStartElapsedRealtime()J"),
-    ...stubs(0, "static isIsolated()Z", "static isSdkSandbox()Z", "static getThreadPriority(I)I"),
-    ...noops("static setThreadPriority(I)V", "static setThreadPriority(II)V"),
+// android.os.Process runs from bytecode; its natives answer for this one process
+const SIGNAL_KILL = 9;
+const threadPriorities = new Map<number, number>();
+const totalMemory = () => BigInt(device.cpu.memKb) * 1024n;
+rt.registerJnis("android/os/Process", {
+  "getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
+  "getGidForName(Ljava/lang/String;)I": (name: string | null) => {
+    if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    return androidGroupId(name);
   },
+  "getUidForName(Ljava/lang/String;)I": (name: string | null) => {
+    if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    return androidGroupId(name);
+  },
+  // setpriority(PRIO_PROCESS, tid): recorded, since the JS engine schedules every thread itself
+  "setThreadPriority(II)V": (tid: number, priority: number) => { threadPriorities.set(tid, priority); },
+  "setThreadPriority(I)V": (priority: number) => { threadPriorities.set(threadTid(curThread), priority); },
+  "getThreadPriority(I)I": (tid: number) => threadPriorities.get(tid) ?? 0,
+  "getThreadScheduler(I)I": () => 0,
+  "setThreadScheduler(III)V": () => {},
+  "setCanSelfBackground(Z)V": () => {},
+  "setThreadGroup(II)V": () => {}, "setThreadGroupAndCpuset(II)V": () => {},
+  "setArgV0Native(Ljava/lang/String;)V": (name: string) => { procIdentity.name = name; },
+  "getTotalMemory()J": totalMemory,
+  "getFreeMemory()J": () => totalMemory() / 2n,
+  "sendSignal(II)V": (pid: number, signal: number) => { if (pid === PROCESS_PID && signal === SIGNAL_KILL) killProcess(pid); },
+  "sendSignalQuiet(II)V": (pid: number, signal: number) => { if (pid === PROCESS_PID && signal === SIGNAL_KILL) killProcess(pid); },
 });
-rt.register({
-  name: "android/os/Trace", ctor: class extends JObj {},
-  methods: {
-    ...noops("static setCounter(Ljava/lang/String;J)V", "static beginSection(Ljava/lang/String;)V",
-      "static endSection()V", "static beginAsyncSection(Ljava/lang/String;I)V",
-      "static endAsyncSection(Ljava/lang/String;I)V"),
-    ...stubs(0, "static isTagEnabled(J)Z", "static isEnabled()Z"),
-  },
+// android.os.Trace runs from bytecode over atrace's natives: nothing traces this page, so no tag is
+// enabled and every event is dropped, as atrace drops them with no tracing session
+rt.registerJnis("android/os/Trace", {
+  "nativeIsTagEnabled(J)Z": () => 0,
+  ...Object.fromEntries(["nativeAsyncTraceBegin(JLjava/lang/String;I)V", "nativeAsyncTraceEnd(JLjava/lang/String;I)V",
+    "nativeAsyncTraceForTrackBegin(JLjava/lang/String;Ljava/lang/String;I)V", "nativeAsyncTraceForTrackEnd(JLjava/lang/String;I)V",
+    "nativeInstant(JLjava/lang/String;)V", "nativeInstantForTrack(JLjava/lang/String;Ljava/lang/String;)V", "nativeRegisterWithPerfetto()V",
+    "nativeSetAppTracingAllowed(Z)V", "nativeSetTracingEnabled(Z)V", "nativeTraceBegin(JLjava/lang/String;)V",
+    "nativeTraceCounter(JLjava/lang/String;J)V", "nativeTraceEnd(J)V"].map((sig) => [sig, () => {}])),
 });
 class JMemoryInfo extends JObj {
   dalvikSharedClean = 0; nativeSharedClean = 0; otherSharedClean = 0;
@@ -726,12 +728,22 @@ rt.register({
 export const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
 /** a path's file stat, null for a directory; ENOENT for neither */
 const existing = (fn: string, path: string) => { const st = vfs.stat(path); if (!st && !vfs.isDir(path)) throw errno(fn, 2); return st; };
-class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
+class JStructStat extends JObj {
+  st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n;
+  st_blksize = 4096n; st_blocks = 0n; st_atim: JObj | null = null; st_mtim: JObj | null = null; st_ctim: JObj | null = null;
+}
 rt.register({
   name: "android/system/StructStat", ctor: JStructStat,
   fields: ["st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime",
-    "st_ctime", "st_blksize", "st_blocks"],
+    "st_ctime", "st_blksize", "st_blocks", "st_atim", "st_mtim", "st_ctim"],
 });
+/** libcore's StructTimespec for a time in milliseconds */
+function timespec(ms: number): JObj {
+  const t = rt.make("android/system/StructTimespec") as Record<string, bigint>;
+  t[declaredField("android/system/StructTimespec", "tv_sec")] = BigInt(Math.floor(ms / 1000));
+  t[declaredField("android/system/StructTimespec", "tv_nsec")] = BigInt(Math.round((ms % 1000) * 1e6));
+  return t as unknown as JObj;
+}
 class JStructUtsname extends JObj {
   sysname = "Linux";
   nodename = "localhost";
@@ -755,6 +767,7 @@ function statOf(size: number, mode: number, mtimeMs: number): JStructStat {
   s.st_mode = mode;
   s.st_size = BigInt(size);
   s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(mtimeMs / 1000));
+  s.st_mtim = s.st_atim = s.st_ctim = timespec(mtimeMs);
   s.st_blocks = (s.st_size + 511n) / 512n;
   return s;
 }
@@ -871,6 +884,16 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (key === null) rt.npe();
       return processEnv[key] ?? null;
     },
+    "setenv(Ljava/lang/String;Ljava/lang/String;Z)V": (key: string, value: string, overwrite: number) => {
+      if (key === null || value === null) rt.npe();
+      if (!key || key.includes("=")) throw errno("setenv", 22);
+      if (overwrite || !(key in processEnv)) processEnv[key] = value;
+    },
+    "unsetenv(Ljava/lang/String;)V": (key: string) => {
+      if (key === null) rt.npe();
+      if (!key || key.includes("=")) throw errno("unsetenv", 22);
+      delete processEnv[key];
+    },
     "getpid()I": () => PROCESS_PID,
     "getuid()I": () => zygoteRunning ? 0 : PROCESS_UID,
     // bionic's passwd entry: every id has one, named as appUserName names it
@@ -902,6 +925,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
     "access(Ljava/lang/String;I)Z": (path: string, mode: number) => { if (path === null) rt.npe(); sys("access", accessPath(null, path, mode)); return 1; },
     "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); sys("remove", removePath(null, path)); },
+    // the VFS keeps no permission bits: the mode is not recorded
+    "mkdir(Ljava/lang/String;I)V": (path: string) => { if (path === null) rt.npe(); sys("mkdir", mkdirPath(null, path)); },
     "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
       if (from === null || to === null) rt.npe();
       sys("rename", renamePath(null, from, to));

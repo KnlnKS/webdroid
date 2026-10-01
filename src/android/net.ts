@@ -431,6 +431,8 @@ rt.register({
     ...noops("static tagSocket(Ljava/net/Socket;)V", "static untagSocket(Ljava/net/Socket;)V",
       "static tagDatagramSocket(Ljava/net/DatagramSocket;)V", "static untagDatagramSocket(Ljava/net/DatagramSocket;)V",
       "static incrementOperationCount(I)V", "static incrementOperationCount(II)V"),
+    // ActivityThread binds the stats service here; no per-uid stats are kept, so there is nothing to bind
+    "static init(Landroid/content/Context;)V": () => {},
     "static getTotalRxBytes()J": () => -1n,
     "static getTotalTxBytes()J": () => -1n,
     "static getMobileRxBytes()J": () => -1n,

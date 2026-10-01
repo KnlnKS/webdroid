@@ -14,22 +14,33 @@ function initRuntime(loader: JClassLoader, parent: JClassLoader | null): void {
   loader.runtime = (parent?.runtime ?? rt).fork();
   loader.runtime.classLoader = loader;
 }
+/** the app's own archives, whose dex the process loaded at boot: a loader over them (LoadedApk's) is
+ *  the app's class loader, over the runtime that already holds those classes */
+export const appArchives = new Set<string>();
 async function init(this: JClassLoader, path: string, libraries: string | null, parent: JClassLoader | null) {
+  if (!rt.classLoader && appArchives.has(path.split(":")[0])) {
+    this.parent = parent; this.runtime = rt; rt.classLoader = this;
+    return;
+  }
   initRuntime(this, parent);
+  await addDexPath(this, path);
+}
+/** DexPathList: each archive's dex files, in classes, classes2, ... order, and its other entries as resources */
+async function addDexPath(loader: JClassLoader, path: string): Promise<void> {
   for (const entry of path.split(":")) {
     const packed = packedArchives.get(entry);
     let files: Record<string, Uint8Array>;
-    if (packed) { await packed.prepare(true); files = packed.zip; this.runtime.classpathSource = packed; }
+    if (packed) { await packed.prepare(true); files = packed.zip; loader.runtime.classpathSource = packed; }
     else {
       const bytes = await vfs.readFile(entry);
       if (!bytes) continue;
       files = bytes[0] === 0x64 && bytes[1] === 0x65 && bytes[2] === 0x78 ? { "classes.dex": bytes } : zipTree(bytes);
     }
     for (const name of Object.keys(files).filter((n) => /^classes(?:[2-9]|[1-9][0-9]+)?\.dex$/.test(n)).sort((a, b) => a.length - b.length || a.localeCompare(b)))
-      for (const dex of dexesIn(files[name], entry + "!/" + name)) this.runtime.loadDex(dex);
-    for (const name of Object.keys(files)) if (!Object.hasOwn(this.runtime.classpath, name)) {
-      Object.defineProperty(this.runtime.classpath, name, { enumerable: true, configurable: true, get: () => files[name] });
-      this.runtime.classpathLocations.set(name, entry);
+      for (const dex of dexesIn(files[name], entry + "!/" + name)) loader.runtime.loadDex(dex);
+    for (const name of Object.keys(files)) if (!Object.hasOwn(loader.runtime.classpath, name)) {
+      Object.defineProperty(loader.runtime.classpath, name, { enumerable: true, configurable: true, get: () => files[name] });
+      loader.runtime.classpathLocations.set(name, entry);
     }
   }
 }
@@ -75,13 +86,27 @@ function findDexClass(this: JClassLoader, name: string) {
 }
 rt.register({
   name: "dalvik/system/BaseDexClassLoader", ctor: JBaseDexClassLoader, sup: "java/lang/ClassLoader",
-  methods: { "findClass(Ljava/lang/String;)Ljava/lang/Class;": findDexClass },
+  methods: {
+    "findClass(Ljava/lang/String;)Ljava/lang/Class;": findDexClass,
+    // the package manager's dex-load reporter feeds dexopt, which nothing here runs
+    "static setReporter(Ldalvik/system/BaseDexClassLoader$Reporter;)V": () => {},
+    "reportClassLoaderChain()V": () => {},
+    "addDexPath(Ljava/lang/String;)V": function (this: JClassLoader, path: string) { return addDexPath(this, path); },
+    "addDexPath(Ljava/lang/String;Z)V": function (this: JClassLoader, path: string) { return addDexPath(this, path); },
+    // native libraries load straight from the loader's archives (findLibrary), so library
+    // directories add nothing to search
+    "addNativePath(Ljava/util/Collection;)V": () => {},
+    "getLdLibraryPath()Ljava/lang/String;": () => "",
+  },
 });
 rt.register({
   name: "dalvik/system/PathClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
     "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, path: string, parent: JClassLoader | null) { return init.call(this, path, null, parent); },
+    // ClassLoaderFactory's, with the shared libraries' loaders, which here are the boot class path's
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;[Ljava/lang/ClassLoader;)V": init,
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;[Ljava/lang/ClassLoader;[Ljava/lang/ClassLoader;)V": init,
   },
 });
 rt.register({
@@ -127,3 +152,8 @@ rt.register({
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": findDexClass,
   },
 });
+
+// libnativeloader's namespace for a class loader: native libraries load from the loader's own
+// archives here (src/native/loader.ts), so there is nothing to set up and no error to report
+rt.registerJni("com/android/internal/os/ClassLoaderFactory",
+  "createClassloaderNamespace(Ljava/lang/ClassLoader;ILjava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;", () => null);

@@ -3,6 +3,8 @@ import { codeStats } from "./jvm/codecache";
 import "./natives";
 import { PROCESS_PID } from "./android/os";
 import { recordVsync, vsyncScheduled } from "./android/vsync";
+import { stageD } from "./jvm/provenance";
+import { dumpWindows } from "./shell/uiautomator";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
@@ -181,6 +183,7 @@ const wd = {
   // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
   // absolute device px with the status bar included, which is the space a tap is expressed in.
   uiTree: () => {
+    if (stageD()) return onMain(dumpWindows);
     const app = currentApp();
     const decor = topDecor();
     if (!app || !decor) return [];

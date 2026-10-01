@@ -714,6 +714,33 @@ const queryFor = (kind: ComponentKind, best: boolean) => driven(function* queryF
 });
 const unknownPackage = (pkg: string) => rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package: " + pkg);
 
+// PackageManager.Property: a manifest <property> of the application or a component, as the package
+// parser reads it (a resource reference, else a boolean, integer, float or string value)
+const COMPONENT_TYPES: [number, ComponentKind | null][] = [[1, null], [2, "activity"], [3, "provider"], [4, "receiver"], [5, "service"]];
+function propertyOf(owner: PackageRecord, node: XmlNode, cls: string | null): JObj | Promise<JObj> | null {
+  const name = attrStr(node, "name");
+  if (!name) return null;
+  const P = PKG + "PackageManager$Property", resource = attr(node, "resource"), value = attr(node, "value");
+  if (resource) return make(P, `(${S}IZ${S}${S})V`, name, resource.data, 1, owner.pkg, cls);
+  if (!value) return null;
+  if (value.type === TV.BOOLEAN) return make(P, `(${S}Z${S}${S})V`, name, +!!value.data, owner.pkg, cls);
+  if (value.type === TV.FLOAT) return make(P, `(${S}F${S}${S})V`, name, new Float32Array(new Int32Array([value.data]).buffer)[0], owner.pkg, cls);
+  if (value.type >= TV.INT_DEC && value.type <= TV.COLOR_RGB4) return make(P, `(${S}I${S}${S})V`, name, value.data, owner.pkg, cls);
+  return make(P, `(${S}${S}${S}${S})V`, name, value.str ?? attrStr(node, "value") ?? "", owner.pkg, cls);
+}
+/** every <property> named `name` under the nodes of a component type, across packages */
+function* properties$(name: string, type: number): Gen<JObj[]> {
+  const kind = COMPONENT_TYPES.find(([t]) => t === type);
+  if (!kind) return [];
+  const out: JObj[] = [];
+  for (const owner of packages.values()) {
+    const nodes: [XmlNode, string | null][] = kind[1] ? [...owner.components[kind[1]]].map(([cls, node]) => [node, cls])
+      : owner.application ? [[owner.application, null]] : [];
+    for (const [node, cls] of nodes) for (const child of node.children)
+      if (child.name === "property" && attrStr(child, "name") === name) { const p = propertyOf(owner, child, cls); if (p) out.push(yield p); }
+  }
+  return out;
+}
 const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", CN = "Landroid/content/ComponentName;", SLICE = "Landroid/content/pm/ParceledListSlice;";
 rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageManager$Stub", methods: {
   [`getPackageInfo(${S}JI)Landroid/content/pm/PackageInfo;`]: driven(function* getPackageInfo$(pkg: string, flags: bigint): Gen {
@@ -785,6 +812,17 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   [`isPackageAvailable(${S}I)Z`]: (pkg: string) => after(packageRecord(pkg), (record) => record ? 1 : 0),
   "isSafeMode()Z": () => 0,
+  [`queryProperty(${S}I)${SLICE}`]: driven(function* queryProperty$(name: string, type: number): Gen { return slice(yield* properties$(name, type)); }),
+  [`getPropertyAsUser(${S}${S}${S}I)Landroid/content/pm/PackageManager$Property;`]: driven(function* getPropertyAsUser$(name: string, pkg: string, cls: string | null): Gen {
+    const owner = packages.get(pkg);
+    if (!owner) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
+    const node = cls ? Object.values(owner.components).map((m) => m.get(cls)).find(Boolean) : owner.application;
+    if (!node) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", cls ?? pkg);
+    const child = node.children.find((c) => c.name === "property" && attrStr(c, "name") === name);
+    return child ? propertyOf(owner, child, cls) : null;
+  }),
+  // the package that provides SdkSandboxService on the reference AVD
+  "getSdkSandboxPackageName()Ljava/lang/String;": () => "com.google.android.sdksandbox",
   "isDeviceUpgrading()Z": () => 0,
   [`getNameForUid(I)${S}`]: (uid: number) => recordsForUid(uid)[0]?.pkg ?? null,
   [`getNamesForUids([I)[${S}`]: (uids: Int32Array) => jarray([...uids].map((uid) => recordsForUid(uid)[0]?.pkg ?? null), S),

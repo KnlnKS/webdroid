@@ -2,7 +2,7 @@
 // application (ApplicationInfo and the process's providers from the package manager, the device
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
-import { JObj, declaredField } from "../../jvm/runtime";
+import { rt, JObj, declaredField } from "../../jvm/runtime";
 import { newObj, vcall, scall, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
@@ -68,3 +68,10 @@ export async function startActivityThread(): Promise<void> {
   const thread = await newObj("android/app/ActivityThread", "()V");
   await vcall(thread, "attach", "(ZJ)V", 0, 0n);
 }
+
+// ActivityThread's natives: heapprofd never profiles this process, and the renderer holds no
+// resources a trim could purge
+rt.registerJnis("android/app/ActivityThread", {
+  "nInitZygoteChildHeapProfiling()V": () => {},
+  "nPurgePendingResources()V": () => {},
+});

@@ -450,6 +450,9 @@ rt.registerJnis("java/lang/reflect/Array", {
 // slack here, so the array is exactly the length asked for — which the contract allows.
 class JVMRuntime extends JObj {}
 const theVmRuntime = new JVMRuntime();
+/** whether the process runs arm64 code: an app shipping only armeabi-v7a libraries runs as a 32-bit process */
+export const is64BitProcess = (): boolean =>
+  rt.nativeAbis.find((abi) => Object.keys(rt.classpath).some((path) => path.startsWith("lib/" + abi + "/"))) !== "armeabi-v7a";
 /** the app's targetSdkVersion as ActivityThread binds it; ART's default is the development SDK */
 let targetSdk = 10000;
 export const setTargetSdkVersion = (version: number) => { targetSdk = version; };
@@ -465,9 +468,12 @@ rt.register({
     "addressOf(Ljava/lang/Object;)J": (array: object) =>
       array instanceof Int8Array && array.buffer === mem.buf ? BigInt(mem.va(array.byteOffset)) : handle(array),
     "getTargetSdkVersion()I": () => targetSdk,
+    "is64Bit()Z": () => +is64BitProcess(),
     "setTargetSdkVersion(I)V": setTargetSdkVersion,
     // ro.build.version.sdk
     "static getSdkVersionNative(I)I": () => device.sdk,
+    // the UI thread is marked sensitive to JIT and GC pauses: the JS engine schedules both itself
+    "static registerSensitiveThread()V": () => {},
     // ART counts native bytes to pace its collections; the JS engine paces its own
     "registerNativeAllocation(J)V": () => {},
     "registerNativeFree(J)V": () => {},
@@ -484,6 +490,27 @@ rt.register({
     "vmVersion()Ljava/lang/String;": () => "2.1.0",
     "properties()[Ljava/lang/String;": () => jarray([`user.locale=${device.locale}`], "Ljava/lang/String;"),
   },
+});
+
+// what ActivityThread tells ART about the process, and the heap and JIT controls it uses: the JS
+// engine owns the heap, the JIT and the scheduling, so these only record or answer ART's defaults
+let heapUtilization = 0.75;
+rt.registerJnis("dalvik/system/VMRuntime", {
+  "registerAppInfo(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;I)V": () => {},
+  "setDisabledCompatChangesNative([J)V": () => {},
+  "setTargetSdkVersionNative(I)V": () => {},
+  "getCurrentInstructionSet()Ljava/lang/String;": () => is64BitProcess() ? "arm64" : "arm",
+  "vmInstructionSet()Ljava/lang/String;": () => is64BitProcess() ? "arm64" : "arm",
+  "vmLibrary()Ljava/lang/String;": () => "libart.so",
+  "isJavaDebuggable()Z": () => 0, "isNativeDebuggable()Z": () => 0, "isCheckJniEnabled()Z": () => 0,
+  "getTargetHeapUtilization()F": () => heapUtilization,
+  "nativeSetTargetHeapUtilization(F)V": (value: number) => { heapUtilization = value; },
+  "getFinalizerTimeoutMs()J": () => 10000n,
+  "getNotifyNativeInterval()I": () => 384,
+  ...Object.fromEntries(["setProcessPackageName(Ljava/lang/String;)V", "setProcessDataDirectory(Ljava/lang/String;)V", "clampGrowthLimit()V", "clearGrowthLimit()V", "trimHeap()V", "requestHeapTrim()V", "requestConcurrentGC()V",
+    "updateProcessState(I)V", "notifyStartupCompleted()V", "bootCompleted()V", "resetJitCounters()V", "setSystemDaemonThreadPriority()V",
+    "notifyNativeAllocationsInternal()V", "preloadDexCaches()V", "runHeapTasks()V", "startHeapTaskProcessor()V", "stopHeapTaskProcessor()V"]
+    .map((sig) => [sig, () => {}])),
 });
 
 // DDMS chunks go to an attached debugger, and ART drops them when none is (there never is here)
