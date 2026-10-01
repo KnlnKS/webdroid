@@ -241,7 +241,6 @@ const imageViewMethods: NativeSpec["methods"] = {
     const nc = canvasOf(cv), ctx = nc.ctx;
     const saveCount = nc.save();
     try {
-      if (this.imageAlpha !== 255) ctx.globalAlpha *= this.imageAlpha / 255;
       if (this.cropToPadding) {
         ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
       }

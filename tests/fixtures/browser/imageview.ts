@@ -57,6 +57,15 @@ async function probe() {
   const first = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
   await vcall(first, "setTranslate", "(FF)V", 99, 0);
   const reset = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
-  return { results, reset: await affine(reset) };
+
+  // the image alpha reaches the drawable once, through its setAlpha, as ImageView.applyAlpha does
+  const faded = rt.make("android/widget/ImageView") as JImageView;
+  faded.right = 10; faded.bottom = 10;
+  await vcall(faded, "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", types[1]);
+  await vcall(faded, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff00ff00 | 0));
+  await vcall(faded, "setImageAlpha", "(I)V", 128);
+  const fadedCtx = new OffscreenCanvas(10, 10).getContext("2d")!;
+  await vcall(faded, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(fadedCtx, 10, 10));
+  return { results, reset: await affine(reset), fadedAlpha: fadedCtx.getImageData(5, 5, 1, 1).data[3] };
 }
 export default probe;
