@@ -636,19 +636,25 @@ Activity, PhoneWindow, ViewRootImpl and widgets run unchanged over TS system ser
 - Verified: an AOSP TextView window added through WindowManagerGlobal from `systemMain()`'s
   context lays out, draws and dumps (`[0,0,1080,2088]` above the 72 px gesture inset).
 
-**In flight on worktree agents** (merge by cherry-pick, re-gate, then delete the branch):
-PackageManager over a hosted IPackageManager with AOSP's ApplicationPackageManager and pm data
-classes (D-mode cannot boot an app without it); notifications over INotificationManager; input
-event classes (MotionEvent, KeyEvent, InputDevice, KeyCharacterMap, VelocityTracker) over natives.
+**Landed since** (2026-10-03; findings in the history's "Stage D boots apps" entry): PackageManager,
+notifications, input events, Intent and Settings on bytecode; AudioManager, Environment/StorageManager,
+SensorManager and haptics over hosted services; services, broadcasts and PendingIntents through
+ActivityThread (`server/activeservices.ts`, `server/broadcastqueue.ts`) and the broker; SurfaceView,
+TextureView and GL surfaces as layers (`texturelayer.ts`); windows ordered by activity token; PixelCopy;
+navigateUpTo; the platform package's picker/share/browser activities; `startActivityThread` replays
+ActivityThread.main. Under `?bytecode=stage-d`, FitNotes runs to its first text entry, CalculatorM
+matches its golden, DoodleJump plays; default mode stays 7/7.
 
-**Next, in order:** boot FitNotes in D-mode and fix what it reaches; broadcasts, services and
-cross-process activities/providers in server/am.ts through the broker; back and key dispatch;
-the browser IME as an InputMethodService-equivalent behind IInputMethodManager; WebView over a
-TS WebViewProvider; SurfaceView/TextureView/GL surfaces as layers; e2e harness on
-`uiautomator.ts` and the compositor; then flip the default and delete the TS view, widget, app
-and policy stacks (Stage F for these prefixes). Intent/ComponentName/IntentFilter flip after the
-PackageManager branch lands. The TS-mode services read `appHost`/TS intents and need D-mode
-counterparts as they are reached.
+**In flight on worktree agents:** the browser IME behind IInputMethodManager (FitNotes' next step);
+cross-process content providers (microG's settings cursor fails in every D-mode flow); WebView over
+a TS WebViewProvider (FlappyBird's AdMob); the remaining TS managers SystemServiceRegistry builds
+(TelephonyManager blocks Mihon and Komikku).
+
+**Next:** run the D-mode matrix (`WEBDROID_BYTECODE=stage-d bun run e2e`, then `--live` and corpus)
+to each flow's previous depth; cross-process activity results and the broker's `visible` phase;
+config changes and rotation; `media.ts` on `windowSurface`; the lifecycle trace differential and
+latency gate in D-mode; then flip the default and delete the TS view, widget, app and policy stacks
+(Stage F for these prefixes).
 
 ### Latest handoff (2026-10-01, night): Stage C is complete, history
 
