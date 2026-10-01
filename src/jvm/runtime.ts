@@ -12,7 +12,7 @@ import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } fro
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, addCell, type Cells, type CompiledCtor, type ResumeBody, type LazyMethod } from "./compiler";
 import { insnLen } from "./opcodes";
-import { gapsOf, recordGaps, type Gap } from "./codecache";
+import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
@@ -294,6 +294,7 @@ export class Runtime {
     this.refCache.clear();
     const dexIndex = this.dexes.length;
     this.dexes.push(dex);
+    if (platform) markPlatformDex(dex.id);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
       if (this.dexIndex.has(name)) continue;
