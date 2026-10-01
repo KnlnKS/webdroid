@@ -3,8 +3,8 @@
 // bytecode. A node's display list is a deferred command list (recording.ts) that drawing the
 // node replays against the real target, with the node's properties applied as
 // RenderNodeDrawable applies them. There is no RenderThread: elevation shadows, Z reordering,
-// projection, stretch and position callbacks are properties kept, not drawn or run; animators run
-// from the frame loop (rtanimator.ts).
+// projection and stretch are properties kept, not drawn; animators run from the frame loop
+// (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
 import { Recorder, displayListLength, recordOrRun, replay, replayingCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { rt, JObj, declaredField } from "../jvm/runtime";
@@ -19,6 +19,7 @@ import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect, unsupported } from 
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
 import { type RuntimeShaderBuilder } from "./runtime-shader";
+import type { TextureLayer } from "./texturelayer";
 
 let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
@@ -59,6 +60,8 @@ export class NativeRenderNode {
   projectBackwards = false; projectionReceiver = false; forceDark = true; usageHint = 0;
   stretch: { x: number; y: number; maxX: number; maxY: number } | null = null;
   positionListener: object | null = null;
+  /** the bounds last reported to the position listener */
+  position: string | null = null;
   effectInput: OffscreenCanvas | null = null; effectCanvas: NativeCanvas | null = null;
   drawing = false;
   constructor(readonly name: string | null) {}
@@ -126,18 +129,41 @@ export class NativeRenderNode {
 const nodeAt = (h: bigint) => deref<NativeRenderNode>(h);
 
 /** RenderNodeDrawable: the node's display list replayed into ctx under its properties */
+/** a frame's position changes for RenderNode.PositionUpdateListeners: listener, then the node's
+ *  bounds in the surface, which the renderer delivers before it queues the frame */
+export const positionUpdates: [object, number, number, number, number][] = [];
+/** RenderNodeDrawable's setViewProperties: the node's position and transform */
+function setViewProperties(ctx: Ctx2D, n: NativeRenderNode): void {
+  if (n.left || n.top) ctx.translate(n.left, n.top);
+  if (n.staticMatrix) applyMatrix(ctx, n.staticMatrix);
+  else if (n.animationMatrix) applyMatrix(ctx, n.animationMatrix);
+  if (n.hasTransform()) applyMatrix(ctx, n.transform!);
+}
+/** PositionListenerTrampoline::onPositionUpdated: the node's bounds through the frame's transform,
+ *  rounded when it only translates, reported when they changed */
+function notePosition(ctx: Ctx2D, n: NativeRenderNode): void {
+  ctx.save();
+  setViewProperties(ctx, n);
+  const m = ctx.getTransform();
+  ctx.restore();
+  const xs = [0, n.width].flatMap((x) => [0, n.height].map((y) => m.a * x + m.c * y + m.e));
+  const ys = [0, n.width].flatMap((x) => [0, n.height].map((y) => m.b * x + m.d * y + m.f));
+  const round = m.b === 0 && m.c === 0 && m.a === 1 && m.d === 1 ? Math.round : (v: number) => v;
+  const b = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => Math.trunc(round(v)));
+  const key = b.join();
+  if (key === n.position) return;
+  n.position = key;
+  positionUpdates.push([n.positionListener!, b[0], b[1], b[2], b[3]]);
+}
 export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
   const ops = n.ops, w = n.width, h = n.height;
+  if (n.positionListener && !n.drawing) notePosition(ctx, n);
   if (!ops?.length || n.drawing || n.nothingToDraw) return;
   ctx.save();
   n.drawing = true;
   // A bad op must not abandon this node's save, or its clip leaks into the frame.
   try {
-    // setViewProperties
-    if (n.left || n.top) ctx.translate(n.left, n.top);
-    if (n.staticMatrix) applyMatrix(ctx, n.staticMatrix);
-    else if (n.animationMatrix) applyMatrix(ctx, n.animationMatrix);
-    if (n.hasTransform()) applyMatrix(ctx, n.transform!);
+    setViewProperties(ctx, n);
     // A layer composites with the node's alpha. hwui also promotes a translucent node with
     // overlapping rendering to a layer; here its alpha multiplies each draw instead, since an
     // offscreen raster per fading node doubled Compose's draw time in the measurements.
@@ -224,7 +250,10 @@ rt.registerJnis("android/graphics/RenderNode", {
   "nEndAllAnimators(J)V": (h: bigint) => endAnimators(nodeAt(h)),
   "nForceEndAnimators(J)V": (h: bigint) => endAnimators(nodeAt(h)),
   // the RenderThread reports a drawn node's position per frame; the listener is kept, not called
-  "nRequestPositionUpdates(JLjava/lang/ref/WeakReference;)V": (h: bigint, l: object | null) => { nodeAt(h).positionListener = l; },
+  "nRequestPositionUpdates(JLjava/lang/ref/WeakReference;)V": (h: bigint, l: object | null) => {
+    const n = nodeAt(h);
+    n.positionListener = l; n.position = null;
+  },
   "nDiscardDisplayList(J)V": (h: bigint) => { nodeAt(h).ops = null; },
   "nIsValid(J)Z": (h: bigint) => +(nodeAt(h).ops !== null),
   "nSetUsageHint(JI)V": (h: bigint, hint: number) => { nodeAt(h).usageHint = hint; },
@@ -468,14 +497,16 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
     const [pl, pt, pr, pb, prx, pry, pp] = [prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b), prop<number>(rx), prop<number>(ry), prop<NativePaint>(p)];
     recordOrRun(canvasAt(h).ctx, (ctx) => drawRoundRect(NativeCanvas.over(ctx), pl.value, pt.value, pr.value, pb.value, prx.value, pry.value, pp.value));
   },
-  // the ripple is a RuntimeShader animated on the RenderThread; texture layers and WebView
-  // functors are the compositor's
+  // the ripple is a RuntimeShader animated on the RenderThread; WebView functors are the compositor's
   "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) => {
     const [px, py, pr, pp, pg, ph] = [prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p), prop<number>(progress), prop<number>(phase)];
     const shader = deref<RuntimeShaderBuilder>(builder);
     recordOrRun(canvasAt(h).ctx, (ctx) => drawRipple(ctx, px.value, py.value, pr.value, pp.value, pg.value, ph.value, color, shader));
   },
-  "nDrawTextureLayer(JJ)V": unsupported("RecordingCanvas.drawTextureLayer"),
+  "nDrawTextureLayer(JJ)V": (h: bigint, layer: bigint) => {
+    const l = deref<TextureLayer>(layer);
+    recordOrRun(canvasAt(h).ctx, (ctx) => l.draw(ctx));
+  },
   "nDrawWebViewFunctor(JI)V": unsupported("RecordingCanvas.drawWebViewFunctor"),
 });
 rt.registerJnis("android/graphics/CanvasProperty", {

@@ -5,7 +5,7 @@
 import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
-import { JSurface, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glview";
+import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glview";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
 import { mainThread, reportUncaught } from "../jvm/natives/jlang";
@@ -180,7 +180,7 @@ export function ndkInit(): void {
     ATrace_beginSection: () => {},
     ATrace_endSection: () => {},
     ANativeWindow_fromSurface: (cpu, a) => {
-      a.p(); const s = deref(a.i(), cpu), surf = s instanceof JSurface ? s.surf : null;
+      a.p(); const surf = surfaceTarget(deref(a.i(), cpu));
       if (!surf) return 0;
       return nativeWindowFor(surf);
     },

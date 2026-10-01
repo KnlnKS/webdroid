@@ -67,7 +67,7 @@ export function eglInit(): void {
     eglDestroySurface: (cpu, a) => {
       a.i(); const h = a.i(), s = surfaces[h];
       if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
-      if (!s.view) s.present?.close();
+      if (!s.view && !s.post) s.present?.close();
       surfaces[h] = null;
       return 1;
     },

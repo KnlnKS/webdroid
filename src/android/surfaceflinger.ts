@@ -1,14 +1,16 @@
 // SurfaceFlinger: the layer tree windows and surfaces compose into, and the client natives that
 // build it — SurfaceSession, SurfaceControl and its Transaction, BLASTBufferQueue and Surface. A
-// BLAST surface's buffer is an OffscreenCanvas the renderer draws into; queueing it latches the
-// buffer on its layer, and the display composes every visible layer of layer stack 0 into the
-// page's frame at the end of the JS turn that changed one.
+// BLAST surface's buffer is an OffscreenCanvas the renderer or a locked Canvas draws into, or the
+// frame an EGL swap or a decoder produced; queueing it latches the buffer on its layer, and the
+// display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
+// turn that changed one.
 import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { canvasOf } from "./canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
+import type { GlSurface } from "./glview";
 
 // SurfaceControl.Builder's creation flags
 const HIDDEN = 0x4, OPAQUE = 0x400, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
@@ -29,8 +31,12 @@ export class Layer {
   cornerRadius = 0;
   /** an effect layer's solid color, r g b in 0..1 */
   color: [number, number, number] | null = null;
-  /** the latched buffer */
-  buffer: OffscreenCanvas | null = null;
+  /** the latched buffer, and the rect it scales into (BLASTBufferQueue's destination frame) */
+  buffer: Frame | null = null;
+  dest: { l: number; t: number; r: number; b: number } | null = null;
+  /** setRelativeLayer: the layer this one is Z-ordered among, and those Z-ordered among this one */
+  relativeOf: Layer | null = null;
+  readonly relatives: Layer[] = [];
   removed = false;
   constructor(readonly name: string, public width: number, public height: number, flags: number) {
     this.hidden = !!(flags & HIDDEN);
@@ -42,7 +48,15 @@ export class Layer {
     this.parent = parent;
     parent?.children.push(this);
   }
+  relativeTo(to: Layer | null): void {
+    if (this.relativeOf) this.relativeOf.relatives.splice(this.relativeOf.relatives.indexOf(this), 1);
+    this.relativeOf = to;
+    to?.relatives.push(this);
+  }
 }
+/** a buffer: a canvas the queue reuses, or a frame its producer hands over and the layer releases */
+type Frame = OffscreenCanvas | ImageBitmap | VideoFrame;
+const releaseFrame = (f: Frame | null) => { if (f && !(f instanceof OffscreenCanvas)) f.close(); };
 const roots = new Set<Layer>();
 
 // ── composition
@@ -63,27 +77,49 @@ function composite(): void {
   ctx.save();
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  for (const layer of [...roots].filter((l) => l.layerStack === 0).sort((a, b) => a.z - b.z)) drawLayer(ctx, layer);
+  for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer);
   ctx.restore();
   perf.drawMs += performance.now() - t0;
   target.present();
 }
-function drawLayer(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void {
-  if (layer.hidden || layer.alpha <= 0 || layer.removed) return;
+const byZ = (a: Layer, b: Layer) => a.z - b.z;
+/** Layer::traverseInZOrder: the children and the layers relative to this one, by Z, those below
+ *  zero under the layer's own content */
+function drawTree(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void {
+  if (layer.removed) return;
+  const zs = layer.relatives.length ? [...layer.children.filter((c) => !c.relativeOf), ...layer.relatives].sort(byZ)
+    : layer.children.length > 1 ? layer.children.slice().sort(byZ) : layer.children;
+  let i = 0;
+  for (; i < zs.length && zs[i].z < 0; i++) if (zs[i].relativeOf === null || zs[i].relativeOf === layer) drawTree(ctx, zs[i]);
+  if (layer.buffer || layer.color) drawContent(ctx, layer);
+  for (; i < zs.length; i++) if (zs[i].relativeOf === null || zs[i].relativeOf === layer) drawTree(ctx, zs[i]);
+}
+/** a layer's buffer or color under its parents' position, matrix, alpha and crop, which apply
+ *  wherever relative Z placed it */
+function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void {
+  const chain: Layer[] = [];
+  for (let l: Layer | null = layer; l; l = l.parent) {
+    if (l.hidden || l.alpha <= 0 || l.removed) return;
+    chain.push(l);
+  }
   ctx.save();
-  ctx.translate(layer.x, layer.y);
-  if (layer.matrix) { const [a, b, c, d] = layer.matrix; ctx.transform(a, b, c, d, 0, 0); }
-  ctx.globalAlpha *= layer.alpha;
-  const crop = layer.crop;
-  if (crop) { ctx.beginPath(); ctx.roundRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t, layer.cornerRadius); ctx.clip(); }
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const l = chain[i], crop = l.crop;
+    ctx.translate(l.x, l.y);
+    if (l.matrix) { const [a, b, c, d] = l.matrix; ctx.transform(a, b, c, d, 0, 0); }
+    ctx.globalAlpha *= l.alpha;
+    if (crop) { ctx.beginPath(); ctx.roundRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t, l.cornerRadius); ctx.clip(); }
+  }
   if (layer.color) {
     const [r, g, b] = layer.color;
     ctx.fillStyle = `rgb(${r * 255},${g * 255},${b * 255})`;
-    if (crop) ctx.fillRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t);
-    else ctx.fillRect(-layer.x, -layer.y, ctx.canvas.width, ctx.canvas.height);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  } else {
+    const buffer = layer.buffer!, dest = layer.dest;
+    if (dest) ctx.drawImage(buffer, dest.l, dest.t, dest.r - dest.l, dest.b - dest.t);
+    else ctx.drawImage(buffer, 0, 0);
   }
-  if (layer.buffer) ctx.drawImage(layer.buffer, 0, 0);
-  for (const child of layer.children.slice().sort((a, b) => a.z - b.z)) drawLayer(ctx, child);
   ctx.restore();
 }
 
@@ -120,6 +156,7 @@ export function displayLayer(name: string, z: number): Layer {
 export function removeLayer(layer: Layer): void {
   layer.removed = true;
   layer.reparent(null);
+  layer.relativeTo(null);
   roots.delete(layer);
   scheduleComposite();
 }
@@ -153,10 +190,10 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeSetAnimationTransaction(J)V": () => {},
   "nativeSetEarlyWakeupStart(J)V": () => {}, "nativeSetEarlyWakeupEnd(J)V": () => {},
   "nativeSetFrameTimelineVsync(JJ)V": () => {},
-  "nativeSetLayer(JJI)V": op((l, z: number) => { l.z = z; }),
-  "nativeSetRelativeLayer(JJJI)V": (t: bigint, sc: bigint, _relativeTo: bigint, z: number) => {
-    const layer = layerOf(sc);
-    tx(t).ops.push(() => { layer.z = z; });
+  "nativeSetLayer(JJI)V": op((l, z: number) => { l.z = z; l.relativeTo(null); }),
+  "nativeSetRelativeLayer(JJJI)V": (t: bigint, sc: bigint, relativeTo: bigint, z: number) => {
+    const layer = layerOf(sc), to = layerOf(relativeTo);
+    tx(t).ops.push(() => { layer.z = z; layer.relativeTo(to); });
   },
   "nativeSetPosition(JJFF)V": op((l, x: number, y: number) => { l.x = x; l.y = y; }),
   "nativeSetScale(JJFF)V": op((l, sx: number, sy: number) => { l.matrix = [sx, 0, 0, sy]; }),
@@ -165,6 +202,9 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeSetColor(JJ[F)V": op((l, c: Float32Array) => { l.color = [c[0], c[1], c[2]]; }),
   "nativeSetWindowCrop(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
     l.crop = right > left && bottom > top ? { l: left, t: top, r: right, b: bottom } : null;
+  }),
+  "nativeSetDestinationFrame(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
+    l.dest = right > left && bottom > top ? { l: left, t: top, r: right, b: bottom } : null;
   }),
   "nativeSetCornerRadius(JJF)V": op((l, r: number) => { l.cornerRadius = r; }),
   "nativeSetFlags(JJII)V": op((l, flags: number, mask: number) => {
@@ -218,8 +258,9 @@ rt.registerJnis("android/hardware/SyncFence", {
 
 // ── BLASTBufferQueue and Surface: a window's buffers
 interface Queue { name: string; control: Control | null; width: number; height: number; canvas: OffscreenCanvas | null; frame: bigint;
-  sync: JObj | null; acquireSingle: boolean; pending: Transaction[] }
-interface Surface { queue: Queue | null; layer: Layer | null }
+  sync: JObj | null; acquireSingle: boolean; pending: Transaction[]; gl: GlSurface | null }
+/** a producer's handle: on a BLAST queue, on a layer, or on a SurfaceTexture's GL surface */
+export interface Surface { queue: Queue | null; layer: Layer | null; producer?: GlSurface }
 const queue = (h: bigint) => deref<Queue>(h);
 /** the buffer a surface's next frame draws into, sized to its queue */
 export function surfaceBuffer(s: Surface): OffscreenCanvas | null {
@@ -230,14 +271,18 @@ export function surfaceBuffer(s: Surface): OffscreenCanvas | null {
   return q.canvas;
 }
 /** BLASTBufferQueue's onFrameAvailable: the drawn buffer latches on the queue's layer, through the
- *  transaction a sync asked for if one is waiting, else at once */
-export async function queueBuffer(s: Surface): Promise<void> {
+ *  transaction a sync asked for if one is waiting, else at once. Latching releases the frame the
+ *  layer held, as acquiring the next buffer releases the last. */
+export async function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?? null): Promise<void> {
   const q = s.queue, layer = q?.control?.layer;
-  if (!q || !layer) return;
+  if (!q || !layer) { if (buffer !== q?.canvas) releaseFrame(buffer); return; }
   q.frame++;
-  const buffer = q.canvas, latch: Transaction = { ops: [...q.pending.flatMap((t) => t.ops.splice(0))] };
+  const latch: Transaction = { ops: [...q.pending.flatMap((t) => t.ops.splice(0))] };
   q.pending.length = 0;
-  latch.ops.push(() => { layer.buffer = buffer; });
+  latch.ops.push(() => {
+    if (layer.buffer !== buffer) releaseFrame(layer.buffer);
+    layer.buffer = buffer;
+  });
   const sync = q.sync;
   if (sync) {
     if (q.acquireSingle) q.sync = null;
@@ -253,10 +298,22 @@ export const nativeSurface = (javaSurface: JObj | null): Surface | null => {
   const h = javaSurface ? (javaSurface as Record<string, bigint>)[surfaceField()] : 0n;
   return h ? deref<Surface>(h) : null;
 };
+/** the surface EGL and media producers draw: on a queue, sized by it, each frame queued as its next
+ *  buffer, and released once the layer latches the one after */
+export function glSurfaceOf(s: Surface): GlSurface | null {
+  if (s.producer) return s.producer;
+  const q = s.queue;
+  if (!q) return null;
+  return q.gl ??= {
+    view: null, present: null, frames: 0,
+    get width() { return q.width; }, get height() { return q.height; },
+    post: (frame) => void queueBuffer(s, frame).catch(reportUncaught),
+  };
+}
 
 rt.registerJnis("android/graphics/BLASTBufferQueue", {
   "nativeCreate(Ljava/lang/String;Z)J": (name: string) =>
-    handle({ name, control: null, width: 0, height: 0, canvas: null, frame: 0n, sync: null, acquireSingle: true, pending: [] } satisfies Queue),
+    handle({ name, control: null, width: 0, height: 0, canvas: null, frame: 0n, sync: null, acquireSingle: true, pending: [], gl: null } satisfies Queue),
   "nativeDestroy(J)V": (h: bigint) => release(h),
   "nativeUpdate(JJJJI)V": (h: bigint, sc: bigint, w: bigint, ht: bigint) => {
     const q = queue(h);
@@ -292,9 +349,9 @@ rt.registerJnis("android/view/Surface", {
   "nativeGetFromBlastBufferQueue(JJ)J": (h: bigint, q: bigint) => h && surface(h).queue === queue(q) ? h : handle({ queue: queue(q), layer: null } satisfies Surface),
   "nativeRelease(J)V": (h: bigint) => release(h),
   "nativeDestroy(J)V": (h: bigint) => release(h),
-  "nativeIsValid(J)Z": (h: bigint) => +!!(h && (surface(h).queue || surface(h).layer)),
-  "nativeGetWidth(J)I": (h: bigint) => surface(h).queue?.width ?? 0,
-  "nativeGetHeight(J)I": (h: bigint) => surface(h).queue?.height ?? 0,
+  "nativeIsValid(J)Z": (h: bigint) => +!!(h && (surface(h).queue || surface(h).layer || surface(h).producer)),
+  "nativeGetWidth(J)I": (h: bigint) => (surface(h).queue ?? surface(h).producer)?.width ?? 0,
+  "nativeGetHeight(J)I": (h: bigint) => (surface(h).queue ?? surface(h).producer)?.height ?? 0,
   "nativeGetNextFrameNumber(J)J": (h: bigint) => (surface(h).queue?.frame ?? 0n) + 1n,
   "nativeIsConsumerRunningBehind(J)Z": () => 0,
   "nativeAllocateBuffers(J)V": () => {},

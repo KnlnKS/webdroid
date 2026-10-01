@@ -20,9 +20,11 @@ const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.s
   : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
 /** Stage D's coupled set: the application framework (ActivityThread, Activity, ContextImpl), the
- *  view stack, windows and the framework side of android.content, over TS system services */
+ *  view stack, windows and the framework side of android.content, over TS system services.
+ *  GLSurfaceView is a SurfaceView, so it goes with the view stack; its GLThread drives EGL10. */
 const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/content/", "android/window/", "android/transition/",
-  "android/preference/", "android/inputmethodservice/", "android/accessibilityservice/", "com/android/internal/policy/"];
+  "android/preference/", "android/inputmethodservice/", "android/accessibilityservice/", "com/android/internal/policy/",
+  "android/opengl/GLSurfaceView"];
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
  *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). `stage-d`

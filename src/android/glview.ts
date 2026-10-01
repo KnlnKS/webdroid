@@ -4,8 +4,8 @@ import { rt, JObj, stubs, noops, driven, declaredField, type Gen } from "../jvm/
 import type { JAttrSet } from "./res";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, vcallOn, JThread, curThread, scall, construct } from "../jvm/natives/jlang";
-import { deref, ownedHandle, release } from "./handles";
+import { vcall, vcallOn, JThread, curThread, scall, construct, after } from "../jvm/natives/jlang";
+import { deref, handle, ownedHandle, release } from "./handles";
 import { uptimeMillis } from "../guest-clock";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
@@ -17,6 +17,7 @@ import { reportUncaught } from "./os";
 import { vsync } from "./vsync";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
+import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger";
 
 export function viewInit(this: JView, c: unknown, set: JAttrSet | null = null) { return initViewFromCtx(this, c, set); }
 function measureDefault(this: JView, w: number, h: number) {
@@ -44,16 +45,20 @@ export interface GlSurface {
   onFrame?: () => void;
   /** the display frame count when the last frame was queued */
   queuedAt?: number;
+  /** a BLAST queue's producer side (surfaceflinger.ts glSurfaceOf): a frame goes to the queue, which
+   *  releases it once the layer latches the next */
+  post?: (frame: ImageBitmap | VideoFrame) => void;
 }
 export const bufferWidth = (s: GlSurface): number => s.userWidth || s.width;
 export const bufferHeight = (s: GlSurface): number => s.userHeight || s.height;
 export function presentSurface(surface: GlSurface, frame: ImageBitmap | VideoFrame): void {
-  surface.present?.close();
+  if (!surface.post) surface.present?.close();
   surface.present = frame;
   surface.frames++;
   surface.queuedAt = displayFrames;
   perf.glFrames++;
   if (surface.view) { surface.view.surfaceLayer = frame; invalidate(surface.view); }
+  surface.post?.(frame);
   surface.onFrame?.();
 }
 let displayFrames = 0, latchWaiters: (() => void)[] = [];
@@ -182,7 +187,20 @@ class JSurfaceHolder extends JObj {
 const holders = new WeakMap<JView, JSurfaceHolder>();
 /** the surface a window (Surface, SurfaceHolder, SurfaceView or SurfaceTexture) draws to, while it exists */
 export function surfaceTarget(win: unknown): GlSurface | null {
-  return win instanceof JSurface ? win.surf : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : liveSurface(surfaceTextureOf(win));
+  if (win instanceof JSurface) return win.surf;
+  if (win instanceof JSurfaceHolder) return win.surface;
+  if (win instanceof JView) return getHolder(win).surface;
+  const s = rt.iof(win, "android/view/Surface") ? nativeSurface(win as JObj) : null;
+  return s ? glSurfaceOf(s) : liveSurface(surfaceTextureOf(win));
+}
+/** EGLImpl's native window: a Surface or SurfaceTexture, or the Surface of a SurfaceView's or a
+ *  SurfaceHolder's, which AOSP's own classes answer through Java */
+export function windowSurface(win: unknown): GlSurface | null | Promise<GlSurface | null> {
+  const s = surfaceTarget(win);
+  if (s || !(win instanceof JObj) || win instanceof JView || win instanceof JSurfaceHolder) return s;
+  const holder = rt.iof(win, "android/view/SurfaceView") ? vcall(win, "getHolder", "()Landroid/view/SurfaceHolder;") : win;
+  return after(holder, (h: JObj | null) => h && rt.iof(h, "android/view/SurfaceHolder")
+    ? after(vcall(h, "getSurface", "()Landroid/view/Surface;"), surfaceTarget) : null);
 }
 export function getHolder(v: JView): JSurfaceHolder {
   let h = holders.get(v);
@@ -393,6 +411,14 @@ rt.registerJnis(SURFACE_TEXTURE, {
   },
   "nativeRelease()V": function (this: object) { nst(this).release(); },
   "nativeIsReleased()Z": function (this: object) { return +nst(this).abandoned; },
+});
+// new Surface(SurfaceTexture): a producer on the texture's GL surface
+rt.registerJnis("android/view/Surface", {
+  "nativeCreateFromSurfaceTexture(Landroid/graphics/SurfaceTexture;)J": (texture: object) => {
+    const producer = liveSurface(nst(texture));
+    if (!producer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "SurfaceTexture has already been released");
+    return handle({ queue: null, layer: null, producer } satisfies Surface);
+  },
 });
 class JTextureView extends JView {
   surfaceBacked = true;
@@ -732,10 +758,8 @@ rt.register({
     "eglCreateWindowSurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljava/lang/Object;[I)Ljavax/microedition/khronos/egl/EGLSurface;":
       (display: unknown, _c: unknown, win: unknown) => {
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, noEglSurface);
-        const s = surfaceTarget(win);
         // no surface yet (the view has no size): EGL_NO_SURFACE, as a real EGL answers a dead ANativeWindow
-        if (!s) return noEglSurface;
-        const e = new JEGLSurface(); e.surf = s; return e;
+        return after(windowSurface(win), (s) => s ? Object.assign(new JEGLSurface(), { surf: s }) : noEglSurface);
       },
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (display: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
@@ -860,8 +884,10 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   },
   "static eglCreateWindowSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Ljava/lang/Object;[II)Landroid/opengl/EGLSurface;": (display: JEGL14Display, config: JEGL14Config, window: unknown) => {
     if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noSurface);
-    const target = surfaceTarget(window); if (!target) return eglFailure(0x300b, noSurface);
-    const surface = new JEGL14Surface(eglHandle++); surface.surf = target; return surface;
+    return after(windowSurface(window), (target) => {
+      if (!target) return eglFailure(0x300b, noSurface);
+      const surface = new JEGL14Surface(eglHandle++); surface.surf = target; return surface;
+    });
   },
   "static eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JEGL14Display, draw: JEGL14Surface, _read: JEGL14Surface, context: JEGL14Context) => {
     if (display !== defaultDisplay) return eglFailure(0x3008, 0);

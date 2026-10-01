@@ -4,9 +4,10 @@
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
 import { rt, type JObj } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, scall } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
-import { NativeRenderNode, drawNodeInto } from "./rendernode";
+import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
+import { textureLayerNatives } from "./texturelayer";
 import { animateRenderThread } from "./rtanimator";
 import { nativeSurface, surfaceBuffer, queueBuffer } from "./surfaceflinger";
 import { onNextVsync } from "./vsync";
@@ -32,6 +33,11 @@ async function drawFrame(p: Proxy): Promise<number> {
   if (!p.opaque) ctx.clearRect(0, 0, buffer.width, buffer.height);
   drawNodeInto(ctx, p.root);
   perf.draws++; perf.drawMs += performance.now() - t0;
+  // prepareTree's position updates reach their listeners before the frame queues, so a SurfaceView
+  // merges its move into this frame's transaction
+  for (const [listener, l, t, r, b] of positionUpdates.splice(0)) {
+    await scall("android/graphics/RenderNode$PositionUpdateListener", "callPositionChanged", "(Ljava/lang/ref/WeakReference;JIIII)Z", listener, frame, l, t, r, b);
+  }
   const draw = p.drawCallback;
   p.drawCallback = null;
   const commit: JObj | null = draw ? await vcall(draw, "onFrameDraw", "(IJ)Landroid/graphics/HardwareRenderer$FrameCommitCallback;", SYNC_OK, frame) : null;
@@ -64,6 +70,7 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
   "nDeleteProxy(J)V": (h: bigint) => release(h),
   "nSetSurface(JLandroid/view/Surface;Z)V": (h: bigint, surface: JObj | null) => { proxy(h).surface = nativeSurface(surface); },
   "nSetSurfaceControl(JJ)V": () => {},
+  ...textureLayerNatives,
   "nSyncAndDrawFrame(J[JI)I": (h: bigint) => drawFrame(proxy(h)),
   "nDestroy(JJ)V": (h: bigint) => { proxy(h).surface = null; },
   "nSetOpaque(JZ)V": (h: bigint, opaque: number) => { proxy(h).opaque = !!opaque; },
