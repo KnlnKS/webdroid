@@ -2,7 +2,7 @@
 
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { vcall, scall, newObj, stringHash, vcallUncaught } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, staticField, vcallUncaught } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
@@ -601,7 +601,7 @@ const bitCount = (mask: number) => { let n = 0; for (; mask; mask &= mask - 1) n
 export class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
   sessionId = 0; attributes: unknown = null;
-  logSessionId = noLogSessionId;
+  logSessionId: JObj | null = null;
 
   state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
   nextTime = 0; written = 0; played = 0; headOrigin = 0; resetHead = false; underruns = 0;
@@ -738,8 +738,10 @@ rt.register({
     },
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
-    "getLogSessionId()Landroid/media/metrics/LogSessionId;": function (this: JAudioTrack) { rt.link("android/media/metrics/LogSessionId"); return this.logSessionId; },
-    "setLogSessionId(Landroid/media/metrics/LogSessionId;)V": function (this: JAudioTrack, id: JLogSessionId) {
+    "getLogSessionId()Landroid/media/metrics/LogSessionId;": function (this: JAudioTrack) {
+      return this.logSessionId ?? staticField("android/media/metrics/LogSessionId", "LOG_SESSION_ID_NONE");
+    },
+    "setLogSessionId(Landroid/media/metrics/LogSessionId;)V": function (this: JAudioTrack, id: JObj) {
       if (!id) return rt.npe();
       if (this.state !== 1) throw rt.mkThrowable("java/lang/IllegalStateException", "AudioTrack not initialized");
       this.logSessionId = id;
@@ -984,17 +986,6 @@ rt.register({
 });
 
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-export class JLogSessionId extends JObj {
-  constructor(public id = "") { super(); }
-}
-const noLogSessionId = new JLogSessionId();
-rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, statics: { LOG_SESSION_ID_NONE: noLogSessionId }, methods: {
-  "<init>(Ljava/lang/String;)V": function (this: JLogSessionId, id: string) { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "id"); this.id = id; },
-  "getStringId()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },
-  "toString()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },
-  "equals(Ljava/lang/Object;)Z": function (this: JLogSessionId, other: unknown) { return +(other instanceof JLogSessionId && other.id === this.id); },
-  "hashCode()I": function (this: JLogSessionId) { return stringHash(this.id); },
-} });
 
 export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
 rt.register({

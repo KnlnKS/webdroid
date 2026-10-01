@@ -122,6 +122,16 @@ describe("storage stats", () => {
   });
 });
 
+describe("media metrics", () => {
+  test("a playback session carries a fresh URL-safe session id", async () => {
+    const metrics = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "media_metrics");
+    const session = await vcall(metrics, "createPlaybackSession", "()Landroid/media/metrics/PlaybackSession;");
+    const id: string = await vcall(await vcall(session, "getSessionId", "()Landroid/media/metrics/LogSessionId;"), "getStringId", "()Ljava/lang/String;");
+    expect(id).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    await vcall(session, "close", "()V");
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");
