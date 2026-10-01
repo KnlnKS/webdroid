@@ -53,8 +53,10 @@ export const putExtra = (intent: JIntent, key: string, value: unknown, desc: str
   vcall(intent, "putExtra", `(${S}${desc})${I}`, key, value);
 
 export type ActivityResultTarget = { act: JActivity; code: number };
+/** Stage D's result target: the calling component, and the delivery to its activity record */
+export type ResultDelivery = { code: number; caller: { pkg: string; cls: string }; deliver: (resultCode: number, data: JIntent | null) => void };
 export const activityTransport: {
-  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ActivityResultTarget) => Promise<void>;
+  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ActivityResultTarget | ResultDelivery) => Promise<void>;
   finish?: (act: JActivity) => boolean;
   attach?: (act: JActivity, task: number, affinity: string) => void;
   finishAffinity?: (act: JActivity) => void;

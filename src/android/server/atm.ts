@@ -177,7 +177,13 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
     if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode).catch(reportUncaught);
-    else if (activityTransport.launch) await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy);
+    else if (activityTransport.launch) {
+      const caller = byToken(resultTo);
+      await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy, caller && requestCode >= 0 ? {
+        code: requestCode, caller: { pkg: appHost!.pkg, cls: field<string>(caller.info, AI, "name") },
+        deliver: (resultCode, data) => void deliverResult(caller, resultWho, requestCode, resultCode, data).catch(reportUncaught),
+      } : undefined);
+    }
     else return START_INTENT_NOT_RESOLVED;
     return START_SUCCESS;
   } finally { transitions--; }
@@ -186,12 +192,16 @@ const RESULT_OK = -1;
 /** an activity the platform package answers over the browser (DocumentsUI's pickers, share, the
  *  browser): it covers its caller, which resumes with any result it asked for */
 async function runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Promise<void> {
-  const caller = resultTo ?? stack.at(-1);
   let data: JObj | null = null;
   try { data = await run(intent); } catch (error) { reportUncaught(error); }
-  if (resultTo && requestCode >= 0)
-    resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data));
-  if (caller && stack.at(-1) === caller) { await pause(caller); await resume(caller); }
+  await deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data);
+}
+/** a result from an activity that covered `to` elsewhere (the browser, another process): the
+ *  caller takes it as it resumes */
+async function deliverResult(to: ActivityRecord | null, resultWho: string | null, requestCode: number, resultCode: number, data: JObj | null): Promise<void> {
+  if (!to || to.finishing) return;
+  if (requestCode >= 0) to.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, resultCode, data));
+  if (stack.at(-1) === to && to.state === "resumed") { await pause(to); await resume(to); }
 }
 /** the broker's launch of one of this process's activities for another process */
 export async function startActivityInProcess(component: string, intent: JObj, remoteId: number): Promise<void> {

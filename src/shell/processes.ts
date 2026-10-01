@@ -11,7 +11,7 @@ import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { JParcel } from "../android/parcel";
-import { type JIntent, activityTransport, componentParts, deliverActivityResult, newIntent, type ActivityResultTarget } from "../android/intent";
+import { type JIntent, activityTransport, componentParts, deliverActivityResult, newIntent, type ResultDelivery } from "../android/intent";
 import { onMain } from "../android/mainloop";
 import { PROCESS_PID, reportUncaught } from "../android/os";
 import { uptimeMillis } from "../guest-clock";
@@ -471,13 +471,22 @@ export function connectProcess(): ProcessEndpoint {
   clipboardTransport.get = () => broker.getClipboard(PROCESS_PID);
   clipboardTransport.listen = active => broker.watchClipboard(PROCESS_PID, active);
   let nextRequest = 1;
-  const requests = new Map<number, ActivityResultTarget>();
+  /** each launch's result delivery, by request */
+  const requests = new Map<number, ResultDelivery["deliver"]>();
   activityTransport.presentation = translucent => broker.presentation(PROCESS_PID, translucent);
   activityTransport.launch = async (pkg, process, component, intent, result) => {
     const request = nextRequest++, data = await encodeIntent(intent);
-    if (result && result.code >= 0) requests.set(request, result);
-    const caller = result && result.code >= 0 ? await componentParts(await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;")) : null;
-    const taskId = await vcall(intent, "getFlags", "()I") & 0x10000000 ? 0 : (result?.act ?? appHost?.currentActivity())?.taskId ?? 0;
+    const act = result && "act" in result ? result.act : null;
+    let caller: { pkg: string; cls: string } | null = null;
+    if (result && result.code >= 0) {
+      if ("deliver" in result) { requests.set(request, result.deliver); caller = result.caller; }
+      else {
+        const { act, code } = result;
+        requests.set(request, (resultCode, data) => { if (!act.finished) deliverActivityResult(act, code, resultCode, data); });
+        caller = await componentParts(await vcall(act, "getComponentName", "()Landroid/content/ComponentName;"));
+      }
+    }
+    const taskId = await vcall(intent, "getFlags", "()I") & 0x10000000 ? 0 : (act ?? appHost?.currentActivity())?.taskId ?? 0;
     void broker.launchActivity(PROCESS_PID, pkg, process, component, data, request, caller?.cls ?? null, taskId);
   };
   activityTransport.attach = (act, task, affinity) => {
@@ -564,9 +573,9 @@ export function connectProcess(): ProcessEndpoint {
         });
         setVisible(true);
       } else {
-        const result = requests.get(request.request);
+        const deliver = requests.get(request.request);
         requests.delete(request.request);
-        if (result && !result.act.finished) deliverActivityResult(result.act, result.code, request.code, request.data ? await decodeIntent(request.data) : null);
+        deliver?.(request.code, request.data ? await decodeIntent(request.data) : null);
       }
     },
     transact: receiveTransaction,
