@@ -1,6 +1,6 @@
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, copyEvent, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, drawableBounds, rvCsl, colorFor, rvColors, setDrawableCallback } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawAt, drawableSize, drawableBounds, rvCsl, colorFor, rvColors, setDrawableCallback } from "./drawable";
 import { rt, type JObj, type NativeSpec, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue, themeOf } from "./res";
 import { TV } from "./axml";
@@ -260,9 +260,8 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
     const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
     const x = Math.round(this.fraction(this.progress) * (w - this.thumbW + this.thumbOffset * 2)) - this.thumbOffset;
     const y = Math.trunc((h - this.thumbH) / 2);
-    yield vcallOn(thread, this.thumb, "setBounds", "(IIII)V", x, y, x + this.thumbW, y + this.thumbH);
     ctx.save(); ctx.translate(this.padL, this.padT);
-    try { yield drawChild(this.thumb, canvas, thread); } finally { ctx.restore(); }
+    try { yield drawAt(this.thumb, canvas, x, y, x + this.thumbW, y + this.thumbH, thread); } finally { ctx.restore(); }
   }),
   "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSeekBar, event: JMotionEvent): Gen {
     if (!this.enabled) return 0;
@@ -876,8 +875,7 @@ rt.register({
       if (!d) return;
       const h = yield drawableSize(d, true, thread), top = indicatorTop(this, h);
       const left = this.atStart() ? this.basePad : this.width() - this.basePad - this.checkMarkW;
-      yield vcallOn(thread, d, "setBounds", "(IIII)V", this.scrollX + left, top, this.scrollX + left + this.checkMarkW, top + h);
-      yield drawChild(d, cv, thread);
+      yield drawAt(d, cv, this.scrollX + left, top, this.scrollX + left + this.checkMarkW, top + h, thread);
     }),
   },
 });

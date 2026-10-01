@@ -1,6 +1,6 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY, createDrawableState, mergeDrawableStates, isShown } from "./view";
-import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, setDrawableCallback, rvCsl } from "./drawable";
+import { type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, drawableSize, drawAt, setDrawableCallback, rvCsl } from "./drawable";
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum, enumOrdinal } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt } from "./res";
@@ -248,10 +248,8 @@ const imageViewMethods: NativeSpec["methods"] = {
       }
       ctx.translate(this.padL, this.padT);
       if (matrix) applyMatrix(ctx, matrix);
-      const bounds = vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, dw, dh);
-      if (bounds instanceof Promise) yield bounds;
-      const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
-      if (draw instanceof Promise) yield draw;
+      const drawn = drawAt(d, cv, 0, 0, dw, dh, thread);
+      if (drawn instanceof Promise) yield drawn;
     } finally { nc.restoreToCount(saveCount); }
   }),
 };

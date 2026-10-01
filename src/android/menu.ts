@@ -1,5 +1,5 @@
 import { JViewGroup, specSize, JView, invalidate, requestLayout, setViewBackground } from "./view";
-import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
+import { type JDrawable, loadDrawable, loadDrawableRV, drawAt } from "./drawable";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium, typefaceOf } from "./fonts";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
@@ -62,12 +62,10 @@ export class JActionBarView extends JViewGroup {
       ctx.fillText("×", x, h / 2);
       x += 72;
     } else if (this.showUp && this.upDrawable) {
-      yield vcallOn(thread, this.upDrawable, "setBounds", "(IIII)V", 2, h / 2 - 24, 50, h / 2 + 24);
-      yield drawChild(this.upDrawable, cv, thread);
+      yield drawAt(this.upDrawable, cv, 2, h / 2 - 24, 50, h / 2 + 24, thread);
     }
     if (this.icon) {
-      yield vcallOn(thread, this.icon, "setBounds", "(IIII)V", x, h / 2 - 30, x + 60, h / 2 + 30);
-      yield drawChild(this.icon, cv, thread);
+      yield drawAt(this.icon, cv, x, h / 2 - 30, x + 60, h / 2 + 30, thread);
       x += 72;
     }
     const { action: shown, overflow, slots } = this.layoutMenu();
@@ -111,8 +109,7 @@ export class JActionBarView extends JViewGroup {
       if (item.icon) {
         // the bar's icons draw white, on a copy of the drawable's state
         yield vcallOn(thread, yield vcallOn(thread, item.icon, "mutate", "()Landroid/graphics/drawable/Drawable;"), "setTint", "(I)V", -1);
-        yield vcallOn(thread, item.icon, "setBounds", "(IIII)V", cx - 24, h / 2 - 24, cx + 24, h / 2 + 24);
-        yield drawChild(item.icon, cv, thread);
+        yield drawAt(item.icon, cv, cx - 24, h / 2 - 24, cx + 24, h / 2 + 24, thread);
       } else {
         ctx.font = "26px Roboto";
         ctx.textAlign = "center";

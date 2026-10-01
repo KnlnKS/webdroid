@@ -14,7 +14,7 @@ import { JRect, castShadow } from "./graphics";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { tfMedium } from "./fonts";
 import { setPaintTypeface } from "./paint";
-import { JDrawable, loadDrawableRV } from "./drawable";
+import { JDrawable, loadDrawableRV, drawAt } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
 import { dispatchWindowKey, backKeyMethods, type JKeyEvent } from "./keyevent";
@@ -27,8 +27,6 @@ import { applyWindowTheme, windowDim, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 import { JMotionEvent } from "./motionevent";
 
-const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
-const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
@@ -131,8 +129,7 @@ rt.register({
         ctx.beginPath();
         ctx.roundRect(0, 0, this.width(), this.height(), r);
         ctx.clip();
-        yield guardCall(bg, M_setBounds, 0, 0, this.width(), this.height());
-        yield guardCall(bg, M_drawableDraw, cv);
+        yield drawAt(bg, cv, 0, 0, this.width(), this.height());
         ctx.restore();
       }
     }),

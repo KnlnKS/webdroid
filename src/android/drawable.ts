@@ -40,10 +40,16 @@ export function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | nul
 export function drawableSize(d: JDrawable, vertical: boolean, thread = curThread): Maybe<number> {
   return after(vcallOn(thread, d, vertical ? "getIntrinsicHeight" : "getIntrinsicWidth", "()I"), Number);
 }
-const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+type Methods = Record<string, (...a: unknown[]) => unknown>;
+const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V"), M_setBounds = mangleMethod("setBounds", "(IIII)V");
 /** Drawable.draw(Canvas), virtually: an app's own Drawable subclass is what gets drawn */
 export function drawChild(d: JDrawable, cv: unknown, thread = curThread): unknown {
-  return callOn(thread, () => (d as unknown as Record<string, (cv: unknown) => unknown>)[M_draw](cv));
+  return callOn(thread, () => (d as unknown as Methods)[M_draw](cv));
+}
+/** Drawable.setBounds, then draw(Canvas) */
+export function drawAt(d: JDrawable, cv: unknown, l: number, t: number, r: number, b: number, thread = curThread): unknown {
+  const bounded = callOn(thread, () => (d as unknown as Methods)[M_setBounds](l, t, r, b));
+  return bounded instanceof Promise ? bounded.then(() => drawChild(d, cv, thread)) : drawChild(d, cv, thread);
 }
 export const setDrawableCallback = (d: JDrawable, callback: unknown): unknown =>
   vcall(d, "setCallback", "(Landroid/graphics/drawable/Drawable$Callback;)V", callback);
@@ -60,7 +66,7 @@ export function colorFor(c: Colors, states: ArrayLike<number>): Maybe<number> {
   if (typeof c === "number") return c;
   return after(vcall(c, "getDefaultColor", "()I"), (dflt: number) => vcall(c, "getColorForState", "([II)I", Int32Array.from(states), dflt));
 }
-export const mkCsl = (color: number): Maybe<JColorStateList> => scall(CSL, "valueOf", `(I)L${CSL};`, color);
+const mkCsl = (color: number): Maybe<JColorStateList> => scall(CSL, "valueOf", `(I)L${CSL};`, color);
 /** the ColorStateList a getter hands out */
 export const colorList = (c: Colors | null): Maybe<JColorStateList | null> => typeof c === "number" ? mkCsl(c) : c;
 /** a colour attribute's value: a resource loads as a list (a selector or one colour), a literal is the colour */

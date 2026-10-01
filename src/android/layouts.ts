@@ -5,7 +5,7 @@ import {
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops, driven, type Gen } from "../jvm/runtime";
 import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework, attrSet } from "./res";
-import { type JDrawable, loadDrawableRV, drawChild } from "./drawable";
+import { type JDrawable, loadDrawableRV, drawAt } from "./drawable";
 import type { JavaCanvas } from "./canvas";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
@@ -316,11 +316,10 @@ export const linearMethods: NativeSpec["methods"] = {
     const size = vertical ? this.dividerH : this.dividerW, d = this.divider, self = this;
     // a generator, not an async closure: a divider that draws synchronously keeps the frame synchronous
     function* draw(position: number): Gen {
-      yield vcall(d, "setBounds", "(IIII)V", vertical ? self.padL + self.dividerPadding : position,
+      yield drawAt(d, canvas, vertical ? self.padL + self.dividerPadding : position,
         vertical ? position : self.padT + self.dividerPadding,
         vertical ? self.width() - self.padR - self.dividerPadding : position + size,
         vertical ? position + size : self.height() - self.padB - self.dividerPadding);
-      yield drawChild(d, canvas);
     }
     for (let i = 0; i < kids.length; i++) if (this.dividerBefore(i)) {
       const c = kids[i], lp = c.lp instanceof JMarginLP ? c.lp : null;

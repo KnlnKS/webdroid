@@ -3,13 +3,13 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, callSelf, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { newObj, vcall, vcallOn, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom, setViewBackground } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources, attrSet } from "./res";
 import { attr } from "./axml";
 import type { JavaCanvas } from "./canvas";
-import { JDrawable, loadDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
+import { JDrawable, loadDrawable, loadDrawableRV, drawableSize, drawAt } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
 import { jeq, toJsArray } from "../jvm/natives/jcoll";
@@ -540,8 +540,7 @@ const adapterViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (!d || this.divH <= 0) return;
     const vs = this.allViews();
     for (let i = 0; i < vs.length - 1; i++) {
-      yield vcallOn(thread, d, "setBounds", "(IIII)V", this.padL, vs[i].bottom, this.width() - this.padR, vs[i].bottom + this.divH);
-      const pending = drawChild(d, cv, thread);
+      const pending = drawAt(d, cv, this.padL, vs[i].bottom, this.width() - this.padR, vs[i].bottom + this.divH, thread);
       if (pending instanceof Promise) yield pending;
     }
   }),

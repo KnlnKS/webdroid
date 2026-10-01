@@ -6,7 +6,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import { type JView, vgMethods } from "./view";
 import { AID, type JAttrSet, obtainStyled, rvDimen } from "./res";
-import { type JDrawable, ST, loadDrawableRV, drawableSize, drawChild } from "./drawable";
+import { type JDrawable, ST, loadDrawableRV, drawableSize, drawAt } from "./drawable";
 import { type JavaCanvas } from "./canvas";
 import { JListView, JBaseAdapter, baseAdapterMethods, listViewMethods } from "./listview";
 import { inflateLayout } from "./inflate";
@@ -211,8 +211,7 @@ rt.register({
           const empty = !open || !next || next.c < 0;
           yield vcallOn(thread, d, "setState", "([I)Z", child ? (r.last ? CHILD_LAST : NO_STATE) : GROUP_STATES[(open ? 1 : 0) | (empty ? 2 : 0)]);
         }
-        yield vcallOn(thread, d, "setBounds", "(IIII)V", left + this.padL, v.top, right + this.padL, v.bottom);
-        yield drawChild(d, cv, thread);
+        yield drawAt(d, cv, left + this.padL, v.top, right + this.padL, v.bottom, thread);
       }
     }),
   },
