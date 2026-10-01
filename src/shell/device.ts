@@ -178,6 +178,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   if (!stageD()) rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   await initDeviceLocales();
   await vfs.prepare(pkg);
+  // installd's createAppData: the data directory with its cache directories, which apps stat
+  // before ContextImpl ever creates them
+  for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${pkg}${dir}`);
   if (stageD()) writePrefsFiles(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
   const appCls = (attrStr(appNode!, "name") ?? "android.app.Application").replace(/^\./, pkg + ".").replace(/\./g, "/");
