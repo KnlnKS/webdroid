@@ -576,10 +576,18 @@ export fn alloc_stack(size: u32) u32 {
         // the thread count is bounded by memory, as in a process (an app's dispatcher, http and
         // image pools alone pass sixty threads)
         const p = map_pages(size +% abi.STACK_GUARD, 0, PAGE_SIZE);
-        return if (p == 0) 0 else p + abi.STACK_GUARD;
+        if (p == 0) return 0;
+        guard(p + abi.STACK_GUARD, 2);
+        return p + abi.STACK_GUARD;
     }
     stack_top = @intCast(top);
+    guard(base, 2);
     return base;
+}
+/// the guard gap below a stack: an overflowing store faults there rather than landing below it
+fn guard(base: u32, flag: u8) void {
+    const g = pageOf(base - abi.STACK_GUARD);
+    for (g..pageOf(base)) |pg| page_flags[pg] = (page_flags[pg] & ~@as(u8, 2)) | flag;
 }
 export fn free_stack(base: u32, size: u32) void {
     if (free_stack_count < free_stacks.len) {
@@ -589,7 +597,10 @@ export fn free_stack(base: u32, size: u32) void {
     }
     // the table is full, which only overflow stacks can do: give the address space back rather
     // than lose it, since a mapped stack is reachable again through map_pages
-    if (base >= abi.ARENA_BASE) _ = unmap_pages(base - abi.STACK_GUARD, size +% abi.STACK_GUARD);
+    if (base >= abi.ARENA_BASE) {
+        guard(base, 0);
+        _ = unmap_pages(base - abi.STACK_GUARD, size +% abi.STACK_GUARD);
+    }
 }
 export fn host_alloc(n: u32, alignment: u32) u32 {
     const p = (host_top + alignment - 1) & ~(alignment - 1);
@@ -614,7 +625,8 @@ export fn mem_init(size: u32) void {
         fill(@intCast(i * PAGE_SIZE), 0, PAGE_SIZE);
     };
     cpu.reset(size > abi.MEM_SIZE_A32);
-    @memset(page_flags[0..pageOf(abi.LOW)], 2);
+    // the core's own data lies below the stacks: a guest store there faults, as below LOW
+    @memset(page_flags[0..pageOf(abi.STACK_BASE)], 2);
 }
 export fn flags_ptr() u32 {
     return @intFromPtr(page_flags);

@@ -38,6 +38,8 @@ export const POOL_BASE = 0x8000_0000;
 export let MEM_SIZE = MEM_SIZE_INITIAL;
 export function setMemSize(n: number): void { MEM_SIZE = n; }
 export const STACK_SIZE = 0x10_0000;
+/** the main thread's, Android's 8 MiB RLIMIT_STACK; other threads get pthread's 1 MiB */
+export const MAIN_STACK_SIZE = 0x80_0000;
 
 export const trampAddr = (slot: number) => TRAMP_BASE + slot * 8;
 export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;
