@@ -290,6 +290,7 @@ const wd = {
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
+  looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
   testFrame: async () => {
     if (processPresentation.visible) await testFrame();
     for (const frame of document.querySelectorAll("iframe")) {

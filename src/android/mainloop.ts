@@ -3,11 +3,13 @@
 // a native callback posted to its looper, which runs there as a device Looper runs its fd callbacks.
 //
 // The main thread loops from boot. Host work (frames, input, broker requests) reaches it with
-// onMain, as a message on the main Handler, so it keeps its order with the app's own posts.
+// onMain, as an asynchronous message on the main looper: it keeps its order with the app's own
+// posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
+// vsync a device delivers as native callbacks.
 import { rt, JObj } from "../jvm/runtime";
 import { curThread, setCurThread, mainThread, scall, newObj, vcall, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
-import { clearGuestTimeout, setGuestTimeout } from "../guest-clock";
+import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
 import { yieldToLoop } from "../jvm/yield";
 
@@ -48,9 +50,11 @@ export class NativeLooper {
   /** run `fn` on this looper's thread at its next poll, between messages */
   post(fn: () => unknown): void { this.callbacks.push(fn); this.signal(); }
   private signal(): void { const w = this.waiter; this.waiter = null; w?.(); }
-  /** MessageQueue.nativePollOnce: synchronous when there is nothing to wait for */
+  /** MessageQueue.nativePollOnce: synchronous on the main looper when nothing is due to wait for.
+   *  Another looper yields between messages, so a busy background thread does not hold off the
+   *  main thread (a device runs them on other cores). */
   pollOnce(timeout: number): void | Promise<void> {
-    if (!this.callbacks.length && !this.woken && timeout === 0 && !sliceOver()) return;
+    if (!this.callbacks.length && !this.woken && timeout === 0 && this === mainLooper && !sliceOver()) return;
     return this.poll(timeout);
   }
   private async poll(timeout: number): Promise<void> {
@@ -92,7 +96,7 @@ rt.registerJnis("android/os/MessageQueue", {
 });
 
 export let mainLooper: NativeLooper | undefined;
-let mainHandlerObj: JObj | null = null, starting: Promise<void> | null = null;
+let mainHandlerObj: JObj | null = null, hostHandler: JObj | null = null, starting: Promise<void> | null = null;
 const ready = Promise.withResolvers<void>();
 
 /** ActivityThread.main's first and last steps: prepare the main looper, then loop on it for good.
@@ -105,7 +109,9 @@ export function startMainLooper(): Promise<void> {
     try {
       await scall("android/os/Looper", "prepareMainLooper", "()V");
       mainLooper = mainThread.looper as NativeLooper;
-      mainHandlerObj = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"));
+      const looper = await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");
+      mainHandlerObj = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
+      hostHandler = await scall("android/os/Handler", "createAsync", "(Landroid/os/Looper;)Landroid/os/Handler;", looper);
     } finally { setCurThread(thread); }
     mainDbg.depth++;
     const loop = (): void => {
@@ -144,8 +150,8 @@ export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
       mainDbg.queued--;
       if (mainDbg.trace) { mainDbg.running = site; mainDbg.started = Date.now(); }
       try { resolve(await job()); } catch (error) { reject(error); }
-    }));
-    if (mainHandlerObj) post(); else void ready.promise.then(post);
+    }), 0, hostHandler!);
+    if (hostHandler) post(); else void ready.promise.then(post);
   });
 }
 
@@ -165,3 +171,19 @@ export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable
 let mainExecutorObj: Promise<unknown> | null = null;
 export const mainExecutor = (): Promise<unknown> =>
   mainExecutorObj ??= newObj("android/os/HandlerExecutor", "(Landroid/os/Handler;)V", mainHandler());
+
+/** debug: the main queue's pending messages and the looper's wait state (wd.looperDump) */
+export async function looperDump(): Promise<unknown> {
+  const { declaredField } = await import("../jvm/runtime");
+  const queue = await vcall(await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"), "getQueue", "()Landroid/os/MessageQueue;");
+  const f = (cls: string, o: unknown, name: string) => (o as Record<string, unknown>)[declaredField(cls, name)];
+  const M = "android/os/Message", messages: string[] = [];
+  for (let m = f("android/os/MessageQueue", queue, "mMessages"); m && messages.length < 50; m = f(M, m, "next")) {
+    const target = f(M, m, "target") as JObj | null, callback = f(M, m, "callback") as JObj | null;
+    const cls = (o: JObj | null) => o ? (o.constructor as { $i?: { name: string } }).$i?.name ?? "?" : "null";
+    messages.push(`when=${f(M, m, "when")} what=${f(M, m, "what")} flags=${f(M, m, "flags")} target=${cls(target)} callback=${cls(callback)}`);
+  }
+  const native = mainLooper as unknown as Record<string, unknown>;
+  return { now: uptimeMillis(), blocked: f("android/os/MessageQueue", queue, "mBlocked"), barrierToken: f("android/os/MessageQueue", queue, "mNextBarrierToken"),
+    polling: native.polling, woken: native.woken, waiting: native.waiter !== null, callbacks: (native.callbacks as unknown[]).length, depth: mainDbg.depth, messages };
+}
