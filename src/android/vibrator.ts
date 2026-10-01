@@ -2,13 +2,26 @@
 // vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
 import { JObj, rt } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { reportUncaught } from "./os";
+import { settingsStore } from "./settings";
 
 const VIBRATOR_ID = 1;
-/** a prebaked effect (EFFECT_CLICK, TICK, ...) plays as a short pulse on a motor with no effects */
-const PREBAKED_MS = 30;
+/** VibrationSettings' fallbacks for prebaked effects a motor without effects cannot play (CLICK,
+ *  DOUBLE_CLICK, TICK, HEAVY_CLICK); TEXTURE_TICK's is a TICK without fallback, which plays nothing */
+const FALLBACK_PATTERNS: Record<number, string> = {
+  0: "config_virtualKeyVibePattern", 1: "config_doubleClickVibePattern", 2: "config_clockTickVibePattern", 5: "config_longPressVibePattern",
+};
+/** a fallback pattern as off/on durations, as VibrationSettings.createEffectFromTimings reads it */
+async function fallbackTimings(effect: number): Promise<number[]> {
+  const name = FALLBACK_PATTERNS[effect];
+  if (!name) return [];
+  const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id: number = await vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, "array", "android");
+  const timings = [...await vcall(res, "getIntArray", "(I)[I", id) as Int32Array];
+  return timings.length === 1 ? [0, timings[0]] : timings;
+}
 let vibration: ReturnType<typeof setTimeout> | undefined;
 /** Android's alternating off/on durations, from the composed effect's segments, played from `repeat` */
 function play(timings: number[], repeat: number): void {
@@ -26,17 +39,20 @@ async function timingsOf(effect: JObj): Promise<[number[], number]> {
   const repeatSegment: number = await vcall(effect, "getRepeatIndex", "()I");
   const timings: number[] = [];
   let repeat = -1;
-  for (const [i, segment] of segments.entries()) {
-    let on: boolean, ms: number;
-    if (rt.iof(segment, "android/os/vibrator/StepSegment")) {
-      on = await vcall(segment, "getAmplitude", "()F") !== 0; ms = Number(await vcall(segment, "getDuration", "()J"));
-    } else if (rt.iof(segment, "android/os/vibrator/RampSegment")) {
-      on = await vcall(segment, "getStartAmplitude", "()F") !== 0 || await vcall(segment, "getEndAmplitude", "()F") !== 0;
-      ms = Number(await vcall(segment, "getDuration", "()J"));
-    } else { on = true; ms = PREBAKED_MS; }
+  const push = (on: boolean, ms: number) => {
     if ((timings.length % 2 === 1) !== on) timings.push(0);
-    if (i === repeatSegment) repeat = timings.length;
     timings.push(ms);
+  };
+  for (const [i, segment] of segments.entries()) {
+    if (i === repeatSegment) repeat = timings.length;
+    if (rt.iof(segment, "android/os/vibrator/StepSegment")) {
+      push(await vcall(segment, "getAmplitude", "()F") !== 0, Number(await vcall(segment, "getDuration", "()J")));
+    } else if (rt.iof(segment, "android/os/vibrator/RampSegment")) {
+      push(await vcall(segment, "getStartAmplitude", "()F") !== 0 || await vcall(segment, "getEndAmplitude", "()F") !== 0,
+        Number(await vcall(segment, "getDuration", "()J")));
+    } else if (rt.iof(segment, "android/os/vibrator/PrebakedSegment") && await vcall(segment, "shouldFallback", "()Z")) {
+      (await fallbackTimings(await vcall(segment, "getEffectId", "()I"))).forEach((ms, k) => push(k % 2 === 1, ms));
+    }
   }
   return [timings, repeat];
 }
@@ -46,6 +62,26 @@ async function playCombined(combined: JObj): Promise<void> {
     ? await vcall(combined, "getEffect", "()Landroid/os/VibrationEffect;")
     : await vcall(await vcall(combined, "getEffects", "()Landroid/util/SparseArray;"), "get", "(I)Ljava/lang/Object;", VIBRATOR_ID);
   if (effect) play(...await timingsOf(effect));
+}
+/** HapticFeedbackVibrationProvider's effect for a haptic feedback constant, as [effect, fallback],
+ *  on a vibrator without primitives: a primitive effect plays its prebaked fallback. Text handle
+ *  haptics are off (config_enableHapticTextHandle); 10004 and 10005 need VIBRATE_SYSTEM_CONSTANTS;
+ *  SAFE_MODE_ENABLED is the system's own. */
+const CLICK = 0, DOUBLE_CLICK = 1, TICK = 2, HEAVY_CLICK = 5, TEXTURE_TICK = 21;
+const HAPTIC_EFFECTS: Record<number, [number, boolean]> = {
+  0: [HEAVY_CLICK, true], 1: [CLICK, true], 3: [CLICK, true], 4: [TEXTURE_TICK, true], 5: [CLICK, true], 6: [TICK, true],
+  7: [TICK, false], 8: [TICK, false], 11: [TICK, false], 12: [CLICK, true], 13: [TICK, true], 14: [HEAVY_CLICK, true],
+  15: [CLICK, true], 16: [CLICK, true], 17: [DOUBLE_CLICK, true], 18: [TICK, true], 19: [CLICK, true], 20: [CLICK, true],
+  21: [TICK, true], 22: [TEXTURE_TICK, true], 23: [TICK, true], 24: [TEXTURE_TICK, true], 25: [HEAVY_CLICK, true],
+  26: [TICK, true], 27: [TEXTURE_TICK, true], 10002: [HEAVY_CLICK, true], 10003: [HEAVY_CLICK, true],
+};
+/** VibratorManagerService.performHapticFeedback: touch feedback, off with haptic_feedback_enabled
+ *  unless the caller bypasses that setting */
+async function performHapticFeedback(constant: number, always: number): Promise<void> {
+  const effect = HAPTIC_EFFECTS[constant];
+  if (!effect || !always && settingsStore().get("system", "haptic_feedback_enabled") === "0") return;
+  const vibration = await scall("android/os/VibrationEffect", "get", "(IZ)Landroid/os/VibrationEffect;", effect[0], +effect[1]);
+  play(...await timingsOf(vibration));
 }
 rt.register({ name: "webdroid/VibratorManagerService", ctor: class extends JObj {}, sup: "android/os/IVibratorManagerService$Stub", methods: {
   "getVibratorIds()[I": () => Int32Array.of(VIBRATOR_ID),
@@ -58,6 +94,9 @@ rt.register({ name: "webdroid/VibratorManagerService", ctor: class extends JObj 
   "vibrate(IILjava/lang/String;Landroid/os/CombinedVibration;Landroid/os/VibrationAttributes;Ljava/lang/String;Landroid/os/IBinder;)V":
     (_uid: number, _device: number, _pkg: string, combined: JObj) => { void playCombined(combined).catch(reportUncaught); },
   "cancelVibrate(ILandroid/os/IBinder;)V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
+  "performHapticFeedback(IILjava/lang/String;IZLjava/lang/String;Z)V": (_uid: number, _device: number, _pkg: string, constant: number, always: number) => {
+    void performHapticFeedback(constant, always).catch(reportUncaught);
+  },
   "isVibrating(I)Z": () => 0,
   // no state changes are reported, as none can be observed
   "registerVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,
