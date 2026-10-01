@@ -924,29 +924,6 @@ rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, 
     `setSelectedRoute(${MRC}Ljava/lang/String;Z)V`),
 } });
 hostStub("media_router", "webdroid/MediaRouterService");
-class JCaptionStyle extends JObj {
-  foregroundColor = -1; backgroundColor = -16777216; edgeType = 0; edgeColor = -16777216; windowColor = 0xff;
-  typeface: unknown = null;
-}
-const defaultCaptionStyle = new JCaptionStyle();
-rt.register({
-  name: "android/view/accessibility/CaptioningManager$CaptionStyle", ctor: JCaptionStyle,
-  fields: ["foregroundColor", "backgroundColor", "edgeType", "edgeColor", "windowColor", "typeface"],
-  statics: { DEFAULT: defaultCaptionStyle },
-  methods: {
-    "getTypeface()Landroid/graphics/Typeface;": function (this: JCaptionStyle) { return this.typeface; },
-    ...stubs(1, "hasForegroundColor()Z", "hasBackgroundColor()Z", "hasEdgeType()Z", "hasEdgeColor()Z", "hasWindowColor()Z"),
-  },
-});
-rt.register({ name: "android/view/accessibility/CaptioningManager", ctor: class extends JObj {}, methods: {
-  "isEnabled()Z": () => 0,
-  "getFontScale()F": () => 1,
-  "getLocale()Ljava/util/Locale;": () => null,
-  "getUserStyle()Landroid/view/accessibility/CaptioningManager$CaptionStyle;": () => defaultCaptionStyle,
-  "addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
-  "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
-} });
-rt.markers("android/view/accessibility/CaptioningManager$CaptioningChangeListener");
 
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 

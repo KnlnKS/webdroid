@@ -195,6 +195,16 @@ describe("media router", () => {
   });
 });
 
+describe("captioning", () => {
+  test("captions follow Settings.Secure: off, at normal scale, in the default style", async () => {
+    const captioning = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "captioning");
+    expect(await vcall(captioning, "isEnabled", "()Z")).toBe(0);
+    expect(await vcall(captioning, "getFontScale", "()F")).toBe(1);
+    expect(await vcall(captioning, "getUserStyle", "()Landroid/view/accessibility/CaptioningManager$CaptionStyle;"))
+      .toBe(await staticField("android/view/accessibility/CaptioningManager$CaptionStyle", "DEFAULT"));
+  });
+});
+
 describe("performance hints", () => {
   test("sessions are created at the AVD's preferred rate and keep their threads", async () => {
     const hints = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "performance_hint");
