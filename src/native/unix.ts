@@ -7,7 +7,7 @@ import { mem } from "./mem";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, logLine } from "./libc";
-import { attachUnixPeer, isUnixSocket } from "./fs";
+import { attachUnixPeer, isUnixSocket, unixConnectListener } from "./fs";
 import { AF_INET, resolveHost, hostOf } from "./net";
 import { parseIpv4 } from "../shell/relay";
 
@@ -102,11 +102,18 @@ const dnsproxyd = (): Daemon => {
 
 const DAEMONS: Record<string, () => Daemon> = { "/dev/socket/logdw": () => logd, "/dev/socket/dnsproxyd": dnsproxyd };
 
-/** connect(2) on an AF_UNIX socket: sockaddr_un's path names the daemon */
+/** connect(2) on an AF_UNIX socket to `path`: a daemon, or a socket listening in this process; -errno on failure */
+export function unixConnectPath(fd: number, path: string): number {
+  if (!isUnixSocket(fd)) return -E.NOTSOCK;
+  const daemon = DAEMONS[path];
+  if (daemon) return -attachUnixPeer(fd, daemon());
+  const e = unixConnectListener(fd, path);
+  return e === -E.CONNREFUSED && !path.startsWith("\0") && !path.startsWith("/dev/socket/") ? -E.NOENT : e;
+}
+/** sockaddr_un's path; an abstract one is its bytes after the leading NUL */
+const sunPath = (sockaddr: number, length: number) => mem.u8[sockaddr + 2] === 0
+  ? "\0" + dec.decode(mem.bytes(sockaddr + 3, length - 3)) : mem.cstr(sockaddr + 2, length - 2);
 export function unixConnect(cpu: Cpu, fd: number, sockaddr: number, length: number): number {
-  if (!isUnixSocket(fd)) return fail(cpu, E.NOTSOCK);
-  const path = mem.cstr(sockaddr + 2, length - 2), daemon = DAEMONS[path];
-  if (!daemon) return fail(cpu, path.startsWith("/dev/socket/") ? E.CONNREFUSED : E.NOENT);
-  const e = attachUnixPeer(fd, daemon());
-  return e ? fail(cpu, e) : 0;
+  const e = unixConnectPath(fd, sunPath(sockaddr, length));
+  return e ? fail(cpu, -e) : 0;
 }

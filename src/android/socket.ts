@@ -6,9 +6,9 @@ import { jarray } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd } from "../native/fs";
+import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd, unixSocket, isUnixSocket, unixListen, unixAccept, unixSocketName } from "../native/fs";
 import {
-  AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
+  AF_UNIX, AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
   socketCreate, socketConnect, socketBind, socketListen, socketAccept, socketShutdown, socketSend, socketReceive, socketName,
   socketOption, setSocketOption, socketGroup, pollEntries, resolveHost, hostOf, gaiText, endpointOf, addressText,
   parseIpv6, isNativeSocket, type Endpoint, type PollEntry,
@@ -88,11 +88,22 @@ const intOption = (fn: string, d: JObj | null, level: number, name: number) => {
 const setIntOption = (fn: string, d: JObj | null, level: number, name: number, value: number) => sys(fn, setSocketOption(fdInt(d), level, name, value));
 /** getaddrinfo's EAI_* as android.system.GaiException */
 const gaiError = (fn: string, code: number) => thrown("android/system/GaiException", "(Ljava/lang/String;I)V", fn, code);
+/** getsockname/getpeername: an InetSocketAddress, or an AF_UNIX socket's UnixSocketAddress over its sun_path */
+function socketAddressOf(fn: string, fd: number, peer: boolean) {
+  if (isUnixSocket(fd)) {
+    const path = unixSocketName(fd, peer);
+    if (typeof path === "number") throw errno(fn, -path);
+    return newObj("android/system/UnixSocketAddress", "([B)V", new Int8Array(new TextEncoder().encode(path)));
+  }
+  const ep = socketName(fd, peer);
+  if (typeof ep === "number") throw errno(fn, -ep);
+  return inetSocketAddress(ep);
+}
 const iface = (name: string | null) => INTERFACES.find((i) => i.name === name) ?? null;
 
 const linux: Record<string, (...args: never[]) => unknown> = {
   "socket(III)Ljava/io/FileDescriptor;": (domain: number, type: number, protocol: number) => {
-    const fd = socketCreate(domain, type, protocol);
+    const fd = domain === AF_UNIX ? unixSocket(type) : socketCreate(domain, type, protocol);
     sys("socket", fd);
     return mkFd(fd);
   },
@@ -111,23 +122,19 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`connect(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => withEndpoint(socketAddressEndpoint("connect", address), (ep) => connect(d, ep)),
   [`bind(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => withEndpoint(endpoint(address, port), (ep) => bind(d, ep)),
   [`bind(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => withEndpoint(socketAddressEndpoint("bind", address), (ep) => bind(d, ep)),
-  [`listen(${FD}I)V`]: (d: JObj | null) => sys("listen", socketListen(fdInt(d))),
-  [`accept(${FD}${SOCKADDR})${FD}`]: (d: JObj | null, peer: JObj | null) =>
-    waited("accept", socketAccept(fdInt(d)), (r: { fd: number; peer: Endpoint }) => after(fillSocketAddress(peer, r.peer), () => mkFd(r.fd))),
+  [`listen(${FD}I)V`]: (d: JObj | null) => { const fd = fdInt(d); sys("listen", isUnixSocket(fd) ? unixListen(fd) : socketListen(fd)); },
+  [`accept(${FD}${SOCKADDR})${FD}`]: (d: JObj | null, peer: JObj | null) => {
+    const fd = fdInt(d);
+    // an AF_UNIX peer is unnamed: its UnixSocketAddress stays as the caller made it
+    return isUnixSocket(fd) ? waited("accept", unixAccept(fd), mkFd)
+      : waited("accept", socketAccept(fd), (r: { fd: number; peer: Endpoint }) => after(fillSocketAddress(peer, r.peer), () => mkFd(r.fd)));
+  },
   [`shutdown(${FD}I)V`]: (d: JObj | null, how: number) => {
     const fd = fdInt(d);
     sys("shutdown", isNativeSocket(fd) ? socketShutdown(fd, how) : javaShutdownFd(fd, how));
   },
-  [`getsockname(${FD})${SOCKADDR}`]: (d: JObj | null) => {
-    const ep = socketName(fdInt(d), false);
-    if (typeof ep === "number") throw errno("getsockname", -ep);
-    return inetSocketAddress(ep);
-  },
-  [`getpeername(${FD})${SOCKADDR}`]: (d: JObj | null) => {
-    const ep = socketName(fdInt(d), true);
-    if (typeof ep === "number") throw errno("getpeername", -ep);
-    return inetSocketAddress(ep);
-  },
+  [`getsockname(${FD})${SOCKADDR}`]: (d: JObj | null) => socketAddressOf("getsockname", fdInt(d), false),
+  [`getpeername(${FD})${SOCKADDR}`]: (d: JObj | null) => socketAddressOf("getpeername", fdInt(d), true),
   "poll([Landroid/system/StructPollfd;I)I": (fds: JObj[] | null, timeout: number) => {
     if (fds === null) return rt.npe();
     const P = "android/system/StructPollfd";

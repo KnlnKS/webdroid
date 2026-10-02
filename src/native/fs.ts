@@ -33,6 +33,8 @@ export interface Fd {
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
   /** an AF_UNIX socket (unix.ts); a datagram one keeps each write whole */
   unix?: boolean; dgram?: boolean;
+  /** a bound AF_UNIX socket's name, and once it listens the connections it has yet to accept */
+  unixName?: string; unixPeer?: string; listener?: { pending: Fd[]; wake: (() => void)[] };
 }
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12, F_DUPFD_CLOEXEC = 0x406;
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
@@ -94,6 +96,8 @@ setNativePollProvider({
       if (f.rpipe.closed) revents |= 16;
     } else if (f.event) {
       if (events & 1 && f.event.count > 0) revents |= 1;
+    } else if (f.listener) {
+      if (events & 1 && f.listener.pending.length) revents |= 1;
     } else if (!f.epoll && events & 1 && !f.write) revents |= 1;
     if (f.wpipe) revents |= f.wpipe.closed ? 8 : events & 4;
     else if (f.write && events & 4) revents |= 4;
@@ -101,7 +105,7 @@ setNativePollProvider({
   },
   subscribe(fd, wake) {
     const f = fds.get(fd);
-    const waiters = f?.rpipe?.wake ?? f?.event?.wake;
+    const waiters = f?.rpipe?.wake ?? f?.event?.wake ?? f?.listener?.wake;
     if (!waiters) return () => {};
     waiters.push(wake);
     return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
@@ -248,6 +252,56 @@ export function attachUnixPeer(fd: number, receive: (bytes: Uint8Array, reply: (
   const drain = () => { while (toPeer.q.length) receive(toPeer.q.shift()!, reply); if (!toPeer.closed) toPeer.wake.push(drain); };
   toPeer.wake.push(drain);
   f.wpipe = toPeer; f.rpipe = fromPeer;
+  return 0;
+}
+/** AF_UNIX names bound in this process, by sockaddr_un path (an abstract name starts with NUL) */
+const unixNames = new Map<string, Fd>();
+export function unixBind(fd: number, path: string): number {
+  const f = fds.get(fd);
+  if (!f?.unix) return -E.NOTSOCK;
+  if (f.unixName !== undefined || f.wpipe) return -E.INVAL;
+  if (unixNames.has(path)) return -E.ADDRINUSE;
+  unixNames.set(f.unixName = path, f);
+  return 0;
+}
+export function unixListen(fd: number): number {
+  const f = fds.get(fd);
+  if (!f?.unix) return -E.NOTSOCK;
+  if (f.unixName === undefined || f.wpipe) return -E.INVAL;
+  f.listener ??= { pending: [], wake: [] };
+  return 0;
+}
+/** accept(2) on a listening AF_UNIX socket: the next connection's descriptor, waiting for one
+ *  unless nonblocking; EBADF once the listener closes under the wait */
+export function unixAccept(fd: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (!f?.unix) return -E.NOTSOCK;
+  if (!f.listener) return -E.INVAL;
+  const next = (): number | Promise<number> => {
+    if (fds.get(fd) !== f) return -E.BADF;
+    const connection = f.listener!.pending.shift();
+    if (connection) return put(connection);
+    if (f.nonblock) return -EAGAIN;
+    return new Promise<void>((resolve) => f.listener!.wake.push(resolve)).then(next);
+  };
+  return next();
+}
+/** getsockname(2)/getpeername(2) of an AF_UNIX socket: its sun_path ("" unnamed), or -errno */
+export function unixSocketName(fd: number, peer: boolean): string | number {
+  const f = fds.get(fd);
+  if (!f?.unix) return -E.NOTSOCK;
+  if (peer && !f.wpipe) return -E.NOTCONN;
+  return (peer ? f.unixPeer : f.unixName) ?? "";
+}
+/** connect(2) to an AF_UNIX socket bound and listening in this process; -errno otherwise */
+export function unixConnectListener(fd: number, path: string): number {
+  const f = fds.get(fd)!, server = unixNames.get(path);
+  if (!server?.listener) return -E.CONNREFUSED;
+  if (f.wpipe) return -E.ISCONN;
+  const up = newPipe(1), down = newPipe(1);
+  f.wpipe = up; f.rpipe = down; f.unixPeer = path;
+  server.listener.pending.push({ ...fdBase("socketpair"), unix: true, rpipe: up, wpipe: down, statusFlags: 2 });
+  wakeAll(server.listener);
   return 0;
 }
 /** socketpair(2): two connected descriptors, each reading what the other writes */
@@ -502,6 +556,8 @@ export function fdClose(cpu: Cpu | null, fd: number): number {
   if (f.timer) disarmClockTimer(f.timer);
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe && !--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
+  if (f.unixName !== undefined && unixNames.get(f.unixName) === f) unixNames.delete(f.unixName);
+  if (f.listener) wakeAll(f.listener);
   return 0;
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
