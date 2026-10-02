@@ -1,8 +1,8 @@
-// Fonts registered with the page's text engine. Canvas2D draws text with CSS fonts: each font drawn is registered as its own CSS family once
-// loaded, its weight left to CSS when it has a wght axis (Chrome sets wght from the requested
-// weight). An axis Chrome would set otherwise than the font wants (opsz, which it sets from the
-// size; ital, which it leaves at the default; wdth and slnt away from 100 and 0) is pinned in an
-// instance HarfBuzz makes.
+// Fonts registered with the page's text engine. Canvas2D draws text with CSS fonts, so each font
+// drawn becomes its own CSS family once loaded, its weight left to CSS when it has a wght axis
+// (Chrome sets wght from the requested weight). An axis Chrome would set otherwise than the font
+// wants (opsz, which it sets from the size; ital, which it leaves at the default; wdth and slnt
+// away from 100 and 0) is pinned in an instance HarfBuzz makes.
 
 import { instanceFace } from "./harfbuzz";
 import { type FvarAxis, faceCount, sfntFace } from "./sfnt";
