@@ -16,7 +16,7 @@ type Record = { key: string; operation: PendingOperation; cancellations: Set<() 
 export class PendingIntents {
   private records = new Map<number, Record>();
   private nextId = 1;
-  constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: IntentData | null, alarmCount: number) => Promise<void>) {}
+  constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: IntentData | null, alarmCount: number) => void | Promise<void>) {}
   private async find(key: string, intent: IntentData): Promise<number | undefined> {
     for (const [id, record] of this.records) if (record.key === key && await this.codec.filterEquals(record.operation.intent, intent)) return id;
     return undefined;

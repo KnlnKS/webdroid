@@ -11,19 +11,19 @@ import { startService } from "./server/activeservices";
 import { thisApp } from "./server/am";
 
 /** PendingIntentRecord.sendInner, in the creator's process with its identity */
-export async function executePendingIntent(operation: PendingOperation, fill: IntentData | null, alarmCount: number): Promise<void> {
-  const intent = await decodeIntent(operation.intent);
+export const executePendingIntent = driven(function* (operation: PendingOperation, fill: IntentData | null, alarmCount: number): Gen<void> {
+  const intent = yield decodeIntent(operation.intent);
   if (!(operation.flags & 0x4000000)) {
-    const supplied = fill ? await decodeIntent(fill) : await newIntent();
-    if (alarmCount) await putExtra(supplied, "android.intent.extra.ALARM_COUNT", alarmCount, "I");
-    await vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", supplied, operation.flags);
+    const supplied = fill ? yield decodeIntent(fill) : yield newIntent();
+    if (alarmCount) yield putExtra(supplied, "android.intent.extra.ALARM_COUNT", alarmCount, "I");
+    yield vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", supplied, operation.flags);
   }
-  if (operation.kind === "broadcast") await broadcastIntent(intent, [], false);
+  if (operation.kind === "broadcast") yield broadcastIntent(intent, [], false);
   else if (operation.kind === "activity") {
-    for (const data of operation.intents?.slice(0, -1) ?? []) await startActivityFor(thisApp(), await decodeIntent(data));
-    await startActivityFor(thisApp(), intent);
-  } else await startService(intent, null, operation.kind === "foreground-service", operation.pkg);
-}
+    for (const data of operation.intents?.slice(0, -1) ?? []) yield startActivityFor(thisApp(), yield decodeIntent(data));
+    yield startActivityFor(thisApp(), intent);
+  } else yield startService(intent, null, operation.kind === "foreground-service", operation.pkg);
+});
 export const localPendingIntents = new PendingIntents(intentCodec, executePendingIntent);
 export const pendingTransport = {
   create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, intents?: IntentData[]) =>
@@ -49,11 +49,11 @@ function* senderId$(sender: JObj): Gen<number> {
 }
 /** a PendingIntent's (or IntentSender's) record, through its IIntentSender */
 export const operationId = driven(senderId$);
-async function send(id: number, fill?: JIntent | null): Promise<void> {
-  if (!await pendingTransport.send(id, fill ? await encodeIntent(fill) : null))
-    throw rt.mkThrowable("android/app/PendingIntent$CanceledException", null);
-}
-export const sendIntent = async (sender: JObj, fill?: JIntent): Promise<void> => send(await operationId(sender), fill);
+/** PendingIntent.send's IntentSender call: CanceledException when its record is gone */
+export const sendIntent = driven(function* (sender: JObj, fill?: JIntent): Gen<void> {
+  const id = yield* senderId$(sender);
+  if (!(yield pendingTransport.send(id, fill ? yield encodeIntent(fill) : null))) throw rt.mkThrowable("android/app/PendingIntent$CanceledException", null);
+});
 const START_CANCELED = -96;
 const KINDS: Record<PendingOperation["kind"], number> = { broadcast: 1, activity: 2, service: 4, "foreground-service": 5 };
 const KIND_OF: Record<number, PendingOperation["kind"]> = { 1: "broadcast", 2: "activity", 4: "service", 5: "foreground-service" };
