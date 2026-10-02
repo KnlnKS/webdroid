@@ -618,6 +618,11 @@ function* hideToast(t: ToastRecord): Gen<void> {
   if (toastQueue[0]) yield* showToast(toastService!, toastQueue[0]);
 }
 let toastService: JObj | null = null;
+const serviceAccessGranted = driven(function* (component: JObj | null) {
+  if (!component) fail("java/lang/NullPointerException", null);
+  checkCallerIsSystemOrSameApp(yield vcall(component, "getPackageName", "()Ljava/lang/String;"));
+  return 0;
+});
 function enqueueToast(this: JObj, t: ToastRecord): number {
   toastService = this;
   toastQueue.push(t);
@@ -784,16 +789,8 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
   "getRuleInstanceCount(Landroid/content/ComponentName;)I": () => enforceSystemOrSystemUI("getRuleInstanceCount"),
 
   // no listener or assistant is enabled: access to either is granted in Settings
-  "isNotificationListenerAccessGranted(Landroid/content/ComponentName;)Z": driven(function* (component: JObj | null) {
-    if (!component) fail("java/lang/NullPointerException", null);
-    checkCallerIsSystemOrSameApp(yield vcall(component, "getPackageName", "()Ljava/lang/String;"));
-    return 0;
-  }),
-  "isNotificationAssistantAccessGranted(Landroid/content/ComponentName;)Z": driven(function* (component: JObj | null) {
-    if (!component) fail("java/lang/NullPointerException", null);
-    checkCallerIsSystemOrSameApp(yield vcall(component, "getPackageName", "()Ljava/lang/String;"));
-    return 0;
-  }),
+  "isNotificationListenerAccessGranted(Landroid/content/ComponentName;)Z": serviceAccessGranted,
+  "isNotificationAssistantAccessGranted(Landroid/content/ComponentName;)Z": serviceAccessGranted,
   "shouldHideSilentStatusIcons(Ljava/lang/String;)Z": (pkg: string) => {
     checkCallerIsSameApp(pkg);
     return SYSTEM_UIDS.has(callingIdentity().uid) ? 0 : fail("java/lang/SecurityException", "Only available for notification listeners");

@@ -73,7 +73,6 @@ export class NativeLooper {
   }
 }
 
-
 rt.registerJnis("android/os/MessageQueue", {
   "nativeInit()J": () => handle(curThread.looper = new NativeLooper(curThread)),
   "nativeDestroy(J)V": (ptr: bigint) => {

@@ -6,7 +6,7 @@ import { windowZOf } from "../android/server/wm";
 import { vcall, scall, newObj } from "../jvm/natives/jlang";
 import { edges } from "../android/graphics";
 
-export interface UiNode {
+interface UiNode {
   text: string; desc: string; cls: string; resId: string; bounds: [number, number, number, number];
   clickable: boolean; enabled: boolean; editable: boolean; scrollable: boolean;
 }

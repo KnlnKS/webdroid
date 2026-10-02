@@ -339,12 +339,6 @@ class ProcessBroker {
       throw error;
     }
   }
-  async releaseBinding(pid: number, key: string): Promise<void> {
-    const caller = this.entries.get(pid), binding = caller?.bindings.get(key);
-    if (!binding) return;
-    caller!.bindings.delete(key);
-    await this.service(null, binding.pkg, binding.process, { kind: "unbind", key });
-  }
   /** getContentProviderImpl for a provider in another process: checkContentProviderPermission,
    *  then the binder its process publishes, starting it. The provider enforces each call's
    *  read or write permission itself. */

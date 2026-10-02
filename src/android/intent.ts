@@ -19,7 +19,7 @@ export const mkComponentName = (pkg: string, cls: string): Promise<JComponentNam
 /** a component by its package and class name */
 export type ComponentRef = { pkg: string; cls: string };
 /** a ComponentName's package and class */
-export function* componentParts$(component: JComponentName | null): Gen<ComponentRef | null> {
+function* componentParts$(component: JComponentName | null): Gen<ComponentRef | null> {
   if (!component) return null;
   return { pkg: yield vcall(component, "getPackageName", `()${S}`), cls: yield vcall(component, "getClassName", `()${S}`) };
 }

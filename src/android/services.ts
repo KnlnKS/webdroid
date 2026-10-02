@@ -333,7 +333,7 @@ rt.register({ name: "webdroid/ThermalService", ctor: class extends JObj {}, sup:
 } });
 // IDeviceIdleController's power-save allowlist, which PowerManager.isIgnoringBatteryOptimizations
 // reads. The system's "let this app run in the background?" dialog, answered by the grant policy runtime
-// permissions follow (context.ts). AOSP's activity ignores an app that did not declare the
+// permissions follow (permissions.ts). AOSP's activity ignores an app that did not declare the
 // permission to ask, which reads as the user declining.
 const DOZE_EXEMPTION = "__system_power";
 registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {

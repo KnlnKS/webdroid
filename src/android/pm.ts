@@ -57,7 +57,6 @@ export function setManifest(root: XmlNode): void {
   packages.set(pkg, currentPackage);
 }
 
-
 // ── the parsed manifest, read as ParsingPackageUtils reads it. The Java side is built in generators
 // that Runtime.drive runs on the calling thread, synchronously until something suspends.
 const resolvedLabel = (node: XmlNode | null | undefined) => {
@@ -194,11 +193,9 @@ function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   return copy((yield applicationInfoOf(record, flags)) as JObj);
 }
 
-
-
 // ── components
-export interface Component { owner: PackageRecord; kind: ComponentKind; name: string; node: XmlNode }
-export interface Match extends Component { priority: number; isDefault: boolean }
+interface Component { owner: PackageRecord; kind: ComponentKind; name: string; node: XmlNode }
+interface Match extends Component { priority: number; isDefault: boolean }
 const hasFilters = (node: XmlNode) => node.children.some((n) => n.name === "intent-filter");
 /** ComponentInfo.exported: declared, else whether it has an intent filter (a provider: below API 17) */
 export const exported = (c: Component): boolean => c.owner.flag(c.node, "exported", c.kind === "provider" ? c.owner.sdk.target < 17 : hasFilters(c.node));
@@ -373,15 +370,15 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
   return infos;
 }
 /** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
-export const resolveActivity = driven(function* resolveActivity$(intent: JObj, flags: number = MATCH_DEFAULT_ONLY): Gen<Match | "system" | null> {
+export const resolveActivity = driven(function* resolveActivity$(intent: JObj): Gen<Match | "system" | null> {
   const q = yield* intentQuery$(intent);
-  return (yield* queryComponents$(q, flags, "activity"))[0] ?? (answersSystem(q) ? "system" : null);
+  return (yield* queryComponents$(q, MATCH_DEFAULT_ONLY, "activity"))[0] ?? (answersSystem(q) ? "system" : null);
 });
-export const resolveService = driven(function* resolveService$(intent: JObj, flags: number = 0): Gen<Match | null> {
-  return (yield* queryComponents$(yield* intentQuery$(intent), flags, "service"))[0] ?? null;
+export const resolveService = driven(function* resolveService$(intent: JObj): Gen<Match | null> {
+  return (yield* queryComponents$(yield* intentQuery$(intent), 0, "service"))[0] ?? null;
 });
-export const queryReceivers = driven(function* queryReceivers$(intent: JObj, flags: number = 0): Gen<Match[]> {
-  return yield* queryComponents$(yield* intentQuery$(intent), flags, "receiver");
+export const queryReceivers = driven(function* queryReceivers$(intent: JObj): Gen<Match[]> {
+  return yield* queryComponents$(yield* intentQuery$(intent), 0, "receiver");
 });
 
 /** the installed provider for an authority (ComputerEngine.resolveContentProvider) */
