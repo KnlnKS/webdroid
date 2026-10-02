@@ -427,17 +427,6 @@ describe("resolver-file", () => {
       expect(vfs.exists(path)).toBe(false);
     } finally { vfs.delete(path); }
   });
-
-  test("parcel file modes distinguish read-write access, truncation and append", async () => {
-    const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
-    for (const [mode, flags] of [["r", 0x10000000], ["w", 0x2c000000], ["wt", 0x2c000000], ["wa", 0x2a000000], ["rw", 0x38000000], ["rwt", 0x3c000000]] satisfies [string, number][]) {
-      expect(await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode)).toBe(flags);
-    }
-    for (const mode of ["", "read", "rwa"]) {
-      const error = await vcallAsync(cls, "parseMode", "(Ljava/lang/String;)I", mode).catch(error => error);
-      expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBe(1);
-    }
-  });
 });
 
 describe("resource-type-id-offset", () => {

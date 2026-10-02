@@ -23,7 +23,7 @@ export class NativeParcel {
 /** a binder or descriptor slot: libbinder's flat_binder_object */
 const FLAT_OBJECT = 24;
 /** a descriptor this parcel owns, as writeDupFileDescriptor leaves one */
-class OwnedFd { constructor(readonly fd: number) {} }
+export class OwnedFd { constructor(readonly fd: number) {} }
 
 /** a Java Parcel, or the native parcel behind one */
 export type JParcel = JObj | NativeParcel;
@@ -148,7 +148,7 @@ export function readObject(jp: JParcel): unknown {
 const isBinder = (o: unknown) => o instanceof JObj && !!(rt.iof(o, "android/os/Binder") || rt.iof(o, "android/os/BinderProxy"));
 const isFd = (o: unknown) => o !== null && !isBinder(o);
 /** closing what a parcel owns: the descriptors written into it */
-function freeData(p: NativeParcel) {
+export function freeData(p: NativeParcel) {
   for (const o of p.objects.values()) if (o instanceof OwnedFd) javaCloseFd(o.fd);
   p.objects.clear();
   p.pos = p.size = 0;

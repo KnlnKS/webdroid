@@ -5,13 +5,13 @@ const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 await import(W + "/tests/platform");
 const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
-const { newObj, vcall } = await import(W + "/src/jvm/natives/jlang");
+const { newObj, vcall, scall } = await import(W + "/src/jvm/natives/jlang");
 const { setAppHost } = await import(W + "/src/android/apphost");
 const { testAppHost, loadPlatform } = await import(W + "/tests/java");
 const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
 const { Resources } = await import(W + "/src/android/res");
 const { TV } = await import(W + "/src/android/axml");
-const { setProcessIdentity, setProcessName, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } = await import(W + "/src/android/os");
+const { setProcessIdentity, setProcessName, mkPfd, pfdContents } = await import(W + "/src/android/os");
 const { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder } = await import(W + "/src/android/binder");
 const { providerProcesses } = await import(W + "/src/android/server/am");
 const { mkUri } = await import(W + "/src/android/net");
@@ -44,7 +44,7 @@ rt.register({ name: "webdroid/test/Provider", ctor: class extends JObj {}, sup: 
     return cursor;
   },
   [`openFile(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: () =>
-    mkPfd(new TextEncoder().encode("hello"), (bytes: Uint8Array, closed?: boolean) => { written.push(`${new TextDecoder().decode(bytes)} ${!!closed}`); }),
+    mkPfd(new TextEncoder().encode("hello"), (bytes: Uint8Array) => { written.push(new TextDecoder().decode(bytes)); }),
 } });
 
 rt.linkNatives();
@@ -91,9 +91,12 @@ await vcall(cursor, "close", "()V");
 
 // a writable descriptor crosses as its bytes, and its writes return to the provider's on close
 const pfd = await vcall(remote, "openFile", `(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`, source, uri, "rw", null);
-out.read = new TextDecoder().decode(parcelFileDescriptorData(pfd)!.bytes);
-await writeParcelFileDescriptor(pfd, new TextEncoder().encode("bye"));
+out.read = new TextDecoder().decode(await pfdContents(pfd) ?? undefined);
+const fd = await vcall(pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+await scall("android/system/Os", "ftruncate", "(Ljava/io/FileDescriptor;J)V", fd, 0n);
+await vcall(await newObj("java/io/FileOutputStream", "(Ljava/io/FileDescriptor;)V", fd), "write", "([B)V", Int8Array.from(new TextEncoder().encode("bye")));
 await vcall(pfd, "close", "()V");
+for (let tries = 0; !written.length && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
 out.written = written;
 console.log(JSON.stringify(out));
 process.exit(0);

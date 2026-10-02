@@ -44,10 +44,10 @@ describe("object-stream-external", () => {
     await vcall(parcel, "writeSerializable", "(Ljava/io/Serializable;)V", await makeValue());
     await vcall(parcel, "writeValue", "(Ljava/lang/Object;)V", await makeValue());
     const binder = await newObj("android/os/Binder");
-    const wire = exportParcel(parcel);
+    const wire = await exportParcel(parcel);
     expect(wire.objects).toEqual([]);
     await vcall(parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V", binder);
-    const transported = await importParcel(structuredClone(exportParcel(parcel)));
+    const transported = await importParcel(structuredClone(await exportParcel(parcel)));
     checkValue(await vcall(transported, "readSerializable", "()Ljava/io/Serializable;"));
     checkValue(await vcall(transported, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
     expect(await vcall(transported, "readStrongBinder", "()Landroid/os/IBinder;")).toBe(binder);

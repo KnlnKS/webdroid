@@ -2,17 +2,19 @@
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { callOn, curThread, JThread, construct, scall, vcall, after } from "../jvm/natives/jlang";
-import { PROCESS_PID, PROCESS_UID, reportUncaught, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
-import { type JParcel, NativeParcel, nativeParcel, parcelAt, newParcel, parcelBytes, setParcelBytes, readInt, readString, writeInt, writeString } from "./parcel";
+import { PROCESS_PID, PROCESS_UID, reportUncaught, fdOverBytes, fdContents } from "./os";
+import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
+import { type JParcel, NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, parcelBytes, setParcelBytes, readInt, readString, writeInt, writeString } from "./parcel";
 import { jarray, mangleMethod, i8, u8 } from "../jvm/abi";
 import { handle, release, FINALIZER } from "./handles";
 
+const F_GETFL = 3, O_RDONLY = 0;
 /** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
 const emptyParcel = (): ParcelData => ({ bytes: new Uint8Array(), objects: [] });
 export type BinderHandle = { pid: number; id: number };
-/** a ParcelFileDescriptor crossing processes, since binder IPC here moves no descriptors: its
- *  bytes and, for a writable one, the binder that writes them back to the descriptor it came from */
+/** a descriptor crossing processes, since binder IPC here moves no descriptors: its file's bytes
+ *  and, for a writable one, the binder that writes them back to the descriptor it came from */
 export type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | null][] };
 /** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
@@ -67,31 +69,30 @@ export function systemToken(): JObj | Promise<JObj> {
   // a parcel written and read back here (an Intent's extras) imports the same token
   return after(proxyFor("token:" + id, { pid: PROCESS_PID, id }), (proxy) => { local.set(id, proxy); return proxy; });
 }
-class JFileWriter extends JObj { pfd: JObj | null = null; }
-function exportObject(o: unknown): BinderHandle | FileHandle | null {
-  const file = parcelFileDescriptorData(o);
-  if (!file) {
-    // a raw descriptor has no transport between processes here
-    if (o !== null && !(o instanceof JObj)) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
-    return exportBinder(o);
-  }
-  if (!file.writable) return { bytes: file.bytes, writer: null };
+/** the binder a writable descriptor's importer sends its final bytes back through */
+class JFileWriter extends JObj { fd = -1; }
+async function exportObject(o: unknown): Promise<BinderHandle | FileHandle | null> {
+  if (!(o instanceof OwnedFd)) return exportBinder(o);
+  const bytes = await fdContents(o.fd);
+  if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
+  if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null };
   rt.link("webdroid/FileWriter");
-  const writer = new JFileWriter(); writer.pfd = o as JObj;
-  return { bytes: file.bytes, writer: exportBinder(writer) };
+  const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
+  return { bytes, writer: exportBinder(writer) };
 }
 function importObject(o: BinderHandle | FileHandle | null): unknown {
   if (!o || !("bytes" in o)) return importBinder(o);
-  return after(o.writer && importBinder(o.writer), (writer) => mkPfd(new Uint8Array(o.bytes), writer && driven(function* (bytes: Uint8Array, closed?: boolean): Gen<void> {
+  return after(o.writer && importBinder(o.writer), (writer) => new OwnedFd(fdOverBytes(new Uint8Array(o.bytes), writer && driven(function* (bytes: Uint8Array): Gen<void> {
     const data = yield newParcel();
     yield vcall(data, "writeByteArray", "([B)V", i8(bytes));
-    yield vcall(data, "writeInt", "(I)V", +!!closed);
     yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
-  }), o.writer ? `binder:${o.writer.pid}:${o.writer.id}` : undefined));
+  }))));
 }
-export function exportParcel(parcel: JParcel): ParcelData {
+export async function exportParcel(parcel: JParcel): Promise<ParcelData> {
   const { bytes, objects } = parcelBytes(nativeParcel(parcel));
-  return { bytes, objects: objects.map(([at, o]) => [at, exportObject(o)]) };
+  const exported: ParcelData["objects"] = [];
+  for (const [at, o] of objects) exported.push([at, await exportObject(o)]);
+  return { bytes, objects: exported };
 }
 const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData): Gen<void> {
   const objects: [number, unknown][] = [];
@@ -155,9 +156,9 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
         let handled = 0;
         try { handled = await vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
         catch (error) { reportUncaught(error); } // "Uncaught remote exception!": the caller sees UNKNOWN_TRANSACTION
-        return { handled, data: exportParcel(reply) };
+        return { handled, data: await exportParcel(reply) };
       });
-    } finally { release(dataPtr); release(replyPtr); }
+    } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
   };
   if (!(request.flags & 1)) return run();
   const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(reportUncaught);
@@ -235,12 +236,13 @@ rt.registerJnis("android/os/Parcel", {
   },
 });
 
+// a writable descriptor's final bytes, which replace its file's
 rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JFileWriter, code: number, data: JParcel): Gen {
-    if (code !== 1) return 0;
-    const bytes: Int8Array = yield vcall(data, "createByteArray", "()[B"), closed: number = yield vcall(data, "readInt", "()I");
-    yield writeParcelFileDescriptor(this.pfd, u8(bytes), !!closed);
-    if (closed) yield vcall(this.pfd, "close", "()V");
+    if (code !== 1 || this.fd < 0) return 0;
+    const bytes = u8((yield vcall(data, "createByteArray", "()[B")) as Int8Array);
+    javaTruncateFd(this.fd, 0); javaPwriteFd(this.fd, bytes, 0); javaCloseFd(this.fd);
+    this.fd = -1;
     return 1;
   }),
 } });
@@ -259,7 +261,7 @@ rt.registerJnis("android/os/BinderProxy", {
   "isBinderAlive()Z": proxyAlive,
   "getExtension()Landroid/os/IBinder;": () => null,
   "transactNative(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": function (this: JObj, code: number, data: JObj | null, reply: JObj | null, flags: number) {
-    return transact(proxyOf(this).handle, code, exportParcel(data ?? rt.npe()), reply, flags);
+    return exportParcel(data ?? rt.npe()).then((exported) => transact(proxyOf(this).handle, code, exported, reply, flags));
   },
   "getInterfaceDescriptor()Ljava/lang/String;": function (this: JObj) {
     const reply = new NativeParcel();

@@ -1,8 +1,8 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
-import { concat, i8 } from "../abi";
-import { vcall, vcallOn, curThread, after, newObj, checkFromIndexSize } from "./jlang";
+import { rt, JObj, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
+import { concat } from "../abi";
+import { vcall, vcallOn, curThread, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
@@ -25,37 +25,6 @@ export function baosBytes(s: JObj): Uint8Array {
   const buf = o[declaredField(BAOS, "buf")] as Int8Array;
   return new Uint8Array(buf.buffer, buf.byteOffset, o[declaredField(BAOS, "count")] as number);
 }
-/** InputStream's reads over bytes a TS stream holds in `buf` from `pos` */
-interface HeldBytes { buf: Uint8Array; pos: number }
-export const heldByteReads: NativeSpec["methods"] = {
-  "read()I": function (this: HeldBytes) { return this.pos < this.buf.length ? this.buf[this.pos++] : -1; },
-  "read([BII)I": function (this: HeldBytes, out: Int8Array, off: number, len: number) {
-    if (!out) rt.npe();
-    checkFromIndexSize(off, len, out.length);
-    if (len === 0) return 0;
-    if (this.pos >= this.buf.length) return -1;
-    const n = Math.min(len, this.buf.length - this.pos);
-    out.set(i8(this.buf, this.pos, n), off);
-    this.pos += n;
-    return n;
-  },
-  "available()I": function (this: HeldBytes) { return this.buf.length - this.pos; },
-  "skip(J)J": function (this: HeldBytes, n: bigint) {
-    const k = n <= 0n ? 0 : Math.min(Number(n), this.buf.length - this.pos);
-    this.pos += k;
-    return BigInt(k);
-  },
-};
-/** OutputStream's writes into bytes a TS stream collects in `chunks` */
-interface HeldWrites { chunks: number[] }
-export const heldByteWrites: NativeSpec["methods"] = {
-  "write(I)V": function (this: HeldWrites, b: number) { this.chunks.push(b & 0xff); },
-  "write([BII)V": function (this: HeldWrites, b: Int8Array, off: number, len: number) {
-    if (!b) rt.npe();
-    checkFromIndexSize(off, len, b.length);
-    for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
-  },
-};
 /** every byte an InputStream has left, through its virtual read */
 export const readStreamFully = driven(function* (s: unknown): Gen<Uint8Array> {
   const chunks: Uint8Array[] = [];

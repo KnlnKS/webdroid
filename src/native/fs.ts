@@ -35,6 +35,8 @@ export interface Fd {
   unix?: boolean; dgram?: boolean;
   /** a bound AF_UNIX socket's name, and once it listens the connections it has yet to accept */
   unixName?: string; unixPeer?: string; listener?: { pending: Fd[]; wake: (() => void)[] };
+  /** run when the last descriptor sharing this open file closes it */
+  onLastClose?: () => void;
 }
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12, F_DUPFD_CLOEXEC = 0x406;
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
@@ -226,6 +228,7 @@ function put(f: Fd, cloexec = false, min = 0): number { const fd = allocateFd(mi
 export const javaBytesFd = (bytes: Uint8Array): number => put({ ...fdBase(""), content: { path: null, data: bytes, len: bytes.length }, synthetic: true });
 export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
 export const javaCloseFd = (fd: number): number => fdClose(null, fd);
+export function javaOnLastClose(fd: number, hook: () => void): void { const f = fds.get(fd); if (f) f.onLastClose = hook; }
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number): number => fdDup(null, fd);
 export const javaDup2Fd = (fd: number, to: number): number => fdDup2(null, fd, to);
@@ -557,6 +560,7 @@ export function fdClose(cpu: Cpu | null, fd: number): number {
   if (!f) return fail(cpu, E.BADF);
   fds.delete(fd); closeOnExec.delete(fd); releaseFd(fd);
   if (--f.references > 0) return 0;
+  f.onLastClose?.();
   if (f.content.path && f.write) notifyInotify(f.content.path, IN_CLOSE_WRITE);
   if (f.inotify) { inotifies.delete(f.inotify); f.inotify.pipe.closed = true; wakeAll(f.inotify.pipe); }
   if (f.timer) disarmClockTimer(f.timer);

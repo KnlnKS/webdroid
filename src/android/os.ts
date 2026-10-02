@@ -2,7 +2,7 @@
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
-import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
+import { parcelCreator, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
@@ -16,9 +16,9 @@ import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
-import { pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "../jvm/natives/jio";
+import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
+import { javaOnLastClose, javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { uptimeMillis, wallMillis } from "../guest-clock";
@@ -231,207 +231,54 @@ rt.register({
   },
 });
 
-class JParcelFileDescriptor extends JObj {
-  bytes: Uint8Array = new Uint8Array(0);
-  sink: ((b: Uint8Array, closed?: boolean) => unknown) | null = null;
-  path = "";
-  flags = 0;
-  fd = -1;
-  closed = false;
-  backing: PfdBacking | null = null;
-  descriptor: JObj | null = null;
-  /** the descriptor a wrapper (ContentResolver's ParcelFileDescriptorInner) acts for */
-  wrapped: JParcelFileDescriptor | null = null;
-}
-type PfdBacking = { path: string; refs: number; key: string; closing: Promise<void> | null; sink: ((b: Uint8Array, closed?: boolean) => unknown) | null };
-/** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
- *  read-only descriptor over bytes with no file behind them reads those bytes. */
-function pfdFd(p: JParcelFileDescriptor): number {
-  if (p.wrapped && !p.closed) return pfdFd(p.wrapped);
-  if (p.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "Already closed");
-  if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
-  else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd(p.bytes);
-  return p.fd;
-}
+// ParcelFileDescriptor runs from AOSP bytecode over libcore's descriptors. Bytes with no file of
+// this process behind them (an asset, a picked document, another process's descriptor) get one here.
+type PfdBacking = { path: string; refs: number; closing: Promise<void> | null };
 let pfdBackingSeq = 0;
 const pfdBackings = new Map<string, PfdBacking>();
+/** the bytes of the backing file descriptors opened under `key` share, null when none is open */
 export const pfdBackingBytes = driven(function* pfdBackingBytes(key: string): Gen<Uint8Array | null> {
   const backing = pfdBackings.get(key);
   if (backing?.closing) { yield backing.closing; return null; }
   return backing ? vfs.read(backing.path) : null;
 });
-export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null, backingKey?: string): JParcelFileDescriptor {
-  const p = new JParcelFileDescriptor();
-  p.bytes = bytes;
-  p.sink = sink;
-  if (backingKey) {
-    let backing = pfdBackings.get(backingKey);
-    if (!backing) {
-      backing = { path: `/data/webdroid-pfd-${++pfdBackingSeq}`, refs: 0, key: backingKey, closing: null, sink };
-      pfdBackings.set(backingKey, backing);
-      vfs.markVolatile(backing.path);
-      vfs.write(backing.path, bytes, false);
-    }
-    if (sink) backing.sink = sink;
-    backing.refs++;
-    p.path = backing.path;
-    p.flags = sink ? 2 : 0;
-    p.backing = backing;
+/** A descriptor over `bytes`: read-only, or, given a `sink`, read-write over a file that hands its
+ *  bytes to `sink` once the last descriptor on it closes. Descriptors opened under one `key` while
+ *  one is open share its file. */
+export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): number {
+  if (!sink) return javaBytesFd(bytes);
+  let backing = key === undefined ? undefined : pfdBackings.get(key);
+  if (!backing || backing.closing) {
+    backing = { path: `/data/webdroid-pfd-${++pfdBackingSeq}`, refs: 0, closing: null };
+    if (key !== undefined) pfdBackings.set(key, backing);
+    vfs.markVolatile(backing.path);
+    vfs.write(backing.path, bytes, false);
   }
-  return p;
+  const shared = backing, fd = javaOpenFd(shared.path, 2);
+  shared.refs++;
+  javaOnLastClose(fd, () => {
+    if (--shared.refs) return;
+    shared.closing = (async () => {
+      try { await sink(vfs.read(shared.path) ?? new Uint8Array(0)); }
+      finally {
+        if (key !== undefined && pfdBackings.get(key) === shared) pfdBackings.delete(key);
+        vfs.delete(shared.path, false);
+      }
+    })().catch(reportUncaught);
+  });
+  return fd;
 }
-export function parcelFileDescriptorData(value: unknown): { bytes: Uint8Array; writable: boolean } | null {
-  return value instanceof JParcelFileDescriptor
-    ? { bytes: (value.backing ? vfs.read(value.backing.path) : value.bytes)?.slice() ?? new Uint8Array(0), writable: value.sink !== null }
-    : null;
+/** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
+export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
+  after(mkFd(fdOverBytes(bytes, sink, key)), (fd) => construct("android/os/ParcelFileDescriptor", `(${FD})V`, fd));
+/** what a descriptor's file holds, whatever its offset; null for one with no file (a pipe, a socket) */
+export function fdContents(fd: number): Uint8Array | null | Promise<Uint8Array> {
+  const source = javaFdSource(fd);
+  return source && source.read(0, source.size);
 }
-export const writeParcelFileDescriptor = driven(function* writeParcelFileDescriptor(value: unknown, bytes: Uint8Array, closed: boolean = false): Gen<void> {
-  if (!(value instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a ParcelFileDescriptor");
-  value.bytes = bytes.slice();
-  if (value.backing) vfs.write(value.backing.path, value.bytes, false);
-  yield value.sink?.(value.bytes, closed);
-});
-rt.register({
-  name: "android/os/ParcelFileDescriptor", ctor: JParcelFileDescriptor,
-  ifaces: ["android/os/Parcelable", "java/io/Closeable"],
-  statics: {
-    MODE_READ_ONLY: 0x10000000, MODE_WRITE_ONLY: 0x20000000, MODE_READ_WRITE: 0x30000000,
-    MODE_CREATE: 0x08000000, MODE_TRUNCATE: 0x04000000, MODE_APPEND: 0x02000000,
-    get CREATOR() { return parcelCreator("android/os/ParcelFileDescriptor", async (parcel) => readObject(parcel)); },
-  },
-  methods: {
-    // a wrapper over another descriptor: its file, released when the wrapper closes
-    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JParcelFileDescriptor, wrapped: JParcelFileDescriptor | null) {
-      if (!wrapped) rt.npe();
-      const { bytes, sink, path, flags, backing } = wrapped!;
-      Object.assign(this, { bytes, sink, path, flags, backing, wrapped });
-    },
-    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: JObj | null, mode: number): Gen {
-      if (!f) rt.npe();
-      const path = pathOf(f!);
-      if (!vfs.exists(path) && !(mode & 0x08000000)) throw rt.mkThrowable("java/io/FileNotFoundException", path);
-      if (mode & 0x04000000) vfs.write(path, new Uint8Array(0));
-      const source = vfs.source(path);
-      const p = mkPfd(source ? yield readFully(source) : new Uint8Array(0), mode & 0x20000000 ? (b) => vfs.write(path, b) : null);
-      p.path = path;
-      // MODE_* bits → O_* flags: the access mode, then create/truncate/append
-      p.flags = ((mode >>> 28) & 3) - 1 + (mode & 0x08000000 ? 0x40 : 0) + (mode & 0x04000000 ? 0x200 : 0) + (mode & 0x02000000 ? 0x400 : 0);
-      return p;
-    }),
-    "static parseMode(Ljava/lang/String;)I": (m: string) => {
-      switch (m) {
-        case "r": return 0x10000000;
-        case "w": case "wt": return 0x2c000000;
-        case "wa": return 0x2a000000;
-        case "rw": return 0x38000000;
-        case "rwt": return 0x3c000000;
-        default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad mode: " + m);
-      }
-    },
-    // AOSP keeps one FileDescriptor per ParcelFileDescriptor, invalidated when it closes
-    "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
-      if (this.descriptor) return this.descriptor;
-      return after(mkFd(pfdFd(this)), (d) => this.descriptor ??= d);
-    },
-    "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
-    "seekTo(J)J": function (this: JParcelFileDescriptor, pos: bigint) {
-      const r = javaSeekFd(pfdFd(this), Number(pos), 0);
-      if (r < 0) throw errno("lseek", -r);
-      return BigInt(r);
-    },
-    "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
-    "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd: javaDupFd(fd) }),
-    // AOSP dup(FileDescriptor): a new descriptor on the same open file description
-    "static dup(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;": (d: JObj | null) => {
-      if (fdInt(d) < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor");
-      const fd = javaDupFd(fdInt(d));
-      if (fd < 0) throw rt.mkThrowable("java/io/IOException", "dup failed: EBADF (Bad file descriptor)");
-      return Object.assign(new JParcelFileDescriptor(), { fd });
-    },
-    "detachFd()I": function (this: JParcelFileDescriptor) {
-      const fd = pfdFd(this);
-      this.fd = -1; this.closed = true;
-      if (this.descriptor) setFdInt(this.descriptor, -1);
-      return fd;
-    },
-    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) {
-      const p = Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)), backing: this.backing });
-      if (p.backing) p.backing.refs++;
-      return p;
-    },
-    "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.backing ? vfs.stat(this.backing.path)?.size ?? 0 : this.bytes.length); },
-    // A parcel carries a duplicate of the descriptor, as the kernel does; another process gets
-    // its bytes and a binder back to it (exportParcel), since binder IPC here moves no descriptors.
-    "describeContents()I": () => 1, // CONTENTS_FILE_DESCRIPTOR
-    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JParcelFileDescriptor, parcel: JParcel, flags: number): Gen {
-      writeObject(parcel, yield vcall(this, "dup", "()Landroid/os/ParcelFileDescriptor;"));
-      if (flags & 1) yield vcall(this, "close", "()V"); // PARCELABLE_WRITE_RETURN_VALUE
-    }),
-    "close()V": driven(function* (this: JParcelFileDescriptor): Gen {
-      if (this.closed) return;
-      if (this.wrapped) {
-        this.closed = true;
-        if (this.descriptor) setFdInt(this.descriptor, -1);
-        return yield vcall(this.wrapped, "close", "()V");
-      }
-      if (this.fd >= 0) javaCloseFd(this.fd);
-      this.fd = -1; this.closed = true;
-      if (this.descriptor) setFdInt(this.descriptor, -1);
-      if (this.backing && --this.backing.refs === 0) {
-        const backing = this.backing, bytes = vfs.read(backing.path) ?? new Uint8Array(0);
-        backing.closing = (async () => {
-          try { await backing.sink?.(bytes, true); }
-          finally {
-            pfdBackings.delete(backing.key);
-            vfs.delete(backing.path, false);
-          }
-        })();
-        yield backing.closing;
-      }
-    }),
-    "checkError()V": () => {},
-  },
-});
-class JPfdIn extends JObj { buf: Uint8Array = new Uint8Array(0); pos = 0; pfd: JParcelFileDescriptor | null = null; channel: JObj | null = null; }
-const pfdDescriptor = (s: JPfdIn) => {
-  if (!s.pfd) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
-  return vcall(s.pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
-};
-rt.register({
-  name: "android/os/ParcelFileDescriptor$AutoCloseInputStream", ctor: JPfdIn, sup: "java/io/InputStream",
-  methods: {
-    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdIn, p: JParcelFileDescriptor) { this.buf = p.bytes; this.pfd = p; },
-    ...heldByteReads,
-    // FileInputStream's, which AOSP's subclasses (AssetFileDescriptor's streams) reach
-    "getFD()Ljava/io/FileDescriptor;": function (this: JPfdIn) { return pfdDescriptor(this); },
-    "getChannel()Ljava/nio/channels/FileChannel;": driven(function* (this: JPfdIn): Gen {
-      return this.channel ??= yield scall("sun/nio/ch/FileChannelImpl", "open", "(Ljava/io/FileDescriptor;Ljava/lang/String;ZZLjava/lang/Object;)Ljava/nio/channels/FileChannel;",
-        yield pfdDescriptor(this), null, 1, 0, this);
-    }),
-    "close()V": function (this: JPfdIn) { const pfd = this.pfd; this.pfd = null; if (pfd) return vcall(pfd, "close", "()V"); },
-  },
-});
-class JPfdOut extends JObj { chunks: number[] = []; pfd: JParcelFileDescriptor | null = null; }
-const pfdFlush = async function (this: JPfdOut, closed = false) {
-  const pfd = this.pfd, bytes = Uint8Array.from(this.chunks);
-  // a backed descriptor's sink takes its file when the last holder closes
-  if (pfd?.backing) vfs.write(pfd.backing.path, bytes, false);
-  else await pfd?.sink?.(bytes, closed);
-};
-rt.register({
-  name: "android/os/ParcelFileDescriptor$AutoCloseOutputStream", ctor: JPfdOut, sup: "java/io/OutputStream",
-  methods: {
-    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
-    ...heldByteWrites,
-    "flush()V": pfdFlush,
-    // FileOutputStream's, which PackageInstaller.Session.fsync reaches: the written bytes, then the descriptor
-    "getFD()Ljava/io/FileDescriptor;": driven(function* (this: JPfdOut): Gen {
-      if (!this.pfd) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
-      yield pfdFlush.call(this);
-      return vcall(this.pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
-    }),
-    "close()V": driven(function* (this: JPfdOut): Gen { yield pfdFlush.call(this, true); const pfd = this.pfd; this.pfd = null; if (pfd) yield vcall(pfd, "close", "()V"); }),
-  },
+/** the bytes a ParcelFileDescriptor's file holds */
+export const pfdContents = driven(function* pfdContents(pfd: JObj): Gen<Uint8Array | null> {
+  return (yield fdContents(fdInt(yield vcall(pfd, "getFileDescriptor", `()${FD}`)))) as Uint8Array | null;
 });
 
 // statvfs answers the browser's storage estimate for whichever path is asked about (one

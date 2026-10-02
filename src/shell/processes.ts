@@ -45,7 +45,7 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
 const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
 async function resultData(result: BroadcastResult): Promise<BroadcastData> {
   const extras = await newParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
-  return { ...result, extras: exportParcel(extras) };
+  return { ...result, extras: await exportParcel(extras) };
 }
 const broadcastResult = async (data: BroadcastData): Promise<BroadcastResult> =>
   ({ ...data, extras: await vcall(await importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
@@ -319,7 +319,7 @@ class ProcessBroker {
       if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
       const reply = await newParcel(), handled = +(request.code === 0x5f4e5446);
       if (handled) await vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.content.IIntentSender");
-      return { handled, data: exportParcel(reply) };
+      return { handled, data: await exportParcel(reply) };
     }
     const target = this.entry(request.handle.pid);
     return this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid }));

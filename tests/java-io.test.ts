@@ -1,10 +1,10 @@
 import { expect, test, describe } from "bun:test";
 import { unzipSync } from "fflate";
 import "../src/natives";
-import { mkPfd } from "../src/android/os";
+import { mkPfd, pfdBackingBytes } from "../src/android/os";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newFile, fdInt, setFdInt, mkFd, readStreamFully, heldByteReads } from "../src/jvm/natives/jio";
+import { newFile, fdInt, setFdInt, mkFd, readStreamFully } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
@@ -26,8 +26,8 @@ describe("android-pfd", () => {
     const written: Uint8Array[] = [];
     const sink = (bytes: Uint8Array) => { written.push(bytes.slice()); };
     const key = `test-pfd-${Math.random()}`;
-    const first = mkPfd(new Uint8Array(8), sink, key);
-    const second = mkPfd(new Uint8Array(8), sink, key);
+    const first = await mkPfd(new Uint8Array(8), sink, key);
+    const second = await mkPfd(new Uint8Array(8), sink, key);
     const stream = async (pfd: typeof first) => {
       const fd = await vcall(pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
       return newObj("java/io/FileOutputStream", "(Ljava/io/FileDescriptor;)V", fd);
@@ -42,6 +42,7 @@ describe("android-pfd", () => {
     await vcall(first, "close", "()V");
     expect(written).toHaveLength(0);
     await vcall(second, "close", "()V");
+    await pfdBackingBytes(key);
     expect(written).toEqual([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])]);
   });
 });
@@ -347,7 +348,7 @@ describe("input-stream-wrapping", () => {
 
 describe("parcel-file", () => {
   test("byte-backed descriptors have native storage and duplicates outlive the original", async () => {
-    const pfd = mkPfd(Uint8Array.of(1, 2, 3), null);
+    const pfd = await mkPfd(Uint8Array.of(1, 2, 3));
     const fd = await vcall(pfd, "getFd", "()I");
     expect(fd).toBeGreaterThanOrEqual(0);
     expect(javaSeekFd(fd, 0, 2)).toBe(3);
@@ -376,7 +377,7 @@ describe("parcel-file", () => {
 
   test("Os.mmap exposes file bytes to native code and munmap releases the address", async () => {
     await loadLibcore();
-    const pfd = mkPfd(Uint8Array.of(9, 8, 7), null);
+    const pfd = await mkPfd(Uint8Array.of(9, 8, 7));
     const fd = await vcall(pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
     const address = await scall("android/system/Os", "mmap", "(JJIILjava/io/FileDescriptor;J)J", 0n, 3n, 1, 2, fd, 0n) as bigint;
     expect([...mem.bytes(guestAt(address), 3)]).toEqual([9, 8, 7]);
@@ -439,14 +440,13 @@ describe("rename", () => {
 });
 
 describe("sequence-input", () => {
-  class ClosingStream extends JObj { buf = new Uint8Array(0); pos = 0; closed = false; }
-  rt.register({ name: "test/ClosingStream", ctor: ClosingStream, sup: "java/io/InputStream", methods: {
-    ...heldByteReads,
+  class ClosingStream extends JObj { closed = false; }
+  rt.register({ name: "test/ClosingStream", ctor: ClosingStream, sup: "java/io/ByteArrayInputStream", methods: {
     "close()V": function (this: ClosingStream) { this.closed = true; },
   } });
   rt.linkNatives();
   test("SequenceInputStream advances lazily and closes exhausted and remaining streams", async () => {
-    const streams = [new Uint8Array(0), Uint8Array.of(1, 2), Uint8Array.of(3)].map(buf => Object.assign(rt.make("test/ClosingStream"), { buf }));
+    const streams: ClosingStream[] = await Promise.all([[], [1, 2], [3]].map((b) => newObj("test/ClosingStream", "([B)V", Int8Array.from(b))));
     const sequence = await newObj("java/io/SequenceInputStream", "(Ljava/util/Enumeration;)V", mkEnumeration(streams));
     const bytes = new Int8Array(4);
     expect(await vcall(sequence, "read", "([BII)I", bytes, 1, 3)).toBe(2);

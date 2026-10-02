@@ -1,6 +1,6 @@
 import { type JIntent, newIntent } from "../android/intent";
 import { serviceContext } from "../android/binder";
-import { parcelFileDescriptorData } from "../android/os";
+import { pfdContents } from "../android/os";
 import { uriText } from "../android/net";
 import type { JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
@@ -27,7 +27,7 @@ async function sharedFiles(intent: JIntent): Promise<File[]> {
     const descriptor = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", parsed, "r");
     try {
       const name = decodeURIComponent(uri.split(/[?#]/, 1)[0].split("/").pop() || "shared-file");
-      files.push(new File([parcelFileDescriptorData(descriptor)!.bytes as BlobPart], name, { type: mime || type || "application/octet-stream" }));
+      files.push(new File([(await pfdContents(descriptor) ?? new Uint8Array(0)) as BlobPart], name, { type: mime || type || "application/octet-stream" }));
     } finally { await vcall(descriptor, "close", "()V"); }
   }
   return files;

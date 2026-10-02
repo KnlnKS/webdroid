@@ -30,6 +30,6 @@ test("another process's provider is reached through the binder it publishes", as
     // rows cross in a CursorWindow beside an IBulkCursor binder
     columns: ["key", "value"], rows: [["a", "1"], ["b", "null"]],
     // a writable descriptor crosses as its bytes; its writes return to the provider's
-    read: "hello", written: ["bye false", "bye true"],
+    read: "hello", written: ["bye"],
   });
 }, 120_000);
