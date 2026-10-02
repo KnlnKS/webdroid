@@ -6,7 +6,7 @@ import { JObj, rt, setDeclared } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
-import { mimeOf } from "./mediastore";
+import { mimeOf } from "../mime";
 import { storageEstimate } from "./os";
 import { callingIdentity, hostStub } from "./binder";
 import { serviceContext } from "./pm";

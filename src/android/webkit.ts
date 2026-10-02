@@ -18,7 +18,7 @@ import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
-import { EXT_MIME, MIME_EXT } from "../mime";
+import { EXT_MIME, MIME_EXT, mimeOf } from "../mime";
 import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
@@ -909,7 +909,7 @@ function guessFileName(url: string, disposition: string | null, mime: string | n
     return name + (ext ?? ".bin");
   }
   // an extension that contradicts the declared type is replaced, not appended to
-  const fromExt = EXT_MIME[name.slice(name.lastIndexOf(".") + 1).toLowerCase()];
+  const fromExt = mimeOf(name);
   if (lmime && fromExt && fromExt !== lmime && MIME_EXT[lmime]) ext = "." + MIME_EXT[lmime];
   return name.slice(0, dot) + (ext ?? name.slice(dot));
 }

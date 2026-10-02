@@ -1,5 +1,6 @@
 import type { Database } from "sql.js";
 import { vfs } from "../shell/vfs";
+import { mimeOf, MIME_EXT } from "../mime";
 import { sqliteStore, mkCursor, contentValues } from "./sqlite";
 import { type JUri, mkUri } from "./net";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
@@ -9,13 +10,6 @@ import { unparcel, type JBundle } from "./os";
 import { newStub } from "./binder";
 import { registerSystemProvider, JSystemContentProvider } from "./systemproviders";
 
-const extensions: Record<string, string> = {
-  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp",
-  bmp: "image/bmp", heic: "image/heic", heif: "image/heif", avif: "image/avif", svg: "image/svg+xml",
-  mp4: "video/mp4", m4v: "video/x-m4v", mov: "video/quicktime", mkv: "video/x-matroska",
-  webm: "video/webm", avi: "video/x-msvideo", "3gp": "video/3gpp",
-  mp3: "audio/mpeg", m4a: "audio/mp4", wav: "audio/wav", ogg: "audio/ogg", flac: "audio/flac",
-};
 const columns = ["_id", "_data", "_display_name", "title", "mime_type", "media_type", "_size",
   "date_added", "date_modified", "datetaken", "relative_path", "bucket_id", "bucket_display_name",
   "width", "height", "duration", "orientation", "is_pending", "is_trashed", "is_favorite"];
@@ -43,9 +37,6 @@ function hash(path: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193);
   return (h >>> 1) || 1;
-}
-export function mimeOf(path: string): string | null {
-  return extensions[path.slice(path.lastIndexOf(".") + 1).toLowerCase()] ?? null;
 }
 function mediaType(mime: string | null): number {
   return mime?.startsWith("image/") ? 1 : mime?.startsWith("audio/") ? 2 : mime?.startsWith("video/") ? 3 : 0;
@@ -138,7 +129,6 @@ const collectionDirs: Record<string, string[]> = {
   "images/media": ["Pictures", "DCIM"], "video/media": ["Movies", "DCIM", "Pictures"], "audio/media": AUDIO_DIRS,
   downloads: ["Download"], file: ["Download", "Documents", "DCIM", "Pictures", "Movies", ...AUDIO_DIRS],
 };
-const extensionOf = (mime: string) => Object.keys(extensions).find((ext) => extensions[ext] === mime);
 const illegal = (why: string) => rt.mkThrowable("java/lang/IllegalArgumentException", why);
 /** where MediaProvider puts a file: under an allowed primary directory, with the MIME type's extension,
  *  and made unique as "name (1).ext" unless it is `current`'s own path */
@@ -148,7 +138,7 @@ function placement(uri: JUri, kind: string, relativePath: string, name: string, 
   const top = relative.split("/")[0];
   if (!allowed.some((dir) => dir.toLowerCase() === top.toLowerCase()))
     throw illegal(`Primary directory ${top} not allowed for ${uri.uri}; allowed directories are [${allowed.join(", ")}]`);
-  const ext = mime && extensionOf(mime);
+  const ext = mime && mime !== "application/octet-stream" ? MIME_EXT[mime] : undefined;
   if (ext && mimeOf(name) !== mime) name += "." + ext;
   const dot = name.lastIndexOf("."), base = dot > 0 ? name.slice(0, dot) : name, suffix = dot > 0 ? name.slice(dot) : "";
   let path = `/sdcard/${relative}/${name}`;

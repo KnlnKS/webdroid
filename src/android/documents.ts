@@ -16,6 +16,7 @@ import { mkPfd, pfdBackingBytes } from "./os";
 import { newObj } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newStub } from "./binder";
+import { mimeOf } from "../mime";
 import { registerSystemProvider, JSystemContentProvider } from "./systemproviders";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
@@ -66,16 +67,6 @@ const isChildrenUri = (u: JUriLike) => uriParts(u)[1].at(-1) === "children";
 const DIR_MIME = "vnd.android.document/directory";
 // Document flags: SUPPORTS_WRITE | SUPPORTS_DELETE | SUPPORTS_RENAME (+ DIR_SUPPORTS_CREATE)
 const FILE_FLAGS = 2 | 4 | 64, DIR_FLAGS = FILE_FLAGS | 8;
-
-const MIMES: Record<string, string> = {
-  txt: "text/plain", json: "application/json", xml: "text/xml", html: "text/html", csv: "text/csv",
-  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif",
-  pdf: "application/pdf", zip: "application/zip", cbz: "application/vnd.comicbook+zip", epub: "application/epub+zip",
-  gz: "application/gzip", tachibk: "application/octet-stream", mp3: "audio/mpeg", mp4: "video/mp4",
-};
-function mimeOf(name: string): string {
-  return MIMES[name.slice(name.lastIndexOf(".") + 1).toLowerCase()] ?? "application/octet-stream";
-}
 
 interface DocRow { id: string; name: string; mime: string; size: number; modified: number; flags: number }
 const DOC_COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "last_modified", "flags"];
@@ -145,7 +136,7 @@ async function resolveDoc(docId: string): Promise<FileSystemHandle | null> {
 async function rowOf(id: string, h: FileSystemHandle): Promise<DocRow> {
   if (h.kind === "directory") return { id, name: h.name, mime: DIR_MIME, size: 0, modified: 0, flags: DIR_FLAGS };
   const f = await (h as FileSystemFileHandle).getFile();
-  return { id, name: h.name, mime: f.type || mimeOf(h.name), size: f.size, modified: f.lastModified, flags: FILE_FLAGS };
+  return { id, name: h.name, mime: f.type || mimeOf(h.name) || "application/octet-stream", size: f.size, modified: f.lastModified, flags: FILE_FLAGS };
 }
 
 async function docRow(docId: string): Promise<DocRow | null> {
@@ -222,7 +213,7 @@ export async function docRename(docId: string, name: string): Promise<string | n
 async function copyDoc(srcId: string, parentId: string, name: string): Promise<string | null> {
   const src = await resolveDoc(srcId);
   if (!src) return null;
-  const dst = await docCreate(parentId, src.kind === "directory" ? DIR_MIME : mimeOf(name), name);
+  const dst = await docCreate(parentId, src.kind === "directory" ? DIR_MIME : mimeOf(name) ?? "application/octet-stream", name);
   if (!dst) return null;
   if (src.kind === "file") await docWrite(dst, await docRead(srcId));
   else for (const child of await docChildren(srcId)) await copyDoc(child.id, dst, child.name);
