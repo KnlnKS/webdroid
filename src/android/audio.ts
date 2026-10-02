@@ -106,6 +106,8 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
     "unregisterLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V", "startLoudnessCodecUpdates(I)V",
     "stopLoudnessCodecUpdates(I)V", "addLoudnessCodecInfo(IILandroid/media/LoudnessCodecInfo;)V",
     "removeLoudnessCodecInfo(ILandroid/media/LoudnessCodecInfo;)V"),
+  // no SystemUI registered a ringtone player, so a Ringtone plays locally
+  "getRingtonePlayer()Landroid/media/IRingtonePlayer;": () => null,
   // PlaybackActivityMonitor: each player gets an id; no playback callback is registered to hear of its events
   "trackPlayer(Landroid/media/PlayerBase$PlayerIdCard;)I": () => ++playerIds,
   "playerAttributes(ILandroid/media/AudioAttributes;)V": () => {}, "playerEvent(III)V": () => {},

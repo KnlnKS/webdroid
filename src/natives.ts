@@ -80,7 +80,6 @@ import "./android/storagestats";
 import "./android/sqlite";
 import "./android/media";
 import "./android/renderscript";
-import "./android/ringtone";
 import "./android/audiofx";
 import "./android/media-metrics";
 import "./android/mediadrm";

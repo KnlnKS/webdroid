@@ -4,7 +4,7 @@ import { mimeOf, MIME_EXT } from "../mime";
 import { sqliteStore, matrixCursor, contentValues } from "./sqlite";
 import { type JUri, mkUri } from "./net";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { scall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { newFile } from "../jvm/natives/jio";
 import type { JBundle } from "./os";
 import { registerSystemProvider, queryArgs, selectionOf, AS, URI, B, CV, SIGNAL } from "./systemproviders";
@@ -279,4 +279,11 @@ registerSystemProvider("media", { pkg: "com.google.android.providers.media.modul
     }),
     [`getType(${AS}${URI})${S}`]: (_source: unknown, u: JUri) => mediaMime(u),
     [`openFile(${AS}${URI}${S}${SIGNAL})L${PFD};`]: (_source: unknown, u: JUri, mode: string) => openFile(u, mode),
+    // MediaStore.SCAN_FILE_CALL, which MediaScannerConnection makes: the file's row, indexed now
+    [`call(${AS}${S}${S}${S}${B})${B}`]: driven(function* call$(_source: unknown, _authority: string, method: string, path: string): Gen {
+      if (method !== "scan_file") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported call: " + method);
+      const out = yield newObj("android/os/Bundle");
+      yield vcall(out, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "android.intent.extra.STREAM", yield scannedMediaUri(path));
+      return out;
+    }),
   } });
