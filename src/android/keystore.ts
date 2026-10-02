@@ -4,7 +4,7 @@
 // the key material, the authorizations KeyMint enforces, and the certificates of asymmetric keys.
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
-import { rt, JObj, declaredField, setDeclared } from "../jvm/runtime";
+import { rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { newObj, scall } from "../jvm/natives/jlang";
 import { unbox } from "../jvm/natives/jbox";
@@ -65,10 +65,15 @@ function readParams(arr: unknown[] | null): Param[] {
   });
 }
 const DESC: Record<number, string> = { [KIND.boolValue]: "Z", [KIND.integer]: "I", [KIND.longInteger]: "J", [KIND.dateTime]: "J", [KIND.blob]: "[B" };
-async function javaParam(p: Param): Promise<JObj> {
+function* javaParam(p: Param): Gen<JObj> {
   const d = DESC[p.kind] ?? "I", v = p.v instanceof Uint8Array ? new Int8Array(p.v) : typeof p.v === "boolean" ? +p.v : p.v;
-  const value = await scall(KPV, KINDS[p.kind], `(${d})L${KPV};`, v);
-  return setDeclared(await newObj(KP), KP, { tag: p.tag, value });
+  const value = yield scall(KPV, KINDS[p.kind], `(${d})L${KPV};`, v);
+  return setDeclared(yield newObj(KP), KP, { tag: p.tag, value });
+}
+function* javaParams(ps: Param[]): Gen<JObj[]> {
+  const out: JObj[] = [];
+  for (const p of ps) out.push(yield* javaParam(p));
+  return out;
 }
 const all = (ps: Param[], tag: number) => ps.filter((p) => p.tag === tag).map((p) => p.v);
 const one = (ps: Param[], tag: number) => ps.find((p) => p.tag === tag)?.v;
@@ -109,12 +114,11 @@ function descriptor(d: unknown): { domain: number; nspace: bigint; alias: string
   if (!d) throw rt.mkThrowable("java/lang/NullPointerException", "key descriptor");
   return { domain: f(d, KD, "domain") as number, nspace: f(d, KD, "nspace") as bigint, alias: f(d, KD, "alias") as string | null };
 }
-async function find(d: unknown): Promise<Entry> {
+function* find(d: unknown): Gen<Entry> {
   const k = descriptor(d);
   const e = k.domain === DOMAIN.KEY_ID ? entries().find((x) => x.id === k.nspace.toString()) : k.domain === DOMAIN.APP ? entries().find((x) => x.alias === k.alias) : undefined;
-  return e ?? failure(RESPONSE.KEY_NOT_FOUND, "Key not found");
+  return e ?? (yield failure(RESPONSE.KEY_NOT_FOUND, "Key not found"));
 }
-const keyIdDescriptor = async (e: Entry) => setDeclared(await newObj(KD), KD, { domain: DOMAIN.KEY_ID, nspace: BigInt(e.id), alias: null, blob: null });
 
 // the characteristics KeyMint enforces, from a generate or import request
 const CHARACTERISTIC_TAGS = new Set([TAG.PURPOSE, TAG.ALGORITHM, TAG.KEY_SIZE, TAG.BLOCK_MODE, TAG.DIGEST, TAG.PADDING, TAG.CALLER_NONCE, TAG.MIN_MAC_LENGTH,
@@ -160,12 +164,13 @@ function certificate(key: PKey, req: Param[], purposes: number[]): Uint8Array {
 
 // ── KeyMetadata / KeyEntryResponse
 const KM = "android/system/keystore2/KeyMetadata", AUTH = "android/system/keystore2/Authorization", KER = "android/system/keystore2/KeyEntryResponse";
-async function metadata(e: Entry): Promise<JObj> {
-  const params = e.params.map(decodeParam);
-  const auths = await Promise.all([...params, { tag: TAG.CREATION_DATETIME, kind: KIND.dateTime, v: BigInt(e.created) }, { tag: TAG.USER_ID, kind: KIND.integer, v: Math.floor(PROCESS_UID / 100000) }]
-    .map(async (p) => setDeclared(await newObj(AUTH), AUTH, { securityLevel: p.tag === TAG.CREATION_DATETIME ? KEYSTORE : SOFTWARE, keyParameter: await javaParam(p) })));
-  return setDeclared(await newObj(KM), KM, {
-    key: await keyIdDescriptor(e), keySecurityLevel: e.material ? TRUSTED_ENVIRONMENT : SOFTWARE, authorizations: jarray(auths, `L${AUTH};`),
+function* metadata(e: Entry): Gen<JObj> {
+  const auths: JObj[] = [];
+  for (const p of [...e.params.map(decodeParam), { tag: TAG.CREATION_DATETIME, kind: KIND.dateTime, v: BigInt(e.created) }, { tag: TAG.USER_ID, kind: KIND.integer, v: Math.floor(PROCESS_UID / 100000) }])
+    auths.push(setDeclared(yield newObj(AUTH), AUTH, { securityLevel: p.tag === TAG.CREATION_DATETIME ? KEYSTORE : SOFTWARE, keyParameter: yield* javaParam(p) }));
+  return setDeclared(yield newObj(KM), KM, {
+    key: setDeclared(yield newObj(KD), KD, { domain: DOMAIN.KEY_ID, nspace: BigInt(e.id), alias: null, blob: null }),
+    keySecurityLevel: e.material ? TRUSTED_ENVIRONMENT : SOFTWARE, authorizations: jarray(auths, `L${AUTH};`),
     certificate: e.cert ? new Int8Array(unb64(e.cert)) : null, certificateChain: e.chain ? new Int8Array(unb64(e.chain)) : null, modificationTimeMs: BigInt(e.modified),
   });
 }
@@ -203,16 +208,21 @@ async function generateMaterial(ps: Param[]): Promise<{ material: Uint8Array; ex
   }
   throw ERR.UNSUPPORTED_ALGORITHM;
 }
-async function store(alias: string, req: Param[], origin: number, made: { material: Uint8Array; extra: Param[]; key?: PKey }): Promise<JObj> {
+function* store(alias: string, req: Param[], origin: number, made: { material: Uint8Array; extra: Param[]; key?: PKey }): Gen<JObj> {
   const now = Date.now(), purposes = all(req, TAG.PURPOSE).map(Number);
   const e: Entry = { id: newId(), alias, params: characteristics(req, origin, made.extra).map(encodeParam), material: b64(made.material), created: now, modified: now };
   if (made.key) e.cert = b64(certificate(made.key, req, purposes));
   save([...entries().filter((x) => x.alias !== alias), e]);
-  return metadata(e);
+  return yield* metadata(e);
 }
-const keymint = async <T>(body: () => T | Promise<T>): Promise<T> => {
-  try { return await body(); } catch (e) { if (typeof e === "number") return failure(e, "KeyMint error " + e); throw e; }
-};
+/** `body`'s answer, a KeyMint error code it throws as the ServiceSpecificException keystore2 sends */
+function keymint<T>(body: () => T | Promise<T>): T | Promise<T> {
+  const error = (e: unknown) => { if (typeof e === "number") return failure(e, "KeyMint error " + e); throw e; };
+  try {
+    const r = body();
+    return r instanceof Promise ? r.catch(error) : r;
+  } catch (e) { return error(e); }
+}
 
 // ── operations
 type Op = { e: Entry; params: Param[]; purpose: number; input: Uint8Array[]; aad: Uint8Array[]; nonce: Uint8Array | null; done: boolean };
@@ -321,9 +331,9 @@ rt.register({ name: "webdroid/KeystoreOperation", ctor: JKeystoreOperation, sup:
 } });
 
 const CREATE_OP = "android/system/keystore2/CreateOperationResponse", KPS = "android/system/keystore2/KeyParameters";
-async function createOperation(d: unknown, opParams: unknown[] | null): Promise<JObj> {
-  const e = await find(d), key = e.params.map(decodeParam), ps = readParams(opParams);
-  return keymint(async () => {
+const createOperation = driven(function* (d: unknown, opParams: unknown[] | null): Gen<JObj> {
+  const e = yield* find(d), key = e.params.map(decodeParam), ps = readParams(opParams);
+  return yield keymint(() => rt.drive(function* (): Gen<JObj> {
     if (!e.material) throw ERR.INCOMPATIBLE_PURPOSE;
     const purpose = num(ps, TAG.PURPOSE);
     if (purpose === undefined || !all(key, TAG.PURPOSE).map(Number).includes(purpose)) throw ERR.INCOMPATIBLE_PURPOSE;
@@ -354,30 +364,30 @@ async function createOperation(d: unknown, opParams: unknown[] | null): Promise<
         } else throw ERR.INVALID_NONCE;
       }
     }
-    const operation = await newObj("webdroid/KeystoreOperation") as JKeystoreOperation;
+    const operation = (yield newObj("webdroid/KeystoreOperation")) as JKeystoreOperation;
     operation.op = { e, params: [...ps, ...key.filter((p) => p.tag === TAG.MIN_MAC_LENGTH)], purpose, input: [], aad: [], nonce, done: false };
-    const parameters = returned.length ? setDeclared(await newObj(KPS), KPS, { keyParameter: jarray(await Promise.all(returned.map(javaParam)), `L${KP};`) }) : null;
-    return setDeclared(await newObj(CREATE_OP), CREATE_OP, { iOperation: operation, operationChallenge: null, parameters, upgradedBlob: null });
-  });
-}
+    const parameters = returned.length ? setDeclared(yield newObj(KPS), KPS, { keyParameter: jarray(yield* javaParams(returned), `L${KP};`) }) : null;
+    return setDeclared(yield newObj(CREATE_OP), CREATE_OP, { iOperation: operation, operationChallenge: null, parameters, upgradedBlob: null });
+  }()));
+});
 
 // ── IKeystoreSecurityLevel (the TEE one) and IKeystoreService
 class JSecurityLevel extends JObj {}
 rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup: "android/system/keystore2/IKeystoreSecurityLevel$Stub", methods: {
   "generateKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
-    (d: unknown, _attest: unknown, params: unknown[]) => keymint(async () => {
+    (d: unknown, _attest: unknown, params: unknown[]) => keymint(() => rt.drive(function* (): Gen<JObj> {
       const ps = readParams(params), alias = descriptor(d).alias;
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (ps.some((p) => p.tag === TAG.ATTESTATION_CHALLENGE)) throw ERR.ATTESTATION_KEYS_NOT_PROVISIONED;
-      return store(alias, ps, 0, await generateMaterial(ps));
-    }),
+      return yield* store(alias, ps, 0, yield generateMaterial(ps));
+    }())),
   "importKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
-    (d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => keymint(async () => {
+    (d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => keymint(() => rt.drive(function* (): Gen<JObj> {
       const ps = readParams(params), alias = descriptor(d).alias, alg = algorithmOf(ps), bytes = new Uint8Array(data);
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (alg === ALG.AES || alg === ALG.HMAC) {
         const extra = num(ps, TAG.KEY_SIZE) === undefined ? [{ tag: TAG.KEY_SIZE, kind: KIND.integer, v: bytes.length * 8 }] : [];
-        return store(alias, ps, 2, { material: bytes, extra });
+        return yield* store(alias, ps, 2, { material: bytes, extra });
       }
       let key: PKey;
       try { key = parsePrivateKey(bytes); } catch { throw ERR.INVALID_ARGUMENT; }
@@ -385,18 +395,18 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
       const extra: Param[] = [];
       if (num(ps, TAG.KEY_SIZE) === undefined) extra.push({ tag: TAG.KEY_SIZE, kind: KIND.integer, v: key.type === EVP_PKEY_EC ? bitLength(key.ec.curve.p) : bitLength((key as { rsa: { n: bigint } }).rsa.n) });
       if (key.type === EVP_PKEY_EC && num(ps, TAG.EC_CURVE) === undefined) extra.push({ tag: TAG.EC_CURVE, kind: KIND.ecCurve, v: CURVE_BY_EC.indexOf(key.ec.curve.name) });
-      return store(alias, ps, 2, { material: marshalPrivateKey(key)!, extra, key });
-    }),
+      return yield* store(alias, ps, 2, { material: marshalPrivateKey(key)!, extra, key });
+    }())),
   "createOperation(Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;Z)Landroid/system/keystore2/CreateOperationResponse;":
     (d: unknown, params: unknown[]) => createOperation(d, params),
   "deleteKey(Landroid/system/keystore2/KeyDescriptor;)V": (d: unknown) => deleteKey(d),
 } });
 let securityLevel: Promise<JObj> | null = null;
 const teeLevel = () => securityLevel ??= newObj("webdroid/KeystoreSecurityLevel");
-async function deleteKey(d: unknown) {
-  const e = await find(d);
+const deleteKey = driven(function* (d: unknown): Gen<void> {
+  const e = yield* find(d);
   save(entries().filter((x) => x !== e));
-}
+});
 async function listed(start: string | null): Promise<unknown[]> {
   const aliases = entries().map((e) => e.alias).filter((a) => start === null || a > start).sort();
   return jarray(await Promise.all(aliases.map(async (alias) => setDeclared(await newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }))), `L${KD};`);
@@ -404,10 +414,10 @@ async function listed(start: string | null): Promise<unknown[]> {
 rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup: "android/system/keystore2/IKeystoreService$Stub", methods: {
   "getSecurityLevel(I)Landroid/system/keystore2/IKeystoreSecurityLevel;": (level: number) =>
     level === TRUSTED_ENVIRONMENT ? teeLevel() : failure(-68, "No KeyMint instance for security level " + level),
-  "getKeyEntry(Landroid/system/keystore2/KeyDescriptor;)Landroid/system/keystore2/KeyEntryResponse;": async (d: unknown) => {
-    const e = await find(d);
-    return setDeclared(await newObj(KER), KER, { iSecurityLevel: e.material ? await teeLevel() : null, metadata: await metadata(e) });
-  },
+  "getKeyEntry(Landroid/system/keystore2/KeyDescriptor;)Landroid/system/keystore2/KeyEntryResponse;": driven(function* (d: unknown) {
+    const e = yield* find(d);
+    return setDeclared(yield newObj(KER), KER, { iSecurityLevel: e.material ? yield teeLevel() : null, metadata: yield* metadata(e) });
+  }),
   // a certificate for a key (its leaf and the rest of its chain), or a certificate-only entry
   "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": async (d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
     const k = descriptor(d), list = entries();
