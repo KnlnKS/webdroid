@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
-import { uptimeMillis, type GuestTimer } from "../../guest-clock";
+import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
@@ -57,8 +57,12 @@ export function callOn<T>(thread: JThread, call: () => T): T {
   setCurThread(thread);
   try { return call(); } finally { setCurThread(previous); }
 }
-export const after = <R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> =>
-  (r instanceof Promise ? r.then(f) : f(r as R));
+/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread that asked */
+export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
+  if (!(r instanceof Promise)) return f(r);
+  const thread = curThread;
+  return r.then((v) => callOn(thread, () => f(v)));
+}
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
 }
@@ -1142,7 +1146,7 @@ rt.register({
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
-    "static currentTimeMillis()J": () => BigInt(Date.now()),
+    "static currentTimeMillis()J": () => BigInt(Math.floor(wallMillis())),
     "static nanoTime()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     // libcore's Object.identityHashCode reads the lock word
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
@@ -1167,7 +1171,7 @@ for (const [name, desc] of [["In", "Ljava/io/InputStream;"], ["Out", "Ljava/io/P
 }
 // Clock.systemUTC's wall time: nanoseconds past `offset` seconds, or -1 beyond ±2^32 s as libcore expects
 rt.registerJni("jdk/internal/misc/VM", "getNanoTimeAdjustment(J)J", (offset: bigint) => {
-  const adjustment = BigInt(Date.now()) * 1_000_000n - offset * 1_000_000_000n;
+  const adjustment = BigInt(Math.round(wallMillis() * 1e6)) - offset * 1_000_000_000n;
   return adjustment > MAX_NANO_ADJUSTMENT || adjustment < -MAX_NANO_ADJUSTMENT ? -1n : adjustment;
 });
 const MAX_NANO_ADJUSTMENT = (1n << 32n) * 1_000_000_000n;
@@ -1425,7 +1429,6 @@ function enumerateThreads(threads: unknown[]): number {
 const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
 export type JSimpleEnum = JObj;
 export const enumName = (e: unknown): string => (e as Record<string, string>)[ENUM_NAME];
-export const enumOrdinal = (e: unknown): number => (e as Record<string, number>)[ENUM_ORDINAL];
 // §4.7: compareTo within one enum class, and valueOf over the constants getSharedConstants shares
 // (AOSP asks getClass and getDeclaringClass of both, and an LRU cache under a lock, per call)
 const sharedEnums = new WeakMap<object, Record<string, unknown>[]>();

@@ -1,16 +1,12 @@
 import { expect, test, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { JClassLoader, newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
-import { Resources } from "../src/android/res";
 import { PROCESS_PID } from "../src/android/os";
-import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/app";
-import { appHost, setAppHost } from "../src/android/apphost";
-import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/shell/vfs";
 import { defaultDisplay } from "../src/android/display";
-import { scall, loadLibcore, appResources, preloadTextPaint, loadFrameworkJar } from "./java";
+import { scall, loadLibcore, preloadTextPaint, loadFrameworkJar, bootApp, packageRecord } from "./java";
 import { toJsArray } from "../src/jvm/natives/jcoll";
 
 // framework.jar and a running main looper, as a booted page has them
@@ -36,76 +32,6 @@ rt.linkNatives();
 beforeAll(preloadTextPaint);
 
 const RESOURCES_CTOR = "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V";
-
-function lifecycleActivity(application: JApplication): JActivity {
-  const activity = new JActivity();
-  Reflect.set(activity, "$host", { application });
-  return activity;
-}
-function useCurrentActivity(activity: JActivity): void {
-  Reflect.set(activity.$host, "currentActivity", () => activity);
-  setAppHost(activity.$host);
-}
-
-test("a lifecycle observer registered on main waits for the next real event", async () => {
-  const calls: string[] = [];
-  const app = new JApplication();
-  const activity = lifecycleActivity(app);
-  const key = mangleMethod("onActivityResumed", "(Landroid/app/Activity;)V");
-  const observer = { [key]: () => { calls.push("resumed"); } };
-  const previousHost = appHost;
-  useCurrentActivity(activity);
-  try {
-    await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", observer);
-    activity.resumed = true;
-    await onMain(() => {});
-    expect(calls).toEqual([]);
-  } finally {
-    setAppHost(previousHost);
-  }
-});
-
-test("activity callbacks registered during pre-create receive later create stages", async () => {
-  const calls: string[] = [];
-  const app = new JApplication();
-  const activity = lifecycleActivity(app);
-  const activityObserver = {
-    [mangleMethod("onActivityCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("created"); },
-    [mangleMethod("onActivityPostCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("post"); },
-  };
-  const appObserver = {
-    [mangleMethod("onActivityPreCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () =>
-      vcall(activity, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", activityObserver),
-  };
-  await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", appObserver);
-  await fireActivityLifecycle(activity, "Created");
-  expect(calls).toEqual(["created", "post"]);
-});
-
-test("background lifecycle registration catches up to the current activity", async () => {
-  const calls: string[] = [];
-  const app = new JApplication();
-  const activity = lifecycleActivity(app);
-  activity.resumed = true;
-  const observer = {
-    [mangleMethod("onActivityCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("created"); },
-    [mangleMethod("onActivityStarted", "(Landroid/app/Activity;)V")]: () => { calls.push("started"); },
-    [mangleMethod("onActivityResumed", "(Landroid/app/Activity;)V")]: () => { calls.push("resumed"); },
-  };
-  const previousHost = appHost;
-  const previousThread = curThread;
-  useCurrentActivity(activity);
-  try {
-    setCurThread(new JThread());
-    await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", observer);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await onMain(() => {});
-    expect(calls).toEqual(["resumed"]);
-  } finally {
-    setCurThread(previousThread);
-    setAppHost(previousHost);
-  }
-});
 
 test("ByteBuffer absolute long and double accessors leave the position alone", async () => {
   const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 24);
@@ -374,8 +300,8 @@ test("In-memory DEX loaders read the buffer window and preserve defining-loader 
 });
 
 test("ContextWrapper.getResources reaches a base context's overriding getResources, and Context.getString goes through it", async () => {
-  const host = new Resources(null, {});
-  const plain = await appResources(host, "wrapper");
+  const base = await bootApp(await packageRecord("org.webdroid.test.wrapper"));
+  const plain = await vcall(base, "getResources", "()Landroid/content/res/Resources;");
   const assets = await vcall(plain, "getAssets", "()Landroid/content/res/AssetManager;");
   // a Resources subclass that serves strings the table lacks, behind a ContextWrapper subclass
   // that answers getResources with it: what a string-store proxy installed by attachBaseContext does
@@ -384,19 +310,15 @@ test("ContextWrapper.getResources reaches a base context's overriding getResourc
   rt.register({ name: "test/ProxyContext", ctor: class extends (rt.link("android/content/ContextWrapper").ctor as any) {}, sup: "android/content/ContextWrapper",
     methods: { "getResources()Landroid/content/res/Resources;": function (this: { store: unknown }) { return this.store; } } });
   const store = await newObj("test/StoreResources", RESOURCES_CTOR, assets, null, null);
-  const base = rt.make("android/content/Context") as JObj & { $host: unknown };
-  base.$host = { res: host, jresources: plain, pkg: "test" };
   const proxy = await newObj("test/ProxyContext", "(Landroid/content/Context;)V", base) as JObj & { store: unknown };
   proxy.store = store;
   const outer = await newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;I)V", proxy, 0);
   expect(await vcall(outer, "getResources", "()Landroid/content/res/Resources;")).toBe(store);
   expect(await vcall(outer, "getString", "(I)Ljava/lang/String;", 0x7f1143e8)).toBe("store:7f1143e8");
-  // a wrapper over the platform context still answers the platform's own Resources directly
+  // a wrapper over the application still answers the application's own Resources
   const direct = await newObj("android/content/ContextWrapper", "(Landroid/content/Context;)V", base);
   expect(await vcall(direct, "getResources", "()Landroid/content/res/Resources;")).toBe(plain);
 });
-
-
 
 test("modern Java helpers preserve their public contracts", async () => {
   const hex = await scall("java/lang/Long", "valueOf", "(Ljava/lang/String;I)Ljava/lang/Long;", "7fffffffffffffff", 16);

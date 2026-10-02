@@ -1,14 +1,10 @@
 import "../../../src/natives";
-import { frame, present, setScreenCanvas } from "../../../src/shell/device";
-import { JRect } from "../../../src/android/graphics";
-import { NativeBitmap, javaBitmap } from "../../../src/android/bitmap";
-import { dispatchAttached, dispatchDetached } from "../../../src/android/view";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
-import { EglContext, getHolder, latchSurfaces, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glview";
+import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";
 import { mem } from "../../../src/native/mem";
 import { Cpu, setA64 } from "../../../src/native/cpu";
 import { jitStats, JIT_HEAT } from "../../../src/native/core";
@@ -35,7 +31,7 @@ function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
 function readback() {
   setA64(false); gles1Init(); gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 4, height: 4, present: null, frames: 0 });
+  context.makeCurrent({ width: 4, height: 4, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "readback");
   const base = mem.reserve(0x3000, 0x1000);
   const execute = (at: number) => {
@@ -77,7 +73,7 @@ function readback() {
 function uploadExtents() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 4, height: 4, present: null, frames: 0 });
+  context.makeCurrent({ width: 4, height: 4, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "texture-upload"), p = mem.reserve(0x1000, 0x1000);
   const lengths: number[] = [];
   for (const name of ["texSubImage2D", "texSubImage3D"] as const) {
@@ -107,7 +103,7 @@ function uploadExtents() {
 /** Java GLES20 client arrays: read at the draw, one reused buffer per attribute and for indices, bindings kept */
 function clientArrays() {
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, program = g.createProgram()!;
   for (const [type, src] of [[g.VERTEX_SHADER, "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}"], [g.FRAGMENT_SHADER, "void main(){gl_FragColor=vec4(1,0,0,1);}"]] as const) {
     const shader = g.createShader(type)!; g.shaderSource(shader, src); g.compileShader(shader); g.attachShader(program, shader);
@@ -139,7 +135,7 @@ function clientArrays() {
 function bufferBindings() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "buffer-bindings"), p = mem.malloc(16);
   const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
   gl("glGenVertexArrays", 1, p); gl("glGenBuffers", 2, p + 4);
@@ -159,7 +155,7 @@ function bufferBindings() {
 function nativeClientArrays() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "client-arrays"), p = mem.malloc(256);
   const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
   const program = g.createProgram()!;
@@ -202,7 +198,7 @@ function nativeClientArrays() {
 function externalTexture() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "external-texture"), p = mem.malloc(16);
   const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
   const EXTERNAL = 0x8d65;
@@ -272,25 +268,14 @@ async function probe() {
   Object.assign(callback, { [mangleMethod("run", "()V")]: () => gl === firstGL });
   const callbackRestored = vcallOn(first, callback, "run", "()V");
   setCurThread(mainThread);
-  const view = rt.make("android/opengl/GLSurfaceView"), renderer = rt.make("java/lang/Object");
-  const rendererThread = Reflect.get(view, "glThread"), callbacks: boolean[] = [];
-  const glSurface: GlSurface = getHolder(view).surface = { view: null, width: 4, height: 4, present: null, frames: 0 };
-  Object.assign(view, { renderer, needCreate: true, sizeChanged: true, winW: 4, winH: 4 });
-  const suspend = async () => { callbacks.push(gl === Reflect.get(view, "egl").gl && curThread === rendererThread); rt.su(rendererThread); await Promise.resolve(); };
-  Object.assign(renderer, {
-    [mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V")]: suspend,
-    [mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V")]: suspend,
-    [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: suspend,
-  });
-  await Reflect.apply(Reflect.get(view, "runFrame"), view, [glSurface]);
-  return { callbacks, bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
+  return { bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
-    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents(),
+    nativeWindow: await nativeWindow(), readback: readback(), uploads: uploadExtents(),
     clientArrays: clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture(), surfaceTexture: await surfaceTexture() };
 }
 async function nativeWindow() {
   ndkInit();
-  const surface: GlSurface = { view: null, width: 2, height: 1, present: null, frames: 0 };
+  const surface: GlSurface = { width: 2, height: 1, present: null, frames: 0 };
   const handle = nativeWindowFor(surface), out = mem.malloc(64);
   const cpu = new Cpu(mainThread, "window-buffer");
   const invoke = (name: string, values: number[]) => {
@@ -325,31 +310,11 @@ async function nativeWindow() {
   surface.present?.close(); mem.free(out);
   return { locked, dimensions, duplicate, posted, pixels, yv12, released, sameHandle, reset, frames: surface.frames };
 }
-async function windowCopy() {
-  const screen = document.createElement("canvas"); screen.width = screen.height = 4;
-  setScreenCanvas(screen);
-  const copy = async () => {
-    const native = new NativeBitmap(4, 4), bitmap = await javaBitmap(native);
-    const rect = new JRect(); rect.right = rect.bottom = 4;
-    const listener = rt.make("java/lang/Object");
-    let finish = (_code: number) => {};
-    const done = new Promise<number>(resolve => { finish = resolve; });
-    Object.assign(listener, { [mangleMethod("onPixelCopyFinished", "(I)V")]: finish });
-    const cls = rt.link("android/view/PixelCopy").ctor;
-    Reflect.apply(Reflect.get(cls, mangleMethod("request", "(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V")), cls, [null, rect, bitmap, listener, null]);
-    return { code: await done, pixel: [...native.ctx.getImageData(0, 0, 1, 1).data] };
-  };
-  frame.fillStyle = "lime"; frame.fillRect(0, 0, 4, 4); present();
-  frame.fillStyle = "red"; frame.fillRect(0, 0, 4, 4);
-  const before = await copy();
-  present();
-  return { before, after: await copy() };
-}
 /** SurfaceTexture in GL contexts, against StProbe on the reference AVD: a latch fills the texture and
  *  takes GLConsumer's flipped matrix, another context cannot update it, a detach deletes the texture
  *  and an attach binds the current image to a new one */
 async function surfaceTexture() {
-  const a = new EglContext(), b = new EglContext(), pbuffer = (): GlSurface => ({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const a = new EglContext(), b = new EglContext(), pbuffer = (): GlSurface => ({ width: 1, height: 1, present: null, frames: 0 });
   const texel = (name: number) => {
     const g = gl!, fbo = g.createFramebuffer(), px = new Uint8Array(4);
     g.bindFramebuffer(g.FRAMEBUFFER, fbo);
@@ -381,43 +346,5 @@ async function surfaceTexture() {
   const released = [vcall(st, "isReleased", "()Z"), thrown(() => vcall(st, "updateTexImage", "()V"))];
   b.makeCurrent(null);
   return { latched, otherContext, deleted, attached, released };
-}
-/** GLThread: surface callbacks and resume wake it, a frame waits for the display to show the last one,
- *  WHEN_DIRTY draws only on request, and detaching ends the thread */
-async function lifecycle() {
-  const view = rt.make("android/opengl/GLSurfaceView"), renderer = rt.make("java/lang/Object");
-  Object.assign(view, { right: 4, bottom: 4 });
-  getHolder(view).callbacks.push(view); // GLSurfaceView.init, which rt.make skips
-  let drawn = 0;
-  Object.assign(renderer, {
-    [mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V")]: () => {},
-    [mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V")]: () => {},
-    [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: () => { drawn++; },
-  });
-  const settle = async (done: () => boolean) => {
-    for (let i = 0; i < 200 && !done(); i++) await new Promise(resolve => setTimeout(resolve, 5));
-    return done();
-  };
-  const idle = () => new Promise(resolve => setTimeout(resolve, 50));
-  await vcall(view, "setRenderer", "(Landroid/opengl/GLSurfaceView$Renderer;)V", renderer);
-  await vcall(view, "setRenderMode", "(I)V", 0);
-  await vcall(view, "onPause", "()V");
-  await dispatchAttached(view);
-  const created = await settle(() => Reflect.get(view, "hasSurface"));
-  await idle();
-  const paused = drawn === 0;
-  await vcall(view, "onResume", "()V");
-  const first = await settle(() => drawn === 1);
-  await vcall(view, "requestRender", "()V");
-  await idle();
-  const backpressure = drawn === 1;
-  latchSurfaces();
-  const second = await settle(() => drawn === 2);
-  latchSurfaces();
-  await idle();
-  const whenDirty = drawn === 2;
-  await dispatchDetached(view);
-  const ended = await settle(() => !Reflect.get(view, "running"));
-  return created && paused && first && backpressure && second && whenDirty && ended;
 }
 export default probe;

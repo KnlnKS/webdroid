@@ -6,10 +6,9 @@ import { JObj, rt, setDeclared } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
-import { mimeOf } from "./mediastore";
+import { mimeOf } from "../mime";
 import { storageEstimate } from "./os";
-import { callingIdentity, hostStub } from "./binder";
-import { serviceContext } from "./context";
+import { callingIdentity, hostStub, serviceContext } from "./binder";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {

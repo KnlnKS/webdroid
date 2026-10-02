@@ -2,34 +2,17 @@ import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
-import { JApplication } from "../src/android/app";
-import { setAppHost } from "../src/android/apphost";
-import { packages, PackageRecord, packageUid } from "../src/android/packages";
-import { Resources } from "../src/android/res";
-import { TV, type XmlAttr, type XmlNode } from "../src/android/axml";
-import { setProcessIdentity } from "../src/android/os";
-import { grantPermissions } from "../src/android/context";
-import { appResources } from "./java";
+import { packageUid } from "../src/android/packages";
+import { grantPermissions } from "../src/android/permissions";
+import { bootApp, packageRecord } from "./java";
 
 const pkg = "org.webdroid.test.notify";
-const attr = (name: string, str: string | null, data = 0): XmlAttr => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
 const N = "Landroid/app/Notification;", B = "Landroid/app/Notification$Builder;";
-let manager: JObj, app: JApplication;
+let manager: JObj, app: JObj;
 rt.linkNatives();
 
 beforeAll(async () => {
-  const manifest: XmlNode = { name: "manifest", attrs: [attr("package", pkg)], children: [
-    { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, 35)], children: [] },
-    { name: "uses-permission", attrs: [attr("name", "android.permission.POST_NOTIFICATIONS")], children: [] },
-    { name: "application", attrs: [], children: [] },
-  ] };
-  const res = new Resources(null, {});
-  packages.set(pkg, new PackageRecord(manifest, res, "/t.apk", packageUid(pkg), async () => []));
-  setProcessIdentity(4321, packageUid(pkg));
-  const jresources = await appResources(res, pkg);
-  app = new JApplication();
-  const host = { pkg, application: app, res, jresources, splits: [], themeResId: 0, iconRes: 0, currentActivity: () => null, activities: () => [] } as never;
-  Reflect.set(app, "$host", host); setAppHost(host);
+  app = await bootApp(await packageRecord(pkg, { permissions: ["android.permission.POST_NOTIFICATIONS"] }));
   manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "notification");
 });
 

@@ -77,9 +77,14 @@ async function softInput(window: JObj, visible: boolean, receiver: JObj | null):
   return 1;
 }
 
-async function startInputOrWindowGainedFocus(window: JObj, info: JObj | null, connection: JObj | null): Promise<JObj> {
+const SOFT_INPUT_MASK_STATE = 0xf, SOFT_INPUT_STATE_VISIBLE = 4, SOFT_INPUT_STATE_ALWAYS_VISIBLE = 5, SOFT_INPUT_IS_FORWARD_NAVIGATION = 0x100;
+async function startInputOrWindowGainedFocus(window: JObj, info: JObj | null, connection: JObj | null, softInputMode: number): Promise<JObj> {
   if (!info || !connection) { finishInput(); return constant(BIND, "NULL_EDITOR_INFO"); }
   startInput(window, info, connection, 0);
+  // DefaultImeVisibilityApplier: an always-visible window shows the keyboard for its editor, a
+  // visible one only when navigated forward to
+  const state = softInputMode & SOFT_INPUT_MASK_STATE;
+  if (state === SOFT_INPUT_STATE_ALWAYS_VISIBLE || state === SOFT_INPUT_STATE_VISIBLE && (softInputMode & SOFT_INPUT_IS_FORWARD_NAVIGATION)) showSoftInput(true);
   return newObj(BIND, "(ILcom/android/internal/inputmethod/IInputMethodSession;Landroid/util/SparseArray;Landroid/view/InputChannel;Ljava/lang/String;IZ)V",
     SUCCESS_WITH_IME_SESSION, await methodSession(), null, null, IME_ID, ++bindSequence, 0);
 }
@@ -106,11 +111,11 @@ const emptyInfoList = () => scall("com/android/internal/inputmethod/InputMethodI
   "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", newArrayList());
 rt.register({ name: "webdroid/InputMethodManagerService", ctor: class extends JObj {}, sup: "com/android/internal/view/IInputMethodManager$Stub", methods: {
   [`startInputOrWindowGainedFocus${START})L${BIND};`]:
-    (_reason: number, _client: JObj, window: JObj, _flags: number, _mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null) =>
-      startInputOrWindowGainedFocus(window, info, connection),
+    (_reason: number, _client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null) =>
+      startInputOrWindowGainedFocus(window, info, connection, mode),
   [`startInputOrWindowGainedFocusAsync${START}I)V`]:
-    async (_reason: number, client: JObj, window: JObj, _flags: number, _mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null, _a11y: JObj, _sdk: number, _user: number, _back: JObj, seq: number) =>
-      vcall(client, "onStartInputResult", `(L${BIND};I)V`, await startInputOrWindowGainedFocus(window, info, connection), seq),
+    async (_reason: number, client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null, _a11y: JObj, _sdk: number, _user: number, _back: JObj, seq: number) =>
+      vcall(client, "onStartInputResult", `(L${BIND};I)V`, await startInputOrWindowGainedFocus(window, info, connection, mode), seq),
   "getEnabledInputMethodList(I)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;": emptyInfoList,
   "getInputMethodList(II)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;": emptyInfoList,
   "getEnabledInputMethodListLegacy(I)Ljava/util/List;": () => newArrayList(),

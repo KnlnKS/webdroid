@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall, after } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import type { NativeBitmap } from "./bitmap";
 import type { Ctx2D } from "./recording";
 import { parcelCreator } from "./parcelable";
@@ -35,12 +35,12 @@ rt.register({ name: "android/graphics/Rect", ctor: JRect, ifaces: PARCELABLE, fi
 /** a RectF: its own class, since fallthrough would otherwise give it Rect's same-descriptor bodies */
 export class JRectF extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 rt.register({ name: "android/graphics/RectF", ctor: JRectF, ifaces: PARCELABLE, fields: RECT_FIELDS, statics: geometryCreator("android/graphics/RectF", RECT_FIELDS, true) });
-export class JPoint extends JObj { x = 0; y = 0; }
+class JPoint extends JObj { x = 0; y = 0; }
 rt.register({ name: "android/graphics/Point", ctor: JPoint, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/Point", POINT_FIELDS, false) });
 rt.register({ name: "android/graphics/PointF", ctor: class extends JObj { x = 0; y = 0; }, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/PointF", POINT_FIELDS, true) });
 
 // android.graphics.Insets — immutable 4-sided inset value (WindowInsets.getInsets() etc).
-export class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
+class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 const INSETS_NONE = new JInsets();
 /** Mirrors Insets.of(): the all-zero case returns the cached NONE singleton, like AOSP. */
 export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
@@ -49,18 +49,6 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
 }
 rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
 
-/** The shadow a shape casts, without the shape: it is filled far to the side and its shadow
- *  offset back, since a canvas shadow takes its opacity from the fill's. `dy` is in user space. */
-export function castShadow(ctx: Ctx2D, trace: () => void, color: string, blur: number, dy: number) {
-  const m = ctx.getTransform(), far = 1 << 16;
-  ctx.save();
-  ctx.translate(-far, 0);
-  ctx.shadowColor = color; ctx.shadowBlur = blur;
-  ctx.shadowOffsetX = m.a * far; ctx.shadowOffsetY = m.b * far + m.d * dy;
-  ctx.fillStyle = "#000";
-  ctx.beginPath(); trace(); ctx.fill();
-  ctx.restore();
-}
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
  * modes Canvas2D cannot express are absent and fall back to plain source-over.
@@ -83,11 +71,6 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
   "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
   "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
   "HUE", "SATURATION", "COLOR", "LUMINOSITY"];
-/** PorterDuff.Mode's, BlendMode's or Region.Op's constant `name`, once the (bytecode) enum has initialized */
-export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode" | "android/graphics/Region$Op", name: string): unknown {
-  const info = rt.link(cls);
-  return after(rt.initClass(info), () => (info.ctor as unknown as Record<string, unknown>)["s$" + name]);
-}
 /**
  * A ColorFilter's native instance, as hwui builds its SkColorFilter: AOSP's row-major 4x5 colour
  * `matrix` with its offsets in 0..255 (SkColorFilters::Matrix and Lighting), or, when that is null,

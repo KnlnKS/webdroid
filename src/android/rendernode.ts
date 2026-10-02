@@ -6,8 +6,8 @@
 // projection and stretch are properties kept, not drawn; animators run from the frame loop
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
-import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
-import { rt, JObj, declaredField } from "../jvm/runtime";
+import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, type Ctx2D, type DisplayList } from "./recording";
+import { rt } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
 import { perf } from "../perf";
@@ -21,11 +21,6 @@ import { addAnimator, endAnimators } from "./rtanimator";
 import { type RuntimeShaderBuilder } from "./runtime-shader";
 import type { TextureLayer } from "./texturelayer";
 import { drawFunctor, trackingClips, pushClip, popClip } from "./webfunctor";
-
-let invalidateHook: (() => void) | null = null;
-export function setInvalidateHook(f: () => void) { invalidateHook = f; }
-/** a frame is owed: the window redraws on the next vsync */
-export const requestRedraw = (): void => invalidateHook?.();
 
 const f32 = Math.fround, ALPHA_EPSILON = f32(0.001), NON_ZERO_EPSILON = f32(0.001);
 /** MathUtils::isZero */
@@ -124,7 +119,7 @@ export class NativeRenderNode {
   }
   setDisplayList(ops: DisplayList | null) {
     this.ops = ops;
-    if (ops) { perf.rnRecord += displayListLength(ops); invalidateHook?.(); }
+    if (ops) perf.rnRecord += displayListLength(ops);
   }
 }
 const nodeAt = (h: bigint) => deref<NativeRenderNode>(h);
@@ -194,11 +189,9 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
       if (surface.width !== w) surface.width = w;
       if (surface.height !== h) surface.height = h;
       const input = surface.getContext("2d")!; input.reset();
-      const recording = replayingCanvas(), canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
+      const canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
       canvas.setTarget(input, w, h, null);
-      canvas.semanticOwner = recording?.semanticOwner ?? null;
-      canvas.semanticBase = recording ? recording.semanticTransform() : null;
-      replayWithSemantics(canvas, () => replay(input, ops));
+      replayFor(canvas, () => replay(input, ops));
       ctx.globalAlpha *= n.alpha;
       effect.draw(ctx, surface);
     } else if (layer) {
@@ -404,34 +397,12 @@ rt.registerJnis("android/graphics/RenderNode", {
 });
 const IDENTITY = identity();
 
-// ── The window's root node and its AnimationHost: attached while the window draws. The TS view
-// stack has no RenderNodes, so a window's RecordingCanvas stands on this one node: what AOSP's
-// animators target and check is attached.
-const HOST = "android/graphics/RenderNode$AnimationHost";
-rt.register({ name: "webdroid/WindowAnimationHost", ctor: class extends JObj {}, ifaces: [HOST], methods: {
-  "isAttached()Z": () => 1,
-  // these animators run from the frame loop once started, wherever they were registered
-  "registerAnimatingRenderNode(Landroid/graphics/RenderNode;Landroid/animation/Animator;)V": () => {},
-  "registerVectorDrawableAnimator(Landroid/view/NativeVectorDrawableAnimator;)V": () => {},
-} });
-let root: JObj | null = null;
-/** the RenderNode a window's RecordingCanvas records for, made as RenderNode.create(name, host)
- *  would make it but without a constructor, so it never suspends */
-export function windowRoot(): JObj {
-  if (root) return root;
-  const n = root = rt.make("android/graphics/RenderNode") as JObj & Record<string, unknown>;
-  n[declaredField("android/graphics/RenderNode", "mNativeRenderNode")] = handle(new NativeRenderNode("window"));
-  n[declaredField("android/graphics/RenderNode", "mAnimationHost")] = rt.make("webdroid/WindowAnimationHost");
-  return n;
-}
-
 // ── RecordingCanvas: SkiaRecordingCanvas records into a display list its node takes when done ──
 /** a new recording over a fresh canvas state; the list goes to its node when the recording finishes */
 function beginRecording(nc: NativeCanvas, w: number, h: number) {
   const rec = nc.recorder!;
   rec.take();
   nc.setTarget(rec.ctx, w, h, null);
-  nc.semanticOwner = nc.semanticBase = null;
 }
 /** AnimatedRippleDrawable: the ripple's circle through its RuntimeShader, with the uniforms the
  *  animated properties drive set as drawn (the turbulence as RippleShader.setNoisePhase sets it) */
@@ -483,7 +454,7 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
   },
   "nDrawRenderNode(JJ)V": (h: bigint, node: bigint) => {
     const nc = canvasAt(h), n = nodeAt(node);
-    replayWithSemantics(nc, () => recordOrRun(nc.ctx, (ctx) => drawNodeInto(ctx, n)));
+    replayFor(nc, () => recordOrRun(nc.ctx, (ctx) => drawNodeInto(ctx, n)));
   },
   // A reorder barrier draws its children by Z; without shadows to cast, they draw in order here.
   "nEnableZ(JZ)V": () => {},

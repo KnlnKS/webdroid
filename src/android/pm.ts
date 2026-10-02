@@ -1,13 +1,13 @@
-// IPackageManager and IPermissionManager, under AOSP's ApplicationPackageManager, PermissionManager
-// and the android.content.pm data classes, answered from the package registry (packages.ts) as
-// PackageManagerService's ComputerEngine answers from its parsed packages. The registry-level
-// queries are exported for the shell, which plays system_server's part in resolving intents,
-// providers and permissions. Intents and component names are read through their Java API only.
-import { JObj, rt, noops, declaredField, driven, type Gen } from "../jvm/runtime";
+// IPackageManager, under AOSP's ApplicationPackageManager and the android.content.pm data classes,
+// answered from the package registry (packages.ts) as PackageManagerService's ComputerEngine answers
+// from its parsed packages. The registry-level queries are exported for the shell, which plays
+// system_server's part in resolving intents and providers; permissions.ts answers for permissions.
+// Intents and component names are read through their Java API only.
+import { JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault, type JBundle } from "./os";
-import { vcall, scall, construct, after } from "../jvm/natives/jlang";
+import { vcall, construct, after } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -16,31 +16,20 @@ import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
-import { DOCS_AUTHORITY } from "./documents";
+import { systemProviders, systemProviderInfo$, DOCUMENTS_PROVIDER } from "./systemproviders";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
-import { hostStub, hostedService } from "./binder";
-import { permissionGranted } from "./context";
+import { hostStub } from "./binder";
 import { installerService } from "./packageinstaller";
-import { javaResources, loadResources } from "./resources";
+import { checkPermission } from "./permissions";
 
 const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
 const SERVICE = PKG + "ServiceInfo", PROVIDER = PKG + "ProviderInfo", PACKAGE = PKG + "PackageInfo", RESOLVE = PKG + "ResolveInfo";
 
-/** sets `cls`'s instance fields (declared there or inherited) on a bytecode object */
-function put(o: JObj, cls: string, values: Record<string, unknown>): void {
-  const fields = o as unknown as Record<string, unknown>;
-  for (const name in values) {
-    const prop = declaredField(cls, name);
-    if (!prop) throw new Error(`${cls}.${name} is not a field`);
-    fields[prop] = values[name];
-  }
-}
-export const field = <T = unknown>(o: unknown, cls: string, name: string): T => (o as Record<string, T>)[declaredField(cls, name)]!;
 /** a copy for a caller that may mutate it, as each binder reply is (Object.clone's) */
 const copy = <T extends object>(o: T): T => Object.assign(Object.create(Object.getPrototypeOf(o)), o);
 
@@ -59,7 +48,6 @@ let currentPackage: PackageRecord | null = null;
 export function setManifest(root: XmlNode): void {
   const pkg = attrStr(root, "package") ?? "";
   if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
-  loadedInfos.clear();
   if (!appHost) return;
   const host = appHost;
   currentPackage = packages.get(pkg) ?? new PackageRecord(root, host.res, apkPath(), packageUid(pkg), async () => {
@@ -68,25 +56,6 @@ export function setManifest(root: XmlNode): void {
   });
   packages.set(pkg, currentPackage);
 }
-/** an attribute of the booted package's <activity> for a dotted or slashed class name */
-function activityAttr(cls: string, name: string): number | undefined {
-  const node = currentPackage?.components.activity.get(cls.replace(/\//g, "."));
-  return node && attr(node, name)?.data;
-}
-/** The activity's own `android:theme`, or 0 when it just inherits the application's. */
-export const manifestActivityTheme = (cls: string): number => activityAttr(cls, "theme") ?? 0;
-export const manifestActivityOrientation = (cls: string): number => activityAttr(cls, "screenOrientation") ?? -1;
-/** ActivityInfo.launchMode: LAUNCH_MULTIPLE (0) unless the manifest names another */
-export const manifestLaunchMode = (cls: string): number => activityAttr(cls, "launchMode") ?? 0;
-/** ActivityInfo.taskAffinity: the activity's own, else the application's, else the package name */
-export function manifestTaskAffinity(cls: string): string {
-  const record = currentPackage, node = record?.components.activity.get(cls.replace(/\//g, "."));
-  return (node && attrStr(node, "taskAffinity")) ?? (record?.application && attrStr(record.application, "taskAffinity")) ?? record?.pkg ?? "";
-}
-/** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
- *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
-export const CONFIG_UI_MODE = 0x0200;
-export const activityHandlesConfig = (cls: string, bits: number): boolean => ((activityAttr(cls, "configChanges") ?? 0) & bits) === bits;
 
 
 // ── the parsed manifest, read as ParsingPackageUtils reads it. The Java side is built in generators
@@ -177,7 +146,7 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
   const splits = own?.splits.length ? own.splits : null;
   const qualified = (name: string) => { const value = app && attrStr(app, name); return value ? qualifyComponent(value, pkg) : null; };
   const className = qualified("name");
-  put(ai, APP, {
+  setDeclared(ai, APP, {
     ...resolvedLabel(app), packageName: pkg, name: className, className,
     icon: intAttr(app, "icon", 0), logo: intAttr(app, "logo", 0), banner: intAttr(app, "banner", 0),
     iconRes: intAttr(app, "icon", 0), roundIconRes: intAttr(app, "roundIcon", 0),
@@ -225,20 +194,6 @@ function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   return copy((yield applicationInfoOf(record, flags)) as JObj);
 }
 
-const loadedInfos = new Map<string, JObj | Promise<JObj>>();
-/** a LoadedApk's ApplicationInfo, which every Context of that package in this process shares: what
- *  the activity manager binds the process with, or ActivityThread.getPackageInfo asks for
- *  (GET_SHARED_LIBRARY_FILES, so no meta-data) */
-export function loadedApplicationInfo(pkg: string): JObj | Promise<JObj> {
-  const known = loadedInfos.get(pkg);
-  if (known) return known;
-  const record = packages.get(pkg);
-  if (!record) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
-  const info = rt.drive(applicationInfo$(record, GET_SHARED_LIBRARY_FILES));
-  loadedInfos.set(pkg, info);
-  if (info instanceof Promise) info.then((made) => loadedInfos.set(pkg, made), () => loadedInfos.delete(pkg));
-  return info;
-}
 
 
 // ── components
@@ -279,7 +234,7 @@ function lookup(pkg: string, cls: string, kind: ComponentKind, flags: number): C
 
 const NO_STRINGS: string[] = jarray([], "Ljava/lang/String;");
 function* componentInfo$(o: JObj, c: Component, flags: number, app: JObj | null): Gen<void> {
-  put(o, COMPONENT, {
+  setDeclared(o, COMPONENT, {
     ...resolvedLabel(c.node), name: c.name, packageName: c.owner.pkg, icon: intAttr(c.node, "icon", 0),
     logo: intAttr(c.node, "logo", 0), banner: intAttr(c.node, "banner", 0),
     metaData: flags & GET_META_DATA ? yield* metaData$(c.node, c.owner.res) : null,
@@ -311,9 +266,9 @@ const CONFIG_MCC = 1, CONFIG_MNC = 2;
 function* activityInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
   const info: JObj = yield make(ACTIVITY);
   yield* componentInfo$(info, c, flags, app);
-  put(info, ACTIVITY, { taskAffinity: manifestAffinity(c), permission: componentPermission(c), flags: activityFlags(c) });
+  setDeclared(info, ACTIVITY, { taskAffinity: manifestAffinity(c), permission: componentPermission(c), flags: activityFlags(c) });
   // an activity is relaunched for an MCC/MNC change only when it asks to be (recreateOnConfigChanges)
-  if (c.kind === "activity") put(info, ACTIVITY, {
+  if (c.kind === "activity") setDeclared(info, ACTIVITY, {
     theme: intAttr(c.node, "theme", 0), launchMode: intAttr(c.node, "launchMode", 0),
     screenOrientation: intAttr(c.node, "screenOrientation", -1),
     configChanges: intAttr(c.node, "configChanges", 0) | ~intAttr(c.node, "recreateOnConfigChanges", 0) & (CONFIG_MCC | CONFIG_MNC),
@@ -330,7 +285,7 @@ const manifestAffinity = (c: Component) => (attrStr(c.node, "taskAffinity") ?? (
 function* serviceInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
   const info: JObj = yield make(SERVICE);
   yield* componentInfo$(info, c, flags, app);
-  put(info, SERVICE, {
+  setDeclared(info, SERVICE, {
     permission: componentPermission(c), mForegroundServiceType: intAttr(c.node, "foregroundServiceType", 0),
     flags: bitsOf(c.owner, c.node, [["stopWithTask", 1, false], ["isolatedProcess", 2, false], ["externalService", 4, false],
       ["useAppZygote", 8, false], ["singleUser", 0x40000000, false]]),
@@ -341,7 +296,7 @@ export const authoritiesOf = (node: XmlNode) => (attrStr(node, "authorities") ??
 function* providerInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
   const info: JObj = yield make(PROVIDER), permission = attrStr(c.node, "permission");
   yield* componentInfo$(info, c, flags, app);
-  put(info, PROVIDER, {
+  setDeclared(info, PROVIDER, {
     authority: authoritiesOf(c.node).join(";") || null, readPermission: attrStr(c.node, "readPermission") ?? permission,
     writePermission: attrStr(c.node, "writePermission") ?? permission, grantUriPermissions: c.owner.flag(c.node, "grantUriPermissions", false) ? 1 : 0,
     forceUriPermissions: c.owner.flag(c.node, "forceUriPermissions", false) ? 1 : 0, multiprocess: c.owner.flag(c.node, "multiprocess", false) ? 1 : 0,
@@ -359,22 +314,12 @@ function* all$<T, R>(items: T[], each: (item: T) => Gen<R>): Gen<R[]> {
 }
 
 // ── the platform's own providers and activities
-const DOCS_PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
-/** Providers the *system* installs. A device answers for the storage authority out of
- *  ExternalStorageProvider, which no app can see in its own manifest, yet every SAF client
- *  (UniFile, DocumentFile) asks the package manager for it before trusting a tree URI. */
-const SYSTEM_PROVIDERS: { authority: string; cls: string; action: string }[] =
-  [{ authority: DOCS_AUTHORITY, cls: "com.android.externalstorage.ExternalStorageProvider", action: DOCS_PROVIDER_INTERFACE }];
+/** a provider answering DocumentsContract.PROVIDER_INTERFACE: the system's ExternalStorageProvider,
+ *  which SAF clients (UniFile, DocumentFile) ask about before trusting a tree URI, or an app's */
 export const isDocumentsProvider = (authority: string): boolean =>
-  SYSTEM_PROVIDERS.some((p) => p.authority === authority && p.action === DOCS_PROVIDER_INTERFACE) ||
+  systemProviders.get(authority)?.action === DOCUMENTS_PROVIDER ||
   [...packages.values()].some((owner) => [...owner.components.provider.values()].some((n) =>
-    handlesAction(n, DOCS_PROVIDER_INTERFACE) && authoritiesOf(n).includes(authority)));
-function* systemProviderInfo$(p: typeof SYSTEM_PROVIDERS[number]): Gen<JObj> {
-  const pkg = p.cls.slice(0, p.cls.lastIndexOf(".")), info: JObj = yield make(PROVIDER), app: JObj = yield make(APP);
-  put(app, APP, { packageName: pkg, processName: pkg, uid: 1000, flags: 1 | 0x800000, enabled: 1 });
-  put(info, PROVIDER, { name: p.cls, packageName: pkg, authority: p.authority, applicationInfo: app, processName: pkg, exported: 1, grantUriPermissions: 1, enabled: 1 });
-  return info;
-}
+    handlesAction(n, DOCUMENTS_PROVIDER) && authoritiesOf(n).includes(authority)));
 const handlesAction = (node: XmlNode, action: string) => node.children.some((f) => f.name === "intent-filter" &&
   f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
 
@@ -410,15 +355,15 @@ function* queryComponents$(q: IntentQuery, flags: number, kind: ComponentKind): 
 /** the platform's chooser or picker standing for a system activity, as ResolverActivity does */
 function* systemResolveInfo$(): Gen<JObj> {
   const info: JObj = yield make(RESOLVE), activity: JObj = yield make(ACTIVITY), platform = packages.get("android");
-  put(activity, ACTIVITY, { name: SYSTEM_ACTIVITY, packageName: "android", processName: "system", exported: 1, enabled: 1,
+  setDeclared(activity, ACTIVITY, { name: SYSTEM_ACTIVITY, packageName: "android", processName: "system", exported: 1, enabled: 1,
     applicationInfo: platform ? yield* applicationInfo$(platform, 0) : null });
-  put(info, RESOLVE, { activityInfo: activity });
+  setDeclared(info, RESOLVE, { activityInfo: activity });
   return info;
 }
 const answersSystem = (q: IntentQuery) => !!systemActivity(q) && (!q.pkg || q.pkg === "android");
 function* resolveInfo$(m: Match, flags: number): Gen<JObj> {
   const info: JObj = yield make(RESOLVE), component: JObj = yield* infoOf$(m, flags);
-  put(info, RESOLVE, {
+  setDeclared(info, RESOLVE, {
     [m.kind === "service" ? "serviceInfo" : m.kind === "provider" ? "providerInfo" : "activityInfo"]: component,
     priority: m.priority, isDefault: m.isDefault ? 1 : 0,
   });
@@ -429,11 +374,8 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
   const q = yield* intentQuery$(intent, type);
   const infos = yield* all$(yield* queryComponents$(q, flags, kind), (m) => resolveInfo$(m, flags));
   if (kind === "activity" && answersSystem(q)) infos.push(yield* systemResolveInfo$());
-  if (kind === "provider") for (const p of SYSTEM_PROVIDERS) if (!q.action || p.action === q.action) {
-    const info: JObj = yield make(RESOLVE);
-    put(info, RESOLVE, { providerInfo: yield* systemProviderInfo$(p) });
-    infos.push(info);
-  }
+  if (kind === "provider") for (const [authority, p] of systemProviders) if (p.action && (!q.action || p.action === q.action))
+    infos.push(setDeclared(yield make(RESOLVE), RESOLVE, { providerInfo: yield* systemProviderInfo$(authority) }));
   return infos;
 }
 /** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
@@ -454,7 +396,6 @@ export function resolveProvider(authority: string, flags = 0): Component | null 
     if (authoritiesOf(c.node).includes(authority)) return c;
   return null;
 }
-export const javaProviderInfo = (c: Component, flags = GET_META_DATA) => rt.drive(providerInfo$(c, flags, null));
 /** the launcher activity of a package, as getLaunchIntentForPackage finds it */
 export function launcherActivity(pkg: string): Component | null {
   const owner = packages.get(pkg);
@@ -462,40 +403,10 @@ export function launcherActivity(pkg: string): Component | null {
     f.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"))) ?? null : null;
 }
 
-// ── permissions, as PermissionManagerService checks them
-const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
-  for (const owner of packages.values()) {
-    const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
-    if (node) return [owner, node];
-  }
-  return null;
-};
-/** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package */
-export function checkPermission(permission: string, pkg: string): number | Promise<number> {
-  const record = packages.get(pkg);
-  if (record?.grants.has(permission)) return 0;
-  if (!record?.permissions.has(permission)) return -1;
-  if (signaturePermissions.has(permission)) return signerHolds(record, permission);
-  return permissionGranted(pkg, permission) ? 0 : -1;
-}
-/** a signature permission: held when the package is signed as the one declaring it */
-async function signerHolds(record: PackageRecord, permission: string): Promise<number> {
-  const certificates = await record.certificates();
-  for (const owner of packages.values()) {
-    if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
-    const signers = await owner.certificates();
-    if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
-  }
-  return -1;
-}
-/** a declared permission's protectionLevel, or null when no package declares it */
-export const protectionLevel = (name: string): number | null => {
-  const declared = declaredPermission(name);
-  return declared ? attr(declared[1], "protectionLevel")?.data ?? 0 : null;
-};
-function* permissionInfo$(owner: PackageRecord, node: XmlNode, flags: number): Gen<JObj> {
+/** a declared permission's PermissionInfo */
+export function* permissionInfo$(owner: PackageRecord, node: XmlNode, flags: number): Gen<JObj> {
   const info: JObj = yield make(PKG + "PermissionInfo");
-  put(info, PKG + "PermissionInfo", {
+  setDeclared(info, PKG + "PermissionInfo", {
     ...resolvedLabel(node), name: attrStr(node, "name"), packageName: owner.pkg, icon: intAttr(node, "icon", 0),
     group: attrStr(node, "permissionGroup"), protectionLevel: intAttr(node, "protectionLevel", 0),
     flags: intAttr(node, "permissionFlags", 0), descriptionRes: intAttr(node, "description", 0),
@@ -528,12 +439,12 @@ function requestedPermissions(root: XmlNode): string[] {
 }
 function* featureInfo$(name: string | null, flags = 0, glEs = 0): Gen<JObj> {
   const info: JObj = yield make(PKG + "FeatureInfo");
-  put(info, PKG + "FeatureInfo", { name, flags, reqGlEsVersion: glEs });
+  setDeclared(info, PKG + "FeatureInfo", { name, flags, reqGlEsVersion: glEs });
   return info;
 }
 function* instrumentationInfo$(record: PackageRecord, node: XmlNode, flags: number): Gen<JObj> {
   const item: JObj = yield make(PKG + "InstrumentationInfo");
-  put(item, PKG + "InstrumentationInfo", {
+  setDeclared(item, PKG + "InstrumentationInfo", {
     ...resolvedLabel(node), name: qualifyComponent(attrStr(node, "name") ?? "", record.pkg), packageName: record.pkg,
     targetPackage: attrStr(node, "targetPackage"), targetProcesses: attrStr(node, "targetProcesses"),
     handleProfiling: record.flag(node, "handleProfiling", false) ? 1 : 0, functionalTest: record.flag(node, "functionalTest", false) ? 1 : 0,
@@ -547,7 +458,7 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const version = attr(root, "versionName");
   const own = record === currentPackage && appHost?.pkg === record.pkg ? appHost : null;
   const time = installTime(record.pkg);
-  put(pi, PACKAGE, {
+  setDeclared(pi, PACKAGE, {
     packageName: record.pkg, splitNames: jarray(own?.splits.slice() ?? [], "Ljava/lang/String;"), splitRevisionCodes: new Int32Array(own?.splits.length ?? 0),
     versionCode: intAttr(root, "versionCode", 0), versionCodeMajor: intAttr(root, "versionCodeMajor", 0),
     versionName: version?.type === TV.REFERENCE ? resString(record.res, version.data) : version?.str ?? null,
@@ -560,27 +471,27 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
     [GET_RECEIVERS, "receiver", "receivers", ACTIVITY], [GET_SERVICES, "service", "services", SERVICE], [GET_PROVIDERS, "provider", "providers", PROVIDER]];
   for (const [bit, kind, name, cls] of lists) {
     const items = flags & bit ? components(record, kind, flags) : [];
-    if (items.length) put(pi, PACKAGE, { [name]: jarray(yield* all$(items, (c) => infoOf$(c, flags, app)), `L${cls};`) });
+    if (items.length) setDeclared(pi, PACKAGE, { [name]: jarray(yield* all$(items, (c) => infoOf$(c, flags, app)), `L${cls};`) });
   }
   const instrumentation = flags & GET_INSTRUMENTATION ? root.children.filter((n) => n.name === "instrumentation") : [];
-  if (instrumentation.length) put(pi, PACKAGE, { instrumentation:
+  if (instrumentation.length) setDeclared(pi, PACKAGE, { instrumentation:
     jarray(yield* all$(instrumentation, (node) => instrumentationInfo$(record, node, flags)), "Landroid/content/pm/InstrumentationInfo;") });
   if (flags & GET_PERMISSIONS) {
     const declared = root.children.filter((n) => n.name === "permission");
-    if (declared.length) put(pi, PACKAGE, { permissions: jarray(yield* all$(declared, (n) => permissionInfo$(record, n, flags)), "Landroid/content/pm/PermissionInfo;") });
+    if (declared.length) setDeclared(pi, PACKAGE, { permissions: jarray(yield* all$(declared, (n) => permissionInfo$(record, n, flags)), "Landroid/content/pm/PermissionInfo;") });
     const requested = requestedPermissions(root), granted: number[] = [];
     for (const name of requested) granted.push(yield checkPermission(name, record.pkg));
     // REQUESTED_PERMISSION_REQUIRED, and REQUESTED_PERMISSION_GRANTED when held
-    if (requested.length) put(pi, PACKAGE, { requestedPermissions: jarray(requested, "Ljava/lang/String;"),
+    if (requested.length) setDeclared(pi, PACKAGE, { requestedPermissions: jarray(requested, "Ljava/lang/String;"),
       requestedPermissionsFlags: Int32Array.from(granted, (result) => 1 | (result === 0 ? 2 : 0)) });
   }
   const features = flags & GET_CONFIGURATIONS ? root.children.filter((n) => n.name === "uses-feature") : [];
-  if (features.length) put(pi, PACKAGE, { reqFeatures: jarray(yield* all$(features, (n) =>
+  if (features.length) setDeclared(pi, PACKAGE, { reqFeatures: jarray(yield* all$(features, (n) =>
     featureInfo$(attrStr(n, "name"), record.flag(n, "required", true) ? 1 : 0, intAttr(n, "glEsVersion", 0))), "Landroid/content/pm/FeatureInfo;") });
   if (flags & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) {
     const certificates: Uint8Array[] = yield record.visibleCertificates();
-    if (flags & GET_SIGNATURES) put(pi, PACKAGE, { signatures: yield* signatureArray$(certificates) });
-    if (flags & GET_SIGNING_CERTIFICATES) put(pi, PACKAGE, { signingInfo: yield* signingInfo$(certificates) });
+    if (flags & GET_SIGNATURES) setDeclared(pi, PACKAGE, { signatures: yield* signatureArray$(certificates) });
+    if (flags & GET_SIGNING_CERTIFICATES) setDeclared(pi, PACKAGE, { signingInfo: yield* signingInfo$(certificates) });
   }
   return pi;
 }
@@ -751,19 +662,20 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   [`queryIntentReceivers(${INTENT}${S}JI)${SLICE}`]: queryFor("receiver", false),
   [`queryIntentContentProviders(${INTENT}${S}JI)${SLICE}`]: queryFor("provider", false),
   [`resolveContentProvider(${S}JI)Landroid/content/pm/ProviderInfo;`]: driven(function* resolveContentProvider$(authority: string, flags: bigint): Gen {
-    const system = SYSTEM_PROVIDERS.find((p) => p.authority === authority);
-    if (system) return yield* systemProviderInfo$(system);
+    if (systemProviders.has(authority)) return yield* systemProviderInfo$(authority);
     const c = resolveProvider(authority, flag(flags));
     return c ? yield* providerInfo$(c, flag(flags), null) : null;
   }),
   [`queryContentProviders(${S}IJ${S})${SLICE}`]: driven(function* queryContentProviders$(process: string | null, uid: number, flags: bigint, metaDataKey: string | null): Gen {
-    const out: JObj[] = process === null ? yield* all$(SYSTEM_PROVIDERS, systemProviderInfo$) : [];
+    const out = process === null && metaDataKey === null ? yield* all$([...systemProviders.keys()], systemProviderInfo$) : [];
+    const own: [number, JObj][] = [];
     for (const owner of packages.values()) for (const c of components(owner, "provider", flag(flags))) {
       if (!authoritiesOf(c.node).length || process !== null && (componentProcess(c) !== process || owner.uid !== uid)) continue;
       if (metaDataKey !== null && !c.node.children.some((n) => n.name === "meta-data" && attrStr(n, "name") === metaDataKey)) continue;
-      out.push(yield* providerInfo$(c, flag(flags), null));
+      own.push([attr(c.node, "initOrder")?.data ?? 0, yield* providerInfo$(c, flag(flags), null)]);
     }
-    return slice(out);
+    // sProviderInitOrderSorter: by descending initOrder, the order ActivityThread installs them in
+    return slice([...out, ...own.sort((a, b) => b[0] - a[0]).map(([, info]) => info)]);
   }),
   [`getComponentEnabledSetting(${CN}I)I`]: driven(function* getComponentEnabledSetting$(c: JObj): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
@@ -854,49 +766,6 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
 } });
 hostStub("package", "webdroid/PackageManagerService");
 
-/** SystemConfig's split permissions (a permission requested below a target SDK implies the newer
- *  one), as the reference AVD lists them through IPermissionManager.getSplitPermissions */
-const permissionName = (name: string) => name.includes(".") ? name : "android.permission." + name;
-const SPLIT_PERMISSIONS: [string, number, string][] = [
-  ["ACCESS_FINE_LOCATION", 10001, "ACCESS_COARSE_LOCATION"], ["WRITE_EXTERNAL_STORAGE", 10001, "READ_EXTERNAL_STORAGE"],
-  ["READ_CONTACTS", 16, "READ_CALL_LOG"], ["WRITE_CONTACTS", 16, "WRITE_CALL_LOG"],
-  ["ACCESS_FINE_LOCATION", 29, "ACCESS_BACKGROUND_LOCATION"], ["ACCESS_COARSE_LOCATION", 29, "ACCESS_BACKGROUND_LOCATION"],
-  ["READ_EXTERNAL_STORAGE", 29, "ACCESS_MEDIA_LOCATION"], ["WRITE_EXTERNAL_STORAGE", 29, "ACCESS_MEDIA_LOCATION"],
-  ...["BLUETOOTH", "BLUETOOTH_ADMIN"].flatMap((name) => ["SCAN", "CONNECT", "ADVERTISE"].map((added): [string, number, string] => [name, 31, "BLUETOOTH_" + added])),
-  ["BODY_SENSORS", 33, "BODY_SENSORS_BACKGROUND"],
-  ...["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"].flatMap((name) => ["AUDIO", "VIDEO", "IMAGES"].map((added): [string, number, string] => [name, 33, "READ_MEDIA_" + added])),
-  ["READ_MEDIA_IMAGES", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"], ["READ_MEDIA_VIDEO", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"],
-  ["ACCESS_MEDIA_LOCATION", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"], ["com.google.android.gms.permission.ACTIVITY_RECOGNITION", 29, "ACTIVITY_RECOGNITION"],
-];
-rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionManager$Stub", methods: {
-  [`checkPermission(${S}${S}${S}I)I`]: (pkg: string, permission: string) => checkPermission(permission, pkg),
-  [`checkUidPermission(I${S}I)I`]: async (uid: number, permission: string) => {
-    for (const record of recordsForUid(uid)) if (await checkPermission(permission, record.pkg) === 0) return 0;
-    return -1;
-  },
-  [`getPermissionInfo(${S}${S}I)Landroid/content/pm/PermissionInfo;`]: driven(function* getPermissionInfo$(name: string, _caller: string, flags: number): Gen {
-    const declared = declaredPermission(name);
-    return declared ? yield* permissionInfo$(declared[0], declared[1], flags) : null;
-  }),
-  // no device policy is installed to revoke anything
-  [`isPermissionRevokedByPolicy(${S}${S}II)Z`]: () => 0,
-  // PermissionManagerServiceImpl answers FLAG_PERMISSION_USER_SET for a permission not held; a
-  // request is never denied here, so no permission carries it
-  [`shouldShowRequestPermissionRationale(${S}${S}II)Z`]: () => 0,
-  "getSplitPermissions()Ljava/util/List;": driven(function* getSplitPermissions$(): Gen {
-    return newArrayList(yield* all$(SPLIT_PERMISSIONS, function* split$([name, target, added]): Gen<JObj> {
-      return yield make("android/content/pm/permission/SplitPermissionInfoParcelable", `(${S}Ljava/util/List;I)V`, permissionName(name), newArrayList([permissionName(added)]), target);
-    }));
-  }),
-  ...noops("addOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V",
-    "removeOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V"),
-} });
-hostStub("permissionmgr", "webdroid/PermissionManagerService");
-// PermissionManager holds a LegacyPermissionManager from construction; none of its identifier
-// checks is answered yet, so each reports itself missing when reached
-rt.register({ name: "webdroid/LegacyPermissionManagerService", ctor: class extends JObj {}, sup: "android/permission/ILegacyPermissionManager$Stub" });
-hostStub("legacy_permission", "webdroid/LegacyPermissionManagerService");
-
 // a single-user device with no managed profile: nothing to reach across
 rt.register({ name: "webdroid/CrossProfileAppsService", ctor: class extends JObj {}, sup: "android/content/pm/ICrossProfileApps$Stub", methods: {
   [`getTargetUserProfiles(${S})Ljava/util/List;`]: () => newArrayList(),
@@ -905,24 +774,3 @@ rt.register({ name: "webdroid/CrossProfileAppsService", ctor: class extends JObj
 } });
 hostStub("crossprofileapps", "webdroid/CrossProfileAppsService");
 
-/** a hosted service as its AIDL interface (Stub.asInterface), made once */
-function hostedInterface(name: string, stub: string, iface: string): () => JObj | Promise<JObj> {
-  let made: JObj | Promise<JObj> | null = null;
-  return () => made ??= after(rt.drive(function* asInterface$(): Gen<JObj> {
-    return yield scall(stub, "asInterface", `(Landroid/os/IBinder;)L${iface};`, yield hostedService(name));
-  }()), (service) => made = service);
-}
-/** what ActivityThread.getPackageManager and getPermissionManager answer */
-export const packageManagerService = hostedInterface("package", "android/content/pm/IPackageManager$Stub", "android/content/pm/IPackageManager");
-export const permissionManagerService = hostedInterface("permissionmgr", "android/permission/IPermissionManager$Stub", "android/permission/IPermissionManager");
-/** ActivityThread.getTopLevelResources: the application's own Resources, or a package's by its APK path */
-export function packageResources(path: string, config: unknown): unknown {
-  const record = [...packages.values()].find((r) => r.path === path);
-  if (appHost && !config && (path === apkPath() || record === currentPackage)) return appHost.jresources;
-  if (!record) return null;
-  return config ? loadResources(path, config) : javaResources(record.res, path);
-}
-/** ContextImpl.getPackageManager's ApplicationPackageManager, over the hosted service */
-export const newPackageManager = driven(function* newPackageManager$(context: JObj): Gen<JObj> {
-  return yield make("android/app/ApplicationPackageManager", "(Landroid/app/ContextImpl;Landroid/content/pm/IPackageManager;)V", context, yield packageManagerService());
-});

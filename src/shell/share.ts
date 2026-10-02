@@ -1,5 +1,6 @@
 import { type JIntent, newIntent } from "../android/intent";
-import { contentResolver, openPfd } from "../android/contentresolver";
+import { serviceContext } from "../android/binder";
+import { parcelFileDescriptorData } from "../android/os";
 import { mkUri } from "../android/net";
 import { vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
@@ -16,16 +17,17 @@ async function sharedFiles(intent: JIntent): Promise<File[]> {
     : await vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.STREAM");
   const entries = stream == null ? [] : multiple ? await toJsArray(stream) : [stream];
   const type: string | null = await vcall(intent, "getType", `()${S}`);
+  const resolver = entries.length ? await vcall(await serviceContext(), "getContentResolver", "()Landroid/content/ContentResolver;") : null;
   const files: File[] = [];
   for (const entry of entries) {
     const uri = (entry as { uri?: string })?.uri;
     if (!uri) continue;
     const parsed = mkUri(uri);
-    const mime = await vcall(contentResolver(), "getType", "(Landroid/net/Uri;)Ljava/lang/String;", parsed) as string | null;
-    const descriptor = await openPfd(parsed, "r");
+    const mime = await vcall(resolver, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", parsed) as string | null;
+    const descriptor = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", parsed, "r");
     try {
       const name = decodeURIComponent(uri.split(/[?#]/, 1)[0].split("/").pop() || "shared-file");
-      files.push(new File([descriptor.bytes as BlobPart], name, { type: mime || type || "application/octet-stream" }));
+      files.push(new File([parcelFileDescriptorData(descriptor)!.bytes as BlobPart], name, { type: mime || type || "application/octet-stream" }));
     } finally { await vcall(descriptor, "close", "()V"); }
   }
   return files;

@@ -57,7 +57,6 @@ export type StepResult = {
   newMissing: string[];
   newPlaceholders: string[];
   nativeRequired: string[];
-  unreadAttrs: string[];
   newErrors: string[];
   web: { url: string | null; title: string; loaded: boolean }[];
   uiTree: UiNode[];
@@ -185,18 +184,12 @@ function installProbe(cfg: ProbeConfig): void {
 
   const busy = (dueBefore: number, stableMs: number): string[] => {
     const now = performance.now();
-    const wd = g.wd, u = wd.uiState, d = wd.mainDbg;
+    const wd = g.wd, d = wd.mainDbg;
     const r: string[] = [];
     if (d.depth > 0) r.push("job:" + d.phase);
     if (d.queued > 0) r.push("queued");
-    if (wd.app()?.stack.length) {
-      if (u.needsDraw) r.push("draw");
-      if (u.needsLayout) r.push("layout");
-      if (u.needsInsets) r.push("insets");
-    }
     if (wd.vsyncScheduled?.()) r.push("vsync");
     if (wd.pendingTransitions?.()) r.push("transition");
-    if (u.animHooks.size) r.push("animators");
     if (wd.yields.pending()) r.push("yields");
     if (inflight) r.push("inflight");
     if (awaitingSockets()) r.push("sockets");
@@ -215,10 +208,6 @@ function installProbe(cfg: ProbeConfig): void {
       return condition.kind === "all" ? matches.every(Boolean) : matches.some(Boolean);
     }
     if (condition.kind === "perf") return (g.wd.perf[condition.counter] ?? 0) >= condition.atLeast;
-    if (condition.kind === "activity") {
-      const activity = g.wd.app()?.stack.at(-1);
-      return activity?.component === condition.component || activity?.constructor?.$i?.name === condition.component;
-    }
     if (condition.kind === "resource" || condition.kind === "resource-absent") {
       const found = nodes.some((node) => node.resId === condition.resId && inScreen(node, screen));
       return condition.kind === "resource" ? found : !found;
@@ -239,7 +228,7 @@ function installProbe(cfg: ProbeConfig): void {
     const samplePresentation = async (): Promise<boolean> => {
       const before = presentation;
       wantSample = true;
-      g.wd.uiState.needsDraw = true;
+      g.wd.redraw();
       if (controlled) await g.wd.testFrame();
       else if (!await nextPresent(500)) { wantSample = false; return false; }
       captured = sampled.get(lastHash) ?? null;
@@ -297,22 +286,35 @@ function installProbe(cfg: ProbeConfig): void {
     const dueBefore = horizonAt + windowMs;
     // the pixel rule samples only past the horizon, as the recorder does past its dwell
     const hashes: number[] = [];
+    let activeSince = 0;
     const seen: Record<string, number> = {};
-    let lastSample = horizonAt - q.intervalMs;
+    let lastSample = horizonAt - q.intervalMs, interval = q.intervalMs;
     lastHash = -1;
     for (;;) {
       const now = performance.now();
-      if (now - lastSample >= q.intervalMs) {
+      if (now - lastSample >= interval) {
         lastSample = now;
         if (now > horizonAt) hashes.push(lastHash);
         if (hashes.length > q.stableFrames * 2) hashes.shift();
         wantSample = true;
+        // each sample is a synchronous GPU readback, which under SwiftShader can take most of a
+        // busy app's main thread: a screen whose every sample differs (a spinner) is sampled less
+        // often until a frame repeats
+        interval = hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs;
       }
       const b = busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
-      // an activity start or finish in flight changes the screen however still it looks now
-      const h = b.includes("transition") ? undefined : stableFrame(hashes, q.stableFrames);
+      // a still screen settles past timers and network, not past work under way: a main-thread job
+      // or its queue (its result is not drawn yet) or an activity start or finish, nor on a real
+      // clock during the first 1.5 s of frames scheduled or threads running (a fling's overscroll
+      // stretch changes no pixels; a background thread's result is not shown yet). A controlled
+      // clock has already run through the window, and a loop that keeps going without changing
+      // the screen (a paused game) is still.
+      activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
+      const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition") ||
+        (!controlled && activeSince > 0 && now - activeSince < 1500);
+      const h = working ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
       if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
       await sleep(25);
@@ -321,7 +323,7 @@ function installProbe(cfg: ProbeConfig): void {
   const capture = () => captured ? encode(captured) : screenPng();
 
   const act = (a: Act, screen: Screen, deadlineMs: number, controlled = false) => performAction({ a, screen, deadlineMs, controlled });
-  const seen = { missing: new Set<string>(), placeholders: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
+  const seen = { missing: new Set<string>(), placeholders: new Set<string>(), native: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
     const out = all.filter((x) => !seen[key].has(x));
     seen[key] = new Set(all);
@@ -365,7 +367,6 @@ function installProbe(cfg: ProbeConfig): void {
       newMissing: fresh("missing", [...wd.rt.missing]),
       newPlaceholders: fresh("placeholders", [...wd.rt.placeholders]),
       nativeRequired: fresh("native", wd.nativeRequirements()),
-      unreadAttrs: fresh("attrs", wd.unreadAttrs()),
       newErrors: fresh("errors", (wd.logs as string[]).filter((l) => l.startsWith("error:"))),
       web: (wd.web() as StepResult["web"]).map(({ url, title, loaded }) => ({ url, title, loaded })),
       uiTree,

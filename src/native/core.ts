@@ -4,7 +4,7 @@
 
 import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi";
 import { perf } from "../perf";
-import { guestNow } from "../guest-clock";
+import { guestNow, wallMillis } from "../guest-clock";
 
 export class NativeFault extends Error {
   pc = 0;
@@ -106,7 +106,7 @@ const instance = await WebAssembly.instantiate(await load(), {
     __indirect_function_table: table,
     now_ms: () => performance.now(),
     guest_ms: guestNow,
-    wall_ms: () => Date.now(),
+    wall_ms: wallMillis,
     js_panic(ptr: number, len: number): never {
       throw new NativeFault("[native] core: " + new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
     },

@@ -5,7 +5,7 @@ import { boxDouble, boxInt } from "../jvm/natives/jbox";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, isBuffer, nativeOrder, remainingBytes, setLimit, setPosition } from "../jvm/natives/jnio";
 import { JMediaFormat } from "./media-format";
 import { JBufferInfo } from "./media";
-import { JSurface, presentSurface, type GlSurface } from "./glview";
+import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";
 import { mainHandler, postTo } from "./mainloop";
 
 type VideoLimits = { maxDimension: number; maxBitrate: number; blockSize: number; maxBlocks: number; blocksPerSecond: number };
@@ -172,7 +172,8 @@ type Output = { kind: "video"; frame: VideoFrame; info: JBufferInfo } | { kind: 
 export class JMediaCodec extends JObj {
   constructor(readonly info: JCodecInfo) { super(); }
   format = new JMediaFormat();
-  surface: JSurface | GlSurface | null = null;
+  /** a Java Surface, or a native ANativeWindow's GlSurface */
+  surface: JObj | GlSurface | null = null;
   callback: unknown = null;
   handler: ReturnType<typeof mainHandler> | null = null;
   frameListener: unknown = null;
@@ -235,7 +236,7 @@ export class JMediaCodec extends JObj {
     this.scheduled.clear(); this.ending = false;
     this.outputs.clear(); this.outputQueue = []; this.nextOutput = 0; this.freeOutputs = []; this.available.clear(); this.announced.clear(); this.inFlight = 0; this.prepend = true; this.error = null; this.wake();
   }
-  configure(format: JMediaFormat, surface: JSurface | GlSurface | null, crypto: unknown, flags: number): void {
+  configure(format: JMediaFormat, surface: JObj | GlSurface | null, crypto: unknown, flags: number): void {
     this.check(); if (crypto || flags) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "encoding and protected media are unavailable");
     this.format = new JMediaFormat(); this.format.values = new Map(format.values); this.surface = surface;
   }
@@ -327,7 +328,7 @@ export class JMediaCodec extends JObj {
     if (output.kind === "video") {
       const epoch = this.epoch;
       const present = () => {
-        const surface = this.surface instanceof JSurface ? this.surface.surf : this.surface;
+        const surface = this.surface instanceof JObj ? surfaceTarget(this.surface) : this.surface;
         if (render && epoch === this.epoch && surface) {
           presentSurface(surface, output.frame);
           const listener = this.frameListener;
@@ -370,7 +371,7 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
   "setCallback(Landroid/media/MediaCodec$Callback;Landroid/os/Handler;)V": function (this: JMediaCodec, callback: unknown, handler: ReturnType<typeof mainHandler> | null) { this.callback = callback; this.handler = handler; },
   "setCallback(Landroid/media/MediaCodec$Callback;)V": function (this: JMediaCodec, callback: unknown) { this.callback = callback; },
   "setOnFrameRenderedListener(Landroid/media/MediaCodec$OnFrameRenderedListener;Landroid/os/Handler;)V": function (this: JMediaCodec, listener: unknown, handler: ReturnType<typeof mainHandler> | null) { this.frameListener = listener; this.frameHandler = handler; },
-  "configure(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V": function (this: JMediaCodec, format: JMediaFormat, surface: JSurface | null, crypto: unknown, flags: number) {
+  "configure(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V": function (this: JMediaCodec, format: JMediaFormat, surface: JObj | null, crypto: unknown, flags: number) {
     this.configure(format, surface, crypto, flags);
   },
   "start()V": function (this: JMediaCodec) { return after(directReady(), () => this.start()); },
@@ -393,7 +394,7 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
   "dequeueOutputBuffer(Landroid/media/MediaCodec$BufferInfo;J)I": function (this: JMediaCodec, info: JBufferInfo, timeout: bigint) { return this.dequeueOutput(info, timeout); },
   "releaseOutputBuffer(IZ)V": function (this: JMediaCodec, index: number, render: number) { this.releaseOutput(index, !!render); },
   "releaseOutputBuffer(IJ)V": function (this: JMediaCodec, index: number, time: bigint) { this.releaseOutput(index, true, time); },
-  "setOutputSurface(Landroid/view/Surface;)V": function (this: JMediaCodec, surface: JSurface) { this.surface = surface; },
+  "setOutputSurface(Landroid/view/Surface;)V": function (this: JMediaCodec, surface: JObj) { this.surface = surface; },
   "detachOutputSurface()V": function (this: JMediaCodec) { this.surface = null; },
   ...noops("setVideoScalingMode(I)V", "setParameters(Landroid/os/Bundle;)V",
     "subscribeToVendorParameters(Ljava/util/List;)V", "unsubscribeFromVendorParameters(Ljava/util/List;)V"),

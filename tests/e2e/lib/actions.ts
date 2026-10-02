@@ -7,17 +7,20 @@ function installEnvironment(cfg: EnvironmentConfig): void {
   if (self !== top) return;
   const g = globalThis as any;
   if (cfg.fixedMs !== null) {
-    const RealDate = g.Date, fixed = cfg.fixedMs;
+    // the wall clock starts at the fixed instant and advances as a device's does: an app timing
+    // itself by currentTimeMillis (a splash's minimum duration) must see time pass
+    const RealDate = g.Date, fixed = cfg.fixedMs - Math.floor(performance.now());
+    const now = () => fixed + Math.floor(performance.now());
     const Pinned = function (this: unknown, ...a: unknown[]) {
-      if (!new.target) return new RealDate(fixed).toString();
-      return a.length ? new (RealDate as any)(...a) : new RealDate(fixed);
+      if (!new.target) return new RealDate(now()).toString();
+      return a.length ? new (RealDate as any)(...a) : new RealDate(now());
     } as any;
     Object.setPrototypeOf(Pinned, RealDate);
     Pinned.prototype = RealDate.prototype;
-    Pinned.now = () => fixed;
+    Pinned.now = now;
     g.Date = Pinned;
-    // java.util.Random seeds from Date.now() ^ Math.random(): pin both and games replay the same draws
-    let seed = fixed >>> 0;
+    // a seeded Math.random: games replay the same draws
+    let seed = cfg.fixedMs >>> 0;
     Math.random = () => {
       seed = (seed + 0x6d2b79f5) | 0;
       let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);

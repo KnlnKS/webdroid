@@ -1,11 +1,10 @@
 // KeyEvent's and KeyCharacterMap's natives: InputEventLookup's key code labels, and libinput's
 // KeyCharacterMap (KeyCharacterMap.cpp) over the reference device's .kcm files behind
-// KeyCharacterMap's mPtr. KeyEvent, its DispatcherState and KeyCharacterMap run from AOSP bytecode;
-// the helpers below build and route events for the TS view stack through their Java API.
+// KeyCharacterMap's mPtr. KeyEvent, its DispatcherState and KeyCharacterMap run from AOSP bytecode.
 
-import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, declaredField } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { after, newObj, scall } from "../jvm/natives/jlang";
 import { ownedHandle, deref } from "./handles";
 import { readInt, writeInt, type JParcel } from "./parcel";
 import { keyCodes } from "./keycodes";
@@ -13,7 +12,6 @@ import { nextId } from "./motionevent";
 import { uptimeMillis } from "../guest-clock";
 
 const KE = "android/view/KeyEvent", KCM = "android/view/KeyCharacterMap";
-export const KEYCODE_BACK = 4;
 const SOURCE_KEYBOARD = 0x101;
 const labels = [...keyCodes.keys()];
 
@@ -210,7 +208,7 @@ function sameMap(a: KeyMap, b: KeyMap): boolean {
 }
 
 /** NativeKeyCharacterMap: a device's id and its map, or no map for obtainEmptyMap's */
-export class NativeKeyCharacterMap { constructor(readonly deviceId: number, readonly map: KeyMap | null) {} }
+class NativeKeyCharacterMap { constructor(readonly deviceId: number, readonly map: KeyMap | null) {} }
 const kcmAt = (h: bigint) => deref<NativeKeyCharacterMap>(h);
 /** a Java KeyCharacterMap over `map` for device `deviceId` */
 export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): Promise<JObj> =>
@@ -331,53 +329,3 @@ rt.registerJnis(KE, {
   "nativeKeyCodeToString(I)Ljava/lang/String;": (code: number) => labels[code] ?? null,
   "nativeKeyCodeFromString(Ljava/lang/String;)I": (label: string) => keyCodes.get(label) ?? 0,
 });
-
-// ── the TS view stack's side
-let keyFields: [string, string] | null = null;
-const fields = () => keyFields ??= [declaredField(KE, "mKeyCode"), declaredField(KE, "mAction")];
-export const keyCodeOf = (ev: object): number => (ev as Record<string, number>)[fields()[0]];
-export const keyActionOf = (ev: object): number => (ev as Record<string, number>)[fields()[1]];
-
-let dispatcherState: JObj | null = null;
-/** the window's KeyEvent.DispatcherState, shared by every view in it (View.getKeyDispatcherState) */
-export const keyDispatcherState = (): JObj | Promise<JObj> => dispatcherState ?? after(newObj(`${KE}$DispatcherState`, "()V") as Promise<JObj>, (s: JObj) => dispatcherState = s);
-
-const M_dispatchKey = `(L${KE};)Z`;
-const newKeyEvent = (downTime: bigint, eventTime: bigint, action: number, code: number): Promise<JObj> =>
-  newObj(KE, "(JJIIIIIIII)V", downTime, eventTime, action, code, 0, 0, -1, 0, 0, SOURCE_KEYBOARD);
-/** A BACK press as ViewRootImpl delivers it to a window's callback: DOWN, then UP */
-export const pressBackKey = driven(function* pressBackKey(callback: JObj): Gen {
-  const downTime = BigInt(Math.floor(uptimeMillis()));
-  yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, yield newKeyEvent(downTime, downTime, 0, KEYCODE_BACK));
-  yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, yield newKeyEvent(downTime, BigInt(Math.floor(uptimeMillis())), 1, KEYCODE_BACK));
-});
-const M_dispatch = `(L${KE}$Callback;L${KE}$DispatcherState;Ljava/lang/Object;)Z`;
-/** KeyEvent.dispatch to `receiver` with the window's dispatcher state, as Activity, Dialog and View do */
-export const dispatchKeyTo = driven(function* dispatchKeyTo(ev: JObj, receiver: JObj, attached = true): Gen {
-  return yield vcall(ev, "dispatch", M_dispatch, receiver, attached ? yield keyDispatcherState() : null, receiver);
-});
-/** The tail of Activity's and Dialog's dispatchKeyEvent: the window's view tree first, then
- *  KeyEvent.dispatch to the callback itself. BACK finishes the window's action mode before its
- *  views see it (DecorView.superDispatchKeyEvent). */
-export const dispatchWindowKey = driven(function* dispatchWindowKey(callback: JObj & { actionMode?: JObj | null }, root: JObj | null, ev: JObj): Gen {
-  if (keyCodeOf(ev) === KEYCODE_BACK && callback.actionMode) {
-    if (keyActionOf(ev) === 1) yield vcall(callback.actionMode, "finish", "()V");
-    return 1;
-  }
-  if (root && (yield vcall(root, "dispatchKeyEvent", M_dispatchKey, ev))) return 1;
-  return yield dispatchKeyTo(ev, callback);
-});
-/** Activity's and Dialog's own onKeyDown/onKeyUp: a BACK DOWN is tracked, and its tracked,
- *  uncanceled UP is onBackPressed */
-export const backKeyMethods = {
-  "onKeyDown(ILandroid/view/KeyEvent;)Z": driven(function* (code: number, ev: JObj): Gen {
-    if (code !== KEYCODE_BACK) return 0;
-    yield vcall(ev, "startTracking", "()V");
-    return 1;
-  }),
-  "onKeyUp(ILandroid/view/KeyEvent;)Z": driven(function* (this: JObj, code: number, ev: JObj): Gen {
-    if (code !== KEYCODE_BACK || !(yield vcall(ev, "isTracking", "()Z")) || (yield vcall(ev, "isCanceled", "()Z"))) return 0;
-    yield vcall(this, "onBackPressed", "()V");
-    return 1;
-  }),
-};

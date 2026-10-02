@@ -7,7 +7,7 @@ import { lookupHost } from "./host";
 import { ndkInit, nativeWindowFor } from "./libandroid";
 import { eglInit } from "./egl";
 import { mem } from "./mem";
-import type { GlSurface } from "../android/glview";
+import type { GlSurface } from "../android/glsurface";
 
 test("Java and NDK code share one thread looper without preparing unrelated threads", async () => {
   setA64(true); ndkInit();
@@ -27,7 +27,7 @@ test("Java and NDK code share one thread looper without preparing unrelated thre
 
 test("buffer geometry sizes EGL buffers while the window keeps its default size", async () => {
   setA64(true); ndkInit(); eglInit();
-  const cpu = new Cpu(new JThread(), "geometry-test"), surface: GlSurface = { view: null, width: 2160, height: 1080, present: null, frames: 0 };
+  const cpu = new Cpu(new JThread(), "geometry-test"), surface: GlSurface = { width: 2160, height: 1080, present: null, frames: 0 };
   const window = nativeWindowFor(surface), out = mem.malloc(8);
   const call = (name: string, lib: string, args: number[]) => cpu.call(lookupHost(name, lib)!, args);
   try {

@@ -4,7 +4,7 @@
 // rather than implied by import order in src/natives.ts. HostStubGen drives the same
 // decision for Ravenwood from a policy file, for the same reason.
 //
-// Empty keeps every native spec. Adding a prefix moves that subtree onto
+// Adding a prefix moves that subtree onto
 // vendor/aosp/framework.jar and withholds our native spec for it, which is what makes a cut
 // one line and a measurement rather than a rewrite.
 //
@@ -14,27 +14,29 @@
 // exactly this reason: its super is java/lang/Object, which has no fields.
 
 /** `?bytecode=android/graphics/text/,android/graphics/fonts/` (headless: WEBDROID_BYTECODE) cuts
- *  those prefixes over for one page load, so the same bundle can be A/B'd against itself — by the
- *  e2e driver, by a comparison script, or by hand — without an edit and a rebuild. */
+ *  those prefixes over too for one page load, so a further cut can be A/B'd against the same bundle
+ *  — by the e2e driver, by a comparison script, or by hand — without an edit and a rebuild. */
 const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode")
   : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
 /** Stage D's coupled set: the application framework (ActivityThread, Activity, ContextImpl), the
  *  view stack, windows and the framework side of android.content, over TS system services.
  *  GLSurfaceView is a SurfaceView and GestureOverlayView a FrameLayout, so they go with the view
- *  stack; GLSurfaceView's GLThread drives EGL10. */
+ *  stack; GLSurfaceView's GLThread drives EGL10. Services outside android/app (tiles, media
+ *  browsers, route providers) are Services, so they go with it. */
 const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/content/", "android/window/", "android/transition/",
   "android/preference/", "android/inputmethodservice/", "android/accessibilityservice/", "com/android/internal/policy/",
-  "android/opengl/GLSurfaceView", "android/gesture/"];
+  "android/opengl/GLSurfaceView", "android/gesture/", "android/service/quicksettings/", "android/service/media/",
+  "android/media/MediaRoute2ProviderService"];
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
- *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). `stage-d`
- *  names the STAGE_D group. */
-export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean)
-  .flatMap((p) => p === "stage-d" ? STAGE_D : [p]) : [];
+ *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). STAGE_D is
+ *  always cut over. */
+export const BYTECODE: string[] = [...STAGE_D, ...(fromUrl ?? "").split(",").map((s) => s.trim()).filter(Boolean)];
 
-/** whether AOSP's ActivityThread runs this process, over the TS system services (Stage D) */
-export const stageD = (): boolean => isBytecode("android/app/ActivityThread");
+
+/** under Stage D's static cut, which withholds a TS spec in every load */
+export const isStageD = (name: string): boolean => STAGE_D.some((p) => name.startsWith(p));
 
 export function isBytecode(name: string): boolean {
   for (const p of BYTECODE) if (name.startsWith(p) || p.endsWith("$") && name === p.slice(0, -1)) return true;

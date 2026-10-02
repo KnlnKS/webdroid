@@ -3,24 +3,20 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, replayingCanvas, type Ctx2D, type DisplayList, type Recorder } from "./recording";
+import { isRecording, nestedRecording, recordOrRun, replay, type Ctx2D, type DisplayList, type Recorder } from "./recording";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
-import { linkInit } from "../jvm/natives/jlang";
-import { NativePath, inversePath, nativePathOf } from "./path";
+import { NativePath, inversePath } from "./path";
 import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { windowRoot } from "./rendernode";
 import { type JRect, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
 import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
-/** what a view's drawn text is recorded on: each run and the window point it landed at (x, y pairs) */
-type DrawnTextOwner = { drawnText: string[] | null; drawnTextPoints: Float32Array | null };
 type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
 type RectLike = { left: number; top: number; right: number; bottom: number };
 /** an open layer: the save count its restore closes, the context drawn into before it, and the close */
@@ -34,7 +30,7 @@ const NO_DASH: number[] = [];
 const MATRIX_CLIP = 3;
 
 /** SkiaCanvas: a 2D context and the state Canvas2D does not expose — the save count, the device
- *  clip bounds, open layers — plus the drawn-text record the harness locates text by */
+ *  clip bounds, open layers */
 export class NativeCanvas {
   ctx!: Ctx2D;
   w = 0; h = 0;
@@ -58,8 +54,6 @@ export class NativeCanvas {
   private filtered: NativePaint | null = null;
   /** the Java canvas TS made over this one, for a hardware canvas drawing a software layer */
   private twin: JavaCanvas | null = null;
-  semanticOwner: DrawnTextOwner | null = null;
-  semanticBase: DOMMatrix | null = null;
 
   static over(ctx: Ctx2D, w = ctx.canvas.width, h = ctx.canvas.height, bmp: NativeBitmap | null = null): NativeCanvas {
     const nc = new NativeCanvas();
@@ -81,17 +75,6 @@ export class NativeCanvas {
     copyPaint(p, out);
     out.flags = (p.flags & ~f.clear) | f.set;
     return out;
-  }
-
-  semanticTransform(): DOMMatrix {
-    const m = this.ctx.getTransform();
-    return this.semanticBase ? this.semanticBase.multiply(m) : m;
-  }
-  /** a text run for the harness to find, on the view drawing it; recorded text belongs to the
-   *  view whose canvas replays it */
-  recordText(text: string, x: number, y: number, size: number, align: number) {
-    if (isRecording(this.ctx)) recordOrRun(this.ctx, (ctx) => noteText(replayingCanvas() ?? this, ctx, text, x, y, size, align));
-    else noteText(replayingCanvas() ?? this, this.ctx, text, x, y, size, align);
   }
 
   prep(p: NativePaint, stroke: boolean) {
@@ -479,33 +462,10 @@ export class NativeCanvas {
     const twin = canvasOf(peer);
     twin.setTarget(this.ctx, this.w, this.h, null);
     twin.cl = this.cl; twin.ct = this.ct; twin.cr = this.cr; twin.cb = this.cb; twin.poly = this.poly;
-    twin.semanticBase = this.semanticBase;
     return peer;
   }
 }
 const paintScratch = new NativePaint();
-/** the run's anchor in window coordinates: `ctx`'s matrix, then the canvas's own placement */
-function noteText(canvas: NativeCanvas, ctx: Ctx2D, text: string, x: number, y: number, size: number, align: number) {
-  const owner = canvas.semanticOwner;
-  if (!owner) return;
-  const i = (owner.drawnText ??= []).push(text) - 1;
-  let points = owner.drawnTextPoints;
-  if (!points || points.length < (i + 1) * 2) {
-    const next = new Float32Array(Math.max(8, (i + 1) * 4));
-    if (points) next.set(points);
-    owner.drawnTextPoints = points = next;
-  }
-  const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
-  const m = ctx.getTransform(), b = canvas.semanticBase;
-  let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
-  if (b) {
-    const px = sx;
-    sx = b.a * px + b.c * sy + b.e;
-    sy = b.b * px + b.d * sy + b.f;
-  }
-  points[i * 2] = sx;
-  points[i * 2 + 1] = sy;
-}
 const pathBox: RectLike = { left: 0, top: 0, right: 0, bottom: 0 };
 /** clip everything away: the context's clip only narrows, so it is intersected with a pixel off the target */
 function clipNothing(ctx: Ctx2D) {
@@ -578,46 +538,6 @@ function canvasPeer(nc: NativeCanvas, recording: boolean): JavaCanvas {
 /** a Java Canvas drawing straight into `ctx`, a RecordingCanvas when `accelerated` */
 export function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): JavaCanvas {
   return canvasPeer(NativeCanvas.over(ctx, w, h), accelerated);
-}
-const windows = new Map<Ctx2D, JavaCanvas>();
-/** the RecordingCanvas a hardware-accelerated window draws its views through, one per target and
- *  reset for each frame */
-export function windowCanvas(ctx: Ctx2D, w: number, h: number): JavaCanvas {
-  let peer = windows.get(ctx);
-  if (!peer) windows.set(ctx, peer = canvasPeer(new NativeCanvas(), true));
-  const nc = canvasOf(peer), f = recordingField(), p = peer as Record<string, unknown>;
-  nc.setTarget(ctx, w, h, null);
-  nc.semanticOwner = nc.semanticBase = null;
-  p[f.width] = w; p[f.height] = h;
-  // what RenderNodeAnimator and AnimatedVectorDrawable run on and check is attached
-  p[f.node] = windowRoot();
-  return peer;
-}
-/** View's constructor tells Canvas the target SDK: what restore underflow, setBitmap and clip ops
- *  may do depends on it */
-export async function setCanvasTargetSdk(target: number): Promise<void> {
-  const info = await linkInit("android/graphics/Canvas"), statics = info.ctor as unknown as Record<string, unknown>;
-  statics[info.staticFieldTable.get("sCompatibilityRestore:Z")!] = +(target < 23);
-  statics[info.staticFieldTable.get("sCompatibilitySetBitmap:Z")!] = +(target < 26);
-  statics[info.staticFieldTable.get("sCompatibilityVersion:I")!] = target;
-  // the window's peer is made without a constructor: its class's statics (MAX_BITMAP_SIZE) must be set
-  await linkInit("android/graphics/RecordingCanvas");
-}
-
-let outlineFields: { mode: string; rect: string; radius: string; path: string } | null = null;
-/** intersect the canvas's clip with a Java Outline's shape (what View.setClipToOutline asks); an
- *  empty outline does not clip */
-export function clipToOutline(nc: NativeCanvas, outline: object): void {
-  const f = outlineFields ??= {
-    mode: declaredField("android/graphics/Outline", "mMode"), rect: declaredField("android/graphics/Outline", "mRect"),
-    radius: declaredField("android/graphics/Outline", "mRadius"), path: declaredField("android/graphics/Outline", "mPath"),
-  };
-  const o = outline as Record<string, unknown>, mode = o[f.mode];
-  if (!mode) return;
-  // MODE_PATH, else MODE_ROUND_RECT
-  if (mode === 2) { nc.clipPath(nativePathOf(o[f.path] as object), false); return; }
-  const r = o[f.rect] as JRect;
-  nc.clipRoundRect(r.left, r.top, r.right, r.bottom, o[f.radius] as number);
 }
 export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: number, radius: number) {
   ctx.beginPath();
@@ -854,34 +774,3 @@ rt.registerJnis("android/graphics/DrawFilter", { "nativeDestructor(J)V": release
 const emptyCtx = () => new OffscreenCanvas(1, 1).getContext("2d")!;
 /** SkiaCanvas over a bitmap's raster, or over none */
 export const bitmapCanvas = (b: NativeBitmap | null): NativeCanvas => b ? NativeCanvas.over(b.context(), b.w, b.h, b) : NativeCanvas.over(emptyCtx(), 0, 0);
-
-// ── drawn text: where each run landed, which the harness looks text up by ──
-export function locateDrawnText(owner: DrawnTextOwner, text: string, width: number, height: number): { x: number; y: number } | null {
-  const runs = owner.drawnText;
-  const points = owner.drawnTextPoints;
-  const count = runs?.length ?? 0;
-  const normalize = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-  const want = normalize(text);
-  if (!runs || !points || !count || !want) return null;
-
-  let best = 0, bestIndex = -1;
-  const score = (candidate: string) => candidate === want ? 3 : candidate.startsWith(want) ? 2 : candidate.includes(want) ? 1 : 0;
-  const consider = (candidate: string, index: number) => {
-    const s = score(candidate);
-    const x = points[index * 2], y = points[index * 2 + 1];
-    if (s > best && Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x < width && y >= 0 && y < height) {
-      best = s;
-      bestIndex = index;
-    }
-  };
-
-  for (let i = 0; i < count; i++) consider(normalize(runs[i]), i);
-  for (let i = 0; i < count; i++) {
-    let phrase = normalize(runs[i]);
-    for (let j = i + 1; j < count; j++) {
-      phrase += " " + normalize(runs[j]);
-      consider(phrase, i);
-    }
-  }
-  return bestIndex < 0 ? null : { x: points[bestIndex * 2], y: points[bestIndex * 2 + 1] };
-}

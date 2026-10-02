@@ -1,4 +1,4 @@
-// bun tests/fixtures/remote-provider.ts, with WEBDROID_BYTECODE=stage-d: another process's provider as the
+// bun tests/fixtures/remote-provider.ts: another process's provider as the
 // activity manager hands it out and AOSP's ContentProviderProxy reaches it, as one JSON object. The
 // "other process" is this realm behind a loopback binder transport that renames its binders' pid.
 const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -7,6 +7,7 @@ const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
 const { newObj, vcall } = await import(W + "/src/jvm/natives/jlang");
 const { setAppHost } = await import(W + "/src/android/apphost");
+const { testAppHost } = await import(W + "/tests/java");
 const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
 const { Resources } = await import(W + "/src/android/res");
 const { TV } = await import(W + "/src/android/axml");
@@ -50,7 +51,7 @@ rt.linkNatives();
 await startMainLooper();
 const client = install(CLIENT), owner = install(OWNER, [{ name: "provider", attrs: [attr("name", ".Data"), attr("authorities", AUTHORITY), attr("exported", "true")], children: [] }]);
 setProcessIdentity(HERE, client.uid); setProcessName(CLIENT);
-setAppHost({ pkg: CLIENT, application: null, res: client.res, splits: [], currentActivity: () => null, activities: () => [] } as never);
+setAppHost(testAppHost(client));
 
 // the owner's process: its published binder, reached through the broker's transport with the
 // caller's identity; binders it hands back are its own, so they cross as REMOTE's

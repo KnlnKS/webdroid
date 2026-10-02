@@ -11,7 +11,7 @@ import { reportUncaught } from "./os";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { hostStub } from "./binder";
-import { permissionGranted } from "./context";
+import { permissionGranted } from "./permissions";
 import { packages } from "./packages";
 import { appHost } from "./apphost";
 import type { LocationEvent, LocationFix } from "../shell/geolocation";
@@ -144,6 +144,8 @@ async function providerList(criteria: JObj | null, enabledOnly: number): Promise
 
 const LISTENER = "Landroid/location/ILocationListener;";
 rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj {}, sup: "android/location/ILocationManager$Stub", methods: {
+  // the browser's geolocation takes no provider commands (aiding data, time injection)
+  "sendExtraCommand(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)V": () => {},
   "getAllProviders()Ljava/util/List;": () => newArrayList(providers()),
   "getProviders(Landroid/location/Criteria;Z)Ljava/util/List;": async (criteria: JObj | null, enabledOnly: number) =>
     newArrayList(await providerList(criteria, enabledOnly)),

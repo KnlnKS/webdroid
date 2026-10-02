@@ -1,33 +1,13 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
-import { JActivity, JApplication, JService } from "../src/android/app";
-import { appHost, setAppHost } from "../src/android/apphost";
-import { packages, PackageRecord } from "../src/android/packages";
-import { Resources } from "../src/android/res";
-import { TV, type XmlAttr } from "../src/android/axml";
-import { mangleMethod } from "../src/jvm/abi";
+import { TV } from "../src/android/axml";
 import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
-import { loadFrameworkJar, loadLibcore, appResources } from "./java";
+import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
-import { PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
+import { setProcessIdentity, setProcessName } from "../src/android/os";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
-
-describe("activity-main-queue", () => {
-  rt.linkNatives();
-  beforeAll(async () => { await loadLibcore(); await loadFrameworkJar(); rt.linkNatives(); });
-
-  test("Activity.runOnUiThread runs inline in the main job", async () => {
-    const events: string[] = [];
-    const runnable = { [mangleMethod("run", "()V")]: () => { events.push("run"); } };
-    await onMain(async () => {
-      await vcall(new JActivity(), "runOnUiThread", "(Ljava/lang/Runnable;)V", runnable);
-      events.push("after");
-    });
-    expect(events).toEqual(["run", "after"]);
-  });
-});
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
@@ -156,14 +136,14 @@ describe("looper", () => {
   });
 });
 
+// one app process for the file, declaring the job service below
+const PKG = "org.webdroid.test.os";
+const app = async () => bootApp(await packageRecord(PKG, { application: [{ name: "service", attrs: [{ name: "name", str: ".Worker", ns: "", resId: 0, type: TV.STRING, data: 0 }], children: [] }] }));
+
 describe("job-scheduler", () => {
   rt.linkNatives();
   test("enqueued work reaches a bound service's JobServiceEngine and finishing unbinds it", async () => {
-    const pkg = "test.jobs", events: string[] = [];
-    const attr = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
-    packages.set(pkg, new PackageRecord({ name: "manifest", attrs: [attr("package", pkg)], children: [
-      { name: "application", attrs: [], children: [{ name: "service", attrs: [attr("name", ".Worker")], children: [] }] },
-    ] }, new Resources(null, {}), "/t.apk", 12345, async () => []));
+    const events: string[] = [];
     rt.register({ name: "test/jobs/Engine", ctor: class extends (rt.link("android/app/job/JobServiceEngine").ctor as new () => JObj) {},
       sup: "android/app/job/JobServiceEngine", methods: {
         "onStartJob(Landroid/app/job/JobParameters;)Z": async (params: JObj) => {
@@ -174,28 +154,22 @@ describe("job-scheduler", () => {
           return 1;
         },
       } });
-    rt.register({ name: "test/jobs/Worker", ctor: class extends JService {}, sup: "android/app/Service", methods: {
-      "<init>()V": function () {},
-      "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": async function (this: JService) {
+    rt.register({ name: PKG.replace(/\./g, "/") + "/Worker", ctor: class extends (rt.link("android/app/Service").ctor as new () => JObj) {}, sup: "android/app/Service", methods: {
+      "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": async function (this: JObj) {
         return vcall(await newObj("test/jobs/Engine", "(Landroid/app/Service;)V", this), "getBinder", "()Landroid/os/IBinder;");
       },
       "onDestroy()V": () => { events.push("destroy"); },
     } });
-    const previous = appHost, app = new JApplication(), host = { pkg, application: app } as never;
-    Reflect.set(app, "$host", host); setAppHost(host);
-    try {
-      await loadFrameworkJar();
-      const scheduler = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "jobscheduler");
-      const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, pkg + ".Worker");
-      const info = await vcall(await newObj("android/app/job/JobInfo$Builder", "(ILandroid/content/ComponentName;)V", 7, component), "build", "()Landroid/app/job/JobInfo;");
-      for (const action of ["a", "b"]) {
-        const item = await newObj("android/app/job/JobWorkItem", "(Landroid/content/Intent;)V", await newObj("android/content/Intent", "(Ljava/lang/String;)V", action));
-        await vcall(scheduler, "enqueue", "(Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I", info, item);
-      }
-      for (let i = 0; i < 50 && !events.includes("destroy"); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(events).toEqual(["a", "b", "destroy"]);
-      expect(await vcall(scheduler, "getPendingJob", "(I)Landroid/app/job/JobInfo;", 7)).toBeNull();
-    } finally { setAppHost(previous); packages.delete(pkg); }
+    const scheduler = await vcall(await app(), "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "jobscheduler");
+    const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", PKG, PKG + ".Worker");
+    const info = await vcall(await newObj("android/app/job/JobInfo$Builder", "(ILandroid/content/ComponentName;)V", 7, component), "build", "()Landroid/app/job/JobInfo;");
+    for (const action of ["a", "b"]) {
+      const item = await newObj("android/app/job/JobWorkItem", "(Landroid/content/Intent;)V", await newObj("android/content/Intent", "(Ljava/lang/String;)V", action));
+      await vcall(scheduler, "enqueue", "(Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I", info, item);
+    }
+    for (let i = 0; i < 50 && !events.includes("destroy"); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(events).toEqual(["a", "b", "destroy"]);
+    expect(await vcall(scheduler, "getPendingJob", "(I)Landroid/app/job/JobInfo;", 7)).toBeNull();
   });
 });
 
@@ -248,21 +222,16 @@ describe("process-user-handle", () => {
 
 describe("environment", () => {
   rt.linkNatives();
-  // framework-res, for the volume's description
-  beforeAll(() => appResources(new Resources(null, {}), "p"));
+  beforeAll(app);
 
   test("AOSP's Environment finds shared storage through the storage service's volume", async () => {
-    const previous = appHost;
-    setAppHost({ pkg: "p" } as never);
-    try {
-      const env = "android/os/Environment", dir = await scall(env, "getExternalStorageDirectory", "()Ljava/io/File;");
-      expect(await vcall(dir, "getPath", "()Ljava/lang/String;")).toBe("/sdcard");
-      expect(await scall(env, "getExternalStorageState", "()Ljava/lang/String;")).toBe("mounted");
-      expect(await scall(env, "isExternalStorageEmulated", "()Z")).toBe(1);
-      expect(await scall(env, "isExternalStorageRemovable", "()Z")).toBe(0);
-      const files: JObj[] = await scall(env, "buildExternalStorageAppFilesDirs", "(Ljava/lang/String;)[Ljava/io/File;", "p");
-      expect(await vcall(files[0], "getPath", "()Ljava/lang/String;")).toBe("/sdcard/Android/data/p/files");
-    } finally { setAppHost(previous); }
+    const env = "android/os/Environment", dir = await scall(env, "getExternalStorageDirectory", "()Ljava/io/File;");
+    expect(await vcall(dir, "getPath", "()Ljava/lang/String;")).toBe("/sdcard");
+    expect(await scall(env, "getExternalStorageState", "()Ljava/lang/String;")).toBe("mounted");
+    expect(await scall(env, "isExternalStorageEmulated", "()Z")).toBe(1);
+    expect(await scall(env, "isExternalStorageRemovable", "()Z")).toBe(0);
+    const files: JObj[] = await scall(env, "buildExternalStorageAppFilesDirs", "(Ljava/lang/String;)[Ljava/io/File;", PKG);
+    expect(await vcall(files[0], "getPath", "()Ljava/lang/String;")).toBe(`/sdcard/Android/data/${PKG}/files`);
   });
 });
 
@@ -383,20 +352,6 @@ describe("stats-event", () => {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     expect(view.getBigInt64(19, true)).toBe(-1n);
     expect(view.getBigInt64(27, true)).toBe(9223372036854775807n);
-  });
-});
-
-describe("system-health", () => {
-  rt.linkNatives();
-
-  test("system health exposes an empty UID snapshot without invented measurements", async () => {
-    const context = rt.make("android/content/Context");
-    const manager = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "systemhealth");
-    expect(manager).not.toBeNull();
-    const snapshot = await vcall(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID);
-    expect(await vcall(snapshot, "getDataType", "()Ljava/lang/String;")).toBe("UidHealthStats");
-    expect(await vcall(snapshot, "hasMeasurement", "(I)Z", 10001)).toBe(0);
-    await expect(vcallAsync(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID + 1)).rejects.toBeDefined();
   });
 });
 

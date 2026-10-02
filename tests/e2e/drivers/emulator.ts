@@ -125,7 +125,7 @@ export async function deviceInfo(): Promise<CaptureScreen & { fingerprint: strin
   const s = /(\d+)x(\d+)\s*$/.exec(size.trim().split("\n").pop() ?? "");
   const d = /(\d+)\s*$/.exec(density.trim().split("\n").pop() ?? "");
   const display = displays.split(/Display: mDisplayId=0\b/)[1]?.split(/Display: mDisplayId=/)[0];
-  const status = /InsetsSource type=ITYPE_STATUS_BAR frame=\[0,0\]\[\d+,(\d+)\]/.exec(display ?? "");
+  const status = /InsetsSource (?:type=ITYPE_STATUS_BAR|id=\S+ type=statusBars) frame=\[0,0\]\[\d+,(\d+)\]/.exec(display ?? "");
   if (!s || !d || +s[1] <= 0 || +s[2] <= 0 || +d[1] <= 0 || !status)
     throw new Error("Cannot read the Android reference display dimensions and status inset");
   return {

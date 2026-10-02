@@ -31,13 +31,13 @@ export function replay(ctx: Ctx2D, ops: DisplayList): void {
 }
 export const displayListLength = (ops: DisplayList): number => ops.length / 3;
 
-/** The canvas the display lists being replayed draw for. Replay is synchronous and nests (a node
- *  in a node, a layer's content, an effect's input), so one variable scoped by replayWithSemantics
- *  names it for every target a replay reaches. */
+/** The canvas the display lists being replayed draw for, whose clip a replayed functor takes.
+ *  Replay is synchronous and nests (a node in a node, a layer's content, an effect's input), so one
+ *  variable scoped by replayFor names it for every target a replay reaches. */
 let replaying: NativeCanvas | null = null;
 export function replayingCanvas(): NativeCanvas | null { return replaying; }
-/** `draw`, with the text that what it replays recorded attributed to `canvas` */
-export function replayWithSemantics(canvas: NativeCanvas, draw: () => void): void {
+/** `draw`, replaying for `canvas` */
+export function replayFor(canvas: NativeCanvas, draw: () => void): void {
   const previous = replaying;
   replaying = canvas;
   try { draw(); }

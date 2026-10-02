@@ -1,5 +1,5 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, construct, vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, construct, scall, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
 import { JParcel } from "./parcel";
 import { jarray, mangleMethod, i8, u8 } from "../jvm/abi";
@@ -55,6 +55,16 @@ export function importBinder(handle: BinderHandle | null): JObj | null {
   }
   return proxy;
 }
+/** a binder system_server owns, as a client process holds it: a proxy, which AOSP tells apart
+ *  from a local Binder (ActivityThread relaunches only activities whose token is not local) */
+export function systemToken(): JObj {
+  rt.link("android/os/BinderProxy");
+  const proxy = new JBinderProxy(), id = nextId++;
+  proxy.handle = { pid: PROCESS_PID, id };
+  // a parcel written and read back here (an Intent's extras) imports the same token
+  local.set(id, proxy);
+  return proxy;
+}
 class JFileWriter extends JBinder { pfd: JObj | null = null; }
 function exportObject(o: unknown): BinderHandle | FileHandle | null {
   const file = parcelFileDescriptorData(o);
@@ -89,6 +99,12 @@ const SELF_TOKEN = -1n;
 const strictModePolicies = new WeakMap<JThread, number>();
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+/** a cross-process transport's call before the broker connects it */
+export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
+/** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
+export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+export const enforceCallingOrSelfPermission = async (permission: string, message: string | null): Promise<void> =>
+  vcall(await serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */

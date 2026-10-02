@@ -4,10 +4,13 @@
 // querying the package manager themselves. The manifest walk (providerNodes, matchesAction,
 // authoritiesOf) lives with PackageManager in pm.ts; DocumentsContract reads it from there.
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, driven, getDeclared, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { isDocumentsProvider, field } from "./pm";
-import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
+import { isDocumentsProvider } from "./pm";
+import { serviceContext } from "./binder";
+import { startActivityFor } from "./server/atm";
+import { thisApp } from "./server/am";
+import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
 
 const S = "Ljava/lang/String;";
 const typeOf = (intent: JIntent): Promise<string | null> => vcall(intent, "getType", `()${S}`);
@@ -16,7 +19,6 @@ import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
 import { isMediaUri, mediaDelete, mediaFlag } from "./mediastore";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
-import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, pickDocuments, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
@@ -71,7 +73,7 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   if (handler) return handler(target);
   // AOSP's chooser lists the activities that handle the target; with none it only says so, and
   // the user dismissing it is RESULT_CANCELED
-  const pm = await vcall(appHost!.application, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+  const pm = await vcall(await serviceContext(), "getPackageManager", "()Landroid/content/pm/PackageManager;");
   const matches = await toJsArray(await vcall(pm, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", target, 0x10000));
   if (!matches.length) return null;
   const labels = await Promise.all(matches.map(async (m) => csText(await vcall(m, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm))));
@@ -79,10 +81,10 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   const choice = await (await import("../shell/share")).chooseActivity(title == null ? frameworkString("chooseActivity") ?? "" : await csText(title), labels);
   if (choice === null) return null;
   const chosen: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", target);
-  const activity = field<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
+  const activity = getDeclared<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
   await vcall(chosen, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(
-    field<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), field<string>(activity, "android/content/pm/PackageItemInfo", "name")));
-  await launchIntent(appHost!, chosen);
+    getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "name")));
+  await startActivityFor(thisApp(), chosen);
   return newIntent();
 });
 
@@ -219,8 +221,8 @@ const mediaRequest = (op: string) => driven(function* (resolver: unknown, uris: 
   yield vcall(intent, "setIdentifier", `(${S})Landroid/content/Intent;`, String(++mediaRequests));
   yield vcall(intent, "putParcelableArrayListExtra", `(${S}Ljava/util/ArrayList;)Landroid/content/Intent;`, "uris", yield newArrayList(items));
   yield putExtra(intent, "op", op, S); yield putExtra(intent, "value", value, "I");
-  return vcall(rt.link("android/app/PendingIntent").ctor, "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
-    appHost?.application, 0, intent, 0x4000000); // FLAG_IMMUTABLE
+  return scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+    yield serviceContext(), 0, intent, 0x4000000); // FLAG_IMMUTABLE
 });
 rt.register({
   name: "android/provider/MediaStore", ctor: class extends JObj {},
@@ -234,9 +236,10 @@ rt.register({
     "static createWriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest("write"),
     "static createTrashRequest(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;": mediaRequest("trash"),
     "static createFavoriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;": mediaRequest("favorite"),
-    "static canManageMedia(Landroid/content/Context;)Z": (ctx: { $host: { pkg: string } } | null) => {
+    "static canManageMedia(Landroid/content/Context;)Z": async (ctx: JObj | null) => {
       if (!ctx) rt.npe();
-      return packages.get(ctx!.$host.pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;
+      const pkg: string = await vcall(ctx, "getOpPackageName", "()Ljava/lang/String;");
+      return packages.get(pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;
     },
   },
 });

@@ -10,7 +10,7 @@ import { libcInit } from "../src/native/libc";
 import { kernelInit } from "../src/native/syscall";
 import { eglInit } from "../src/native/egl";
 import { gl } from "../src/android/gl";
-import { EglContext } from "../src/android/glview";
+import { EglContext } from "../src/android/glsurface";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current";
 import { gles3Init } from "../src/native/gles3";
 

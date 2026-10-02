@@ -12,8 +12,8 @@ import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } fro
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, addCell, type Cells, type CompiledCtor, type ResumeBody, type LazyMethod } from "./compiler";
 import { insnLen } from "./opcodes";
-import { gapsOf, recordGaps, type Gap } from "./codecache";
-import { isBytecode } from "./provenance";
+import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
+import { isBytecode, isStageD } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
 import { Monitors, type Monitor } from "./monitor";
@@ -83,9 +83,7 @@ export const isPlaceholderMethod = (value: unknown): boolean =>
 type Accessor = (this: any, v?: unknown) => unknown;
 const accessors = (t: Record<string, string>, make: (f: string) => Accessor) => Object.fromEntries(Object.entries(t).map(([s, f]) => [s, make(f)]));
 export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f]; });
-export const flagGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f] ? 1 : 0; });
 export const fieldSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = v; });
-export const flagSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = !!v; });
 
 /** a shared table less the entries a class does not declare */
 export function without(methods: NativeSpec["methods"], ...keys: string[][]): NonNullable<NativeSpec["methods"]> {
@@ -294,6 +292,7 @@ export class Runtime {
     this.refCache.clear();
     const dexIndex = this.dexes.length;
     this.dexes.push(dex);
+    if (platform) markPlatformDex(dex.id);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
       if (this.dexIndex.has(name)) continue;
@@ -330,7 +329,10 @@ export class Runtime {
   }
 
   register(spec: NativeSpec) {
-    if (isBytecode(spec.name)) return;   // provenance says AOSP's own bytecode answers for this
+    if (isBytecode(spec.name)) {   // provenance says AOSP's own bytecode answers for this
+      if (isStageD(spec.name)) console.warn("[webdroid] native spec Stage D always withholds:", spec.name);
+      return;
+    }
     if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
     this.ifaceNames = null;
@@ -1291,17 +1293,24 @@ export const rt = new Runtime();
 const declaredFields = new Map<string, string>();
 /** the property holding `cls`'s instance field `name`, whether a spec maps it or bytecode keeps it;
  *  "" when the class has none */
-/** assigns `values` to `o`'s fields as `cls` declares or inherits them */
-export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<string, unknown>): T {
-  for (const name in values) (o as unknown as Record<string, unknown>)[declaredField(cls, name)] = values[name];
-  return o;
-}
 export function declaredField(cls: string, name: string): string {
   const key = cls + "." + name;
   let prop = declaredFields.get(key);
   if (prop === undefined) declaredFields.set(key, prop = instanceFieldOf(rt.link(cls), name) ?? "");
   return prop;
 }
+function fieldOf(cls: string, name: string): string {
+  const prop = declaredField(cls, name);
+  if (!prop) throw new Error(`${cls} has no field ${name}`);
+  return prop;
+}
+/** assigns `values` to `o`'s fields as `cls` declares or inherits them */
+export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<string, unknown>): T {
+  for (const name in values) (o as unknown as Record<string, unknown>)[fieldOf(cls, name)] = values[name];
+  return o;
+}
+/** `o`'s field `name` as `cls` declares or inherits it */
+export const getDeclared = <T = unknown>(o: unknown, cls: string, name: string): T => (o as Record<string, T>)[fieldOf(cls, name)]!;
 
 /** A native implemented as a generator (see Runtime.drive), callable like any other method.
  *  It forwards every argument: caller-sensitive natives receive the caller's Runtime past their

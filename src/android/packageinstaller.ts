@@ -1,16 +1,15 @@
 // IPackageInstaller and IPackageInstallerSession, under AOSP's PackageInstaller and its Session:
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
-import { JObj, rt, noops, declaredField, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
 import { construct, scall, vcall, after } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
-import { sendBroadcast } from "./broadcast";
+import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
-import { appHost } from "./apphost";
 import { reportUncaught } from "./os";
 import { newStub } from "./binder";
 import type { JIntent } from "./intent";
@@ -53,8 +52,8 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
   }
   if (installed !== null) {
     const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
-    sendBroadcast(appHost?.application ?? (yield construct("android/content/Context", "()V")), yield construct("android/content/Intent",
-      `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri));
+    const added: JIntent = yield construct("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
+    void broadcastIntent(added, [], false).catch(reportUncaught);
     yield extra("android.content.pm.extra.PACKAGE_NAME", installed, S);
     yield extra("android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
   } else {
@@ -103,11 +102,9 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
 } });
 
 function* sessionInfo$(s: Session): Gen<JObj> {
-  const info: JObj = yield construct(PI + "$SessionInfo", "()V"), fields = info as unknown as Record<string, unknown>;
-  const values: Record<string, unknown> = { sessionId: s.id, userId: 0, installerPackageName: s.installer, mode: s.mode,
-    appPackageName: s.packageName, sealed: s.sealed ? 1 : 0, active: 1, parentSessionId: -1 };
-  for (const name in values) fields[declaredField(PI + "$SessionInfo", name)] = values[name];
-  return info;
+  const info: JObj = yield construct(PI + "$SessionInfo", "()V");
+  return setDeclared(info, PI + "$SessionInfo", { sessionId: s.id, userId: 0, installerPackageName: s.installer, mode: s.mode,
+    appPackageName: s.packageName, sealed: s.sealed ? 1 : 0, active: 1, parentSessionId: -1 });
 }
 function* sessionList$(installer: string | null | undefined): Gen {
   const infos: JObj[] = [];
@@ -116,7 +113,7 @@ function* sessionList$(installer: string | null | undefined): Gen {
 }
 rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageInstaller$Stub", methods: {
   [`createSession(L${PI}$SessionParams;${S}${S}I)I`]: (params: JObj, installer: string | null) => {
-    const read = (name: string) => (params as unknown as Record<string, unknown>)[declaredField(PI + "$SessionParams", name)];
+    const read = (name: string) => getDeclared(params, PI + "$SessionParams", name);
     const s: Session = { id: nextSession++, mode: read("mode") as number, packageName: read("appPackageName") as string | null,
       installer, names: [], sealed: false, binder: null };
     sessions.set(s.id, s);

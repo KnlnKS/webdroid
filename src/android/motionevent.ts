@@ -2,8 +2,7 @@
 // android_view_MotionEvent.cpp's natives. MotionEvent, PointerCoords and PointerProperties run
 // from AOSP bytecode; TS reaches an event's native state through motionOf.
 
-import { rt, JObj, declaredField } from "../jvm/runtime";
-import { after, scall } from "../jvm/natives/jlang";
+import { rt, declaredField } from "../jvm/runtime";
 import { ownedHandle, deref } from "./handles";
 import { matrixOf } from "./matrix";
 import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type JParcel } from "./parcel";
@@ -13,13 +12,13 @@ const HISTORY_CURRENT = -0x80000000;
 export const AXIS_X = 0, AXIS_Y = 1, AXIS_PRESSURE = 2, AXIS_SIZE = 3, AXIS_ORIENTATION = 8, AXIS_RELATIVE_X = 27, AXIS_RELATIVE_Y = 28;
 const SOURCE_CLASS_POINTER = 2, SOURCE_CLASS_POSITION = 8, SOURCE_CLASS_JOYSTICK = 16, SOURCE_MOUSE_RELATIVE = 0x20004;
 /** AMOTION_EVENT_PRIVATE_FLAG_SUPPORTS_ORIENTATION and _SUPPORTS_DIRECTIONAL_ORIENTATION: kept from Java */
-export const SUPPORTS_ORIENTATION = 0x80;
+const SUPPORTS_ORIENTATION = 0x80;
 const DIRECTIONAL = 0x100, PRIVATE_FLAGS = 0x180;
 const MAX_POINTERS = 16, MAX_AXES = 30;
 const f32 = Math.fround;
 
 // ── ui::Transform: [a, b, tx, c, d, ty] with x' = a·x + b·y + tx and y' = c·x + d·y + ty, in float
-export type Xform = Float32Array;
+type Xform = Float32Array;
 const IDENTITY_XF = () => Float32Array.of(1, 0, 0, 0, 1, 0);
 const mapX = (t: Xform, x: number, y: number) => f32(f32(f32(t[0] * x) + f32(t[1] * y)) + t[2]);
 const mapY = (t: Xform, x: number, y: number) => f32(f32(f32(t[3] * x) + f32(t[4] * y)) + t[5]);
@@ -56,7 +55,7 @@ function rotationOf(flags: number): Xform {
 const round = (v: number) => f32((v < 0 ? -Math.round(-v * 1024) : Math.round(v * 1024)) / 1024);
 
 // ── PointerCoords: BitSet64 of axes (MSB first, as Java's mPackedAxisBits) and their values
-export class Coords {
+class Coords {
   /** axes 0-31 at bit 31 - axis, and 32-63 at bit 63 - axis */
   hi = 0; lo = 0;
   v = new Float32Array(64);
@@ -213,25 +212,6 @@ const ptrOf = (ev: object) => (ev as Record<string, bigint>)[ptrField ||= declar
 const eventAt = (h: bigint) => deref<NativeMotionEvent>(h);
 /** the native event behind a Java MotionEvent */
 export const motionOf = (ev: object): NativeMotionEvent => eventAt(ptrOf(ev));
-export const actionOf = (ev: object): number => motionOf(ev).action;
-export const eventX = (ev: object, i = 0): number => motionOf(ev).axis(AXIS_X, i);
-export const eventY = (ev: object, i = 0): number => motionOf(ev).axis(AXIS_Y, i);
-/** the event's time in uptime milliseconds, with the nanoseconds getEventTime truncates */
-export const eventTimeMs = (ev: object): number => Number(motionOf(ev).eventTime) / 1e6;
-/** MotionEvent.obtain(ev): a copy the caller may keep */
-export const copyEvent = (ev: object): JObj | Promise<JObj> => scall(ME, "obtain", `(L${ME};)L${ME};`, ev);
-/** MotionEvent.obtain(downTime, eventTime, action, x, y, metaState) */
-export const obtainMotion = (downMs: number, atMs: number, action: number, x: number, y: number, metaState = 0): JObj | Promise<JObj> =>
-  scall(ME, "obtain", `(JJIFFI)L${ME};`, BigInt(Math.floor(downMs)), BigInt(Math.floor(atMs)), action, x, y, metaState);
-/** android_view_MotionEvent_obtainAsCopy: a pooled Java MotionEvent holding a copy of `n` */
-export function obtainAsCopy(n: NativeMotionEvent): JObj | Promise<JObj> {
-  return after(scall(ME, "obtain", `()L${ME};`) as JObj | Promise<JObj>, (ev: JObj) => {
-    const h = ptrOf(ev);
-    if (h) eventAt(h).copyFrom(n, true);
-    else { const dst = new NativeMotionEvent(); dst.copyFrom(n, true); (ev as unknown as Record<string, bigint>)[ptrField] = ownedHandle(dst); }
-    return ev;
-  });
-}
 
 // ── JNI
 const iae = (msg: string) => rt.mkThrowable("java/lang/IllegalArgumentException", msg);
@@ -550,30 +530,5 @@ rt.registerJnis(ME, {
   "nativeGetSurfaceRotation(J)I": (ptr: bigint) => {
     const o = orientation(at(ptr).xform);
     return o === 0 ? 0 : o === ROT_90 ? 3 : o === 3 ? 2 : o === 7 ? 1 : -1;
-  },
-});
-
-// DragEvent: no drag-and-drop gesture pipeline exists (nothing ever starts a drag), but the
-// class must exist for View$OnDragListener.onDrag(View, DragEvent) and app code that reads
-// DragEvent.ACTION_* constants to link.
-class JDragEvent extends JObj {
-  action = 0; x = 0; y = 0; resultV = false;
-  clipData: unknown = null; clipDescription: unknown = null; localState: unknown = null;
-}
-rt.register({
-  name: "android/view/DragEvent", ctor: JDragEvent, ifaces: ["android/os/Parcelable"],
-  statics: {
-    ACTION_DRAG_STARTED: 1, ACTION_DRAG_LOCATION: 2, ACTION_DROP: 3,
-    ACTION_DRAG_ENDED: 4, ACTION_DRAG_ENTERED: 5, ACTION_DRAG_EXITED: 6,
-  },
-  methods: {
-    "getAction()I": function (this: JDragEvent) { return this.action; },
-    "getX()F": function (this: JDragEvent) { return this.x; },
-    "getY()F": function (this: JDragEvent) { return this.y; },
-    "getResult()Z": function (this: JDragEvent) { return this.resultV ? 1 : 0; },
-    "getClipData()Landroid/content/ClipData;": function (this: JDragEvent) { return this.clipData; },
-    "getClipDescription()Landroid/content/ClipDescription;": function (this: JDragEvent) { return this.clipDescription; },
-    "getLocalState()Ljava/lang/Object;": function (this: JDragEvent) { return this.localState; },
-    "toString()Ljava/lang/String;": () => "DragEvent",
   },
 });

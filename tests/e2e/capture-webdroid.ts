@@ -30,8 +30,6 @@ export type StepRun = {
   newPlaceholders?: string[];
   /** Native libraries this step was the first to need as machine code ("libx.so (abi)"). */
   nativeRequired?: string[];
-  /** framework attributes this step was the first to use and find unread */
-  unreadAttrs?: string[];
   /** Wall-clock ms this step took to settle, and the perf counters it burned getting there. */
   ms?: number;
   perf?: Record<string, number>;
@@ -120,7 +118,9 @@ export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act 
 export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
   const evidence = evidenceOf(step);
   const capture = mode === "full" || evidence.kind !== "semantic";
-  const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent"
+  // the fast lane drops a semantic step's horizon, except a launch's: startup (a splash screen's
+  // minimum duration) is what it covers
+  const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent" && step.action.type !== "launch"
     ? { ...step.wait, maxVirtualMs: 0 }
     : step.wait;
   const quiescence = mode === "fast" && evidence.kind === "semantic"
@@ -184,7 +184,6 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
                 newPlaceholders: r.newPlaceholders.length ? r.newPlaceholders : undefined,
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
-                unreadAttrs: r.unreadAttrs.length ? r.unreadAttrs : undefined,
                 newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
                 processes: await readProcesses(drv.page), frameHash: r.frameHash ?? undefined,
                 presentation: r.presentation, evidence, phases: { ...r.phases, hostWriteMs } });

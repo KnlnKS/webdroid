@@ -5,7 +5,7 @@
 import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
-import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glview";
+import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
 import { mainThread, reportUncaught } from "../jvm/natives/jlang";

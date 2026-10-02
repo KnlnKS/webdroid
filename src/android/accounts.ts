@@ -16,9 +16,9 @@ import { attr, attrStr, parseAXML } from "./axml";
 import { servicesMatching } from "./pm";
 import { resString } from "./res";
 import { asSystem, hostStub } from "./binder";
-import { bindAsSystem } from "./runningservices";
+import { bindAsSystem } from "./server/activeservices";
 import { mkComponentName } from "./intent";
-import { deliverBroadcast } from "./broadcast";
+import { deliverBroadcast } from "./server/broadcastqueue";
 
 type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
 /** the manifests' authenticator services, each described by its <account-authenticator> resource */
@@ -47,11 +47,10 @@ let accountStore = new AccountStore(), stopAccountUpdates = () => {};
 /** AccountManagerService's broadcasts on a change, which AccountManager's listeners hear */
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
 function accountsChanged(): void {
-  const context = appHost?.application;
-  if (!context) return;
+  if (!appHost) return;
   for (const action of CHANGED) {
     void newObj("android/content/Intent", "(Ljava/lang/String;)V", action)
-      .then((intent) => deliverBroadcast(context, intent, null, false)).catch(reportUncaught);
+      .then((intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null)).catch(reportUncaught);
   }
 }
 export function useAccountStore(store: AccountStore): () => void {

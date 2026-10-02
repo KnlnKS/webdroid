@@ -9,8 +9,8 @@ import { JObj, declaredField, rt } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { linkInit, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { mangleStaticField } from "../jvm/abi";
-import { callingIdentity, hostStub } from "./binder";
-import { enforceCallingOrSelfPermission, uidPermissionState } from "./context";
+import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
+import { checkUidPermission } from "./permissions";
 import { packages } from "./packages";
 import { locationTransport } from "./locationmanager";
 import { DNS_SERVER, netUp, theNetwork } from "./services";
@@ -23,9 +23,9 @@ const enforce = (permission: string) => enforceCallingOrSelfPermission(permissio
 const enforceAccess = () => enforce("android.permission.ACCESS_WIFI_STATE");
 /** WifiPermissionsUtil.enforceCanAccessScanResults for an app: location on, and fine location (coarse
  *  below Q) */
-function canAccessScanResults(pkg: string): boolean {
-  const { uid } = callingIdentity(), held = (name: string) => !uidPermissionState("android.permission." + name, uid);
-  return locationTransport.enabled() && (held("ACCESS_FINE_LOCATION") || (packages.get(pkg)?.sdk.target ?? 0) < 29 && held("ACCESS_COARSE_LOCATION"));
+async function canAccessScanResults(pkg: string): Promise<boolean> {
+  const { uid } = callingIdentity(), held = async (name: string) => await checkUidPermission("android.permission." + name, uid) === 0;
+  return locationTransport.enabled() && (await held("ACCESS_FINE_LOCATION") || (packages.get(pkg)?.sdk.target ?? 0) < 29 && await held("ACCESS_COARSE_LOCATION"));
 }
 async function connectionInfo(): Promise<JObj> {
   const info = await newObj("android/net/wifi/WifiInfo");
@@ -51,7 +51,7 @@ rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "a
   [`getConnectionInfo(${S}${S})Landroid/net/wifi/WifiInfo;`]: async (pkg: string) => {
     await enforceAccess();
     const info = await connectionInfo(), redactions: bigint = await vcall(info, "getApplicableRedactions", "()J");
-    return vcall(info, "makeCopy", "(J)Landroid/net/wifi/WifiInfo;", canAccessScanResults(pkg) ? redactions & ~REDACT_FOR_ACCESS_FINE_LOCATION : redactions);
+    return vcall(info, "makeCopy", "(J)Landroid/net/wifi/WifiInfo;", await canAccessScanResults(pkg) ? redactions & ~REDACT_FOR_ACCESS_FINE_LOCATION : redactions);
   },
   "getCurrentNetwork()Landroid/net/Network;": () => netUp() ? theNetwork() : null,
   [`getDhcpInfo(${S})Landroid/net/DhcpInfo;`]: async () => {
@@ -66,6 +66,8 @@ rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "a
   // an app sees no saved networks from Q, and the page's network is not one it can change
   [`getConfiguredNetworks(${S}${S}Z)L${SLICE};`]: async () => { await enforceAccess(); return emptySlice(); },
   [`setWifiEnabled(${S}Z)Z`]: async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; },
+  ...Object.fromEntries(["reconnect", "reassociate", "disconnect"].map((name) =>
+    [`${name}(${S})Z`, async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; }])),
   "isScanAlwaysAvailable()Z": () => 0,
   "getVerboseLoggingLevel()I": () => 0,
   // the AVD's 2.4 GHz-only radio, with none of the optional features (p2p, aware, rtt...) this device lacks

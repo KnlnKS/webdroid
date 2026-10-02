@@ -1,14 +1,13 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe } from "bun:test";
 import { zipSync } from "fflate";
 import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { unbox } from "../src/jvm/natives/jbox";
-import { checkUriPermission, grantUriPermission, revokeUriPermission, providerOperations } from "../src/android/contentresolver";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
 import { mangleMethod } from "../src/jvm/abi";
-import { JContext, JContextWrapper } from "../src/android/context";
 import { defaultDisplay } from "../src/android/display";
 import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
@@ -16,28 +15,17 @@ import { centralDir, zipTree } from "../src/jvm/natives/jzip";
 import { mergeInstall } from "../src/shell/install";
 import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
-import { registerPackage, FLAG_IS_GAME, field } from "../src/android/pm";
+import { registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { hostedService } from "../src/android/binder";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
-import { Resources, JTheme, themeOf, rvString, newSV, nativeRes, AID } from "../src/android/res";
-import { newTheme } from "../src/android/resources";
+import { Resources, rvString, newSV } from "../src/android/res";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { mkComponentName, newIntent } from "../src/android/intent";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
 import { PendingIntents } from "../src/shell/pendingintents";
-import { mkPfd } from "../src/android/os";
-import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
 import { javaReadFd } from "../src/native/fs";
 import { Arsc } from "../src/android/arsc";
-import { getInflater } from "../src/android/inflate";
-import { JFrameLayout } from "../src/android/layouts";
-import { JWindow } from "../src/android/window";
-import { resolveSystemBars } from "../src/shell/systembars";
-import { device } from "../src/shell/config";
-import { JView, dispatchAttached, uiState } from "../src/android/view";
-import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
-import { JActivity } from "../src/android/app";
-import { scall, loadLibcore, appResources, preloadTextPaint } from "./java";
+import { scall, loadLibcore, bootApp, packageRecord } from "./java";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -85,13 +73,17 @@ describe("clip-data", () => {
   });
 });
 
+// one app process for the file
+const PKG = "org.webdroid.test.content";
+const app = async () => bootApp(await packageRecord(PKG));
+rt.register({ name: "test/Connection", ctor: class extends JObj {}, ifaces: ["android/content/ServiceConnection"], methods: {} });
+
 describe("context-process-state", () => {
   rt.linkNatives();
 
   test("Context.databaseList returns private database directory entries", async () => {
-    const context = rt.make("android/content/Context") as JContext;
-    context.$host = { pkg: "database-list-test" } as JContext["$host"];
-    const dir = "/data/data/database-list-test/databases";
+    const context = await app();
+    const dir = `/data/data/${PKG}/databases`;
     const paths = [`${dir}/main.db`, `${dir}/main.db-wal`];
     for (const path of paths) vfs.write(path, new Uint8Array(0));
     try {
@@ -280,7 +272,7 @@ describe("package-game-info", () => {
     try {
       const info = await vcall(await hostedService("package"), "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, 0n, 0);
       const APP = "android/content/pm/ApplicationInfo";
-      expect([field(info, APP, "category"), field<number>(info, APP, "flags") & (FLAG_IS_GAME | 1)]).toEqual([0, FLAG_IS_GAME | 1]);
+      expect([getDeclared(info, APP, "category"), getDeclared<number>(info, APP, "flags") & (FLAG_IS_GAME | 1)]).toEqual([0, FLAG_IS_GAME | 1]);
     } finally { packages.delete(pkg); }
   });
 });
@@ -335,13 +327,13 @@ describe("package-permissions", () => {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
       const packageInfo = (flags: bigint) => vcall(pms, "getPackageInfo", "(Ljava/lang/String;JI)Landroid/content/pm/PackageInfo;", pkg, flags, 0);
       const info = await packageInfo(0x1000n);
-      expect([...field<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
-      expect([...field<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
+      expect([...getDeclared<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
+      expect([...getDeclared<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
       record.grants.add(denied);
-      expect([...field<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
+      expect([...getDeclared<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
       const omitted = await packageInfo(0n);
-      expect(field(omitted, PI, "requestedPermissions")).toBeNull();
-      expect(field(omitted, PI, "requestedPermissionsFlags")).toBeNull();
+      expect(getDeclared(omitted, PI, "requestedPermissions")).toBeNull();
+      expect(getDeclared(omitted, PI, "requestedPermissionsFlags")).toBeNull();
     } finally { packages.delete(pkg); signaturePermissions.delete(denied); }
   });
 });
@@ -396,10 +388,10 @@ describe("pending-intents", () => {
   });
 
   test("PendingIntent reports its stored operation type", async () => {
-    const context = new JContext(), intent = await newIntent();
+    const context = await app(), intent = await newIntent();
     const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
-    const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
-    const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
+    const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
+    const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
     expect(await vcall(activity, "isActivity", "()Z")).toBe(1);
     expect(await vcall(activity, "isBroadcast", "()Z")).toBe(0);
     expect(await vcall(activity, "isImmutable", "()Z")).toBe(1);
@@ -407,30 +399,6 @@ describe("pending-intents", () => {
     expect(await vcall(broadcast, "isBroadcast", "()Z")).toBe(1);
     expect(await vcall(foreground, "isForegroundService", "()Z")).toBe(1);
     expect(await vcall(foreground, "isService", "()Z")).toBe(0);
-  });
-});
-
-describe("provider-file-ipc", () => {
-  rt.linkNatives();
-
-  test("provider file descriptors cross IPC as readable bytes", async () => {
-    const encoded = await encodeProviderValue(mkPfd(new Uint8Array([4, 5, 6]), null));
-    const descriptor = await decodeProviderValue(encoded);
-    const input = await newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", descriptor);
-    const bytes = new Int8Array(3);
-    expect(await vcall(input, "read", "([B)I", bytes)).toBe(3);
-    expect([...bytes]).toEqual([4, 5, 6]);
-    expect(providerOperations.openFile).toBe("(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;");
-  });
-
-  test("writable provider descriptors forward flushed bytes", async () => {
-    let written = new Uint8Array(0);
-    const encoded = await encodeProviderValue(mkPfd(new Uint8Array(0), () => {}));
-    const descriptor = await decodeProviderValue(encoded, (bytes) => { written = bytes.slice(); });
-    const output = await newObj("android/os/ParcelFileDescriptor$AutoCloseOutputStream", "(Landroid/os/ParcelFileDescriptor;)V", descriptor);
-    await vcall(output, "write", "([B)V", new Int8Array([7, 8]));
-    await vcall(output, "close", "()V");
-    expect([...written]).toEqual([7, 8]);
   });
 });
 
@@ -648,42 +616,28 @@ describe("service-bind", () => {
   rt.linkNatives();
 
   test("a failed service binding still requires one unbind", async () => {
-    const context = rt.make("android/content/Context") as JContext;
-    context.$host = { pkg: "service-bind-test" } as JContext["$host"];
-    const intent = await newIntent();
-    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName("service-bind-test", "service-bind-test.MissingService"));
-    const connection = new JObj();
+    const context = await app(), intent = await newIntent();
+    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(PKG, PKG + ".MissingService"));
+    const connection = await newObj("test/Connection");
     expect(await vcall(context, "bindService", "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z", intent, connection, 0)).toBe(0);
     await vcall(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection);
-    await expect(vcallAsync(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection)).rejects.toMatchObject({ msg: "Service not registered" });
+    const second = await vcallAsync(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection).then(() => null, (e: { msg?: string }) => e.msg);
+    expect(second).toMatch(/^Service not registered: /);
   });
 });
 
 describe("window-context", () => {
-  beforeAll(preloadTextPaint);
   rt.linkNatives();
 
-  test("finding an activity content view installs its decor before setContentView", async () => {
-    const activity = new JActivity(), res = new Resources(null, {}), theme = new JTheme();
-    theme.res = res;
-    Reflect.set(activity, "$host", { res, theme, pkg: "test" });
-    activity.window.activity = activity;
-    expect(activity.window.decor).toBeNull();
-    const content = await vcall(activity, "findViewById", "(I)Landroid/view/View;", 0x01020002);
-    expect(content).not.toBeNull();
-    expect(content).toBe(activity.window.contentParent);
-    expect(await vcall(activity.window, "findViewById", "(I)Landroid/view/View;", 0x01020002)).toBe(content);
-  });
-
   test("display and window contexts retain display identity and own their window service", async () => {
-    const source = new JContext(), screen = await defaultDisplay();
-    Reflect.set(source, "$host", { pkg: "test" });
+    const source = await app(), screen = await defaultDisplay();
     const displayContext = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", screen);
     expect(await vcall(displayContext, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
     expect(await vcall(displayContext, "isUiContext", "()Z")).toBe(0);
     const window = await vcall(displayContext, "createWindowContext", "(ILandroid/os/Bundle;)Landroid/content/Context;", 2038, null);
     expect(rt.iof(window, "android/content/ContextWrapper")).toBeTruthy();
-    expect(await vcall(window, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
+    // its display is the window manager's for the same display id, not the caller's object
+    expect(await vcall(await vcall(window, "getDisplay", "()Landroid/view/Display;"), "getDisplayId", "()I")).toBe(await vcall(screen, "getDisplayId", "()I"));
     expect(await vcall(window, "isUiContext", "()Z")).toBe(1);
     const manager = await vcall(window, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "window");
     expect(await vcall(window, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", rt.classFor("android/view/WindowManager"))).toBe(manager);
@@ -694,8 +648,7 @@ describe("window-context", () => {
   });
 
   test("attribution contexts retain their base and expose their tag", async () => {
-    const source = new JContext();
-    Reflect.set(source, "$host", { application: source, pkg: "test" });
+    const source = await app();
     const tagged = await vcall(source, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", "navigation");
     expect(tagged).not.toBe(source);
     expect(await vcall(tagged, "getApplicationContext", "()Landroid/content/Context;")).toBe(source);
@@ -705,93 +658,5 @@ describe("window-context", () => {
     expect(await vcall(attribution, "getAttributionTag", "()Ljava/lang/String;")).toBe("navigation");
     const reset = await vcall(tagged, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", null);
     expect(await vcall(reset, "getAttributionTag", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("unchanged window attributes do not restart inset dispatch", async () => {
-    const window = rt.make("android/view/Window");
-    const attrs = await vcall(window, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;");
-    const pending = uiState.needsInsets;
-    try {
-      uiState.needsInsets = false;
-      await vcall(attrs, "setFitInsetsTypes", "(I)V", 0);
-      await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
-      expect(uiState.needsInsets).toBe(true);
-      uiState.needsInsets = false;
-      await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
-      expect(uiState.needsInsets).toBe(false);
-    } finally { uiState.needsInsets = pending; }
-  });
-
-  test("destroyed context windows detach without dismissing dialogs or other activities", async () => {
-    const owner = new JContext(), other = new JContext();
-    const themed = new JContextWrapper();
-    themed.base = owner;
-    const ownedView = new JView(), otherView = new JView();
-    ownedView.ctx = themed; otherView.ctx = other;
-    addOverlay(ownedView, 0, 0, 0);
-    addOverlay(otherView, 0, 0, 0);
-    await dispatchAttached(ownedView);
-    await dispatchAttached(otherView);
-    try {
-      await detachContextOverlays(owner);
-      expect(ownedView.attached).toBe(false);
-      expect(overlays.some(o => o.view === ownedView)).toBe(false);
-      expect(otherView.attached).toBe(true);
-      expect(overlays.some(o => o.view === otherView)).toBe(true);
-    } finally {
-      await detachContextOverlays(other);
-      removeOverlay(ownedView);
-    }
-  });
-
-  test("Dialog exposes its overlay theme through its context and inflater without changing its owner", async () => {
-    const jresources = await appResources(new Resources(null, {}), "dialog"), res = nativeRes(jresources);
-    const style = (name: string) => res.idFor("style", name, "android"), floating = (t: JTheme | null | undefined) => t?.lookup(AID("windowIsFloating"))?.d;
-    const theme = await newTheme(jresources, null, style("Theme.Material.Light"));
-    const context = Object.assign(rt.make("android/content/Context"), { $host: { res, jresources, theme } });
-    const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, style("Theme.Material.Light.Dialog"));
-    const themed = await vcall(dialog, "getContext", "()Landroid/content/Context;");
-    expect(themed).not.toBe(context);
-    expect(floating(themeOf(themed))).toBe(-1);
-    expect(floating(themeOf(getInflater(themed).jctx))).toBe(-1);
-    expect(floating(theme)).toBe(0);
-    expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBeNull();
-    const owner = rt.make("android/app/Activity");
-    await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);
-    expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBe(owner);
-  });
-
-
-  test("full-screen windows own their system bars and hiding restores the underlying window", async () => {
-    const activity = new JFrameLayout(), dialog = new JFrameLayout();
-    const underneath = activity.windowOwner = new JWindow(), above = dialog.windowOwner = new JWindow();
-    underneath.decor = activity; above.decor = dialog;
-    above.layoutW = above.layoutH = -1;
-    dialog.right = device.width; dialog.bottom = device.height;
-    const overlays = [{ view: dialog, x: 0, y: 0, flags: 0 }];
-    await vcall(underneath, "setStatusBarColor", "(I)V", 0xff112233);
-    await vcall(underneath, "setNavigationBarColor", "(I)V", 0xff223344);
-    await vcall(above, "setStatusBarColor", "(I)V", 0xffeeeeee);
-    await vcall(above, "setNavigationBarColor", "(I)V", 0xffdddddd);
-    const controller = await vcall(above, "getInsetsController", "()Landroid/view/WindowInsetsController;");
-    await vcall(controller, "setSystemBarsAppearance", "(II)V", 24, 24);
-    expect(await vcall(controller, "getSystemBarsAppearance", "()I")).toBe(24);
-    await vcall(controller, "hide", "(I)V", 1);
-    const bars = resolveSystemBars(activity, overlays);
-    expect(bars.root).toBe(dialog);
-    expect([bars.status, bars.navigation, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 2]);
-    above.layoutW = device.width; above.layoutH = device.height;
-    expect(resolveSystemBars(activity, overlays)).toEqual(bars);
-    above.flags |= 8;
-    expect(resolveSystemBars(activity, overlays).root).toBe(activity);
-    above.flags &= ~8;
-    dialog.right--;
-    expect(resolveSystemBars(activity, overlays).root).toBe(activity);
-    dialog.right++;
-    dialog.visibility = 4;
-    const restored = resolveSystemBars(activity, overlays);
-    expect(restored.root).toBe(activity);
-    expect([restored.status, restored.navigation, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 2]);
-    expect(await vcall(underneath, "getNavigationBarColor", "()I")).toBe(0xff223344);
   });
 });

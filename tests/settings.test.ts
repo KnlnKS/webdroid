@@ -2,32 +2,23 @@ import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, scall } from "../src/jvm/natives/jlang";
-import { JApplication } from "../src/android/app";
-import { setAppHost } from "../src/android/apphost";
-import { packages, PackageRecord, packageUid } from "../src/android/packages";
-import { Resources } from "../src/android/res";
-import { TV, type XmlAttr, type XmlNode } from "../src/android/axml";
+import { packages, type PackageRecord } from "../src/android/packages";
 import { setProcessIdentity } from "../src/android/os";
 import { locationTransport } from "../src/android/locationmanager";
 import { hostedService } from "../src/android/binder";
 import { mkUri, type JUri } from "../src/android/net";
-import { settingsStore, systemProvider } from "../src/android/settings";
-import { appResources } from "./java";
+import { settingsStore } from "../src/android/settings";
+import { systemProvider } from "../src/android/systemproviders";
+import { bootApp, packageRecord } from "./java";
 
-const attr = (name: string, str: string | null, data = 0): XmlAttr => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
-function install(pkg: string, target: number, permissions: string[], certificate: number): PackageRecord {
-  const manifest: XmlNode = { name: "manifest", attrs: [attr("package", pkg)], children: [
-    { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, target)], children: [] },
-    ...permissions.map((name) => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),
-    { name: "application", attrs: [], children: [] },
-  ] };
-  const record = new PackageRecord(manifest, new Resources(null, {}), `/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([certificate])]);
+async function install(pkg: string, target: number, permissions: string[], certificate: number): Promise<PackageRecord> {
+  const record = await packageRecord(pkg, { target, permissions, certificate });
   packages.set(pkg, record);
   return record;
 }
 const CR = "Landroid/content/ContentResolver;", S = "Ljava/lang/String;";
 const SECURE = "android/provider/Settings$Secure", SYSTEM = "android/provider/Settings$System", GLOBAL = "android/provider/Settings$Global";
-let app: JApplication, cr: JObj;
+let app: JObj, cr: JObj;
 const changes: string[] = [];
 rt.register({ name: "webdroid/test/SettingsObserver", ctor: class extends JObj {}, sup: "android/database/ContentObserver", methods: {
   "onChange(ZLandroid/net/Uri;)V": function (this: JObj, _self: number, uri: JUri) { changes.push(`${Reflect.get(this, "tag")} ${uri.uri}`); },
@@ -45,14 +36,9 @@ const thrown = async (call: () => unknown): Promise<string> => {
 
 beforeAll(async () => {
   rt.linkNatives();
-  const record = install("org.webdroid.test.settings", 35, [], 1);
-  install("org.webdroid.test.settings.twin", 35, [], 1);
-  install("org.webdroid.test.settings.other", 35, [], 2);
-  setProcessIdentity(4321, record.uid);
-  const res = record.res, jresources = await appResources(res, record.pkg);
-  app = new JApplication();
-  const host = { pkg: record.pkg, application: app, res, jresources, splits: [], themeResId: 0, iconRes: 0, currentActivity: () => null, activities: () => [] } as never;
-  Reflect.set(app, "$host", host); setAppHost(host);
+  await install("org.webdroid.test.settings.twin", 35, [], 1);
+  await install("org.webdroid.test.settings.other", 35, [], 2);
+  app = await bootApp(await install("org.webdroid.test.settings", 35, [], 1));
   cr = await vcall(app, "getContentResolver", `()${CR}`);
 });
 
@@ -102,7 +88,7 @@ describe("settings-provider", () => {
   });
 
   test("an app targeting below 23 holds WRITE_SETTINGS and writes persist", async () => {
-    const legacy = install("org.webdroid.test.settings.legacy", 22, ["android.permission.WRITE_SETTINGS"], 3);
+    const legacy = await install("org.webdroid.test.settings.legacy", 22, ["android.permission.WRITE_SETTINGS"], 3);
     setProcessIdentity(4321, legacy.uid);
     try {
       const provider = await systemProvider("settings")!;

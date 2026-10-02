@@ -117,7 +117,7 @@ export class ControlledGuestClock {
   }
 }
 
-type ClockHost = typeof globalThis & { __wdGuestClock?: ControlledGuestClock };
+type ClockHost = typeof globalThis & { __wdGuestClock?: ControlledGuestClock; __wdWallAtStart?: number };
 const browser = typeof location !== "undefined" && typeof window !== "undefined";
 const controlledGuestTime = browser && new URLSearchParams(location.search).get("testClock") === "controlled";
 const realm = browser ? Number(new URLSearchParams(location.search).get("pid") ?? 0) : 0;
@@ -152,6 +152,11 @@ export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) =
 export const bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;
 /** CLOCK_MONOTONIC in milliseconds, one clock for every realm of the page */
 export const uptimeMillis = clock ? guestNow : (): number => performance.timeOrigin - bootTime + realNow();
+/** CLOCK_REALTIME in milliseconds: the host's, or under a controlled clock the host's at the
+ *  clock's start advancing with guest time, as a device's wall clock advances with its uptime */
+export const wallMillis = clock
+  ? ((start) => () => start + clock.nowMs)(((window.top as unknown as ClockHost).__wdWallAtStart ??= Date.now() - clock.nowMs))
+  : (): number => Date.now();
 
 const hostYield = (): Promise<void> => new Promise((resolve) => realSetTimeout(resolve, 0));
 const advanceTo = async (targetMs: number): Promise<number> => {

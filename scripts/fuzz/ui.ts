@@ -96,7 +96,6 @@ function processSignals(processes: Awaited<ReturnType<typeof readProcesses>>): s
     const prefix = diagnostics.pkg ?? process.url;
     for (const value of diagnostics.missing) signals.push(`missing:${prefix}:${value}`);
     for (const value of diagnostics.native) signals.push(`native:${prefix}:${value}`);
-    for (const value of diagnostics.unreadAttrs ?? []) signals.push(`attr:${prefix}:${value}`);
     for (const value of diagnostics.errors ?? []) signals.push(`error:${prefix}:${value}`);
     const perf = diagnostics.perf;
     if (perf?.layoutErrors) signals.push(`layout:${prefix}`);

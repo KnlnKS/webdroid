@@ -11,7 +11,7 @@ import { mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
-import { hostStub, hostedService, callingIdentity, exportParcel, importParcel, type ParcelData } from "./binder";
+import { hostStub, hostedService, callingIdentity, serviceContext, exportParcel, importParcel, type ParcelData } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
@@ -19,7 +19,8 @@ import { JParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
 import { appHost } from "./apphost";
-import { permissionGranted, grantPrompted } from "./context";
+import { coverTop, foreground } from "./server/atm";
+import { permissionGranted, grantPrompted } from "./permissions";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const LIST = "android/content/pm/ParceledListSlice";
@@ -121,7 +122,7 @@ function hasPermission(uid: number): boolean {
   return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
 }
 /** the system's view of packages: the application's PackageManager over the hosted service */
-const getPM = async (): Promise<JObj> => vcall(appHost!.application, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+const getPM = async (): Promise<JObj> => vcall(await serviceContext(), "getPackageManager", "()Landroid/content/pm/PackageManager;");
 const appInfo = async (pkg: string): Promise<JObj> =>
   vcall(await getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
 
@@ -263,7 +264,7 @@ function enforceNoForegroundService(pkg: string, userId: number, channel: string
 
 /** PermissionPolicyService's notification prompt for an app targeting 6.0 to 12L, which cannot ask
  *  for POST_NOTIFICATIONS itself: once it has a channel, the system asks when a launcher task is in
- *  front. The dialog's answer follows the grant policy runtime permissions follow (context.ts). */
+ *  front. The dialog's answer follows the grant policy runtime permissions follow. */
 function promptNeeded(pkg: string): boolean {
   const record = packages.get(pkg), target = targetSdk(pkg);
   return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
@@ -271,14 +272,7 @@ function promptNeeded(pkg: string): boolean {
 }
 async function showNotificationPrompt(pkg: string): Promise<void> {
   grantPrompted(pkg, POST_NOTIFICATIONS);
-  const activity = appHost?.currentActivity();
-  if (activity) await appHost!.roundTrip(activity);
-}
-/** an activity launched from the launcher (PermissionPolicyService's ActivityInterceptorCallback):
- *  decided by the channels the app has as it launches, shown once its activity is in front */
-export function notificationPromptOnLaunch(pkg: string): () => Promise<void> {
-  const needed = promptNeeded(pkg);
-  return async () => { if (needed && promptNeeded(pkg)) await showNotificationPrompt(pkg); };
+  await coverTop();
 }
 
 // ── the notification list
@@ -404,7 +398,7 @@ async function addAutoGroupSummary(trigger: PostedNotification, flags: number, m
   const pk = packageKey(trigger.userId, trigger.pkg);
   if (notificationStore.autobundled.has(pk)) return;
   const look = await summaryLook(trigger.pkg, members);
-  const context = appHost?.application;
+  const context = await serviceContext();
   const triggering = await fromParcel(N, trigger.data);
   let builder = await newObj(`${N}$Builder`, "(Landroid/content/Context;Ljava/lang/String;)V", context, trigger.channel);
   const B = `L${N}$Builder;`;
@@ -614,7 +608,7 @@ async function showToast(service: JObj, t: ToastRecord): Promise<void> {
   const windowToken = await newObj("android/os/Binder", "()V");
   if (t.custom) await vcall(t.custom, "show", "(Landroid/os/IBinder;)V", windowToken);
   else {
-    const ctx = await scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+    const ctx = await serviceContext();
     const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
     const id = (name: string, type: string) => vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
     const gravity: number = await vcall(res, "getInteger", "(I)I", await id("config_toastDefaultGravity", "integer"));
@@ -697,8 +691,9 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
       if (!channel) fail("java/lang/NullPointerException", "channel in list is null");
       created = await createChannel(prefs, await copyOf(CHANNEL, channel)) || created;
     }
-    // the prompt shows over a launcher task the user can see; a task still starting gets it at its next launch
-    if (created && !had && appHost?.currentActivity()?.resumed && promptNeeded(pkg)) await showNotificationPrompt(pkg);
+    // the prompt shows over the activity in front, after this call returns: covering it pauses that
+    // activity, whose main thread may be the caller
+    if (created && !had && foreground() && promptNeeded(pkg)) void showNotificationPrompt(pkg).catch(reportUncaught);
   },
   "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
     async (callingPkg: string, userId: number, pkg: string, channelId: string | null) => {

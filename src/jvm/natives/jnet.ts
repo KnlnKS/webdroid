@@ -195,10 +195,10 @@ rt.register({
       this.host = h ?? ""; this.port = p; yield this.open();
     }),
     "connect(Ljava/net/SocketAddress;)V": function (this: JSSLSocket, a: unknown) { return vcall(this, "connect", "(Ljava/net/SocketAddress;I)V", a, 0); },
-    "connect(Ljava/net/SocketAddress;I)V": async function (this: JSSLSocket, a: JObj | null) {
-      this.host = a === null ? "" : await vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = await socketPort(a);
-      await this.open();
-    },
+    "connect(Ljava/net/SocketAddress;I)V": driven(function* (this: JSSLSocket, a: JObj | null): Gen {
+      this.host = a === null ? "" : yield vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = yield socketPort(a);
+      yield this.open();
+    }),
     "getInputStream()Ljava/io/InputStream;": function (this: JSSLSocket) {
       const o = rt.make("webdroid/SocketInputStream") as JSocketIn; o.s = this; return o;
     },
@@ -405,11 +405,11 @@ type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: 
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
-async function headerMap(groups: Iterable<[string | null, string[]]>) {
+const headerMap = driven(function* (groups: Iterable<[string | null, string[]]>): Gen<JObj> {
   const m = rt.make("java/util/HashMap");
-  for (const [k, v] of groups) await vcall(m, "put", PUT, k, newArrayList(v));
+  for (const [k, v] of groups) yield vcall(m, "put", PUT, k, newArrayList(v));
   return m;
-}
+});
 function group(entries: [string | null, string][]): Map<string | null, string[]> {
   const g = new Map<string | null, string[]>();
   for (const [k, v] of entries) { let l = g.get(k); if (!l) g.set(k, l = []); l.push(v); }
@@ -433,6 +433,82 @@ function initConnection(c: JObj, url: unknown): void {
   (rt.link(UC).ctor.prototype as Record<string, (u: unknown) => void>)[mangleMethod("<init>", "(Ljava/net/URL;)V")].call(c, url);
 }
 type Fields = Record<string, unknown>;
+/** the exchange, redirects followed: a driven native, so the CookieHandler and every other Java
+ *  call after a fetch runs on the thread that connected, not on whatever the event loop resumed */
+const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> {
+  this.connected = 1;
+  const ac = (this.ac = new AbortController());
+  let timer: ReturnType<typeof setTimeout> | undefined, timedOut = "";
+  const arm = (ms: number, what: string) => {
+    clearTimeout(timer);
+    if (ms > 0) timer = setTimeout(() => { timedOut = what; ac.abort(); }, ms);
+  };
+  const base = new Headers();
+  for (const [k, v] of this.req) base.append("x-wd-" + k, v);
+  // Android's engine adds http.agent to requests that set no User-Agent
+  const agent: string | null = yield scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent");
+  if (!base.has("x-wd-user-agent") && agent) base.set("x-wd-user-agent", agent);
+  if (this.ifMod) base.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
+  const spec: string = yield urlText(this.url);
+  // OkHttp's HttpUrl.getChecked
+  if (!(yield vcall(this.url, "getHost", "()Ljava/lang/String;"))) throw rt.mkThrowable("java/net/UnknownHostException", "Invalid host: " + spec);
+  let method = this.method, target = spec, r: Response, hdrs: [string, string][], length: string | null;
+  let body = this.out && method !== "GET" && method !== "HEAD" ? baosBytes(this.out).slice() : undefined;
+  // Redirects are followed here, one proxy hop each, because the process CookieHandler that
+  // Android's HttpURLConnection consults around every exchange must see each hop's URL.
+  for (let hop = 0; ; hop++) {
+    const cookies = yield scall("java/net/CookieHandler", "getDefault", "()Ljava/net/CookieHandler;");
+    const uri = cookies && (yield cookieURI(target)), headers = new Headers(base);
+    if (cookies) {
+      const offered = yield vcall(cookies, "get", "(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;", uri, yield headerMap(group(this.req)));
+      for (const e of (yield toJsArray(yield vcall(offered, "entrySet", "()Ljava/util/Set;"))) as unknown[]) {
+        const key: string | null = yield vcall(e, "getKey", "()Ljava/lang/Object;");
+        const values = (yield toJsArray(yield vcall(e, "getValue", "()Ljava/lang/Object;"))) as string[];
+        if (key && /^cookie2?$/i.test(key) && values.length) headers.set("x-wd-" + key, values.join("; "));
+      }
+    }
+    arm(this.cto, "connect timed out");
+    try {
+      r = yield fetch("/proxy?manual=1&url=" + encodeURIComponent(target), { method, headers, signal: ac.signal, body });
+    } catch (e) {
+      if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
+      if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
+      throw rt.mkThrowable("java/io/IOException", String(e));
+    } finally { clearTimeout(timer); }
+    // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
+    if (r.status === 502 && !r.headers.get("x-wd-final-url")) {
+      const { hostname, port, protocol } = new URL(target), kind = r.headers.get("x-wd-error");
+      const detail = (yield r.text()).replace(/^proxy error: /, "");
+      if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
+      if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
+      throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
+    }
+    hdrs = [];
+    r.headers.forEach((v, k) => {
+      if (k === "x-wd-set-cookie") for (const c of JSON.parse(v) as string[]) hdrs.push(["set-cookie", c]);
+      else if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]);
+    });
+    length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
+    if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
+    if (cookies) yield vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, yield headerMap(group(hdrs)));
+    const status = Number(r.headers.get("x-wd-status")) || r.status, location = r.headers.get("location");
+    if (!this.follow || ![301, 302, 303, 307, 308].includes(status) || !location) break;
+    // OkHttp's MAX_FOLLOW_UPS
+    if (hop === 20) throw rt.mkThrowable("java/net/ProtocolException", "Too many follow-up requests: 21");
+    yield r.body?.cancel();
+    // the method rewrites fetch's redirect mode (the proxy's former follower) applies
+    if (status === 303 && method !== "HEAD" || (status === 301 || status === 302) && method === "POST") { method = "GET"; body = undefined; base.delete("x-wd-content-type"); }
+    const next = new URL(location, target).href;
+    if (new URL(next).origin !== new URL(target).origin) base.delete("x-wd-authorization");
+    target = next;
+  }
+  if (target !== spec) this.url = yield newObj("java/net/URL", "(Ljava/lang/String;)V", target);   // getURL() reports where a redirect landed
+  const stream = new JHttpInputStream();
+  stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
+  const status = Number(r.headers.get("x-wd-status")) || r.status;
+  if (length && method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
+  return (this.res = { status, msg: r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
+});
 class JHttpURLConnection extends JObj {
   get url(): unknown { return (this as unknown as Fields)[uc().url]; }
   set url(u: unknown) { (this as unknown as Fields)[uc().url] = u; }
@@ -452,81 +528,7 @@ class JHttpURLConnection extends JObj {
   pending: Promise<HttpRes> | null = null;
   connect(): Promise<HttpRes> {
     if (this.res) return Promise.resolve(this.res);
-    return this.pending ??= this.fetchResponse().finally(() => { this.pending = null; });
-  }
-  private async fetchResponse(): Promise<HttpRes> {
-    this.connected = 1;
-    const ac = (this.ac = new AbortController());
-    let timer: ReturnType<typeof setTimeout> | undefined, timedOut = "";
-    const arm = (ms: number, what: string) => {
-      clearTimeout(timer);
-      if (ms > 0) timer = setTimeout(() => { timedOut = what; ac.abort(); }, ms);
-    };
-    const base = new Headers();
-    for (const [k, v] of this.req) base.append("x-wd-" + k, v);
-    // Android's engine adds http.agent to requests that set no User-Agent
-    const agent: string | null = await scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent");
-    if (!base.has("x-wd-user-agent") && agent) base.set("x-wd-user-agent", agent);
-    if (this.ifMod) base.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
-    const spec = await urlText(this.url);
-    // OkHttp's HttpUrl.getChecked
-    if (!await vcall(this.url, "getHost", "()Ljava/lang/String;")) throw rt.mkThrowable("java/net/UnknownHostException", "Invalid host: " + spec);
-    let method = this.method, target = spec, r: Response, hdrs: [string, string][], length: string | null;
-    let body = this.out && method !== "GET" && method !== "HEAD" ? baosBytes(this.out).slice() : undefined;
-    // Redirects are followed here, one proxy hop each, because the process CookieHandler that
-    // Android's HttpURLConnection consults around every exchange must see each hop's URL.
-    for (let hop = 0; ; hop++) {
-      const cookies = await scall("java/net/CookieHandler", "getDefault", "()Ljava/net/CookieHandler;");
-      const uri = cookies && await cookieURI(target), headers = new Headers(base);
-      if (cookies) {
-        const offered = await vcall(cookies, "get", "(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;", uri, await headerMap(group(this.req)));
-        for (const e of await toJsArray(await vcall(offered, "entrySet", "()Ljava/util/Set;"))) {
-          const key: string | null = await vcall(e, "getKey", "()Ljava/lang/Object;");
-          const values = await toJsArray(await vcall(e, "getValue", "()Ljava/lang/Object;")) as string[];
-          if (key && /^cookie2?$/i.test(key) && values.length) headers.set("x-wd-" + key, values.join("; "));
-        }
-      }
-      arm(this.cto, "connect timed out");
-      try {
-        r = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target), { method, headers, signal: ac.signal, body });
-      } catch (e) {
-        if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
-        if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
-        throw rt.mkThrowable("java/io/IOException", String(e));
-      } finally { clearTimeout(timer); }
-      // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-      if (r.status === 502 && !r.headers.get("x-wd-final-url")) {
-        const { hostname, port, protocol } = new URL(target), kind = r.headers.get("x-wd-error");
-        const detail = (await r.text()).replace(/^proxy error: /, "");
-        if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
-        if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
-        throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
-      }
-      hdrs = [];
-      r.headers.forEach((v, k) => {
-        if (k === "x-wd-set-cookie") for (const c of JSON.parse(v) as string[]) hdrs.push(["set-cookie", c]);
-        else if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]);
-      });
-      length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
-      if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
-      if (cookies) await vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, await headerMap(group(hdrs)));
-      const status = Number(r.headers.get("x-wd-status")) || r.status, location = r.headers.get("location");
-      if (!this.follow || ![301, 302, 303, 307, 308].includes(status) || !location) break;
-      // OkHttp's MAX_FOLLOW_UPS
-      if (hop === 20) throw rt.mkThrowable("java/net/ProtocolException", "Too many follow-up requests: 21");
-      await r.body?.cancel();
-      // the method rewrites fetch's redirect mode (the proxy's former follower) applies
-      if (status === 303 && method !== "HEAD" || (status === 301 || status === 302) && method === "POST") { method = "GET"; body = undefined; base.delete("x-wd-content-type"); }
-      const next = new URL(location, target).href;
-      if (new URL(next).origin !== new URL(target).origin) base.delete("x-wd-authorization");
-      target = next;
-    }
-    if (target !== spec) this.url = await newObj("java/net/URL", "(Ljava/lang/String;)V", target);   // getURL() reports where a redirect landed
-    const stream = new JHttpInputStream();
-    stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
-    const status = Number(r.headers.get("x-wd-status")) || r.status;
-    if (length && method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
-    return (this.res = { status, msg: r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
+    return this.pending ??= Promise.resolve(fetchResponse.call(this)).finally(() => { this.pending = null; });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
   hdr(name: string | null): string | null {
@@ -539,9 +541,9 @@ class JHttpURLConnection extends JObj {
   }
   stream(): JHttpInputStream { return this.res!.stream; }
 }
-/** an accessor that needs the response: connect first */
+/** an accessor that needs the response: connect first, then answer on the calling thread */
 function withRes<A extends unknown[], C extends JHttpURLConnection = JHttpURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
-  return async function (this: C, ...a: A) { return f.call(this, await this.connect(), ...a); };
+  return driven(function* (this: C, ...a: A): Gen { return yield f.call(this, yield this.connect(), ...a); });
 }
 const connectionMethods: NativeSpec["methods"] = {
   "connect()V": driven(function* (this: JHttpURLConnection): Gen {

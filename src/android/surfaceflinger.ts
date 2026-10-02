@@ -10,7 +10,8 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { canvasOf } from "./canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
-import type { GlSurface } from "./glview";
+import { frameDrawn } from "./vsync";
+import type { GlSurface } from "./glsurface";
 import { drawnOn, deviceRect, placeFunctors, type Rect } from "./webfunctor";
 
 // SurfaceControl.Builder's creation flags
@@ -65,6 +66,7 @@ let target: { ctx: OffscreenCanvasRenderingContext2D; present: () => void } | nu
 /** where the display composes: the realm's frame, and what shows it */
 export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: () => void): void { target = { ctx, present }; }
 let composing = false;
+const overlaid = typeof window !== "undefined" && window.top !== window;
 /** compose the display once the current turn's transactions and draws are done */
 export function scheduleComposite(): void {
   if (composing) return;
@@ -76,8 +78,10 @@ function composite(): void {
   if (!target) return;
   const { ctx } = target, t0 = performance.now();
   ctx.save();
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  // a process's frame stacks over the processes below it (processes.ts), which show through
+  // wherever its windows draw nothing; the bottom one shows black there, as a display does
+  if (overlaid) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
   placed.clear();
   for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer);
   ctx.restore();
@@ -162,7 +166,7 @@ const op = (fn: (layer: Layer, ...a: never[]) => void) => (t: bigint, sc: bigint
   const layer = layerOf(sc);
   tx(t).ops.push(() => fn(layer, ...a));
 };
-export function applyOps(t: Transaction): void {
+function applyOps(t: Transaction): void {
   const ops = t.ops.splice(0);
   for (const fn of ops) fn();
   if (ops.length) scheduleComposite();
@@ -332,7 +336,7 @@ export function glSurfaceOf(s: Surface): GlSurface | null {
   const q = s.queue;
   if (!q) return null;
   return q.gl ??= {
-    view: null, present: null, frames: 0,
+    present: null, frames: 0,
     get width() { return q.width; }, get height() { return q.height; },
     post: (frame) => void queueBuffer(s, frame).catch(reportUncaught),
   };
@@ -375,7 +379,9 @@ rt.registerJnis("android/view/Surface", {
   "nativeGetFromSurfaceControl(JJ)J": (_h: bigint, sc: bigint) => handle({ queue: null, layer: layerOf(sc) } satisfies Surface),
   "nativeGetFromBlastBufferQueue(JJ)J": (h: bigint, q: bigint) => h && surface(h).queue === queue(q) ? h : handle({ queue: queue(q), layer: null } satisfies Surface),
   "nativeRelease(J)V": (h: bigint) => release(h),
-  "nativeDestroy(J)V": (h: bigint) => release(h),
+  // Surface.destroy disconnects the producer, then release() frees the native object: freeing it
+  // here would free a handle another surface took in between
+  "nativeDestroy(J)V": () => {},
   "nativeIsValid(J)Z": (h: bigint) => +!!(h && (surface(h).queue || surface(h).layer || surface(h).producer)),
   "nativeGetWidth(J)I": (h: bigint) => (surface(h).queue ?? surface(h).producer)?.width ?? 0,
   "nativeGetHeight(J)I": (h: bigint) => (surface(h).queue ?? surface(h).producer)?.height ?? 0,
@@ -392,7 +398,8 @@ rt.registerJnis("android/view/Surface", {
     const s = surface(h), buffer = surfaceBuffer(s);
     if (!buffer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Surface has no buffer to lock");
     canvasOf(canvas).setTarget(buffer.getContext("2d")!, buffer.width, buffer.height, null);
-    return h;
+    // the locked object is a reference of its own, which unlockCanvasAndPost releases
+    return handle({ ...s } satisfies Surface);
   },
-  "nativeUnlockCanvasAndPost(JLandroid/graphics/Canvas;)V": (h: bigint) => queueBuffer(surface(h)),
+  "nativeUnlockCanvasAndPost(JLandroid/graphics/Canvas;)V": (h: bigint) => { perf.draws++; frameDrawn(); return queueBuffer(surface(h)); },
 });

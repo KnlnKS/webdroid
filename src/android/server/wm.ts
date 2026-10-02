@@ -133,12 +133,13 @@ async function addWindow(window: JObj, attrs: JObj, visibility: number, outChann
   ws.visibility = visibility;
   ws.requestedVisibleTypes = await insetsType("defaultVisible");
   windows.set(window, ws);
-  updateFocus();
   if (outChannel) {
     const pair: JObj[] = await scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
     ws.channel = channelOf(pair[0]);
     await vcall(pair[1], "copyTo", "(Landroid/view/InputChannel;)V", outChannel);
   }
+  // after the channel exists, which the focus event travels on
+  updateFocus();
   if (outState) await vcall(outState, "set", "(Landroid/view/InsetsState;)V", await insetsState());
   if (outFrame) await vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
   if (outScale) outScale[0] = 1;
@@ -162,8 +163,10 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   if (visibility === VISIBLE) {
     if (!ws.javaSurface) { ws.javaSurface = await javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
     await vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
-    if (!ws.parent) { ws.layer.x = frame.left; ws.layer.y = frame.top; }
-    else { ws.layer.x = frame.left - ws.parent.layer.x; ws.layer.y = frame.top - ws.parent.layer.y; }
+    // the surface extends past the frame by its insets (room for a shadow)
+    const insets = lp<Record<string, number>>(ws.attrs, "surfaceInsets");
+    ws.layer.x = frame.left - insets.left - (ws.parent?.layer.x ?? 0);
+    ws.layer.y = frame.top - insets.top - (ws.parent?.layer.y ?? 0);
   } else {
     await vcall(R("surfaceControl"), "release", "()V");
   }
@@ -322,11 +325,26 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   "watchRotation(Landroid/view/IRotationWatcher;I)I": () => device.width > device.height ? 1 : 0,
   "removeRotationWatcher(Landroid/view/IRotationWatcher;)V": () => {},
   "isInTouchMode(I)Z": () => 1,
+  // the keyguard is never shown and has no secure lock, as on the reference AVD, so an exit succeeds at once
   ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
+  ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
+    "removeKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V"),
+  "exitKeyguardSecurely(Landroid/view/IOnKeyguardExitResult;)V": (callback: unknown) => vcall(callback, "onKeyguardExitResult", "(Z)V", 1),
   "getInitialDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
   "getBaseDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
   "getInitialDisplayDensity(I)I": () => device.densityDpi,
   "getBaseDisplayDensity(I)I": () => device.densityDpi,
+  // the compositor draws no blur behind or across windows, so cross-window blur is never enabled
+  "registerCrossWindowBlurEnabledListener(Landroid/view/ICrossWindowBlurEnabledListener;)Z": () => 0,
+  "unregisterCrossWindowBlurEnabledListener(Landroid/view/ICrossWindowBlurEnabledListener;)V": () => {},
+  // a WindowContext's windows go on the one display, under its configuration
+  ...Object.fromEntries([`attachWindowContextToDisplayArea(Landroid/app/IApplicationThread;Landroid/os/IBinder;IILandroid/os/Bundle;)`,
+    `attachWindowContextToDisplayContent(Landroid/app/IApplicationThread;Landroid/os/IBinder;I)`].map((sig) =>
+    [sig + "Landroid/window/WindowContextInfo;", async () => newObj("android/window/WindowContextInfo", "(Landroid/content/res/Configuration;I)V", (await configurations()).global, 0)])),
+  "detachWindowContext(Landroid/os/IBinder;)V": () => {},
+  // nothing records the screen
+  "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
+  "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
 } });
 
 /** WindowManagerGlobal's IWindowManager, for an app whose windows AOSP's ViewRootImpl manages */

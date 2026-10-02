@@ -1,6 +1,6 @@
 // The native halves of android.content.res: ApkAssets, AssetManager, XmlBlock and StringBlock, as
 // libandroidfw answers them (ApkAssets, AssetManager2, Theme, AttributeResolution, ResXMLParser).
-// The AssetManager handle is a Resources (res.ts), which is AssetManager2 for our own stack too.
+// The AssetManager handle is a Resources (res.ts), the AssetManager2.
 //
 // AOSP's TypedArray is a flat int[] in STYLE_NUM_ENTRIES layout that applyStyle fills and every
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
@@ -11,7 +11,7 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
 import {
-  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES, attrSet, javaField,
+  Resources, JTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
 } from "./res";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml";
 import { sizeClass, type Arsc } from "./arsc";
@@ -45,6 +45,11 @@ function apkAt(path: string): Apk | null {
 /** an apk the shell installed, before the package registry records it */
 export function registerApk(path: string, res: Resources): void {
   if (!loaded.has(path)) loaded.set(path, { path, table: res.arsc, zip: res.zip, lazyEntries: res.lazyEntries });
+}
+/** a split installed with its base: its table and entries are merged into the base's (shell/install.ts),
+ *  so the ApkAssets ResourcesManager loads for its path adds nothing of its own */
+export function registerSplit(path: string): void {
+  if (!loaded.has(path)) loaded.set(path, { path, table: null, zip: {}, lazyEntries: new Map() });
 }
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {
@@ -109,25 +114,12 @@ delegate("android/content/res/ApkAssets", {
 
 interface Block { doc: XmlDoc; res: Resources | null; strings: bigint }
 /** the parse cursor. It IS an AttributeSet: AOSP passes XmlBlock.Parser.mParseState to
- *  applyStyle, and our own stack reads the element off `node`. */
-class ParseState extends JAttrSet {
+ *  applyStyle, which reads the element off `node`. */
+class ParseState {
   pos = 0;
-  constructor(readonly blk: Block, readonly sourceResId: number) {
-    super();
-    if (blk.res) this.res = blk.res;
-    this.node = null;
-  }
+  node: XmlNode | null = null;
+  constructor(readonly blk: Block, readonly sourceResId: number) {}
   get ev(): XmlEvent { return this.blk.doc.events[this.pos]; }
-}
-/** the root element of the document an XmlBlock$Parser reads */
-export function parserRoot(parser: unknown): XmlNode | null {
-  const st = attrSet(parser);
-  return st instanceof ParseState ? st.blk.doc.root : null;
-}
-/** another parser over the document an XmlBlock$Parser reads, from its start */
-export function reopenParser(parser: unknown): Promise<unknown> {
-  const st = attrSet(parser) as ParseState;
-  return vcall(javaField(parser, "android/content/res/XmlBlock$Parser", "mBlock"), "newParser", "(I)Landroid/content/res/XmlResourceParser;", st.sourceResId);
 }
 const block = (h: bigint) => deref<Block>(h);
 const state = (h: bigint) => deref<ParseState>(h);
@@ -370,7 +362,7 @@ delegate("android/content/res/AssetManager", {
   // themes
   "nativeThemeCreate(J)J": (h: bigint) => {
     const t = new JTheme();
-    t.res = assets(h); t.live = false;
+    t.res = assets(h);
     return handle(t);
   },
   "nativeGetThemeFreeFunction()J": () => FINALIZER,
@@ -396,16 +388,16 @@ delegate("android/content/res/AssetManager", {
 
   // obtainStyledAttributes, which is what every widget constructor is really doing
   "nativeApplyStyle(JJIIJ[IJJ)V": (h: bigint, th: bigint, defStyleAttr: number, defStyleRes: number, xml: bigint, attrs: Int32Array, outValues: bigint, outIndices: bigint) => {
-    const st = xml ? deref<JAttrSet>(xml) : null;
-    resolveAttributes(assets(h), deref<JTheme>(th), st?.node ?? null, (st as ParseState | null)?.sourceResId ?? 0, defStyleAttr, defStyleRes,
-      attrs, null, deref<Int32Array>(outValues), deref<Int32Array>(outIndices), null);
+    const st = xml ? state(xml) : null;
+    resolveAttributes(assets(h), deref<JTheme>(th), st?.node ?? null, st?.sourceResId ?? 0, defStyleAttr, defStyleRes,
+      attrs, null, deref<Int32Array>(outValues), deref<Int32Array>(outIndices));
   },
   "nativeResolveAttrs(JJII[I[I[I[I)Z": (h: bigint, th: bigint, defStyleAttr: number, defStyleRes: number, values: Int32Array | null, attrs: Int32Array, outValues: Int32Array, outIndices: Int32Array | null) => {
-    resolveAttributes(assets(h), deref<JTheme>(th), null, 0, defStyleAttr, defStyleRes, attrs, values?.length ? values : null, outValues, outIndices, null);
+    resolveAttributes(assets(h), deref<JTheme>(th), null, 0, defStyleAttr, defStyleRes, attrs, values?.length ? values : null, outValues, outIndices);
     return 1;
   },
   "nativeRetrieveAttributes(JJ[I[I[I)Z": (h: bigint, xml: bigint, attrs: Int32Array, outValues: Int32Array, outIndices: Int32Array | null) => {
-    resolveAttributes(assets(h), null, xml ? deref<JAttrSet>(xml).node : null, 0, 0, 0, attrs, null, outValues, outIndices, null);
+    resolveAttributes(assets(h), null, xml ? state(xml).node : null, 0, 0, 0, attrs, null, outValues, outIndices);
     return 1;
   },
   "nativeAttributeResolutionStack(JJIII)[I": (h: bigint, th: bigint, xmlStyle: number, defStyleAttr: number, defStyleRes: number) => {

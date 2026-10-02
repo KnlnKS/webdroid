@@ -15,7 +15,6 @@ export type ProcessDiagnostics = {
   perf: Record<string, number> | null;
   queue: { queued: number; depth: number; phase: string } | null;
   compositor: unknown;
-  unreadAttrs: string[] | null;
   coverage: { enabled: boolean; methods: string[] } | null;
 } | { status: "unavailable" } | { status: "failure"; message: string };
 
@@ -35,7 +34,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
     try {
       const read = () => frame.evaluate(() => {
         const wd = globalThis.wd;
-        return wd ? { status: "ok" as const, pkg: wd.app()?.host.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
+        return wd ? { status: "ok" as const, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
           missingAt: Object.fromEntries(wd.rt.missingAt ?? []),
           placeholders: [...wd.rt.placeholders],
           placeholderAt: Object.fromEntries(wd.rt.placeholderAt),
@@ -44,7 +43,6 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
           perf: wd.perf ? { ...wd.perf } : null,
           queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth, phase: wd.mainDbg.phase } : null,
           compositor: Reflect.get(wd, "compositorStatus") ?? null,
-          unreadAttrs: wd.unreadAttrs?.() ?? null,
           coverage: wd.jvmCoverage?.snapshot?.() ?? null } : { status: "unavailable" as const };
       });
       const diagnostics = await Promise.race([(async () => {

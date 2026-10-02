@@ -3,35 +3,32 @@
 // ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
-import { JObj, rt, noops, stubs, declaredField, setDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
-import { appHost, jclsNameOf } from "./apphost";
-import { mkComponentName, newIntent, putExtra, registerSystemActivity } from "./intent";
-import { intentSenderMethods } from "./pendingintent";
-import type { JActivity } from "./app";
+import { appHost } from "./apphost";
+import { newIntent, putExtra, registerSystemActivity } from "./intent";
+import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
-import { runningServices } from "./runningservices";
-import { GL_ES_VERSION, protectionLevel } from "./pm";
+import { GL_ES_VERSION } from "./pm";
+import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions";
 import { deviceConfiguration } from "./resnative";
-import { callingIdentity, hostStub } from "./binder";
+import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
-import { enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./context";
-import { stickyBroadcasts } from "./broadcast";
+import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue";
 import { activityManagerMethods } from "./server/am";
-import { activityTaskMethods } from "./server/atm";
+import { activityTaskMethods, foreground } from "./server/atm";
 import { activeServiceMethods } from "./server/activeservices";
-import { broadcastQueueMethods } from "./server/broadcastqueue";
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
-const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_SERVICE = 300, IMPORTANCE_CACHED = 400;
+const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 function fillProc(info: JObj): JObj {
   const pkg = appHost?.pkg ?? "";
   return setDeclared(info, PROCESS_INFO, { processName: PROCESS_NAME || pkg, pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
-    importance: appHost?.currentActivity() ? IMPORTANCE_FOREGROUND : runningServices.size ? IMPORTANCE_SERVICE : IMPORTANCE_CACHED });
+    importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED });
 }
 
 // IActivityManager: this process's view of the activity manager
@@ -44,7 +41,8 @@ const activityManager: NativeSpec["methods"] = {
   },
   "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) =>
     jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
-  "getServices(II)Ljava/util/List;": (max: number) => newArrayList([...runningServices.values()].slice(0, max)),
+  // ActiveServices does not report its records as RunningServiceInfo
+  "getServices(II)Ljava/util/List;": () => newArrayList(),
   // no exits or starts are recorded, and nothing restricts this app or drives it as a monkey
   "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": () =>
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
@@ -52,8 +50,8 @@ const activityManager: NativeSpec["methods"] = {
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
   "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
-  "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
-  "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
+  "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
+  "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
   "isUserAMonkey()Z": () => 0,
   // the render thread's tid, for scheduling: everything here shares the page's one thread
   "setRenderThread(I)V": () => {},
@@ -64,65 +62,26 @@ const activityManager: NativeSpec["methods"] = {
 rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub",
   methods: { ...activityManager, ...activityManagerMethods, ...activeServiceMethods, ...broadcastQueueMethods } });
 
-// IAppTask: one of the caller's tasks, the activities the shell stacks under a task id
-class JAppTask extends JObj { taskId = 0; }
-rt.register({ name: "webdroid/AppTask", ctor: JAppTask, sup: "android/app/IAppTask$Stub", methods: {
-  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": driven(function* (this: JAppTask): Gen {
-    const activities = (appHost?.activities() ?? []).filter((a) => a.taskId === this.taskId);
-    const component = (a: JActivity | undefined) => a ? mkComponentName(appHost?.pkg ?? "", jclsNameOf(a)) : null, id = this.taskId;
-    return setDeclared(yield newObj("android/app/ActivityManager$RecentTaskInfo", "()V"), "android/app/ActivityManager$RecentTaskInfo", {
-      id, persistentId: id, taskId: id, numActivities: activities.length, isRunning: +(activities.length > 0),
-      baseIntent: activities[0]?.intent ?? null, baseActivity: yield component(activities[0]), topActivity: yield component(activities.at(-1)) });
-  }),
-  "finishAndRemoveTask()V": function (this: JAppTask) { appHost?.finishTask(this.taskId); },
-  // one task is shown at a time, and there are no recents to exclude it from
-  "moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V": () => {},
-  "setExcludeFromRecents(Z)V": () => {},
-} });
-const appTasks = new Map<number, Promise<JAppTask>>();
-
 // IActivityTaskManager
 rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityTaskManager$Stub", methods: {
   ...activityTaskMethods,
-  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => {
-    const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
-    for (const id of appTasks.keys()) if (!ids.includes(id)) appTasks.delete(id);
-    return newArrayList(await Promise.all(ids.map((taskId) => {
-      let task = appTasks.get(taskId);
-      if (!task) appTasks.set(taskId, task = newObj("webdroid/AppTask").then((t: JAppTask) => Object.assign(t, { taskId })));
-      return task;
-    })));
-  },
+  ...intentSenderTaskMethods,
   "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": async () => {
-    const info: JObj = await newObj("android/content/pm/ConfigurationInfo"), config = deviceConfiguration(), fields = info as unknown as Record<string, number>;
-    const values = { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard, reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION };
-    for (const [name, value] of Object.entries(values)) fields[declaredField("android/content/pm/ConfigurationInfo", name)] = value;
-    return info;
+    const config = deviceConfiguration();
+    return setDeclared(await newObj("android/content/pm/ConfigurationInfo"), "android/content/pm/ConfigurationInfo", { 
+      reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard,
+      reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION });
   },
 } });
 
 hostStub("activity", "webdroid/ActivityManagerService");
 hostStub("activity_task", "webdroid/ActivityTaskManagerService");
 
-// IWindowManager: what WindowManagerGlobal and screen recording callbacks ask of it. Animations run
-// at the default duration scale, and nothing records the page, so a registration reports "not
-// recorded" and that never changes. The keyguard is never shown and has no secure lock, as on the
-// reference AVD, so an exit succeeds at once; ITrustManager agrees.
-rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
-  "getCurrentAnimatorScale()F": () => 1,
-  "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
-  "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
-  ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
-  ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
-    "removeKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V"),
-  "exitKeyguardSecurely(Landroid/view/IOnKeyguardExitResult;)V": (callback: unknown) =>
-    vcall(callback, "onKeyguardExitResult", "(Z)V", 1),
-} });
+// ITrustManager: the keyguard is never shown and has no secure lock, as on the reference AVD
 rt.register({ name: "webdroid/TrustManagerService", ctor: class extends JObj {}, sup: "android/app/trust/ITrustManager$Stub", methods: {
   ...stubs(0, "isDeviceLocked(II)Z", "isDeviceSecure(II)Z"),
 } });
 
-hostStub("window", "webdroid/WindowManagerService");
 hostStub("trust", "webdroid/TrustManagerService");
 
 // system_server services every device runs, which an app reaches with nothing to act on here: no
@@ -148,6 +107,15 @@ rt.register({ name: "webdroid/TextClassificationManagerService", ctor: class ext
     `onCreateTextClassificationSession(${TC}TextClassificationContext;${TC}TextClassificationSessionId;)V`, `onDestroyTextClassificationSession(${TC}TextClassificationSessionId;)V`),
 } });
 hostStub("textclassification", "webdroid/TextClassificationManagerService");
+// ITextServicesManager, under AOSP's TextServicesManager: no spell checker is installed, so none
+// is enabled or current, and a new session is null as AOSP's manager returns then
+rt.register({ name: "webdroid/TextServicesManagerService", ctor: class extends JObj {}, sup: "com/android/internal/textservice/ITextServicesManager$Stub", methods: {
+  "isSpellCheckerEnabled(I)Z": () => 0,
+  "getCurrentSpellChecker(ILjava/lang/String;)Landroid/view/textservice/SpellCheckerInfo;": () => null,
+  "getCurrentSpellCheckerSubtype(IZ)Landroid/view/textservice/SpellCheckerSubtype;": () => null,
+  "getEnabledSpellCheckers(I)[Landroid/view/textservice/SpellCheckerInfo;": () => jarray([], "Landroid/view/textservice/SpellCheckerInfo;"),
+} });
+hostStub("textservices", "webdroid/TextServicesManagerService");
 // SensitiveContentProtectionManagerService only blocks a sensitive window from screen sharing, and
 // nothing projects the screen here
 rt.register({ name: "webdroid/SensitiveContentProtectionManagerService", ctor: class extends JObj {}, sup: "android/view/ISensitiveContentProtectionManager$Stub",
@@ -156,6 +124,40 @@ hostStub("sensitive_content_protection_service", "webdroid/SensitiveContentProte
 hostStub("voiceinteraction", "webdroid/VoiceInteractionManagerService");
 hostStub("content_capture", "webdroid/ContentCaptureManagerService");
 hostStub("network_management", "webdroid/NetworkManagementService");
+// MediaProjectionManagerService with no projection: nothing records or casts the screen, so there is
+// no active projection to report and no change for a watcher to hear
+rt.register({ name: "webdroid/MediaProjectionManagerService", ctor: class extends JObj {}, sup: "android/media/projection/IMediaProjectionManager$Stub", methods: {
+  ...stubs(null, "getActiveProjectionInfo()Landroid/media/projection/MediaProjectionInfo;",
+    "addCallback(Landroid/media/projection/IMediaProjectionWatcherCallback;)Landroid/media/projection/MediaProjectionInfo;"),
+  ...noops("removeCallback(Landroid/media/projection/IMediaProjectionWatcherCallback;)V"),
+} });
+hostStub("media_projection", "webdroid/MediaProjectionManagerService");
+// StatusBarManagerService: quick settings never bind a tile, so a tile's listening request has no panel to reach
+rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj {}, sup: "com/android/internal/statusbar/IStatusBarService$Stub",
+  methods: noops("requestTileServiceListeningState(Landroid/content/ComponentName;I)V") });
+hostStub("statusbar", "webdroid/StatusBarManagerService");
+// IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
+// or enabled, so a client's state is all off; the focus highlight is framework-res's
+async function systemResource(type: string, name: string, read: string, desc: string, ...args: unknown[]): Promise<number> {
+  const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id: number = await vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
+  return vcall(res, read, desc, id, ...args);
+}
+rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends JObj {}, sup: "android/view/accessibility/IAccessibilityManager$Stub", methods: {
+  "addClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)J": () => 0n,
+  "removeClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)Z": () => 1,
+  "getRecommendedTimeoutMillis()J": () => 0n,
+  "getFocusStrokeWidth()I": () => systemResource("dimen", "accessibility_focus_highlight_stroke_width", "getDimensionPixelSize", "(I)I"),
+  "getFocusColor()I": () => systemResource("color", "accessibility_focus_highlight_color", "getColor", "(ILandroid/content/res/Resources$Theme;)I", null),
+  "getEnabledAccessibilityServiceList(II)Ljava/util/List;": () => newArrayList(),
+  "getInstalledAccessibilityServiceList(I)Landroid/content/pm/ParceledListSlice;": () =>
+    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+  ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;I)V", "interrupt(I)V"),
+} });
+hostStub("accessibility", "webdroid/AccessibilityManagerService");
+// No Bluetooth, NFC or autofill: SystemServer starts none of their services without the hardware
+// or FEATURE_AUTOFILL, so AOSP's managers, which every device registers, report no service
+absentService("bluetooth_manager", "nfc", "autofill");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
@@ -397,11 +399,10 @@ hostStub("appops", "webdroid/AppOpsService");
 const SOURCE = "android/content/AttributionSourceState";
 rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionChecker$Stub", methods: {
   "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
-    (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) => {
+    async (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) => {
       for (let current: JObj | undefined = source, first = true; current; first = false) {
-        const fields = current as unknown as Record<string, unknown>;
-        if (!(first && fromDatasource) && uidPermissionState(permission, fields[declaredField(SOURCE, "uid")] as number) !== 0) return 2; // PERMISSION_HARD_DENIED
-        current = (fields[declaredField(SOURCE, "next")] as JObj[] | null)?.[0];
+        if (!(first && fromDatasource) && await checkUidPermission(permission, getDeclared(current, SOURCE, "uid")) !== 0) return 2; // PERMISSION_HARD_DENIED
+        current = getDeclared<JObj[] | null>(current, SOURCE, "next")?.[0];
       }
       return 0;
     },

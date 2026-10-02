@@ -8,7 +8,7 @@ import { vfs } from "./vfs";
 import { packages, signaturePermissions, componentState } from "../android/packages";
 import { mkComponentName, newIntent, putExtra } from "../android/intent";
 import { vcall } from "../jvm/natives/jlang";
-import { serviceTransport } from "../android/runningservices";
+import { serviceTransport } from "../android/server/activeservices";
 import { hexBytes } from "../jvm/abi";
 
 let ready: Promise<void> | null = null;

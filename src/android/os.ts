@@ -11,7 +11,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall, stringHash } from "../jvm/natives/jlang";
 import { box, boxObject, unboxAs, type BoxDesc } from "../jvm/natives/jbox";
 import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
@@ -21,7 +21,7 @@ import { pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "..
 import { vfs } from "../shell/vfs";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
+import { newLinkedHashSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 
@@ -354,7 +354,11 @@ const bundleMethods: NativeSpec["methods"] = {
   "containsKey(Ljava/lang/String;)Z": function (this: JBundle, k: string) { return this.map.has(k) ? 1 : 0; },
   "remove(Ljava/lang/String;)V": function (this: JBundle, k: string) { this.map.delete(k); },
   "clear()V": function (this: JBundle) { this.map.clear(); },
-  "keySet()Ljava/util/Set;": function (this: JBundle) { return newStringSet(this.map.keys()); },
+  // ArrayMap's order: by key hash, insertion order among equal hashes (androidx.startup runs a
+  // provider's initializers in its meta-data's key order)
+  "keySet()Ljava/util/Set;": function (this: JBundle) {
+    return newLinkedHashSet([...this.map.keys()].sort((a, b) => (a === null ? 0 : stringHash(a)) - (b === null ? 0 : stringHash(b))));
+  },
   "putAll(Landroid/os/Bundle;)V": putAll,
   "putAll(Landroid/os/PersistableBundle;)V": putAll,
   "setClassLoader(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
@@ -505,11 +509,14 @@ class JParcelFileDescriptor extends JObj {
   closed = false;
   backing: PfdBacking | null = null;
   descriptor: JObj | null = null;
+  /** the descriptor a wrapper (ContentResolver's ParcelFileDescriptorInner) acts for */
+  wrapped: JParcelFileDescriptor | null = null;
 }
 type PfdBacking = { path: string; refs: number; key: string; closing: Promise<void> | null; sink: ((b: Uint8Array, closed?: boolean) => unknown) | null };
 /** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
  *  read-only descriptor over bytes with no file behind them reads those bytes. */
 function pfdFd(p: JParcelFileDescriptor): number {
+  if (p.wrapped && !p.closed) return pfdFd(p.wrapped);
   if (p.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "Already closed");
   if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
   else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd(p.bytes);
@@ -562,6 +569,12 @@ rt.register({
     get CREATOR() { return parcelCreator("android/os/ParcelFileDescriptor", async (parcel) => readObject(parcel)); },
   },
   methods: {
+    // a wrapper over another descriptor: its file, released when the wrapper closes
+    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JParcelFileDescriptor, wrapped: JParcelFileDescriptor | null) {
+      if (!wrapped) rt.npe();
+      const { bytes, sink, path, flags, backing } = wrapped!;
+      Object.assign(this, { bytes, sink, path, flags, backing, wrapped });
+    },
     "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: JObj | null, mode: number): Gen {
       if (!f) rt.npe();
       const path = pathOf(f!);
@@ -590,6 +603,11 @@ rt.register({
       return after(mkFd(pfdFd(this)), (d) => this.descriptor ??= d);
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
+    "seekTo(J)J": function (this: JParcelFileDescriptor, pos: bigint) {
+      const r = javaSeekFd(pfdFd(this), Number(pos), 0);
+      if (r < 0) throw errno("lseek", -r);
+      return BigInt(r);
+    },
     "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
     "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd: javaDupFd(fd) }),
     // AOSP dup(FileDescriptor): a new descriptor on the same open file description
@@ -620,6 +638,11 @@ rt.register({
     }),
     "close()V": driven(function* (this: JParcelFileDescriptor): Gen {
       if (this.closed) return;
+      if (this.wrapped) {
+        this.closed = true;
+        if (this.descriptor) setFdInt(this.descriptor, -1);
+        return yield vcall(this.wrapped, "close", "()V");
+      }
       if (this.fd >= 0) javaCloseFd(this.fd);
       this.fd = -1; this.closed = true;
       if (this.descriptor) setFdInt(this.descriptor, -1);
@@ -1202,3 +1225,4 @@ rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
     if (prop) info.ctor[prop] = value;
   }
 });
+rt.register({ name: "android/os/ext/SdkExtensions", ctor: class extends JObj {}, methods: { "static getExtensionVersion(I)I": () => 0 } });

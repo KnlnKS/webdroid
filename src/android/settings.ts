@@ -7,21 +7,22 @@
 // app holding WRITE_SETTINGS is not checked against SystemSettingsValidators, which ship in
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
-import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall, scall, construct, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
 import { mangleStaticField } from "../jvm/abi";
-import { suspendWith } from "../jvm/suspend";
-import { callingIdentity, asSystem, newStub } from "./binder";
+import { once } from "../jvm/suspend";
+import { callingIdentity, asSystem } from "./binder";
 import { mkUri, uriParts, uriDecode, type JUri } from "./net";
 import { mkCursor, contentValues } from "./sqlite";
 import { packages, type PackageRecord } from "./packages";
 import { reportUncaught, type JBundle } from "./os";
 import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
-import { holdsPlatformPermission } from "./context";
+import { holdsPlatformPermission } from "./permissions";
 import { SettingsStore, type SettingsTable } from "../shell/settings";
+import { registerSystemProvider, queryArgs, selectionOf, AS, URI, B, CV, SIGNAL } from "./systemproviders";
 
 export const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
@@ -53,17 +54,6 @@ const WRITE_SETTINGS = "android.permission.WRITE_SETTINGS", WRITE_SECURE_SETTING
 const SECURITY = "java/lang/SecurityException", ILLEGAL = "java/lang/IllegalArgumentException";
 const S = "Ljava/lang/String;";
 const fail = (cls: string, message: string): never => { throw rt.mkThrowable(cls, message); };
-/** a value computed by its first asker and kept. A suspended computation's promise carries that
- *  asker's frames (suspendWith), so it is never handed to another: one asking meanwhile computes too. */
-function once<T>(make: () => T | Promise<T>): () => T | Promise<T> {
-  let value: { v: T } | null = null;
-  return () => {
-    if (value) return value.v;
-    const v = make();
-    if (!(v instanceof Promise)) { value = { v }; return v; }
-    return suspendWith(v, (done, threw) => { if (threw) throw done; value = { v: done as T }; return done; }) as Promise<T>;
-  };
-}
 const javaStrings = (collection: unknown): Gen<Set<string>> => (function* () { return new Set((yield toJsArray(collection)) as string[]); })();
 
 // ── the Settings classes' own key sets (Settings.X.getPublicSettings, getMovedTo*), read once
@@ -368,61 +358,21 @@ function mimeType(uri: JUri): string {
   return (segments.length > 1 ? "vnd.android.cursor.item/" : "vnd.android.cursor.dir/") + (uriDecode(segments[0] ?? null) ?? "");
 }
 
-const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", CV = "Landroid/content/ContentValues;", B = "Landroid/os/Bundle;";
 /** ContentProvider.query/update/delete(Bundle): the selection the Bundle carries */
 const selected = <T>(op: (uri: JUri, where: string | null, args: string[] | null) => T) => driven(function* selected$(uri: JUri | null, extras: JBundle | null): Gen<T> {
-  const where: string | null = extras ? yield string(extras, "android:query-arg-sql-selection") : null;
-  const args: string[] | null = extras ? yield vcall(extras, "getStringArray", `(${S})[${S}`, "android:query-arg-sql-selection-args") : null;
-  return yield op(nonNullUri(uri), where, args);
+  return yield op(nonNullUri(uri), ...selectionOf(yield queryArgs(extras)));
 });
 const nonNullUri = (uri: JUri | null): JUri => uri ?? fail("java/lang/NullPointerException", "uri");
-rt.register({ name: "webdroid/SettingsProvider", ctor: class extends JObj {}, sup: "android/content/ContentProviderNative", methods: {
-  "getProviderName()Ljava/lang/String;": () => "com.android.providers.settings.SettingsProvider",
-  [`call(${AS}${S}${S}${S}${B})${B}`]: (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras),
-  [`query(${AS}${URI}[${S}${B}Landroid/os/ICancellationSignal;)Landroid/database/Cursor;`]:
-    (_source: unknown, uri: JUri | null, projection: string[] | null, args: JBundle | null) =>
+// FLAG_SYSTEM | FLAG_PERSISTENT; the provider is singleUser (FLAG_SINGLE_USER)
+registerSystemProvider(SETTINGS_AUTHORITY, { pkg: "com.android.providers.settings", cls: "com.android.providers.settings.SettingsProvider",
+  process: "system", appFlags: 0x9, flags: 0x40000000, initOrder: 100, methods: {
+    [`call(${AS}${S}${S}${S}${B})${B}`]: (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras),
+    [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, uri: JUri | null, projection: string[] | null, args: JBundle | null) =>
       selected((u, where, whereArgs) => query(u, projection, where, whereArgs))(uri, args),
-  [`insert(${AS}${URI}${CV}${B})${URI}`]: (_source: unknown, uri: JUri | null, values: JObj | null) => insert(nonNullUri(uri), values),
-  [`bulkInsert(${AS}${URI}[${CV})I`]: driven(function* (_source: unknown, uri: JUri | null, values: JObj[]): Gen<number> {
-    let inserted = 0;
-    for (const value of values) if (yield insert(nonNullUri(uri), value)) inserted++;
-    return inserted;
-  }),
-  [`update(${AS}${URI}${CV}${B})I`]: (_source: unknown, uri: JUri | null, values: JObj | null, extras: JBundle | null) =>
-    selected((u, where, args) => update(u, values, where, args))(uri, extras),
-  [`delete(${AS}${URI}${B})I`]: (_source: unknown, uri: JUri | null, extras: JBundle | null) => selected(remove)(uri, extras),
-  [`getType(${AS}${URI})${S}`]: (_source: unknown, uri: JUri | null) => mimeType(nonNullUri(uri)),
-  [`openFile(${AS}${URI}${S}Landroid/os/ICancellationSignal;)Landroid/os/ParcelFileDescriptor;`]: (_source: unknown, uri: JUri | null) => openFile(nonNullUri(uri)),
-  [`openAssetFile(${AS}${URI}${S}Landroid/os/ICancellationSignal;)Landroid/content/res/AssetFileDescriptor;`]: (_source: unknown, uri: JUri | null) => openFile(nonNullUri(uri)),
-  [`openTypedAssetFile(${AS}${URI}${S}${B}Landroid/os/ICancellationSignal;)Landroid/content/res/AssetFileDescriptor;`]: (_source: unknown, uri: JUri | null, filter: string) =>
-    filter === "*/*" ? openFile(nonNullUri(uri)) : fail("java/io/FileNotFoundException", `Can't open ${nonNullUri(uri).uri} as type ${filter}`),
-  [`canonicalize(${AS}${URI})${URI}`]: () => null,
-  [`uncanonicalize(${AS}${URI})${URI}`]: (_source: unknown, uri: JUri) => uri,
-  "createCancellationSignal()Landroid/os/ICancellationSignal;": () => scall("android/os/CancellationSignal", "createTransport", "()Landroid/os/ICancellationSignal;"),
-} });
-
-const provider = once(() => newStub("webdroid/SettingsProvider"));
-/** a provider system_server publishes (SettingsProvider, as the `settings` authority), by its IContentProvider */
-export const systemProvider = (authority: string | null): JObj | Promise<JObj> | null => authority === SETTINGS_AUTHORITY ? provider() : null;
-const set = (o: JObj, cls: string, values: Record<string, unknown>) => {
-  for (const [name, value] of Object.entries(values)) {
-    const field = declaredField(cls, name);
-    if (!field) throw new Error(`${cls} has no field ${name}`);
-    (o as unknown as Record<string, unknown>)[field] = value;
-  }
-};
-/** ActivityManagerService.getContentProvider's holder for a system provider: SettingsProvider's
- *  ProviderInfo as the AVD's package manager reports it, its binder, and no reference to release */
-export const systemProviderHolder = driven(function* systemProviderHolder$(authority: string): Gen<JObj | null> {
-  const binder = systemProvider(authority);
-  if (!binder) return null;
-  const app: JObj = yield construct("android/content/pm/ApplicationInfo", "()V"), info: JObj = yield construct("android/content/pm/ProviderInfo", "()V");
-  // FLAG_SYSTEM | FLAG_PERSISTENT; the provider is singleUser (FLAG_SINGLE_USER)
-  set(app, "android/content/pm/ApplicationInfo", { packageName: "com.android.providers.settings", processName: "system", uid: 1000, flags: 0x9 });
-  set(info, "android/content/pm/ProviderInfo", { authority, initOrder: 100, flags: 0x40000000 });
-  set(info, "android/content/pm/ComponentInfo", { applicationInfo: app, processName: "system", exported: 1 });
-  set(info, "android/content/pm/PackageItemInfo", { name: "com.android.providers.settings.SettingsProvider", packageName: "com.android.providers.settings" });
-  const holder: JObj = yield construct("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
-  set(holder, "android/app/ContentProviderHolder", { provider: yield binder, noReleaseNeeded: 1 });
-  return holder;
-});
+    [`insert(${AS}${URI}${CV}${B})${URI}`]: (_source: unknown, uri: JUri | null, values: JObj | null) => insert(nonNullUri(uri), values),
+    [`update(${AS}${URI}${CV}${B})I`]: (_source: unknown, uri: JUri | null, values: JObj | null, extras: JBundle | null) =>
+      selected((u, where, args) => update(u, values, where, args))(uri, extras),
+    [`delete(${AS}${URI}${B})I`]: (_source: unknown, uri: JUri | null, extras: JBundle | null) => selected(remove)(uri, extras),
+    [`getType(${AS}${URI})${S}`]: (_source: unknown, uri: JUri | null) => mimeType(nonNullUri(uri)),
+    [`openFile(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: (_source: unknown, uri: JUri | null) => openFile(nonNullUri(uri)),
+  } });

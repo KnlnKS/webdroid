@@ -1,4 +1,4 @@
-export type PointerSample = { action: 0 | 1 | 2 | 3; x: number; y: number; at: number };
+export type PointerSample = { action: 0 | 1 | 2 | 3; x: number; y: number };
 
 export function queuePointer(pending: PointerSample[], sample: PointerSample): void {
   const last = pending[pending.length - 1];

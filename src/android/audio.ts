@@ -106,6 +106,8 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
     "unregisterLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V", "startLoudnessCodecUpdates(I)V",
     "stopLoudnessCodecUpdates(I)V", "addLoudnessCodecInfo(IILandroid/media/LoudnessCodecInfo;)V",
     "removeLoudnessCodecInfo(ILandroid/media/LoudnessCodecInfo;)V"),
+  // the mode stays MODE_NORMAL, so no mode change is ever dispatched
+  ...noops("registerModeDispatcher(Landroid/media/IAudioModeDispatcher;)V", "unregisterModeDispatcher(Landroid/media/IAudioModeDispatcher;)V"),
 } });
 hostStub("audio", "webdroid/AudioService");
 

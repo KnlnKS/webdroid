@@ -6,7 +6,9 @@
 // key is the dex signature and method index. Saves append a chunk of the bodies not yet written,
 // so their cost follows what is new rather than what the app has accumulated. Bodies a launch
 // first needed before its first frame go to startup chunks, which the next launch awaits; the
-// rest load after that launch's first frame, so they do not delay it.
+// rest load after that launch's first frame, so they do not delay it. Bodies of the platform's
+// dex are the same for every app, so they persist in one store all packages share: an app's first
+// launch runs the framework code earlier launches of other apps compiled.
 
 import { inputSettled } from "./yield";
 import { BYTECODE } from "./provenance";
@@ -21,7 +23,11 @@ const bundle = new URL(import.meta.url).pathname.replace(/[^\w.-]+/g, "_");
 /** "s" until the realm's first frame, then "l": which chunks a body recorded now belongs to */
 type Phase = "s" | "l";
 let phase: Phase = "s";
-let dir: string | null = null;
+let dir: string | null = null, platformDir: string | null = null;
+const platformDexes = new Set<string>();
+/** a boot class path dex: its bodies go to the shared store */
+export function markPlatformDex(id: string): void { platformDexes.add(id); }
+const isPlatformKey = (key: string) => platformDexes.has(key.slice(0, key.indexOf(":")));
 let loaded: Record<string, Factory> = {};
 /** keys the startup chunks hold, which a compacting rewrite keeps there */
 let startupKeys = new Set<string>();
@@ -37,7 +43,7 @@ const firstUse = new Map<string, Phase>();
 const entryOf = (key: string) => key.slice(0, -1) + "e";
 
 /** where this launch persists, what it loaded and what it has yet to write */
-export const codeStats = () => ({ dir, loaded: Object.keys(loaded).length, pending: pending.size, deferred: deferred.size, later: later?.length ?? 0 });
+export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) => !isPlatformKey(key)).length, pending: pending.size, deferred: deferred.size, later: later?.length ?? 0 });
 
 export const codeKey = (dexId: string, methodIdx: number, form: "e" | "r") => `${dexId}:${methodIdx}:${form}`;
 
@@ -131,24 +137,27 @@ export function codeText(bodies: Iterable<[string, string]> = [...pending].map((
 export async function loadCode(app: string): Promise<void> {
   if (typeof caches === "undefined") return;
   dir = `/wd-code/${bundle}/${encodeURIComponent(app)}/`;
+  // the bodies depend on which platform classes run from bytecode, so a cut has a store of its own
+  const platform = `@platform${BYTECODE.length ? "-" + [...BYTECODE.join(",")].reduce((h, c) => Math.imul(h, 31) + c.charCodeAt(0) | 0, 0).toString(36) : ""}`;
+  platformDir = `/wd-code/${bundle}/${platform}/`;
   addEventListener("pagehide", () => void saveCode());
   try {
-    const cache = await caches.open(CACHE), mine: string[] = [], suffix = `/${encodeURIComponent(app)}/`;
+    const cache = await caches.open(CACHE), mine: string[] = [], suffixes = [`/${encodeURIComponent(app)}/`, `/${platform}/`];
     for (const request of await cache.keys()) {
       const path = new URL(request.url).pathname;
-      if (path.startsWith(dir)) mine.push(path);
-      // an older bundle's chunks for this app are stale; other apps' belong to other realms
-      else if (path.includes(suffix)) void cache.delete(request);
+      if (path.startsWith(dir) || path.startsWith(platformDir)) mine.push(path);
+      // an older bundle's chunks for this app or the platform are stale; other apps' belong to other realms
+      else if (suffixes.some((suffix) => path.includes(suffix))) void cache.delete(request);
     }
     // through the service worker when it controls the page, so V8 can reuse its code cache
     const direct = !!navigator.serviceWorker?.controller;
     importChunk = async (path) =>
       (await import(/* @vite-ignore */ direct ? path : URL.createObjectURL(await (await cache.match(path))!.blob()))).default;
-    const laterPaths = mine.filter((path) => path.startsWith(`${dir}l-`));
+    const laterPaths = mine.filter((path) => path.startsWith(`${dir}l-`) || path.startsWith(`${platformDir}l-`));
     later = laterPaths.length ? laterPaths : null;
     useCode(Object.assign({}, ...await Promise.all(mine.filter((path) => !laterPaths.includes(path)).map(importChunk))));
     startupKeys = new Set(Object.keys(loaded));
-    compact = mine.length > MAX_CHUNKS;
+    compact = mine.filter((path) => path.startsWith(dir!)).length > MAX_CHUNKS || mine.filter((path) => path.startsWith(platformDir!)).length > MAX_CHUNKS;
   } catch (e) { console.warn("[webdroid] persisted code unavailable", e); }
 }
 let importChunk: (path: string) => Promise<Record<string, Factory>> = async () => ({});
@@ -188,16 +197,26 @@ function saveCode(): Promise<void> {
   return saving = saving.then(async () => {
     const rewrite = compact && !later;
     if (!dir || !(pending.size || rewrite) || typeof caches === "undefined") return;
-    const chunks: Record<Phase, [string, string][]> = { s: [], l: [] };
-    if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!offered.has(key) && !pending.has(key)) chunks[startupKeys.has(key) ? "s" : "l"].push([key, factory.toString()]);
-    for (const [key, { source, phase }] of pending) chunks[phase].push([key, source]);
+    // by store (the app's, the platform's) and phase
+    const chunks = new Map<string, [string, string][]>();
+    const add = (key: string, at: Phase, source: string) => {
+      const name = `${isPlatformKey(key) ? platformDir : dir}${at}`;
+      let chunk = chunks.get(name);
+      if (!chunk) chunks.set(name, chunk = []);
+      chunk.push([key, source]);
+    };
+    if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!offered.has(key) && !pending.has(key)) add(key, startupKeys.has(key) ? "s" : "l", factory.toString());
+    for (const [key, { source, phase }] of pending) add(key, phase, source);
     pending.clear();
     lastSave = performance.now();
     const cache = await caches.open(CACHE), old = rewrite ? await cache.keys() : [], stamp = Date.now().toString(36);
-    // both at once: a pagehide save gets no time for a second write after the first
-    await Promise.all((["s", "l"] as const).filter((at) => chunks[at].length).map((at) =>
-      cache.put(`${dir}${at}-${stamp}.js`, new Response(codeText(chunks[at]), { headers: { "content-type": "text/javascript" } }))));
-    if (rewrite) for (const request of old) if (new URL(request.url).pathname.startsWith(dir)) void cache.delete(request);
+    // all at once: a pagehide save gets no time for a second write after the first
+    await Promise.all([...chunks].map(([name, bodies]) =>
+      cache.put(`${name}-${stamp}.js`, new Response(codeText(bodies), { headers: { "content-type": "text/javascript" } }))));
+    if (rewrite) for (const request of old) {
+      const path = new URL(request.url).pathname;
+      if (path.startsWith(dir) || path.startsWith(platformDir!)) void cache.delete(request);
+    }
     if (rewrite) compact = false;
   }).catch((e) => console.warn("[webdroid] saving compiled code failed", e));
 }

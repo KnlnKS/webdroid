@@ -4,14 +4,13 @@
 // placed where the WebView's draw functor composes. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
 import { vcall, callOn, newObj, linkInit, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";
-import { rootOf, type JView } from "./view";
-import { overlays } from "./popup";
+import { hostStub } from "./binder";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { mkUri } from "./net";
@@ -19,13 +18,12 @@ import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
-import { EXT_MIME, MIME_EXT } from "../mime";
+import { EXT_MIME, MIME_EXT, mimeOf } from "../mime";
 import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
-import { createFunctor, releaseFunctor, drawFunctor, drawnOn, resetDrawn, placeFunctors, type Rect } from "./webfunctor";
-import { stageD } from "../jvm/provenance";
+import { createFunctor, releaseFunctor, drawFunctor, type Rect } from "./webfunctor";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 /** a static of a bytecode class, by name and descriptor */
@@ -50,20 +48,29 @@ rt.register({
 const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
 const UA = `Mozilla/5.0 (Linux; Android 13; webdroid) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${WEBVIEW_VERSION} Mobile Safari/537.36`;
 const FACTORY = "webdroid/WebViewFactoryProvider";
+/** the provider package's PackageInfo */
+const webViewPackage = driven(function* webViewPackage$(): Gen<JObj> {
+  const pi: JObj = yield newObj("android/content/pm/PackageInfo"), ai: JObj = yield newObj("android/content/pm/ApplicationInfo");
+  setDeclared(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
+  setDeclared(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
+  return pi;
+});
 rt.register({
   name: "android/webkit/WebViewFactory", ctor: class extends JObj {}, platformClinit: true,
   methods: {
     // getWebViewContextAndSetProvider's package, then the provider class its context's loader finds
     "static getProviderClass()Ljava/lang/Class;": driven(function* (): Gen {
-      const pi: Record<string, unknown> = yield newObj("android/content/pm/PackageInfo"), ai: Record<string, unknown> = yield newObj("android/content/pm/ApplicationInfo");
-      const set = (o: Record<string, unknown>, cls: string, values: Record<string, unknown>) => { for (const k in values) o[declaredField(cls, k)] = values[k]; };
-      set(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
-      set(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
-      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = pi;
+      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = yield webViewPackage();
       return rt.classFor(FACTORY);
     }),
   },
 });
+// WebViewUpdateService: the provider package is the only one, current and never updated
+rt.register({ name: "webdroid/WebViewUpdateService", ctor: class extends JObj {}, sup: "android/webkit/IWebViewUpdateService$Stub", methods: {
+  "getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": webViewPackage,
+  "getCurrentWebViewPackageName()Ljava/lang/String;": () => WEBVIEW_PACKAGE,
+} });
+hostStub("webviewupdate", "webdroid/WebViewUpdateService");
 
 // ── WebSettings: the app reads back what it wrote, so every setter has its value and getter
 const settingsMethods: NonNullable<NativeSpec["methods"]> = {
@@ -150,18 +157,6 @@ function weakIfaces(of: () => WebInterfaces | null | undefined): WebInterfaces {
     for (const m in methods) proxy[m] = async (...args) => of()?.[name]?.[m]?.(...args);
   }
   return out;
-}
-/** without a compositor (the TS view stack) the page's draw pass is the composition: frames sit
- *  above the canvas, so a visible window stacked over the WebView's own hides it */
-function covered(v: JView): boolean {
-  const root = rootOf(v);
-  for (let i = overlays.length - 1; i >= 0 && overlays[i].view !== root; i--) if (overlays[i].view.visibility === 0) return true;
-  return false;
-}
-/** after a TS view stack draw pass onto `target`: the functors it drew are what shows */
-export function webLayerSweep(target: object): void {
-  placeFunctors(new Map(drawnOn(target)));
-  resetDrawn(target);
 }
 /** debug: the canvas capture cannot see frame pixels, so this is how a harness proves a page loaded */
 export function webViewInfo(): { url: string | null; title: string; loaded: boolean; progress: number; rect: Rect | null }[] {
@@ -407,7 +402,6 @@ export class WebViewChromium extends JObj {
   place(rect: Rect | null): void {
     const el = this.hold.el;
     if (!el) return;
-    if (rect && !stageD() && covered(this.view as unknown as JView)) rect = null;
     const was = this.rect;
     this.rect = rect;
     if (!rect) { if (was) el.hidden = true; return; }
@@ -915,7 +909,7 @@ function guessFileName(url: string, disposition: string | null, mime: string | n
     return name + (ext ?? ".bin");
   }
   // an extension that contradicts the declared type is replaced, not appended to
-  const fromExt = EXT_MIME[name.slice(name.lastIndexOf(".") + 1).toLowerCase()];
+  const fromExt = mimeOf(name);
   if (lmime && fromExt && fromExt !== lmime && MIME_EXT[lmime]) ext = "." + MIME_EXT[lmime];
   return name.slice(0, dot) + (ext ?? name.slice(dot));
 }

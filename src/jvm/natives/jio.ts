@@ -25,16 +25,7 @@ export const filterIn = (s: object): unknown => (s as Fields)[FILTER_IN];
 export const filterOut = (s: object): unknown => (s as Fields)[FILTER_OUT];
 export const setFilterIn = (s: object, stream: unknown): void => { (s as Fields)[FILTER_IN] = stream; };
 export const setFilterOut = (s: object, stream: unknown): void => { (s as Fields)[FILTER_OUT] = stream; };
-const BAIS = "java/io/ByteArrayInputStream", BAOS = "java/io/ByteArrayOutputStream";
-/** `new ByteArrayInputStream(bytes)`, sharing them; the class has no <clinit>, so this is synchronous */
-export function streamOf(bytes: Uint8Array): JObj {
-  const info = rt.link(BAIS);
-  rt.initClass(info);
-  const s = new info.ctor() as Record<string, unknown>;
-  s[declaredField(BAIS, "buf")] = i8(bytes);
-  s[declaredField(BAIS, "count")] = bytes.length;
-  return s as unknown as JObj;
-}
+const BAOS = "java/io/ByteArrayOutputStream";
 /** the bytes a ByteArrayOutputStream holds, without copying */
 export function baosBytes(s: JObj): Uint8Array {
   const o = s as unknown as Record<string, Int8Array | number>;

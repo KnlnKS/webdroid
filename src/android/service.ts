@@ -96,8 +96,4 @@ rt.register({
 
 // ── Marker interfaces. An app class that `implements` one of these cannot link until the
 // interface is registered, and the static audit never lists them (dynamic dispatch).
-rt.register({ name: "android/content/ServiceConnection", ctor: class extends JObj {}, methods: {
-  "onNullBinding(Landroid/content/ComponentName;)V": () => {},
-  "onBindingDied(Landroid/content/ComponentName;)V": () => {},
-} });
 rt.markers("android/os/IInterface");

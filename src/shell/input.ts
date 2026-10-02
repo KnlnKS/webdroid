@@ -2,9 +2,7 @@
 // trackpad's two-finger swipe reaches every app as a phone's one-finger drag.
 import { device } from "./config";
 import { dispatchPointer } from "./device";
-import { setInputElement } from "../android/textview-input";
-import { imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "../android/ime";
-import { guestNow } from "../guest-clock";
+import { setInputElement, imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "../android/ime";
 import { queuePointer, type PointerSample } from "./pointer-queue";
 
 export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement): void {
@@ -36,7 +34,7 @@ function sendPointer(sample: PointerSample): void {
     return;
   }
   pointerPending = true;
-  void dispatchPointer(sample.action, sample.x, sample.y, sample.at).finally(() => {
+  void dispatchPointer(sample.action, sample.x, sample.y).finally(() => {
     pointerPending = false;
     const next = pendingPointers.shift();
     if (next) sendPointer(next);
@@ -71,24 +69,24 @@ function attachInput(canvas: HTMLCanvasElement, onDown: () => void) {
     rect = canvas.getBoundingClientRect();
     try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
     const [x, y] = at(e);
-    sendPointer({ action: 0, x, y, at: guestNow() });
+    sendPointer({ action: 0, x, y });
     onDown();
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!down) return;
     const [x, y] = at(e);
-    sendPointer({ action: 2, x, y, at: guestNow() });
+    sendPointer({ action: 2, x, y });
   });
   canvas.addEventListener("pointerup", (e) => {
     if (!down) return;
     down = false;
     const [x, y] = at(e);
-    sendPointer({ action: 1, x, y, at: guestNow() });
+    sendPointer({ action: 1, x, y });
   });
   canvas.addEventListener("pointercancel", () => {
     if (!down) return;
     down = false;
-    sendPointer({ action: 3, x: 0, y: 0, at: guestNow() });
+    sendPointer({ action: 3, x: 0, y: 0 });
   });
   canvas.addEventListener("wheel", (e) => {
     // the page must not scroll under the phone, and a horizontal swipe must not walk history.

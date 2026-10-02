@@ -1467,6 +1467,132 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     before the app's uid is set, and Looper.loop captures its calling-identity token once, so
     every message logged "Thread identity changed" (a stack trace and an AMS call each); this
     process's own identity is now one token whatever its uid.
+- 2026-10-04, Stage D: the fast gate, the live flows and the corpus. The fast gate passes 7/7 in
+  both modes; the D-mode live flows and corpus reach their TS-mode depth except where noted below.
+  AOSP's own code is stricter than the TS stack was, so most fixes were fidelity, not D plumbing:
+  - Time: the harness pinned `Date.now`, which froze `currentTimeMillis`. Mihon's and Komikku's
+    splash keep conditions (`elapsed <= 500 || !ready && elapsed <= 5000`) then never cleared, and
+    ViewRootImpl honours the cancelling pre-draw listener. The TS stack had ignored it. Under a
+    controlled clock the guest wall clock is now start plus guest time; a pinned page's clock
+    advances from its fixed instant. Komikku's `ready` is set only for its own intent actions, so
+    a launcher start holds the splash 5 s on a device too; the fast lane keeps a launch's horizon.
+  - Order matters where the TS stack was lenient. A Bundle's keys iterate by hash, as ArrayMap's
+    do, which androidx.startup's initializer order follows. A process's providers install by
+    descending initOrder: Reddit's DI provider must precede InitializationProvider, whose
+    initializers wait on its graph with a timeout.
+  - Windows: a new window got focus before its input channel existed, so a dialog never heard
+    it and its ViewRootImpl dropped the back key. A surface with insets (a dialog's shadow room) sits
+    at the frame less the insets.
+  - Surfaces: lockCanvas returned the surface's own handle, which unlockSwCanvasAndPost releases
+    as its locked reference. The first software frame freed the window surface (Unity's FATAL
+    EXCEPTION in Among Us, Cut the Rope and Subway Surfers). Destroy must not free either: release
+    follows it, and a slot reused in between was freed.
+  - A start waiting for a pause must not wait on a record that a finish destroyed (TikTok's splash
+    finishes in onCreate).
+  - SAF: the storage documents provider is a system provider with a binder, and a result's URIs
+    are granted to the receiver, so `takePersistableUriPermission` works. The provider's asset
+    descriptor has unknown length; with length 0, AssetFileDescriptor's output stream dropped
+    every write.
+  - Harness: a tap's UP follows its DOWN by 60 guest ms regardless of when the DOWN is handled; a
+    late UP read as a long press. The pixel rule waits out main-thread jobs, transitions, and on a
+    real clock the first 1.5 s of frames or runnable threads. A fling's overscroll stretch draws
+    no new pixels, so a tap landed in the scroll and was consumed. `locateText` ranks exact
+    matches first, as the device driver does. A sample asks the compositor to present, since the
+    TS needsDraw does nothing under Stage D.
+  - Many system services gained the methods apps reached, each answering as this device does
+    (blur, screen recording/capture, media projection, backup, WebView update, status bar
+    tiles, window contexts, URI permissions, audio mode, Wi-Fi reconnects).
+  - The activity starter honours launch modes and CLEAR_TOP/SINGLE_TOP/REORDER_TO_FRONT/CLEAR_TASK
+    (every start had pushed a new instance), and an activity's translucency comes from its theme
+    as AttributeCache reads it. Before, only convertToTranslucent set it, so dialog-themed
+    activities stopped what they covered and the broker hid the process beneath a translucent
+    one.
+  - The latency gate passes under Stage D, cold and warm (FitNotes, Calculator M, Mihon, taps
+    9-51 ms on a loaded host). Its FitNotes scenario had tapped TS-layout coordinates that miss
+    AOSP's dialog. D-mode launches compile about 45% more classes and run about twice the cold
+    calls of TS mode (FitNotes first frame 2.8 s vs 1.9 s, loaded host). The framework's bodies
+    now persist in one store shared by all packages, so an app's first launch after any other
+    app's is warm in framework code (Calculator M 1.95 s → 1.28 s after FitNotes).
+  Limits: Clash of Clans and Clash Royale fail their anti-tamper checks in both modes; Resy and
+  TikTok fail their live flows in both modes. Reddit's flow is timing-sensitive under D: microG's
+  One Tap sheet arrives in its own process during the launch and takes the next taps.
+- 2026-10-04, Stage D lifecycle differential (§5.3). ActivityThread writes `wm_on_*_called`
+  EventLog tags (30021-30065) on both sides. Replaying a flow on the reference AVD with
+  `logcat -b events` cleared per step, and on webdroid with the page's `[I/EventLog]` lines, then
+  comparing each step's (event, activity, reason) sequence for the app's own activities:
+  - FitNotes (39 steps), CalculatorM (8) and Mihon onboarding (5) now match (since the review
+    below, launches differ only in the top-resumed reason string). The one remaining
+    FitNotes difference is a step boundary: the AVD's start for `28 ex-custom` lands in step 29's
+    window. The AVD's mihon-app replay diverged from the flow on its own (it was at the Library by
+    step 15 and left the app at 16), so that flow is not evidence either way.
+  - No TopResumedActivityChangeItem was ever sent, so `onTopResumedActivityChanged` never ran.
+    ATM now sends gained after a launch (the client reports `topStateChangedWhenResumed`) or with
+    a resume (`topWhenResuming`), and lost in the transaction that pauses.
+  - `Activity.recreate` did nothing: `scheduleRelaunchActivityIfPossible` skips an activity whose
+    token is a local `android.os.Binder` (an ActivityGroup child the server does not know), and
+    ATM's tokens were local Binders. A client now holds a BinderProxy for a system-owned binder,
+    as on a device. Mihon's onboarding theme choice relaunches as the AVD does.
+  - A splash screen that starts its successor and finishes raced: the finish saw the activity
+    already pausing and scheduled its destroy before the pause transaction was built. A
+    lifecycle request for a missing record is ignored, so this was silent until the top-resumed
+    callback, an ActivityTransactionItem, threw on it. A second pause now waits on the first.
+  - The recorder read the status inset only as `ITYPE_STATUS_BAR`; the current API 35 image prints
+    `InsetsSource id=… type=statusBars`, so it could not start. It reads both now.
+  - Under SwiftShader, the pixel rule's readbacks dominate a step whose screen keeps changing: in
+    Komikku's `09 manga`, `getImageData` took 5.7 s of a 7 s step. Its settle exceeds 20 s on a
+    loaded host and times out under the parallel gate.
+- 2026-10-04, Stage F and Amazon's launch freeze. With Stage D the only mode, the TS view, widget,
+  window, app, context and lifecycle layers were deleted (about 18,000 lines under `src/`): every
+  spec in them was under a STAGE_D prefix and withheld. Their removal exposed Stage D paths that
+  still read the TS app model, which is always empty under D (app tasks, process importance, the
+  notification prompt, MediaStore requests' PendingIntent context); those now read ATM's stack.
+  - Amazon froze the page at launch in both modes. A pool thread's HttpURLConnection exchange called
+    the app's CookieHandler after `await fetch`, and a plain async native resumes with the main
+    thread's identity. Amazon's cookie jar waits on a lock in `NetworkAccessManager.waitForAccess`,
+    so the exchange, running as "main", entered the monitor the real main thread had released by
+    parking in `wait()`, and both believed they owned it. Main later called `wait()` while a pool
+    thread held the lock. javac's catch-all around a synchronized block covers its own
+    `monitor-exit`, so the IllegalMonitorStateException re-ran the exit forever. `fetchResponse`
+    is now a driven generator, which re-enters the calling thread at each resume, and Amazon
+    reaches its sign-in screen.
+  - Any TS async native that calls Java after an `await` has the same exposure. Driven generators
+    are the safe form. Hosted services still use plain async natives that call Java after host
+    awaits (notification, appwidget, telephony, storagestats); they were not converted.
+  - Harness: the pixel rule's readbacks starved Komikku's manga step (above); a screen whose every
+    sample differs is now sampled less often. Komikku's `16 populated-library` timeouts came
+    from step 06 settling on the unchanged welcome page before the library appeared, leaving later
+    taps a screen behind; that step now waits for the navigation bar.
+  - Open: about one parallel gate run in five early in this session failed Komikku's
+    `21 restore` with NotFoundError from `docRead` on a picked "single" document (the backup file
+    in the OPFS stand-in). Logging showed no delete or rename of it; it did not recur in 16 later
+    runs, alone or parallel. A read overlapping the backup's `createWritable().close()` is the
+    untested hypothesis.
+  - AOSP's ContentResolver.getType calls `getTypeAsync` (canonicalize and uncanonicalize have
+    async forms too), which the hosted Settings and ExternalStorage providers lacked, so getType
+    on their URIs failed. A shared base in `systemproviders.ts` answers them as
+    ContentProvider.Transport does, and MediaStore's provider is hosted on it (`media`, package and
+    process `com.google.android.providers.media.module`, as on the reference AVD).
+- 2026-10-04, review of the Stage D/F branch. A strict review of the branch found:
+  - ATM: a launch sent "top-resumed gained" in a second transaction that a finish in onCreate
+    could overtake. It now rides with every resume, so top-resumed is exactly the resumed
+    state; launches therefore report `topWhenResuming` where the AVD reports
+    `topStateChangedWhenResumed`, with the same callback order.
+  - A plain start answered getCallingActivity: a result record is now kept only for a start for
+    a result. A CLEAR_TOP that destroyed a broker-started activity never told the broker.
+  - The notification prompt awaited a pause of the main thread that was usually its caller.
+  - `after()` and HttpURLConnection's accessors ran Java on the event loop's thread after a
+    promise: the Amazon bug class.
+  - Providers: two registries of system providers disagreed, so PMS did not resolve Settings or
+    Media. The three hosted providers each re-implemented ContentProvider.Transport's defaults,
+    and ExternalStorage lacked createCancellationSignal. AMS and IPermissionManager answered uid
+    permission checks differently. These are now one registry, one base and one
+    `checkUidPermission` in `permissions.ts`.
+  - Dead leftovers of the TS stack: drawn-text semantic tracking (a recorded op per drawText),
+    AppHost fields and the boot theme work that filled them, the TS resource reader, the Java
+    side of the preference store, and withheld registrations. Runtime.register now warns when a
+    spec is under a STAGE_D prefix.
+  - MediaPlayer.create, SoundPool.load and MediaStore.canManageMedia read the deleted TS
+    Context's `$host`.
 
 ## Java, storage and framework semantics
 

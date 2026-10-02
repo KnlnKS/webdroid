@@ -1,5 +1,6 @@
 import { rt } from "../runtime";
 import { parkTimeout, unparkTimeout, yieldToLoop } from "../yield";
+import { wallMillis } from "../../guest-clock";
 import { JThread, curThread } from "./jlang";
 
 // A parked thread wakes on its permit, its deadline, or an interrupt, which leaves the interrupt
@@ -27,7 +28,7 @@ const unparkThread = (t: JThread | null) => { if (!t) return; if (t.unpark) { t.
 // libcore's LockSupport parks through Unsafe: `absolute` times are epoch milliseconds, others
 // nanoseconds, and 0 is no deadline
 rt.registerJni("jdk/internal/misc/Unsafe", "park(ZJ)V", (absolute: number, time: bigint) =>
-  parkThread(curThread, absolute ? Math.max(0, Number(time) - Date.now()) : time > 0n ? Number(time) / 1e6 : undefined));
+  parkThread(curThread, absolute ? Math.max(0, Number(time) - wallMillis()) : time > 0n ? Number(time) / 1e6 : undefined));
 rt.registerJni("jdk/internal/misc/Unsafe", "unpark(Ljava/lang/Object;)V", unparkThread);
 // libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock; JS does
 rt.registerJni("java/util/concurrent/atomic/AtomicLong", "VMSupportsCS8()Z", () => 1);

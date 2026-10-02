@@ -3,7 +3,7 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { type Resources, setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
+import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
 import { vcall, after, scall, newObj } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues";
@@ -13,12 +13,6 @@ import { parcelCreator } from "./parcelable";
 import { appHost } from "./apphost";
 import { hostStub } from "./binder";
 
-/** a raw resource's bytes; NotFoundException when the table has no file for it */
-export function rawResourceBytes(res: Resources, id: number): Uint8Array {
-  const bytes = res.fileOf(id)?.bytes;
-  if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Resource 0x" + id.toString(16));
-  return bytes;
-}
 /** an AssetFileDescriptor over bytes, the whole of a ParcelFileDescriptor served over them */
 export function mkAssetFd(bytes: Uint8Array, pfd: unknown = null): Promise<unknown> {
   return newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", pfd ?? mkPfd(bytes, null), 0n, BigInt(bytes.length));
@@ -89,16 +83,23 @@ rt.register({ name: "webdroid/LocaleManagerService", ctor: class extends JObj {}
   "getOverrideLocaleConfig(Ljava/lang/String;I)Landroid/app/LocaleConfig;": () => null,
 } });
 hostStub("locale", "webdroid/LocaleManagerService");
+/** a list of distinct locales, the first of each tag kept */
+function initLocaleList(this: JLocaleList, locales: JLocale[]) {
+  if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
+  return after(withTags(locales), ({ values, tags }) => {
+    const first = tags.map((tag, i) => tags.indexOf(tag) === i);
+    this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
+  });
+}
 rt.register({
   name: "android/os/LocaleList", ctor: JLocaleList, ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/os/LocaleList", readLocaleList); } },
   methods: {
-    "<init>([Ljava/util/Locale;)V": function (this: JLocaleList, locales: JLocale[]) {
-      if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
-      return after(withTags(locales), ({ values, tags }) => {
-        const first = tags.map((tag, i) => tags.indexOf(tag) === i);
-        this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
-      });
+    "<init>([Ljava/util/Locale;)V": initLocaleList,
+    // `top` first, then the rest of `others` without it
+    "<init>(Ljava/util/Locale;Landroid/os/LocaleList;)V": function (this: JLocaleList, top: JLocale | null, others: JLocaleList | null) {
+      if (!top) throw rt.mkThrowable("java/lang/NullPointerException", "topLocale is null");
+      return initLocaleList.call(this, [top, ...(others?.values ?? [])]);
     },
     "static getDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => defaultList ?? theConfig.locales),
     // the process default ActivityThread sets from its configuration, with its best locale first

@@ -3,8 +3,6 @@ import { mangleMethod, jmethod } from "../jvm/abi";
 import { idHash, newObj, stringHash, vcall } from "../jvm/natives/jlang";
 import type { JBundle } from "./os";
 import { myLooper, postTo } from "./mainloop";
-import { type JContext } from "./context";
-import { JService } from "./app";
 
 class JMediaSession extends JObj {
   token = new JSessionToken(this);
@@ -57,35 +55,7 @@ rt.register({ name: "android/media/session/MediaSessionManager$RemoteUserInfo", 
       return Math.imul(31, Math.imul(31, Math.imul(31, 1) + stringHash(this.packageName)) + this.pid) + this.uid | 0;
     },
   } });
-class JMediaBrowserService extends JService { token: JSessionToken | null = null; }
-class JBrowserRoot extends JObj { rootId = ""; extras: JBundle | null = null; }
-rt.register({ name: "android/service/media/MediaBrowserService", ctor: JMediaBrowserService, sup: "android/app/Service", methods: {
-  "<init>()V": function () {},
-  "setSessionToken(Landroid/media/session/MediaSession$Token;)V": function (this: JMediaBrowserService, token: JSessionToken | null) {
-    if (!token) throw rt.mkThrowable("java/lang/IllegalArgumentException", "session token cannot be null");
-    if (this.token) throw rt.mkThrowable("java/lang/IllegalStateException", "session token already set");
-    this.token = token;
-  },
-  "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaBrowserService) { return this.token; },
-  "notifyChildrenChanged(Ljava/lang/String;)V": (parent: string | null) => {
-    if (!parent) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parentId cannot be null");
-  },
-  "notifyChildrenChanged(Ljava/lang/String;Landroid/os/Bundle;)V": (parent: string | null, options: JBundle | null) => {
-    if (!parent || !options) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parentId and options cannot be null");
-  },
-  "getBrowserRootHints()Landroid/os/Bundle;": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "Outside onGetRoot or onLoadChildren"); },
-  "getCurrentBrowserInfo()Landroid/media/session/MediaSessionManager$RemoteUserInfo;": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "Outside onGetRoot or onLoadChildren"); },
-} });
-rt.register({ name: "android/service/media/MediaBrowserService$BrowserRoot", ctor: JBrowserRoot, methods: {
-  "<init>(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBrowserRoot, id: string | null, extras: JBundle | null) {
-    if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "rootId cannot be null or empty");
-    this.rootId = id; this.extras = extras;
-  },
-  "getRootId()Ljava/lang/String;": function (this: JBrowserRoot) { return this.rootId; },
-  "getExtras()Landroid/os/Bundle;": function (this: JBrowserRoot) { return this.extras; },
-} });
-
-async function initialize(session: JMediaSession, context: JContext | null, tag: string) {
+async function initialize(session: JMediaSession, context: JObj | null, tag: string) {
   if (!context) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context cannot be null");
   if (!tag) throw rt.mkThrowable("java/lang/IllegalArgumentException", "tag cannot be null or empty");
   rt.link("android/media/session/MediaSession$Token"); rt.link("android/media/session/MediaController");
@@ -100,7 +70,7 @@ function dispatch(session: JMediaSession, method: string, desc: string, ...args:
   const { callback, epoch } = session;
   postTo(session.handler!, () => session.released || session.epoch !== epoch ? undefined : vcall(callback, method, desc, ...args));
 }
-const initSession = function (this: JMediaSession, context: JContext | null, tag: string) { return initialize(this, context, tag); };
+const initSession = function (this: JMediaSession, context: JObj | null, tag: string) { return initialize(this, context, tag); };
 rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
   "<init>(Landroid/content/Context;Ljava/lang/String;)V": initSession,
   "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V": initSession,
@@ -138,7 +108,7 @@ rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class e
   ...noops("<init>()V"),
 } });
 rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
-  "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, context: JContext | null, token: JSessionToken | null) {
+  "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, context: JObj | null, token: JSessionToken | null) {
     if (!context || !token) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context and token must not be null");
     this.session = token.session; this.controls.session = token.session;
   },
