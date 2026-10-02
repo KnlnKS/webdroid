@@ -220,7 +220,7 @@ function consumeInput(s: Stream, strm: number): void {
   s.heldInput = 0;
 }
 
-function inflate(strm: number, _flush: number): number {
+function inflate(strm: number): number {
   const s = streams.get(strm);
   if (!s) return Z_STREAM_ERROR;
   if (!mem.ld32(strm + Z.AVOUT)) return Z_BUF_ERROR;
@@ -310,7 +310,7 @@ export function zlibInit(): void {
     },
     inflateInit_: (_c, a) => { const strm = a.p(); a.str(); a.i(); return open(strm, 15); },
     inflateInit2_: (_c, a) => { const strm = a.p(), bits = a.i(); a.str(); a.i(); return open(strm, bits); },
-    inflate: (_c, a) => inflate(a.p(), a.i()),
+    inflate: (_c, a) => inflate(a.p()),
     inflateEnd: (_c, a) => streams.delete(a.p()) ? Z_OK : Z_STREAM_ERROR,
     inflateReset: (_c, a) => { const strm = a.p(), s = streams.get(strm); return s ? open(strm, s.windowBits) : Z_STREAM_ERROR; },
     inflateSetDictionary: () => Z_STREAM_ERROR,
