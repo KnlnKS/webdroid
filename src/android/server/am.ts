@@ -2,7 +2,7 @@
 // application (ApplicationInfo and the process's providers from the package manager, the device
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
-import { rt, JObj, declaredField } from "../../jvm/runtime";
+import { rt, JObj, declaredField, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, scall, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
@@ -73,10 +73,10 @@ function publication(authority: string): Publication {
   if (!pending) publications.set(authority, pending = Promise.withResolvers());
   return pending;
 }
-async function publishProviders(holders: JObj): Promise<void> {
-  const count: number = await vcall(holders, "size", "()I");
+const publishProviders = driven(function* (holders: JObj): Gen<void> {
+  const count: number = yield vcall(holders, "size", "()I");
   for (let i = 0; i < count; i++) {
-    const holder: Record<string, unknown> = await vcall(holders, "get", "(I)Ljava/lang/Object;", i);
+    const holder: Record<string, unknown> = yield vcall(holders, "get", "(I)Ljava/lang/Object;", i);
     if (!holder) continue;
     holder[declaredField(HOLDER, "noReleaseNeeded")] = 1;
     const authority = (holder[declaredField(HOLDER, "info")] as Record<string, string | null>)[declaredField(PROVIDER_INFO, "authority")];
@@ -85,7 +85,7 @@ async function publishProviders(holders: JObj): Promise<void> {
       publication(name).resolve(holder as unknown as JObj);
     }
   }
-}
+});
 /** the IContentProvider binder this process publishes for an authority, for a caller in another
  *  process; null when it is not published in time */
 export async function publishedProvider(authority: string): Promise<JObj | null> {
@@ -101,23 +101,23 @@ export const providerProcesses: { get: (pkg: string, process: string, authority:
  *  package manager's: a local one (newHolder(null, true)) when it may run here, multiprocess or
  *  this process's with its uid, which ActivityThread instantiates rather than waiting for a
  *  publication; otherwise the binder its own process published, which the broker waits for */
-async function contentProvider(name: string, userId: number): Promise<JObj | null> {
-  const own = published.get(name) ?? await systemProviderHolder(name);
+const contentProvider = driven(function* (name: string, userId: number): Gen<JObj | null> {
+  const own = published.get(name) ?? (yield systemProviderHolder(name));
   if (own) return own;
-  const info: Record<string, unknown> | null = await vcall(await pms(), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
+  const info: Record<string, unknown> | null = yield vcall(yield pms(), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
   if (!info) return null;
   const app = info[declaredField(COMPONENT_INFO, "applicationInfo")] as Record<string, unknown>;
   const process = info[declaredField(COMPONENT_INFO, "processName")] as string;
-  const holder: Record<string, unknown> = await newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
+  const holder: Record<string, unknown> = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
   if (app[declaredField(APP_INFO, "uid")] === PROCESS_UID && (info[declaredField(PROVIDER_INFO, "multiprocess")] || process === (PROCESS_NAME || appHost!.pkg))) {
     holder[declaredField(HOLDER, "mLocal")] = 1;
     return holder as unknown as JObj;
   }
-  const binder = await providerProcesses.get(app[declaredField(APP_INFO, "packageName")] as string, process, name);
+  const binder = yield providerProcesses.get(app[declaredField(APP_INFO, "packageName")] as string, process, name);
   if (!binder) return null;
-  holder[declaredField(HOLDER, "provider")] = await scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder);
+  holder[declaredField(HOLDER, "provider")] = yield scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder);
   return holder as unknown as JObj;
-}
+});
 
 /** the methods IActivityManager adds for ActivityThread */
 export const activityManagerMethods = {

@@ -2,7 +2,7 @@
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
 import { JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { construct, scall, vcall, after } from "../jvm/natives/jlang";
+import { callUncaught, construct, scall, vcall, after } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -53,7 +53,7 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
   if (installed !== null) {
     const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
     const added: JIntent = yield construct("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
-    void broadcastIntent(added, [], false).catch(reportUncaught);
+    callUncaught(() => broadcastIntent(added, [], false));
     yield extra("android.content.pm.extra.PACKAGE_NAME", installed, S);
     yield extra("android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
   } else {
