@@ -459,7 +459,7 @@ export const ioResult = (fn: string, result: number): number => { sys(fn, result
 const SENDFILE_CHUNK = 1 << 20;
 /** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
 export type IoBuffer = Int8Array | JBuffer | null;
-export function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
+function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
   if (buffer === null) return rt.npe();
   const view = isBuffer(buffer) ? bufferBytes(buffer) : buffer;
   checkFromIndexSize(offset, count, view.byteLength, "java/lang/ArrayIndexOutOfBoundsException");

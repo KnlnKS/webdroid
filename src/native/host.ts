@@ -13,7 +13,7 @@ export const ARG0: unique symbol = Symbol("arg0");
 /** a name the core serves (CORE_LIBC): the host has no body, the tracer goes through libc_call */
 export const SERVED: HostFn = (cpu) => cpu.fault("a core-served call reached the host");
 /** the result is already in v0 (see retF/retD); only the return itself is left to do */
-export const VRET: unique symbol = Symbol("vret");
+const VRET: unique symbol = Symbol("vret");
 export type HostRet = number | bigint | void | typeof NORET | typeof VRET | typeof ARG0;
 export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
 

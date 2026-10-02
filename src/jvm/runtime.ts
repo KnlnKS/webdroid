@@ -92,10 +92,6 @@ export function without(methods: NativeSpec["methods"], ...keys: string[][]): No
   return out;
 }
 
-export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
-  return (m![sig] as (this: unknown, ...a: unknown[]) => unknown).call(self, ...args);
-}
-
 export class ClassInfo {
   staticFieldTable = new Map<string, string>();
   ctor: any;

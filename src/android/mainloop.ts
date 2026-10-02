@@ -73,8 +73,6 @@ export class NativeLooper {
   }
 }
 
-/** the looper of the calling thread, if it has prepared one */
-export const myLooper = (): NativeLooper | undefined => curThread.looper as NativeLooper | undefined;
 
 rt.registerJnis("android/os/MessageQueue", {
   "nativeInit()J": () => handle(curThread.looper = new NativeLooper(curThread)),
@@ -123,7 +121,7 @@ export function startMainLooper(): Promise<void> {
 }
 
 /** the main thread's Handler, which View.post and the framework's managers post on */
-export function mainHandler(): JObj {
+function mainHandler(): JObj {
   if (!mainHandlerObj) throw new Error("the main looper has not started");
   return mainHandlerObj;
 }

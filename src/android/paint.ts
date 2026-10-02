@@ -169,8 +169,8 @@ const metricsOf = (p: NativePaint): FaceMetrics => p.primary().font.faceMetrics!
 /** getMetricsInternal's elegant-height metrics, in 2048ths of the size: top, ascent, descent, bottom */
 const ELEGANT_METRICS = [2500, 1900, 500, 1000];
 const elegant = (p: NativePaint, i: number) => (i < 2 ? -p.textSize : p.textSize) * ELEGANT_METRICS[i] / 2048;
-export const fontAscent = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 1) : -p.textSize * metricsOf(p).ascent;
-export const fontDescent = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 2) : p.textSize * metricsOf(p).descent;
+const fontAscent = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 1) : -p.textSize * metricsOf(p).ascent;
+const fontDescent = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 2) : p.textSize * metricsOf(p).descent;
 export const fontTop = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 0) : Math.fround(-p.textSize * metricsOf(p).top);
 export const fontBottom = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 3) : Math.fround(p.textSize * metricsOf(p).bottom);
 const metricKeys: Record<string, string[]> = {};

@@ -261,7 +261,7 @@ class WordBreaker {
 /** a style run has a style; a replacement run (a ReplacementSpan) has only its width */
 export interface Run { start: number; end: number; style: TextStyle | null; width: number; lang: string; lbStyle: number; lbWordStyle: number }
 /** a paragraph's measurement: each character's advance, and its piece's ascent and descent */
-export interface Measured { text: string; runs: Run[]; widths: Float32Array; extents: Float32Array }
+interface Measured { text: string; runs: Run[]; widths: Float32Array; extents: Float32Array }
 const measured = (h: bigint) => deref<Measured>(h);
 
 /** MeasuredText::getExtent: the extent of the pieces over [start,end) */

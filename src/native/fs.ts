@@ -26,7 +26,7 @@ interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed:
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
-export interface Fd {
+interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   /** a writable /proc file, whose writes procWrite takes */
   proc?: boolean;

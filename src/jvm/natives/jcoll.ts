@@ -56,7 +56,6 @@ const newCollection = driven(function* newCollection(cls: string, items: Iterabl
   for (const item of items) yield vcall(c, "add", "(Ljava/lang/Object;)Z", item);
   return c;
 });
-export const newStringSet = (items: Iterable<string>) => newCollection("java/util/HashSet", items);
 export const newLinkedHashSet = (items: Iterable<unknown>) => newCollection("java/util/LinkedHashSet", items);
 
 const AM = "android/util/ArrayMap", AM_ARRAY = mangleField(AM, "mArray"), AM_SIZE = mangleField(AM, "mSize");

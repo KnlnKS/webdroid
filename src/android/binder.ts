@@ -15,7 +15,7 @@ export type BinderHandle = { pid: number; id: number };
 /** a descriptor crossing processes, since binder IPC here moves no descriptors: its file's bytes,
  *  for a writable one the binder that writes them back to the descriptor it came from, and for an
  *  ashmem region its protection */
-export type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
+type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | null][] };
 /** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
@@ -138,7 +138,7 @@ function setWorkSource(uid: number, propagate: boolean): bigint {
   workSources.set(curThread, { uid, propagate });
   return BigInt(+was.propagate) << 32n | BigInt(was.uid >>> 0);
 }
-export const transactionCaller = (): Caller | undefined => callers.get(curThread);
+const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 /** a oneway call to a local binder: made on a fresh turn of the caller's thread, which neither
  *  waits for the callee nor hears of its failure */
@@ -156,7 +156,7 @@ export const enforceCallingOrSelfPermission = driven(function* (permission: stri
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
-export async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
+async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
   const thread = new JThread();
   thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller);
   if (system) systemThreads.add(thread);

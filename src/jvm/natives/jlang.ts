@@ -640,16 +640,6 @@ export function checkFromIndexSize(off: number, len: number, length: number, cls
   if (off < 0 || len < 0 || off > length - len) throw rt.mkThrowable(cls, null);
 }
 
-const tsThrowables = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
-/** Register a TS throwable class. Under a libcore parent it is re-parented when it links, so
- *  registering links nothing before the platform class path is there. */
-export function defineException(name: string, sup: string, methods: NativeSpec["methods"] = {}) {
-  if (!tsThrowables.has(sup) && rt.natives.has(sup)) throw new Error(`defineException ${name}: define ${sup} with defineException first`);
-  const c = class extends (tsThrowables.get(sup) ?? JObj as unknown as new () => JThrowable) {};
-  tsThrowables.set(name, c);
-  rt.register({ name, sup, ctor: c, methods });
-}
-
 /** a throwable made without running its constructors: `cls` linked, its message set, its trace
  *  taken here (a class that is not a throwable, or cannot link, makes a plain Throwable) */
 rt.mkThrowable = (cls: string, msg: string | null) => {
@@ -1427,8 +1417,6 @@ function enumerateThreads(threads: unknown[]): number {
 }
 // java.lang.Enum runs from libcore; TS reads a constant's name and ordinal through these
 const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
-type JSimpleEnum = JObj;
-const enumName = (e: unknown): string => (e as Record<string, string>)[ENUM_NAME];
 // §4.7: compareTo within one enum class, and valueOf over the constants getSharedConstants shares
 // (AOSP asks getClass and getDeclaringClass of both, and an LRU cache under a lock, per call)
 const sharedEnums = new WeakMap<object, Record<string, unknown>[]>();
@@ -1444,30 +1432,6 @@ rt.intrinsic("java/lang/Enum", {
     return base(cls, name);
   },
 });
-/**
- * A Java enum with nothing behind it but its constants: registers the class (a fresh ctor per
- * enum, so each has its own statics and ClassInfo; libcore's Enum becomes its superclass when it
- * links), and returns the constants in declaration order. `extra` adds methods a specific enum
- * needs beyond Enum's own.
- */
-export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["methods"] = {}, ifaces?: string[], fields?: NativeSpec["fields"]): JSimpleEnum[] {
-  const ctor = class extends JObj {};
-  const vals = names.map((n, i) => Object.assign(new ctor(), { [ENUM_NAME]: n, [ENUM_ORDINAL]: i }));
-  rt.register({
-    name: cls, ctor, sup: "java/lang/Enum", ifaces, fields,
-    statics: Object.fromEntries(names.map((n, i) => [n, vals[i]])),
-    methods: {
-      [`static values()[L${cls};`]: () => jarray(vals.slice(), `L${cls};`),
-      // Enum.valueOf's answers
-      [`static valueOf(Ljava/lang/String;)L${cls};`]: (n: string | null) => {
-        if (n === null) throw rt.mkThrowable("java/lang/NullPointerException", "Name is null");
-        return vals.find((e) => enumName(e) === n) ?? (() => { throw rt.mkThrowable("java/lang/IllegalArgumentException", `No enum constant ${dotName(cls).replace(/\$/g, ".")}.${n}`); })();
-      },
-      ...extra,
-    },
-  });
-  return vals;
-}
 
 const THREAD_STATES = ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"];
 /** debug: each live thread as Thread.getState reads it, with the object it parked on

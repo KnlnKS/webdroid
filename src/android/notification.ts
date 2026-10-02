@@ -36,7 +36,7 @@ const AUTOGROUP_AT_COUNT = 2;
 const MAX_PACKAGE_NOTIFICATIONS = 50, MAX_PACKAGE_ENQUEUE_RATE = 5;
 
 /** a posted notification as its NotificationRecord: what the rules read, and the Notification's parcel */
-export interface PostedNotification {
+interface PostedNotification {
   key: string; pkg: string; opPkg: string; id: number; tag: string | null; uid: number; pid: number; userId: number;
   postTime: bigint; channel: string; flags: number; group: string | null; sortKey: string | null;
   /** the group key an adjustment overrides the app's with (GroupHelper's autogroup) */
@@ -47,7 +47,7 @@ export interface PostedNotification {
 interface Ungrouped { flags: number; icon: string; color: number; visibility: number }
 /** NotificationManagerService's notification list and the state its posting rules keep, shared by
  *  every process through the broker */
-export class NotificationStore {
+class NotificationStore {
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
   /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */

@@ -247,16 +247,12 @@ let nativeInstance = "";
 export const typefaceOf = (t: object | null): NativeTypeface =>
   resolveDefault(t && deref<NativeTypeface>((t as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Typeface", "native_instance")]));
 
-/** Typeface.create("sans-serif-medium", NORMAL), the face framework chrome uses (dialog buttons,
- *  picker values, the action bar title), once the system font map is loaded */
-export let tfMedium: object | null = null;
 /** the zygote's preload of the system font map (Typeface.DEFAULT and the named families) over the
  *  platform font index, with HarfBuzz and the default family's font loaded to measure text */
 export async function loadSystemFontMap(): Promise<void> {
   const T = "android/graphics/Typeface";
   [fontIndex] = await Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]);
   await scall(T, "loadPreinstalledSystemFontMap", "()V");
-  tfMedium = await scall(T, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "sans-serif-medium", 0);
 }
 
 const fontSet = new Set<NativeFont>();

@@ -22,10 +22,6 @@ export function unbox(o: unknown): number | bigint | undefined {
   const d = boxDesc(o);
   return d === null ? undefined : (o as Obj)[VALUE[d]];
 }
-/** a box's primitive value if it is a `desc` box, else `fallback` */
-export function unboxAs<T>(o: unknown, desc: BoxDesc, fallback: T): number | bigint | T {
-  return boxDesc(o) === desc ? (o as Obj)[VALUE[desc]] : fallback;
-}
 
 // The small values valueOf shares, from each class's cache once it has initialized (AOSP's
 // valueOf initializes it; before that a box is made fresh, as `new Integer(v)` would make it).

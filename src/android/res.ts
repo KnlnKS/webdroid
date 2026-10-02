@@ -64,7 +64,7 @@ let configGen = 0;
 const allResources: Resources[] = [];
 /** the booted app's Resources — the framework package is an Arsc, not one of these, so the
  *  most recent is the app's. */
-export function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
+function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
 /** Re-resolve entries under changed qualifiers in every live resource table. */
 function setDeviceQualifiers(qualifiers: Partial<Arsc["device"]>): void {
   configGen++;

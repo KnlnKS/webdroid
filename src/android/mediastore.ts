@@ -103,7 +103,7 @@ function tableOf(uri: string): Table | null {
   const match = /^content:\/\/media\/(external|external_primary|internal)\/(file|images\/media|video\/media|audio\/media|downloads)(?:\/(\d+))?(?:\?.*)?$/.exec(uri);
   return match ? { volume: match[1], kind: match[2], id: match[3] ? Number(match[3]) : null } : null;
 }
-export function isMediaUri(uri: string): boolean { return tableOf(uri) !== null; }
+function isMediaUri(uri: string): boolean { return tableOf(uri) !== null; }
 export async function mediaPath(uri: string): Promise<string | null> {
   const table = tableOf(uri);
   if (!table?.id || table.volume === "internal") return null;
@@ -120,7 +120,7 @@ function setFlag(database: Database, path: string, column: Flag, value: boolean)
   database.run(`UPDATE media SET ${column} = ? WHERE _data = ?`, [+value, path]);
 }
 /** createTrashRequest/createFavoriteRequest once granted: the column set on each item */
-export async function mediaFlag(uris: string[], column: Flag, value: boolean): Promise<void> {
+async function mediaFlag(uris: string[], column: Flag, value: boolean): Promise<void> {
   const database = await index();
   for (const uri of uris) {
     const path = await mediaPath(uri);
@@ -205,7 +205,7 @@ function matchPredicate(column: string, match: number, fallback: number): string
   return m === 2 ? `${column} = 0` : m === 3 ? `${column} = 1` : null;
 }
 /** A media row is its file: deleting the row deletes the file, and the index follows the VFS. */
-export async function mediaDelete(uri: string, selection: string | null, args: string[] | null): Promise<number> {
+async function mediaDelete(uri: string, selection: string | null, args: string[] | null): Promise<number> {
   const table = tableOf(uri);
   let count = 0;
   for (const path of table ? await selectedPaths(table, selection, args) : []) if (vfs.delete(path)) count++;

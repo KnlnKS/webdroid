@@ -29,7 +29,7 @@ const HB_MEMORY_MODE_READONLY = 1;
 export const HB_DIRECTION_INVALID = 0, HB_DIRECTION_LTR = 4, HB_DIRECTION_RTL = 5;
 
 /** one face of a font file in wasm memory, and its fonts by variation settings */
-export interface Face { readonly face: Ptr; readonly data: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
+interface Face { readonly face: Ptr; readonly data: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
 /** an hb_font whose positions, extents and outlines come in `units` per em: 256 per font unit, so a
  *  varied advance keeps its fraction; glyph outlines are cached */
 export interface Font { readonly font: Ptr; readonly face: Face; readonly units: number; readonly outlines: Map<number, Path2D | null> }

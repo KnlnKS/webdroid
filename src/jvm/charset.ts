@@ -95,7 +95,7 @@ export function covers(a: CharsetInfo, b: CharsetInfo): boolean {
 // ICU's UErrorCodes the codecs report
 export const U_ZERO_ERROR = 0, U_INVALID_CHAR_FOUND = 10, U_TRUNCATED_CHAR_FOUND = 11, U_ILLEGAL_CHAR_FOUND = 12, U_BUFFER_OVERFLOW_ERROR = 15;
 /** CodingErrorAction as NativeConverter numbers them */
-export const REPORT = 0, IGNORE = 1, REPLACE = 2;
+const REPORT = 0, IGNORE = 1, REPLACE = 2;
 const UTF8_BYTES = new Uint8Array(256);
 for (let b = 0xc2; b <= 0xf4; b++) UTF8_BYTES[b] = b < 0xe0 ? 2 : b < 0xf0 ? 3 : 4;
 /** the range UTF-8's second byte may take after `lead` (maximal subparts, as ICU and WHATWG) */

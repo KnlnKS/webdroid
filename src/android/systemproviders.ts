@@ -85,7 +85,7 @@ export const uriBundle = driven(function* uriBundle$(key: string, uri: string | 
 type Maybe<T> = T | Promise<T>;
 /** the IContentProvider calls a hosted provider answers, over uri strings, ContentValues' entries
  *  and the Bundle's selection; ContentProvider's defaults stand for those it leaves out */
-export interface ProviderOps {
+interface ProviderOps {
   query?(uri: string, projection: string[] | null, selection: string | null, selectionArgs: string[] | null, extras: JObj | null): Maybe<JObj | null>;
   insert?(uri: string, values: Map<string, unknown>): Maybe<string | null>;
   update?(uri: string, values: Map<string, unknown>, selection: string | null, selectionArgs: string[] | null): Maybe<number>;

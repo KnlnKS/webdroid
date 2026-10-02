@@ -28,7 +28,7 @@ const T_GLYF = 0x676c7966, T_CBLC = 0x43424c43;
 const isScalable = (at: Map<number, number>) => at.has(T_GLYF) || at.has(T_CFF) || at.has(T_CFF2);
 
 /** weight/italic from the face's OS/2 table (what AOSP's analyzeStyle reads), null if absent */
-export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boolean } | null {
+function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boolean } | null {
   const t = sfntTables(b, ttcIndex);
   const off = t?.at.get(T_OS2);
   if (!t || off === undefined || off + 64 > b.length) return null;
@@ -40,7 +40,7 @@ export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic
  *  underline's top and thickness from post. A face with only bitmaps (a CBDT emoji font) has its
  *  largest strike's line metrics, scaled, and no underline. */
 export interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number; underline?: number; underlineThickness?: number }
-export function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
+function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
   const t = sfntTables(b, ttcIndex);
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
   if (!t || head === undefined || hhea === undefined || head + 44 > b.length || hhea + 10 > b.length) return null;
@@ -120,7 +120,7 @@ function fvarAxes(b: Uint8Array, ttcIndex: number): FvarAxis[] {
 
 /** CmapCoverage: the code points a face's best Unicode cmap (format 12, else 4) maps, as sorted
  *  inclusive [first, last] pairs */
-export function cmapCoverage(b: Uint8Array, ttcIndex: number): Uint32Array {
+function cmapCoverage(b: Uint8Array, ttcIndex: number): Uint32Array {
   const t = sfntTables(b, ttcIndex), cmap = t?.at.get(T_CMAP), out: number[] = [];
   if (!t || cmap === undefined || cmap + 4 > b.length) return new Uint32Array(0);
   const dv = t.dv, add = (first: number, last: number) => {

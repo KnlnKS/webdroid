@@ -23,5 +23,4 @@ export function tagDirection(tag: string): number {
   try { const locale = new Intl.Locale(tag); return rtlScripts.has(locale.script ?? locale.maximize().script ?? "") ? 1 : 0; }
   catch { return 0; }
 }
-export const defaultLocale = (): JLocale | Promise<JLocale> => scall("java/util/Locale", "getDefault", "()Ljava/util/Locale;");
 export const localeForTag = (tag: string): JLocale | Promise<JLocale> => scall("java/util/Locale", "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", tag);

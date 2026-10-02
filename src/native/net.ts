@@ -28,7 +28,7 @@ const IP_ADD_MEMBERSHIP = 35, IP_DROP_MEMBERSHIP = 36, IP_MULTICAST_ALL = 49, MC
 const IPV6_UNICAST_HOPS = 16, IPV6_MULTICAST_IF = 17, IPV6_MULTICAST_HOPS = 18, IPV6_MULTICAST_LOOP = 19, IPV6_V6ONLY = 26, IPV6_TCLASS = 67;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
 const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICHOST = 4, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
-export const EAI_ADDRFAMILY = 1, EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_NODATA = 7, EAI_NONAME = 8;
+const EAI_ADDRFAMILY = 1, EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_NODATA = 7, EAI_NONAME = 8;
 const EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
 export const NI_NUMERICHOST = 2, NI_NAMEREQD = 4;
 const IFF_UP = 1, IFF_LOOPBACK = 8, IFF_RUNNING = 0x40;
@@ -63,7 +63,7 @@ function sameAddress(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
 const addressKey = (a: ArrayLike<number>) => Array.from(a).join(".");
 
 /** RFC 5952 text: lower-case hex, the longest run of two or more zero groups as "::" */
-export function ipv6Text(b: ArrayLike<number>): string {
+function ipv6Text(b: ArrayLike<number>): string {
   const g = Array.from({ length: 8 }, (_, i) => (b[2 * i] << 8) | b[2 * i + 1]);
   let at = -1, len = 0;
   for (let i = 0; i < 8;) {
@@ -118,7 +118,7 @@ export function hostOf(address: ArrayLike<number>): string | null {
   return address.length === 4 ? syntheticHost(address) : null;
 }
 // bionic's gai_strerror
-export const GAI_TEXT = ["Success", "Address family for hostname not supported", "Temporary failure in name resolution",
+const GAI_TEXT = ["Success", "Address family for hostname not supported", "Temporary failure in name resolution",
   "Invalid value for ai_flags", "Non-recoverable failure in name resolution", "ai_family not supported", "Memory allocation failure",
   "No address associated with hostname", "hostname nor servname provided, or not known", "servname not supported for ai_socktype",
   "ai_socktype not supported", "System error returned in errno", "Invalid value for hints", "Resolved protocol is unknown",

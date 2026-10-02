@@ -37,7 +37,7 @@ export function pieceEnd(text: string, at: number, end: number): number {
 export const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}\p{sc=Phag}\p{sc=Deva}\p{sc=Beng}\p{sc=Guru}\p{sc=Modi}\p{sc=Shrd}\p{sc=Sylo}\p{sc=Tirh}\p{sc=Ogam}]/u;
 /** the HarfBuzz features a paint shapes with: optional ligatures are off under letter spacing, as
  *  CSS asks */
-export const featuresOf = (p: NativePaint): string | null => Math.abs(p.letterSpacingEm) > 0.03
+const featuresOf = (p: NativePaint): string | null => Math.abs(p.letterSpacingEm) > 0.03
   ? "liga=0,clig=0" + (p.fontFeatureSettings ? "," + p.fontFeatureSettings : "") : p.fontFeatureSettings;
 
 const fontCache = new WeakMap<NativeFont, Font>();
@@ -56,7 +56,7 @@ function hbFont(hb: HarfBuzz, f: NativeFont, weight = -1, italic = -1): Font {
 
 /** whether Skia hints a paint's glyphs: without LINEAR_TEXT, and not skewed (SUBPIXEL_TEXT does
  *  not change advances) */
-export const paintHinted = (p: NativePaint) => !p.linearText && p.textSkewX === 0;
+const paintHinted = (p: NativePaint) => !p.linearText && p.textSkewX === 0;
 /** whether a hinted paint's glyphs in `font` are hinted, so their advances are whole pixels: an
  *  outline font not faking italic (a skew) */
 const hints = (paintHinted: boolean, font: NativeFont, fakery = 0) => paintHinted && !(fakery & FAKE_ITALIC) && font.scalable;

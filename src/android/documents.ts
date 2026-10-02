@@ -18,7 +18,7 @@ import { mkPfd, pfdBackingBytes } from "./os";
 import { mimeOf } from "../mime";
 import { registerSystemProvider, matrixCursor, uriBundle, DOCUMENTS_PROVIDER } from "./systemproviders";
 
-export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
+const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
 // ── content://<authority>/tree/<treeId>/document/<docId>[/children], and the ids inside it
 const enc = encodeURIComponent;

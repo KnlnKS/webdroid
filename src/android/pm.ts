@@ -292,7 +292,7 @@ function* serviceInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj>
   });
   return info;
 }
-export const authoritiesOf = (node: XmlNode) => (attrStr(node, "authorities") ?? "").split(";").filter(Boolean);
+const authoritiesOf = (node: XmlNode) => (attrStr(node, "authorities") ?? "").split(";").filter(Boolean);
 function* providerInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
   const info: JObj = yield make(PROVIDER), permission = attrStr(c.node, "permission");
   yield* componentInfo$(info, c, flags, app);

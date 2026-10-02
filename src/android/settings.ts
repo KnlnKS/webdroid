@@ -22,7 +22,7 @@ import { holdsPlatformPermission } from "./permissions";
 import { SettingsStore, type SettingsTable } from "../shell/settings";
 import { registerSystemProvider, matrixCursor } from "./systemproviders";
 
-export const SETTINGS_AUTHORITY = "settings";
+const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
 /** the broker's store, shared by every process */
 export function useSettingsStore(shared: SettingsStore): () => void {
