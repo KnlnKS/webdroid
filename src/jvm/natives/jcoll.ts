@@ -1,7 +1,8 @@
 // java.util's collections run from libcore. TS builds and reads the ones it exchanges with Java
 // through these helpers: ArrayList by its own fields, anything else through its Java API.
 import { jarray, mangleField } from "../abi";
-import { rt, driven, type Gen, type Intrinsic } from "../runtime";
+import { rt, driven, type Gen } from "../runtime";
+import { intrinsicCompiler } from "./jbox";
 import { vcall, scall, stringHash } from "./jlang";
 
 const AL = "java/util/ArrayList", HM = "java/util/HashMap", NODE = "java/util/HashMap$Node", ITR = "java/util/ArrayList$Itr";
@@ -68,13 +69,10 @@ export function arrayMapEntries(map: Obj): [unknown, unknown][] {
 
 // §4.7 intrinsics: the index, size and iteration steps UI code runs most, and HashMap lookups of
 // String and Integer keys, whose hashCode and equals cannot suspend. Anything else (bounds and
-// modification failures, tree bins, other keys) is the AOSP body's. Each is compiled with its
-// fields' own names (`$field` below): a named load stays monomorphic where a keyed one would not.
-const FIELDS: Record<string, string> = { data: DATA, size: SIZE, mod: MOD, outer: OUTER, cursor: CURSOR, limit: LIMIT, last: LAST,
+// modification failures, tree bins, other keys) is the AOSP body's.
+const compile = intrinsicCompiler({ data: DATA, size: SIZE, mod: MOD, outer: OUTER, cursor: CURSOR, limit: LIMIT, last: LAST,
   expected: EXPECTED, table: TABLE, hash: HASH, key: KEY, value: VALUE, next: NEXT,
-  seed: mangleField("java/util/Random", "seed"), long: mangleField("java/util/concurrent/atomic/AtomicLong", "value"), ivalue: IVALUE };
-const compile = (params: string, body: string, env: Record<string, unknown> = {}): Intrinsic => (base) =>
-  new Function("base", ...Object.keys(env), `return function(${params}){${body.replace(/\$(\w+)/g, (_, f: string) => FIELDS[f])}}`)(base, ...Object.values(env));
+  seed: mangleField("java/util/Random", "seed"), long: mangleField("java/util/concurrent/atomic/AtomicLong", "value"), ivalue: IVALUE });
 rt.intrinsic(AL, {
   "get(I)Ljava/lang/Object;": compile("i", "return i >>> 0 < this.$size ? this.$data[i] : base.call(this, i);"),
   "set(ILjava/lang/Object;)Ljava/lang/Object;": compile("i, e", `

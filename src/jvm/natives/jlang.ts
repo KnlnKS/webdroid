@@ -10,7 +10,7 @@ import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
-import { boxObject } from "./jbox";
+import { boxObject, intrinsicCompiler } from "./jbox";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
 import { procIdentity, procTasks, processTid } from "../../shell/procfs";
 
@@ -1267,17 +1267,16 @@ function inheriting(init: (this: JThread, ...a: any[]) => void) {
 {
   const TL = "java/lang/ThreadLocal", MAP = "java/lang/ThreadLocal$ThreadLocalMap";
   let proto: Record<string, unknown> | undefined;
-  const names: Record<string, string> = { hash: mangleField(TL, "threadLocalHashCode"), table: mangleField(MAP, "table"),
-    value: mangleField(MAP + "$Entry", "value"), getMap: mangleMethod("getMap", "(Ljava/lang/Thread;)Ljava/lang/ThreadLocal$ThreadLocalMap;") };
-  const entry = (params: string, hit: string) => (base: (this: unknown, ...a: unknown[]) => unknown) => new Function("base", "R", "proto",
-    `return function(${params}){
-      const map = this.$getMap === proto().$getMap ? R.th().threadLocals : null;
-      if (map !== null) {
-        const table = map.$table, e = table[this.$hash & (table.length - 1)];
-        if (e !== null && e.wr !== null && e.wr.deref() === this) ${hit}
-      }
-      return base.call(this${params ? ", " + params : ""});
-    }`.replace(/\$(\w+)/g, (_, f: string) => names[f]))(base, rt, () => proto ??= rt.link(TL).ctor.prototype);
+  const compile = intrinsicCompiler({ hash: mangleField(TL, "threadLocalHashCode"), table: mangleField(MAP, "table"),
+    value: mangleField(MAP + "$Entry", "value"), getMap: mangleMethod("getMap", "(Ljava/lang/Thread;)Ljava/lang/ThreadLocal$ThreadLocalMap;") },
+  { R: rt, proto: () => proto ??= rt.link(TL).ctor.prototype });
+  const entry = (params: string, hit: string) => compile(params, `
+    const map = this.$getMap === proto().$getMap ? R.th().threadLocals : null;
+    if (map !== null) {
+      const table = map.$table, e = table[this.$hash & (table.length - 1)];
+      if (e !== null && e.wr !== null && e.wr.deref() === this) ${hit}
+    }
+    return base.call(this${params ? ", " + params : ""});`);
   rt.intrinsic(TL, { "get()Ljava/lang/Object;": entry("", "return e.$value;"), "set(Ljava/lang/Object;)V": entry("v", "{ e.$value = v; return; }") });
 }
 

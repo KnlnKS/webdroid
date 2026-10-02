@@ -5,6 +5,7 @@
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
 import { after, scall, construct } from "./jlang";
+import { intrinsicCompiler } from "./jbox";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
@@ -221,7 +222,7 @@ rt.registerJnis("libcore/util/CharsetUtils", {
 // the loops GL and media code run per vertex and sample. A direct buffer's address is read once
 // a call as plane 0's Number offset, not through ix's and Memory.peek*'s BigInt arithmetic. An
 // inaccessible buffer, a bounds or read-only failure, an external mapping or another plane's
-// address is the AOSP body's. Each is compiled with its fields' own names, as jcoll.ts's are.
+// address is the AOSP body's. Each is compiled with its fields' own names (intrinsicCompiler).
 const DBB = "java/nio/DirectByteBuffer", HBB = "java/nio/HeapByteBuffer";
 const FIELDS: Record<string, string> = {
   position: mangleField("java/nio/Buffer", "position"), limit: mangleField("java/nio/Buffer", "limit"), address: mangleField("java/nio/Buffer", "address"),
@@ -242,8 +243,7 @@ const env = {
   f64: (bits: bigint) => { scratch.setBigInt64(0, bits, true); return scratch.getFloat64(0, true); },
   bits64: (v: number) => { scratch.setFloat64(0, v, true); return scratch.getBigInt64(0, true); },
 };
-const compile = (params: string, body: string, fields: Record<string, string> = FIELDS): Intrinsic => (base) =>
-  new Function("base", ...Object.keys(env), `return function(${params}){${body.replace(/\$(\w+)/g, (_, f: string) => fields[f])}}`)(base, ...Object.values(env));
+const compile = intrinsicCompiler(FIELDS, env);
 
 /** an element type: its size and descriptor, how a direct buffer loads and stores it at native
  *  address A (byte-swapped when s), and the DataView accessor a heap buffer's bytes go through */
@@ -322,22 +322,22 @@ rt.intrinsic(HBB, Object.assign({}, ...[BYTE, ...KINDS].map((k) => accessors(k, 
 // element's byte offset; a read from an external mapping waits for its pages
 for (const k of KINDS) {
   const view = `java/nio/ByteBufferAs${k.name}Buffer`, ret = `Ljava/nio/${k.name}Buffer;`;
-  const fields = { ...FIELDS, bb: mangleField(view, "bb"), byteOffset: mangleField(view, "byteOffset"), isReadOnly: mangleField(`java/nio/${k.name}Buffer`, "isReadOnly"),
+  const viewCompile = intrinsicCompiler({ ...FIELDS, bb: mangleField(view, "bb"), byteOffset: mangleField(view, "byteOffset"), isReadOnly: mangleField(`java/nio/${k.name}Buffer`, "isReadOnly"),
     getU: mangleMethod(`get${k.name}Unchecked`, `(I)${k.d}`), putU: mangleMethod(`put${k.name}Unchecked`, `(I${k.d})V`),
-    getA: mangleMethod("getUnchecked", `(I[${k.d}II)V`), putA: mangleMethod("putUnchecked", `(I[${k.d}II)V`) };
+    getA: mangleMethod("getUnchecked", `(I[${k.d}II)V`), putA: mangleMethod("putUnchecked", `(I[${k.d}II)V`) }, env);
   const bulkGuard = "array === null || offset < 0 || length < 0 || offset > array.length - length || length > this.$limit - this.$position";
   const ix = `(at << ${Math.log2(k.n)}) + this.$byteOffset`;
   rt.intrinsic(view, {
-    [`get()${k.d}`]: compile("", `const at = this.$position; if (at >= this.$limit) return base.call(this); this.$position = at + 1;
-      return this.$bb.$getU(${ix});`, fields),
-    [`get(I)${k.d}`]: compile("at", `if (at < 0 || at >= this.$limit) return base.call(this, at); return this.$bb.$getU(${ix});`, fields),
-    [`put(${k.d})${ret}`]: compile("v", `if (this.$isReadOnly) return base.call(this, v); const at = this.$position; if (at >= this.$limit) return base.call(this, v);
-      this.$position = at + 1; this.$bb.$putU(${ix}, v); return this;`, fields),
-    [`put(I${k.d})${ret}`]: compile("at, v", `if (this.$isReadOnly || at < 0 || at >= this.$limit) return base.call(this, at, v); this.$bb.$putU(${ix}, v); return this;`, fields),
-    [`get([${k.d}II)${ret}`]: compile("array, offset, length", `if (${bulkGuard}) return base.call(this, array, offset, length);
+    [`get()${k.d}`]: viewCompile("", `const at = this.$position; if (at >= this.$limit) return base.call(this); this.$position = at + 1;
+      return this.$bb.$getU(${ix});`),
+    [`get(I)${k.d}`]: viewCompile("at", `if (at < 0 || at >= this.$limit) return base.call(this, at); return this.$bb.$getU(${ix});`),
+    [`put(${k.d})${ret}`]: viewCompile("v", `if (this.$isReadOnly) return base.call(this, v); const at = this.$position; if (at >= this.$limit) return base.call(this, v);
+      this.$position = at + 1; this.$bb.$putU(${ix}, v); return this;`),
+    [`put(I${k.d})${ret}`]: viewCompile("at, v", `if (this.$isReadOnly || at < 0 || at >= this.$limit) return base.call(this, at, v); this.$bb.$putU(${ix}, v); return this;`),
+    [`get([${k.d}II)${ret}`]: viewCompile("array, offset, length", `if (${bulkGuard}) return base.call(this, array, offset, length);
       const at = this.$position, read = this.$bb.$getA(${ix}, array, offset, length); this.$position += length;
-      return read instanceof Promise ? read.then(() => this) : this;`, fields),
-    [`put([${k.d}II)${ret}`]: compile("array, offset, length", `if (this.$isReadOnly || ${bulkGuard}) return base.call(this, array, offset, length);
-      const at = this.$position; this.$bb.$putA(${ix}, array, offset, length); this.$position += length; return this;`, fields),
+      return read instanceof Promise ? read.then(() => this) : this;`),
+    [`put([${k.d}II)${ret}`]: viewCompile("array, offset, length", `if (this.$isReadOnly || ${bulkGuard}) return base.call(this, array, offset, length);
+      const at = this.$position; this.$bb.$putA(${ix}, array, offset, length); this.$position += length; return this;`),
   });
 }

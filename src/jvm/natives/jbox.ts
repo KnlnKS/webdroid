@@ -81,10 +81,17 @@ export function boxObject(v: unknown): unknown {
   return v;
 }
 
-// §4.7 intrinsics, each compiled with its fields' own names ($I is Integer.value, ...): a named
-// load stays monomorphic where a keyed one would not.
-const compile = (params: string, body: string, env: Record<string, unknown> = {}): Intrinsic => (base) =>
-  new Function("base", ...Object.keys(env), `return function(${params}){${body.replace(/\$([IJFDZCBS])\b/g, (_, d: BoxDesc) => VALUE[d])}}`)(base, ...Object.values(env));
+/** Compiles §4.7 intrinsics from source in which `$name` is the property `fields[name]`, so each
+ *  load is named and stays monomorphic where a keyed one would not. The body sees `base` and the
+ *  values `env` and the call's `extra` name. */
+export const intrinsicCompiler = (fields: Record<string, string>, env: Record<string, unknown> = {}) =>
+  (params: string, body: string, extra: Record<string, unknown> = {}): Intrinsic => (base) => {
+    const scope = { ...env, ...extra };
+    return new Function("base", ...Object.keys(scope), `return function(${params}){${body.replace(/\$(\w+)/g, (_, f: string) => fields[f])}}`)(base, ...Object.values(scope));
+  };
+
+// the boxes' intrinsics: $I is Integer.value, ...
+const compile = intrinsicCompiler(VALUE);
 
 /** valueOf: the cache's box, else a new one; a cache not initialized yet is AOSP's to initialize.
  *  The constructor is bound when the class compiles: one looked up lazily is not a constant to
