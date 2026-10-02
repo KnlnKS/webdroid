@@ -7,7 +7,7 @@ import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
 import { setProcessIdentity, setProcessName } from "../src/android/os";
-import { JBinder, binderTransport, importBinder } from "../src/android/binder";
+import { binderTransport, importBinder } from "../src/android/binder";
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
@@ -41,7 +41,7 @@ describe("bitmap-parcel", () => {
     await vcall(b, "setDensity", "(I)V", 320);
     await vcall(b, "setHasAlpha", "(Z)V", 0);
     await vcall(b, "setPixel", "(III)V", 2, 1, 0xff336699 | 0);
-    const p = await newObj("android/os/Parcel", "()V");
+    const p = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", b, 0);
     await vcall(p, "setDataPosition", "(I)V", 0);
     const back = await vcall(p, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
@@ -168,7 +168,7 @@ describe("keyevent-parcel", () => {
 
   test("KeyEvent survives a Parcelable round trip", async () => {
     const event = await newObj("android/view/KeyEvent", "(II)V", 1, 87);
-    const parcel = await newObj("android/os/Parcel", "()V");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", event, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
     const restored = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
@@ -183,11 +183,11 @@ describe("parcel-string16", () => {
 
   test("String16 keeps lone surrogates in short, long and unaligned strings", async () => {
     const strings = ["a\ud800", "x\udc00".repeat(20) + "😀", "\ud800y".repeat(9000)];
-    const p = await newObj("android/os/Parcel", "()V");
+    const p = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     for (const s of strings) await vcall(p, "writeString16", "(Ljava/lang/String;)V", s);
     await vcall(p, "setDataPosition", "(I)V", 0);
     for (const s of strings) expect(await vcall(p, "readString16", "()Ljava/lang/String;")).toBe(s);
-    const odd = await newObj("android/os/Parcel", "()V");
+    const odd = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(odd, "setDataPosition", "(I)V", 1);
     await vcall(odd, "writeString16", "(Ljava/lang/String;)V", strings[1]);
     await vcall(odd, "setDataPosition", "(I)V", 1);
@@ -255,7 +255,8 @@ describe("remotecallbacklist", () => {
     "asBinder()Landroid/os/IBinder;": function (this: Callback) { return this.binder; },
   } });
   rt.linkNatives();
-  function callback(binder: unknown = new JBinder()) {
+  async function callback(binder?: unknown) {
+    binder ??= await newObj("android/os/Binder");
     const result = new Callback(); result.binder = binder; return result;
   }
   const register = (list: unknown, cb: unknown, cookie: unknown = null) => vcall(list, "register", "(Landroid/os/IInterface;Ljava/lang/Object;)Z", cb, cookie);
@@ -263,13 +264,13 @@ describe("remotecallbacklist", () => {
   const count = (list: unknown) => vcall(list, "getRegisteredCallbackCount", "()I");
 
   test("RemoteCallbackList keys registrations by Binder and broadcasts a stable snapshot", async () => {
-    const list = await newObj("android/os/RemoteCallbackList"), first = callback(), replacement = callback(first.binder);
+    const list = await newObj("android/os/RemoteCallbackList"), first = await callback(), replacement = await callback(first.binder);
     expect(await register(list, first, "old")).toBe(1);
     expect(await register(list, replacement, "new")).toBe(1);
     expect(await count(list)).toBe(1);
     expect(await vcall(list, "beginBroadcast", "()I")).toBe(1);
     expect(await unregister(list, first)).toBe(1);
-    expect(await register(list, callback())).toBe(1);
+    expect(await register(list, await callback())).toBe(1);
     expect(await vcall(list, "getBroadcastItem", "(I)Landroid/os/IInterface;", 0)).toBe(replacement);
     expect(await vcall(list, "getBroadcastCookie", "(I)Ljava/lang/Object;", 0)).toBe("new");
     await expect(vcallAsync(list, "beginBroadcast", "()I")).rejects.toBeDefined();
@@ -288,7 +289,7 @@ describe("remotecallbacklist", () => {
     binderTransport.alive = () => alive;
     binderTransport.watch = (_pid, died) => { watches.add(died); return () => { watches.delete(died); }; };
     try {
-      const list = await newObj("android/os/RemoteCallbackList"), cb = callback(importBinder({ pid: 987654, id: 1 }));
+      const list = await newObj("android/os/RemoteCallbackList"), cb = await callback(await importBinder({ pid: 987654, id: 1 }));
       expect(await register(list, cb)).toBe(1);
       expect(await register(list, cb)).toBe(1);
       expect(watches.size).toBe(1);

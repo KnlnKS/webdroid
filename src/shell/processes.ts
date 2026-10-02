@@ -8,7 +8,7 @@ import { encodeIntent, decodeIntent, intentCodec, type IntentData } from "../and
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
-import { JParcel } from "../android/parcel";
+import { newParcel } from "../android/parcel";
 import { type JIntent, newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID, reportUncaught } from "../android/os";
 import { guestSleep, uptimeMillis } from "../guest-clock";
@@ -44,11 +44,11 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
 }
 const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
 async function resultData(result: BroadcastResult): Promise<BroadcastData> {
-  const extras = new JParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
+  const extras = await newParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
   return { ...result, extras: exportParcel(extras) };
 }
 const broadcastResult = async (data: BroadcastData): Promise<BroadcastResult> =>
-  ({ ...data, extras: await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
+  ({ ...data, extras: await vcall(await importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
 type ServiceRequest = { kind: "bind"; intent: IntentData; key: string; flags?: number } | { kind: "unbind"; key: string }
   | { kind: "stop"; intent: IntentData } | { kind: "peek"; intent: IntentData }
@@ -317,8 +317,7 @@ class ProcessBroker {
     const caller = this.entry(callerPid);
     if (request.handle.pid === 0) {
       if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
-      rt.link("android/os/Parcel");
-      const reply = new JParcel(), handled = +(request.code === 0x5f4e5446);
+      const reply = await newParcel(), handled = +(request.code === 0x5f4e5446);
       if (handled) await vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.content.IIntentSender");
       return { handled, data: exportParcel(reply) };
     }
@@ -435,7 +434,7 @@ export function connectProcess(): ProcessEndpoint {
   };
   activityTransport.finished = (id, code, data) => {
     setVisible(false);
-    void resultIntent(data).then((encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)).catch(reportUncaught);
+    void Promise.resolve(resultIntent(data)).then((encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)).catch(reportUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);

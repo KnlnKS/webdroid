@@ -15,7 +15,7 @@ import { hostStub, hostedService, callingIdentity, serviceContext, exportParcel,
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
-import { JParcel } from "./parcel";
+import { newParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
 import { appHost } from "./apphost";
@@ -77,13 +77,13 @@ const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
   items.map((item, i) => ({ item, hash: javaHash(key(item)), i })).sort((a, b) => a.hash - b.hash || a.i - b.i).map(({ item }) => item);
 
 function* parcelOf(o: JObj): Gen<ParcelData> {
-  const parcel = new JParcel();
+  const parcel = yield newParcel();
   yield vcall(o, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-  return exportParcel(parcel);
+  return yield exportParcel(parcel);
 }
 function* fromParcel(cls: string, data: ParcelData): Gen<JObj> {
   const creator = (yield linkInit(cls)).ctor[mangleStaticField("CREATOR")];
-  return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", importParcel(data));
+  return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", yield importParcel(data));
 }
 /** what a binder call hands the service: a copy of the caller's object */
 function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield* fromParcel(cls, yield* parcelOf(o)); }

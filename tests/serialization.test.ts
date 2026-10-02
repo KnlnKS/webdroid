@@ -40,19 +40,19 @@ describe("object-stream-external", () => {
     }
   });
   test("Serializable survives Parcel marshalling without object side tables", async () => {
-    const parcel = await newObj("android/os/Parcel");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(parcel, "writeSerializable", "(Ljava/io/Serializable;)V", await makeValue());
     await vcall(parcel, "writeValue", "(Ljava/lang/Object;)V", await makeValue());
     const binder = await newObj("android/os/Binder");
     const wire = exportParcel(parcel);
     expect(wire.objects).toEqual([]);
     await vcall(parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V", binder);
-    const transported = importParcel(structuredClone(exportParcel(parcel)));
+    const transported = await importParcel(structuredClone(exportParcel(parcel)));
     checkValue(await vcall(transported, "readSerializable", "()Ljava/io/Serializable;"));
     checkValue(await vcall(transported, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
     expect(await vcall(transported, "readStrongBinder", "()Landroid/os/IBinder;")).toBe(binder);
     const bytes = wire.bytes;
-    const copy = await newObj("android/os/Parcel");
+    const copy = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(copy, "unmarshall", "([BII)V", bytes, 0, bytes.length);
     await vcall(copy, "setDataPosition", "(I)V", 0);
     checkValue(await vcall(copy, "readSerializable", "()Ljava/io/Serializable;"));

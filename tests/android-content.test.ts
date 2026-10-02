@@ -58,7 +58,7 @@ describe("clip-data", () => {
     const clip = await scall("android/content/ClipData", "newIntent", "(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;", "label", inner);
     const outer = await newObj("android/content/Intent");
     await vcall(outer, "setClipData", "(Landroid/content/ClipData;)V", clip);
-    const parcel = await newObj("android/os/Parcel");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(outer, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
     const restored = await newObj("android/content/Intent", "(Landroid/os/Parcel;)V", parcel);
@@ -172,7 +172,7 @@ describe("intent-typed-extras", () => {
       ["S", "[S", new Int16Array([-3])], ["Z", "[Z", new Uint8Array([1, 0])], ["F", "[F", new Float32Array([0.5])],
       ["D", "[D", new Float64Array([0.25])], ["b", "B", -7], ["s", "S", 300], ["r", "[Landroid/os/Parcelable;", Object.assign([component], { $t: "Landroid/os/Parcelable;" })]];
     for (const [k, d, v] of values) await vcall(intent, "putExtra", `(Ljava/lang/String;${d})Landroid/content/Intent;`, k, v);
-    const parcel = await newObj("android/os/Parcel", "()V");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", intent, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
     const back = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
@@ -185,7 +185,7 @@ describe("intent-typed-extras", () => {
     expect(await vcall(components[0], "equals", "(Ljava/lang/Object;)Z", component)).toBe(1);
 
     const extras = await vcall(back, "getExtras", "()Landroid/os/Bundle;");
-    const bundleParcel = await newObj("android/os/Parcel", "()V");
+    const bundleParcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(extras, "writeToParcel", "(Landroid/os/Parcel;I)V", bundleParcel, 0);
     await vcall(bundleParcel, "setDataPosition", "(I)V", 0);
     const bundle = await newObj("android/os/Bundle", "()V");

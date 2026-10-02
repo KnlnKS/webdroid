@@ -26,7 +26,7 @@ describe("locale-span", () => {
     const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
     expect(await vcall(copy, "getTextLocales", "()Landroid/os/LocaleList;")).toBe(locales);
     expect(paintOf(copy).language).toBe("ja-JP");
-    const parcel = await newObj("android/os/Parcel");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(span, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
     const restored = await newObj("android/text/style/LocaleSpan", "(Landroid/os/Parcel;)V", parcel);

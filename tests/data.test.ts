@@ -28,7 +28,7 @@ describe("cursorwindow", () => {
     expect(await vcall(window, "putString", "(Ljava/lang/String;II)Z", "hello", 8, 1)).toBe(1);
     expect(await vcall(window, "putBlob", "([BII)Z", new Int8Array([1, -1]), 8, 2)).toBe(1);
 
-    const parcel = rt.make("android/os/Parcel");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(window, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
     const restored = await vcall(rt.link("android/database/CursorWindow").ctor, "newFromParcel", "(Landroid/os/Parcel;)Landroid/database/CursorWindow;", parcel);

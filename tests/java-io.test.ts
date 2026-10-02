@@ -470,7 +470,7 @@ describe("shared-memory", () => {
     await vcall(type, "unmap", "(Ljava/nio/ByteBuffer;)V", writable);
     expect(await vcall(shared, "setProtect", "(I)Z", 1)).toBe(1);
     expect(await vcall(shared, "setProtect", "(I)Z", 3)).toBe(0);
-    const parcel = await newObj("android/os/Parcel", "()V");
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", shared, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
     const restored = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);

@@ -1,8 +1,11 @@
-import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, construct, scall, vcall, vcallUncaught } from "../jvm/natives/jlang";
+// Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
+// calling identity, local binders exported to the broker and proxies to other processes' binders.
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { callOn, curThread, JThread, construct, scall, vcall, after } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
-import { JParcel } from "./parcel";
+import { type JParcel, NativeParcel, nativeParcel, parcelAt, newParcel, parcelBytes, setParcelBytes, readInt, readString, writeInt, writeString } from "./parcel";
 import { jarray, mangleMethod, i8, u8 } from "../jvm/abi";
+import { handle, release, FINALIZER } from "./handles";
 
 /** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
@@ -26,49 +29,52 @@ export const binderTransport: {
   watch: () => () => {},
 };
 
-export class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
-class JBinderProxy extends JObj {
-  handle: BinderHandle = { pid: 0, id: 0 };
-  deaths = new Map<unknown, () => void>();
-}
+/** BinderProxyNativeData: the remote binder a proxy stands for and the deaths it reports */
+type ProxyData = { handle: BinderHandle; deaths: Map<unknown, () => void> };
+const proxyData = new WeakMap<JObj, ProxyData>();
 const local = new Map<number, JObj>();
 const localIds = new WeakMap<JObj, number>();
-const proxies = new Map<string, JBinderProxy>();
+const proxies = new Map<string, JObj | Promise<JObj>>();
 let nextId = 1;
 
 export function exportBinder(binder: unknown): BinderHandle | null {
-  if (binder == null || binder === 0) return null;
-  if (binder instanceof JBinderProxy) return binder.handle;
-  if (!(binder instanceof JObj) || !rt.iof(binder, "android/os/IBinder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel: " + (binder instanceof JObj ? (binder.constructor as { $i?: { name: string } }).$i?.name : typeof binder));
-  let id = localIds.get(binder);
-  if (!id) { id = nextId++; localIds.set(binder, id); local.set(id, binder); }
+  if (binder == null) return null;
+  const proxy = proxyData.get(binder as JObj);
+  if (proxy) return proxy.handle;
+  if (!rt.iof(binder, "android/os/Binder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel: " + ((binder as JObj).constructor as { $i?: { name: string } }).$i?.name);
+  let id = localIds.get(binder as JObj);
+  if (!id) { id = nextId++; localIds.set(binder as JObj, id); local.set(id, binder as JObj); }
   return { pid: PROCESS_PID, id };
 }
-export function importBinder(handle: BinderHandle | null): JObj | null {
-  if (!handle) return null;
-  if (handle.pid === PROCESS_PID) return local.get(handle.id) ?? null;
-  const key = handle.pid + ":" + handle.id;
+/** javaObjectForIBinder's one proxy per remote binder */
+function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
   let proxy = proxies.get(key);
-  if (!proxy) {
-    rt.link("android/os/BinderProxy");
-    proxy = new JBinderProxy(); proxy.handle = handle; proxies.set(key, proxy);
-  }
+  if (proxy) return proxy;
+  const data: ProxyData = { handle: h, deaths: new Map() };
+  proxy = after(construct("android/os/BinderProxy", "(J)V", handle(data)), (made) => { proxyData.set(made, data); proxies.set(key, made); return made; });
+  proxies.set(key, proxy);
   return proxy;
+}
+export function importBinder(h: BinderHandle | null): JObj | null | Promise<JObj> {
+  if (!h) return null;
+  if (h.pid === PROCESS_PID) return local.get(h.id) ?? null;
+  return proxyFor(h.pid + ":" + h.id, h);
 }
 /** a binder system_server owns, as a client process holds it: a proxy, which AOSP tells apart
  *  from a local Binder (ActivityThread relaunches only activities whose token is not local) */
-export function systemToken(): JObj {
-  rt.link("android/os/BinderProxy");
-  const proxy = new JBinderProxy(), id = nextId++;
-  proxy.handle = { pid: PROCESS_PID, id };
+export function systemToken(): JObj | Promise<JObj> {
+  const id = nextId++;
   // a parcel written and read back here (an Intent's extras) imports the same token
-  local.set(id, proxy);
-  return proxy;
+  return after(proxyFor("token:" + id, { pid: PROCESS_PID, id }), (proxy) => { local.set(id, proxy); return proxy; });
 }
-class JFileWriter extends JBinder { pfd: JObj | null = null; }
+class JFileWriter extends JObj { pfd: JObj | null = null; }
 function exportObject(o: unknown): BinderHandle | FileHandle | null {
   const file = parcelFileDescriptorData(o);
-  if (!file) return exportBinder(o);
+  if (!file) {
+    // a raw descriptor has no transport between processes here
+    if (o !== null && !(o instanceof JObj)) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
+    return exportBinder(o);
+  }
   if (!file.writable) return { bytes: file.bytes, writer: null };
   rt.link("webdroid/FileWriter");
   const writer = new JFileWriter(); writer.pfd = o as JObj;
@@ -76,27 +82,41 @@ function exportObject(o: unknown): BinderHandle | FileHandle | null {
 }
 function importObject(o: BinderHandle | FileHandle | null): unknown {
   if (!o || !("bytes" in o)) return importBinder(o);
-  const writer = o.writer && importBinder(o.writer);
-  return mkPfd(new Uint8Array(o.bytes), writer && driven(function* (bytes: Uint8Array, closed?: boolean): Gen<void> {
-    const data = new JParcel();
+  return after(o.writer && importBinder(o.writer), (writer) => mkPfd(new Uint8Array(o.bytes), writer && driven(function* (bytes: Uint8Array, closed?: boolean): Gen<void> {
+    const data = yield newParcel();
     yield vcall(data, "writeByteArray", "([B)V", i8(bytes));
     yield vcall(data, "writeInt", "(I)V", +!!closed);
     yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
-  }), writer ? `binder:${o.writer!.pid}:${o.writer!.id}` : undefined);
+  }), o.writer ? `binder:${o.writer.pid}:${o.writer.id}` : undefined));
 }
 export function exportParcel(parcel: JParcel): ParcelData {
-  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, exportObject(o)]) };
+  const { bytes, objects } = parcelBytes(nativeParcel(parcel));
+  return { bytes, objects: objects.map(([at, o]) => [at, exportObject(o)]) };
 }
-export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel {
-  parcel.buf = new Uint8Array(data.bytes); parcel.view = new DataView(parcel.buf.buffer);
-  parcel.pos = 0; parcel.size = parcel.buf.length;
-  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, importObject(handle)]));
+const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData): Gen<void> {
+  const objects: [number, unknown][] = [];
+  for (const [at, o] of data.objects) objects.push([at, yield importObject(o)]);
+  setParcelBytes(p, { bytes: data.bytes, objects });
+});
+/** a Parcel holding what another process sent, read from its start */
+export const importParcel = driven(function* importParcel(data: ParcelData): Gen<JObj> {
+  const parcel = yield newParcel();
+  yield fillParcel(nativeParcel(parcel), data);
   return parcel;
-}
+});
 
+// ── IPCThreadState
 const callers = new WeakMap<JThread, Caller>();
 const SELF_TOKEN = -1n;
 const strictModePolicies = new WeakMap<JThread, number>();
+const UNSET_WORK_SOURCE = -1;
+const workSources = new WeakMap<JThread, { uid: number; propagate: boolean }>();
+const workSource = () => workSources.get(curThread) ?? { uid: UNSET_WORK_SOURCE, propagate: false };
+function setWorkSource(uid: number, propagate: boolean): bigint {
+  const was = workSource();
+  workSources.set(curThread, { uid, propagate });
+  return BigInt(+was.propagate) << 32n | BigInt(was.uid >>> 0);
+}
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 /** a cross-process transport's call before the broker connects it */
@@ -123,22 +143,21 @@ const systemThreads = new WeakSet<JThread>();
 export function asSystem<T>(call: () => Promise<T>): Promise<T> {
   return withCallingIdentity(SYSTEM_CALLER, call, true);
 }
+/** JavaBBinder::onTransact: Binder.execTransact over the transaction's parcels */
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);
   if (!binder || request.handle.pid !== PROCESS_PID) throw rt.mkThrowable("android/os/DeadObjectException", "Binder is dead");
   const run = async (): Promise<TransactionReply> => {
-    const data = importParcel(request.data), reply = new JParcel();
-    return withCallingIdentity(caller, async () => {
-      try {
-        const handled = await vcall(binder, "onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", request.code, data, reply, request.flags);
+    const data = new NativeParcel(), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
+    try {
+      await fillParcel(data, request.data);
+      return await withCallingIdentity(caller, async () => {
+        let handled = 0;
+        try { handled = await vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
+        catch (error) { reportUncaught(error); } // "Uncaught remote exception!": the caller sees UNKNOWN_TRANSACTION
         return { handled, data: exportParcel(reply) };
-      } catch (error) {
-        if (request.flags & 1) throw error;
-        reply.pos = reply.size = 0; reply.objects.clear();
-        await vcall(reply, "writeException", "(Ljava/lang/Exception;)V", error);
-        return { handled: 1, data: exportParcel(reply) };
-      }
-    });
+      });
+    } finally { release(dataPtr); release(replyPtr); }
   };
   if (!(request.flags & 1)) return run();
   const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(reportUncaught);
@@ -147,52 +166,75 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
   return { handled: 1, data: emptyParcel() };
 }
 
-rt.register({ name: "android/os/IBinder", ctor: class extends JObj {}, statics: { FIRST_CALL_TRANSACTION: 1, FLAG_ONEWAY: 1, INTERFACE_TRANSACTION } });
-rt.markers("android/os/IBinder$DeathRecipient");
-rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
-  // blocking-call warnings are StrictMode reporting, which is not modelled
-  "static allowBlocking(Landroid/os/IBinder;)Landroid/os/IBinder;": (binder: unknown) => binder,
-  "static defaultBlocking(Landroid/os/IBinder;)Landroid/os/IBinder;": (binder: unknown) => binder,
-  "static copyAllowBlocking(Landroid/os/IBinder;Landroid/os/IBinder;)V": () => {},
-  // a stability label for binders crossing partitions; every binder here shares one build
-  "markVintfStability()V": () => {},
-  "static getCallingUid()I": () => callingIdentity().uid,
-  // IPCThreadState's per-thread StrictMode policy, which a call carries to its binder thread
-  "static setThreadStrictModePolicy(I)V": (mask: number) => { strictModePolicies.set(curThread, mask); },
-  "static getThreadStrictModePolicy()I": () => strictModePolicies.get(curThread) ?? 0,
-  "static getCallingPid()I": () => callingIdentity().pid,
-  // a binder thread is in onTransact for its caller (Parcel bounds what a transaction may allocate)
-  "static isDirectlyHandlingTransaction()Z": () => +(transactionCaller() !== undefined),
+const extensions = new WeakMap<JObj, unknown>();
+const explicitIdentity = new WeakSet<JThread>();
+const EXPLICIT = 1n << 31n;
+rt.registerJnis("android/os/Binder", {
+  "getNativeBBinderHolder()J": () => handle({}),
+  "getNativeFinalizer()J": () => FINALIZER,
+  "getCallingPid()I": () => callingIdentity().pid,
+  "getCallingUid()I": () => callingIdentity().uid,
+  "isDirectlyHandlingTransactionNative()Z": () => +(transactionCaller() !== undefined),
+  "hasExplicitIdentity()Z": () => +explicitIdentity.has(curThread),
   // IPCThreadState packs the caller into the token, so clearing twice gives the same one. This
   // process's own identity is one token whatever its uid: the page is the zygote that became the
   // app, so a Looper that started looping before then still finds its identity unchanged.
-  "static clearCallingIdentity()J": () => {
-    const caller = transactionCaller();
-    callers.delete(curThread);
-    return caller ? BigInt(caller.uid) << 32n | BigInt(caller.pid >>> 0) : SELF_TOKEN;
+  "clearCallingIdentity()J": () => {
+    const caller = transactionCaller(), explicit = explicitIdentity.has(curThread) ? EXPLICIT : 0n;
+    callers.delete(curThread); explicitIdentity.add(curThread);
+    return caller ? BigInt(caller.uid) << 32n | explicit | BigInt(caller.pid & 0x7fffffff) : SELF_TOKEN;
   },
-  "static restoreCallingIdentity(J)V": (token: bigint) => {
-    const caller = { pid: Number(BigInt.asIntN(32, token)), uid: Number(BigInt.asIntN(32, token >> 32n)) };
+  "restoreCallingIdentity(J)V": (token: bigint) => {
+    const caller = { pid: Number(token & 0x7fffffffn), uid: Number(BigInt.asIntN(32, token >> 32n)) };
     if (token === SELF_TOKEN || caller.pid === PROCESS_PID && caller.uid === PROCESS_UID) callers.delete(curThread); else callers.set(curThread, caller);
+    if (token !== SELF_TOKEN && token & EXPLICIT) explicitIdentity.add(curThread); else explicitIdentity.delete(curThread);
   },
-  "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) { this.owner = owner; this.descriptor = descriptor; },
-  "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) { return this.descriptor === descriptor ? this.owner : null; },
-  "getInterfaceDescriptor()Ljava/lang/String;": function (this: JBinder) { return this.descriptor; },
-  "<init>(Ljava/lang/String;)V": function (this: JBinder, descriptor: string | null) { this.descriptor = descriptor; },
-  // the transaction callback reports binder calls' timing to tracing, which is off
-  "static setTransactionCallback(Landroid/os/IBinderCallback;)V": () => {},
-  ...noops("<init>()V", "static flushPendingCommands()V", "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V"),
-  ...stubs(1, "pingBinder()Z", "isBinderAlive()Z", "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z"),
-  "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {
-    const pos = data.pos; data.pos = 0;
-    try { return yield vcall(this, "onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", code, data, reply, flags); }
-    finally { data.pos = pos; if (reply) reply.pos = 0; }
-  }),
-  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, _data: JParcel, reply: JParcel | null): Gen {
-    if (code !== INTERFACE_TRANSACTION || !reply) return 0;
-    yield vcall(reply, "writeString", "(Ljava/lang/String;)V", this.descriptor); return 1;
-  }),
-} });
+  // IPCThreadState's per-thread StrictMode policy, which a call carries to its binder thread
+  "setThreadStrictModePolicy(I)V": (mask: number) => { strictModePolicies.set(curThread, mask); },
+  "getThreadStrictModePolicy()I": () => strictModePolicies.get(curThread) ?? 0,
+  "getCallingWorkSourceUid()I": () => workSource().uid,
+  "setCallingWorkSourceUid(I)J": (uid: number) => setWorkSource(uid, true),
+  "clearCallingWorkSource()J": () => setWorkSource(UNSET_WORK_SOURCE, true),
+  "restoreCallingWorkSource(J)V": (token: bigint) => { setWorkSource(Number(BigInt.asIntN(32, token)), !!(token >> 32n)); },
+  "flushPendingCommands()V": () => {},
+  "blockUntilThreadAvailable()V": () => {},
+  // stability labels for binders crossing partitions; every binder here shares one build
+  "markVintfStability()V": () => {},
+  "forceDowngradeToSystemStability()V": () => {},
+  "getExtension()Landroid/os/IBinder;": function (this: JObj) { return extensions.get(this) ?? null; },
+  "setExtension(Landroid/os/IBinder;)V": function (this: JObj, ext: unknown) { extensions.set(this, ext); },
+});
+
+// Parcel's interface token: the caller's StrictMode policy and work source ahead of the descriptor
+const STRICT_MODE_PENALTY_GATHER = 1 << 31, SYST = 0x53595354;
+rt.registerJnis("android/os/Parcel", {
+  "nativeWriteInterfaceToken(JLjava/lang/String;)V": (ptr: bigint, name: string) => {
+    const p = parcelAt(ptr), source = workSource();
+    writeInt(p, (strictModePolicies.get(curThread) ?? 0) | STRICT_MODE_PENALTY_GATHER);
+    p.workSourceAt = p.pos;
+    writeInt(p, source.propagate ? source.uid : UNSET_WORK_SOURCE);
+    writeInt(p, SYST);
+    writeString(p, name);
+  },
+  "nativeEnforceInterface(JLjava/lang/String;)V": (ptr: bigint, name: string) => {
+    const p = parcelAt(ptr);
+    strictModePolicies.set(curThread, readInt(p) & ~STRICT_MODE_PENALTY_GATHER);
+    p.workSourceAt = p.pos;
+    workSources.set(curThread, { uid: readInt(p), propagate: false });
+    if (readInt(p) !== SYST || readString(p) !== name) throw rt.mkThrowable("java/lang/SecurityException", "Binder invocation to an incorrect interface");
+  },
+  "nativeReadCallingWorkSourceUid(J)I": (ptr: bigint) => {
+    const p = parcelAt(ptr);
+    return p.workSourceAt < 0 ? UNSET_WORK_SOURCE : p.view.getInt32(p.workSourceAt, true);
+  },
+  "nativeReplaceCallingWorkSourceUid(JI)Z": (ptr: bigint, uid: number) => {
+    const p = parcelAt(ptr);
+    if (p.workSourceAt < 0) return 0;
+    p.view.setInt32(p.workSourceAt, uid, true);
+    return 1;
+  },
+});
+
 rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JFileWriter, code: number, data: JParcel): Gen {
     if (code !== 1) return 0;
@@ -202,32 +244,41 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
     return 1;
   }),
 } });
-function proxyAlive(this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; }
-rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["android/os/IBinder"], methods: {
-  "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": () => null,
+
+const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
+const proxyAlive = function (this: JObj) { return +binderTransport.alive(proxyOf(this).handle.pid); };
+/** BpBinder::transact: the data parcel's bytes go whole; the reply is read from its start */
+const transact = driven(function* transact(target: BinderHandle, code: number, data: ParcelData, reply: JParcel | null, flags: number): Gen<number> {
+  const result: TransactionReply = yield binderTransport.transact({ handle: target, code, data, flags, system: systemThreads.has(curThread) });
+  if (reply) yield fillParcel(nativeParcel(reply), result.data);
+  return result.handled;
+});
+rt.registerJnis("android/os/BinderProxy", {
+  "getNativeFinalizer()J": () => FINALIZER,
   "pingBinder()Z": proxyAlive,
   "isBinderAlive()Z": proxyAlive,
-  "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinderProxy, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {
-    const result = yield binderTransport.transact({ handle: this.handle, code, data: exportParcel(data), flags, system: systemThreads.has(curThread) });
-    if (reply) importParcel(result.data, reply);
-    return result.handled;
-  }),
-  "getInterfaceDescriptor()Ljava/lang/String;": driven(function* (this: JBinderProxy): Gen {
-    const result = yield binderTransport.transact({ handle: this.handle, code: INTERFACE_TRANSACTION, flags: 0, data: emptyParcel() });
-    return vcall(importParcel(result.data), "readString", "()Ljava/lang/String;");
-  }),
-  "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JBinderProxy, recipient: unknown) {
-    if (!binderTransport.alive(this.handle.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
-    if (!this.deaths.has(recipient)) this.deaths.set(recipient, binderTransport.watch(this.handle.pid, () => {
-      this.deaths.delete(recipient); void vcallUncaught(recipient, "binderDied", "()V");
+  "getExtension()Landroid/os/IBinder;": () => null,
+  "transactNative(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": function (this: JObj, code: number, data: JObj | null, reply: JObj | null, flags: number) {
+    return transact(proxyOf(this).handle, code, exportParcel(data ?? rt.npe()), reply, flags);
+  },
+  "getInterfaceDescriptor()Ljava/lang/String;": function (this: JObj) {
+    const reply = new NativeParcel();
+    return after(transact(proxyOf(this).handle, INTERFACE_TRANSACTION, emptyParcel(), reply, 0), () => readString(reply));
+  },
+  "linkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JObj, recipient: unknown) {
+    const { handle: target, deaths } = proxyOf(this);
+    if (!binderTransport.alive(target.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
+    if (!deaths.has(recipient)) deaths.set(recipient, binderTransport.watch(target.pid, () => {
+      deaths.delete(recipient);
+      void (async () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this))().catch(reportUncaught);
     }));
   },
-  "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JBinderProxy, recipient: unknown) {
-    const cancel = this.deaths.get(recipient);
+  "unlinkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JObj, recipient: unknown) {
+    const { deaths } = proxyOf(this), cancel = deaths.get(recipient);
     if (!cancel) return 0;
-    cancel(); this.deaths.delete(recipient); return 1;
+    cancel(); deaths.delete(recipient); return 1;
   },
-} });
+});
 
 // ── servicemanager: the context object BinderInternal hands AOSP's ServiceManager. It answers
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
@@ -249,7 +300,7 @@ export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
 /** services the platform registers only on hardware this device does not have */
 const absentServices = new Set<string>();
 export const absentService = (...names: string[]): void => names.forEach((name) => absentServices.add(name));
-class JServiceManager extends JObj { binder: JBinder | null = null; }
+class JServiceManager extends JObj { binder: JObj | null = null; }
 /** a hosted service's binder, made when first asked for */
 export function hostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);
@@ -270,12 +321,9 @@ rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["
     throw rt.mkThrowable("java/lang/SecurityException", "an app may not register a system service");
   },
 } });
-let contextObject: JBinder | null = null;
-rt.registerJni("com/android/internal/os/BinderInternal", "getContextObject()Landroid/os/IBinder;", () => {
-  if (contextObject) return contextObject;
+let contextObject: JObj | Promise<JObj> | null = null;
+rt.registerJni("com/android/internal/os/BinderInternal", "getContextObject()Landroid/os/IBinder;", () => contextObject ??= after(construct("android/os/Binder", "()V"), (binder) => {
   const manager = rt.make("webdroid/ServiceManager") as JServiceManager;
-  contextObject = manager.binder = rt.make("android/os/Binder") as JBinder;
-  contextObject.owner = manager;
-  contextObject.descriptor = "android.os.IServiceManager";
-  return contextObject;
-});
+  manager.binder = binder;
+  return after(vcall(binder, "attachInterface", "(Landroid/os/IInterface;Ljava/lang/String;)V", manager, "android.os.IServiceManager"), () => contextObject = binder);
+}));

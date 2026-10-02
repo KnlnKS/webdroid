@@ -3,7 +3,9 @@
 import { rt, JObj, setDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { construct, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
-import { unparcel, type JBundle } from "./os";
+import type { JBundle } from "./os";
+import { toJsArray } from "../jvm/natives/jcoll";
+import { unbox } from "../jvm/natives/jbox";
 import { newStub } from "./binder";
 import { uriText, type JUri } from "./net";
 
@@ -58,9 +60,12 @@ rt.register({ name: "webdroid/SystemContentProvider", ctor: JSystemContentProvid
 
 /** a query, update or delete Bundle's arguments by key (ContentResolver.QUERY_ARG_*) */
 export const queryArgs = driven(function* queryArgs$(extras: JBundle | null): Gen<Map<string, unknown>> {
-  if (!extras) return new Map();
-  yield unparcel(extras);
-  return extras.map;
+  const args = new Map<string, unknown>();
+  if (extras) for (const k of (yield toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;"))) as string[]) {
+    const v = yield vcall(extras, "get", `(${S})Ljava/lang/Object;`, k);
+    args.set(k, unbox(v) ?? v);
+  }
+  return args;
 });
 /** the SQL selection and its arguments among a Bundle's */
 export const selectionOf = (args: Map<string, unknown>) => [(args.get("android:query-arg-sql-selection") ?? null) as string | null,

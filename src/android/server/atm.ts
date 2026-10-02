@@ -212,7 +212,7 @@ async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: Acti
   transitions++;
   try {
     if (await reuseActivity(intent, info)) return;
-    const token = systemToken();
+    const token = await systemToken();
     const prev = stack.at(-1);
     const orientation = getDeclared<number>(info, AI, "screenOrientation");
     if (prev) await pause(prev);

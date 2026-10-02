@@ -93,7 +93,3 @@ rt.register({
     ...noops("startWatching()V", "stopWatching()V", "onEvent(ILjava/lang/String;)V"),
   },
 });
-
-// ── Marker interfaces. An app class that `implements` one of these cannot link until the
-// interface is registered, and the static audit never lists them (dynamic dispatch).
-rt.markers("android/os/IInterface");

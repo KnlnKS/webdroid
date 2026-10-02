@@ -2,17 +2,16 @@
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
-import { parcelCreator, readObject, writeObject, unparcelBundle, type JParcel } from "./parcel";
+import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
-import { rt, JObj, type NativeSpec, stubs, noops, driven, without, declaredField, type Gen } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
 import { i8, jarray, utf8 } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall, stringHash } from "../jvm/natives/jlang";
-import { box, boxObject, unboxAs, type BoxDesc } from "../jvm/natives/jbox";
+import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
@@ -21,7 +20,6 @@ import { pathOf, fdInt, setFdInt, mkFd, heldByteReads, heldByteWrites } from "..
 import { vfs } from "../shell/vfs";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { newLinkedHashSet, toJsArray } from "../jvm/natives/jcoll";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 
@@ -239,188 +237,12 @@ rt.register({
     },
   },
 });
-/** a Bundle's wire form while it is unread: the bytes after BUNDLE_MAGIC and their binders */
-export type ParcelledBundle = { bytes: Uint8Array<ArrayBuffer>; objects: [number, unknown][] };
-export class JBaseBundle extends JObj {
-  private values = new Map<string, unknown>();
-  loader: unknown = null;
-  /** mParcelledData: a bundle read from a parcel stays in wire form until something reads it */
-  parcelled: ParcelledBundle | null = null;
-  unparcelling: Promise<void> | null = null;
-  /** FLAG_DEFUSABLE */
-  defusable = false;
-  allowFds = true;
-  /** the values; a parcelled bundle has to be unparcelled (`unparcel`) first */
-  get map(): Map<string, unknown> {
-    if (this.parcelled) throw new Error("Bundle read while parcelled");
-    return this.values;
-  }
-  set map(values: Map<string, unknown>) { this.values = values; this.parcelled = null; }
-}
-export class JPersistableBundle extends JBaseBundle {}
-export class JBundle extends JBaseBundle {
-  constructor() { super(); rt.link("android/os/Bundle"); }
-}
-function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
-  if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
-  return unboxAs(value, descriptor as BoxDesc, fallback);
-}
-/** What put<Type> stores: I and J stay bare (their JS type names them); the other primitives
- *  keep their declared width in a box, as a Parcel round trip will too. */
-function bundleBox(value: unknown, descriptor: string): unknown {
-  return typeof value === "number" && descriptor !== "I" && descriptor.length === 1 ? box(descriptor as BoxDesc, value) : value;
-}
-function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallback: unknown): unknown {
-  const v = b.map.get(k);
-  return descriptor.length === 1 ? bundlePrimitive(v, descriptor, fallback) : v ?? fallback;
-}
-/** The typed values a Bundle carries, by accessor stem: get/put<stem> */
-const BUNDLE_TYPES = [
-  ...["Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"].flatMap((t, i) => [[t, "ZBCSIJFD"[i]], [t + "Array", "[" + "ZBCSIJFD"[i]]] as const),
-  ["String", "Ljava/lang/String;"], ["CharSequence", "Ljava/lang/CharSequence;"], ["Parcelable", "Landroid/os/Parcelable;"],
-  ["Serializable", "Ljava/io/Serializable;"], ["Bundle", "Landroid/os/Bundle;"], ["IBinder", "Landroid/os/IBinder;"],
-  ["StringArray", "[Ljava/lang/String;"], ["CharSequenceArray", "[Ljava/lang/CharSequence;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
-  ...["Integer", "String", "CharSequence", "Parcelable"].map((t) => [t + "ArrayList", "Ljava/util/ArrayList;"] as const),
-  ["Binder", "Landroid/os/IBinder;"], ["PersistableBundle", "Landroid/os/PersistableBundle;"],
-  ["Size", "Landroid/util/Size;"], ["SizeF", "Landroid/util/SizeF;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
-/** API 33's class-checked getters, [stem, return] */
-const BUNDLE_TYPED = [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/io/Serializable;"],
-  ["ParcelableArray", "[Ljava/lang/Object;"], ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
-/** A class-checked getter's value. The class narrows a single value, which a mismatch reads as
- *  null; arrays and lists hold what was put. */
-function bundleTyped(b: JBaseBundle, k: string, cls: unknown, ret: string): unknown {
-  const v = boxObject(b.map.get(k) ?? null), single = ret === "Ljava/lang/Object;" || ret === "Ljava/io/Serializable;";
-  return single && v !== null && !vcall(cls, "isInstance", "(Ljava/lang/Object;)Z", v) ? null : v;
-}
-/** BaseBundle.unparcel: read a parcelled bundle's values, once */
-export function unparcel(b: JBaseBundle): void | Promise<void> {
-  if (!b.parcelled) return;
-  return b.unparcelling ??= unparcelBundle(b).finally(() => { b.unparcelling = null; });
-}
-/** a Bundle method that reads values: it unparcels first, as BaseBundle's accessors do */
-const unparcelled = (f: (this: JBaseBundle, ...a: unknown[]) => unknown) =>
-  function (this: JBaseBundle, ...a: unknown[]): unknown { return this.parcelled ? rt.drive(unparcelThen(this, f, a)) : f.apply(this, a); };
-function* unparcelThen(b: JBaseBundle, f: (this: JBaseBundle, ...a: unknown[]) => unknown, a: unknown[]): Gen {
-  yield unparcel(b);
-  return f.apply(b, a);
-}
-function copyBundle(this: JBaseBundle, b: JBaseBundle | null) {
-  if (!b) return;
-  this.loader = b.loader;
-  if (b.parcelled) this.parcelled = b.parcelled;
-  else this.map = new Map(b.map);
-}
-const putAll = driven(function* (this: JBaseBundle, b: JBaseBundle): Gen {
-  yield unparcel(b);
-  for (const [k, v] of b.map) this.map.set(k, v);
-});
-/** BaseBundle's deep copy: nested bundles and arrays are copied too, other values are shared; a
- *  parcelled bundle copies its wire form */
-function deepCopy(this: JBaseBundle): JBaseBundle {
-  const copy = new (this.constructor as new () => JBaseBundle)();
-  copy.loader = this.loader;
-  if (this.parcelled) { copy.parcelled = this.parcelled; return copy; }
-  for (const [k, v] of this.map) copy.map.set(k, v instanceof JBaseBundle ? deepCopy.call(v)
-    : Array.isArray(v) ? Object.assign(v.slice(), { $t: (v as { $t?: string }).$t }) : ArrayBuffer.isView(v) ? (v as Uint8Array).slice() : v);
-  return copy;
-}
-const bundleMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/os/Bundle;)V": copyBundle,
-  "<init>(Landroid/os/PersistableBundle;)V": copyBundle,
-  "<init>(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
-  "clone()Ljava/lang/Object;": function (this: JBundle) {
-    const copy = new (this.constructor as typeof JBundle)();
-    copyBundle.call(copy, this);
-    return copy;
-  },
-  ...noops("<init>()V", "<init>(I)V"),
-  ...stubs(0, "describeContents()I"),
-  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBundle, parcel: JParcel): Gen { yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this); }),
-  "readFromParcel(Landroid/os/Parcel;)V": driven(function* (this: JBundle, parcel: JParcel): Gen {
-    const read: JBundle | null = yield vcall(parcel, "readBundle", "(Ljava/lang/ClassLoader;)Landroid/os/Bundle;", this.loader);
-    this.map = new Map();
-    if (read) copyBundle.call(this, read);
-  }),
-  "isParcelled()Z": function (this: JBundle) { return +!!this.parcelled; },
-  // an empty bundle is never kept parcelled
-  "isDefinitelyEmpty()Z": function (this: JBundle) { return +(!this.parcelled && !this.map.size); },
-  "getSize()I": function (this: JBundle) { return this.parcelled ? this.parcelled.bytes.length : 0; },
-  "setAllowFds(Z)Z": function (this: JBundle, allow: number) { const previous = this.allowFds; this.allowFds = !!allow; return +previous; },
-  "size()I": function (this: JBundle) { return this.map.size; },
-  // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
-  // caller that reaches for Object then calls toString()/instanceof Number needs the box.
-  "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JBundle, k: string) { return boxObject(this.map.get(k) ?? null); },
-  "isEmpty()Z": function (this: JBundle) { return this.map.size ? 0 : 1; },
-  "containsKey(Ljava/lang/String;)Z": function (this: JBundle, k: string) { return this.map.has(k) ? 1 : 0; },
-  "remove(Ljava/lang/String;)V": function (this: JBundle, k: string) { this.map.delete(k); },
-  "clear()V": function (this: JBundle) { this.map.clear(); },
-  // ArrayMap's order: by key hash, insertion order among equal hashes (androidx.startup runs a
-  // provider's initializers in its meta-data's key order)
-  "keySet()Ljava/util/Set;": function (this: JBundle) {
-    return newLinkedHashSet([...this.map.keys()].sort((a, b) => (a === null ? 0 : stringHash(a)) - (b === null ? 0 : stringHash(b))));
-  },
-  "putAll(Landroid/os/Bundle;)V": putAll,
-  "putAll(Landroid/os/PersistableBundle;)V": putAll,
-  "setClassLoader(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
-  "getClassLoader()Ljava/lang/ClassLoader;": function (this: JBundle) { return this.loader; },
-  "getSerializable(Ljava/lang/String;)Ljava/io/Serializable;": function (this: JBundle, k: string) { return boxObject(this.map.get(k) ?? null); },
-};
-for (const [t, d] of BUNDLE_TYPES) {
-  const zero = d.length > 1 ? null : d === "J" ? 0n : 0;
-  bundleMethods[`put${t}(Ljava/lang/String;${d})V`] = function (this: JBundle, k: string, v: unknown) { this.map.set(k, bundleBox(v, d)); };
-  bundleMethods[`get${t}(Ljava/lang/String;)${d}`] ??= function (this: JBundle, k: string) { return bundleGet(this, k, d, zero); };
-  // AOSP boxes getByte's default; the reference types with a default overload are the two strings
-  if (d === "B") bundleMethods["getByte(Ljava/lang/String;B)Ljava/lang/Byte;"] = function (this: JBundle, k: string, dv: number) { return box("B", bundleGet(this, k, d, dv) as number); };
-  else if (zero !== null || t === "String" || t === "CharSequence") {
-    bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dv: unknown) { return bundleGet(this, k, d, dv); };
-  }
-}
-for (const [t, d] of BUNDLE_TYPED) {
-  bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string, cls: unknown) { return bundleTyped(this, k, cls, d); };
-}
-bundleMethods["hasFileDescriptors()Z"] = driven(function* (this: JBundle): Gen {
-  // nothing here marshals a file descriptor, so a parcelled bundle carries none
-  if (this.parcelled) return 0;
-  for (const v of this.map.values()) if (yield* hasFds(v)) return 1;
-  return 0;
-});
-/** Bundle.hasFileDescriptors' walk: a Parcelable reporting CONTENTS_FILE_DESCRIPTOR, in a list, array or bundle */
-function* hasFds(v: unknown): Gen<boolean> {
-  if (v instanceof JBundle) return !!(yield vcall(v, "hasFileDescriptors", "()Z"));
-  if (Array.isArray(v)) { for (const x of v) if (yield* hasFds(x)) return true; return false; }
-  if (rt.iof(v, "android/os/Parcelable")) return !!((yield vcall(v, "describeContents", "()I")) as number & 1);
-  if (rt.iof(v, "java/util/List")) for (const x of (yield toJsArray(v)) as unknown[]) if (yield* hasFds(x)) return true;
-  return false;
-}
-const PARCELLED_OK = new Set(["<init>(Landroid/os/Bundle;)V", "<init>(Landroid/os/PersistableBundle;)V", "<init>(Ljava/lang/ClassLoader;)V",
-  "<init>()V", "<init>(I)V", "clone()Ljava/lang/Object;", "describeContents()I", "writeToParcel(Landroid/os/Parcel;I)V",
-  "readFromParcel(Landroid/os/Parcel;)V", "setClassLoader(Ljava/lang/ClassLoader;)V", "getClassLoader()Ljava/lang/ClassLoader;",
-  "isParcelled()Z", "isDefinitelyEmpty()Z", "getSize()I", "setAllowFds(Z)Z", "hasFileDescriptors()Z"]);
-for (const [k, f] of Object.entries(bundleMethods)) if (typeof f === "function" && !PARCELLED_OK.has(k)) bundleMethods[k] = unparcelled(f as never);
-/** what only Bundle holds (PersistableBundle keeps to strings, numbers and nested PersistableBundles) */
-const PARCEL_STEMS = new Set(["Binder", "Bundle", "IBinder", "Parcelable", "ParcelableArray", "ParcelableArrayList", "Size", "SizeF", "SparseParcelableArray"]);
-const bundleOnly = [
-  ...BUNDLE_TYPES.filter(([t]) => PARCEL_STEMS.has(t)).flatMap(([t, d]) => [`put${t}(Ljava/lang/String;${d})V`, `get${t}(Ljava/lang/String;)${d}`]),
-  ...BUNDLE_TYPED.filter(([t]) => PARCEL_STEMS.has(t)).map(([t, d]) => `get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`),
-  "putAll(Landroid/os/Bundle;)V", "readFromParcel(Landroid/os/Parcel;)V", "getSize()I", "setAllowFds(Z)Z", "hasFileDescriptors()Z",
-];
-const persistableOnly = ["putPersistableBundle(Ljava/lang/String;Landroid/os/PersistableBundle;)V", "getPersistableBundle(Ljava/lang/String;)Landroid/os/PersistableBundle;"];
-rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: without(bundleMethods, bundleOnly, persistableOnly,
-  ["<init>(Landroid/os/Bundle;)V", "<init>(Landroid/os/PersistableBundle;)V", "describeContents()I", "writeToParcel(Landroid/os/Parcel;I)V"]) });
-rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
-  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } },
-  methods: { ...without(bundleMethods, persistableOnly), "deepCopy()Landroid/os/Bundle;": deepCopy,
-    "setDefusable(Z)V": function (this: JBundle, defusable: number) { this.defusable = !!defusable; } } });
-rt.register({ name: "android/os/PersistableBundle", ctor: JPersistableBundle, sup: "android/os/BaseBundle",
-  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JPersistableBundle(); } },
-  methods: { ...without(bundleMethods, bundleOnly, ["<init>(Ljava/lang/ClassLoader;)V"]), "deepCopy()Landroid/os/PersistableBundle;": deepCopy } });
-
+/** the Java Bundle and PersistableBundle run from AOSP bytecode */
+export type JBundle = JObj;
 export const PARCELABLE = {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
 } as const;
-rt.markers("android/os/Parcelable");
-rt.markers("android/os/OutcomeReceiver");
 const sharedMappings = new WeakSet<JBuffer>();
 /** the ashmem region: guest memory, which each mapping's direct buffer addresses */
 class JSharedMemory extends JObj {
