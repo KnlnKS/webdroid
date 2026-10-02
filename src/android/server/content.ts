@@ -47,8 +47,8 @@ const binderOf = (observer: JObj) => vcall(observer, "asBinder", "()Landroid/os/
 rt.register({ name: "webdroid/ContentService", ctor: class extends JObj {}, sup: "android/content/IContentService$Stub", methods: {
   [`registerContentObserver(Landroid/net/Uri;Z${IObserver}II)V`]: driven(function* (uri: JUri | null, descendants: number, observer: JObj | null, userId: number): Gen<void> {
     if (!uri || !observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid uri and observer");
-    observeContent(yield uriText(uri), !!descendants, yield binderOf(observer), async (changed, self, flags) =>
-      vcall(observer, "onChangeEtc", "(Z[Landroid/net/Uri;II)V", +self, jarray([await mkUri(changed)], "Landroid/net/Uri;"), flags, userId));
+    observeContent(yield uriText(uri), !!descendants, yield binderOf(observer), (changed, self, flags) =>
+      rt.drive(function* (): Gen { yield vcall(observer, "onChangeEtc", "(Z[Landroid/net/Uri;II)V", +self, jarray([yield mkUri(changed)], "Landroid/net/Uri;"), flags, userId); }()));
   }),
   [`unregisterContentObserver(${IObserver})V`]: driven(function* (observer: JObj | null): Gen<void> {
     if (!observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid observer");

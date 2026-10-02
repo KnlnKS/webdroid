@@ -102,8 +102,12 @@ async function releasePersistable(juri: JUri, modes: number): Promise<void> {
     return flags & 3 ? [{ ...grant, flags }] : [];
   }));
 }
-const persistedPermissions = async (): Promise<JObj> => newArrayList(await Promise.all(uriGrants.all().map(async (grant) =>
-  newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", await mkUri(grant.uri), grant.flags, BigInt(grant.time)))));
+function* persistedPermissions(): Gen<JObj> {
+  const permissions: JObj[] = [];
+  for (const grant of uriGrants.all())
+    permissions.push(yield newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", yield mkUri(grant.uri), grant.flags, BigInt(grant.time)));
+  return newArrayList(permissions);
+}
 
 // IUriGrantsManager, under AOSP's ContentResolver: this app's persisted grants. Grants it made to
 // others are not recorded, so it has no outgoing ones.
@@ -111,7 +115,7 @@ rt.register({ name: "webdroid/UriGrantsManagerService", ctor: class extends JObj
   "takePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri, modes: number) => takePersistable(u, modes),
   "releasePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri, modes: number) => releasePersistable(u, modes),
   "getUriPermissions(Ljava/lang/String;ZZ)Landroid/content/pm/ParceledListSlice;": driven(function* (_pkg: string, incoming: number) {
-    return yield newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? yield persistedPermissions() : newArrayList());
+    return yield newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? yield* persistedPermissions() : newArrayList());
   }),
 } });
 hostStub("uri_grants", "webdroid/UriGrantsManagerService");
