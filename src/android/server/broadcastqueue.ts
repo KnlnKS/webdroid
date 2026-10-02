@@ -3,7 +3,7 @@
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { JObj, driven, type Gen } from "../../jvm/runtime";
-import { callUncaught, newObj, vcall, reportUncaught } from "../../jvm/natives/jlang";
+import { callUncaught, newObj, vcall } from "../../jvm/natives/jlang";
 import { hostedService, notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
@@ -20,9 +20,9 @@ export const broadcastTransport: { send: (intent: JIntent, permissions: string[]
  *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */
 export const stickyBroadcasts = new Map<string, () => JIntent | Promise<JIntent>>();
 /** IntentFilter.match(ContentResolver, Intent, boolean, String), as the broadcast queue matches a registration */
-const filterMatches = driven(function* matches$(filter: JObj, intent: JIntent): Gen<boolean> {
+function* filterMatches(filter: JObj, intent: JIntent): Gen<boolean> {
   return (yield vcall(filter, "match", "(Landroid/content/ContentResolver;Landroid/content/Intent;ZLjava/lang/String;)I", null, intent, 0, "ActivityManager")) >= 0;
-});
+}
 
 export type Sender = { uid: number; pkg: string };
 const SYSTEM_UID = 1000, SYSTEM: Sender = { uid: SYSTEM_UID, pkg: "android" };
@@ -53,7 +53,7 @@ function* hears(registration: Registration, intent: JObj, sender: Sender): Gen<b
     if (registration.flags & RECEIVER_NOT_EXPORTED) return false;
     if (registration.permission && (yield checkPermission(registration.permission, sender.pkg)) !== 0) return false;
   }
-  return yield filterMatches(registration.filter, intent);
+  return yield* filterMatches(registration.filter, intent);
 }
 
 /** this process's share of a broadcast: one manifest receiver, or every registered one it matches */
@@ -104,12 +104,12 @@ export const broadcastQueueMethods = {
       for (const [action, make] of stickyBroadcasts) {
         if (!(yield vcall(filter, "hasAction", `(${S})Z`, action))) continue;
         const sticky = yield make();
-        if (yield filterMatches(filter, sticky)) stickies.push(sticky);
+        if (yield* filterMatches(filter, sticky)) stickies.push(sticky);
       }
       if (receiver) {
         registered.set(receiver, { filter, permission, flags, pkg });
         const none: BroadcastResult = { code: 0, data: null, extras: null, aborted: false };
-        for (const sticky of stickies) void scheduleRegistered(receiver, sticky, none, false, true, SYSTEM).catch(reportUncaught);
+        for (const sticky of stickies) callUncaught(() => scheduleRegistered(receiver, sticky, none, false, true, SYSTEM));
       }
       return stickies[0] ?? null;
     }),

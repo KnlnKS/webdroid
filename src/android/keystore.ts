@@ -6,7 +6,7 @@
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
 import { rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall } from "../jvm/natives/jlang";
+import { after, newObj, scall } from "../jvm/natives/jlang";
 import { unbox } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
 import { PROCESS_UID } from "./os";
@@ -45,9 +45,8 @@ const RESPONSE = { KEY_NOT_FOUND: 7, INVALID_ARGUMENT: 20 };
 const DOMAIN = { APP: 0, KEY_ID: 4 };
 const SOFTWARE = 0, TRUSTED_ENVIRONMENT = 1, KEYSTORE = 100;
 
-async function failure(code: number, msg: string): Promise<never> {
-  throw await newObj("android/os/ServiceSpecificException", "(ILjava/lang/String;)V", code, msg);
-}
+const failure = (code: number, msg: string): Promise<never> =>
+  after(newObj("android/os/ServiceSpecificException", "(ILjava/lang/String;)V", code, msg), (e) => { throw e; });
 
 // ── key parameters: (tag, KeyParameterValue kind, value)
 type Value = number | bigint | boolean | Uint8Array;
@@ -216,12 +215,8 @@ function* store(alias: string, req: Param[], origin: number, made: { material: U
   return yield* metadata(e);
 }
 /** `body`'s answer, a KeyMint error code it throws as the ServiceSpecificException keystore2 sends */
-function keymint<T>(body: () => T | Promise<T>): T | Promise<T> {
-  const error = (e: unknown) => { if (typeof e === "number") return failure(e, "KeyMint error " + e); throw e; };
-  try {
-    const r = body();
-    return r instanceof Promise ? r.catch(error) : r;
-  } catch (e) { return error(e); }
+function* keymint$<T>(body: Gen<T>): Gen<T> {
+  try { return yield* body; } catch (e) { if (typeof e !== "number") throw e; return yield failure(e, "KeyMint error " + e); }
 }
 
 // ── operations
@@ -316,24 +311,26 @@ const live = (self: JKeystoreOperation) => {
   if (!self.op || self.op.done) throw ERR.INVALID_OPERATION;
   return self.op;
 };
+/** an IKeystoreOperation method, a step of the live operation */
+const operation = <A extends unknown[]>(step: (op: Op, ...a: A) => unknown) => function (this: JKeystoreOperation, ...a: A) {
+  const self = this;
+  return rt.drive(keymint$(function* () { return step(live(self), ...a); }()));
+};
 rt.register({ name: "webdroid/KeystoreOperation", ctor: JKeystoreOperation, sup: "android/system/keystore2/IKeystoreOperation$Stub", methods: {
-  "updateAad([B)V": function (this: JKeystoreOperation, aad: Int8Array) { return keymint(() => { live(this).aad.push(new Uint8Array(aad)); }); },
-  "update([B)[B": function (this: JKeystoreOperation, input: Int8Array) { return keymint(() => { live(this).input.push(new Uint8Array(input)); return null; }); },
-  "finish([B[B)[B": function (this: JKeystoreOperation, input: Int8Array | null, signature: Int8Array | null) {
-    return keymint(() => {
-      const op = live(this);
-      if (input) op.input.push(new Uint8Array(input));
-      op.done = true;
-      return out(finishOp(op, signature ? new Uint8Array(signature) : null));
-    });
-  },
+  "updateAad([B)V": operation((op, aad: Int8Array) => { op.aad.push(new Uint8Array(aad)); }),
+  "update([B)[B": operation((op, input: Int8Array) => { op.input.push(new Uint8Array(input)); return null; }),
+  "finish([B[B)[B": operation((op, input: Int8Array | null, signature: Int8Array | null) => {
+    if (input) op.input.push(new Uint8Array(input));
+    op.done = true;
+    return out(finishOp(op, signature ? new Uint8Array(signature) : null));
+  }),
   "abort()V": function (this: JKeystoreOperation) { if (this.op) this.op.done = true; },
 } });
 
 const CREATE_OP = "android/system/keystore2/CreateOperationResponse", KPS = "android/system/keystore2/KeyParameters";
 const createOperation = driven(function* (d: unknown, opParams: unknown[] | null): Gen<JObj> {
   const e = yield* find(d), key = e.params.map(decodeParam), ps = readParams(opParams);
-  return yield keymint(() => rt.drive(function* (): Gen<JObj> {
+  return yield* keymint$(function* (): Gen<JObj> {
     if (!e.material) throw ERR.INCOMPATIBLE_PURPOSE;
     const purpose = num(ps, TAG.PURPOSE);
     if (purpose === undefined || !all(key, TAG.PURPOSE).map(Number).includes(purpose)) throw ERR.INCOMPATIBLE_PURPOSE;
@@ -368,21 +365,21 @@ const createOperation = driven(function* (d: unknown, opParams: unknown[] | null
     operation.op = { e, params: [...ps, ...key.filter((p) => p.tag === TAG.MIN_MAC_LENGTH)], purpose, input: [], aad: [], nonce, done: false };
     const parameters = returned.length ? setDeclared(yield newObj(KPS), KPS, { keyParameter: jarray(yield* javaParams(returned), `L${KP};`) }) : null;
     return setDeclared(yield newObj(CREATE_OP), CREATE_OP, { iOperation: operation, operationChallenge: null, parameters, upgradedBlob: null });
-  }()));
+  }());
 });
 
 // ── IKeystoreSecurityLevel (the TEE one) and IKeystoreService
 class JSecurityLevel extends JObj {}
 rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup: "android/system/keystore2/IKeystoreSecurityLevel$Stub", methods: {
   "generateKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
-    (d: unknown, _attest: unknown, params: unknown[]) => keymint(() => rt.drive(function* (): Gen<JObj> {
+    (d: unknown, _attest: unknown, params: unknown[]) => rt.drive(keymint$(function* (): Gen<JObj> {
       const ps = readParams(params), alias = descriptor(d).alias;
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (ps.some((p) => p.tag === TAG.ATTESTATION_CHALLENGE)) throw ERR.ATTESTATION_KEYS_NOT_PROVISIONED;
       return yield* store(alias, ps, 0, yield generateMaterial(ps));
     }())),
   "importKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
-    (d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => keymint(() => rt.drive(function* (): Gen<JObj> {
+    (d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => rt.drive(keymint$(function* (): Gen<JObj> {
       const ps = readParams(params), alias = descriptor(d).alias, alg = algorithmOf(ps), bytes = new Uint8Array(data);
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (alg === ALG.AES || alg === ALG.HMAC) {

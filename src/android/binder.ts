@@ -156,7 +156,7 @@ export const enforceCallingOrSelfPermission = driven(function* (permission: stri
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
-export async function withCallingIdentity<T>(caller: Caller, call: () => Promise<T>, system = false): Promise<T> {
+export async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
   const thread = new JThread();
   thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller);
   if (system) systemThreads.add(thread);
@@ -167,7 +167,7 @@ export async function withCallingIdentity<T>(caller: Caller, call: () => Promise
 export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
 const systemThreads = new WeakSet<JThread>();
 /** run a hosted service's calls into other binders as system_server makes them */
-export function asSystem<T>(call: () => Promise<T>): Promise<T> {
+export function asSystem<T>(call: () => T | Promise<T>): Promise<T> {
   return withCallingIdentity(SYSTEM_CALLER, call, true);
 }
 /** JavaBBinder::onTransact: Binder.execTransact over the transaction's parcels */

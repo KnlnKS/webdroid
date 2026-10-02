@@ -3,7 +3,7 @@
 // connections hear each binder the service publishes. A service of another process is reached
 // through the broker, whose request lands in that process's ActiveServices.
 import { rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, vcallUncaught, reportUncaught } from "../../jvm/natives/jlang";
+import { newObj, vcall, callUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService, notConnected } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
@@ -175,16 +175,15 @@ export const hostedServices = {
   peek: driven(function* (intent: JObj): Gen<JObj | null> { return yield* peekLocal(yield* local(intent)); }),
   unbind: driven(unbindLocal),
   bind: driven(function* (intent: JObj, key: string, flags: number = BIND_AUTO_CREATE): Gen<JObj | null> {
-    const t = yield* local(intent);
-    return yield new Promise<JObj | null>((resolve, reject) => {
-      Promise.resolve(rt.drive(bindLocal(t, intent, { id: key, autoCreate: !!(flags & BIND_AUTO_CREATE), connected: (binder, dead) =>
-        dead ? reject(rt.mkThrowable("android/os/DeadObjectException", "Service stopped")) : resolve(binder) }))).catch(reject);
-    });
+    const t = yield* local(intent), bound = Promise.withResolvers<JObj | null>();
+    yield* bindLocal(t, intent, { id: key, autoCreate: !!(flags & BIND_AUTO_CREATE), connected: (binder, dead) =>
+      dead ? bound.reject(rt.mkThrowable("android/os/DeadObjectException", "Service stopped")) : bound.resolve(binder) });
+    return yield bound.promise;
   }),
 };
 
 /** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
-export const bindAsSystem = driven(function* (component: JComponentName, key: string, action: string | null = null): Gen<{ binder: JObj; unbind: () => Promise<void> }> {
+export const bindAsSystem = driven(function* (component: JComponentName, key: string, action: string | null = null): Gen<{ binder: JObj; unbind: () => unknown }> {
   const parts = (yield componentParts(component))!;
   const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
   const node = owner?.components.service.get(cls);
@@ -193,7 +192,7 @@ export const bindAsSystem = driven(function* (component: JComponentName, key: st
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield mkComponentName(owner.pkg, cls));
   const process = owner.process(node);
   if (owner.pkg === appHost.pkg && process === (PROCESS_NAME || owner.pkg))
-    return { binder: (yield hostedServices.bind(intent, key))!, unbind: async () => { await hostedServices.unbind(key); } };
+    return { binder: (yield hostedServices.bind(intent, key))!, unbind: () => hostedServices.unbind(key) };
   return { binder: (yield serviceTransport.bind(owner, process, intent, key)) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
 });
 
@@ -205,7 +204,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   if (denied) return yield newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", "!", denied);
   const bound = yield* withComponent(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
-  else void serviceTransport.start(remoteOwner(t), t.process, bound, foreground).catch(reportUncaught);
+  else callUncaught(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground));
   return t.name;
 });
 /** a connection to a service elsewhere: the broker key that binding holds */
@@ -222,7 +221,7 @@ export const activeServiceMethods = {
     if (!t) return 0;
     if (yield* denial(t, appHost!.pkg)) return -1;
     if (isLocal(t)) yield* stopLocal(t);
-    else void serviceTransport.stop(remoteOwner(t), t.process, yield* withComponent(intent, t.name)).catch(reportUncaught);
+    else { const bound = yield* withComponent(intent, t.name); callUncaught(() => serviceTransport.stop(remoteOwner(t), t.process, bound)); }
     return 1;
   }),
   "stopServiceToken(Landroid/content/ComponentName;Landroid/os/IBinder;I)Z": driven(function* (_name: JObj, token: JObj, startId: number) {
@@ -238,22 +237,26 @@ export const activeServiceMethods = {
       if (!t) return 0;
       if (yield* denial(t, callingPackage)) return -1;
       const bound = yield* withComponent(intent, t.name), bits = Number(BigInt.asIntN(32, flags));
-      const connected = (binder: JObj | null, dead: boolean) => vcallUncaught(conn, "connected", CONNECTED, t.name, binder, +dead);
+      const connected = (binder: JObj | null, dead: boolean) => callUncaught(() => vcall(conn, "connected", CONNECTED, t.name, binder, +dead));
       if (isLocal(t)) {
         yield* bindLocal(t, bound, { id: conn, autoCreate: !!(bits & BIND_AUTO_CREATE), connected });
         return 1;
       }
       const key = PROCESS_PID + ":" + nextKey++, held = remoteConnections.get(conn) ?? [];
       held.push({ t, key }); remoteConnections.set(conn, held);
-      void serviceTransport.bind(remoteOwner(t), t.process, bound, key, bits).then((binder) => {
-        if (remoteConnections.get(conn)?.some((r) => r.key === key)) connected(binder as JObj | null, false);
-      }, (error) => { connected(null, true); reportUncaught(error); });
+      // the binding answers later, on this thread
+      callUncaught(() => rt.drive(function* () {
+        let binder: JObj | null;
+        try { binder = yield serviceTransport.bind(remoteOwner(t), t.process, bound, key, bits); }
+        catch (error) { connected(null, true); throw error; }
+        if (remoteConnections.get(conn)?.some((r) => r.key === key)) connected(binder, false);
+      }()));
       return 1;
     }),
   "unbindService(Landroid/app/IServiceConnection;)Z": driven(function* (conn: JObj) {
     const held = remoteConnections.get(conn) ?? [];
     remoteConnections.delete(conn);
-    for (const { t, key } of held) void serviceTransport.unbind(remoteOwner(t), t.process, key).catch(reportUncaught);
+    for (const { t, key } of held) callUncaught(() => serviceTransport.unbind(remoteOwner(t), t.process, key));
     return +((yield* unbindLocal(conn)) || held.length > 0);
   }),
   "publishService(Landroid/os/IBinder;Landroid/content/Intent;Landroid/os/IBinder;)V": driven(function* (token: JObj, intent: JObj, binder: JObj | null) {
