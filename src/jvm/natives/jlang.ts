@@ -833,9 +833,11 @@ sm("regionMatches(ILjava/lang/String;II)Z", function (toff: number, o: string, o
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
 sm("codePointCount(II)I", function (a: number, b: number) { return cpCount(this, a, b); });
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
-const intStream = (values: number[]) => scall("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;", Int32Array.from(values));
-sm("chars()Ljava/util/stream/IntStream;", function () { return intStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
-sm("codePoints()Ljava/util/stream/IntStream;", function () { return intStream(Array.from(this, char => char.codePointAt(0)!)); });
+const intStream = (values: Int32Array) => scall("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;", values);
+const charStream = (s: string) => intStream(Int32Array.from({ length: s.length }, (_, i) => s.charCodeAt(i)));
+const codePointStream = (s: string) => intStream(Int32Array.from(s, (ch) => ch.codePointAt(0)!));
+sm("chars()Ljava/util/stream/IntStream;", function () { return charStream(this); });
+sm("codePoints()Ljava/util/stream/IntStream;", function () { return codePointStream(this); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return stringMatches(this as string, p); });
 sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, true); });
@@ -897,9 +899,8 @@ const checkRange = (start: number, end: number, n: number, cls = "java/lang/Stri
 function grow(sb: JSB, min: number): void { if (min > sb.cap) sb.cap = Math.max(min, sb.cap * 2 + 2); }
 /** the append every builder method but insert takes */
 function add(sb: JSB, text: string): JSB {
-  const s = sb.s, n = s.length + text.length;
-  if (n > sb.cap) sb.cap = Math.max(n, sb.cap * 2 + 2);
-  sb.s = s + text;
+  grow(sb, sb.s.length + text.length);
+  sb.s += text;
   return sb;
 }
 function put(sb: JSB, at: number, text: string): JSB {
@@ -931,14 +932,9 @@ function sbSpec(name: string): NativeSpec {
   const c = name === "java/lang/StringBuilder" ? class SB extends JSB {} : class SBuf extends JSB {};
   const L = `L${name};`;
   const at = (self: JSB, i: number, text: string | Promise<string>) => after(text, (t: string) => put(self, i, t));
-  const appendText = function (this: JSB, t: string | Promise<string>) { return after(t, (text: string) => add(this, text)); };
-  const appendCs = function (this: JSB, v: unknown) { return appendText.call(this, csChars(v, 0)); };
-  const appendRange = function (this: JSB, v: unknown, a: number, b: number) {
-    return appendText.call(this, csChars(v, a, b));
-  };
+  const appendText = (self: JSB, t: string | Promise<string>) => after(t, (text: string) => add(self, text));
+  const appendCs = function (this: JSB, v: unknown) { return appendText(this, csChars(v, 0)); };
   const insertText = (text: (v: any) => string | Promise<string>) => function (this: JSB, i: number, v: unknown) { checkOffset(i, this.s.length); return at(this, i, text(v)); };
-  const insertCs = insertText((v) => csChars(v, 0));
-  const codePoints = (s: string) => Array.from(s, (ch) => ch.codePointAt(0)!);
   const methods: NativeSpec["methods"] = {
     "<init>()V": function () {},
     "<init>(I)V": function (this: JSB, n: number) { if (n < 0) throw rt.mkThrowable("java/lang/NegativeArraySizeException", String(n)); this.cap = n; },
@@ -947,25 +943,25 @@ function sbSpec(name: string): NativeSpec {
       return after(csChars(v ?? rt.npe(), 0), (s: string) => { this.cap = s.length + 16; this.s = s; });
     },
     [`append(Ljava/lang/String;)${L}`]: function (this: JSB, v: string | null) { return add(this, v ?? "null"); },
-    [`append(Ljava/lang/Object;)${L}`]: function (this: JSB, v: unknown) { return appendText.call(this, stringOf(v)); },
+    [`append(Ljava/lang/Object;)${L}`]: function (this: JSB, v: unknown) { return appendText(this, stringOf(v)); },
     [`append(Ljava/lang/CharSequence;)${L}`]: appendCs,
     [`append(Ljava/lang/StringBuffer;)${L}`]: appendCs,
-    [`append(Ljava/lang/CharSequence;II)${L}`]: appendRange,
+    [`append(Ljava/lang/CharSequence;II)${L}`]: function (this: JSB, v: unknown, a: number, b: number) { return appendText(this, csChars(v, a, b)); },
     [`append([C)${L}`]: function (this: JSB, v: Uint16Array) { return add(this, charRange(v, 0, v?.length ?? 0)); },
     [`append([CII)${L}`]: function (this: JSB, v: Uint16Array, o: number, n: number) { return add(this, charRange(v, o, n)); },
     [`append(Z)${L}`]: function (this: JSB, v: number) { return add(this, v ? "true" : "false"); },
     [`append(C)${L}`]: function (this: JSB, v: number) { return add(this, String.fromCharCode(v)); },
     [`append(I)${L}`]: function (this: JSB, v: number) { return add(this, "" + v); },
     [`append(J)${L}`]: function (this: JSB, v: bigint) { return add(this, "" + v); },
-    [`append(F)${L}`]: function (this: JSB, v: number) { return appendText.call(this, floatText(v)); },
-    [`append(D)${L}`]: function (this: JSB, v: number) { return appendText.call(this, doubleText(v)); },
+    [`append(F)${L}`]: function (this: JSB, v: number) { return appendText(this, floatText(v)); },
+    [`append(D)${L}`]: function (this: JSB, v: number) { return appendText(this, doubleText(v)); },
     [`appendCodePoint(I)${L}`]: function (this: JSB, cp: number) {
       if (cp >>> 0 > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a valid Unicode code point: 0x" + (cp >>> 0).toString(16).toUpperCase());
       return add(this, String.fromCodePoint(cp));
     },
     [`insert(ILjava/lang/String;)${L}`]: insertText((v: string | null) => v ?? "null"),
     [`insert(ILjava/lang/Object;)${L}`]: insertText(stringOf),
-    [`insert(ILjava/lang/CharSequence;)${L}`]: insertCs,
+    [`insert(ILjava/lang/CharSequence;)${L}`]: insertText((v) => csChars(v, 0)),
     [`insert(ILjava/lang/CharSequence;II)${L}`]: function (this: JSB, i: number, v: unknown, a: number, b: number) {
       checkOffset(i, this.s.length);
       return at(this, i, csChars(v, a, b));
@@ -999,8 +995,8 @@ function sbSpec(name: string): NativeSpec {
     "codePointBefore(I)I": function (this: JSB, i: number) { checkIndex(i - 1, this.s.length); return cpBefore(this.s, i); },
     "codePointCount(II)I": function (this: JSB, a: number, b: number) { return cpCount(this.s, a, b); },
     "offsetByCodePoints(II)I": function (this: JSB, i: number, n: number) { return offsetCodePoints(this.s, i, n); },
-    "chars()Ljava/util/stream/IntStream;": function (this: JSB) { return intStream(Array.from({ length: this.s.length }, (_, i) => this.s.charCodeAt(i))); },
-    "codePoints()Ljava/util/stream/IntStream;": function (this: JSB) { return intStream(codePoints(this.s)); },
+    "chars()Ljava/util/stream/IntStream;": function (this: JSB) { return charStream(this.s); },
+    "codePoints()Ljava/util/stream/IntStream;": function (this: JSB) { return codePointStream(this.s); },
     [`compareTo(${L})I`]: function (this: JSB, o: JSB) { return stringCompare(this.s, (o ?? rt.npe()).s); },
     [`replace(IILjava/lang/String;)${L}`]: function (this: JSB, a: number, b: number, r: string) {
       const n = this.s.length;
