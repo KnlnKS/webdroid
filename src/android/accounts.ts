@@ -5,11 +5,11 @@
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
 import { JObj, rt, noops, declaredField, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, reportUncaught } from "../jvm/natives/jlang";
 import { boxInt } from "../jvm/natives/jbox";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";
-import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
+import { PROCESS_PID, PROCESS_UID } from "./os";
 import { packages, qualifyComponent } from "./packages";
 import { AccountStore, type StoredAccount } from "../shell/accounts";
 import { attr, attrStr, parseAXML } from "./axml";

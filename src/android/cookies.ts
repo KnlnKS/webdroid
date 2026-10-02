@@ -1,10 +1,9 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, reportUncaught } from "../jvm/natives/jlang";
 import { boxBool } from "../jvm/natives/jbox";
 import type { WebCookies } from "../shell/webcookies";
 import { appHost } from "./apphost";
 import { onMain } from "./mainloop";
-import { reportUncaught } from "./os";
 
 const defaults = new Map<string, Promise<WebCookies>>();
 export let webCookies = (pkg: string): Promise<WebCookies> => {

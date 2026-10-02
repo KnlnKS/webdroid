@@ -2,7 +2,7 @@
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
 import { JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { callUncaught, construct, scall, vcall, after } from "../jvm/natives/jlang";
+import { callUncaught, construct, scall, vcall, after, reportUncaught } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -10,7 +10,6 @@ import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
-import { reportUncaught } from "./os";
 import { newStub } from "./binder";
 import type { JIntent } from "./intent";
 

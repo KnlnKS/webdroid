@@ -4,10 +4,9 @@
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleField, jarray } from "../jvm/abi";
-import { newObj, scall, vcall, staticField } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, staticField, reportUncaught } from "../jvm/natives/jlang";
 import { hostStub } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
-import { reportUncaught } from "./os";
 import { device } from "../shell/config";
 
 const INFO = "android/view/DisplayInfo";

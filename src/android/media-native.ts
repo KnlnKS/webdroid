@@ -5,7 +5,7 @@ import { after, callOn, curThread, scall, vcall } from "../jvm/natives/jlang";
 import { javaFdSource } from "../native/fs";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { onMain } from "./mainloop";
-import { reportUncaught } from "./os";
+import { reportUncaught } from "../jvm/natives/jlang";
 
 /** The native halves of a Java class's objects: attached by setup and closed once, by release or
  *  finalize. Given `cls`, an attached object's mNativeContext is non-zero, which is all its Java

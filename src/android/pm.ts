@@ -6,7 +6,7 @@
 import { JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
-import { uuidDefault, type JBundle } from "./os";
+import { uuidDefault } from "./os";
 import { vcall, construct, after } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
@@ -67,10 +67,10 @@ const resolvedLabel = (node: XmlNode | null | undefined) => {
 const intAttr = (node: XmlNode | null | undefined, name: string, def: number) => (node ? attr(node, name)?.data : undefined) ?? def;
 const make = (cls: string, desc = "()V", ...args: unknown[]) => construct(cls, desc, ...args);
 /** <meta-data> children → Bundle, typed the way aapt encoded them (string / boolean / int). */
-function* metaData$(node: XmlNode | null | undefined, res: Resources): Gen<JBundle | null> {
+function* metaData$(node: XmlNode | null | undefined, res: Resources): Gen<JObj | null> {
   const items = node?.children.filter((md) => md.name === "meta-data") ?? [];
   if (!items.length) return null;
-  const bundle: JBundle = yield make("android/os/Bundle");
+  const bundle: JObj = yield make("android/os/Bundle");
   const put = (setter: string, desc: string, key: string, value: unknown) => vcall(bundle, setter, `(Ljava/lang/String;${desc})V`, key, value);
   for (const md of items) {
     const key = attrStr(md, "name");

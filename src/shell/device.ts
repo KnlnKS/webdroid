@@ -21,7 +21,8 @@ import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../a
 import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
 import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
-import { reportUncaught, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
+import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
+import { reportUncaught } from "../jvm/natives/jlang";
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain } from "../android/mainloop";
 import { deliverVsync } from "../android/vsync";

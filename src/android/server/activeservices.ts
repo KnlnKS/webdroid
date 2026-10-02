@@ -3,10 +3,10 @@
 // connections hear each binder the service publishes. A service of another process is reached
 // through the broker, whose request lands in that process's ActiveServices.
 import { rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, vcallUncaught } from "../../jvm/natives/jlang";
+import { newObj, vcall, vcallUncaught, reportUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService, notConnected } from "../binder";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "../os";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";

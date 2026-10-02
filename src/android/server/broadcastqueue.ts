@@ -3,16 +3,16 @@
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { JObj, driven, type Gen } from "../../jvm/runtime";
-import { callUncaught, newObj, vcall } from "../../jvm/natives/jlang";
+import { callUncaught, newObj, vcall, reportUncaught } from "../../jvm/natives/jlang";
 import { hostedService, notConnected } from "../binder";
-import { PROCESS_UID, reportUncaught, type JBundle } from "../os";
+import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
 import type { JIntent } from "../intent";
 import { scheduleOnApp, compatInfo, thisApp } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 
-export type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
+export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
 /** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */
 export const broadcastTransport: { send: (intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult) => Promise<BroadcastResult> } =
   { send: notConnected };
@@ -115,12 +115,12 @@ export const broadcastQueueMethods = {
     }),
   "unregisterReceiver(Landroid/content/IIntentReceiver;)V": (receiver: JObj) => { registered.delete(receiver); },
   "broadcastIntentWithFeature(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/content/Intent;Ljava/lang/String;Landroid/content/IIntentReceiver;ILjava/lang/String;Landroid/os/Bundle;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;ILandroid/os/Bundle;ZZI)I":
-    (_caller: JObj, _feature: string | null, intent: JObj, _type: string | null, resultTo: JObj | null, code: number, data: string | null, extras: JBundle | null,
+    (_caller: JObj, _feature: string | null, intent: JObj, _type: string | null, resultTo: JObj | null, code: number, data: string | null, extras: JObj | null,
       permissions: string[] | null, _excluded: unknown, _excludedPackages: unknown, _op: number, _options: unknown, serialized: number) => {
       callUncaught(() => broadcastIntent(intent, [...permissions ?? []], !!serialized, resultTo, { code, data, extras, aborted: false }));
       return 0;
     },
-  "finishReceiver(Landroid/os/IBinder;ILjava/lang/String;Landroid/os/Bundle;ZI)V": (who: JObj, code: number, data: string | null, extras: JBundle | null, aborted: number) => {
+  "finishReceiver(Landroid/os/IBinder;ILjava/lang/String;Landroid/os/Bundle;ZI)V": (who: JObj, code: number, data: string | null, extras: JObj | null, aborted: number) => {
     const q = finishing.get(who), resolve = q?.shift();
     if (q && !q.length) finishing.delete(who);
     resolve?.({ code, data, extras, aborted: !!aborted });

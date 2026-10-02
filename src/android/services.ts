@@ -5,14 +5,14 @@
 // missing by its AIDL name.
 import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
-import { newObj, vcall, scall, linkInit, staticField } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, staticField, reportUncaught } from "../jvm/natives/jlang";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost } from "./apphost";
 import { newIntent, putExtra, registerSystemActivity } from "./intent";
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os";
 import { GL_ES_VERSION } from "./pm";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions";
 import { deviceConfiguration } from "./resnative";

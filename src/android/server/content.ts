@@ -4,10 +4,9 @@
 // IContentService. Sync is answered as a device with no sync adapters.
 import { rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime";
 import { newArrayList } from "../../jvm/natives/jcoll";
-import { vcall } from "../../jvm/natives/jlang";
+import { vcall, reportUncaught } from "../../jvm/natives/jlang";
 import { jarray } from "../../jvm/abi";
 import { hostStub } from "../binder";
-import { reportUncaught } from "../os";
 import { mkUri, uriParts, uriText, type JUri } from "../net";
 
 const NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS = 2;

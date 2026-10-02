@@ -3,11 +3,10 @@
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
 import { rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleStaticField } from "../jvm/abi";
-import { vcall, JThread, curThread, scall, after } from "../jvm/natives/jlang";
+import { vcall, JThread, curThread, scall, after, reportUncaught } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { uptimeMillis } from "../guest-clock";
 import { gl, tables } from "./gl";
-import { reportUncaught } from "./os";
 import { vsync } from "./vsync";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";

@@ -14,7 +14,6 @@ import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newO
 import { E, ERRSTR, strerror } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
-export { reportUncaught };
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaOnLastClose, javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
@@ -174,8 +173,6 @@ rt.registerJnis("dalvik/system/VMDebug", {
   "getRuntimeStatInternal(I)Ljava/lang/String;": () => "0",
   "getRuntimeStatsInternal()[Ljava/lang/String;": () => jarray(RUNTIME_STATS.map(() => "0"), "Ljava/lang/String;"),
 });
-/** the Java Bundle and PersistableBundle run from AOSP bytecode */
-export type JBundle = JObj;
 // ParcelFileDescriptor runs from AOSP bytecode over libcore's descriptors. Bytes with no file of
 // this process behind them (an asset, a picked document, another process's descriptor) get one here.
 type PfdBacking = { path: string; refs: number; closing: Promise<void> | null };

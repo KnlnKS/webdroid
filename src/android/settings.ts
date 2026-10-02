@@ -8,7 +8,7 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { vcall, scall, construct, linkInit } from "../jvm/natives/jlang";
+import { vcall, scall, construct, linkInit, reportUncaught } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
 import { mangleStaticField } from "../jvm/abi";
@@ -16,7 +16,6 @@ import { once } from "../jvm/suspend";
 import { callingIdentity, asSystem } from "./binder";
 import { uriParts } from "./net";
 import { packages, type PackageRecord } from "./packages";
-import { reportUncaught, type JBundle } from "./os";
 import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
 import { holdsPlatformPermission } from "./permissions";
@@ -226,12 +225,12 @@ function* writeSetting(c: Caller, table: Table, name: string, value: string | nu
 // ── the provider's operations
 const string = (b: unknown, key: string): unknown => vcall(b, "getString", `(${S})${S}`, key);
 const PUT: Record<string, string> = { String: `(${S}${S})V`, Int: `(${S}I)V`, Serializable: `(${S}Ljava/io/Serializable;)V`, StringArrayList: `(${S}Ljava/util/ArrayList;)V` };
-function* bundle(entries: [string, string, unknown][]): Gen<JBundle> {
-  const b: JBundle = yield construct("android/os/Bundle", "()V");
+function* bundle(entries: [string, string, unknown][]): Gen<JObj> {
+  const b: JObj = yield construct("android/os/Bundle", "()V");
   for (const [type, key, value] of entries) yield vcall(b, `put${type}`, PUT[type], key, value);
   return b;
 }
-const call = driven(function* call$(method: string, name: string | null, args: JBundle | null): Gen<JBundle | null> {
+const call = driven(function* call$(method: string, name: string | null, args: JObj | null): Gen<JObj | null> {
   const c = caller();
   const requested: number = args ? yield vcall(args, "getInt", `(${S}I)I`, "_user", 0) : 0;
   const table = /^(?:GET|PUT|DELETE|LIST|RESET)_(system|secure|global|config)$/.exec(method)?.[1] as Table | "config" | undefined;
@@ -274,7 +273,7 @@ const call = driven(function* call$(method: string, name: string | null, args: J
   return null;
 });
 /** getResetModeEnforcingPermission: the trusted and untrusted resets are the system's and the shell's */
-function* reset(c: Caller, args: JBundle | null): Gen<never> {
+function* reset(c: Caller, args: JObj | null): Gen<never> {
   const mode: number = args ? yield vcall(args, "getInt", `(${S})I`, "_reset_mode") : 0;
   const what = ["", "reset untrusted changes", "reset to untrusted defaults", "reset to trusted defaults", "reset to trusted defaults"][mode];
   if (!what) fail(ILLEGAL, "Invalid reset mode: " + mode);

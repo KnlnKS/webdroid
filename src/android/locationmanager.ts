@@ -6,8 +6,7 @@
 // grant is not fudged here) and a caller without either sees no providers.
 import { JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
-import { reportUncaught } from "./os";
+import { after, newObj, scall, vcall, reportUncaught } from "../jvm/natives/jlang";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { hostStub } from "./binder";

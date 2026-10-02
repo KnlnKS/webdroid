@@ -3,7 +3,6 @@
 import { rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { construct, newObj, scall, vcall, after } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
-import type { JBundle } from "./os";
 import { arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
 import { i8, jarray, strArray } from "../jvm/abi";
@@ -60,7 +59,7 @@ rt.register({ name: "webdroid/SystemContentProvider", ctor: JSystemContentProvid
 } });
 
 /** the SQL selection and its arguments a query, update or delete Bundle carries (ContentResolver.QUERY_ARG_SQL_*) */
-function* selectionOf(extras: JBundle | null): Gen<[string | null, string[] | null]> {
+function* selectionOf(extras: JObj | null): Gen<[string | null, string[] | null]> {
   return extras ? [yield vcall(extras, "getString", `(${S})${S}`, "android:query-arg-sql-selection"),
     yield vcall(extras, "getStringArray", `(${S})[${S}`, "android:query-arg-sql-selection-args")] : [null, null];
 }
@@ -77,8 +76,8 @@ export const matrixCursor = driven(function* matrixCursor(columns: string[], row
   return cursor;
 });
 /** a Bundle holding one Uri, as a call answers a document or a scanned file */
-export const uriBundle = driven(function* uriBundle$(key: string, uri: string | null): Gen<JBundle> {
-  const out: JBundle = yield newObj("android/os/Bundle", "()V");
+export const uriBundle = driven(function* uriBundle$(key: string, uri: string | null): Gen<JObj> {
+  const out: JObj = yield newObj("android/os/Bundle", "()V");
   yield vcall(out, "putParcelable", `(${S}Landroid/os/Parcelable;)V`, key, uri === null ? null : yield mkUri(uri));
   return out;
 });
@@ -87,34 +86,34 @@ type Maybe<T> = T | Promise<T>;
 /** the IContentProvider calls a hosted provider answers, over uri strings, ContentValues' entries
  *  and the Bundle's selection; ContentProvider's defaults stand for those it leaves out */
 export interface ProviderOps {
-  query?(uri: string, projection: string[] | null, selection: string | null, selectionArgs: string[] | null, extras: JBundle | null): Maybe<JObj | null>;
+  query?(uri: string, projection: string[] | null, selection: string | null, selectionArgs: string[] | null, extras: JObj | null): Maybe<JObj | null>;
   insert?(uri: string, values: Map<string, unknown>): Maybe<string | null>;
   update?(uri: string, values: Map<string, unknown>, selection: string | null, selectionArgs: string[] | null): Maybe<number>;
   delete?(uri: string, selection: string | null, selectionArgs: string[] | null): Maybe<number>;
   getType?(uri: string): Maybe<string | null>;
   openFile?(uri: string, mode: string): Maybe<JObj | null>;
-  call?(method: string, arg: string | null, extras: JBundle | null): Maybe<JBundle | null>;
+  call?(method: string, arg: string | null, extras: JObj | null): Maybe<JObj | null>;
 }
 /** IContentProvider's methods over a provider's operations */
 function transport(ops: ProviderOps): NativeSpec["methods"] {
   const methods: NativeSpec["methods"] = {};
   const { query, insert, update, delete: remove, getType, openFile, call } = ops;
-  if (query) methods[`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`] = driven(function* (_source: unknown, uri: JUri | null, projection: string[] | null, extras: JBundle | null): Gen {
+  if (query) methods[`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`] = driven(function* (_source: unknown, uri: JUri | null, projection: string[] | null, extras: JObj | null): Gen {
     return yield query(yield uriText(uri), projection, ...(yield* selectionOf(extras)), extras);
   });
   if (insert) methods[`insert(${AS}${URI}${CV}${B})${URI}`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null): Gen {
     const inserted: string | null = yield insert(yield uriText(uri), contentValues(values));
     return inserted === null ? null : yield mkUri(inserted);
   });
-  if (update) methods[`update(${AS}${URI}${CV}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null, extras: JBundle | null): Gen {
+  if (update) methods[`update(${AS}${URI}${CV}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null, extras: JObj | null): Gen {
     return yield update(yield uriText(uri), contentValues(values), ...(yield* selectionOf(extras)));
   });
-  if (remove) methods[`delete(${AS}${URI}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, extras: JBundle | null): Gen {
+  if (remove) methods[`delete(${AS}${URI}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, extras: JObj | null): Gen {
     return yield remove(yield uriText(uri), ...(yield* selectionOf(extras)));
   });
   if (getType) methods[`getType(${AS}${URI})${S}`] = (_source: unknown, uri: JUri | null) => after(uriText(uri), getType);
   if (openFile) methods[`openFile${OPEN_FILE}`] = (_source: unknown, uri: JUri | null, mode: string) => after(uriText(uri), (u) => openFile(u, mode));
-  if (call) methods[`call(${AS}${S}${S}${S}${B})${B}`] = (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras);
+  if (call) methods[`call(${AS}${S}${S}${S}${B})${B}`] = (_source: unknown, _authority: string, method: string, arg: string | null, extras: JObj | null) => call(method, arg, extras);
   return methods;
 }
 

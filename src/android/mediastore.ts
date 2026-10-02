@@ -9,7 +9,6 @@ import { strArray } from "../jvm/abi";
 import { serviceContext } from "./binder";
 import { registerSystemActivity, newIntent, putExtra } from "./intent";
 import { newFile } from "../jvm/natives/jio";
-import type { JBundle } from "./os";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { registerSystemProvider, matrixCursor, contentValues, uriBundle } from "./systemproviders";
 
@@ -249,7 +248,7 @@ const S = "Ljava/lang/String;", PFD = "android/os/ParcelFileDescriptor";
 const ARG = "android:query-arg-", GET: Record<string, string> = { Int: `(${S})I`, String: `(${S})${S}`, StringArray: `(${S})[${S}` };
 const QUERY_ARGS = new Set(["sql-selection", "sql-selection-args", "sql-sort-order", "sql-limit", "sort-columns", "sort-direction",
   "limit", "offset", "match-trashed", "match-pending", "match-favorite"].map((key) => ARG + key));
-const query = driven(function* query$(u: string, projection: string[] | null, selection: string | null, args: string[] | null, extras: JBundle | null): Gen<JObj | null> {
+const query = driven(function* query$(u: string, projection: string[] | null, selection: string | null, args: string[] | null, extras: JObj | null): Gen<JObj | null> {
   const table = tableOf(u), requested = projection?.length ? projection : columns;
   if (!table) return null;
   const keys = new Set<string>(extras ? yield toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;")) : []);
@@ -305,7 +304,7 @@ registerSystemProvider("media", { pkg: "com.google.android.providers.media.modul
   query, insert: mediaInsert, update: mediaUpdate, delete: mediaDelete, getType: mediaMime, openFile,
   // MediaStore.SCAN_FILE_CALL, which MediaScannerConnection makes, takes the file's path and
   // answers its row, indexed now; the create*Request calls answer a consent PendingIntent
-  call: driven(function* (method: string, arg: string | null, extras: JBundle | null): Gen<JBundle> {
+  call: driven(function* (method: string, arg: string | null, extras: JObj | null): Gen<JObj> {
     if (method !== "scan_file") return yield* mediaCall(method, extras);
     return yield uriBundle("android.intent.extra.STREAM", yield scannedMediaUri(arg ?? ""));
   }),

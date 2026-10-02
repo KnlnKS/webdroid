@@ -2,10 +2,9 @@
 // scheduler (the broker's, across processes), and an OnAlarmListener's alarm fires in this process
 // by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
 import { operationId, localPendingIntents } from "./pendingintent";
 import { Alarms } from "../shell/alarms";
-import { reportUncaught } from "./os";
 import { uptimeMillis } from "../guest-clock";
 import { packages, usesSdk } from "./packages";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";

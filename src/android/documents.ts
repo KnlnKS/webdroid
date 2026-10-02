@@ -14,7 +14,7 @@ import { vcall } from "../jvm/natives/jlang";
 import { uriParts, uriText } from "./net";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
-import { mkPfd, pfdBackingBytes, type JBundle } from "./os";
+import { mkPfd, pfdBackingBytes } from "./os";
 import { mimeOf } from "../mime";
 import { registerSystemProvider, matrixCursor, uriBundle, DOCUMENTS_PROVIDER } from "./systemproviders";
 
@@ -239,7 +239,7 @@ async function docQuery(u: string, projection: string[] | null): Promise<JObj> {
 const S = "Ljava/lang/String;";
 /** DocumentsProvider.call's document methods, as DocumentsContract sends them: the document in
  *  EXTRA_URI, and a created or renamed one's uri back in it; failures throw as ExternalStorageProvider's do */
-async function docCall(method: string, _arg: string | null, extras: JBundle | null): Promise<JBundle | null> {
+async function docCall(method: string, _arg: string | null, extras: JObj | null): Promise<JObj | null> {
   const get = (key: string) => vcall(extras, "getString", `(${S})${S}`, key) as Promise<string | null>;
   const uri = await uriText(await vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "uri")), id = documentId(uri);
   let result: string | null;
