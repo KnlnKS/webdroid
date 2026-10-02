@@ -589,6 +589,17 @@ Stage B or C, the newer ones supersede them. Each commit message states what it 
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings. Stage E is complete on this branch: its handoff is "Stage E handoff" below.
 
+### §4 follow-up (2026-10-02): the code store works across realms; no platform image
+
+The shared platform store had been deleted on every launch that started a `/process` realm, so
+warm launches ran most platform code cold; it is now keyed by a source hash and loads before
+zygoteInit, and warm first frames run 2.6k–15k cold calls instead of 125k–196k. The boot-profile
+platform image (§4.1/§4.3) was measured and rejected: 37 MB that Chrome imports in 2.5 s to save
+at most ~0.2 s on a browser profile's first app launch (history, 2026-10-02). Mihon's 7 s launch
+is its own 5 s splash, as on the reference AVD. Remaining launch costs are diffuse: class linking,
+lazy-method installation and mangling (~120 ms of a warm FitNotes launch), clinit (~130 ms).
+`knlnks/q-async` waited on the platform image; re-measure its Mihon race on this tip instead.
+
 ### Stage F handoff (2026-10-05): superseded TS removed
 
 Every platform class's TS spec now implements natives only, except the VM built-ins, boundaries

@@ -1664,6 +1664,29 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     7% on Komikku, so it was not kept. The lever is a faster library path (§4.1/§4.3). That change,
     the runtime thread-ownership check that replaces the async-natives lint, and the lint's
     deletion wait on `knlnks/q-async`.
+- 2026-10-02 (after the Stage F review), the persisted code store and the platform image (§4.1):
+  - The platform store shared by every app was deleted on every launch that started a `/process`
+    realm (microG for most apps): the store was keyed by the URL of the chunk holding codecache.ts,
+    which differs between index.html's and process.html's bundles, so each realm deleted the
+    other's chunks as stale. Warm launches therefore ran most platform code cold (FitNotes 125k
+    cold calls at its first frame). Stores are now keyed by a hash of `src/` served with the link
+    table, and the platform store loads before zygoteInit, which had run platform code cold on
+    every launch. Warm first-frame cold calls: FitNotes 125k → 2.6k, Calculator M 138k → 9.6k,
+    Mihon 196k → 15k; FitNotes' warm first frame 1.87 → 1.51 s.
+  - Persisting bodies that had only run cold exposed a hot-tier fault: a hot `invoke-direct` into
+    an interface (a private interface method, e.g. Consumer.andThen's R8 lambda bridge) called the
+    method's direct name on the receiver, which no implementor's prototype chain has. It now calls
+    the resolved function, as the cold tier does (JvmTierProbe covers it).
+  - Platform image, measured and not built: the reference boot image profile's 30,923 methods in
+    bytecode classes emit 37 MB (4.7 MB gzipped) in 0.8 s in Bun, and Chrome imports that module in
+    2.5–2.7 s whether its factories compile eagerly or lazily. What it could save is at most what a
+    warm platform store saves a first launch: FitNotes after Calculator M warmed the store reached
+    its first frame in 1.67 s, against 1.89 s cold. The store already makes an app's first launch
+    reuse what earlier apps compiled, so only a browser profile's first app would gain.
+  - Mihon's 7 s to first frame is its own splash: `setKeepOnScreenCondition` waits for a home tab
+    to set `ready`, for at most 5 s, and the onboarding a fresh install shows sets none. The
+    reference AVD's `am start -W` reports 5,428 ms for the same fresh launch; webdroid adds ~2 s of
+    boot. FitNotes and Calculator M report 117 and 199 ms there.
 
 ## Java, storage and framework semantics
 
