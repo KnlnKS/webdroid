@@ -473,6 +473,7 @@ export function walkPath(path: NativePath, sink: Sink) {
   for (const op of path.ops) pen.op(op);
 }
 
+export const pathAt = (h: bigint) => deref<NativePath>(h);
 let mNativePath = "";
 /** the geometry behind a Java Path */
 export const nativePathOf = (p: object): NativePath =>

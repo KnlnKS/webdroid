@@ -11,7 +11,7 @@ import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
 import type { FaceMetrics } from "./sfnt";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges, emptyBox } from "./graphics";
 import { colorLongAt } from "./bitmap";
-import { NativePath, skCommands, setSkCommands } from "./path";
+import { NativePath, skCommands, setSkCommands, pathAt } from "./path";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
 import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect";
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping";
@@ -254,7 +254,6 @@ export const paintAt = (h: bigint) => deref<NativePaint>(h);
 const flag = (bit: number) => (h: bigint, v: number) => paintAt(h).setFlag(bit, !!v);
 /** the SkFont flags MinikinPaint compares: anti-aliasing, fake bold, linear metrics and subpixel positioning */
 const FONT_FLAGS = AA | FAKE_BOLD_TEXT | LINEAR | SUBPIXEL;
-const pathAt = (h: bigint) => deref<NativePath>(h);
 /** a run's direction under Paint's bidi flags: BIDI_RTL and BIDI_FORCE_RTL, or the default
  *  directions' first strong character (the whole run takes one direction) */
 const STRONG = /\p{L}/u;

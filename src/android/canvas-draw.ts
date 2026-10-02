@@ -8,7 +8,7 @@ import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia";
 import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { deref } from "./handles";
-import { NativePath, PathMeasure, inversePath } from "./path";
+import { NativePath, PathMeasure, inversePath, pathAt } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
 import { drawGlyphs, cssFont, shapeTextRun } from "./shaping";
@@ -17,7 +17,7 @@ import { paintAdvance } from "./minikin";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import { cssColor, canvasLocalBounds, tintedBmp, argbOfColorLong, BLEND_MODES, COMPOSITE } from "./graphics";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch";
-import { type Mat, applyMatrix } from "./matrix";
+import { applyMatrix, matrixAt } from "./matrix";
 import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas";
 
 function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
@@ -95,12 +95,14 @@ function drawOval(nc: NativeCanvas, l: number, t: number, r: number, b: number, 
 export function drawCircle(nc: NativeCanvas, x: number, y: number, r: number, p: NativePaint) {
   if (r > 0) drawOval(nc, x - r, y - r, x + r, y + r, p);
 }
+const radii = (rx: number, ry: number) => ({ x: Math.max(rx, 0), y: Math.max(ry, 0) });
+const cornerRadii = (r: Float32Array) => [radii(r[0], r[1]), radii(r[2], r[3]), radii(r[4], r[5]), radii(r[6], r[7])];
 export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
   if (tryBitmapRoundRect(nc, p, left, top, left + width, top + height, rx, ry)) return;
   const path = new Path2D();
-  path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
+  path.roundRect(left, top, width, height, radii(rx, ry));
   nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)));
 }
 /** the ring between two round rects, each with one radius pair or one per corner (as a 2D
@@ -112,8 +114,6 @@ function drawDoubleRoundRect(nc: NativeCanvas, ol: number, ot: number, or: numbe
   ring.roundRect(il, it, ir - il, ib - it, inner);
   nc.drawShape(p, (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
 }
-const radii = (rx: number, ry: number) => ({ x: Math.max(rx, 0), y: Math.max(ry, 0) });
-const cornerRadii = (r: Float32Array) => [radii(r[0], r[1]), radii(r[2], r[3]), radii(r[4], r[5]), radii(r[6], r[7])];
 /** android_graphics_Canvas: an offset/count pair outside the array draws nothing and throws */
 function checkPts(pts: Float32Array, off: number, n: number) {
   if (!pts) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -302,7 +302,6 @@ function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: 
   onPath.setPath(path, false);
   const advance = paintAdvance(p, s), align = p.textAlignN;
   if (align) hOffset += (align === 1 ? -0.5 : -1) * (advance - onPath.length());
-  const left = p.textAlignN;
   p.textAlignN = 0;
   try {
     let x = 0;
@@ -317,15 +316,13 @@ function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: 
       } finally { nc.ctx.restore(); }
       x += w;
     }
-  } finally { p.textAlignN = left; }
+  } finally { p.textAlignN = align; }
 }
 /** the text a run names, without a copy for the whole string */
 const run = (s: string, start: number, end: number) => (start === 0 && end === s.length ? s : s.slice(start, end));
 
 // ── natives ──
 const optPaint = (nc: NativeCanvas, h: bigint) => (h ? nc.paint(h) : null);
-const matrixAt = (h: bigint) => deref<Mat>(h);
-const pathAt = (h: bigint) => deref<NativePath>(h);
 const DRAWS: Record<string, unknown> = {
   "nDrawColor(JII)V": (h: bigint, c: number, mode: number) => drawColor(drawingCanvas(h), c, mode),
   "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint, mode: number) => drawColor(drawingCanvas(h), argbOfColorLong(c), mode),
@@ -405,13 +402,13 @@ const DRAWS: Record<string, unknown> = {
     const nc = drawingCanvas(h); drawPatch(nc, bitmapAt(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(nc, p), dstDensity, srcDensity);
   },
   "nPunchHole(JFFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, alpha: number) => punchHole(drawingCanvas(h), l, t, r, b, rx, ry, alpha),
-  // meshes, vertices with per-vertex colours and bitmap meshes need triangle rasterization a 2D
-  // context does not have
   // glyph runs from a font's outlines, which HarfBuzz reads (shaping.ts)
   "nDrawGlyphs(J[I[FIIIJJ)V": (h: bigint, ids: Int32Array, positions: Float32Array, idOffset: number, posOffset: number, count: number, font: bigint, p: bigint) => {
     const nc = drawingCanvas(h), paint = nc.paint(p);
     return drawGlyphs((fill, stroke) => nc.drawShape(paint, fill, stroke), ids, idOffset, positions, posOffset, count, font, paint);
   },
+  // meshes, vertices with per-vertex colours and bitmap meshes need triangle rasterization a 2D
+  // context does not have
   "nDrawMesh(JJIJ)V": unsupported("Canvas.drawMesh"),
   "nDrawVertices(JII[FI[FI[II[SIIJ)V": unsupported("Canvas.drawVertices"),
   "nDrawBitmapMesh(JJII[FI[IIJ)V": unsupported("Canvas.drawBitmapMesh"),

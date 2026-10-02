@@ -7,13 +7,13 @@ import { isRecording, nestedRecording, recordOrRun, replay, type Ctx2D, type Dis
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
-import { NativePath, inversePath } from "./path";
+import { NativePath, inversePath, pathAt } from "./path";
 import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
 import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
-import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
+import { type Affine, setAffine, applyMatrix, matrixAt } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
@@ -51,8 +51,6 @@ export class NativeCanvas {
   /** PaintFlagsDrawFilter: the paint flags every draw clears and sets */
   filter: { clear: number; set: number } | null = null;
   private filtered: NativePaint | null = null;
-  /** the Java canvas TS made over this one, for a hardware canvas drawing a software layer */
-  private twin: JavaCanvas | null = null;
 
   static over(ctx: Ctx2D, w = ctx.canvas.width, h = ctx.canvas.height, bmp: NativeBitmap | null = null): NativeCanvas {
     const nc = new NativeCanvas();
@@ -449,16 +447,6 @@ export class NativeCanvas {
     const d = deviceBounds(this.ctx.getTransform(), bounds.left, bounds.top, bounds.right, bounds.bottom);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
-
-  /** the Java Canvas over this one's target that a software layer draws through under a hardware
-   *  window: made once, and given this canvas's state each time */
-  softwareTwin(): JavaCanvas {
-    const peer = this.twin ??= canvasPeer(new NativeCanvas(), false);
-    const twin = canvasOf(peer);
-    twin.setTarget(this.ctx, this.w, this.h, null);
-    twin.cl = this.cl; twin.ct = this.ct; twin.cr = this.cr; twin.cb = this.cb; twin.poly = this.poly;
-    return peer;
-  }
 }
 const paintScratch = new NativePaint();
 /** clip everything away: the context's clip only narrows, so it is intersected with a pixel off the target */
@@ -505,33 +493,21 @@ function deviceBounds(m: DOMMatrix, l: number, t: number, r: number, b: number):
 }
 
 // ── the Java side: one bridge, and the peers TS makes ──
-let wrapperField = "", recordingFields: { width: string; height: string; node: string } | null = null;
+let wrapperField = "";
 const wrapper = () => wrapperField ||= declaredField("android/graphics/Canvas", "mNativeCanvasWrapper");
-const recordingField = () => recordingFields ??= {
-  width: declaredField("android/graphics/RecordingCanvas", "mWidth"), height: declaredField("android/graphics/RecordingCanvas", "mHeight"),
-  node: declaredField("android/graphics/RecordingCanvas", "mNode"),
-};
 /** the native state behind a Java canvas, which TS takes to draw through */
-export function canvasOf(c: object): NativeCanvas {
-  const nc = deref<NativeCanvas>((c as Record<string, bigint>)[wrapper()]);
-  nc.bmp?.wrote();
-  return nc;
-}
+export const canvasOf = (c: object): NativeCanvas => drawingCanvas((c as Record<string, bigint>)[wrapper()]);
 const peers = new FinalizationRegistry<bigint>(release);
-/** A Java Canvas over `nc` — a RecordingCanvas of its size when `recording`, which is what a
- *  hardware window hands its views — made without running a constructor, so it never suspends.
- *  The handle is released with the peer. */
-function canvasPeer(nc: NativeCanvas, recording: boolean): JavaCanvas {
-  const c = rt.make(recording ? "android/graphics/RecordingCanvas" : "android/graphics/Canvas") as JavaCanvas & Record<string, unknown>;
-  const h = handle(nc);
-  c[wrapper()] = h;
-  if (recording) { const f = recordingField(); c[f.width] = nc.w; c[f.height] = nc.h; }
-  peers.register(c, h);
-  return c;
-}
-/** a Java Canvas drawing straight into `ctx`, a RecordingCanvas when `accelerated` */
+/** A Java Canvas drawing straight into `ctx` — a RecordingCanvas of its size when `accelerated`,
+ *  which is what a hardware window hands its views — made without running a constructor, so it
+ *  never suspends. The handle is released with the peer. */
 export function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): JavaCanvas {
-  return canvasPeer(NativeCanvas.over(ctx, w, h), accelerated);
+  const c = rt.make(accelerated ? "android/graphics/RecordingCanvas" : "android/graphics/Canvas") as JavaCanvas & Record<string, unknown>;
+  const ptr = handle(NativeCanvas.over(ctx, w, h));
+  c[wrapper()] = ptr;
+  if (accelerated) { c[declaredField("android/graphics/RecordingCanvas", "mWidth")] = w; c[declaredField("android/graphics/RecordingCanvas", "mHeight")] = h; }
+  peers.register(c, ptr);
+  return c;
 }
 export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: number, radius: number) {
   ctx.beginPath();
@@ -686,8 +662,6 @@ export function drawingCanvas(h: bigint): NativeCanvas {
   nc.bmp?.wrote();
   return nc;
 }
-const matrixAt = (h: bigint) => deref<Mat>(h);
-const pathAt = (h: bigint) => deref<NativePath>(h);
 /** SkClipOp and Region.Op's nativeInt: 0 difference, 1 intersect; hwui ignores the ops that would
  *  widen the clip (it emulates REPLACE only for apps before P, which cannot be done by narrowing) */
 const clipOp = (nc: NativeCanvas, op: number, intersect: () => boolean, difference: () => boolean) =>
@@ -765,7 +739,6 @@ rt.registerJnis("android/graphics/PaintFlagsDrawFilter", {
   "nativeConstructor(II)J": (clear: number, set: number) => ownedHandle({ clear, set }),
 });
 rt.registerJnis("android/graphics/DrawFilter", { "nativeDestructor(J)V": release });
-
 
 /** Canvas() with no bitmap: SkiaCanvas over an empty bitmap, which clips everything; its matrix
  *  is still its own */
