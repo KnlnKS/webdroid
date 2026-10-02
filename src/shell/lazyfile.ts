@@ -70,8 +70,6 @@ export async function readFully(source: FileSource, offset = 0, length = source.
   return pos === out.length ? out : out.slice(0, pos);
 }
 
-type FileFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
 export class RangeFile implements FileSource {
   private readonly chunks = new Map<number, Uint8Array>();
   private readonly inflight = new Map<number, Promise<Uint8Array>>();
@@ -82,20 +80,19 @@ export class RangeFile implements FileSource {
     readonly size: number,
     private readonly chunkSize = 1 << 20,
     private readonly maxChunks = 32,
-    private readonly fetcher: FileFetch = fetch,
   ) {}
 
-  static async open(url: string, fetcher: FileFetch = fetch): Promise<FileSource> {
-    const response = await fetcher.call(globalThis, url, { method: "HEAD" });
+  static async open(url: string): Promise<FileSource> {
+    const response = await fetch(url, { method: "HEAD" });
     if (!response.ok) throw new Error(`HEAD ${url}: ${response.status}`);
     const header = response.headers.get("content-length");
     if (header !== null && /^\d+$/.test(header) && Number.isSafeInteger(Number(header)))
-      return new RangeFile(url, Number(header), 1 << 20, 32, fetcher);
-    const probe = await fetcher.call(globalThis, url, { headers: { Range: "bytes=0-0" } });
+      return new RangeFile(url, Number(header));
+    const probe = await fetch(url, { headers: { Range: "bytes=0-0" } });
     if (probe.status === 206) {
       const match = /^bytes 0-0\/(\d+)$/.exec(probe.headers.get("content-range") ?? "");
       await probe.body?.cancel();
-      if (match && Number.isSafeInteger(Number(match[1]))) return new RangeFile(url, Number(match[1]), 1 << 20, 32, fetcher);
+      if (match && Number.isSafeInteger(Number(match[1]))) return new RangeFile(url, Number(match[1]));
     }
     if (probe.status === 200) return new BytesFile(new Uint8Array(await probe.arrayBuffer()));
     throw new Error(`range probe ${url}: ${probe.status}`);
@@ -146,7 +143,7 @@ export class RangeFile implements FileSource {
   }
 
   private async range(start: number, end: number): Promise<Uint8Array> {
-    const response = await this.fetcher.call(globalThis, this.url, { headers: { Range: `bytes=${start}-${end}` } });
+    const response = await fetch(this.url, { headers: { Range: `bytes=${start}-${end}` } });
     if (response.status !== 206) {
       await response.body?.cancel();
       throw new Error(`range ${start}-${end} from ${this.url}: ${response.status}`);
