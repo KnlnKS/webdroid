@@ -155,10 +155,11 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
   vfs.rename(from, to);
   return 0;
 }
+const isRandomDevice = (path: string): boolean => path === "/dev/urandom" || path === "/dev/random";
 export function accessPath(cpu: Cpu | null, path: string, mode: number): number {
   if (mode & ~7) return fail(cpu, E.INVAL);
   const p = vfs.norm(path);
-  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : fail(cpu, E.NOENT);
 }
 export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number {
   const path = atPath(cpu, dirfd, name);
@@ -192,7 +193,7 @@ export function removePath(cpu: Cpu | null, path: string): number {
 export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   path = vfs.norm(path);
   const acc = flags & O_ACCMODE;
-  if (path === "/dev/urandom" || path === "/dev/random") {
+  if (isRandomDevice(path)) {
     if (acc !== 0) return fail(cpu, E.ACCES);
     return put({ ...fdBase(path), random: true }, !!(flags & O_CLOEXEC));
   }
@@ -727,7 +728,7 @@ async function epollWait(cpu: Cpu, epfd: number, events: bigint, max: number, ti
 }
 export function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
-  if (path === "/dev/urandom" || path === "/dev/random") { fillStat(buf, false, 0, Date.now(), path); return 0; }
+  if (isRandomDevice(path)) { fillStat(buf, false, 0, Date.now(), path); return 0; }
   const s = procText(path);
   if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now(), path); return 0; }
   if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now(), path); return 0; }
