@@ -13,11 +13,9 @@ import { rt, JObj } from "../jvm/runtime";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
 import { mkPfd, pfdBackingBytes } from "./os";
-import { newObj } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
-import { newStub } from "./binder";
 import { mimeOf } from "../mime";
-import { registerSystemProvider, JSystemContentProvider, DOCUMENTS_PROVIDER } from "./systemproviders";
+import { registerSystemProvider, DOCUMENTS_PROVIDER, AS, URI, B, SIGNAL } from "./systemproviders";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
@@ -253,27 +251,16 @@ async function docPfd(docId: string, mode: string | null) {
 
 // ── ExternalStorageProvider, the storage authority's IContentProvider over the picked handles: a
 // document, or a directory's children, as DocumentsProvider's query answers them
-const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;", SIGNAL = "Landroid/os/ICancellationSignal;";
 async function docQuery(u: JUriLike, projection: string[] | null): Promise<JObj> {
   const id = documentId(u, true);
   const rows = isChildrenUri(u) ? await docChildren(id) : [await docRow(id)].filter((r) => r !== null);
   const cols = projection?.length ? projection : DOC_COLUMNS;
   return mkCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); }));
 }
-// ContentProvider.openAssetFile's: the whole file, of unknown length
-const docAssetFd = async (u: JUriLike, mode: string) =>
-  newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", await docPfd(documentId(u, true), mode), 0n, -1n);
-rt.register({ name: "webdroid/ExternalStorageProvider", ctor: class extends JSystemContentProvider {}, sup: "webdroid/SystemContentProvider", methods: {
-  "getProviderName()Ljava/lang/String;": () => "com.android.externalstorage.ExternalStorageProvider",
-  [`query(${AS}${URI}[Ljava/lang/String;${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, u: JUriLike, projection: string[] | null) => docQuery(u, projection),
-  [`getType(${AS}${URI})Ljava/lang/String;`]: async (_source: unknown, u: JUriLike) => (await docRow(documentId(u, true)))?.mime ?? null,
-  [`openFile(${AS}${URI}Ljava/lang/String;${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: (_source: unknown, u: JUriLike, mode: string) => docPfd(documentId(u, true), mode),
-  [`openAssetFile(${AS}${URI}Ljava/lang/String;${SIGNAL})Landroid/content/res/AssetFileDescriptor;`]: (_source: unknown, u: JUriLike, mode: string) => docAssetFd(u, mode),
-  [`openTypedAssetFile(${AS}${URI}Ljava/lang/String;${B}${SIGNAL})Landroid/content/res/AssetFileDescriptor;`]: (_source: unknown, u: JUriLike) => docAssetFd(u, "r"),
-  [`delete(${AS}${URI}${B})I`]: async (_source: unknown, u: JUriLike) => +await docDelete(documentId(u, true)),
-  [`canonicalize(${AS}${URI})${URI}`]: () => null,
-  [`uncanonicalize(${AS}${URI})${URI}`]: (_source: unknown, u: JUriLike) => u,
-} });
-let storageProvider: JObj | Promise<JObj> | null = null;
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
-  process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER, binder: () => storageProvider ??= newStub("webdroid/ExternalStorageProvider") });
+  process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER, methods: {
+    [`query(${AS}${URI}[Ljava/lang/String;${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, u: JUriLike, projection: string[] | null) => docQuery(u, projection),
+    [`getType(${AS}${URI})Ljava/lang/String;`]: async (_source: unknown, u: JUriLike) => (await docRow(documentId(u, true)))?.mime ?? null,
+    [`openFile(${AS}${URI}Ljava/lang/String;${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: (_source: unknown, u: JUriLike, mode: string) => docPfd(documentId(u, true), mode),
+    [`delete(${AS}${URI}${B})I`]: async (_source: unknown, u: JUriLike) => +await docDelete(documentId(u, true)),
+  } });

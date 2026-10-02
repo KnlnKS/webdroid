@@ -4,11 +4,10 @@ import { mimeOf, MIME_EXT } from "../mime";
 import { sqliteStore, mkCursor, contentValues } from "./sqlite";
 import { type JUri, mkUri } from "./net";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall } from "../jvm/natives/jlang";
+import { scall } from "../jvm/natives/jlang";
 import { newFile } from "../jvm/natives/jio";
-import { unparcel, type JBundle } from "./os";
-import { newStub } from "./binder";
-import { registerSystemProvider, JSystemContentProvider } from "./systemproviders";
+import type { JBundle } from "./os";
+import { registerSystemProvider, queryArgs, selectionOf, AS, URI, B, CV, SIGNAL } from "./systemproviders";
 
 const columns = ["_id", "_data", "_display_name", "title", "mime_type", "media_type", "_size",
   "date_added", "date_modified", "datetaken", "relative_path", "bucket_id", "bucket_display_name",
@@ -240,70 +239,38 @@ export async function mediaQuery(uri: JUri, projection: string[] | null, selecti
 
 // ── MediaProvider, the media authority's IContentProvider: a query's selection, sort and limit come
 // in its Bundle (ContentResolver.QUERY_ARG_*, MediaStore.QUERY_ARG_MATCH_*), an item opens as its file
-const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", CV = "Landroid/content/ContentValues;",
-  B = "Landroid/os/Bundle;", S = "Ljava/lang/String;", SIGNAL = "Landroid/os/ICancellationSignal;", PFD = "android/os/ParcelFileDescriptor";
+const S = "Ljava/lang/String;", PFD = "android/os/ParcelFileDescriptor";
 const ARG = "android:query-arg-";
 const QUERY_ARGS = new Set(["sql-selection", "sql-selection-args", "sql-sort-order", "sql-limit", "sort-columns", "sort-direction",
   "limit", "offset", "match-trashed", "match-pending", "match-favorite"].map((key) => ARG + key));
-const argsOf = driven(function* argsOf$(extras: JBundle | null): Gen<Map<string, unknown>> {
-  if (!extras) return new Map();
-  yield unparcel(extras);
-  return extras.map;
-});
-const selected = (args: Map<string, unknown>) =>
-  [(args.get(ARG + "sql-selection") ?? null) as string | null, (args.get(ARG + "sql-selection-args") ?? null) as string[] | null] as const;
 const query = driven(function* query$(u: JUri, projection: string[] | null, extras: JBundle | null): Gen {
-  const args: Map<string, unknown> = yield argsOf(extras);
+  const args: Map<string, unknown> = yield queryArgs(extras);
   for (const key of args.keys()) if (!QUERY_ARGS.has(key)) throw rt.unimplemented(`MediaProvider query argument ${key}`);
   const get = <T = number>(key: string) => args.get(ARG + key) as T | undefined;
   const limit = get("limit"), offset = get("offset");
   // QUERY_SORT_DIRECTION_DESCENDING is 1
   const sort = get<string>("sql-sort-order") ?? get<string[]>("sort-columns")?.map((c) => c + (get("sort-direction") === 1 ? " DESC" : " ASC")).join(", ") ?? null;
   const sqlLimit = get<string>("sql-limit") ?? (limit === undefined ? null : Math.trunc(limit) + (offset ? ` OFFSET ${Math.trunc(offset)}` : ""));
-  return mediaQuery(u, projection, ...selected(args), sort, { trashed: get("match-trashed"), pending: get("match-pending"), favorite: get("match-favorite"), limit: sqlLimit });
+  return mediaQuery(u, projection, ...selectionOf(args), sort, { trashed: get("match-trashed"), pending: get("match-pending"), favorite: get("match-favorite"), limit: sqlLimit });
 });
 const openFile = driven(function* openFile$(u: JUri, mode: string): Gen<JObj> {
   const path: string | null = yield mediaPath(u);
   if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
   return yield scall(PFD, "open", `(Ljava/io/File;I)L${PFD};`, yield newFile(path), yield scall(PFD, "parseMode", `(${S})I`, mode));
 });
-// ContentProvider.openAssetFile's: the whole file, of unknown length
-const openAsset = driven(function* openAsset$(u: JUri, mode: string): Gen<JObj> {
-  return yield newObj("android/content/res/AssetFileDescriptor", `(L${PFD};JJ)V`, yield openFile(u, mode), 0n, -1n);
-});
-/** ContentProvider.openTypedAssetFile: the item itself when its type matches the filter */
-const openTyped = driven(function* openTyped$(u: JUri, filter: string): Gen<JObj> {
-  const mime: string | null = filter === "*/*" ? filter : yield mediaMime(u);
-  if (mime !== null && (filter === "*/*" || filter === mime || filter.endsWith("/*") && mime.startsWith(filter.slice(0, -1))))
-    return yield openAsset(u, "r");
-  throw rt.mkThrowable("java/io/FileNotFoundException", `Can't open ${u.uri} as type ${filter}`);
-});
 const valuesOf = (values: JObj | null) => values ? contentValues(values) : new Map<string, unknown>();
-rt.register({ name: "webdroid/MediaProvider", ctor: class extends JSystemContentProvider {}, sup: "webdroid/SystemContentProvider", methods: {
-  "getProviderName()Ljava/lang/String;": () => "com.android.providers.media.MediaProvider",
-  [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, u: JUri, projection: string[] | null, extras: JBundle | null) =>
-    query(u, projection, extras),
-  [`insert(${AS}${URI}${CV}${B})${URI}`]: (_source: unknown, u: JUri, values: JObj | null) => mediaInsert(u, valuesOf(values)),
-  [`bulkInsert(${AS}${URI}[${CV})I`]: async (_source: unknown, u: JUri, values: JObj[]) => {
-    let inserted = 0;
-    for (const value of values) if (await mediaInsert(u, valuesOf(value))) inserted++;
-    return inserted;
-  },
-  [`update(${AS}${URI}${CV}${B})I`]: driven(function* (_source: unknown, u: JUri, values: JObj | null, extras: JBundle | null): Gen {
-    return yield mediaUpdate(u, valuesOf(values), ...selected(yield argsOf(extras)));
-  }),
-  [`delete(${AS}${URI}${B})I`]: driven(function* (_source: unknown, u: JUri, extras: JBundle | null): Gen {
-    return yield mediaDelete(u, ...selected(yield argsOf(extras)));
-  }),
-  [`getType(${AS}${URI})${S}`]: (_source: unknown, u: JUri) => mediaMime(u),
-  [`openFile(${AS}${URI}${S}${SIGNAL})L${PFD};`]: (_source: unknown, u: JUri, mode: string) => openFile(u, mode),
-  [`openAssetFile(${AS}${URI}${S}${SIGNAL})Landroid/content/res/AssetFileDescriptor;`]: (_source: unknown, u: JUri, mode: string) => openAsset(u, mode),
-  [`openTypedAssetFile(${AS}${URI}${S}${B}${SIGNAL})Landroid/content/res/AssetFileDescriptor;`]: (_source: unknown, u: JUri, filter: string) => openTyped(u, filter),
-  [`canonicalize(${AS}${URI})${URI}`]: () => null,
-  [`uncanonicalize(${AS}${URI})${URI}`]: (_source: unknown, u: JUri) => u,
-  "createCancellationSignal()Landroid/os/ICancellationSignal;": () => scall("android/os/CancellationSignal", "createTransport", "()Landroid/os/ICancellationSignal;"),
-} });
-let mediaProvider: JObj | Promise<JObj> | null = null;
 // FLAG_SYSTEM | FLAG_HAS_CODE | FLAG_ALLOW_CLEAR_USER_DATA, in its own package's process
 registerSystemProvider("media", { pkg: "com.google.android.providers.media.module", cls: "com.android.providers.media.MediaProvider",
-  process: "com.google.android.providers.media.module", appFlags: 0x45, flags: 0, initOrder: 0, binder: () => mediaProvider ??= newStub("webdroid/MediaProvider") });
+  process: "com.google.android.providers.media.module", appFlags: 0x45, flags: 0, initOrder: 0, methods: {
+    [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, u: JUri, projection: string[] | null, extras: JBundle | null) =>
+      query(u, projection, extras),
+    [`insert(${AS}${URI}${CV}${B})${URI}`]: (_source: unknown, u: JUri, values: JObj | null) => mediaInsert(u, valuesOf(values)),
+    [`update(${AS}${URI}${CV}${B})I`]: driven(function* (_source: unknown, u: JUri, values: JObj | null, extras: JBundle | null): Gen {
+      return yield mediaUpdate(u, valuesOf(values), ...selectionOf(yield queryArgs(extras)));
+    }),
+    [`delete(${AS}${URI}${B})I`]: driven(function* (_source: unknown, u: JUri, extras: JBundle | null): Gen {
+      return yield mediaDelete(u, ...selectionOf(yield queryArgs(extras)));
+    }),
+    [`getType(${AS}${URI})${S}`]: (_source: unknown, u: JUri) => mediaMime(u),
+    [`openFile(${AS}${URI}${S}${SIGNAL})L${PFD};`]: (_source: unknown, u: JUri, mode: string) => openFile(u, mode),
+  } });
