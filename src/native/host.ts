@@ -169,7 +169,6 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
     if (!hostTrace.filter || hostTrace.filter.test(nm)) {
       traced = true;
       const w = cpu.w;
-      // a reservation's caller is two frames up (the mmap wrapper keeps its lr at sp+0x10)
       const args = Array.from({ length: cpu.a64 ? 8 : 4 }, (_, i) => {
         const lo = (w[2 * i] >>> 0).toString(16);
         return cpu.a64 && w[2 * i + 1] ? (w[2 * i + 1] >>> 0).toString(16) + "_" + lo.padStart(8, "0") : lo;
