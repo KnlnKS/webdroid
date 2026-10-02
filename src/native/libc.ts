@@ -52,11 +52,11 @@ export function fail(cpu: Cpu | null, e: number): number {
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const randomWord = new Uint32Array(1);
-export function fillRandom(p: number, n: number): void {
-  const bytes = mem.bytes(p, n);
-  for (let off = 0; off < n; off += 65536) crypto.getRandomValues(bytes.subarray(off, off + 65536));
-  wrote(p, n);
+/** getRandomValues fills at most 64 KiB a call */
+export function randomBytes(target: Uint8Array): void {
+  for (let off = 0; off < target.length; off += 65536) crypto.getRandomValues(target.subarray(off, off + 65536));
 }
+export function fillRandom(p: number, n: number): void { randomBytes(mem.bytes(p, n)); wrote(p, n); }
 function random32(): number { crypto.getRandomValues(randomWord); return randomWord[0] >>> 0; }
 export const utf8 = (s: string) => enc.encode(s);
 export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;

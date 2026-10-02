@@ -6,7 +6,7 @@ import { mem, guestAt } from "./mem";
 import { type HostFn, PTR, stp, ldp, ARG0 } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { fail, utf8, logLine, offArg, readTs, clockTime } from "./libc";
+import { fail, utf8, logLine, offArg, readTs, clockTime, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
@@ -360,7 +360,7 @@ export function javaReadFd(fd: number, target: Uint8Array): number | Promise<num
 export function javaPreadFd(fd: number, target: Uint8Array, off: number): number | Promise<number> {
   const f = fds.get(fd), error = positionalError(fd, f, off, false);
   if (error) return -error;
-  if (f!.random) { fillRandom(target); return target.length; }
+  if (f!.random) { randomBytes(target); return target.length; }
   let value: Uint8Array | Promise<Uint8Array>;
   try { value = contentAt(f!.content, off, target.length); }
   catch { return -E.IO; }
@@ -436,10 +436,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
 function gather(iov: number, count: number): Uint8Array {
   const parts: Uint8Array[] = [];
   for (let i = 0; i < count; i++) { const entry = iov + i * 2 * PTR; parts.push(mem.bytes(ldp(entry), mem.ld32(entry + PTR) >>> 0)); }
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.length; }
-  return out;
+  return concat(parts);
 }
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
@@ -466,17 +463,13 @@ function readWouldWait(fd: number): boolean {
 }
 function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): number | Promise<number> {
   if (!n) return 0;
-  if (f.random) { fillRandom(mem.u8.subarray(p, p + n)); return n; }
+  if (f.random) { randomBytes(mem.u8.subarray(p, p + n)); return n; }
   let value: Uint8Array | Promise<Uint8Array>;
   try { value = contentAt(f.content, off, n); }
   catch { return fail(cpu, E.IO); }
   if (!(value instanceof Promise)) { mem.write(p, value); return value.length; }
   const dst = mem.va(p);
   return value.then((bytes) => { mem.write(guestAt(dst), bytes); return bytes.length; }, () => fail(cpu, E.IO));
-}
-/** getRandomValues fills at most 64 KiB a call */
-function fillRandom(target: Uint8Array): void {
-  for (let done = 0; done < target.length; done += 65536) crypto.getRandomValues(target.subarray(done, done + 65536));
 }
 /** up to `n` bytes of a file at `off`: a view of its data, or what its lazy source reads */
 function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
