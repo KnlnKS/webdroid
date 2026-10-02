@@ -4,6 +4,7 @@
 import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { windowZOf } from "../android/server/wm";
 import { vcall, scall, newObj } from "../jvm/natives/jlang";
+import { csText } from "../jvm/natives/jchars";
 import { edges } from "../android/graphics";
 
 interface UiNode {
@@ -11,7 +12,6 @@ interface UiNode {
   clickable: boolean; enabled: boolean; editable: boolean; scrollable: boolean;
 }
 const HOST_VIEW_ID = -1;
-const str = async (cs: unknown): Promise<string> => cs == null ? "" : String(typeof cs === "string" ? cs : await vcall(cs, "toString", "()Ljava/lang/String;"));
 
 async function describe(node: JObj, rect: JObj): Promise<UiNode | null> {
   if (!await vcall(node, "isVisibleToUser", "()Z")) return null;
@@ -19,9 +19,9 @@ async function describe(node: JObj, rect: JObj): Promise<UiNode | null> {
   const b = edges(rect);
   const flag = (name: string): Promise<boolean> => Promise.resolve(vcall(node, name, "()Z")).then(Boolean);
   return {
-    text: await str(await vcall(node, "getText", "()Ljava/lang/CharSequence;")),
-    desc: await str(await vcall(node, "getContentDescription", "()Ljava/lang/CharSequence;")),
-    cls: await str(await vcall(node, "getClassName", "()Ljava/lang/CharSequence;")),
+    text: await csText(await vcall(node, "getText", "()Ljava/lang/CharSequence;")),
+    desc: await csText(await vcall(node, "getContentDescription", "()Ljava/lang/CharSequence;")),
+    cls: await csText(await vcall(node, "getClassName", "()Ljava/lang/CharSequence;")),
     resId: (await vcall(node, "getViewIdResourceName", "()Ljava/lang/String;")) ?? "",
     bounds: [b.left, b.top, b.right, b.bottom],
     clickable: await flag("isClickable"), enabled: await flag("isEnabled"), editable: await flag("isEditable"),
