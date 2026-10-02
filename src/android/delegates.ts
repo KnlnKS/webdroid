@@ -692,7 +692,7 @@ export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, (
     yield scall("com/android/internal/os/RuntimeInit", "getDefaultUserAgent", "()Ljava/lang/String;"));
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
   yield scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
-  yield loadSystemFontMap();
+  yield* loadSystemFontMap();
   yield initDeviceLocales();
   yield preloadPaint();
   // ActivityThread.main, once the process is forked
