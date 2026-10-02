@@ -110,7 +110,7 @@ await exercise("Bitmap: pixels, configs, copies, buffers, parcels (device values
   const alpha = await vcall(b, "extractAlpha", "()Landroid/graphics/Bitmap;");
   same("extractAlpha", `${await info(alpha)} | ${await px(alpha)}`, "3x2 ALPHA_8 rb=4 bc=8 abc=8 alpha=true premul=true mut=true | 80000000 1000000 40000000 ff000000 0 7f000000");
   await vcall(b, "setDensity", "(I)V", 213);
-  const parcel = await newObj("android/os/Parcel", "()V");
+  const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
   await vcall(b, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
   await vcall(parcel, "setDataPosition", "(I)V", 0);
   const back = await vcall((await statics(BITMAP))[mangleStaticField("CREATOR")], "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);

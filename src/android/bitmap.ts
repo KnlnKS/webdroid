@@ -17,6 +17,7 @@ import { construct, scall, vcall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
+import { type JParcel, createByteArray, readInt, writeByteArray, writeInt } from "./parcel";
 import { extractBitmapAlpha } from "./maskfilter";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
@@ -438,17 +439,17 @@ rt.registerJnis(BITMAP, {
   }),
   "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
-  "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, p: object) => {
+  "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, p: JParcel) => {
     const b = bmp(h);
-    for (const v of [b.immutable ? 0 : 1, b.config, b.alphaType, b.w, b.h, b.rowBytes, density]) vcall(p, "writeInt", "(I)V", v);
+    for (const v of [b.immutable ? 0 : 1, b.config, b.alphaType, b.w, b.h, b.rowBytes, density]) writeInt(p, v);
     const memory = memoryOf(b);
-    vcall(p, "writeByteArray", "([B)V", new Int8Array(memory.buffer, memory.byteOffset, memory.length));
+    writeByteArray(p, new Int8Array(memory.buffer, memory.byteOffset, memory.length));
     return 1;
   },
-  "nativeCreateFromParcel(Landroid/os/Parcel;)Landroid/graphics/Bitmap;": (p: object) => {
-    const [mutable, config, alphaType, w, h, rowBytes, density] = Array.from({ length: 7 }, () => vcall(p, "readInt", "()I") as number);
+  "nativeCreateFromParcel(Landroid/os/Parcel;)Landroid/graphics/Bitmap;": (p: JParcel) => {
+    const [mutable, config, alphaType, w, h, rowBytes, density] = Array.from({ length: 7 }, () => readInt(p));
     const b = new NativeBitmap(w, h, config, alphaType, rowBytes);
-    const memory = vcall(p, "createByteArray", "()[B") as Int8Array | null;
+    const memory = createByteArray(p);
     if (memory) setMemory(b, u8(memory));
     b.immutable = !mutable;
     return javaBitmap(b, density);

@@ -123,6 +123,8 @@ export function readString8(jp: JParcel): string | null {
   }
   return s;
 }
+export const writeByteArray = (jp: JParcel, b: Int8Array | null): void => b ? writeBytes(nativeParcel(jp), b, 0, b.length) : writeInt(jp, -1);
+export const createByteArray = (jp: JParcel): Int8Array | null => readBytes(nativeParcel(jp));
 function writeBytes(p: NativeParcel, b: Int8Array, off: number, len: number) {
   writeInt(p, len);
   const at = writeInplace(p, len);
