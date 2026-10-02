@@ -11,8 +11,6 @@ import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
-import { rootOf, type JView } from "./view";
-import { overlays } from "./popup";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { mkUri } from "./net";
@@ -26,7 +24,6 @@ import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { createFunctor, releaseFunctor, drawFunctor, drawnOn, resetDrawn, placeFunctors, type Rect } from "./webfunctor";
-import { stageD } from "../jvm/provenance";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 /** a static of a bytecode class, by name and descriptor */
@@ -161,13 +158,6 @@ function weakIfaces(of: () => WebInterfaces | null | undefined): WebInterfaces {
     for (const m in methods) proxy[m] = async (...args) => of()?.[name]?.[m]?.(...args);
   }
   return out;
-}
-/** without a compositor (the TS view stack) the page's draw pass is the composition: frames sit
- *  above the canvas, so a visible window stacked over the WebView's own hides it */
-function covered(v: JView): boolean {
-  const root = rootOf(v);
-  for (let i = overlays.length - 1; i >= 0 && overlays[i].view !== root; i--) if (overlays[i].view.visibility === 0) return true;
-  return false;
 }
 /** after a TS view stack draw pass onto `target`: the functors it drew are what shows */
 export function webLayerSweep(target: object): void {
@@ -418,7 +408,6 @@ export class WebViewChromium extends JObj {
   place(rect: Rect | null): void {
     const el = this.hold.el;
     if (!el) return;
-    if (rect && !stageD() && covered(this.view as unknown as JView)) rect = null;
     const was = this.rect;
     this.rect = rect;
     if (!rect) { if (was) el.hidden = true; return; }
