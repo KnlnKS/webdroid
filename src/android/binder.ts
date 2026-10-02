@@ -77,11 +77,11 @@ function exportObject(o: unknown): BinderHandle | FileHandle | null {
 function importObject(o: BinderHandle | FileHandle | null): unknown {
   if (!o || !("bytes" in o)) return importBinder(o);
   const writer = o.writer && importBinder(o.writer);
-  return mkPfd(new Uint8Array(o.bytes), writer && (async (bytes: Uint8Array, closed?: boolean) => {
+  return mkPfd(new Uint8Array(o.bytes), writer && driven(function* (bytes: Uint8Array, closed?: boolean): Gen<void> {
     const data = new JParcel();
-    await vcall(data, "writeByteArray", "([B)V", i8(bytes));
-    await vcall(data, "writeInt", "(I)V", +!!closed);
-    await vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
+    yield vcall(data, "writeByteArray", "([B)V", i8(bytes));
+    yield vcall(data, "writeInt", "(I)V", +!!closed);
+    yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
   }), writer ? `binder:${o.writer!.pid}:${o.writer!.id}` : undefined);
 }
 export function exportParcel(parcel: JParcel): ParcelData {
