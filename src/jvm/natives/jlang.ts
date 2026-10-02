@@ -14,21 +14,21 @@ import { boxObject } from "./jbox";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
 import { procIdentity, procTasks, processTid } from "../../shell/procfs";
 
-async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
+function* joinCharSequences(separator: unknown, parts: unknown[]): Gen<string> {
   if (separator == null || parts == null) rt.npe();
-  const text = await csText(separator);
+  const text: string = yield csText(separator);
   const values: string[] = [];
-  for (const part of parts) values.push(part == null ? "null" : await csText(part));
+  for (const part of parts) values.push(part == null ? "null" : yield csText(part));
   return values.join(text);
 }
 
-async function joinIterable(separator: unknown, parts: unknown): Promise<string> {
+const joinIterable = driven(function* (separator: unknown, parts: unknown): Gen<string> {
   if (parts == null) rt.npe();
   const values: unknown[] = [];
-  const iterator = await vcall(parts, "iterator", "()Ljava/util/Iterator;");
-  while (await vcall(iterator, "hasNext", "()Z")) values.push(await vcall(iterator, "next", "()Ljava/lang/Object;"));
-  return joinCharSequences(separator, values);
-}
+  const iterator = yield vcall(parts, "iterator", "()Ljava/util/Iterator;");
+  while (yield vcall(iterator, "hasNext", "()Z")) values.push(yield vcall(iterator, "next", "()Ljava/lang/Object;"));
+  return yield* joinCharSequences(separator, values);
+});
 
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
@@ -76,10 +76,10 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
 /** a static field's value, once the class has initialized */
 export const staticField = async <T = unknown>(cls: string, field: string): Promise<T> =>
   ((await linkInit(cls)).ctor as Record<string, T>)[mangleStaticField(field)];
-/** A static Java call from native code, once the class has initialized */
+/** A static Java call from native code, once the class has initialized, on the calling thread */
 export function scall(cls: string, name: string, desc: string, ...args: unknown[]): any {
   const info = rt.link(cls), init = rt.initClass(info);
-  return init ? init.then(() => vcall(info.ctor, name, desc, ...args)) : vcall(info.ctor, name, desc, ...args);
+  return init ? after(init, () => vcall(info.ctor, name, desc, ...args)) : vcall(info.ctor, name, desc, ...args);
 }
 /** `new Cls(args)` from native code: init the class, construct, run the Java constructor `desc` (none when null) */
 export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
@@ -883,7 +883,7 @@ rt.register({
     "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": valueOfObject,
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
-    "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;": joinCharSequences,
+    "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;": driven(joinCharSequences),
     "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": joinIterable,
 
   },
