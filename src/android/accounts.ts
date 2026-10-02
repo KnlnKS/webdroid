@@ -17,7 +17,7 @@ import { servicesMatching } from "./pm";
 import { resString } from "./res";
 import { asSystem, hostStub } from "./binder";
 import { bindAsSystem } from "./server/activeservices";
-import { mkComponentName } from "./intent";
+import { mkComponentName, newIntent } from "./intent";
 import { deliverBroadcast } from "./server/broadcastqueue";
 
 type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
@@ -49,7 +49,7 @@ const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.ac
 function accountsChanged(): void {
   if (!appHost) return;
   for (const action of CHANGED) {
-    void newObj("android/content/Intent", "(Ljava/lang/String;)V", action)
+    void newIntent(action)
       .then((intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null)).catch(reportUncaught);
   }
 }
