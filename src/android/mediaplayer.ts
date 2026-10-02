@@ -1,8 +1,8 @@
 // MediaPlayer's native half (mediaplayer.cpp over a media element). Its state machine answers a
 // call in the wrong state with INVALID_OPERATION, which the JNI throws as IllegalStateException;
 // events reach Java through postEventFromNative, as the player's listener posts them.
-import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { after, vcall } from "../jvm/natives/jlang";
+import { rt, driven, getDeclared, setDeclared, type JObj, type Gen } from "../jvm/runtime";
+import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import { readFully, type FileSource } from "../shell/lazyfile";
 import { presentSurface, windowSurface, type GlSurface } from "./glsurface";
@@ -12,7 +12,9 @@ import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-na
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
 const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, MEDIA_SET_VIDEO_SIZE = 5,
   MEDIA_STARTED = 6, MEDIA_PAUSED = 7, MEDIA_STOPPED = 8, MEDIA_ERROR = 100, MEDIA_INFO = 200;
-const MP = "android/media/MediaPlayer";
+const MP = "android/media/MediaPlayer", PP = "android/media/PlaybackParams";
+/** PlaybackParams' SET_* bits: which of its fields a setPlaybackParams call changes */
+const SET_SPEED = 1, SET_PITCH = 2, SET_FALLBACK = 4, SET_STRETCH = 8;
 /** a player plays through a media element; given a surface, each video frame the element shows is presented to it */
 class Player {
   constructor(readonly ref: JObj, public sessionId: number) {}
@@ -28,6 +30,18 @@ class Player {
   /** a synchronous prepare's outcome: resolved with 0 or MEDIA_ERROR's extra */
   prepared: ((status: number) => void) | null = null;
   streamType = 3;
+  /** the AudioPlaybackRate: the element plays at `speed`, and keeps its pitch only at pitch 1 */
+  rate = { mSpeed: 1, mPitch: 1, mAudioFallbackMode: 0, mAudioStretchMode: 0 };
+  applyRate(el: HTMLMediaElement): void {
+    if (this.rate.mSpeed) el.playbackRate = this.rate.mSpeed;
+    el.preservesPitch = this.rate.mPitch === 1;
+  }
+  play(): void {
+    const el = this.media!;
+    if (this.state === COMPLETE) el.currentTime = 0;
+    this.state = STARTED;
+    void el.play().then(() => { if (this.surface) this.pumpFrames(el); }).catch(() => { /* autoplay refused: the element stays paused */ });
+  }
   post(what: number, arg1 = 0, arg2 = 0): void { postNativeEvent([MP, this.ref], null, what, arg1, arg2); }
   require(states: number): void {
     if (!(this.state & states)) throw rt.mkThrowable("java/lang/IllegalStateException", null);
@@ -41,6 +55,7 @@ class Player {
     this.require(IDLE);
     const el = this.media = document.createElement("video");
     el.preload = "none"; el.src = src; el.loop = this.looping; el.volume = this.volume;
+    this.applyRate(el);
     this.seeks = 0;
     const live = (f: () => void) => () => { if (this.media === el) f(); };
     el.onplay = live(() => setSounding(el, true));
@@ -129,10 +144,7 @@ rt.registerJnis(MP, {
   "_prepareAsync(Landroid/os/Parcel;)I": M((p) => { p.prepare(); return 0; }),
   "_start()V": M((p) => {
     p.require(PREPARED | STARTED | PAUSED | COMPLETE);
-    const el = p.media!;
-    if (p.state === COMPLETE) el.currentTime = 0;
-    p.state = STARTED;
-    void el.play().then(() => { if (p.surface) p.pumpFrames(el); }).catch(() => { /* autoplay refused: the element stays paused */ });
+    p.play();
     p.post(MEDIA_STARTED);
   }),
   "_pause()V": M((p) => {
@@ -160,6 +172,25 @@ rt.registerJnis(MP, {
   }),
   "getVideoWidth()I": M((p) => { p.require(~IDLE); return p.media?.videoWidth ?? 0; }),
   "getVideoHeight()I": M((p) => { p.require(~IDLE); return p.media?.videoHeight ?? 0; }),
+  // MediaPlayer::setPlaybackSettings: no player before a source or once stopped; a negative rate is
+  // BAD_VALUE; speed 0 pauses a started player, and any other speed starts a prepared, paused or
+  // completed one
+  "setPlaybackParams(Landroid/media/PlaybackParams;)V": M((p, params: JObj | null) => {
+    if (params === null) rt.npe();
+    p.require(~(IDLE | STOPPED));
+    const set = getDeclared<number>(params, PP, "mSet"), rate = { ...p.rate };
+    for (const [bit, name] of [[SET_SPEED, "mSpeed"], [SET_PITCH, "mPitch"], [SET_FALLBACK, "mAudioFallbackMode"], [SET_STRETCH, "mAudioStretchMode"]] as const)
+      if (set & bit) rate[name] = getDeclared<number>(params, PP, name);
+    if (rate.mSpeed < 0 || rate.mPitch < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    p.rate = rate;
+    if (p.media) p.applyRate(p.media);
+    if (rate.mSpeed === 0 && p.state === STARTED) { p.media!.pause(); p.state = PAUSED; }
+    else if (rate.mSpeed !== 0 && p.state & (PREPARED | PAUSED | COMPLETE)) p.play();
+  }),
+  "getPlaybackParams()Landroid/media/PlaybackParams;": M((p) => {
+    p.require(~IDLE);
+    return after(newObj(PP), (params: JObj) => setDeclared(params, PP, { mSet: SET_SPEED | SET_PITCH | SET_FALLBACK | SET_STRETCH, ...p.rate }));
+  }),
   "setLooping(Z)V": M((p, loop: number) => { p.looping = !!loop; if (p.media) p.media.loop = p.looping; }),
   "isLooping()Z": M((p) => +p.looping),
   "_setVolume(FF)V": M((p, l: number, r: number) => { p.volume = Math.min(1, Math.max(l, r)); if (p.media) p.media.volume = p.volume; }),
