@@ -9,7 +9,7 @@ import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
 import { rt } from "./jvm/runtime";
-import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
+import { newObj, vcall, linkInit, threadStates } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
@@ -216,6 +216,7 @@ const wd = {
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
+  threads: threadStates,
   redraw,
   testFrame: async () => {
     if (processPresentation.visible) await testFrame();

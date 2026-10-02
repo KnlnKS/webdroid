@@ -1474,6 +1474,12 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
 }
 
 const THREAD_STATES = ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"];
+/** debug: each live thread as Thread.getState reads it, with the object it parked on
+ *  (wd.threads; the e2e harness records it when a step's phase hangs) */
+export const threadStates = (): { name: string; state: string; blocker?: string }[] => [...liveThreads].map((t) => ({
+  name: t.jname, state: THREAD_STATES[rt.monitors.isBlocked(t) ? 2 : t.parked || 1],
+  blocker: (t.parkBlocker as { constructor?: { $i?: ClassInfo } } | null)?.constructor?.$i?.name,
+}));
 
 class JRef extends JObj { referent: unknown = null; queue: JRefQueue | null = null; state = 0; }
 class JRefQueue extends JObj { items: JRef[] = []; waiters = new Set<() => void>(); }

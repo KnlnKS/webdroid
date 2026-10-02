@@ -41,6 +41,7 @@ export type StepSpec = {
   timing: "controlled" | "real";
 };
 
+export type Hang = { phase: string; afterMs: number; looper: unknown; threads: unknown };
 /** how the wait ended, how long it took, and how many polls each reason kept it waiting */
 export type Settled = { how: "idle" | "pixels" | "timeout" | "snapshot" | "state"; ms: number; busy: Record<string, number> };
 
@@ -52,6 +53,8 @@ export type StepResult = {
   semanticHit?: boolean;
   wedged: boolean;
   error?: string;
+  /** a phase that outran its bound: where the main looper and each thread were parked then */
+  hang?: Hang;
   ms: number;
   perf: Record<string, number>;
   newMissing: string[];
@@ -329,8 +332,20 @@ function installProbe(cfg: ProbeConfig): void {
     seen[key] = new Set(all);
     return out;
   };
+  // a phase that can wait on the main looper (settle's test frames, the UI dump) past this bound
+  // records the looper and the threads, then the step goes on without it
+  const PHASE_BOUND_MS = 30_000;
+  const bounded = async <T>(phase: string, work: Promise<T>, ms: number, fallback: T, hangs: Hang[]): Promise<T> => {
+    let id = 0;
+    const late = new Promise<"late">((r) => { id = rawSetTimeout(() => r("late"), ms); });
+    const out = await Promise.race([work, late]).finally(() => rawClearTimeout(id));
+    if (out !== "late") return out as T;
+    const within = <U>(p: Promise<U>) => Promise.race([p, new Promise<string>((r) => rawSetTimeout(() => r("no answer in 3 s"), 3000))]);
+    hangs.push({ phase, afterMs: ms, looper: await within(Promise.resolve().then(() => g.wd.looperDump())).catch(String), threads: g.wd.threads?.() });
+    return fallback;
+  };
   const step = async (spec: StepSpec): Promise<StepResult> => {
-    const wd = g.wd;
+    const wd = g.wd, hangs: Hang[] = [];
     wd.perfReset();
     shots.length = 0; shotHash = -1; shooting = cfg.shots;
     const t0 = performance.now();
@@ -346,23 +361,25 @@ function installProbe(cfg: ProbeConfig): void {
     }
     const actionMs = performance.now() - actionAt;
     const controlled = spec.timing === "controlled";
-    const settled = await settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen);
+    const settleBound = (spec.wait.kind === "live" || spec.wait.kind === "live-sample" ? spec.wait.timeoutMs : spec.wait.maxRealMs) + PHASE_BOUND_MS;
+    const settled = await bounded("settle", settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen), settleBound,
+      { how: "timeout", ms: settleBound, busy: { hang: 1 } } as Settled, hangs);
     const aliveAt = performance.now();
     const alive = wd.alive(spec.aliveMs);
     const wedged = !(controlled ? await wd.guestClock.drive(alive, spec.aliveMs) : await alive);
     const livenessMs = performance.now() - aliveAt;
     shooting = false;
     const captureAt = performance.now();
-    const png = spec.capture ? await capture() : null;
+    const png = spec.capture ? await bounded("capture", capture(), PHASE_BOUND_MS, null, hangs) : null;
     const frames: string[] = [];
     for (const f of shots) frames.push(await encode(f));
     const captureMs = performance.now() - captureAt;
     const telemetryAt = performance.now();
-    const uiTree: UiNode[] = await wd.uiTree();
+    const uiTree: UiNode[] = await bounded("uiTree", wd.uiTree(), PHASE_BOUND_MS, [], hangs);
     const counters = { ...wd.perf };
     const result = {
       png, frameHash: lastHash < 0 ? null : lastHash.toString(16).padStart(8, "0"), presentation,
-      settled, semanticHit, wedged, error,
+      settled, semanticHit, wedged, error, hang: hangs[0],
       perf: counters,
       newMissing: fresh("missing", [...wd.rt.missing]),
       newPlaceholders: fresh("placeholders", [...wd.rt.placeholders]),

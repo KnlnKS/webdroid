@@ -7,7 +7,7 @@ import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
 import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
 import { parseScreen } from "../../src/shell/config";
-import type { Act, Settled, StepResult } from "./lib/probe";
+import type { Act, Hang, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
 
 export type StepRun = {
@@ -22,6 +22,7 @@ export type StepRun = {
   settleTimedOut: boolean;
   /** webdroid's main-looper queue stopped draining — the app is hung, not merely idle. */
   mainLoopWedged: boolean;
+  hang?: Hang;
   /** Distinct frames recorded during the step when --shots is on. 1 means nothing moved. */
   frames?: number;
   /** Framework APIs this step was the first to ask for and not find. The dev loop's work list. */
@@ -176,7 +177,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
     const frames = r.frames.length || undefined;
     runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
                 busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
-                settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, frames,
+                settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, hang: r.hang, frames,
                 ms: stepMs, perf: r.perf, fps: motion ? Math.round(fps) : undefined,
                 glFps: motion && r.ms ? (r.perf.glFrames ?? 0) * 1000 / r.ms : undefined,
                 presentFps: motion && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
@@ -192,6 +193,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       r.semanticHit === false && !(action.type === "tapText" && action.optional) ? "coord-fallback" : "",
       r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
       r.wedged ? "MAIN LOOP WEDGED" : "",
+      r.hang ? `HANG in ${r.hang.phase}` : "",
       frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
       `${stepMs}ms`,
       motion ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
