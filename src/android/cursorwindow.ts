@@ -1,12 +1,40 @@
 // android.database.CursorWindow's native half (android_database_CursorWindow.cpp): a window of
 // typed fields behind the long in mWindowPtr, filled by SQLiteConnection.nativeExecuteForCursorWindow
-// or the Java putters, and serialized into a Parcel in our own layout (both ends are ours).
+// or the Java putters, and serialized into a Parcel in our own layout (both ends are ours); and the
+// SQLiteException mapping both share (android_database_SQLiteCommon.cpp).
 
-import { rt, declaredField } from "../jvm/runtime";
+import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { ownedHandle, deref, release } from "./handles";
-import { readInt, readLong, readDouble, readString, writeInt, writeLong, writeDouble, writeString, type JParcel } from "./parcel";
+import { readInt, readLong, readDouble, readString, writeInt, writeLong, writeDouble, writeString, writeByteArray, createByteArray, nativeParcel,
+  type NativeParcel } from "./parcel";
 
-export const FIELD_NULL = 0, FIELD_INTEGER = 1, FIELD_FLOAT = 2, FIELD_STRING = 3, FIELD_BLOB = 4;
+// ── errors, as throw_sqlite3_exception raises them
+export const SQLITE_BUSY = 5, SQLITE_LOCKED = 6, SQLITE_INTERRUPT = 9, SQLITE_CANTOPEN = 14, SQLITE_TOOBIG = 18, SQLITE_CONSTRAINT = 19,
+  SQLITE_MISUSE = 21, SQLITE_RANGE = 25, SQLITE_ROW = 100, SQLITE_DONE = 101;
+const CODES = ["OK", "ERROR", "INTERNAL", "PERM", "ABORT", "BUSY", "LOCKED", "NOMEM", "READONLY", "INTERRUPT", "IOERR", "CORRUPT",
+  "NOTFOUND", "FULL", "CANTOPEN", "PROTOCOL", "EMPTY", "SCHEMA", "TOOBIG", "CONSTRAINT", "MISMATCH", "MISUSE", "NOLFS", "AUTH",
+  "FORMAT", "RANGE", "NOTADB", "NOTICE", "WARNING"];
+const CONSTRAINTS = ["", "CHECK", "COMMITHOOK", "FOREIGNKEY", "FUNCTION", "NOTNULL", "PRIMARYKEY", "TRIGGER", "UNIQUE", "VTAB", "ROWID", "PINNED", "DATATYPE"];
+const SQL = "android/database/sqlite/";
+const EXCEPTIONS: Record<string, string> = {
+  PERM: SQL + "SQLiteAccessPermException", ABORT: SQL + "SQLiteAbortException", BUSY: SQL + "SQLiteDatabaseLockedException",
+  LOCKED: SQL + "SQLiteTableLockedException", NOMEM: SQL + "SQLiteOutOfMemoryException", READONLY: SQL + "SQLiteReadOnlyDatabaseException",
+  INTERRUPT: "android/os/OperationCanceledException", IOERR: SQL + "SQLiteDiskIOException", CORRUPT: SQL + "SQLiteDatabaseCorruptException",
+  FULL: SQL + "SQLiteFullException", CANTOPEN: SQL + "SQLiteCantOpenDatabaseException", TOOBIG: SQL + "SQLiteBlobTooBigException",
+  CONSTRAINT: SQL + "SQLiteConstraintException", MISMATCH: SQL + "SQLiteDatatypeMismatchException", MISUSE: SQL + "SQLiteMisuseException",
+  RANGE: SQL + "SQLiteBindOrColumnIndexOutOfRangeException", NOTADB: SQL + "SQLiteDatabaseCorruptException", DONE: SQL + "SQLiteDoneException",
+};
+export function sqliteException(code: number, sqliteMessage: string | null, message: string | null = null): unknown {
+  const primary = code & 0xff, name = primary === SQLITE_ROW ? "ROW" : primary === SQLITE_DONE ? "DONE" : CODES[primary] ?? "UNKNOWN";
+  const constraint = primary === SQLITE_CONSTRAINT && code >> 8 ? "_" + CONSTRAINTS[code >> 8] : "";
+  return rt.mkThrowable(EXCEPTIONS[name] ?? SQL + "SQLiteException", sqliteMessage === null || primary === SQLITE_DONE ? message
+    : `${sqliteMessage} (code ${code} SQLITE_${name}${constraint}[${code}])${message ? ": " + message : ""}`);
+}
+/** throw_sqlite3_exception without a database handle */
+export const noHandle = (message: string) => sqliteException(0, "unknown error", message);
+
+const FIELD_NULL = 0;
+export const FIELD_INTEGER = 1, FIELD_FLOAT = 2, FIELD_STRING = 3, FIELD_BLOB = 4;
 /** an INTEGER field holds a number while it is exact, else the bigint */
 type Value = null | number | bigint | string | Int8Array;
 // CursorWindow.cpp's accounting: a 16-byte field slot per column per row, values over the 8 inline bytes out of line
@@ -19,7 +47,7 @@ export class NativeWindow {
   types: number[] = [];
   values: Value[] = [];
   constructor(readonly name: string, readonly size: number, readonly readOnly = false) {}
-  clear() { this.rows = this.cols = this.used = 0; this.types.length = this.values.length = 0; }
+  clear(cols = 0) { this.rows = this.used = 0; this.cols = cols; this.types.length = this.values.length = 0; }
   allocRow(): boolean {
     const used = this.used + this.cols * SLOT;
     if (this.readOnly || used > this.size) return false;
@@ -51,14 +79,38 @@ export class NativeWindow {
       `Couldn't read row ${row}, col ${col} from CursorWindow.  Make sure the Cursor is initialized correctly before accessing data from it.`);
     return row * this.cols + col;
   }
+  writeTo(p: NativeParcel) {
+    writeString(p, this.name);
+    for (const n of [this.size, this.used, this.rows, this.cols]) writeInt(p, n);
+    for (let i = 0; i < this.types.length; i++) {
+      const type = this.types[i], v = this.values[i];
+      writeInt(p, type);
+      if (type === FIELD_INTEGER) writeLong(p, BigInt(v as number | bigint));
+      else if (type === FIELD_FLOAT) writeDouble(p, v as number);
+      else if (type === FIELD_STRING) writeString(p, v as string);
+      else if (type === FIELD_BLOB) writeByteArray(p, v as Int8Array);
+    }
+  }
+  static fromParcel(p: NativeParcel): NativeWindow {
+    const w = new NativeWindow(readString(p) ?? "", readInt(p), true);
+    w.used = readInt(p);
+    w.rows = readInt(p);
+    w.cols = readInt(p);
+    if (w.rows < 0 || w.cols < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid CursorWindow dimensions");
+    for (let i = w.rows * w.cols; i > 0; i--) {
+      const type = readInt(p);
+      w.types.push(type);
+      w.values.push(type === FIELD_INTEGER ? integer(readLong(p)) : type === FIELD_FLOAT ? readDouble(p) : type === FIELD_STRING ? readString(p)
+        : type === FIELD_BLOB ? createByteArray(p) ?? new Int8Array(0) : null);
+    }
+    return w;
+  }
 }
 
 const window = (h: bigint) => deref<NativeWindow>(h);
-/** throw_sqlite3_exception without a database handle */
-const conversion = (message: string) => rt.mkThrowable("android/database/sqlite/SQLiteException", `unknown error (code 0 SQLITE_OK[0]): ${message}`);
 
 /** printf's %g, which nativeGetString formats a FLOAT field with */
-export function formatG(d: number): string {
+function formatG(d: number): string {
   if (!Number.isFinite(d)) return Number.isNaN(d) ? "nan" : d > 0 ? "inf" : "-inf";
   if (d === 0) return Object.is(d, -0) ? "-0" : "0";
   const [mantissa, exp] = d.toExponential(5).split("e"), x = Number(exp);
@@ -83,31 +135,18 @@ function strtod(s: string): number {
 }
 const utf8 = new TextEncoder();
 const utf8Length = (s: string) => /[^\0-\x7f]/.test(s) ? utf8.encode(s).length : s.length;
-const EXACT = 2n ** 53n;
+const SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** an INTEGER field's value as the window holds it */
-export const integer = (v: bigint): number | bigint => v >= -EXACT && v <= EXACT ? Number(v) : v;
+const integer = (v: bigint): number | bigint => v >= -SAFE && v <= SAFE ? Number(v) : v;
 /** nativeGetString's conversions, which nativeCopyStringToBuffer shares */
 function fieldText(w: NativeWindow, row: number, col: number): string | null {
   const i = w.slot(row, col), v = w.values[i];
   switch (w.types[i]) {
     case FIELD_STRING: case FIELD_INTEGER: return String(v);
     case FIELD_FLOAT: return formatG(v as number);
-    case FIELD_BLOB: throw conversion("Unable to convert BLOB to string");
+    case FIELD_BLOB: throw noHandle("Unable to convert BLOB to string");
     default: return null;
   }
-}
-/** a BLOB field as its length and little-endian words */
-function writeBlob(parcel: JParcel, b: Int8Array) {
-  writeInt(parcel, b.length);
-  for (let i = 0; i < b.length; i += 4) writeInt(parcel, (b[i] & 255) | (b[i + 1] & 255) << 8 | (b[i + 2] & 255) << 16 | b[i + 3] << 24);
-}
-function readBlob(parcel: JParcel): Int8Array {
-  const b = new Int8Array(Math.max(0, readInt(parcel)));
-  for (let i = 0; i < b.length; i += 4) {
-    const word = readInt(parcel);
-    for (let j = 0; j < 4 && i + j < b.length; j++) b[i + j] = word >> (8 * j);
-  }
-  return b;
 }
 const putter = (type: number, size: (v: never) => number) => (h: bigint, value: never, row: number, col: number) =>
   +window(h).put(row, col, type, value, size(value));
@@ -133,8 +172,8 @@ rt.registerJnis("android/database/CursorWindow", {
       case FIELD_BLOB: return (v as Int8Array).slice();
       // a STRING field's bytes are its UTF-8 and the terminating NUL
       case FIELD_STRING: { const b = utf8.encode(v as string), out = new Int8Array(b.length + 1); out.set(b); return out; }
-      case FIELD_INTEGER: throw conversion("INTEGER data in nativeGetBlob ");
-      case FIELD_FLOAT: throw conversion("FLOAT data in nativeGetBlob ");
+      case FIELD_INTEGER: throw noHandle("INTEGER data in nativeGetBlob ");
+      case FIELD_FLOAT: throw noHandle("FLOAT data in nativeGetBlob ");
       default: return null;
     }
   },
@@ -152,7 +191,7 @@ rt.registerJnis("android/database/CursorWindow", {
       case FIELD_INTEGER: return typeof v === "bigint" ? v : BigInt(v as number);
       case FIELD_FLOAT: return BigInt.asIntN(64, BigInt(Math.trunc(v as number)));
       case FIELD_STRING: return strtoll(v as string);
-      case FIELD_BLOB: throw conversion("Unable to convert BLOB to long");
+      case FIELD_BLOB: throw noHandle("Unable to convert BLOB to long");
       default: return 0n;
     }
   },
@@ -161,7 +200,7 @@ rt.registerJnis("android/database/CursorWindow", {
     switch (w.types[i]) {
       case FIELD_FLOAT: case FIELD_INTEGER: return Number(v);
       case FIELD_STRING: return strtod(v as string);
-      case FIELD_BLOB: throw conversion("Unable to convert BLOB to double");
+      case FIELD_BLOB: throw noHandle("Unable to convert BLOB to double");
       default: return 0;
     }
   },
@@ -171,35 +210,6 @@ rt.registerJnis("android/database/CursorWindow", {
     +window(h).put(row, col, FIELD_INTEGER, integer(v)),
   "nativePutDouble(JDII)Z": putter(FIELD_FLOAT, () => 0),
   "nativePutNull(JII)Z": (h: bigint, row: number, col: number) => +window(h).put(row, col, FIELD_NULL, null),
-  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (h: bigint, parcel: JParcel) => {
-    const w = window(h);
-    writeString(parcel, w.name);
-    writeInt(parcel, w.size);
-    writeInt(parcel, w.rows);
-    writeInt(parcel, w.cols);
-    for (let i = 0; i < w.types.length; i++) {
-      const type = w.types[i], v = w.values[i];
-      writeInt(parcel, type);
-      if (type === FIELD_INTEGER) writeLong(parcel, BigInt(v as number | bigint));
-      else if (type === FIELD_FLOAT) writeDouble(parcel, v as number);
-      else if (type === FIELD_STRING) writeString(parcel, v as string);
-      else if (type === FIELD_BLOB) writeBlob(parcel, v as Int8Array);
-    }
-  },
-  "nativeCreateFromParcel(Landroid/os/Parcel;)J": (parcel: JParcel) => {
-    const w = new NativeWindow(readString(parcel) ?? "", readInt(parcel), true);
-    w.rows = readInt(parcel);
-    w.cols = readInt(parcel);
-    if (w.rows < 0 || w.cols < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid CursorWindow dimensions");
-    for (let i = w.rows * w.cols; i > 0; i--) {
-      const type = readInt(parcel);
-      w.types.push(type);
-      if (type === FIELD_INTEGER) w.values.push(integer(readLong(parcel)));
-      else if (type === FIELD_FLOAT) w.values.push(readDouble(parcel));
-      else if (type === FIELD_STRING) w.values.push(readString(parcel));
-      else if (type === FIELD_BLOB) w.values.push(readBlob(parcel));
-      else w.values.push(null);
-    }
-    return ownedHandle(w);
-  },
+  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (h: bigint, parcel: JObj) => window(h).writeTo(nativeParcel(parcel)),
+  "nativeCreateFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) => ownedHandle(NativeWindow.fromParcel(nativeParcel(parcel))),
 });

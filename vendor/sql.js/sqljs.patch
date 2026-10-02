@@ -25,7 +25,7 @@ index 3be2595..0fcddb6 100644
  "_sqlite3_bind_parameter_index",
  "_sqlite3_step",
  "_sqlite3_column_count",
-@@ -43,5 +44,13 @@
+@@ -43,5 +44,16 @@
  "_sqlite3_result_error",
  "_sqlite3_aggregate_context",
  "_RegisterExtensionFunctions",
@@ -38,17 +38,21 @@ index 3be2595..0fcddb6 100644
 +"_sqlite3_get_autocommit",
 +"_sqlite3_total_changes",
 +"_sqlite3_extended_errcode",
-+"_sqlite3_create_collation_v2"
++"_sqlite3_create_collation_v2",
++"_sqlite3_db_handle",
++"_sqlite3_stmt_busy",
++"_sqlite3_wal_checkpoint_v2"
  ]
 diff --git a/src/exported_runtime_methods.json b/src/exported_runtime_methods.json
 index f099056..58603f6 100644
 --- a/src/exported_runtime_methods.json
 +++ b/src/exported_runtime_methods.json
-@@ -7,5 +7,6 @@
+@@ -7,5 +7,7 @@
  "stringToNewUTF8",
  "writeArrayToMemory",
  "removeFunction",
 -"addFunction"
 +"addFunction",
-+"HEAPU8"
++"HEAPU8",
++"FS"
  ]

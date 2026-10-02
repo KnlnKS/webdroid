@@ -6,7 +6,7 @@
 // visible to the next statement on another, and what lives on a connection (the TEMP schema,
 // PRAGMAs) lasts as long as it does. The file's bytes reach the VFS in debounced snapshots.
 
-import initSqlJs, { type Database } from "sql.js";
+import initSqlJs from "sql.js";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { i8, u8, mangleField, jarray, strArray } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
@@ -14,22 +14,31 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
 import { arrayMapEntries } from "../jvm/natives/jcoll";
 import { handle, deref, release } from "./handles";
-import { type NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, integer } from "./cursorwindow";
+import { type NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
+  SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
-/** the C API vendor/sql.js/sqljs.patch exports */
+/** the C API and Emscripten FS vendor/sql.js/sqljs.patch exports */
 type Sql = SqlJs & {
   HEAPU8: Uint8Array;
+  FS: { writeFile(path: string, data: Uint8Array): void; readFile(path: string): Uint8Array; unlink(path: string): void };
   _malloc(size: number): number;
   _free(ptr: number): void;
   stringToNewUTF8(s: string): number;
   UTF8ToString(ptr: number, maxBytes?: number): string;
   addFunction(fn: (...args: number[]) => number, sig: string): number;
+  _sqlite3_open(name: number, out: number): number;
+  _sqlite3_close_v2(db: number): number;
+  _RegisterExtensionFunctions(db: number): number;
+  _sqlite3_exec(db: number, sql: number, callback: number, arg: number, error: number): number;
+  _sqlite3_wal_checkpoint_v2(db: number, name: number, mode: number, log: number, checkpointed: number): number;
   _sqlite3_prepare_v2(db: number, sql: number, bytes: number, out: number, tail: number): number;
+  _sqlite3_db_handle(st: number): number;
   _sqlite3_finalize(st: number): number;
   _sqlite3_reset(st: number): number;
   _sqlite3_clear_bindings(st: number): number;
   _sqlite3_step(st: number): number;
+  _sqlite3_stmt_busy(st: number): number;
   _sqlite3_bind_text(st: number, i: number, text: number, bytes: number, destructor: number): number;
   _sqlite3_bind_blob(st: number, i: number, data: number, bytes: number, destructor: number): number;
   _sqlite3_bind_double(st: number, i: number, v: number): number;
@@ -52,68 +61,77 @@ type Sql = SqlJs & {
   _sqlite3_errmsg(db: number): number;
   _sqlite3_create_collation_v2(db: number, name: number, encoding: number, arg: number, compare: number, destroy: number): number;
 };
-const ROW = 100, DONE = 101, INTEGER = 1, FLOAT = 2, TEXT = 3, BLOB = 4, UTF8 = 1, TRANSIENT = -1;
+const INTEGER = 1, FLOAT = 2, TEXT = 3, BLOB = 4, UTF8 = 1, TRANSIENT = -1;
 
-/** one database file every connection to it shares; `db` holds the Emscripten file and takes the snapshots */
-type SharedDatabase = { path: string; db: Database; connections: Set<Connection>; saving: ReturnType<typeof setTimeout> | null; mtime: number };
+/** one database file every connection to it shares, held in the Emscripten file `name` */
+type SharedDatabase = { path: string; name: string; connections: Set<Connection>; saving: ReturnType<typeof setTimeout> | null; mtime: number };
 type SQLiteStore = { sql: () => Promise<SqlJs>; files: Map<string, SharedDatabase> };
 let sqlReady: Promise<SqlJs> | null = null;
 export let sqliteStore: SQLiteStore = { files: new Map(), sql: () => sqlReady ??= initSqlJs({ locateFile: (f: string) => "/sqljs/" + f }) };
 export function useSQLiteStore(store: SQLiteStore): void { sqliteStore = store; }
 let C!: Sql;
-const loadSql = async () => C ??= await sqliteStore.sql() as Sql;
-
-/** sql.js keeps each Database's bytes in an Emscripten VFS file; @types/sql.js omits the name. */
-const named = (db: Database) => db as Database & { filename: string; db: number };
-// sql.js's Database.export() CLOSES and re-opens the connection, which destroys everything that lives
-// on a connection rather than in the file: the TEMP schema, the PRAGMAs, and every live prepared
-// statement. Snapshot the file through a THROWAWAY connection instead: point its filename at ours so
-// its export() reads our bytes while closing only its own handle, then restore the name so its
-// close() unlinks its own file.
-function snapshotBytes(db: Database): Uint8Array | null {
-  // The main file alone omits WAL pages; a reader can prevent a complete checkpoint.
-  const checkpoint = db.exec("PRAGMA wal_checkpoint(PASSIVE)")[0]?.values[0];
-  if (checkpoint && (checkpoint[0] || checkpoint[1] !== checkpoint[2])) return null;
-  const shadow = named(new C.Database()), own = shadow.filename;
-  shadow.filename = named(db).filename;
-  try {
-    return shadow.export();
-  } finally {
-    shadow.filename = own;
-    try { shadow.close(); } catch { /* */ }
-  }
-}
-/** another sqlite3 handle on `source`'s file: export() re-opens under the borrowed name */
-function sharedConnection(source: Database): Database {
-  const db = named(new C.Database()), own = db.filename;
-  db.filename = named(source).filename;
-  try { db.export(); } catch (e) { db.filename = own; db.close(); throw e; }
-  const close = db.close.bind(db);
-  db.close = () => { db.filename = own; close(); };
-  return db;
+/** an 8-byte out parameter */
+let out = 0;
+const loadSql = async () => { C ??= await sqliteStore.sql() as Sql; out ||= C._malloc(8); };
+const int32At = (at: number) => C.HEAPU8[at] | C.HEAPU8[at + 1] << 8 | C.HEAPU8[at + 2] << 16 | C.HEAPU8[at + 3] << 24;
+function withUTF8<T>(s: string, f: (text: number) => T): T {
+  const text = C.stringToNewUTF8(s);
+  try { return f(text); } finally { C._free(text); }
 }
 
+/** what a failure raises: AOSP's SQLiteException family, or androidx's SQLException */
+type Raise = (code: number, sqliteMessage: string, message?: string | null) => unknown;
+class Connection {
+  cancelable = false;
+  canceled = false;
+  constructor(readonly ptr: number, readonly file: SharedDatabase | null, readonly raise: Raise) {}
+}
+const conn = (h: bigint) => deref<Connection>(h);
+const byPtr = new Map<number, Connection>();
+const dbError = (c: Connection, message: string | null = null) =>
+  c.raise(C._sqlite3_extended_errcode(c.ptr), C.UTF8ToString(C._sqlite3_errmsg(c.ptr)), message);
+const check = (c: Connection, rc: number) => { if (rc) throw dbError(c); };
+
+// ── persistence: the file is still the one at its path unless deleted, or replaced while no connection had it open
+const isCurrent = (f: SharedDatabase | undefined): f is SharedDatabase => !!f && sqliteStore.files.get(f.path) === f && vfs.exists(f.path)
+  && (f.connections.size > 0 || vfs.mtime(f.path) === f.mtime);
 function scheduleSave(file: SharedDatabase) {
   if (file.saving) clearTimeout(file.saving);
   file.saving = setTimeout(() => void save(file), 400);
 }
+/** the file's bytes, or null while an open transaction or a reader leaves them incomplete */
+function snapshot(file: SharedDatabase): Uint8Array | null {
+  let any: Connection | null = null;
+  for (const c of file.connections) {
+    // mid-transaction the file can hold uncommitted pages whose undo lives in a journal we do not copy
+    if (!C._sqlite3_get_autocommit(c.ptr)) return null;
+    any = c;
+  }
+  if (any) {
+    // the main file alone omits WAL pages; a reader can prevent a complete checkpoint
+    const rc = C._sqlite3_wal_checkpoint_v2(any.ptr, 0, 0, out, out + 4);
+    if ((rc & 0xff) === SQLITE_BUSY || (rc & 0xff) === SQLITE_LOCKED || int32At(out) !== int32At(out + 4)) return null;
+    check(any, rc);
+  }
+  return C.FS.readFile(file.name);
+}
 async function save(file: SharedDatabase) {
   file.saving = null;
-  // unlinked (deleteDatabase) or replaced by a newer file at the path: nothing to persist
-  if (sqliteStore.files.get(file.path) !== file || !vfs.exists(file.path)) return;
-  // mid-transaction the file can hold uncommitted pages whose undo lives in a journal we do not copy
-  for (const c of file.connections) if (!C._sqlite3_get_autocommit(c.ptr)) return scheduleSave(file);
+  if (!isCurrent(file)) return;
   try {
-    const bytes = snapshotBytes(file.db);
+    const bytes = snapshot(file);
     if (!bytes) return scheduleSave(file);
     vfs.write(file.path, bytes);
     file.mtime = vfs.mtime(file.path);
     await vfs.flush();
     globalThis.localStorage?.removeItem("wd:db:" + file.path);
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("locked")) scheduleSave(file);
-    else console.warn("[sqlite] persist failed", e);
-  }
+  } catch (e) { console.warn("[sqlite] persist failed", e); }
+}
+/** an Emscripten file no longer at its path, once its last connection closes */
+function retire(file: SharedDatabase) {
+  if (file.connections.size) return;
+  if (file.saving) clearTimeout(file.saving);
+  C.FS.unlink(file.name);
 }
 /** a snapshot an older build kept in localStorage */
 function legacySnapshot(path: string): Uint8Array | null {
@@ -122,41 +140,6 @@ function legacySnapshot(path: string): Uint8Array | null {
     return raw ? Uint8Array.from(atob(raw), (c) => c.charCodeAt(0)) : null;
   } catch { return null; }
 }
-
-class Connection {
-  readonly ptr: number;
-  cancelable = false;
-  canceled = false;
-  constructor(readonly db: Database, readonly file: SharedDatabase | null) { this.ptr = named(db).db; }
-}
-const conn = (h: bigint) => deref<Connection>(h);
-
-// ── errors, as android_database_SQLiteCommon.cpp's throw_sqlite3_exception raises them
-const CODES = ["OK", "ERROR", "INTERNAL", "PERM", "ABORT", "BUSY", "LOCKED", "NOMEM", "READONLY", "INTERRUPT", "IOERR", "CORRUPT",
-  "NOTFOUND", "FULL", "CANTOPEN", "PROTOCOL", "EMPTY", "SCHEMA", "TOOBIG", "CONSTRAINT", "MISMATCH", "MISUSE", "NOLFS", "AUTH",
-  "FORMAT", "RANGE", "NOTADB", "NOTICE", "WARNING"];
-const CONSTRAINTS = ["", "CHECK", "COMMITHOOK", "FOREIGNKEY", "FUNCTION", "NOTNULL", "PRIMARYKEY", "TRIGGER", "UNIQUE", "VTAB", "ROWID", "PINNED", "DATATYPE"];
-const EXCEPTIONS: Record<number, string> = {
-  3: "SQLiteAccessPermException", 4: "SQLiteAbortException", 5: "SQLiteDatabaseLockedException", 6: "SQLiteTableLockedException",
-  7: "SQLiteOutOfMemoryException", 8: "SQLiteReadOnlyDatabaseException", 10: "SQLiteDiskIOException", 11: "SQLiteDatabaseCorruptException",
-  13: "SQLiteFullException", 14: "SQLiteCantOpenDatabaseException", 18: "SQLiteBlobTooBigException", 19: "SQLiteConstraintException",
-  20: "SQLiteDatatypeMismatchException", 21: "SQLiteMisuseException", 25: "SQLiteBindOrColumnIndexOutOfRangeException",
-  26: "SQLiteDatabaseCorruptException", 101: "SQLiteDoneException",
-};
-function codeName(code: number): string {
-  const primary = code & 0xff, name = primary === ROW ? "ROW" : primary === DONE ? "DONE" : CODES[primary] ?? "UNKNOWN";
-  return `SQLITE_${name}${primary === 19 && code >> 8 ? "_" + CONSTRAINTS[code >> 8] : ""}[${code}]`;
-}
-function sqliteException(code: number, sqliteMessage: string | null, message: string | null = null): unknown {
-  const primary = code & 0xff;
-  const cls = primary === 9 ? "android/os/OperationCanceledException" : "android/database/sqlite/" + (EXCEPTIONS[primary] ?? "SQLiteException");
-  return rt.mkThrowable(cls, sqliteMessage === null || primary === DONE ? message
-    : `${sqliteMessage} (code ${code} ${codeName(code)})${message ? ": " + message : ""}`);
-}
-const dbException = (c: Connection, message: string | null = null) =>
-  sqliteException(C._sqlite3_extended_errcode(c.ptr), C.UTF8ToString(C._sqlite3_errmsg(c.ptr)), message);
-const check = (c: Connection, rc: number) => { if (rc) throw dbException(c); };
-const noHandle = (message: string) => sqliteException(0, "unknown error", message);
 
 // ── collations: register_android_functions' UNICODE and register_localized_collators' LOCALIZED (ICU, primary strength)
 const collators = new Map<string, number>();
@@ -169,115 +152,113 @@ function collate(c: Connection, name: string, locale: string, options: Intl.Coll
     compare = C.addFunction((_arg, n1, p1, n2, p2) => collator.compare(C.UTF8ToString(p1, n1), C.UTF8ToString(p2, n2)), "iiiiii");
     collators.set(key, compare);
   }
-  const text = C.stringToNewUTF8(name);
-  try { check(c, C._sqlite3_create_collation_v2(c.ptr, text, UTF8, 0, compare, 0)); } finally { C._free(text); }
+  check(c, withUTF8(name, (text) => C._sqlite3_create_collation_v2(c.ptr, text, UTF8, 0, compare, 0)));
 }
 
 /** SQLiteConnection.nativeOpen's flags: CREATE_IF_NECESSARY opens read-write whatever OPEN_READONLY says */
-async function openConnection(path: string, readOnly: boolean, create: boolean): Promise<Connection> {
+async function openConnection(path: string, readOnly: boolean, create: boolean, raise: Raise): Promise<Connection> {
   await loadSql();
-  let c: Connection;
-  if (path === ":memory:") c = new Connection(new C.Database(), null);
-  else {
-    // a file deleted, or replaced while no connection had it open, is read afresh
-    const current = (f: SharedDatabase | undefined) => !!f && vfs.exists(path) && (f.connections.size > 0 || vfs.mtime(path) === f.mtime);
-    let file = sqliteStore.files.get(path);
-    if (!current(file)) {
-      const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null) ?? legacySnapshot(path);
-      const cantOpen = !data && (readOnly || !create || !vfs.isDir(path.slice(0, path.lastIndexOf("/")) || "/"));
-      if (cantOpen) throw sqliteException(14, "unable to open database file", "Could not open database");
-      file = sqliteStore.files.get(path);
-      if (!current(file)) {
-        if (file && !file.connections.size) file.db.close();
-        file = { path, db: new C.Database(data), connections: new Set(), saving: null, mtime: 0 };
-        sqliteStore.files.set(path, file);
-        // opening creates the (empty) file, which callers chmod or stat before the first snapshot
-        if (!data) vfs.write(path, new Uint8Array(0));
-        else if (!vfs.exists(path)) scheduleSave(file);
-        file.mtime = vfs.mtime(path);
-      }
+  let file: SharedDatabase | undefined;
+  if (path !== ":memory:" && !isCurrent(file = sqliteStore.files.get(path))) {
+    const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null) ?? legacySnapshot(path);
+    const cantOpen = !data && (readOnly || !create || !vfs.isDir(path.slice(0, path.lastIndexOf("/")) || "/"));
+    if (cantOpen) throw raise(SQLITE_CANTOPEN, "unable to open database file", "Could not open database");
+    if (!isCurrent(file = sqliteStore.files.get(path))) {
+      if (file) retire(file);
+      const name = `/${crypto.randomUUID()}.db`, bytes = data ?? new Uint8Array(0);
+      C.FS.writeFile(name, bytes);
+      // opening creates the file, which callers chmod or stat before the first snapshot
+      if (!vfs.exists(path)) vfs.write(path, bytes);
+      sqliteStore.files.set(path, file = { path, name, connections: new Set(), saving: null, mtime: vfs.mtime(path) });
     }
-    c = new Connection(sharedConnection(file!.db), file!);
-    file!.connections.add(c);
-    if (readOnly) c.db.exec("PRAGMA query_only=1");
   }
+  const ptr = withUTF8(file?.name ?? path, (name) => { const rc = C._sqlite3_open(name, out); return rc ? -rc : int32At(out); });
+  if (ptr < 0) throw raise(-ptr, "unable to open database file", "Could not open database");
+  C._RegisterExtensionFunctions(ptr);
+  const c = new Connection(ptr, file ?? null, raise);
+  byPtr.set(ptr, c);
+  file?.connections.add(c);
+  if (readOnly && file) withUTF8("PRAGMA query_only=1", (sql) => C._sqlite3_exec(ptr, sql, 0, 0, 0));
   collate(c, "UNICODE", "und", {});
   return c;
 }
-function closeConnection(c: Connection) {
-  c.db.close();
-  c.file?.connections.delete(c);
+/** sqlite3_close_v2: statements the caller has yet to close keep the handle alive until they finalize */
+function closeConnection(h: bigint) {
+  const c = conn(h);
+  C._sqlite3_close_v2(c.ptr);
+  byPtr.delete(c.ptr);
+  release(h);
+  if (!c.file) return;
+  c.file.connections.delete(c);
+  if (sqliteStore.files.get(c.file.path) !== c.file) retire(c.file);
 }
 
 // ── statements: the long a PreparedStatement holds is the sqlite3_stmt pointer itself
-let out = 0;
-/** sqlite3_prepare_v2's statement, or `error`'s exception */
-function prepare(c: Connection, sql: string, error: () => unknown): number {
-  const text = C.stringToNewUTF8(sql), at = out ||= C._malloc(4);
-  try {
-    if (C._sqlite3_prepare_v2(c.ptr, text, -1, at, 0)) throw error();
-    return C.HEAPU8[at] | C.HEAPU8[at + 1] << 8 | C.HEAPU8[at + 2] << 16 | C.HEAPU8[at + 3] << 24;
-  } finally { C._free(text); }
+const st = (h: bigint) => Number(h);
+/** sqlite3_prepare_v2's statement, or the connection's exception with `message` */
+function prepare(c: Connection, sql: string, message: string | null = null): bigint {
+  if (withUTF8(sql, (text) => C._sqlite3_prepare_v2(c.ptr, text, -1, out, 0))) throw dbError(c, message);
+  return BigInt(int32At(out));
 }
-function bindText(st: number, i: number, value: string): number {
-  const text = C.stringToNewUTF8(value);
-  try { return C._sqlite3_bind_text(st, i, text, -1, TRANSIENT); } finally { C._free(text); }
-}
-function bindBlob(st: number, i: number, value: Int8Array): number {
+const bindText = (s: number, i: number, value: string) => withUTF8(value, (text) => C._sqlite3_bind_text(s, i, text, -1, TRANSIENT));
+function bindBlob(s: number, i: number, value: Int8Array): number {
   const data = C._malloc(value.length || 1);
   C.HEAPU8.set(u8(value), data);
-  try { return C._sqlite3_bind_blob(st, i, data, value.length, TRANSIENT); } finally { C._free(data); }
+  try { return C._sqlite3_bind_blob(s, i, data, value.length, TRANSIENT); } finally { C._free(data); }
 }
-const bindNull = (st: number, i: number) => C._sqlite3_bind_blob(st, i, 0, 0, 0);
-function columnText(st: number, i: number): string | null {
-  const text = C._sqlite3_column_text(st, i);
-  return text ? C.UTF8ToString(text, C._sqlite3_column_bytes(st, i)) : null;
+/** both drivers' binders: [AOSP name, androidx name, value descriptor, bind] */
+const BINDERS: [string, string, string, (s: number, i: number, v: never) => number][] = [
+  ["Null", "Null", "", (s, i) => C._sqlite3_bind_blob(s, i, 0, 0, 0)],
+  ["Long", "Long", "J", (s, i, v: bigint) => C._sqlite3_bind_int64(s, i, v)],
+  ["Double", "Double", "D", (s, i, v: number) => C._sqlite3_bind_double(s, i, v)],
+  ["String", "Text", "Ljava/lang/String;", bindText],
+  ["Blob", "Blob", "[B", bindBlob],
+];
+function columnText(s: number, i: number): string | null {
+  const text = C._sqlite3_column_text(s, i);
+  return text ? C.UTF8ToString(text, C._sqlite3_column_bytes(s, i)) : null;
 }
-function columnBlob(st: number, i: number): Int8Array {
-  const data = C._sqlite3_column_blob(st, i);
-  return i8(C.HEAPU8.slice(data, data + C._sqlite3_column_bytes(st, i)));
+function columnBlob(s: number, i: number): Int8Array {
+  const data = C._sqlite3_column_blob(s, i);
+  return i8(C.HEAPU8.slice(data, data + C._sqlite3_column_bytes(s, i)));
 }
-const columnName = (st: number, i: number) => { const name = C._sqlite3_column_name(st, i); return name ? C.UTF8ToString(name) : null; };
+const columnName = (s: number, i: number) => { const name = C._sqlite3_column_name(s, i); return name ? C.UTF8ToString(name) : null; };
 /** sqlite3_step, interrupted as the progress handler interrupts a cancelled connection */
-function step(c: Connection, st: number): number {
-  if (c.cancelable && c.canceled) throw sqliteException(9, "interrupted");
-  return C._sqlite3_step(st);
+function step(c: Connection, s: number): number {
+  if (c.cancelable && c.canceled) throw sqliteException(SQLITE_INTERRUPT, "interrupted");
+  return C._sqlite3_step(s);
 }
 /** a statement that may have changed the file schedules its snapshot */
-const stepped = (c: Connection, st: number) => { if (c.file && !C._sqlite3_stmt_readonly(st)) scheduleSave(c.file); };
-function executeNonQuery(c: Connection, st: number, isPragma = false) {
-  let rc = step(c, st);
-  if (isPragma) while (rc === ROW) rc = step(c, st);
-  stepped(c, st);
+const stepped = (c: Connection, s: number) => { if (c.file && !C._sqlite3_stmt_readonly(s)) scheduleSave(c.file); };
+function executeNonQuery(c: Connection, s: number, isPragma = false) {
+  let rc = step(c, s);
+  if (isPragma) while (rc === ROW) rc = step(c, s);
+  stepped(c, s);
   if (rc === ROW) throw noHandle("Queries can be performed using SQLiteDatabase query or rawQuery methods only.");
-  if (rc !== DONE) throw dbException(c);
+  if (rc !== DONE) throw dbError(c);
 }
-function executeOneRowQuery(c: Connection, st: number): boolean {
-  const rc = step(c, st);
-  stepped(c, st);
-  if (rc !== ROW) throw dbException(c);
-  return C._sqlite3_column_count(st) >= 1;
+function executeOneRowQuery(c: Connection, s: number): boolean {
+  const rc = step(c, s);
+  stepped(c, s);
+  if (rc !== ROW) throw dbError(c);
+  return C._sqlite3_column_count(s) >= 1;
 }
 
 /** copyRow: the statement's current row into the window's next one; false when it does not fit */
-function copyRow(w: NativeWindow, st: number, cols: number): boolean {
+function copyRow(w: NativeWindow, s: number, cols: number): boolean {
   if (!w.allocRow()) return false;
   const row = w.rows - 1;
   for (let i = 0; i < cols; i++) {
     let fits = true;
-    switch (C._sqlite3_column_type(st, i)) {
+    switch (C._sqlite3_column_type(s, i)) {
       case INTEGER: {
-        const d = C._sqlite3_column_double(st, i);
-        fits = w.put(row, i, FIELD_INTEGER, Number.isSafeInteger(d) ? d : integer(C._sqlite3_column_int64(st, i)));
+        const d = C._sqlite3_column_double(s, i);
+        fits = w.put(row, i, FIELD_INTEGER, Number.isSafeInteger(d) ? d : C._sqlite3_column_int64(s, i));
         break;
       }
-      case FLOAT: fits = w.put(row, i, FIELD_FLOAT, C._sqlite3_column_double(st, i)); break;
-      case TEXT: {
-        const text = C._sqlite3_column_text(st, i), n = C._sqlite3_column_bytes(st, i);
-        fits = w.put(row, i, FIELD_STRING, C.UTF8ToString(text, n), n + 1);
-        break;
-      }
-      case BLOB: { const b = columnBlob(st, i); fits = w.put(row, i, FIELD_BLOB, b, b.length); break; }
+      case FLOAT: fits = w.put(row, i, FIELD_FLOAT, C._sqlite3_column_double(s, i)); break;
+      case TEXT: { const text = columnText(s, i); fits = w.put(row, i, FIELD_STRING, text, C._sqlite3_column_bytes(s, i) + 1); break; }
+      case BLOB: { const b = columnBlob(s, i); fits = w.put(row, i, FIELD_BLOB, b, b.length); break; }
     }
     if (!fits) { w.freeLastRow(); return false; }
   }
@@ -285,58 +266,50 @@ function copyRow(w: NativeWindow, st: number, cols: number): boolean {
 }
 /** nativeExecuteForCursorWindow: rows from startPos into the window, refilling from later rows when
  *  it fills before requiredPos, and counting every row on request; (startPos << 32) | totalRows */
-function fillWindow(c: Connection, st: number, w: NativeWindow, startPos: number, requiredPos: number, countAllRows: number): bigint {
+function fillWindow(c: Connection, s: number, w: NativeWindow, startPos: number, requiredPos: number, countAllRows: number): bigint {
   if (w.readOnly) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to clear the cursor window, status=-38");
-  w.clear();
-  const cols = w.cols = C._sqlite3_column_count(st);
+  const cols = C._sqlite3_column_count(s);
+  w.clear(cols);
   let total = 0, added = 0, full = false;
   try {
     while (!full || countAllRows) {
-      const rc = step(c, st);
+      const rc = step(c, s);
       if (rc === DONE) break;
-      if (rc !== ROW) throw dbException(c);
+      if (rc !== ROW) throw dbError(c);
       if (startPos >= ++total || full) continue;
-      let fits = copyRow(w, st, cols);
+      let fits = copyRow(w, s, cols);
       if (!fits && added && startPos + added <= requiredPos) {
         // filled before the one row really wanted: start again from here
-        w.clear();
-        w.cols = cols;
+        w.clear(cols);
         startPos += added;
         added = 0;
-        fits = copyRow(w, st, cols);
+        fits = copyRow(w, s, cols);
       }
       if (fits) added++; else full = true;
     }
   } finally {
-    C._sqlite3_reset(st);
-    stepped(c, st);
+    C._sqlite3_reset(s);
+    stepped(c, s);
   }
-  if (total > 0 && added === 0) throw sqliteException(18, null, `Row too big to fit into CursorWindow requiredPos=${requiredPos}, totalRows=${total}`);
+  if (total > 0 && added === 0) throw sqliteException(SQLITE_TOOBIG, null, `Row too big to fit into CursorWindow requiredPos=${requiredPos}, totalRows=${total}`);
   return BigInt(startPos) << 32n | BigInt(total);
 }
 
 const OPEN_READONLY = 1, CREATE_IF_NECESSARY = 0x10000000;
-const st = (h: bigint) => Number(h);
 rt.registerJnis("android/database/sqlite/SQLiteConnection", {
-  "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": async (path: string, flags: number) =>
-    handle(await openConnection(path, (flags & OPEN_READONLY) !== 0 && !(flags & CREATE_IF_NECESSARY), (flags & CREATE_IF_NECESSARY) !== 0)),
-  "nativeClose(J)V": (h: bigint) => { closeConnection(conn(h)); release(h); },
+  "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": async (path: string, flags: number) => handle(await openConnection(path,
+    (flags & OPEN_READONLY) !== 0 && !(flags & CREATE_IF_NECESSARY), (flags & CREATE_IF_NECESSARY) !== 0, sqliteException)),
+  "nativeClose(J)V": closeConnection,
   "nativeRegisterLocalizedCollators(JLjava/lang/String;)V": (h: bigint, locale: string) =>
     collate(conn(h), "LOCALIZED", locale.replaceAll("_", "-"), { sensitivity: "base" }),
-  "nativePrepareStatement(JLjava/lang/String;)J": (h: bigint, sql: string) => {
-    const c = conn(h);
-    return BigInt(prepare(c, sql, () => dbException(c, ", while compiling: " + sql)));
-  },
+  "nativePrepareStatement(JLjava/lang/String;)J": (h: bigint, sql: string) => prepare(conn(h), sql, ", while compiling: " + sql),
   "nativeFinalizeStatement(JJ)V": (_h: bigint, s: bigint) => { C._sqlite3_finalize(st(s)); },
   "nativeGetParameterCount(JJ)I": (_h: bigint, s: bigint) => C._sqlite3_bind_parameter_count(st(s)),
   "nativeIsReadOnly(JJ)Z": (_h: bigint, s: bigint) => C._sqlite3_stmt_readonly(st(s)),
   "nativeGetColumnCount(JJ)I": (_h: bigint, s: bigint) => C._sqlite3_column_count(st(s)),
   "nativeGetColumnName(JJI)Ljava/lang/String;": (_h: bigint, s: bigint, i: number) => columnName(st(s), i),
-  "nativeBindNull(JJI)V": (h: bigint, s: bigint, i: number) => check(conn(h), bindNull(st(s), i)),
-  "nativeBindLong(JJIJ)V": (h: bigint, s: bigint, i: number, v: bigint) => check(conn(h), C._sqlite3_bind_int64(st(s), i, v)),
-  "nativeBindDouble(JJID)V": (h: bigint, s: bigint, i: number, v: number) => check(conn(h), C._sqlite3_bind_double(st(s), i, v)),
-  "nativeBindString(JJILjava/lang/String;)V": (h: bigint, s: bigint, i: number, v: string) => check(conn(h), bindText(st(s), i, v)),
-  "nativeBindBlob(JJI[B)V": (h: bigint, s: bigint, i: number, v: Int8Array) => check(conn(h), bindBlob(st(s), i, v)),
+  ...Object.fromEntries(BINDERS.map(([name, , desc, bind]) =>
+    [`nativeBind${name}(JJI${desc})V`, (h: bigint, s: bigint, i: number, v: never) => check(conn(h), bind(st(s), i, v))])),
   "nativeResetStatementAndClearBindings(JJ)V": (h: bigint, s: bigint) => {
     const rc = C._sqlite3_reset(st(s));
     check(conn(h), rc || C._sqlite3_clear_bindings(st(s)));
@@ -366,57 +339,46 @@ rt.registerJnis("android/database/sqlite/SQLiteConnection", {
 rt.registerJni("android/database/sqlite/SQLiteGlobal", "nativeReleaseMemory()I", () => 0);
 
 // ── androidx.sqlite's bundled driver (libsqliteJni): its statement natives name only the statement
-const bundled = new Map<number, Connection>();
-const bundledConn = (s: bigint) => bundled.get(st(s)) ?? rt.npe();
-const bundledError = (c: Connection) =>
-  rt.mkThrowable("android/database/SQLException", `Error code: ${C._sqlite3_extended_errcode(c.ptr)}, message: ${C.UTF8ToString(C._sqlite3_errmsg(c.ptr))}`);
-const bundledCheck = (c: Connection, rc: number) => { if (rc) throw bundledError(c); };
+const androidx: Raise = (code, sqliteMessage) => rt.mkThrowable("android/database/SQLException", `Error code: ${code}, message: ${sqliteMessage}`);
+const owner = (s: bigint) => byPtr.get(C._sqlite3_db_handle(st(s))) ?? rt.npe();
+/** throwIfNoRow and throwIfInvalidColumn, which guard the column getters */
+function column(s: bigint, i: number, row = true): number {
+  const p = st(s);
+  if (row && !C._sqlite3_stmt_busy(p)) throw androidx(SQLITE_MISUSE, "no row");
+  if (i < 0 || i >= C._sqlite3_column_count(p)) throw androidx(SQLITE_RANGE, "column index out of range");
+  return p;
+}
 rt.claimNativeLib("sqliteJni");
 rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteDriverKt", {
   "nativeThreadSafeMode()I": () => 0,
   "nativeOpen(Ljava/lang/String;I)J": async (name: string, flags: number) =>
-    handle(await openConnection(name || ":memory:", (flags & 3) === 1, (flags & 6) === 6)),
+    handle(await openConnection(name || ":memory:", (flags & 3) === 1, (flags & 6) === 6, androidx)),
 });
 rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteConnectionKt", {
-  "nativePrepare(JLjava/lang/String;)J": (h: bigint, sql: string) => {
-    const c = conn(h), s = prepare(c, sql, () => bundledError(c));
-    bundled.set(s, c);
-    return BigInt(s);
-  },
-  "nativeClose(J)V": (h: bigint) => {
-    const c = conn(h);
-    for (const [s, owner] of bundled) if (owner === c) { C._sqlite3_finalize(s); bundled.delete(s); }
-    closeConnection(c);
-    release(h);
-  },
+  "nativePrepare(JLjava/lang/String;)J": (h: bigint, sql: string) => prepare(conn(h), sql),
+  "nativeClose(J)V": closeConnection,
   "nativeInTransaction(J)Z": (h: bigint) => +!C._sqlite3_get_autocommit(conn(h).ptr),
-  "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V": () => {
-    throw rt.mkThrowable("android/database/SQLException", "Error code: 1, message: not authorized");
-  },
+  "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V": () => { throw androidx(1, "not authorized"); },
 });
 rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", {
-  "nativeBindBlob(JI[B)V": (s: bigint, i: number, v: Int8Array) => bundledCheck(bundledConn(s), bindBlob(st(s), i, v)),
-  "nativeBindDouble(JID)V": (s: bigint, i: number, v: number) => bundledCheck(bundledConn(s), C._sqlite3_bind_double(st(s), i, v)),
-  "nativeBindLong(JIJ)V": (s: bigint, i: number, v: bigint) => bundledCheck(bundledConn(s), C._sqlite3_bind_int64(st(s), i, v)),
-  "nativeBindNull(JI)V": (s: bigint, i: number) => bundledCheck(bundledConn(s), bindNull(st(s), i)),
-  "nativeBindText(JILjava/lang/String;)V": (s: bigint, i: number, v: string) => bundledCheck(bundledConn(s), bindText(st(s), i, v)),
-  "nativeClearBindings(J)V": (s: bigint) => bundledCheck(bundledConn(s), C._sqlite3_clear_bindings(st(s))),
+  ...Object.fromEntries(BINDERS.map(([, name, desc, bind]) =>
+    [`nativeBind${name}(JI${desc})V`, (s: bigint, i: number, v: never) => check(owner(s), bind(st(s), i, v))])),
+  "nativeClearBindings(J)V": (s: bigint) => check(owner(s), C._sqlite3_clear_bindings(st(s))),
   "nativeStep(J)Z": (s: bigint) => {
-    const c = bundledConn(s), rc = step(c, st(s));
+    const c = owner(s), rc = step(c, st(s));
     stepped(c, st(s));
-    if (rc === ROW) return 1;
-    if (rc === DONE) return 0;
-    return bundledCheck(c, rc), 0;
+    if (rc !== ROW && rc !== DONE) throw dbError(c);
+    return +(rc === ROW);
   },
-  "nativeReset(J)V": (s: bigint) => bundledCheck(bundledConn(s), C._sqlite3_reset(st(s))),
-  "nativeClose(J)V": (s: bigint) => { if (bundled.delete(st(s))) C._sqlite3_finalize(st(s)); },
+  "nativeReset(J)V": (s: bigint) => check(owner(s), C._sqlite3_reset(st(s))),
+  "nativeClose(J)V": (s: bigint) => { C._sqlite3_finalize(st(s)); },
   "nativeGetColumnCount(J)I": (s: bigint) => C._sqlite3_column_count(st(s)),
-  "nativeGetColumnName(JI)Ljava/lang/String;": (s: bigint, i: number) => columnName(st(s), i),
-  "nativeGetColumnType(JI)I": (s: bigint, i: number) => C._sqlite3_column_type(st(s), i),
-  "nativeGetLong(JI)J": (s: bigint, i: number) => C._sqlite3_column_int64(st(s), i),
-  "nativeGetDouble(JI)D": (s: bigint, i: number) => C._sqlite3_column_double(st(s), i),
-  "nativeGetText(JI)Ljava/lang/String;": (s: bigint, i: number) => columnText(st(s), i) ?? "",
-  "nativeGetBlob(JI)[B": (s: bigint, i: number) => columnBlob(st(s), i),
+  "nativeGetColumnName(JI)Ljava/lang/String;": (s: bigint, i: number) => columnName(column(s, i, false), i),
+  "nativeGetColumnType(JI)I": (s: bigint, i: number) => C._sqlite3_column_type(column(s, i), i),
+  "nativeGetLong(JI)J": (s: bigint, i: number) => C._sqlite3_column_int64(column(s, i), i),
+  "nativeGetDouble(JI)D": (s: bigint, i: number) => C._sqlite3_column_double(column(s, i), i),
+  "nativeGetText(JI)Ljava/lang/String;": (s: bigint, i: number) => columnText(column(s, i), i) ?? "",
+  "nativeGetBlob(JI)[B": (s: bigint, i: number) => columnBlob(column(s, i), i),
 });
 
 // ── the hosted system providers' side of android.database

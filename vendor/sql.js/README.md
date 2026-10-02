@@ -3,8 +3,9 @@
 This local `sql.js` package keeps the upstream API and browser/Node entry points.
 The two-line API patch binds JavaScript BigInt through `sqlite3_bind_int64`.
 Upstream 1.14.2 binds BigInt as TEXT; converting it to Number loses integer
-precision above 2^53. The patch also exports the C functions and `HEAPU8` that
-`android.database.sqlite.SQLiteConnection`'s natives (`src/android/sqlite.ts`) call.
+precision above 2^53. The patch also exports the C functions, `HEAPU8` and `FS`
+that `android.database.sqlite.SQLiteConnection`'s and androidx's bundled driver's
+natives (`src/android/sqlite.ts`) use to open raw handles on Emscripten files.
 
 Source: sql.js v1.14.2, commit `9c4e167ec37129192d166ab9223faa9a4bd07c58`.
 SQLite: 3.49.1, with upstream compilation flags and extension-functions.c.

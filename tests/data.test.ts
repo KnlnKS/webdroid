@@ -117,6 +117,71 @@ describe("sqlite", () => {
     expect(await long(db, "SELECT count(*) FROM changes")).toBe(2n);
     saved.close(); vfs.delete(path);
   });
+
+  test("a snapshot waits for an open transaction, and leaves a file replaced after its connections close", async () => {
+    freshSQLiteStore();
+    const sql = await loadSql(), path = "/data/data/test.sqlite/databases/restore.db", backup = new sql.Database();
+    backup.exec("CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (7)");
+    const restored = backup.export(); backup.close();
+    jest.useFakeTimers();
+    try {
+      const db = await open(path);
+      await exec(db, "CREATE TABLE t (v INTEGER)");
+      jest.runOnlyPendingTimers();
+      await vcall(db, "beginTransaction", "()V");
+      await exec(db, "INSERT INTO t VALUES (1)");
+      const before = vfs.mtime(path);
+      jest.advanceTimersByTime(1000);
+      expect(vfs.mtime(path)).toBe(before);
+      await vcall(db, "setTransactionSuccessful", "()V");
+      await vcall(db, "endTransaction", "()V");
+      jest.advanceTimersByTime(1000);
+      expect(vfs.mtime(path)).toBeGreaterThan(before);
+      await exec(db, "INSERT INTO t VALUES (2)");
+      await vcall(db, "close", "()V");
+      jest.advanceTimersByTime(1);
+      vfs.write(path, restored);
+      jest.runOnlyPendingTimers();
+    } finally { jest.useRealTimers(); }
+    expect(vfs.read(path)).toEqual(restored);
+    expect(await long(await open(path), "SELECT sum(v) FROM t")).toBe(7n);
+  });
+
+  test("a cursor refills its window from later rows until it holds the row it moved to", async () => {
+    freshSQLiteStore();
+    const db = await open(":memory:");
+    await exec(db, "CREATE TABLE t (id INTEGER, payload BLOB)");
+    await exec(db, "WITH RECURSIVE n(x) AS (SELECT 0 UNION ALL SELECT x + 1 FROM n WHERE x < 999) INSERT INTO t SELECT x, CASE WHEN x < 500 THEN NULL ELSE zeroblob(200) END FROM n");
+    const cursor = await vcall(db, "rawQuery", `(${S}[${S})Landroid/database/Cursor;`, "SELECT id, payload FROM t", null);
+    await vcall(cursor, "setWindow", "(Landroid/database/CursorWindow;)V", await newObj("android/database/CursorWindow", `(${S}J)V`, "small", 8192n));
+    expect(await vcall(cursor, "getCount", "()I")).toBe(1000);
+    expect(await vcall(cursor, "moveToPosition", "(I)Z", 900)).toBe(1);
+    expect(await vcall(cursor, "getLong", "(I)J", 0)).toBe(900n);
+  });
+
+  test("androidx's bundled driver binds, steps and reads columns, guarding the row and column", async () => {
+    const jni = (cls: string, sig: string) => rt.jniFn("androidx/sqlite/driver/bundled/" + cls, sig) as (...a: unknown[]) => unknown;
+    const connection = await jni("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J")("", 6) as bigint;
+    const prepare = (sql: string) => jni("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J")(connection, sql) as bigint;
+    const call = (name: string, statement: bigint, ...args: unknown[]) => jni("BundledSQLiteStatementKt", name)(statement, ...args);
+    const message = (f: () => unknown) => Promise.resolve().then(f).then(() => null, (e) => vcall(e, "getMessage", `()${S}`));
+    const create = prepare("CREATE TABLE t (id INTEGER, name TEXT)");
+    call("nativeStep(J)Z", create);
+    call("nativeClose(J)V", create);
+    const insert = prepare("INSERT INTO t VALUES (?, ?)");
+    call("nativeBindLong(JIJ)V", insert, 1, 9007199254740993n);
+    call("nativeBindText(JILjava/lang/String;)V", insert, 2, "hello");
+    expect(call("nativeStep(J)Z", insert)).toBe(0);
+    call("nativeClose(J)V", insert);
+    const query = prepare("SELECT id, name FROM t");
+    expect(call("nativeGetColumnName(JI)Ljava/lang/String;", query, 1)).toBe("name");
+    expect(await message(() => call("nativeGetLong(JI)J", query, 0))).toContain("Error code: 21, message: no row");
+    expect(call("nativeStep(J)Z", query)).toBe(1);
+    expect([call("nativeGetLong(JI)J", query, 0), call("nativeGetText(JI)Ljava/lang/String;", query, 1)]).toEqual([9007199254740993n, "hello"]);
+    expect(await message(() => call("nativeGetLong(JI)J", query, 2))).toContain("Error code: 25, message: column index out of range");
+    jni("BundledSQLiteConnectionKt", "nativeClose(J)V")(connection);
+    call("nativeClose(J)V", query);
+  });
 });
 
 describe("mediastore", () => {
