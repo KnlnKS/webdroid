@@ -1,14 +1,15 @@
-// AF_UNIX sockets to the system daemons a guest libc talks to, as /dev/socket names: logd's logdw
+// AF_UNIX addressing over the sockets fs.ts keeps, shared by native syscalls, libcore's Os and
+// LocalSocketImpl. The system daemons a guest libc talks to are /dev/socket names: logd's logdw
 // (liblog's records) and netd's dnsproxyd (bionic's getaddrinfo and gethostby* proxy to it). A
-// connected socket is a socketpair end whose peer is the daemon here; a name no daemon serves
-// refuses the connection, as a socket file with no listener does.
+// socket connected to one is a socketpair end whose peer is the daemon here; any other name
+// reaches a socket listening in this process, or is refused as a socket file with no listener is.
 
 import { mem } from "./mem";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, logLine } from "./libc";
 import { attachUnixPeer, isUnixSocket, unixConnectListener } from "./fs";
-import { AF_INET, resolveHost, hostOf } from "./net";
+import { AF_INET, AF_UNIX, resolveHost, hostOf } from "./net";
 import { parseIpv4 } from "../shell/relay";
 
 type Daemon = (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void;
@@ -106,14 +107,28 @@ const DAEMONS: Record<string, () => Daemon> = { "/dev/socket/logdw": () => logd,
 export function unixConnectPath(fd: number, path: string): number {
   if (!isUnixSocket(fd)) return -E.NOTSOCK;
   const daemon = DAEMONS[path];
-  if (daemon) return -attachUnixPeer(fd, daemon());
+  if (daemon) return attachUnixPeer(fd, daemon());
   const e = unixConnectListener(fd, path);
   return e === -E.CONNREFUSED && !path.startsWith("\0") && !path.startsWith("/dev/socket/") ? -E.NOENT : e;
 }
-/** sockaddr_un's path; an abstract one is its bytes after the leading NUL */
-const sunPath = (sockaddr: number, length: number) => mem.u8[sockaddr + 2] === 0
-  ? "\0" + dec.decode(mem.bytes(sockaddr + 3, length - 3)) : mem.cstr(sockaddr + 2, length - 2);
-export function unixConnect(cpu: Cpu, fd: number, sockaddr: number, length: number): number {
-  const e = unixConnectPath(fd, sunPath(sockaddr, length));
-  return e ? fail(cpu, -e) : 0;
+/** sockaddr_un's sun_path bytes → the name: an abstract one is its bytes after the leading NUL */
+export function sunPath(bytes: Uint8Array): string {
+  if (bytes[0] === 0) return "\0" + dec.decode(bytes.subarray(1));
+  const end = bytes.indexOf(0);
+  return dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
+}
+/** a name's sun_path bytes, as getsockname(2) reports them: a pathname with its NUL */
+export const sunPathBytes = (path: string): Uint8Array => enc.encode(path === "" || path[0] === "\0" ? path : path + "\0");
+/** a whole sockaddr_un for `path` */
+export function sockaddrUn(path: string): Uint8Array {
+  const name = sunPathBytes(path), sockaddr = new Uint8Array(2 + name.length);
+  sockaddr[0] = AF_UNIX;
+  sockaddr.set(name, 2);
+  return sockaddr;
+}
+/** bind(2) or connect(2) on an AF_UNIX socket: `op` on the sockaddr_un's name */
+export function unixAt(cpu: Cpu, sockaddr: number, length: number, op: (path: string) => number): number {
+  if (!sockaddr || length < 2 || mem.ld16u(sockaddr) !== AF_UNIX) return fail(cpu, E.INVAL);
+  const e = op(sunPath(mem.bytes(sockaddr + 2, length - 2)));
+  return e < 0 ? fail(cpu, -e) : 0;
 }

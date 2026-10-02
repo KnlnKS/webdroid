@@ -1,12 +1,13 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // model native code shares (src/native/net.ts): a descriptor from either side is the same socket.
-import { rt, JObj, declaredField, driven } from "../jvm/runtime";
+import { rt, JObj, declaredField, getDeclared, driven } from "../jvm/runtime";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
-import { jarray } from "../jvm/abi";
+import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd, unixSocket, isUnixSocket, unixListen, unixAccept, unixSocketName } from "../native/fs";
+import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd, unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName } from "../native/fs";
+import { sunPath, sunPathBytes, unixConnectPath } from "../native/unix";
 import {
   AF_UNIX, AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
   socketCreate, socketConnect, socketBind, socketListen, socketAccept, socketShutdown, socketSend, socketReceive, socketName,
@@ -15,11 +16,10 @@ import {
 } from "../native/net";
 import { parseIpv4 } from "../shell/relay";
 
-const ISA = "java/net/InetSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
+const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";
 const SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, IP_MULTICAST_IF = 32, SO_BINDTODEVICE = 25;
 type Obj = Record<string, unknown>;
-const field = (o: JObj, cls: string, name: string) => (o as unknown as Obj)[declaredField(cls, name)];
 const setField = (o: JObj, cls: string, name: string, v: unknown) => { (o as unknown as Obj)[declaredField(cls, name)] = v; };
 
 /** a bytecode throwable, initialized before it is made (a native's exception needs its class ready) */
@@ -48,12 +48,18 @@ function endpoint(address: JObj | null, port: number): Endpoint | Promise<Endpoi
 function socketAddressEndpoint(fn: string, address: JObj | null): Endpoint | Promise<Endpoint> {
   if (address === null) return rt.npe();
   if (!rt.iof(address, ISA)) throw errno(fn, E.AFNOSUPPORT);
-  const holder = field(address, ISA, "holder") as JObj;
-  const inet = field(holder, ISA_HOLDER, "addr") as JObj | null;
+  const holder = getDeclared(address, ISA, "holder") as JObj;
+  const inet = getDeclared(holder, ISA_HOLDER, "addr") as JObj | null;
   if (inet === null) throw errno(fn, E.INVAL);
-  return endpoint(inet, field(holder, ISA_HOLDER, "port") as number);
+  return endpoint(inet, getDeclared(holder, ISA_HOLDER, "port") as number);
 }
 /** sockaddrToInetAddress: InetAddress.getByAddress(null, bytes, scope) */
+/** an AF_UNIX socket's bind or connect takes a UnixSocketAddress's sun_path */
+function unixPath(fn: string, address: JObj | null): string {
+  if (address === null) return rt.npe();
+  if (!rt.iof(address, UNIX_ADDRESS)) throw errno(fn, E.INVAL);
+  return sunPath(u8(getDeclared<Int8Array>(address, UNIX_ADDRESS, "sun_path")));
+}
 const inetAddress = (ep: { address: number[]; scope?: number }): JObj | Promise<JObj> =>
   scall("java/net/InetAddress", "getByAddress", "(Ljava/lang/String;[BI)Ljava/net/InetAddress;", null, Int8Array.from(ep.address), ep.scope ?? 0);
 const inetSocketAddress = (ep: Endpoint): Promise<JObj> =>
@@ -62,7 +68,7 @@ const inetSocketAddress = (ep: Endpoint): Promise<JObj> =>
 function fillSocketAddress(target: JObj | null, ep: Endpoint | null): void | Promise<void> {
   if (target === null || ep === null || !rt.iof(target, ISA)) return;
   return after(inetAddress(ep), (a) => {
-    const holder = field(target, ISA, "holder") as JObj;
+    const holder = getDeclared(target, ISA, "holder") as JObj;
     setField(holder, ISA_HOLDER, "addr", a);
     setField(holder, ISA_HOLDER, "port", ep.port);
   });
@@ -93,7 +99,7 @@ function socketAddressOf(fn: string, fd: number, peer: boolean) {
   if (isUnixSocket(fd)) {
     const path = unixSocketName(fd, peer);
     if (typeof path === "number") throw errno(fn, -path);
-    return newObj("android/system/UnixSocketAddress", "([B)V", new Int8Array(new TextEncoder().encode(path)));
+    return newObj(UNIX_ADDRESS, "([B)V", new Int8Array(sunPathBytes(path).buffer));
   }
   const ep = socketName(fd, peer);
   if (typeof ep === "number") throw errno(fn, -ep);
@@ -119,9 +125,17 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     return mkFd(fd);
   },
   [`connect(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => withEndpoint(endpoint(address, port), (ep) => connect(d, ep)),
-  [`connect(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => withEndpoint(socketAddressEndpoint("connect", address), (ep) => connect(d, ep)),
+  [`connect(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => {
+    const fd = fdInt(d);
+    if (isUnixSocket(fd)) sys("connect", unixConnectPath(fd, unixPath("connect", address)));
+    else return withEndpoint(socketAddressEndpoint("connect", address), (ep) => connect(d, ep));
+  },
   [`bind(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => withEndpoint(endpoint(address, port), (ep) => bind(d, ep)),
-  [`bind(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => withEndpoint(socketAddressEndpoint("bind", address), (ep) => bind(d, ep)),
+  [`bind(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => {
+    const fd = fdInt(d);
+    if (isUnixSocket(fd)) sys("bind", unixBind(fd, unixPath("bind", address)));
+    else return withEndpoint(socketAddressEndpoint("bind", address), (ep) => bind(d, ep));
+  },
   [`listen(${FD}I)V`]: (d: JObj | null) => { const fd = fdInt(d); sys("listen", isUnixSocket(fd) ? unixListen(fd) : socketListen(fd)); },
   [`accept(${FD}${SOCKADDR})${FD}`]: (d: JObj | null, peer: JObj | null) => {
     const fd = fdInt(d);
@@ -138,7 +152,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   "poll([Landroid/system/StructPollfd;I)I": (fds: JObj[] | null, timeout: number) => {
     if (fds === null) return rt.npe();
     const P = "android/system/StructPollfd";
-    const entries: PollEntry[] = fds.map((p) => ({ fd: p === null ? -1 : fdInt(field(p, P, "fd") as JObj | null), events: field(p, P, "events") as number, revents: 0 }));
+    const entries: PollEntry[] = fds.map((p) => ({ fd: p === null ? -1 : fdInt(getDeclared(p, P, "fd") as JObj | null), events: getDeclared(p, P, "events") as number, revents: 0 }));
     return after(pollEntries(entries, timeout), (n) => {
       fds.forEach((p, i) => { if (p !== null) setField(p, P, "revents", entries[i].revents); });
       return n;
@@ -155,7 +169,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`setsockoptLinger(${FD}IILandroid/system/StructLinger;)V`]: (d: JObj | null, level: number, name: number, linger: JObj | null) => {
     if (linger === null) return rt.npe();
     const L = "android/system/StructLinger";
-    setIntOption("setsockopt", d, level, name, field(linger, L, "l_onoff") ? field(linger, L, "l_linger") as number : -1);
+    setIntOption("setsockopt", d, level, name, getDeclared(linger, L, "l_onoff") ? getDeclared(linger, L, "l_linger") as number : -1);
   },
   [`getsockoptTimeval(${FD}II)Landroid/system/StructTimeval;`]: (d: JObj | null, level: number, name: number) => {
     const ms = intOption("getsockopt", d, level, name);
@@ -163,7 +177,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   },
   [`setsockoptTimeval(${FD}IILandroid/system/StructTimeval;)V`]: (d: JObj | null, level: number, name: number, tv: JObj | null) => {
     if (tv === null) return rt.npe();
-    const T = "android/system/StructTimeval", sec = field(tv, T, "tv_sec") as bigint, usec = field(tv, T, "tv_usec") as bigint;
+    const T = "android/system/StructTimeval", sec = getDeclared(tv, T, "tv_sec") as bigint, usec = getDeclared(tv, T, "tv_usec") as bigint;
     if (level !== SOL_SOCKET || name !== SO_RCVTIMEO && name !== SO_SNDTIMEO || sec < 0n || usec < 0n || usec >= 1_000_000n) throw errno("setsockopt", E.INVAL);
     setIntOption("setsockopt", d, level, name, Number(sec) * 1000 + Math.ceil(Number(usec) / 1000));
   },
@@ -179,8 +193,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     if (req === null) return rt.npe();
     const G = "android/system/StructGroupReq";
     const join = name === GROUP_OPTIONS.MCAST_JOIN_GROUP || name === GROUP_OPTIONS.IP_ADD_MEMBERSHIP;
-    return after(endpoint(field(req, G, "gr_group") as JObj | null, 0), (ep) =>
-      sys("setsockopt", socketGroup(fdInt(d), join, ep.address, field(req, G, "gr_interface") as number)));
+    return after(endpoint(getDeclared(req, G, "gr_group") as JObj | null, 0), (ep) =>
+      sys("setsockopt", socketGroup(fdInt(d), join, ep.address, getDeclared(req, G, "gr_interface") as number)));
   },
   [`setsockoptIfreq(${FD}IILjava/lang/String;)V`]: (d: JObj | null, level: number, name: number, ifname: string | null) => {
     if (!isNativeSocket(fdInt(d))) throw errno("setsockopt", fdInt(d) < 0 ? E.BADF : E.NOTSOCK);
@@ -202,7 +216,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   "android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;": (node: string | null, hints: JObj | null) => {
     if (node === null || hints === null) return rt.npe();
     const A = "android/system/StructAddrinfo";
-    const found = resolveHost(node, field(hints, A, "ai_family") as number, field(hints, A, "ai_flags") as number);
+    const found = resolveHost(node, getDeclared(hints, A, "ai_family") as number, getDeclared(hints, A, "ai_flags") as number);
     return after(found, (addresses) => typeof addresses === "number" ? gaiError("android_getaddrinfo", addresses)
       : Promise.all(addresses.map((address) => inetAddress({ address }))).then((list) => jarray(list, INET)));
   },

@@ -255,7 +255,7 @@ export const isUnixSocket = (fd: number): boolean => !!fds.get(fd)?.unix;
  *  replies is what the socket reads; -errno when already connected */
 export function attachUnixPeer(fd: number, receive: (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void): number {
   const f = fds.get(fd)!;
-  if (f.wpipe) return E.ISCONN;
+  if (f.wpipe) return -E.ISCONN;
   const toPeer = newPipe(1), fromPeer = newPipe(1);
   const reply = (bytes: Uint8Array) => { fromPeer.q.push(bytes); wakeAll(fromPeer); };
   const drain = () => { while (toPeer.q.length) receive(toPeer.q.shift()!, reply); if (!toPeer.closed) toPeer.wake.push(drain); };
@@ -280,16 +280,19 @@ export function unixListen(fd: number): number {
   f.listener ??= { pending: [], wake: [] };
   return 0;
 }
-/** accept(2) on a listening AF_UNIX socket: the next connection's descriptor, waiting for one
- *  unless nonblocking; EBADF once the listener closes under the wait */
-export function unixAccept(fd: number): number | Promise<number> {
+/** accept4(2) on a listening AF_UNIX socket: the next connection's descriptor, waiting for one
+ *  unless nonblocking; EBADF once the listener closes under the wait. `flags`: SOCK_NONBLOCK, SOCK_CLOEXEC */
+export function unixAccept(fd: number, flags = 0): number | Promise<number> {
   const f = fds.get(fd);
   if (!f?.unix) return -E.NOTSOCK;
   if (!f.listener) return -E.INVAL;
   const next = (): number | Promise<number> => {
     if (fds.get(fd) !== f) return -E.BADF;
     const connection = f.listener!.pending.shift();
-    if (connection) return put(connection);
+    if (connection) {
+      if (flags & O_NONBLOCK) { connection.nonblock = true; connection.statusFlags |= O_NONBLOCK; }
+      return put(connection, !!(flags & O_CLOEXEC));
+    }
     if (f.nonblock) return -EAGAIN;
     return new Promise<void>((resolve) => f.listener!.wake.push(resolve)).then(next);
   };
@@ -567,7 +570,12 @@ export function fdClose(cpu: Cpu | null, fd: number): number {
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe && !--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   if (f.unixName !== undefined && unixNames.get(f.unixName) === f) unixNames.delete(f.unixName);
-  if (f.listener) wakeAll(f.listener);
+  if (f.listener) {
+    // connections never accepted are reset, which their clients read as the end of the stream
+    for (const c of f.listener.pending) { c.wpipe!.closed = true; wakeAll(c.wpipe!); }
+    f.listener.pending = [];
+    wakeAll(f.listener);
+  }
   return 0;
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */

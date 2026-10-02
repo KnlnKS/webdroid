@@ -1,6 +1,6 @@
 // android_net_LocalSocketImpl.cpp: LocalSocket's AF_UNIX descriptors are the kernel's (native/fs.ts),
-// so a LocalServerSocket's name is reachable from native code too. A name's namespace makes its
-// sockaddr_un path: ABSTRACT leads with NUL, RESERVED is under /dev/socket, FILESYSTEM is the path.
+// whose names native sockets and libcore's Os share. A name's namespace makes its sockaddr_un
+// path: ABSTRACT leads with NUL, RESERVED is under /dev/socket, FILESYSTEM is the path.
 import { rt, type JObj } from "../jvm/runtime";
 import { newObj } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";

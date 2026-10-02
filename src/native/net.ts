@@ -11,8 +11,8 @@ import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem, guestAt } from "./mem";
 import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
-import { unixSocket, isUnixSocket } from "./fs";
-import { unixConnect } from "./unix";
+import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName } from "./fs";
+import { unixAt, unixConnectPath, sockaddrUn } from "./unix";
 const enc = new TextEncoder();
 
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
@@ -769,14 +769,18 @@ function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Endpoint | nu
   if (mem.ld16u(sockaddr) !== AF_INET) { fail(cpu, E.AFNOSUPPORT); return null; }
   return { port: (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3], address: Array.from(mem.u8.subarray(sockaddr + 4, sockaddr + 8)) };
 }
-function putSockaddr(endpoint: Endpoint, address: number, length: number, capacity: number): void {
+function sockaddrIn(endpoint: Endpoint): Uint8Array {
   const sockaddr = new Uint8Array(16);
   sockaddr[0] = AF_INET;
   sockaddr[2] = endpoint.port >>> 8;
   sockaddr[3] = endpoint.port & 255;
   if (endpoint.address.length === 4) sockaddr.set(endpoint.address, 4);
-  if (capacity > 0) mem.write(address, sockaddr.subarray(0, Math.min(capacity, 16)));
-  mem.st32(length, 16);
+  return sockaddr;
+}
+/** an address result: as much of `sockaddr` as `capacity` holds, and its whole length */
+function putSockaddr(sockaddr: Uint8Array, address: number, length: number, capacity: number): void {
+  if (capacity > 0) mem.write(address, sockaddr.subarray(0, Math.min(capacity, sockaddr.length)));
+  mem.st32(length, sockaddr.length);
 }
 
 /** the ARM32 struct ifaddrs: its size and the offsets of what getifaddrs fills */
@@ -870,7 +874,7 @@ function nativeReceive(cpu: Cpu | null, fd: number, destination: number, length:
     if (n) mem.write(guestAt(destinationVa), target.subarray(0, Math.min(n, length)));
     if (sourceVa && sourceLengthVa && from.source) {
       const currentLength = guestAt(sourceLengthVa);
-      putSockaddr(from.source, guestAt(sourceVa), currentLength, mem.ld32(currentLength));
+      putSockaddr(sockaddrIn(from.source), guestAt(sourceVa), currentLength, mem.ld32(currentLength));
     }
     return n;
   };
@@ -879,13 +883,13 @@ function nativeReceive(cpu: Cpu | null, fd: number, destination: number, length:
 }
 
 function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number, peer: boolean): number {
-  const endpoint = socketName(fd, peer);
-  if (typeof endpoint === "number") return fail(cpu, -endpoint);
+  const name = isUnixSocket(fd) ? unixSocketName(fd, peer) : socketName(fd, peer);
+  if (typeof name === "number") return fail(cpu, -name);
   if (!length) return fail(cpu, E.FAULT);
   const capacity = mem.ld32(length);
   if (capacity < 0) return fail(cpu, E.INVAL);
   if (capacity && !address) return fail(cpu, E.FAULT);
-  putSockaddr(endpoint, address, length, capacity);
+  putSockaddr(typeof name === "string" ? sockaddrUn(name) : sockaddrIn(name), address, length, capacity);
   return 0;
 }
 
@@ -1006,18 +1010,18 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   },
   connect: (cpu, args) => {
     const fd = args.i(), sockaddr = args.p(), length = args.u();
-    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixConnect(cpu, fd, sockaddr, length) : fail(cpu, E.BADF);
+    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixAt(cpu, sockaddr, length, (path) => unixConnectPath(fd, path)) : fail(cpu, E.BADF);
     if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return sys(cpu, socketConnect(fd, null) as number);
     const endpoint = readEndpoint(cpu, sockaddr, length);
     return endpoint ? sysAsync(cpu, socketConnect(fd, endpoint)) : -1;
   },
   bind: (cpu, args) => {
     const fd = args.i(), sockaddr = args.p(), length = args.u();
-    if (!sockets.has(fd)) return fail(cpu, E.BADF);
+    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixAt(cpu, sockaddr, length, (path) => unixBind(fd, path)) : fail(cpu, E.BADF);
     const endpoint = readEndpoint(cpu, sockaddr, length);
     return endpoint ? sys(cpu, socketBind(fd, endpoint)) : -1;
   },
-  listen: (cpu, args) => { const fd = args.i(); args.i(); return sys(cpu, socketListen(fd)); },
+  listen: (cpu, args) => { const fd = args.i(); args.i(); return sys(cpu, isUnixSocket(fd) ? unixListen(fd) : socketListen(fd)); },
   accept: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), 0),
   accept4: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), args.i()),
   sendto: (cpu, args) => {
@@ -1073,13 +1077,22 @@ export function netInit(): void {
 
 function nativeAccept(cpu: Cpu, fd: number, address: number, length: number, flags: number): HostRet | Promise<HostRet> {
   const addressVa = address ? mem.va(address) : 0, lengthVa = length ? mem.va(length) : 0;
-  const land = (r: { fd: number; peer: Endpoint } | number): number => {
+  const land = (fd: number, peer: Uint8Array): number => {
+    if (addressVa && lengthVa) { const at = guestAt(lengthVa); putSockaddr(peer, guestAt(addressVa), at, mem.ld32(at)); }
+    return fd;
+  };
+  if (isUnixSocket(fd)) {
+    // an AF_UNIX peer is unnamed
+    const unix = (r: number) => r < 0 ? fail(cpu, -r) : land(r, sockaddrUn(""));
+    const r = unixAccept(fd, flags);
+    return r instanceof Promise ? r.then(unix) : unix(r);
+  }
+  const inet = (r: { fd: number; peer: Endpoint } | number): number => {
     if (typeof r === "number") return fail(cpu, -r);
     if (flags & SOCK_NONBLOCK) nativeSocketFcntl(cpu, r.fd, F_SETFL, O_NONBLOCK);
     if (flags & SOCK_CLOEXEC) sockets.get(r.fd)!.cloexec = true;
-    if (addressVa && lengthVa) { const at = guestAt(lengthVa); putSockaddr(r.peer, guestAt(addressVa), at, mem.ld32(at)); }
-    return r.fd;
+    return land(r.fd, sockaddrIn(r.peer));
   };
   const r = socketAccept(fd);
-  return r instanceof Promise ? r.then(land) : land(r);
+  return r instanceof Promise ? r.then(inet) : inet(r);
 }

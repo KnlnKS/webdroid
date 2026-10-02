@@ -277,6 +277,15 @@ describe("localsocket", () => {
     const late = await newObj("android/net/LocalSocket");
     await expect(vcallAsync(late, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"))).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
   });
+  test("closing a LocalServerSocket ends the streams of connections it never accepted", async () => {
+    const address = await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.pending");
+    const server = await newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.pending");
+    const client = await newObj("android/net/LocalSocket");
+    await vcall(client, "connect", "(Landroid/net/LocalSocketAddress;)V", address);
+    const read = vcall(await vcall(client, "getInputStream", "()Ljava/io/InputStream;"), "read", "()I");
+    await vcall(server, "close", "()V");
+    expect(await read).toBe(-1);
+  });
 });
 
 describe("nsd-service", () => {
