@@ -85,6 +85,13 @@ export function release(h: bigint): void {
   objs[n] = refs[n] = undefined;
   free.push(n);
 }
+/** the object behind a handle its receiver takes over, as a JNI unique_ptr's release does: the
+ *  handle is freed */
+export function take<T>(h: bigint): T {
+  const o = deref<T>(h);
+  release(h);
+  return o;
+}
 
 // A platform class that frees its native state in finalize() (Region, Picture, PathMeasure, ...)
 // would leak its handle here, where finalizers never run: a JS finalizer cannot see the object it

@@ -7,7 +7,7 @@
 
 import { rt } from "../jvm/runtime";
 import { scall } from "../jvm/natives/jlang";
-import { deref, handle, ownedHandle, release } from "./handles";
+import { deref, handle, ownedHandle, take } from "./handles";
 import { type NativePaint } from "./paint";
 import { NativeRenderNode } from "./rendernode";
 import { interpolatePaths, PathData } from "./pathparser";
@@ -56,12 +56,6 @@ const INTERPOLATORS = {
 };
 rt.registerJnis("android/graphics/animation/NativeInterpolatorFactory", Object.fromEntries(
   Object.entries(INTERPOLATORS).map(([sig, make]) => [sig, (...a: never[]) => handle((make as (...a: never[]) => Interpolator)(...a))])));
-/** an interpolator handle an animator takes over (hwui's animators own theirs) */
-function adopt<T>(h: bigint): T {
-  const o = deref<T>(h);
-  release(h);
-  return o;
-}
 
 // ── BaseRenderNodeAnimator: play states, requests staged from Java, and a value animated from the
 // start value (the target's own unless one was set) to the final one
@@ -224,7 +218,8 @@ rt.registerJnis("android/graphics/animation/RenderNodeAnimator", {
   },
   "nGetDuration(J)J": (h: bigint) => BigInt(nodeAnimator(h).duration),
   "nSetStartDelay(JJ)V": (h: bigint, d: bigint) => { nodeAnimator(h).startDelay = Number(d); },
-  "nSetInterpolator(JJ)V": (h: bigint, i: bigint) => { nodeAnimator(h).interpolator = adopt<Interpolator>(i); },
+  // hwui's animators own their interpolators
+  "nSetInterpolator(JJ)V": (h: bigint, i: bigint) => { nodeAnimator(h).interpolator = take<Interpolator>(i); },
   // there is one thread either way
   "nSetAllowRunningAsync(JZ)V": () => {},
   "nSetListener(JLandroid/graphics/animation/RenderNodeAnimator;)V": (h: bigint, l: object) => { nodeAnimator(h).listener = l; },
@@ -344,7 +339,7 @@ rt.registerJnis("android/graphics/drawable/AnimatedVectorDrawable", {
   "nSetVectorDrawableTarget(JJ)V": (s: bigint, tree: bigint) => { animatorSet(s).tree = deref<Tree>(tree); },
   // the set takes over the holder and the interpolator
   "nAddAnimator(JJJJJII)V": (s: bigint, h: bigint, interp: bigint, delay: bigint, duration: bigint, repeat: number, mode: number) =>
-    void animatorSet(s).animators.push(new PropertyAnimator(adopt<Holder>(h), adopt<Interpolator>(interp), Number(delay), Number(duration), repeat, mode)),
+    void animatorSet(s).animators.push(new PropertyAnimator(take<Holder>(h), take<Interpolator>(interp), Number(delay), Number(duration), repeat, mode)),
   "nSetPropertyHolderData(J[FI)V": (h: bigint, data: Float32Array, n: number) => { deref<Holder>(h).data = Array.from(data.subarray(0, n)); },
   "nSetPropertyHolderData(J[II)V": (h: bigint, data: Int32Array, n: number) => { deref<Holder>(h).data = Array.from(data.subarray(0, n)); },
   "nCreateGroupPropertyHolder(JIFF)J": (g: bigint, id: number, from: number, to: number) => handle(new GroupHolder(node<Group>(g), id, from, to)),

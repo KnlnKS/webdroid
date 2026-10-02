@@ -14,7 +14,7 @@
 
 import { startMainLooper } from "./mainloop";
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
-import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
+import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles";
 import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
@@ -204,8 +204,6 @@ delegate("android/graphics/Typeface", {
 
 // ── android.graphics.fonts ─────────────────────────────────────────────────────────────
 // minikin's Font and FontFamily are fonts.ts' NativeFont and NativeFamily.
-/** a builder's state, which building consumes, as the JNI's unique_ptr does */
-function take<T>(h: bigint): T { const b = deref<T>(h); release(h); return b; }
 /** a direct buffer's bytes, as GetDirectBufferAddress and GetDirectBufferCapacity see them;
  *  guest memory can move, so bytes there are copied */
 function directBytes<T>(b: JBuffer | null, then: (bytes: Uint8Array) => T): T | Promise<T> {
