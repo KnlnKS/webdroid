@@ -4,9 +4,9 @@
 // browser for high accuracy, and passive requests only hear fixes others asked for. As in
 // LocationManagerService, locations need ACCESS_COARSE_LOCATION or ACCESS_FINE_LOCATION (a coarse
 // grant is not fudged here) and a caller without either sees no providers.
-import { JObj, noops, rt, stubs } from "../jvm/runtime";
+import { JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { newObj, scall, vcall } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
@@ -32,17 +32,17 @@ const exists = (provider: string | null) => provider !== null && providers().inc
 const properties = new Map<string, Promise<JObj>>();
 function providerProperties(provider: string): Promise<JObj> {
   let made = properties.get(provider);
-  if (!made) properties.set(provider, made = (async () => {
+  if (!made) properties.set(provider, made = Promise.resolve(rt.drive(function* (): Gen<JObj> {
     const [network, satellite, altitude, speed, bearing, power, accuracy] = PROPERTIES[provider];
-    const B = "Landroid/location/provider/ProviderProperties$Builder;", builder = await newObj("android/location/provider/ProviderProperties$Builder");
+    const B = "Landroid/location/provider/ProviderProperties$Builder;", builder = yield newObj("android/location/provider/ProviderProperties$Builder");
     for (const [setter, value] of [["setHasNetworkRequirement", network], ["setHasSatelliteRequirement", satellite],
       ["setHasAltitudeSupport", altitude], ["setHasSpeedSupport", speed], ["setHasBearingSupport", bearing]] as const) {
-      await vcall(builder, setter, `(Z)${B}`, value);
+      yield vcall(builder, setter, `(Z)${B}`, value);
     }
-    await vcall(builder, "setPowerUsage", `(I)${B}`, power);
-    await vcall(builder, "setAccuracy", `(I)${B}`, accuracy);
-    return vcall(builder, "build", "()Landroid/location/provider/ProviderProperties;");
-  })());
+    yield vcall(builder, "setPowerUsage", `(I)${B}`, power);
+    yield vcall(builder, "setAccuracy", `(I)${B}`, accuracy);
+    return yield vcall(builder, "build", "()Landroid/location/provider/ProviderProperties;");
+  }())));
   return made;
 }
 const permitted = (pkg: string | null) => pkg !== null
@@ -57,32 +57,32 @@ function requireProvider(provider: string | null): string {
   if (!exists(provider)) throw rt.mkThrowable("java/lang/IllegalArgumentException", `provider "${provider}" does not exist`);
   return provider!;
 }
-async function location(fix: LocationFix, provider: string): Promise<JObj> {
-  const value = await newObj("android/location/Location", "(Ljava/lang/String;)V", provider === "passive" ? fix.highAccuracy ? "gps" : "network" : provider);
-  await vcall(value, "setLatitude", "(D)V", fix.latitude);
-  await vcall(value, "setLongitude", "(D)V", fix.longitude);
-  await vcall(value, "setTime", "(J)V", BigInt(Math.floor(fix.timestamp)));
-  await vcall(value, "setElapsedRealtimeNanos", "(J)V", BigInt(Math.max(0, Math.floor((fix.monotonic - bootTime) * 1e6))));
-  await vcall(value, "setAccuracy", "(F)V", fix.accuracy);
-  if (fix.altitude !== null) await vcall(value, "setAltitude", "(D)V", fix.altitude);
-  if (fix.altitudeAccuracy !== null) await vcall(value, "setVerticalAccuracyMeters", "(F)V", fix.altitudeAccuracy);
-  if (fix.speed !== null) await vcall(value, "setSpeed", "(F)V", fix.speed);
-  if (fix.heading !== null && Number.isFinite(fix.heading)) await vcall(value, "setBearing", "(F)V", fix.heading);
+const location = driven(function* (fix: LocationFix, provider: string): Gen<JObj> {
+  const value = yield newObj("android/location/Location", "(Ljava/lang/String;)V", provider === "passive" ? fix.highAccuracy ? "gps" : "network" : provider);
+  yield vcall(value, "setLatitude", "(D)V", fix.latitude);
+  yield vcall(value, "setLongitude", "(D)V", fix.longitude);
+  yield vcall(value, "setTime", "(J)V", BigInt(Math.floor(fix.timestamp)));
+  yield vcall(value, "setElapsedRealtimeNanos", "(J)V", BigInt(Math.max(0, Math.floor((fix.monotonic - bootTime) * 1e6))));
+  yield vcall(value, "setAccuracy", "(F)V", fix.accuracy);
+  if (fix.altitude !== null) yield vcall(value, "setAltitude", "(D)V", fix.altitude);
+  if (fix.altitudeAccuracy !== null) yield vcall(value, "setVerticalAccuracyMeters", "(F)V", fix.altitudeAccuracy);
+  if (fix.speed !== null) yield vcall(value, "setSpeed", "(F)V", fix.speed);
+  if (fix.heading !== null && Number.isFinite(fix.heading)) yield vcall(value, "setBearing", "(F)V", fix.heading);
   return value;
-}
+});
 const lastFix = (provider: string) => {
   const fix = locationTransport.last();
   return fix && locationTransport.enabled() && (provider !== "gps" || fix.highAccuracy) ? fix : null;
 };
 
 type Request = { interval: bigint; minInterval: bigint; distance: number; maxUpdates: number; duration: bigint; high: boolean };
-async function readRequest(provider: string, request: JObj): Promise<Request> {
-  const interval: bigint = await vcall(request, "getIntervalMillis", "()J");
+function* readRequest(provider: string, request: JObj): Gen<Request> {
+  const interval: bigint = yield vcall(request, "getIntervalMillis", "()J");
   return {
-    interval, minInterval: await vcall(request, "getMinUpdateIntervalMillis", "()J"),
-    distance: await vcall(request, "getMinUpdateDistanceMeters", "()F"), maxUpdates: await vcall(request, "getMaxUpdates", "()I"),
-    duration: await vcall(request, "getDurationMillis", "()J"),
-    high: provider === "gps" || await vcall(request, "getQuality", "()I") === 100,
+    interval, minInterval: yield vcall(request, "getMinUpdateIntervalMillis", "()J"),
+    distance: yield vcall(request, "getMinUpdateDistanceMeters", "()F"), maxUpdates: yield vcall(request, "getMaxUpdates", "()I"),
+    duration: yield vcall(request, "getDurationMillis", "()J"),
+    high: provider === "gps" || (yield vcall(request, "getQuality", "()I")) === 100,
   };
 }
 type Subscription = { id: number; active: boolean; timer: ReturnType<typeof setTimeout> | null };
@@ -98,12 +98,12 @@ function unsubscribe(key: unknown): void {
 }
 /** fixes for one registration, throttled by its request as LocationProviderManager throttles them */
 function subscribe(key: unknown, provider: string, request: Request, on: {
-  location: (fix: LocationFix) => Promise<void>; enabled?: (enabled: boolean) => Promise<void>; expired?: () => Promise<void>;
+  location: (fix: LocationFix) => unknown; enabled?: (enabled: boolean) => unknown; expired?: () => unknown;
 }): void {
   unsubscribe(key);
   const subscription: Subscription = { id: nextId++, active: true, timer: null };
   subscriptions.set(key, subscription);
-  const deliver = (job: () => Promise<void>) => { void onMain(job).catch(reportUncaught); };
+  const deliver = (job: () => unknown) => { void onMain(job).catch(reportUncaught); };
   const end = () => { if (subscription.active) { unsubscribe(key); if (on.expired) deliver(on.expired); } };
   if (request.duration < 0x7fffffffn) subscription.timer = setTimeout(end, Number(request.duration));
   const start = uptimeMillis();
@@ -130,13 +130,13 @@ async function distanceM(a: LocationFix, b: LocationFix): Promise<number> {
   return results[0];
 }
 /** LocationManagerService.getProviders: none for a caller without location permission */
-async function providerList(criteria: JObj | null, enabledOnly: number): Promise<string[]> {
+function* providerList(criteria: JObj | null, enabledOnly: number): Gen<string[]> {
   if (!permitted(appHost?.pkg ?? null)) return [];
   const out: string[] = [];
   for (const name of providers()) {
     if (enabledOnly && !locationTransport.enabled()) continue;
-    if (criteria && !await scall("android/location/LocationProvider", "propertiesMeetCriteria",
-      "(Ljava/lang/String;Landroid/location/provider/ProviderProperties;Landroid/location/Criteria;)Z", name, await providerProperties(name), criteria)) continue;
+    if (criteria && !(yield scall("android/location/LocationProvider", "propertiesMeetCriteria",
+      "(Ljava/lang/String;Landroid/location/provider/ProviderProperties;Landroid/location/Criteria;)Z", name, yield providerProperties(name), criteria))) continue;
     out.push(name);
   }
   return out;
@@ -147,14 +147,15 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
   // the browser's geolocation takes no provider commands (aiding data, time injection)
   "sendExtraCommand(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)V": () => {},
   "getAllProviders()Ljava/util/List;": () => newArrayList(providers()),
-  "getProviders(Landroid/location/Criteria;Z)Ljava/util/List;": async (criteria: JObj | null, enabledOnly: number) =>
-    newArrayList(await providerList(criteria, enabledOnly)),
+  "getProviders(Landroid/location/Criteria;Z)Ljava/util/List;": driven(function* (criteria: JObj | null, enabledOnly: number) {
+    return newArrayList(yield* providerList(criteria, enabledOnly));
+  }),
   // the best of the providers meeting the criteria, or of all of them when none does
-  "getBestProvider(Landroid/location/Criteria;Z)Ljava/lang/String;": async (criteria: JObj | null, enabledOnly: number) => {
-    let names = await providerList(criteria, enabledOnly);
-    if (!names.length) names = await providerList(null, enabledOnly);
+  "getBestProvider(Landroid/location/Criteria;Z)Ljava/lang/String;": driven(function* (criteria: JObj | null, enabledOnly: number) {
+    let names = yield* providerList(criteria, enabledOnly);
+    if (!names.length) names = yield* providerList(null, enabledOnly);
     return ["fused", "gps", "network"].find((name) => names.includes(name)) ?? names[0] ?? null;
-  },
+  }),
   "hasProvider(Ljava/lang/String;)Z": (provider: string | null) => +exists(provider),
   "isLocationEnabledForUser(I)Z": () => +locationTransport.enabled(),
   "isProviderEnabledForUser(Ljava/lang/String;I)Z": (provider: string | null) => +(exists(provider) && locationTransport.enabled()),
@@ -167,34 +168,35 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
       return fix && location(fix, provider!);
     },
   [`registerLocationListener(Ljava/lang/String;Landroid/location/LocationRequest;${LISTENER}Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V`]:
-    async (provider: string | null, request: JObj, listener: JObj, pkg: string | null) => {
+    driven(function* (provider: string | null, request: JObj, listener: JObj, pkg: string | null) {
       enforce(pkg);
       const name = requireProvider(provider);
-      subscribe(listener, name, await readRequest(name, request), {
-        location: async (fix) => vcall(listener, "onLocationChanged", "(Ljava/util/List;Landroid/os/IRemoteCallback;)V", newArrayList([await location(fix, name)]), null),
+      subscribe(listener, name, yield* readRequest(name, request), {
+        location: (fix) => after(location(fix, name), (l: JObj) => vcall(listener, "onLocationChanged", "(Ljava/util/List;Landroid/os/IRemoteCallback;)V", newArrayList([l]), null)),
         enabled: (enabled) => vcall(listener, "onProviderEnabledChanged", "(Ljava/lang/String;Z)V", name, +enabled),
       });
-    },
+    }),
   [`unregisterLocationListener(${LISTENER})V`]: unsubscribe,
   [`requestListenerFlush(Ljava/lang/String;${LISTENER}I)V`]: (_provider: string, listener: JObj, code: number) =>
     void onMain(() => vcall(listener, "onFlushComplete", "(I)V", code)).catch(reportUncaught),
   // one location within the request's duration, or null once it passes
   "getCurrentLocation(Ljava/lang/String;Landroid/location/LocationRequest;Landroid/location/ILocationCallback;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/os/ICancellationSignal;":
-    async (provider: string | null, request: JObj, callback: JObj, pkg: string | null) => {
+    driven(function* (provider: string | null, request: JObj, callback: JObj, pkg: string | null) {
       enforce(pkg);
       const name = requireProvider(provider), deliver = (value: JObj | null) => vcall(callback, "onLocation", "(Landroid/location/Location;)V", value);
-      subscribe(callback, name, { ...await readRequest(name, request), maxUpdates: 1 }, {
-        location: async (fix) => deliver(await location(fix, name)), expired: () => deliver(null),
+      subscribe(callback, name, { ...yield* readRequest(name, request), maxUpdates: 1 }, {
+        location: (fix) => after(location(fix, name), deliver), expired: () => deliver(null),
       });
       return null;
-    },
+    }),
   // no GNSS hardware reports satellites, measurements or NMEA, so registrations never hear anything
   ...noops("registerGnssStatusCallback(Landroid/location/IGnssStatusListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
     "unregisterGnssStatusCallback(Landroid/location/IGnssStatusListener;)V",
     "registerGnssNmeaCallback(Landroid/location/IGnssNmeaListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
     "unregisterGnssNmeaCallback(Landroid/location/IGnssNmeaListener;)V"),
-  "getGnssCapabilities()Landroid/location/GnssCapabilities;": async () =>
-    vcall(await newObj("android/location/GnssCapabilities$Builder"), "build", "()Landroid/location/GnssCapabilities;"),
+  "getGnssCapabilities()Landroid/location/GnssCapabilities;": driven(function* () {
+    return yield vcall(yield newObj("android/location/GnssCapabilities$Builder"), "build", "()Landroid/location/GnssCapabilities;");
+  }),
   "getGnssYearOfHardware()I": () => 0,
   // no GNSS time either: SystemClock.currentGnssTimeClock reports it unavailable
   ...stubs(null, "getGnssHardwareModelName()Ljava/lang/String;", "getGnssTimeMillis()Landroid/location/LocationTime;"),
