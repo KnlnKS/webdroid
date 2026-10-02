@@ -55,6 +55,15 @@ export function importBinder(handle: BinderHandle | null): JObj | null {
   }
   return proxy;
 }
+/** a binder system_server owns, as a client process holds it: a proxy, which AOSP tells apart
+ *  from a local Binder (ActivityThread relaunches only activities whose token is not local) */
+export function systemToken(): JObj {
+  rt.link("android/os/BinderProxy");
+  const proxy = new JBinderProxy(), id = nextId++;
+  proxy.handle = { pid: PROCESS_PID, id };
+  local.set(id, proxy); localIds.set(proxy, id);
+  return proxy;
+}
 class JFileWriter extends JBinder { pfd: JObj | null = null; }
 function exportObject(o: unknown): BinderHandle | FileHandle | null {
   const file = parcelFileDescriptorData(o);

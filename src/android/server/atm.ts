@@ -9,7 +9,7 @@ import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
-import { hostedService } from "../binder";
+import { hostedService, systemToken } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
 import { activityTransport, intentQuery, systemActivity, SYSTEM_ACTIVITY, type SystemHandler } from "../intent";
@@ -195,7 +195,7 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
   transitions++;
   try {
     if (await reuseActivity(intent, info)) return;
-    const token = await newObj("android/os/Binder", "()V");
+    const token = systemToken();
     const prev = stack.at(-1);
     const orientation = field<number>(info, AI, "screenOrientation");
     if (prev) await pause(prev);
@@ -395,8 +395,8 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token); if (r) r.state = "stopped";
   },
   "activityDestroyed(Landroid/os/IBinder;)V": () => {},
-  // the relaunch is done; nothing here waits on it
-  "activityRelaunched(Landroid/os/IBinder;)V": () => {},
+  // Activity.recreate's relaunch, started and done in the client; nothing here waits on it
+  ...noops("activityLocalRelaunch(Landroid/os/IBinder;)V", "activityRelaunched(Landroid/os/IBinder;)V"),
   // as a start: the pause a finish waits for runs on the caller's main thread
   "finishActivity(Landroid/os/IBinder;ILandroid/content/Intent;I)Z": (token: JObj, resultCode: number, data: JObj | null) => {
     const r = byToken(token);
