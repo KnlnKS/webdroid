@@ -12,14 +12,29 @@ import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { after } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeFont, type NativeFamily, type FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, cssFamily } from "./fonts";
+import { type NativeFont, type NativeFamily, type NativeTypeface, type FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, cssFamily } from "./fonts";
 import { type NativePaint, paintAt } from "./paint";
-import { pieceEnd, JOINING } from "./minikin";
-import { type HarfBuzz, type Font, harfBuzz, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
+import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
 import type { Ctx2D } from "./recording";
 import type { NativePath } from "./path";
 
 const f32 = Math.fround;
+
+const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c === 0x3000
+  || c >= 0x2066 && c <= 0x2069 || c >= 0x202a && c <= 0x202e || c === 0x200e || c === 0x200f;
+const breakBefore = (c: number) => breakAfter(c) || c >= 0x3400 && c <= 0x9fff;
+/** LayoutUtils' getNextWordBreakForCache: where the layout piece starting at `at` ends */
+export function pieceEnd(text: string, at: number, end: number): number {
+  if (breakAfter(text.charCodeAt(at))) return at + 1;
+  for (let i = at + 1; i < end; i++) if (breakBefore(text.charCodeAt(i))) return i;
+  return end;
+}
+/** scripts whose letters join, which minikin does not letter-space */
+export const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}\p{sc=Phag}\p{sc=Deva}\p{sc=Beng}\p{sc=Guru}\p{sc=Modi}\p{sc=Shrd}\p{sc=Sylo}\p{sc=Tirh}\p{sc=Ogam}]/u;
+/** the HarfBuzz features a paint shapes with: optional ligatures are off under letter spacing, as
+ *  CSS asks */
+export const featuresOf = (p: NativePaint): string | null => Math.abs(p.letterSpacingEm) > 0.03
+  ? "liga=0,clig=0" + (p.fontFeatureSettings ? "," + p.fontFeatureSettings : "") : p.fontFeatureSettings;
 
 const fontCache = new WeakMap<NativeFont, Font>();
 /** the HarfBuzz font drawing `f`: its own axes, then the fakery's */
@@ -108,8 +123,7 @@ export function shapeTextRun(text: string, start: number, count: number, ctxStar
 function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart: number, ctxEnd: number, rtl: boolean, p: NativePaint): Layout {
   const t = resolveDefault(p.tf), families = t.collection.families, size = p.textSize, scaleX = p.textScaleX;
   const ids: number[] = [], xs: number[] = [], ys: number[] = [], fonts: FakedFont[] = [];
-  // optional ligatures are off under letter spacing, as CSS asks
-  const features = Math.abs(p.letterSpacingEm) > 0.03 ? "liga=0,clig=0" + (p.fontFeatureSettings ? "," + p.fontFeatureSettings : "") : p.fontFeatureSettings;
+  const features = featuresOf(p);
   const pieces: number[] = [];
   for (let i = start; i < end;) { const e = Math.min(pieceEnd(text, i, end), end); pieces.push(i, e); i = e; }
   hb.setText(text, ctxStart, ctxEnd);
@@ -133,8 +147,7 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
         if (ls && (i === 0 || w[info + (i - 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
         ids.push(glyph); fonts.push(faked);
         xs.push(x + w[o + 2] * sx); ys.push(-w[o + 3] * s);
-        const nominal = hb.advance(font, glyph);
-        x = f32(x + f32((hinted ? Math.round(nominal * sx) : nominal * sx) + (w[o] - nominal) * sx));
+        x = f32(x + advanceOf(hb, font, glyph, w[o], sx, hinted));
         if (ls && (i === n - 1 || w[info + (i + 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
         if (texts && !texts.has(glyph)) texts.set(glyph, clusterText(text, ctxStart, w, info, i, n, b));
       }
@@ -146,6 +159,34 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
     }
   }
   return new Layout(Uint32Array.from(ids), Float32Array.from(xs), Float32Array.from(ys), fonts, f32(x), ascent, descent);
+}
+/** a shaped glyph's advance in pixels: Skia's whole-pixel advance while hinting, with HarfBuzz's
+ *  kerning on top; one HarfBuzz zeroed (a mark, a default ignorable) stays zero */
+function advanceOf(hb: HarfBuzz, font: Font, glyph: number, advance: number, sx: number, hinted: boolean): number {
+  if (!hinted || advance === 0) return f32(advance * sx);
+  const nominal = hb.advance(font, glyph);
+  return f32(Math.round(nominal * sx) + (advance - nominal) * sx);
+}
+/** what a measurement is shaped under: the paint's state when a run is measured */
+export interface ShapeStyle { tf: NativeTypeface; size: number; scaleX: number; hinted: boolean; features: string | null; lang: string }
+/** Layout::doLayoutRun's advances for one LayoutSplitter piece: each glyph's advance (hinted as
+ *  layout's) added to its cluster's first code unit, before letter spacing. The direction is the
+ *  one HarfBuzz guesses from the piece's script. */
+export function measurePiece(piece: string, s: ShapeStyle): Float32Array {
+  const hb = loadedHarfBuzz(), out = new Float32Array(piece.length);
+  hb.setText(piece, 0, piece.length);
+  const runs = itemize(hb, s.tf.collection.families, piece, 0, piece.length, s.lang);
+  for (let r = 0; r + 2 < runs.length; r += 2) {
+    const a = runs[r] as number, faked = (runs[r + 1] as NativeFamily).match(s.tf.weight, s.tf.italic);
+    const font = hbFont(hb, faked.font, faked.weight, faked.italic), sx = s.size / font.face.upem * s.scaleX;
+    const hinted = s.hinted && !(faked.fakery & FAKE_ITALIC) && faked.font.scalable;
+    const n = hb.shape(font, a, (runs[r + 2] as number) - a, HB_DIRECTION_INVALID, s.lang, s.features);
+    const w = hb.words(), info = hb.infos(), pos = hb.positions();
+    for (let i = 0; i < n; i++) {
+      out[w[info + i * 5 + 2]] += advanceOf(hb, font, w[info + i * 5], w[pos + i * 5], sx, hinted);
+    }
+  }
+  return out;
 }
 /** the text of glyph i's cluster: from its cluster to the next cluster in logical order */
 function clusterText(text: string, ctxStart: number, w: Int32Array, info: number, i: number, n: number, runEnd: number): string {

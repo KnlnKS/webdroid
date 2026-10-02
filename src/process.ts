@@ -78,7 +78,7 @@ try {
   for (const font of parent.document.fonts) {
     if (systemFonts.has(font.family.replace(/^"(.*)"$/, "$1"))) document.fonts.add(font);
   }
-  mountSystemFonts(await fetchSystemFonts());
+  await mountSystemFonts(await fetchSystemFonts());
   mountSystemCertificates();
   mountPlatformData();
   let boot: Install | null = null;

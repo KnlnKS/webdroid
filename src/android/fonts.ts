@@ -10,6 +10,7 @@ import { vfs } from "../shell/vfs";
 import { pageShared } from "../shell/pageshared";
 import { utf8 } from "../jvm/abi";
 import { deref, handle } from "./handles";
+import { harfBuzz } from "./harfbuzz";
 
 /** Offsets of the sfnt tables we read, by tag, or null if `b` is not a font we understand. */
 export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at: Map<number, number> } | null {
@@ -158,11 +159,13 @@ export function fetchSystemFonts(): Promise<Uint8Array[]> {
     return new Uint8Array(await res.arrayBuffer());
   }))).then((list) => list.map((b) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength)));
 }
-/** a realm's /system/fonts, and the font configuration naming them (the legacy and current files) */
-export function mountSystemFonts(bytes: readonly Uint8Array[]): void {
+/** a realm's /system/fonts, the font configuration naming them (the legacy and current files), and
+ *  the HarfBuzz that shapes them */
+export async function mountSystemFonts(bytes: readonly Uint8Array[]): Promise<void> {
   SYSTEM_FONT_FILES.forEach((file, i) => vfs.write(`/system/fonts/${file}`, bytes[i]));
   vfs.write("/system/etc/fonts.xml", utf8.enc.encode(fontsXml(' version="23"')));
   vfs.write("/system/etc/font_fallback.xml", utf8.enc.encode(fontsXml("")));
+  await harfBuzz();
 }
 /** the page's FontFaces for the system faces, which its realms share */
 export async function registerSystemFonts(bytes: readonly Uint8Array[]): Promise<void> {

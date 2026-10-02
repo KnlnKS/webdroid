@@ -35,7 +35,7 @@ export function loadSystemFonts(): Promise<void> {
   return fontMap ??= (async () => {
     const { SYSTEM_FONT_FILES, mountSystemFonts, loadSystemFontMap } = await import("../src/android/fonts");
     await mountApexData();
-    mountSystemFonts(await Promise.all(SYSTEM_FONT_FILES.map(async (file) =>
+    await mountSystemFonts(await Promise.all(SYSTEM_FONT_FILES.map(async (file) =>
       new Uint8Array(await Bun.file(new URL(`../vendor/fonts/${file}`, import.meta.url)).arrayBuffer()))));
     await loadSystemFontMap();
     await preloadTextPaint();

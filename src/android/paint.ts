@@ -7,7 +7,6 @@ import { charsToString, mangleMethod } from "../jvm/abi";
 import { after, construct, newObj, vcall } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
-import { perf } from "../perf";
 import { type FaceMetrics, type NativeTypeface, type FakedFont, SYSTEM_FONT, resolveDefault, FAKE_BOLD } from "./fonts";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
 import { colorLongAt } from "./bitmap";
@@ -188,30 +187,10 @@ export function measureCtx(font?: string, language = "en-US"): CanvasRenderingCo
   if ("lang" in _measureCtx && _measureCtx.lang !== language) _measureCtx.lang = language;
   return _measureCtx;
 }
-// Browser text measurement is the hot path of every layout AND every draw (a TextView
-// measures, wraps, then re-wraps to draw). Width is a pure function of (font, string) and
-// the vertical metrics of (font) alone, so both are memoised. The width cache is capped and
-// cleared wholesale rather than evicted per entry — line breaking probes many short-lived
-// prefixes, so LRU bookkeeping would cost more than the refill.
-const WIDTH_CACHE_MAX = 20000;
-let widthCache = new Map<string, Map<string, number>>(), widthCount = 0;
 const vmetCache = new Map<string, { a: number; d: number }>();
 let lastFont = "";
 function setFont(ctx: { font: string }, f: string): void {
   if (f !== lastFont) { ctx.font = f; lastFont = f; }
-}
-/** the advance of `s` in CSS font `f`, before letter spacing */
-export function rawWidth(f: string, s: string, language: string): number {
-  const key = language === "en-US" ? f : f + "\0" + language;
-  let byFont = widthCache.get(key);
-  if (byFont === undefined) widthCache.set(key, byFont = new Map());
-  const hit = byFont.get(s);
-  if (hit !== undefined) return hit;
-  perf.measureTextMiss++;
-  const w = measureCtx(f, language).measureText(s).width;
-  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[key, byFont = new Map()]]); widthCount = 1; }
-  byFont.set(s, w);
-  return w;
 }
 /** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds; the
  *  metrics are the drawn face's. Browser bounding-box metrics round to pixels even with FontFace

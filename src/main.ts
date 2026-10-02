@@ -266,7 +266,7 @@ const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : ne
 });
 
 const fontsReady = fetchSystemFonts().then(async (bytes) => {
-  mountSystemFonts(bytes);
+  await mountSystemFonts(bytes);
   await registerSystemFonts(bytes);
 });
 void fontsReady.catch((e) => console.error("[fonts]", e));

@@ -100,7 +100,7 @@ export function startZygote(): Promise<void> {
     useLinkTable(await table, rt.linkFingerprint());
     await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
     // the runtime's own setup and the system font map need no app: a device's zygote runs them
-    mountSystemFonts(await fetchSystemFonts());
+    await mountSystemFonts(await fetchSystemFonts());
     await zygoteInit();
   })();
 }

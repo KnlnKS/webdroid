@@ -26,7 +26,7 @@ interface Exports {
 }
 
 const HB_MEMORY_MODE_READONLY = 1;
-export const HB_DIRECTION_LTR = 4, HB_DIRECTION_RTL = 5;
+export const HB_DIRECTION_INVALID = 0, HB_DIRECTION_LTR = 4, HB_DIRECTION_RTL = 5;
 
 /** one face of a font file in wasm memory, and its fonts by variation settings */
 export interface Face { readonly face: Ptr; readonly data: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
@@ -246,6 +246,12 @@ let ready: HarfBuzz | null = null;
 /** the tab's HarfBuzz, loading it on first use */
 export function harfBuzz(): HarfBuzz | Promise<HarfBuzz> {
   return ready ?? pageShared("__wdHarfBuzz", load).then((hb) => ready = hb);
+}
+/** the tab's HarfBuzz, which mountSystemFonts loaded with the realm's fonts: text is measured
+ *  synchronously */
+export function loadedHarfBuzz(): HarfBuzz {
+  if (!ready) throw new Error("HarfBuzz is not loaded");
+  return ready;
 }
 async function load(): Promise<HarfBuzz> {
   let exports: Exports;

@@ -7,6 +7,7 @@ import { mangleMethod } from "../src/jvm/abi";
 import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
 import { JTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
 import { TV } from "../src/android/axml";
+import type { TextStyle } from "../src/android/minikin";
 
 beforeAll(loadSystemFonts);
 /** a TextPaint's public field */
@@ -228,7 +229,8 @@ describe("minikin", () => {
     const mismatches: string[] = [];
     for (const row of rows.filter((r) => /^\d/.test(r))) {
       const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
-      const style = { font: "", lang: "en-US", size, hinted: true, scaleX: 1, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0, ascent: 0, descent: 0 };
+      // line breaking reads only the size, spacing and extents of a run's style
+      const style = { size, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0, ascent: 0, descent: 0 } as TextStyle;
       const breaks: number[] = [];
       // StaticLayout breaks each paragraph, its newline included, on its own
       for (let start = 0; start < text.length;) {
@@ -241,6 +243,24 @@ describe("minikin", () => {
       }
       const want = lines.map((l) => +l.split(":")[0]);
       if (breaks.join() !== want.join()) mismatches.push(`${i} ${strategy} ${spacing}: ${breaks} device ${want}`);
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  test("Paint's advances are the reference device's", async () => {
+    await loadLibcore();
+    const { styleOf, advances } = await import("../src/android/minikin");
+    const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
+    const cases = rows.filter((r) => r.startsWith("case ")).map((r) => r.split("\t")).map(([, text, , size]) => ({ text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), size: +size }));
+    const paint = newPaint("android/text/TextPaint"), mismatches: string[] = [];
+    for (const [, i, spacing, ...device] of rows.filter((r) => r.startsWith("advances ")).map((r) => r.split(" "))) {
+      const { text, size } = cases[+i];
+      if (/\p{sc=Han}/u.test(text)) continue; // the page has no CJK face
+      await vcall(paint, "setTextSize", "(F)V", size);
+      await vcall(paint, "setLetterSpacing", "(F)V", Math.fround(+spacing * 0.05));
+      const out = new Float32Array(text.length);
+      advances(styleOf(paintOf(paint)), text, 0, text.length, out);
+      out.forEach((a, k) => { if (Math.abs(a - +device[k]) > 0.01) mismatches.push(`${i} ${spacing} @${k}: ${a} device ${device[k]}`); });
     }
     expect(mismatches).toEqual([]);
   });

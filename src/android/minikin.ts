@@ -1,5 +1,5 @@
 // minikin, the text layout library under android.graphics.text and Paint's text measurement,
-// over the page's font metrics. Each part follows minikin's own code (frameworks/minikin at
+// over shaping.ts' HarfBuzz layout. Each part follows minikin's own code (frameworks/minikin at
 // android-15.0.0_r1, with the reference build's text flags: letter_spacing_justification,
 // phrase_strict_fallback and word_style_auto on):
 //   - advances come per LayoutSplitter piece (a word and its trailing space), each cluster's advance
@@ -15,91 +15,54 @@ import { charsToString, mangleMethod } from "../jvm/abi";
 import { scall, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { perf } from "../perf";
-import { type NativePaint, paintAt, rawWidth, measureCtx, fontAscent, fontDescent } from "./paint";
+import { type NativePaint, paintAt, fontAscent, fontDescent } from "./paint";
+import { type NativeTypeface, resolveDefault } from "./fonts";
+import { type ShapeStyle, measurePiece, featuresOf, pieceEnd, JOINING } from "./shaping";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
-const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c === 0x3000
-  || c >= 0x2066 && c <= 0x2069 || c >= 0x202a && c <= 0x202e || c === 0x200e || c === 0x200f;
-const breakBefore = (c: number) => breakAfter(c) || c >= 0x3400 && c <= 0x9fff;
-/** LayoutUtils' getNextWordBreakForCache: where the layout piece starting at `at` ends */
-export function pieceEnd(text: string, at: number, end: number): number {
-  if (breakAfter(text.charCodeAt(at))) return at + 1;
-  for (let i = at + 1; i < end; i++) if (breakBefore(text.charCodeAt(i))) return i;
-  return end;
-}
-
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-/** text where every code unit is its own grapheme cluster */
-const SIMPLE = /^[\x20-\x7e\xa0-\u02ff]*$/;
-function clusterStarts(s: string): number[] {
-  if (SIMPLE.test(s)) return Array.from(s, (_, i) => i);
-  return Array.from(graphemes.segment(s), (g) => g.index);
-}
-// Advances are a pure function of (font, language, piece). Pieces repeat (they are words), so the
-// cache is capped and cleared wholesale like paint.ts' width cache.
+// Advances are a pure function of (typeface, shaping state, piece). Pieces repeat (they are
+// words), so the cache is capped and cleared wholesale rather than evicted per entry.
 const PIECES_MAX = 20000;
-let pieces = new Map<string, Map<string, Float32Array>>(), pieceCount = 0;
-/** One piece's advances: cluster widths by prefix difference, so they sum to the shaped width,
- *  under the paint's horizontal scale. Hinted, as Skia measures a paint without LINEAR_TEXT (the
- *  device's advances do not change with SUBPIXEL_TEXT), each glyph's advance is whole pixels and
- *  only kerning stays fractional. */
-function pieceAdvances(font: string, lang: string, piece: string, hinted: boolean, scaleX: number): Float32Array {
-  const key = font + "\0" + lang + (hinted ? "\0h" : "") + (scaleX === 1 ? "" : "\0" + scaleX);
-  let byFont = pieces.get(key);
-  if (!byFont) pieces.set(key, byFont = new Map());
-  let out = byFont.get(piece);
+let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Float32Array>>>(), pieceCount = 0;
+function pieceAdvances(s: TextStyle, piece: string): Float32Array {
+  let byTf = pieces.get(s.tf);
+  if (!byTf) pieces.set(s.tf, byTf = new Map());
+  let byStyle = byTf.get(s.key);
+  if (!byStyle) byTf.set(s.key, byStyle = new Map());
+  let out = byStyle.get(piece);
   if (out) return out;
-  out = new Float32Array(piece.length);
-  const starts = clusterStarts(piece);
-  if (starts.length === 1) out[0] = rawWidth(font, piece, lang);
-  else if (piece.length <= 64) {
-    const ctx = measureCtx(font, lang);
-    let prev = 0;
-    for (let k = 0; k < starts.length; k++) {
-      const w = ctx.measureText(piece.slice(0, starts[k + 1] ?? piece.length)).width;
-      out[starts[k]] = w - prev; prev = w;
-    }
-  } else {
-    // a long unbroken run (a URL): per-cluster widths scaled to the whole, not n² prefixes
-    let sum = 0;
-    for (let k = 0; k < starts.length; k++) sum += out[starts[k]] = rawWidth(font, piece.slice(starts[k], starts[k + 1] ?? piece.length), lang);
-    const scale = sum ? rawWidth(font, piece, lang) / sum : 1;
-    for (const s of starts) out[s] *= scale;
-  }
-  if (scaleX !== 1) for (const s of starts) out[s] *= scaleX;
-  if (hinted) for (let k = 0; k < starts.length; k++) {
-    const glyph = starts.length === 1 ? out[0] : rawWidth(font, piece.slice(starts[k], starts[k + 1] ?? piece.length), lang) * scaleX;
-    out[starts[k]] += Math.round(glyph) - glyph;
-  }
-  if (++pieceCount > PIECES_MAX) { pieces = new Map([[key, byFont = new Map()]]); pieceCount = 1; }
-  byFont.set(piece, out);
+  perf.measureTextMiss++;
+  out = measurePiece(piece, s);
+  if (++pieceCount > PIECES_MAX) { pieces = new WeakMap([[s.tf, byTf = new Map([[s.key, byStyle = new Map()]])]]); pieceCount = 1; }
+  byStyle.set(piece, out);
   return out;
 }
 
 /** what measuring text under a paint depends on, taken when a run is added: the paint changes after */
-export interface TextStyle {
-  font: string; lang: string; size: number; hinted: boolean; scaleX: number; letterSpacing: number; wordSpacing: number; ascent: number; descent: number;
+export interface TextStyle extends ShapeStyle {
+  key: string; letterSpacing: number; wordSpacing: number; ascent: number; descent: number;
 }
-export const styleOf = (p: NativePaint): TextStyle => ({
-  font: p.font(), lang: p.language, size: p.textSize, hinted: !p.linearText, scaleX: p.textScaleX,
-  letterSpacing: p.letterSpacingEm * p.textSize * p.textScaleX, wordSpacing: p.wordSpacing, ascent: fontAscent(p), descent: fontDescent(p),
-});
+export function styleOf(p: NativePaint): TextStyle {
+  // Skia hints a paint without LINEAR_TEXT unless it is skewed; SUBPIXEL_TEXT does not change advances
+  const size = p.textSize, scaleX = p.textScaleX, hinted = !p.linearText && p.textSkewX === 0, features = featuresOf(p), lang = p.language;
+  return { tf: resolveDefault(p.tf), size, scaleX, hinted, features, lang, key: `${size} ${scaleX} ${+hinted} ${lang} ${features}`,
+    letterSpacing: p.letterSpacingEm * size * scaleX, wordSpacing: p.wordSpacing, ascent: fontAscent(p), descent: fontDescent(p) };
+}
 
-/** control characters shape to nothing, where the browser measures a space */
-const CONTROL = /[\0-\x1f\x7f-\x9f]/;
-/** scripts whose letters join, which minikin does not letter-space */
-export const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}\p{sc=Phag}\p{sc=Deva}\p{sc=Beng}\p{sc=Guru}\p{sc=Modi}\p{sc=Shrd}\p{sc=Sylo}\p{sc=Tirh}\p{sc=Ogam}]/u;
+/** control characters other than tab shape to nothing; a tab has HarfBuzz's space fallback, and
+ *  no letter spacing (as the device measures them) */
+const CONTROL = /[\0-\x08\x0a-\x1f\x7f-\x9f]/;
 /** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum.
  *  Letter spacing is added to every other cluster, as minikin's layout does, and word spacing to
  *  every space (isWordSpace: U+0020 and U+00A0). */
 export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0): number {
   let total = 0;
   for (let i = start; i < end;) {
-    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), w = pieceAdvances(style.font, style.lang, piece, style.hinted, style.scaleX);
+    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), w = pieceAdvances(style, piece);
     const ls = JOINING.test(piece) ? 0 : style.letterSpacing, controls = CONTROL.test(piece);
     for (let j = 0; j < w.length; j++) {
       const c = piece.charCodeAt(j);
-      let a = controls && CONTROL.test(piece[j]) ? 0 : w[j] && Math.fround(w[j] + ls);
+      let a = controls && CONTROL.test(piece[j]) ? 0 : c === TAB ? w[j] : w[j] && Math.fround(w[j] + ls);
       if (style.wordSpacing && (c === 0x20 || c === 0xa0)) a = Math.fround(a + style.wordSpacing);
       if (out) out[at + i - start + j] = a;
       total = Math.fround(total + a);
@@ -117,6 +80,7 @@ export function paintAdvance(p: NativePaint, text: string): number {
 // ── grapheme breaks ───────────────────────────────────────────────────────────────────────
 // GraphemeBreak::isGraphemeBreak is UAX #29 with minikin's tailorings; the browser's segmenter
 // answers UAX #29, and the tailorings that matter here are applied around it.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
 /** controls minikin treats as Extend, so no break comes before them */
 const extendsCluster = (c: number) => c === 0xad || c === 0x61c || c === 0x180e || c === 0x200b || c === 0x200e || c === 0x200f

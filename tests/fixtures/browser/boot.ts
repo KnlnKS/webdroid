@@ -14,7 +14,7 @@ export async function bootWithFonts(): Promise<void> {
   await startMainLooper();
   mountPlatformData();
   const bytes = await fetchSystemFonts();
-  mountSystemFonts(bytes);
+  await mountSystemFonts(bytes);
   await registerSystemFonts(bytes);
   await loadSystemFontMap();
   await initDeviceLocales();
