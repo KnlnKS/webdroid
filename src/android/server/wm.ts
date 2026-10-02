@@ -325,7 +325,11 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   "watchRotation(Landroid/view/IRotationWatcher;I)I": () => device.width > device.height ? 1 : 0,
   "removeRotationWatcher(Landroid/view/IRotationWatcher;)V": () => {},
   "isInTouchMode(I)Z": () => 1,
+  // the keyguard is never shown and has no secure lock, as on the reference AVD, so an exit succeeds at once
   ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
+  ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
+    "removeKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V"),
+  "exitKeyguardSecurely(Landroid/view/IOnKeyguardExitResult;)V": (callback: unknown) => vcall(callback, "onKeyguardExitResult", "(Z)V", 1),
   "getInitialDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
   "getBaseDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
   "getInitialDisplayDensity(I)I": () => device.densityDpi,

@@ -105,25 +105,11 @@ rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends J
 hostStub("activity", "webdroid/ActivityManagerService");
 hostStub("activity_task", "webdroid/ActivityTaskManagerService");
 
-// IWindowManager: what WindowManagerGlobal and screen recording callbacks ask of it. Animations run
-// at the default duration scale, and nothing records the page, so a registration reports "not
-// recorded" and that never changes. The keyguard is never shown and has no secure lock, as on the
-// reference AVD, so an exit succeeds at once; ITrustManager agrees.
-rt.register({ name: "webdroid/WindowManagerService", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
-  "getCurrentAnimatorScale()F": () => 1,
-  "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
-  "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
-  ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
-  ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
-    "removeKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V"),
-  "exitKeyguardSecurely(Landroid/view/IOnKeyguardExitResult;)V": (callback: unknown) =>
-    vcall(callback, "onKeyguardExitResult", "(Z)V", 1),
-} });
+// ITrustManager: the keyguard is never shown and has no secure lock, as on the reference AVD
 rt.register({ name: "webdroid/TrustManagerService", ctor: class extends JObj {}, sup: "android/app/trust/ITrustManager$Stub", methods: {
   ...stubs(0, "isDeviceLocked(II)Z", "isDeviceSecure(II)Z"),
 } });
 
-hostStub("window", "webdroid/WindowManagerService");
 hostStub("trust", "webdroid/TrustManagerService");
 
 // system_server services every device runs, which an app reaches with nothing to act on here: no
