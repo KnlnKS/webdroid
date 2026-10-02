@@ -617,9 +617,9 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
 3. The async-natives baseline (ATM, WM, IMM, surfaces, intentipc) and the `.then`/timer callbacks
    the lint cannot see; MediaDataSource.readAt runs from a host read callback.
 4. Class-init re-entry is judged by JThread identity while main-loop jobs share mainThread.
-5. Merge into `knlnks/bytecode` once Stage E allows; the sql.js patch rebuilds each checkout's
-   `vendor/sql.js/dist` on its first bun command, so give a checkout its own dist rather than a
-   symlink to a shared one.
+5. This branch is rebased onto `knlnks/bytecode` after Stage E2 and ready to fast-forward it. The
+   sql.js patch rebuilds each checkout's `vendor/sql.js/dist` on its first bun command, so give a
+   checkout its own dist rather than a symlink to a shared one.
 
 ### Stage E handoff (2026-10-01): Stage E is complete
 
