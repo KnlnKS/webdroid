@@ -1,24 +1,16 @@
-// android.hardware: the legacy Camera, and the natives of AOSP's SystemSensorManager
+// android.hardware: the natives of the legacy Camera, and those of AOSP's SystemSensorManager
 // (android_hardware_SensorManager.cpp). This device has no sensors (config.ts features), so the
 // sensor list is empty, no dynamic or runtime sensor appears, data injection is off, and an event
 // queue or direct channel has no sensor to enable: SensorService answers BAD_VALUE.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt } from "../jvm/runtime";
 
-rt.markers("android/hardware/Camera$AutoFocusCallback");
-class JCameraInfo extends JObj { facing = 0; orientation = 0; }
-rt.register({
-  name: "android/hardware/Camera$CameraInfo", ctor: JCameraInfo, fields: ["facing", "orientation"],
-  statics: { CAMERA_FACING_BACK: 0, CAMERA_FACING_FRONT: 1 }, methods: { "<init>()V": function () {} },
+// android_hardware_Camera.cpp over a CameraService with no cameras: connecting fails with -EACCES
+rt.registerJnis("android/hardware/Camera", {
+  "_getNumberOfCameras(II)I": () => 0,
+  "_getCameraInfo(IIIILandroid/hardware/Camera$CameraInfo;)V": () => { throw rt.mkThrowable("java/lang/RuntimeException", "Fail to get camera info"); },
+  "native_setup(Ljava/lang/Object;ILjava/lang/String;IZII)I": () => -13,
 });
-rt.register({
-  name: "android/hardware/Camera", ctor: class extends JObj {},
-  methods: {
-    "static getNumberOfCameras()I": () => 0,
-    "static getCameraInfo(ILandroid/hardware/Camera$CameraInfo;)V": () => { throw rt.mkThrowable("java/lang/RuntimeException", "Unknown camera ID"); },
-  },
-});
-rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
 
 const BAD_VALUE = -22;
 let handles = 0n;
