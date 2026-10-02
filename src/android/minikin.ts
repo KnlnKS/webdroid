@@ -264,15 +264,16 @@ export interface Run { start: number; end: number; style: TextStyle | null; widt
 interface Measured { text: string; runs: Run[]; widths: Float32Array; extents: Float32Array }
 const measured = (h: bigint) => deref<Measured>(h);
 
-/** MeasuredText::getExtent: the extent of the pieces over [start,end) */
-function extent(m: Measured, start: number, end: number): [number, number] {
+/** MeasuredText::getExtent: the extent of the pieces over [start,end) of ascent, descent pairs */
+function extent(extents: Float32Array, start: number, end: number): [number, number] {
   let ascent = 0, descent = 0;
-  for (let i = start * 2; i < end * 2; i += 2) { ascent = Math.min(ascent, m.extents[i]); descent = Math.max(descent, m.extents[i + 1]); }
+  for (let i = start * 2; i < end * 2; i += 2) { ascent = Math.min(ascent, extents[i]); descent = Math.max(descent, extents[i + 1]); }
   return [ascent, descent];
 }
-function widthOf(m: Measured, start: number, end: number): number {
+/** advances [start,end) summed in float, as minikin sums them */
+function sum(advances: Float32Array, start = 0, end = advances.length): number {
   let w = 0;
-  for (let i = start; i < end; i++) w = Math.fround(w + m.widths[i]);
+  for (let i = start; i < end; i++) w = Math.fround(w + advances[i]);
   return w;
 }
 
@@ -299,15 +300,15 @@ rt.registerJnis("android/graphics/text/MeasuredText$Builder", fontNatives({
 rt.registerJnis("android/graphics/text/MeasuredText", {
   "nGetReleaseFunc()J": () => FINALIZER,
   "nGetMemoryUsage(J)I": (h: bigint) => measured(h).text.length * 6,
-  "nGetWidth(JII)F": (h: bigint, start: number, end: number) => widthOf(measured(h), start, end),
+  "nGetWidth(JII)F": (h: bigint, start: number, end: number) => sum(measured(h).widths, start, end),
   "nGetCharWidthAt(JI)F": (h: bigint, i: number) => measured(h).widths[i],
   // glyph bounds are not known: the advance box over the run extents, rounded out
   "nGetBounds(J[CIILandroid/graphics/Rect;)V": (h: bigint, _c: Uint16Array, start: number, end: number, r: object) => {
-    const m = measured(h), [ascent, descent] = extent(m, start, end);
-    setEdges(r, { left: 0, top: Math.floor(ascent), right: Math.ceil(widthOf(m, start, end)), bottom: Math.ceil(descent) });
+    const m = measured(h), [ascent, descent] = extent(m.extents, start, end);
+    setEdges(r, { left: 0, top: Math.floor(ascent), right: Math.ceil(sum(m.widths, start, end)), bottom: Math.ceil(descent) });
   },
   "nGetExtent(J[CII)J": (h: bigint, _c: Uint16Array, start: number, end: number) => {
-    const [ascent, descent] = extent(measured(h), start, end);
+    const [ascent, descent] = extent(measured(h).extents, start, end);
     return BigInt.asIntN(64, (BigInt(Math.round(ascent)) << 32n) | BigInt(Math.round(descent) >>> 0));
   },
 });
@@ -539,7 +540,7 @@ function* breakOptimal(m: Measured, len: number, lineWidth: LineWidth, b: Breake
 const emptyResult = (): BreakResult => ({ breaks: [], widths: [], ascents: [], descents: [], flags: [] });
 /** a line's extent: with useBoundsForWidth, over its text less trailing spaces when any is left */
 function pushLine(out: BreakResult, m: Measured, start: number, end: number, width: number, useBounds: boolean, flags: number): void {
-  const trimmed = useBounds ? trimTrailing(m.text, start, end) : end, [ascent, descent] = extent(m, start, trimmed > start ? trimmed : end);
+  const trimmed = useBounds ? trimTrailing(m.text, start, end) : end, [ascent, descent] = extent(m.extents, start, trimmed > start ? trimmed : end);
   out.breaks.push(end); out.widths.push(width); out.ascents.push(ascent); out.descents.push(descent); out.flags.push(flags);
 }
 
@@ -680,7 +681,7 @@ function breakText(h: bigint, text: string, forwards: boolean, maxWidth: number,
 /** doRunAdvance: the advance to `offset` of text[start,end) in its context, with each character's */
 function runAdvanceOf(h: bigint, chars: Uint16Array, start: number, end: number, cs: number, ce: number, offset: number, out: Float32Array | null, at: number): number {
   const text = charsToString(chars, cs, ce - cs), adv = measure(h, text, start - cs, end - start);
-  if (offset === end && !out) return adv.reduce((a, b) => Math.fround(a + b), 0);
+  if (offset === end && !out) return sum(adv);
   const result = runAdvance(adv, text, start - cs, end - start, offset - cs);
   if (out) { distribute(adv, text, start - cs, end - start); out.set(adv, at); }
   return result;
@@ -690,15 +691,14 @@ function runAdvanceOf(h: bigint, chars: Uint16Array, start: number, end: number,
 function metricsForText(h: bigint, text: string, start: number, count: number, fm: object): void {
   const p = paintAt(h), extents = new Float32Array(count * 2);
   advances(styleOf(p), text, start, start + count, null, 0, extents);
-  let ascent = 0, descent = 0;
-  for (let i = 0; i < extents.length; i += 2) { ascent = Math.min(ascent, extents[i]); descent = Math.max(descent, extents[i + 1]); }
+  const [ascent, descent] = extent(extents, 0, count);
   setFontMetrics(fm, true, Math.floor(Math.min(ascent, fontTop(p))), Math.round(ascent), Math.round(descent), Math.ceil(Math.max(descent, fontBottom(p))), 0);
 }
 function textAdvances(h: bigint, text: string, start: number, count: number, out: Float32Array | null, at: number): number {
   if (!count) return 0;
   const adv = measure(h, text, start, count);
   if (out) out.set(adv, at);
-  return adv.reduce((a, b) => Math.fround(a + b), 0);
+  return sum(adv);
 }
 rt.registerJnis("android/graphics/Paint", fontNatives({
   "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, c: Uint16Array, start: number, count: number, _cs: number, _cc: number, _rtl: number, fm: object) =>
