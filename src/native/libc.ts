@@ -49,6 +49,8 @@ export function fail(cpu: Cpu | null, e: number): number {
   setErrno(cpu, e);
   return -1;
 }
+/** MAP_FAILED, pointer-wide, with errno set */
+function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return PTR === 8 ? -1n : -1; }
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const randomWord = new Uint32Array(1);
@@ -92,7 +94,7 @@ function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64
     v = v * BigInt(base) + BigInt(d); any = true; p++;
   }
   if (!any) p = s;
-  if (endp) stp(endp, any ? p : s);
+  if (endp) stp(endp, p);
   if (neg) v = -v;
   const max = unsigned ? (1n << BigInt(bits)) - 1n : (1n << BigInt(bits - 1)) - 1n, min = unsigned ? 0n : -(1n << BigInt(bits - 1));
   if (v > max) { setErrno(cpu, E.RANGE); return max; }
@@ -224,13 +226,12 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   // MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
   mmap: (cpu, a) => {
     const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
-    const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
-    if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
+    if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return mapFailed(cpu, E.INVAL);
     const reserve = (flags & 0x20) !== 0 && prot === 0;
     // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
     // low and made executable later, as V8's is) must not land in a plane above it.
     const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
-    if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
+    if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return mapFailed(cpu, E.NOMEM);
     if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
     if (fd !== -1 && !(flags & 0x20)) {
       const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
@@ -248,18 +249,17 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   // MREMAP_FIXED and moving a shared file mapping are not supported
   mremap: (cpu, a) => {
     const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i();
-    const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
     const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
-    if (old & BigInt(PAGE_SIZE - 1) || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return failed(E.INVAL);
-    if (flags & 2) return failed(E.NOSYS);
+    if (old & BigInt(PAGE_SIZE - 1) || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return mapFailed(cpu, E.INVAL);
+    if (flags & 2) return mapFailed(cpu, E.NOSYS);
     if (page(size) <= page(oldSize)) {
       if (page(size) < page(oldSize)) mem.unmapVa(old + BigInt(page(size)), page(oldSize) - page(size));
       return PTR === 8 ? old : Number(old);
     }
-    if (!(flags & 1)) return failed(E.NOMEM);
-    if (isShared(old, oldSize)) return failed(E.NOSYS);
+    if (!(flags & 1)) return mapFailed(cpu, E.NOMEM);
+    if (isShared(old, oldSize)) return mapFailed(cpu, E.NOSYS);
     const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
-    if (!moved) return failed(E.NOMEM);
+    if (!moved) return mapFailed(cpu, E.NOMEM);
     mem.write(guestAt(moved), mem.bytes(mem.txVa(old), oldSize));
     mem.unmapVa(old, page(oldSize));
     return moved;
@@ -524,22 +524,14 @@ export function libcInit(): void {
     tzset: () => {},
     difftime: (c, a) => retD(c, a.i() - a.i()),
 
-    // ── setjmp / longjmp (the buffer holds r4–r14; sigsetjmp aliases)
+    // ── setjmp / longjmp (the buffer holds r4–r14; the _ and sig variants alias them below)
     setjmp: (cpu, a) => setjmp(cpu, a.p()),
-    _setjmp: (cpu, a) => setjmp(cpu, a.p()),
-    sigsetjmp: (cpu, a) => setjmp(cpu, a.p()),
     longjmp: (cpu, a) => longjmp(cpu, a.p(), a.i()),
-    _longjmp: (cpu, a) => longjmp(cpu, a.p(), a.i()),
-    siglongjmp: (cpu, a) => longjmp(cpu, a.p(), a.i()),
 
     lrand48: () => next48() & 0x7fffffff,
     mrand48: () => next48() | 0,
     drand48: (c) => retD(c, (next48() >>> 0) / 4294967296),
     srand48: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
-    rand: () => next48() & 0x7fffffff,
-    random: () => next48() & 0x7fffffff,
-    srand: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
-    srandom: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
     arc4random: () => random32() | 0,
     arc4random_buf: (_c, a) => { const p = a.p(), n = a.u(); if (n) fillRandom(p, n); },
     arc4random_uniform: (_c, a) => {
@@ -557,9 +549,8 @@ export function libcInit(): void {
     inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) mem.st8(out + i, +m[i + 1]); return 1; },
     inet_addr: (_c, a) => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a.str()); if (!m) return -1; return (+m[1]) | (+m[2] << 8) | (+m[3] << 16) | (+m[4] << 24); },
     inet_ntoa: (_c, a) => { const v = a.u(); mem.putCstr(inetBuf, `${v & 255}.${(v >>> 8) & 255}.${(v >>> 16) & 255}.${v >>> 24}`, 20); return inetBuf; },
-    htons: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); }, ntohs: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); },
+    htons: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); },
     htonl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },
-    ntohl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },
     __android_log_write: (_c, a) => { const prio = a.i(), tag = a.str(), msg = a.str(); logLine(prio, tag, msg); return 1; },
     __android_log_print: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, a)); return 1; },
     __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p()))); return 1; },
@@ -571,6 +562,8 @@ export function libcInit(): void {
     "iswspace", "iswdigit", "iswalpha", "iswupper", "iswlower", "towlower", "towupper", "mbrtowc", "wcrtomb", "localeconv", "strerror",
     "sprintf", "snprintf", "vsprintf", "vsnprintf", "asprintf", "vasprintf", "sscanf", "vsscanf", "btowc", "wctob", "wctype", "iswctype"]) if (M[n]) M[n + "_l"] = M[n];
   M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
+  M._setjmp = M.sigsetjmp = M.setjmp; M._longjmp = M.siglongjmp = M.longjmp;
+  M.rand = M.random = M.lrand48; M.srand = M.srandom = M.srand48; M.ntohs = M.htons; M.ntohl = M.htonl;
   M.__aeabi_memclr = M.__aeabi_memclr4 = M.__aeabi_memclr8 = M.bzero;
   M.__aeabi_memset = M.__aeabi_memset4 = M.__aeabi_memset8 = (_c, a) => {
     const d = a.p(), n = a.u(), value = a.i();
