@@ -49,9 +49,9 @@ export function vcallAsync(obj: unknown, name: string, desc: string, ...args: un
 export function vcallUncaught(obj: unknown, name: string, desc: string, ...args: unknown[]): Promise<void> {
   return vcallAsync(obj, name, desc, ...args).then(() => {}, reportUncaught);
 }
-/** A driven generator no Java frame waits on, as vcallUncaught: it runs on the calling thread */
-export function driveUncaught(g: Gen): void {
-  try { const r = rt.drive(g); if (r instanceof Promise) r.catch(reportUncaught); } catch (e) { reportUncaught(e); }
+/** A call no Java frame waits on, as vcallUncaught, made now on the calling thread */
+export function callUncaught(call: () => unknown): void {
+  try { const r = call(); if (r instanceof Promise) r.catch(reportUncaught); } catch (e) { reportUncaught(e); }
 }
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));

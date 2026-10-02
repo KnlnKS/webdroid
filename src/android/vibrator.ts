@@ -2,7 +2,7 @@
 // vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { driveUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { settingsStore } from "./settings";
 
@@ -91,10 +91,10 @@ rt.register({ name: "webdroid/VibratorManagerService", ctor: class extends JObj 
     return yield vcall(builder, "build", "()Landroid/os/VibratorInfo;");
   }),
   "vibrate(IILjava/lang/String;Landroid/os/CombinedVibration;Landroid/os/VibrationAttributes;Ljava/lang/String;Landroid/os/IBinder;)V":
-    (_uid: number, _device: number, _pkg: string, combined: JObj) => { driveUncaught(playCombined(combined)); },
+    (_uid: number, _device: number, _pkg: string, combined: JObj) => { callUncaught(() => rt.drive(playCombined(combined))); },
   "cancelVibrate(ILandroid/os/IBinder;)V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
   "performHapticFeedback(IILjava/lang/String;IZLjava/lang/String;Z)V": (_uid: number, _device: number, _pkg: string, constant: number, always: number) => {
-    driveUncaught(performHapticFeedback(constant, always));
+    callUncaught(() => rt.drive(performHapticFeedback(constant, always)));
   },
   "isVibrating(I)Z": () => 0,
   // no state changes are reported, as none can be observed

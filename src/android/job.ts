@@ -4,7 +4,7 @@
 // through the service's IJobService, and hear back through the IJobCallback its parameters carry.
 
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { driveUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { bindAsSystem } from "./server/activeservices";
 import { hostStub } from "./binder";
@@ -41,10 +41,10 @@ const pending = (job: ScheduledJob) => namespaces.get(job.spec.namespace)?.get(j
 let nextBinding = 1;
 /** off the caller's stack, as JobServiceContext's handler messages are: a service reporting from
  *  inside a callback is not unbound under itself */
-const later = (job: () => Gen<void>) => { setTimeout(() => driveUncaught(job()), 0); };
+const later = (job: () => Gen<void>) => { setTimeout(() => callUncaught(() => rt.drive(job())), 0); };
 function armJob(job: ScheduledJob, delay: number): void {
   if (job.timer) clearTimeout(job.timer);
-  job.timer = setTimeout(() => { job.timer = null; driveUncaught(startJob(job)); }, Math.min(Math.max(0, delay), 0x7fffffff));
+  job.timer = setTimeout(() => { job.timer = null; callUncaught(() => rt.drive(startJob(job))); }, Math.min(Math.max(0, delay), 0x7fffffff));
 }
 function* finishJob(job: ScheduledJob, run: JobRun, reschedule: boolean): Gen<void> {
   if (job.run !== run) return;
