@@ -2,7 +2,7 @@
 // profile's one built-in display. Geometry, density and refresh rate come from the profile; the
 // rest is what the reference AVD answers an app (app_process as uid 2000: getDisplayInfo(0),
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
-import { rt, JObj, noops } from "../jvm/runtime";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleField, jarray } from "../jvm/abi";
 import { newObj, scall, vcall, staticField } from "../jvm/natives/jlang";
 import { hostStub } from "./binder";
@@ -15,38 +15,38 @@ const INFO = "android/view/DisplayInfo";
 const mode = () => newObj("android/view/Display$Mode", "(IIIFFZ[F[I)V", 1, Math.min(device.width, device.height),
   Math.max(device.width, device.height), device.refreshRate, device.refreshRate, 0, new Float32Array(0), new Int32Array(0));
 
-async function displayInfo(): Promise<JObj> {
-  const info: Record<string, unknown> = await newObj(INFO, "()V");
+const displayInfo = driven(function* (): Gen<JObj> {
+  const info: Record<string, unknown> = yield newObj(INFO, "()V");
   const { width, height } = device, short = Math.min(width, height), long = Math.max(width, height);
   const rate = device.refreshRate, interval = device.frameIntervalNanos;
-  const date = await newObj("android/hardware/display/DeviceProductInfo$ManufactureDate", "(Ljava/lang/Integer;Ljava/lang/Integer;)V",
-    await scall("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", 27), await scall("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", 2006));
+  const date = yield newObj("android/hardware/display/DeviceProductInfo$ManufactureDate", "(Ljava/lang/Integer;Ljava/lang/Integer;)V",
+    yield scall("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", 27), yield scall("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", 2006));
   const values: Record<string, unknown> = {
     layerStack: 0, flags: 16515, type: 1, displayId: 0, displayGroupId: 0,
-    address: await scall("android/view/DisplayAddress", "fromPhysicalDisplayId", "(J)Landroid/view/DisplayAddress$Physical;", 4619827259835644672n),
-    deviceProductInfo: await newObj("android/hardware/display/DeviceProductInfo",
+    address: yield scall("android/view/DisplayAddress", "fromPhysicalDisplayId", "(J)Landroid/view/DisplayAddress$Physical;", 4619827259835644672n),
+    deviceProductInfo: yield newObj("android/hardware/display/DeviceProductInfo",
       "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Landroid/hardware/display/DeviceProductInfo$ManufactureDate;I)V",
       "EMU_display_0", "GGL", "1", null, date, 0),
     name: "Built-in Screen", uniqueId: "local:4619827259835644672",
     appWidth: width, appHeight: height, logicalWidth: width, logicalHeight: height,
     smallestNominalAppWidth: short, smallestNominalAppHeight: short, largestNominalAppWidth: long, largestNominalAppHeight: long,
     rotation: width > height ? 1 : 0, modeId: 1, renderFrameRate: rate, defaultModeId: 1, userPreferredModeId: -1,
-    supportedModes: jarray([await mode()], "Landroid/view/Display$Mode;"),
-    appsSupportedModes: jarray([await mode()], "Landroid/view/Display$Mode;"),
+    supportedModes: jarray([yield mode()], "Landroid/view/Display$Mode;"),
+    appsSupportedModes: jarray([yield mode()], "Landroid/view/Display$Mode;"),
     colorMode: 0, supportedColorModes: Int32Array.of(0),
-    hdrCapabilities: await newObj("android/view/Display$HdrCapabilities", "([IFFF)V", new Int32Array(0), 500, 500, 0),
+    hdrCapabilities: yield newObj("android/view/Display$HdrCapabilities", "([IFFF)V", new Int32Array(0), 500, 500, 0),
     userDisabledHdrTypes: new Int32Array(0), minimalPostProcessingSupported: 0,
     logicalDensityDpi: device.densityDpi, physicalXDpi: device.densityDpi, physicalYDpi: device.densityDpi,
     appVsyncOffsetNanos: 1000000n, presentationDeadlineNanos: interval, state: 2, committedState: 2, ownerUid: 0,
     refreshRateOverride: rate, removeMode: 0, brightnessMinimum: 0, brightnessMaximum: 1, brightnessDefault: BRIGHTNESS,
-    roundedCorners: await staticField("android/view/RoundedCorners", "NO_ROUNDED_CORNERS"),
+    roundedCorners: yield staticField("android/view/RoundedCorners", "NO_ROUNDED_CORNERS"),
     installOrientation: 0,
-    displayShape: await scall("android/view/DisplayShape", "createDefaultDisplayShape", "(IIZ)Landroid/view/DisplayShape;", width, height, 0),
-    hdrSdrRatio: NaN, thermalRefreshRateThrottling: await newObj("android/util/SparseArray", "()V"), thermalBrightnessThrottlingDataId: "default",
+    displayShape: yield scall("android/view/DisplayShape", "createDefaultDisplayShape", "(IIZ)Landroid/view/DisplayShape;", width, height, 0),
+    hdrSdrRatio: NaN, thermalRefreshRateThrottling: yield newObj("android/util/SparseArray", "()V"), thermalBrightnessThrottlingDataId: "default",
   };
   for (const [name, value] of Object.entries(values)) info[mangleField(INFO, name)] = value;
   return info as unknown as JObj;
-}
+});
 const BRIGHTNESS = 0.39763778;
 
 // OverlayProperties: hardware composition the display offers. The AVD composes everything on the

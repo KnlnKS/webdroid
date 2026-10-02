@@ -4,7 +4,7 @@
 // there. The touchscreen's raw axes span 0..32767; InputReader scales them to the panel, which
 // sets its motion ranges and the events' precision.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { hostStub } from "./binder";
 import { device } from "../shell/config";
@@ -17,11 +17,11 @@ const TOUCH_SOURCE = 0x5002;
 const RAW_RANGE = 32768;
 
 const B = "android/view/InputDevice$Builder";
-async function build(calls: [string, string, ...unknown[]][], ranges: [number, number, number][] = []): Promise<JObj> {
-  const builder = await newObj(B, "()V");
-  for (const [name, arg, ...values] of calls) await vcall(builder, name, `(${arg})L${B};`, ...values);
-  for (const [axis, min, max] of ranges) await vcall(builder, "addMotionRange", `(IIFFFFF)L${B};`, axis, TOUCH_SOURCE, min, max, 0, 0, 0);
-  return vcall(builder, "build", "()Landroid/view/InputDevice;");
+function* build(calls: [string, string, ...unknown[]][], ranges: [number, number, number][] = []): Gen<JObj> {
+  const builder = yield newObj(B, "()V");
+  for (const [name, arg, ...values] of calls) yield vcall(builder, name, `(${arg})L${B};`, ...values);
+  for (const [axis, min, max] of ranges) yield vcall(builder, "addMotionRange", `(IIFFFFF)L${B};`, axis, TOUCH_SOURCE, min, max, 0, 0, 0);
+  return yield vcall(builder, "build", "()Landroid/view/InputDevice;");
 }
 const keyMap = (file: string) => parseKeyMap(`/system/usr/keychars/${file}`, KEY_CHARACTER_MAPS[file]);
 function common(id: number, generation: number, name: string, descriptor: string, sources: number, keyboardType: number, bus: number, display: number) {
@@ -30,17 +30,17 @@ function common(id: number, generation: number, name: string, descriptor: string
     ["setDeviceBus", "I", bus], ["setAssociatedDisplayId", "I", display], ["setEnabled", "Z", 1]] as [string, string, ...unknown[]][];
 }
 let devices: Promise<Map<number, JObj>> | null = null;
-const inputDevices = () => devices ??= (async () => {
-  const virtual = await build([...common(VIRTUAL_KEYBOARD, 3, "Virtual", "a718a782d34bc767f4689c232d64d527998ea7fd", 0x301, 2, 0, -1),
-    ["setKeyCharacterMap", "Landroid/view/KeyCharacterMap;", await javaKeyCharacterMap(VIRTUAL_KEYBOARD, keyMap("Virtual.kcm"))]]);
+const inputDevices = () => devices ??= Promise.resolve(rt.drive(function* (): Gen<Map<number, JObj>> {
+  const virtual = yield* build([...common(VIRTUAL_KEYBOARD, 3, "Virtual", "a718a782d34bc767f4689c232d64d527998ea7fd", 0x301, 2, 0, -1),
+    ["setKeyCharacterMap", "Landroid/view/KeyCharacterMap;", yield javaKeyCharacterMap(VIRTUAL_KEYBOARD, keyMap("Virtual.kcm"))]]);
   const { width, height } = device, diagonal = Math.hypot(width, height);
   // the switch mapper's source (AINPUT_SOURCE_SWITCH, 0x80000000) rides along with keyboard, touchscreen and stylus
-  const touch = await build([...common(TOUCHSCREEN, 86, "virtio_input_multi_touch_1", "43db9dd6fa61939c1b516cd9522f0fe93926a00b", 0x80005103 | 0, 1, 6, 0),
-    ["setKeyCharacterMap", "Landroid/view/KeyCharacterMap;", await javaKeyCharacterMap(TOUCHSCREEN, keyMap("Generic.kcm"))]],
+  const touch = yield* build([...common(TOUCHSCREEN, 86, "virtio_input_multi_touch_1", "43db9dd6fa61939c1b516cd9522f0fe93926a00b", 0x80005103 | 0, 1, 6, 0),
+    ["setKeyCharacterMap", "Landroid/view/KeyCharacterMap;", yield javaKeyCharacterMap(TOUCHSCREEN, keyMap("Generic.kcm"))]],
   [[0, 0, (RAW_RANGE - 1) * width / RAW_RANGE], [1, 0, (RAW_RANGE - 1) * height / RAW_RANGE], [2, 0, 1], [3, 0, 1],
     [4, 0, diagonal], [5, 0, diagonal], [6, 0, diagonal], [7, 0, diagonal], [8, -Math.PI / 2, Math.PI / 2]]);
   return new Map([[VIRTUAL_KEYBOARD, virtual], [TOUCHSCREEN, touch]]);
-})();
+}()));
 
 /** InputReader::hasKeys: a negative id asks every device; only keyboard mappers know keys */
 function hasKeys(id: number, sourceMask: number, codes: Int32Array, out: Uint8Array): number {

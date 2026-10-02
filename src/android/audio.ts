@@ -3,7 +3,7 @@
 // a normal ringer and mode, MediaFocusControl's focus stack, and no spatializer. Output devices are
 // not modelled (AudioSystem lists no ports), so no attributes route to one. A codec's loudness
 // parameters are the reference AVD's for its output (the speaker).
-import { rt, JObj, noops, stubs, declaredField } from "../jvm/runtime";
+import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { hostStub } from "./binder";
@@ -94,13 +94,13 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
     (_attrs: unknown, gain: number, _cb: unknown, dispatcher: JObj | null, clientId: string) => requestFocus(gain, dispatcher, clientId),
   "abandonAudioFocus(Landroid/media/IAudioFocusDispatcher;Ljava/lang/String;Landroid/media/AudioAttributes;Ljava/lang/String;)I":
     (_dispatcher: unknown, clientId: string) => abandon(clientId),
-  "getLoudnessParams(Landroid/media/LoudnessCodecInfo;)Landroid/os/PersistableBundle;": async (info: Record<string, number>) => {
-    const bundle = await newObj("android/os/PersistableBundle"), type = info[declaredField("android/media/LoudnessCodecInfo", "metadataType")];
-    await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-target-ref-level", 64);
-    if (type === 1) await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-heavy-compression", 1);
-    if (type === 2) await vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-effect-type", 3);
+  "getLoudnessParams(Landroid/media/LoudnessCodecInfo;)Landroid/os/PersistableBundle;": driven(function* (info: Record<string, number>) {
+    const bundle = yield newObj("android/os/PersistableBundle"), type = info[declaredField("android/media/LoudnessCodecInfo", "metadataType")];
+    yield vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-target-ref-level", 64);
+    if (type === 1) yield vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-heavy-compression", 1);
+    if (type === 2) yield vcall(bundle, "putInt", "(Ljava/lang/String;I)V", "aac-drc-effect-type", 3);
     return bundle;
-  },
+  }),
   // the output never changes, so no updated parameters are ever dispatched
   ...noops("registerLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V",
     "unregisterLoudnessCodecUpdatesDispatcher(Landroid/media/ILoudnessCodecUpdatesDispatcher;)V", "startLoudnessCodecUpdates(I)V",

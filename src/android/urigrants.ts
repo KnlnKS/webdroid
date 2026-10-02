@@ -1,5 +1,5 @@
 import { hostStub } from "./binder";
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost } from "./apphost";
 import { type JUri, mkUri } from "./net";
 import { PROCESS_UID } from "./os";
@@ -45,15 +45,15 @@ export function grantUriPermission(pkg: string, uri: JUri, modes: number): void 
 }
 /** ActivityManager's grant of a result's URIs to the activity receiving it: its data and every
  *  ClipData item, under the result's grant flags */
-export async function grantResultUris(pkg: string, data: JObj): Promise<void> {
-  const flags: number = await vcall(data, "getFlags", "()I");
+export const grantResultUris = driven(function* (pkg: string, data: JObj): Gen<void> {
+  const flags: number = yield vcall(data, "getFlags", "()I");
   if (!(flags & 3)) return;
-  const clip: JObj | null = await vcall(data, "getClipData", "()Landroid/content/ClipData;");
-  const uris: (JUri | null)[] = [await vcall(data, "getData", "()Landroid/net/Uri;")];
-  for (let i = 0, n = clip ? await vcall(clip, "getItemCount", "()I") : 0; i < n; i++)
-    uris.push(await vcall(await vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;"));
+  const clip: JObj | null = yield vcall(data, "getClipData", "()Landroid/content/ClipData;");
+  const uris: (JUri | null)[] = [yield vcall(data, "getData", "()Landroid/net/Uri;")];
+  for (let i = 0, n = clip ? yield vcall(clip, "getItemCount", "()I") : 0; i < n; i++)
+    uris.push(yield vcall(yield vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;"));
   for (const uri of uris) if (uri) grantUriPermission(pkg, uri, flags);
-}
+});
 export function revokeUriPermission(uri: JUri, modes: number): void {
   if (!uri) rt.npe();
   for (const grants of transientUriGrants.values()) {
@@ -106,7 +106,8 @@ const persistedPermissions = async (): Promise<JObj> => newArrayList(await Promi
 rt.register({ name: "webdroid/UriGrantsManagerService", ctor: class extends JObj {}, sup: "android/app/IUriGrantsManager$Stub", methods: {
   "takePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri, modes: number) => takePersistable(u, modes),
   "releasePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri, modes: number) => releasePersistable(u, modes),
-  "getUriPermissions(Ljava/lang/String;ZZ)Landroid/content/pm/ParceledListSlice;": async (_pkg: string, incoming: number) =>
-    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? await persistedPermissions() : newArrayList()),
+  "getUriPermissions(Ljava/lang/String;ZZ)Landroid/content/pm/ParceledListSlice;": driven(function* (_pkg: string, incoming: number) {
+    return yield newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? yield persistedPermissions() : newArrayList());
+  }),
 } });
 hostStub("uri_grants", "webdroid/UriGrantsManagerService");
