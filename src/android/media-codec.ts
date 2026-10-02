@@ -154,12 +154,12 @@ export class Codec {
   waiters = new Set<() => void>();
   scheduled = new Map<ReturnType<typeof setTimeout>, VideoFrame>();
   /** an event to the Java codec's EventHandler, dropped once the codec is reset */
-  post(what: number, arg1: number, arg2: number, obj: () => unknown = () => null): void {
-    const owner = this.owner, epoch = this.epoch;
+  post(what: number, arg1: number, arg2: number, obj: () => Gen = function* () { return null; }): void {
+    const owner = this.owner, epoch = this.epoch, codec = this;
     if (!owner) return;
-    void onMain(async () => {
-      if (epoch === this.epoch) await vcall(owner, "postEventFromNative", "(IIILjava/lang/Object;)V", what, arg1, arg2, await obj());
-    }).catch(reportUncaught);
+    void onMain(() => rt.drive(function* (): Gen {
+      if (epoch === codec.epoch) yield vcall(owner, "postEventFromNative", "(IIILjava/lang/Object;)V", what, arg1, arg2, yield* obj());
+    }())).catch(reportUncaught);
   }
   wake(): void { for (const resolve of this.waiters) resolve(); this.waiters.clear(); }
   check(): void {
@@ -171,7 +171,7 @@ export class Codec {
     console.warn("[media codec]", error);
     const message = this.error = error instanceof Error ? error.message : String(error);
     // ERROR_UNKNOWN (0), neither transient nor recoverable
-    if (this.async) this.post(EVENT_CALLBACK, CB_ERROR, 0, () => newObj("android/media/MediaCodec$CodecException", "(IILjava/lang/String;)V", 0, 0, message));
+    if (this.async) this.post(EVENT_CALLBACK, CB_ERROR, 0, function* () { return yield newObj("android/media/MediaCodec$CodecException", "(IILjava/lang/String;)V", 0, 0, message); });
     this.wake();
   }
   busy(): boolean { return this.inFlight + this.outputs.size + this.scheduled.size >= 8; }
@@ -184,7 +184,7 @@ export class Codec {
   }
   changed(format: NativeFormat): void {
     this.outputFormat = format;
-    if (this.async) this.post(EVENT_CALLBACK, CB_OUTPUT_FORMAT_CHANGE, 0, () => formatToJava(format));
+    if (this.async) this.post(EVENT_CALLBACK, CB_OUTPUT_FORMAT_CHANGE, 0, function* () { return yield formatToJava(format); });
     else this.formatChanged = true;
   }
   output(output: Output): void {
@@ -192,9 +192,9 @@ export class Codec {
     const index = this.freeOutputs.pop() ?? this.nextOutput++;
     this.outputs.set(index, output);
     const { offset, size, time, flags } = output.info;
-    if (this.async) this.post(EVENT_CALLBACK, CB_OUTPUT_AVAILABLE, index, async () => {
-      const bufferInfo = await newObj("android/media/MediaCodec$BufferInfo");
-      await vcall(bufferInfo, "set", "(IIJI)V", offset, size, time, flags);
+    if (this.async) this.post(EVENT_CALLBACK, CB_OUTPUT_AVAILABLE, index, function* () {
+      const bufferInfo = yield newObj("android/media/MediaCodec$BufferInfo");
+      yield vcall(bufferInfo, "set", "(IIJI)V", offset, size, time, flags);
       return bufferInfo;
     });
     else this.outputQueue.push(index);
@@ -297,9 +297,9 @@ export class Codec {
           presentSurface(surface, output.frame);
           if (this.frameEvents) {
             const media = output.info.time, nano = BigInt(Math.floor(performance.now() * 1e6));
-            this.post(EVENT_FRAME_RENDERED, 0, 0, async () => {
-              const map = await newObj("java/util/HashMap"), put = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
-              await vcall(map, "put", put, "0-media-time-us", boxLong(media)); await vcall(map, "put", put, "0-system-nano", boxLong(nano));
+            this.post(EVENT_FRAME_RENDERED, 0, 0, function* () {
+              const map = yield newObj("java/util/HashMap"), put = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+              yield vcall(map, "put", put, "0-media-time-us", boxLong(media)); yield vcall(map, "put", put, "0-system-nano", boxLong(nano));
               return map;
             });
           }

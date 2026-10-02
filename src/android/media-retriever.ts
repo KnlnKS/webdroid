@@ -1,4 +1,4 @@
-import { rt, type JObj } from "../jvm/runtime";
+import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { concat } from "../jvm/abi";
 import { after, vcall } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
@@ -59,7 +59,7 @@ class Retriever {
       this.metadata.set(32, String(video.samples.length));
     }
   }
-  async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<object | null> {
+  async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<NativeBitmap | null> {
     // no source, no video track or no decoder for it: the retriever has no frame to give
     const extractor = this.extractor, source = this.source;
     if (!source || !extractor || typeof VideoDecoder === "undefined") return null;
@@ -96,7 +96,7 @@ class Retriever {
       const width = targetWidth ?? decoded.displayWidth, height = targetHeight ?? decoded.displayHeight;
       const bitmap = new NativeBitmap(width, height);
       bitmap.ctx.drawImage(decoded, 0, 0, width, height);
-      return await javaBitmap(bitmap);
+      return bitmap;
     } catch { return null; }
     finally { frames[0]?.close(); if (decoder.state !== "closed") decoder.close(); }
   }
@@ -134,10 +134,11 @@ rt.registerJnis(MMR, {
     } }));
   },
   "nativeExtractMetadata(I)Ljava/lang/String;": function (this: JObj, key: number) { return retriever(this).metadata.get(key) ?? null; },
-  "_getFrameAtTime(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;": function (this: JObj,
-    time: bigint, option: number, width: number, height: number) {
-    return retriever(this).frame(time, option, width > 0 ? width : undefined, height > 0 ? height : undefined);
-  },
+  "_getFrameAtTime(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;": driven(function* (this: JObj,
+    time: bigint, option: number, width: number, height: number): Gen {
+    const bitmap: NativeBitmap | null = yield retriever(this).frame(time, option, width > 0 ? width : undefined, height > 0 ? height : undefined);
+    return bitmap && (yield javaBitmap(bitmap));
+  }),
   // only an MP3's APIC frame is read, whatever picture type is asked for
   "getEmbeddedPicture(I)[B": function (this: JObj) { return retriever(this).picture; },
 });

@@ -78,10 +78,10 @@ rt.register({ name: "webdroid/MediaSessionRecord", ctor: JRecordBinder, sup: MS 
   [`setPlaybackState(L${PS};)V`]: R((r, state: JObj | null) => { r.playback = state; push(r, "onPlaybackStateChanged", `(L${PS};)V`, state); }),
   "resetQueue()V": R((r) => { r.queue = null; push(r, "onQueueChanged", "(Landroid/content/pm/ParceledListSlice;)V", null); }),
   "getBinderForSetQueue()Landroid/os/IBinder;": R((r) => newObj(MS + "ParcelableListBinder", "(Ljava/lang/Class;Ljava/util/function/Consumer;)V",
-    rt.classFor(MS + "MediaSession$QueueItem"), lambda("java/util/function/Consumer", "accept(Ljava/lang/Object;)V", async (list: JObj) => {
+    rt.classFor(MS + "MediaSession$QueueItem"), lambda("java/util/function/Consumer", "accept(Ljava/lang/Object;)V", driven(function* (list: JObj): Gen {
       r.queue = list;
-      push(r, "onQueueChanged", "(Landroid/content/pm/ParceledListSlice;)V", await queueSlice(list));
-    }))),
+      push(r, "onQueueChanged", "(Landroid/content/pm/ParceledListSlice;)V", yield queueSlice(list));
+    })))),
   "setQueueTitle(Ljava/lang/CharSequence;)V": R((r, title: unknown) => { r.queueTitle = title; push(r, "onQueueTitleChanged", "(Ljava/lang/CharSequence;)V", title); }),
   [`setExtras(${B})V`]: R((r, extras: JObj | null) => { r.extras = extras; push(r, "onExtrasChanged", `(${B})V`, extras); }),
   "setRatingType(I)V": R((r, type: number) => { r.ratingType = type; }),
