@@ -61,7 +61,8 @@ export function systemToken(): JObj {
   rt.link("android/os/BinderProxy");
   const proxy = new JBinderProxy(), id = nextId++;
   proxy.handle = { pid: PROCESS_PID, id };
-  local.set(id, proxy); localIds.set(proxy, id);
+  // a parcel written and read back here (an Intent's extras) imports the same token
+  local.set(id, proxy);
   return proxy;
 }
 class JFileWriter extends JBinder { pfd: JObj | null = null; }
