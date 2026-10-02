@@ -11,7 +11,7 @@ import { installPackageArchive } from "./pm";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
 import { newStub } from "./binder";
-import type { JIntent } from "./intent";
+import { putExtra, type JIntent } from "./intent";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
 const STATUS_SUCCESS = 0, STATUS_FAILURE_INVALID = 4, MODE_FULL_INSTALL = 1;
@@ -38,8 +38,7 @@ function finish(s: Session, success: boolean): void {
 /** PackageInstallerSession.commit: install the staged APK, then report to the status receiver */
 function* commit$(s: Session, sender: JObj): Gen<void> {
   const result: JIntent = yield construct("android/content/Intent", "()V");
-  const extra = (key: string, value: unknown, desc: string) => vcall(result, "putExtra", `(${S}${desc})Landroid/content/Intent;`, key, value);
-  yield extra("android.content.pm.extra.SESSION_ID", s.id, "I");
+  yield putExtra(result, "android.content.pm.extra.SESSION_ID", s.id, "I");
   let installed: string | null = null, failure = "";
   try {
     if (s.mode !== MODE_FULL_INSTALL || s.names.length !== 1) throw new Error("Install requires one base APK");
@@ -53,11 +52,11 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
     const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
     const added: JIntent = yield construct("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
     callUncaught(() => broadcastIntent(added, [], false));
-    yield extra("android.content.pm.extra.PACKAGE_NAME", installed, S);
-    yield extra("android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
+    yield putExtra(result, "android.content.pm.extra.PACKAGE_NAME", installed, S);
+    yield putExtra(result, "android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
   } else {
-    yield extra("android.content.pm.extra.STATUS", STATUS_FAILURE_INVALID, "I");
-    yield extra("android.content.pm.extra.STATUS_MESSAGE", failure, S);
+    yield putExtra(result, "android.content.pm.extra.STATUS", STATUS_FAILURE_INVALID, "I");
+    yield putExtra(result, "android.content.pm.extra.STATUS_MESSAGE", failure, S);
   }
   finish(s, installed !== null);
   yield sendIntent(sender, result);

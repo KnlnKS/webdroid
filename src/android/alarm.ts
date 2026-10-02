@@ -5,9 +5,8 @@ import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
 import { operationId, localPendingIntents } from "./pendingintent";
 import { Alarms } from "../shell/alarms";
-import { uptimeMillis } from "../guest-clock";
+import { clearGuestTimeout, setGuestTimeout, uptimeMillis, type GuestTimer } from "../guest-clock";
 import { packages, usesSdk } from "./packages";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 const localAlarms = new Alarms(localPendingIntents, uptimeMillis, reportUncaught);
 export const alarmTransport = {
