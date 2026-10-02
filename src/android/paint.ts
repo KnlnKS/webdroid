@@ -7,13 +7,13 @@ import { charsToString, mangleMethod } from "../jvm/abi";
 import { after, construct, newObj, vcall } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
-import { type FaceMetrics, type NativeTypeface, type FakedFont, SYSTEM_FONT, resolveDefault, FAKE_BOLD } from "./fonts";
+import { type FaceMetrics, type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
 import { colorLongAt } from "./bitmap";
 import { NativePath, walkPath } from "./path";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
 import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect";
-import { shapeTextRun, layoutOutlines, hasGlyph } from "./shaping";
+import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping";
 import { strokeCommands } from "./skia-text";
 import type { Ctx2D } from "./recording";
 
@@ -92,26 +92,18 @@ export class NativePaint {
     return this.blend === "source-in" && this.color >>> 24 === 0 && !this.shader && !this.colorFilter;
   }
 
-  // font() is called per text op and per measure; the result is a pure function of
-  // (typeface, textSize, fakeBold), so cache it and rebuild only when one changes.
-  private fCache = "";
-  private fTf: NativeTypeface | null | undefined = undefined;
-  private fSize = -1;
-  private fBold = false;
-  private fFace: FakedFont | null = null;
-  font(): string {
-    const bold = this.fakeBold;
-    if (this.fTf === this.tf && this.fSize === this.textSize && this.fBold === bold) return this.fCache;
-    const t = resolveDefault(this.tf), w = bold ? Math.max(700, t.weight) : t.weight;
-    // minikin draws from the primary family's closest face; the face's own weight makes CSS pick it
-    const face = this.fFace = t.collection.families[0]?.match(w, t.italic) ?? null;
-    this.fTf = this.tf; this.fSize = this.textSize; this.fBold = bold;
-    const weight = !face ? w : face.fakery & FAKE_BOLD ? 700 : face.font.weight;
-    return (this.fCache = `${t.italic ? "italic " : ""}${weight} ${this.textSize}px ${t.collection.css}, sans-serif`);
+  // the primary font is a pure function of the typeface; text ops and metrics ask for it often
+  private pTf: NativeTypeface | null | undefined = undefined;
+  private pFont: FakedFont | null = null;
+  /** minikin's primary font: the typeface's first family as it matches the typeface's style */
+  primary(): FakedFont {
+    if (this.pTf !== this.tf) {
+      const t = resolveDefault(this.tf);
+      this.pFont = t.collection.families[0].match(t.weight, t.italic);
+      this.pTf = this.tf;
+    }
+    return this.pFont!;
   }
-  /** the face font() draws from, and whether it draws it with fake bold or italic */
-  face() { this.font(); return this.fFace?.font ?? null; }
-  faked(): boolean { this.font(); return !!this.fFace?.fakery; }
   fillStyle(ctx: Ctx2D): string | CanvasGradient | CanvasPattern {
     return this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
   }
@@ -170,59 +162,21 @@ const TF = "Landroid/graphics/Typeface;";
 export const paintTypeface = (p: object) => vcall(p, "getTypeface", `()${TF}`) as object | null;
 export const setPaintTypeface = (p: object, tf: object | null): unknown => vcall(p, "setTypeface", `(${TF})${TF}`, tf);
 
-// ── text measurement and metrics
-let _measureCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
-/**
- * The shared measurement context. ALWAYS pass the font you are about to measure with:
- * setFont elides a redundant assignment by remembering what it last wrote, so a caller that
- * assigns ctx.font itself leaves that memo naming a font the context no longer has — and the
- * next cache miss then measures with the wrong one.
- */
-export function measureCtx(font?: string, language = "en-US"): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
-  if (!_measureCtx) {
-    const c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : (document.createElement("canvas"));
-    _measureCtx = c.getContext("2d") as CanvasRenderingContext2D;
-  }
-  if (font !== undefined) setFont(_measureCtx, font);
-  if ("lang" in _measureCtx && _measureCtx.lang !== language) _measureCtx.lang = language;
-  return _measureCtx;
+// ── text metrics
+let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
+/** a 2D context that makes gradients and patterns for any canvas */
+export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+  return scratch ??= (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas")).getContext("2d") as OffscreenCanvasRenderingContext2D;
 }
-const vmetCache = new Map<string, { a: number; d: number }>();
-let lastFont = "";
-function setFont(ctx: { font: string }, f: string): void {
-  if (f !== lastFont) { ctx.font = f; lastFont = f; }
-}
-/** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds; the
- *  metrics are the drawn face's. Browser bounding-box metrics round to pixels even with FontFace
- *  metric overrides. */
-const metricsOf = (p: NativePaint): FaceMetrics => p.face()?.faceMetrics ?? SYSTEM_FONT;
-function vmetrics(p: NativePaint): { a: number; d: number } {
-  const f = p.font();
-  let v = vmetCache.get(f);
-  if (!v) {
-    const face = p.face()?.faceMetrics;
-    if (face) v = { a: -p.textSize * face.ascent, d: p.textSize * face.descent };
-    else {
-      const m = measureCtx(f).measureText("Ag");
-      v = { a: -(m.fontBoundingBoxAscent ?? p.textSize * SYSTEM_FONT.ascent), d: m.fontBoundingBoxDescent ?? p.textSize * SYSTEM_FONT.descent };
-    }
-    vmetCache.set(f, v);
-  }
-  return v;
-}
+/** Paint's metrics are its primary font's (hhea ascent/descent, head bounds), fractional */
+const metricsOf = (p: NativePaint): FaceMetrics => p.primary().font.faceMetrics!;
 /** getMetricsInternal's elegant-height metrics, in 2048ths of the size: top, ascent, descent, bottom */
 const ELEGANT_METRICS = [2500, 1900, 500, 1000];
 const elegant = (p: NativePaint, i: number) => (i < 2 ? -p.textSize : p.textSize) * ELEGANT_METRICS[i] / 2048;
-export function fontAscent(p: NativePaint): number { return p.elegant === ELEGANT ? elegant(p, 1) : vmetrics(p).a; }
-export function fontDescent(p: NativePaint): number { return p.elegant === ELEGANT ? elegant(p, 2) : vmetrics(p).d; }
-export function fontTop(p: NativePaint): number {
-  if (p.elegant === ELEGANT) return elegant(p, 0);
-  const m = metricsOf(p); return Math.fround(vmetrics(p).a * (m.top / m.ascent));
-}
-export function fontBottom(p: NativePaint): number {
-  if (p.elegant === ELEGANT) return elegant(p, 3);
-  const m = metricsOf(p); return Math.fround(vmetrics(p).d * (m.bottom / m.descent));
-}
+export const fontAscent = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 1) : -p.textSize * metricsOf(p).ascent;
+export const fontDescent = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 2) : p.textSize * metricsOf(p).descent;
+export const fontTop = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 0) : Math.fround(-p.textSize * metricsOf(p).top);
+export const fontBottom = (p: NativePaint): number => p.elegant === ELEGANT ? elegant(p, 3) : Math.fround(p.textSize * metricsOf(p).bottom);
 const metricKeys: Record<string, string[]> = {};
 /** a Java Paint.FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */
 export function setFontMetrics(fm: object, int: boolean, top: number, ascent: number, descent: number, bottom: number, leading: number) {
@@ -254,12 +208,12 @@ export const underlineThickness = (p: NativePaint) => f32(p.textSize * (metricsO
 export const strikeThruPosition = (p: NativePaint) => f32(p.textSize * STD_STRIKE_THRU_TOP);
 export const strikeThruThickness = (p: NativePaint) => f32(p.textSize * STD_THICKNESS);
 
-/** the glyph bounds the browser reports, rounded out */
 type Box = { left: number; top: number; right: number; bottom: number };
-function textBounds(p: NativePaint, s: string, r: Box) {
-  const m = measureCtx(p.font(), p.language).measureText(s);
-  r.left = Math.floor(-m.actualBoundingBoxLeft); r.right = Math.ceil(m.actualBoundingBoxRight);
-  r.top = -Math.ceil(m.actualBoundingBoxAscent); r.bottom = Math.ceil(m.actualBoundingBoxDescent);
+/** Paint::getTextBounds: the laid-out glyphs' bounds, rounded out */
+function textBounds(p: NativePaint, bidi: number, s: string, r: Box) {
+  return after(layoutBounds(s, isRtl(bidi, s), p), (b) => {
+    [r.left, r.top, r.right, r.bottom] = b ? [Math.floor(b[0]), Math.floor(b[1]), Math.ceil(b[2]), Math.ceil(b[3])] : [0, 0, 0, 0];
+  });
 }
 
 // ── shadows
@@ -420,14 +374,10 @@ rt.registerJnis(PAINT, {
   "nGetStrikeThruThickness(J)F": (h: bigint) => strikeThruThickness(paintAt(h)),
   "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: object | null) => fillFontMetrics(paintAt(h), fm, false),
   "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: object | null) => fillFontMetrics(paintAt(h), fm, true),
-  // the per-run forms answer for one text run; with one font for everything, the run does
-  // not change the answer, so they are the whole-paint metrics
-  "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _c: Uint16Array, _a: number, _b: number, _d: number, _e: number, _f: number, fm: object) => fillFontMetrics(paintAt(h), fm, true),
-  "nGetFontMetricsIntForText(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _s: string, _a: number, _b: number, _d: number, _e: number, _f: number, fm: object) => fillFontMetrics(paintAt(h), fm, true),
-  "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, _bidi: number, r: Box) =>
-    textBounds(paintAt(h), charsToString(c, i, n), r),
-  "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, _bidi: number, r: Box) =>
-    textBounds(paintAt(h), s.slice(a, b), r),
+  "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, bidi: number, r: Box) =>
+    textBounds(paintAt(h), bidi, charsToString(c, i, n), r),
+  "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, bidi: number, r: Box) =>
+    textBounds(paintAt(h), bidi, s.slice(a, b), r),
   // MinikinPaint equality: size, scale, skew, spacing, font flags, features, locales and typeface
   "nEqualsForTextMeasurement(JJ)Z": (a: bigint, b: bigint) => {
     const x = paintAt(a), y = paintAt(b);

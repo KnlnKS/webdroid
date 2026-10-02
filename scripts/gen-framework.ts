@@ -70,10 +70,12 @@ if (!process.argv.includes("--verify")) {
   sh("shell", `/apex/com.android.art/bin/profman --profile-file=/system/etc/boot-image.prof ${bootJars.map((j) => `--apk=${j} --dex-location=${j}`).join(" ")}` +
     " --dump-classes-and-methods > /data/local/tmp/boot-image-profile.txt");
   pull("/data/local/tmp/boot-image-profile.txt", "boot-image-profile.txt");
-  // ICU data, the time zone module's files and bionic's libraries, at their device paths
+  // ICU data, the time zone module's files, the system fonts and their configuration, and
+  // bionic's libraries, at their device paths
   const data: Record<string, number> = {};
   const { DEVICE_LIBS } = await import("../src/native/bionic");
-  for (const src of [...sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "-type", "f").split(/\s+/), ...DEVICE_LIBS]) {
+  const files = sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "/system/fonts", "-type", "f").split(/\s+/);
+  for (const src of [...files, "/system/etc/fonts.xml", "/system/etc/font_fallback.xml", ...DEVICE_LIBS]) {
     await Bun.$`mkdir -p ${`${OUT}${src.slice(0, src.lastIndexOf("/"))}`}`.quiet();
     pull(src, src.slice(1));
     data[src] = Bun.file(`${OUT}${src}`).size;

@@ -59,6 +59,9 @@ function devicePath(req: Request): Response {
   return path.includes("..") ? new Response("nope", { status: 400 }) : new Response(Bun.file(path), { headers: { "cache-control": IMMUTABLE } });
 }
 
+/** scripts/font-index.ts, run once: the reference build's fonts change only with gen-framework */
+let fontIndex: Promise<string> | null = null;
+
 const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
  *  live in its splits, so filtering the container's own entries finds nothing. */
@@ -113,6 +116,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/compile-worker.js": () => compileWorker(),
     "/link-table.json": linkTable,
+    "/font-index.json": async () => new Response(await (fontIndex ??= new Response(Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" }).stdout).text()),
+      { headers: { "content-type": "application/json" } }),
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
     "/dns-query": forwardDnsMessage,
     "/proxy": (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),
@@ -136,10 +141,10 @@ const server: Bun.Server<SocketData> = Bun.serve({
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
     "/harfbuzz.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz.wasm"),
+    "/harfbuzz-subset.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz-subset.wasm"),
     // under vendor/aosp, the reference build's class path, framework-res.apk and its ICU and time
     // zone files (bun run gen-framework): they only change with the build, so let the browser keep them.
     "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),
-    "/vendor/fonts/:file": (req) => serveFile("vendor/fonts", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/boot/:file": (req) => serveFile("vendor/aosp/boot", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/apex/*": devicePath,

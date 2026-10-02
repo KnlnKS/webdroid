@@ -8,7 +8,6 @@ import { dumpWindows } from "./shell/uiautomator";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
-import { fetchSystemFonts, mountSystemFonts, registerSystemFonts } from "./android/fonts";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
@@ -97,7 +96,7 @@ async function boot(file: string, local?: File) {
   let rollbackAssets: (() => void) | undefined;
   try {
     void startZygote();
-    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText(), displayRate]);
+    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkiaText(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -265,8 +264,3 @@ const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : ne
   requestAnimationFrame(sample);
 });
 
-const fontsReady = fetchSystemFonts().then(async (bytes) => {
-  await mountSystemFonts(bytes);
-  await registerSystemFonts(bytes);
-});
-void fontsReady.catch((e) => console.error("[fonts]", e));

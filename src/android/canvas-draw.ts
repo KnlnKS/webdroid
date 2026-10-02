@@ -11,7 +11,8 @@ import { deref } from "./handles";
 import { NativePath, PathMeasure, inversePath } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
-import { drawGlyphs } from "./shaping";
+import { drawGlyphs, cssFont } from "./shaping";
+import { fontNatives } from "./fonts";
 import { paintAdvance } from "./minikin";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
 import { cssColor, canvasLocalBounds, tintedBmp, argbOfColorLong, BLEND_MODES, COMPOSITE } from "./graphics";
@@ -238,12 +239,19 @@ function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p:
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm && p.textScaleX === 1 && !p.textSkewX &&
     !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.pathEffect && !p.shadowRadius &&
     !p.colorFilter && !p.blend && !isRecording(nc.ctx) &&
-    p.face()?.path === SKIA_TEXT_FACE && !p.faked() &&
+    skiaFace(p) &&
     drawSkiaText(nc.ctx, s, x, y, p.textSize,
       p.color,
       p.style === 1 ? "hairline" : "fill", p.subpixelText || p.linearText));
 }
+/** whether the paint draws in the face CanvasKit has: the system Roboto's default instance */
+function skiaFace(p: NativePaint): boolean {
+  const f = p.primary(), fvar = f.font.fvarAxes;
+  return f.font.path === SKIA_TEXT_FACE && !f.fakery && f.weight === 400 && f.italic !== 1 && f.font.axes.every((a) => fvar.find((x) => x.tag === a.tag)?.def === a.value);
+}
+/** Canvas::drawText; its fonts are loaded first (throwing FontPending), before the canvas is touched */
 function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint) {
+  const font = cssFont(s, p);
   if (tryDrawBitmapText(nc, s, x, y, p)) return;
   const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
   const blend = p.compositeOp(), prev = blend ? ctx.globalCompositeOperation : null;
@@ -251,7 +259,7 @@ function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePa
   const warped = p.textScaleX !== 1 || p.textSkewX !== 0;
   try {
     if (blend) ctx.globalCompositeOperation = blend;
-    ctx.font = p.font();
+    ctx.font = font;
     ctx.textRendering = "geometricPrecision";
     if ("lang" in ctx) ctx.lang = p.language;
     if (warped) { ctx.save(); ctx.transform(p.textScaleX, 0, p.textSkewX, 1, x - p.textScaleX * x - p.textSkewX * y, 0); }
@@ -285,6 +293,7 @@ const onPath = new PathMeasure(), posTan = new Float32Array(4), graphemes = type
  *  advance along the path's first contour and turned to its tangent, the alignment an offset of
  *  the whole run against the contour's length */
 function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: number, vOffset: number, p: NativePaint) {
+  cssFont(s, p);
   onPath.setPath(path, false);
   const advance = paintAdvance(p, s), align = p.textAlignN;
   if (align) hOffset += (align === 1 ? -0.5 : -1) * (advance - onPath.length());
@@ -345,6 +354,7 @@ const DRAWS: Record<string, unknown> = {
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
   "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); drawPath(nc, pathAt(path), nc.paint(p)); },
   "nDrawRegion(JJJ)V": (h: bigint, r: bigint, p: bigint) => { const nc = drawingCanvas(h); drawRegion(nc, deref<NativeRegion>(r), nc.paint(p)); },
+  ...fontNatives({
   "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _bidi: number, p: bigint) => {
     const nc = drawingCanvas(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
   },
@@ -364,6 +374,7 @@ const DRAWS: Record<string, unknown> = {
   "nDrawTextOnPath(J[CIIJFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) => {
     const nc = drawingCanvas(h); drawTextOnPath(nc, charsToString(c, i, n), pathAt(path), ho, vo, nc.paint(p));
   },
+  }),
   "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, p: bigint, canvasDensity: number, _screen: number, bitmapDensity: number) => {
     const nc = drawingCanvas(h); drawBitmapAt(nc, bitmapAt(b), x, y, optPaint(nc, p), canvasDensity, bitmapDensity);
   },

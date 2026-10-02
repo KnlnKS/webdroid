@@ -1,4 +1,4 @@
-import { NativeFont, NativeTypeface, FontCollection, mkFamily, wrapFont } from "../../../src/android/fonts";
+import { NativeFont, NativeFamily, NativeTypeface, FontCollection, FakedFont, wrapFont, cssFace, withFonts } from "../../../src/android/fonts";
 import { drawGlyphs, shapeTextRun } from "../../../src/android/shaping";
 import { NativePaint } from "../../../src/android/paint";
 import type { Ctx2D } from "../../../src/android/recording";
@@ -21,9 +21,9 @@ function scan(ctx: Ctx2D) {
  *  file (ink boxes, and how many pixels one covers and the other does not), and an emoji glyph,
  *  which has no outline, in color */
 export default async function glyphs() {
-  const bytes = async (file: string) => new Uint8Array(await (await fetch(`/vendor/fonts/${file}`)).arrayBuffer());
-  const roboto = new NativeFont(await bytes("Roboto-Regular.ttf"), 0, 400, false), emoji = new NativeFont(await bytes("NotoColorEmoji.ttf"), 0, 400, false);
-  const families = [await mkFamily([roboto]), await mkFamily([emoji], "und-Zsye")];
+  const bytes = async (file: string) => new Uint8Array(await (await fetch(`/vendor/aosp/system/fonts/${file}`)).arrayBuffer());
+  const roboto = NativeFont.of(await bytes("Roboto-Regular.ttf"), 0, 400, false), emoji = NativeFont.of(await bytes("NotoColorEmoji.ttf"), 0, 400, false);
+  const families = [new NativeFamily([roboto]), new NativeFamily([emoji], "und-Zsye")];
   const paint = new NativePaint();
   paint.tf = new NativeTypeface(new FontCollection(families), 400, 0, 400, false); paint.textSize = 40; paint.language = "en-US";
   const draw = async (text: string, ctx: Ctx2D) => {
@@ -34,7 +34,7 @@ export default async function glyphs() {
   };
   const drawn = new OffscreenCanvas(W, H).getContext("2d")!, reference = new OffscreenCanvas(W, H).getContext("2d")!;
   const run = await draw("Hig", drawn);
-  reference.font = `40px ${families[0].css}`;
+  reference.font = `40px "${await withFonts(() => cssFace(new FakedFont(roboto, 0, 400, 0)))}"`;
   for (let i = 0; i < 3; i++) reference.fillText("Hig"[i], 10 + run.x[i], 50);
   const a = scan(drawn), b = scan(reference);
   let differing = 0, inked = 0;

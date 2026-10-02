@@ -15,16 +15,16 @@ import { charsToString, mangleMethod } from "../jvm/abi";
 import { scall, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { perf } from "../perf";
-import { type NativePaint, paintAt, fontAscent, fontDescent } from "./paint";
-import { type NativeTypeface, resolveDefault } from "./fonts";
-import { type ShapeStyle, measurePiece, featuresOf, pieceEnd, JOINING } from "./shaping";
+import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";
+import { type NativeTypeface, resolveDefault, fontNatives } from "./fonts";
+import { type ShapeStyle, type Piece, measurePiece, featuresOf, pieceEnd, JOINING } from "./shaping";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
 // Advances are a pure function of (typeface, shaping state, piece). Pieces repeat (they are
 // words), so the cache is capped and cleared wholesale rather than evicted per entry.
 const PIECES_MAX = 20000;
-let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Float32Array>>>(), pieceCount = 0;
-function pieceAdvances(s: TextStyle, piece: string): Float32Array {
+let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Piece>>>(), pieceCount = 0;
+function pieceOf(s: TextStyle, piece: string): Piece {
   let byTf = pieces.get(s.tf);
   if (!byTf) pieces.set(s.tf, byTf = new Map());
   let byStyle = byTf.get(s.key);
@@ -39,14 +39,12 @@ function pieceAdvances(s: TextStyle, piece: string): Float32Array {
 }
 
 /** what measuring text under a paint depends on, taken when a run is added: the paint changes after */
-export interface TextStyle extends ShapeStyle {
-  key: string; letterSpacing: number; wordSpacing: number; ascent: number; descent: number;
-}
+export interface TextStyle extends ShapeStyle { key: string; letterSpacing: number; wordSpacing: number }
 export function styleOf(p: NativePaint): TextStyle {
   // Skia hints a paint without LINEAR_TEXT unless it is skewed; SUBPIXEL_TEXT does not change advances
   const size = p.textSize, scaleX = p.textScaleX, hinted = !p.linearText && p.textSkewX === 0, features = featuresOf(p), lang = p.language;
   return { tf: resolveDefault(p.tf), size, scaleX, hinted, features, lang, key: `${size} ${scaleX} ${+hinted} ${lang} ${features}`,
-    letterSpacing: p.letterSpacingEm * size * scaleX, wordSpacing: p.wordSpacing, ascent: fontAscent(p), descent: fontDescent(p) };
+    letterSpacing: p.letterSpacingEm * size * scaleX, wordSpacing: p.wordSpacing };
 }
 
 /** control characters other than tab shape to nothing; a tab has HarfBuzz's space fallback, and
@@ -54,11 +52,13 @@ export function styleOf(p: NativePaint): TextStyle {
 const CONTROL = /[\0-\x08\x0a-\x1f\x7f-\x9f]/;
 /** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum.
  *  Letter spacing is added to every other cluster, as minikin's layout does, and word spacing to
- *  every space (isWordSpace: U+0020 and U+00A0). */
-export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0): number {
+ *  every space (isWordSpace: U+0020 and U+00A0). `extents` takes each character's piece's ascent
+ *  and descent, two values a character, from `at`. */
+export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0, extents: Float32Array | null = null): number {
   let total = 0;
   for (let i = start; i < end;) {
-    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), w = pieceAdvances(style, piece);
+    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), p = pieceOf(style, piece), w = p.advances;
+    if (extents) for (let k = (at + i - start) * 2; k < (at + e - start) * 2; k += 2) { extents[k] = p.ascent; extents[k + 1] = p.descent; }
     const ls = JOINING.test(piece) ? 0 : style.letterSpacing, controls = CONTROL.test(piece);
     for (let j = 0; j < w.length; j++) {
       const c = piece.charCodeAt(j);
@@ -261,16 +261,14 @@ class WordBreaker {
 // ── MeasuredText ──────────────────────────────────────────────────────────────────────────
 /** a style run has a style; a replacement run (a ReplacementSpan) has only its width */
 export interface Run { start: number; end: number; style: TextStyle | null; width: number; lang: string; lbStyle: number; lbWordStyle: number }
-export interface Measured { text: string; runs: Run[]; widths: Float32Array }
+/** a paragraph's measurement: each character's advance, and its piece's ascent and descent */
+export interface Measured { text: string; runs: Run[]; widths: Float32Array; extents: Float32Array }
 const measured = (h: bigint) => deref<Measured>(h);
 
-/** MeasuredText::getExtent: the extent of the style runs over [start,end) */
+/** MeasuredText::getExtent: the extent of the pieces over [start,end) */
 function extent(m: Measured, start: number, end: number): [number, number] {
   let ascent = 0, descent = 0;
-  for (const r of m.runs) {
-    if (!r.style || r.start >= end || start >= r.end) continue;
-    ascent = Math.min(ascent, r.style.ascent); descent = Math.max(descent, r.style.descent);
-  }
+  for (let i = start * 2; i < end * 2; i += 2) { ascent = Math.min(ascent, m.extents[i]); descent = Math.max(descent, m.extents[i + 1]); }
   return [ascent, descent];
 }
 function widthOf(m: Measured, start: number, end: number): number {
@@ -279,7 +277,7 @@ function widthOf(m: Measured, start: number, end: number): number {
   return w;
 }
 
-rt.registerJnis("android/graphics/text/MeasuredText$Builder", {
+rt.registerJnis("android/graphics/text/MeasuredText$Builder", fontNatives({
   "nInitBuilder()J": () => handle([] as Run[]),
   "nFreeBuilder(J)V": release,
   "nAddStyleRun(JJIIZIIZ)V": (h: bigint, p: bigint, lbStyle: number, lbWordStyle: number, _hyphenate: number, start: number, end: number) => {
@@ -290,14 +288,14 @@ rt.registerJnis("android/graphics/text/MeasuredText$Builder", {
     deref<Run[]>(h).push({ start, end, style: null, width, lang: paintAt(p).language, lbStyle: LB_NONE, lbWordStyle: LW_NONE });
   },
   "nBuildMeasuredText(JJ[CZZZZ)J": (h: bigint, _hint: bigint, chars: Uint16Array) => {
-    const text = charsToString(chars, 0, chars.length), runs = deref<Run[]>(h), widths = new Float32Array(text.length);
+    const text = charsToString(chars, 0, chars.length), runs = deref<Run[]>(h), widths = new Float32Array(text.length), extents = new Float32Array(text.length * 2);
     for (const r of runs) {
-      if (r.style) advances(r.style, text, r.start, r.end, widths, r.start);
+      if (r.style) advances(r.style, text, r.start, r.end, widths, r.start, extents);
       else if (r.end > r.start) widths[r.start] = r.width;
     }
-    return handle({ text, runs, widths } as Measured);
+    return handle({ text, runs, widths, extents } as Measured);
   },
-});
+}));
 
 rt.registerJnis("android/graphics/text/MeasuredText", {
   "nGetReleaseFunc()J": () => FINALIZER,
@@ -688,13 +686,26 @@ function runAdvanceOf(h: bigint, chars: Uint16Array, start: number, end: number,
   if (out) { distribute(adv, text, start - cs, end - start); out.set(adv, at); }
   return result;
 }
+/** getFontMetricsIntForText: the paint's metrics with the ascent and descent of the fonts the text
+ *  uses, its top and bottom widened to them */
+function metricsForText(h: bigint, text: string, start: number, count: number, fm: object): void {
+  const p = paintAt(h), extents = new Float32Array(count * 2);
+  advances(styleOf(p), text, start, start + count, null, 0, extents);
+  let ascent = 0, descent = 0;
+  for (let i = 0; i < extents.length; i += 2) { ascent = Math.min(ascent, extents[i]); descent = Math.max(descent, extents[i + 1]); }
+  setFontMetrics(fm, true, Math.floor(Math.min(ascent, fontTop(p))), Math.round(ascent), Math.round(descent), Math.ceil(Math.max(descent, fontBottom(p))), 0);
+}
 function textAdvances(h: bigint, text: string, start: number, count: number, out: Float32Array | null, at: number): number {
   if (!count) return 0;
   const adv = measure(h, text, start, count);
   if (out) out.set(adv, at);
   return adv.reduce((a, b) => Math.fround(a + b), 0);
 }
-rt.registerJnis("android/graphics/Paint", {
+rt.registerJnis("android/graphics/Paint", fontNatives({
+  "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, c: Uint16Array, start: number, count: number, _cs: number, _cc: number, _rtl: number, fm: object) =>
+    metricsForText(h, charsToString(c, 0, c.length), start, count, fm),
+  "nGetFontMetricsIntForText(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, s: string, start: number, count: number, _cs: number, _cc: number, _rtl: number, fm: object) =>
+    metricsForText(h, s, start, count, fm),
   "nGetTextAdvances(J[CIIIII[FI)F": (h: bigint, c: Uint16Array, index: number, count: number, cs: number, cc: number, _bidi: number, out: Float32Array | null, at: number) =>
     textAdvances(h, charsToString(c, cs, cc), index - cs, count, out, at),
   "nGetTextAdvances(JLjava/lang/String;IIIII[FI)F": (h: bigint, s: string, start: number, end: number, cs: number, ce: number, _bidi: number, out: Float32Array | null, at: number) =>
@@ -717,4 +728,4 @@ rt.registerJnis("android/graphics/Paint", {
     breakText(h, s, !!forwards, maxWidth, measured),
   "nBreakText(J[CIIFI[F)I": (h: bigint, c: Uint16Array, index: number, count: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
     breakText(h, charsToString(c, index, Math.abs(count)), count >= 0, maxWidth, measured),
-});
+}));

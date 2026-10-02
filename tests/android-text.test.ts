@@ -8,6 +8,7 @@ import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/andro
 import { JTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import type { TextStyle } from "../src/android/minikin";
+import { withFonts } from "../src/android/fonts";
 
 beforeAll(loadSystemFonts);
 /** a TextPaint's public field */
@@ -229,13 +230,13 @@ describe("minikin", () => {
     const mismatches: string[] = [];
     for (const row of rows.filter((r) => /^\d/.test(r))) {
       const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
-      // line breaking reads only the size, spacing and extents of a run's style
-      const style = { size, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0, ascent: 0, descent: 0 } as TextStyle;
+      // line breaking reads only the size and spacing of a run's style
+      const style = { size, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0 } as TextStyle;
       const breaks: number[] = [];
       // StaticLayout breaks each paragraph, its newline included, on its own
       for (let start = 0; start < text.length;) {
         const end = text.indexOf("\n", start) + 1 || text.length, para = text.slice(start, end);
-        const m = { text: para, widths: adv.slice(start, end), runs: [{ start: 0, end: para.length, style, width: 0, lang: "en-US", lbStyle: 0, lbWordStyle: 0 }] };
+        const m = { text: para, widths: adv.slice(start, end), extents: new Float32Array(para.length * 2), runs: [{ start: 0, end: para.length, style, width: 0, lang: "en-US", lbStyle: 0, lbWordStyle: 0 }] };
         const b = { strategy: +strategy, frequency: 0, justified: false, indents: new Float32Array(0), useBounds: false };
         const result = await computeBreaks(b, m, para.length, new LineWidth(width, 1, width, b.indents, 0), new TabStops(null, 20));
         breaks.push(...result.breaks.map((o) => o + start));
@@ -255,11 +256,10 @@ describe("minikin", () => {
     const paint = newPaint("android/text/TextPaint"), mismatches: string[] = [];
     for (const [, i, spacing, ...device] of rows.filter((r) => r.startsWith("advances ")).map((r) => r.split(" "))) {
       const { text, size } = cases[+i];
-      if (/\p{sc=Han}/u.test(text)) continue; // the page has no CJK face
       await vcall(paint, "setTextSize", "(F)V", size);
       await vcall(paint, "setLetterSpacing", "(F)V", Math.fround(+spacing * 0.05));
       const out = new Float32Array(text.length);
-      advances(styleOf(paintOf(paint)), text, 0, text.length, out);
+      await withFonts(() => advances(styleOf(paintOf(paint)), text, 0, text.length, out));
       out.forEach((a, k) => { if (Math.abs(a - +device[k]) > 0.01) mismatches.push(`${i} ${spacing} @${k}: ${a} device ${device[k]}`); });
     }
     expect(mismatches).toEqual([]);

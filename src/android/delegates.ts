@@ -19,7 +19,7 @@ import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./ha
 import { type JRectF, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
-import { paintAt, measureCtx, preloadPaint, setFontMetrics } from "./paint";
+import { paintAt, scratch2d, preloadPaint, setFontMetrics } from "./paint";
 import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
@@ -33,8 +33,8 @@ import { NativeRegion, nativeRegionOf } from "./region";
 import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
-  type Axis, NativeFont, NativeFamily, NativeTypeface, mkFamily, systemFonts, sfntTables, T_CMAP,
-  fontRevision, postScriptName, isPostScriptType1, resolveDefault, setDefaultTypeface, loadSystemFontMap,
+  type Axis, NativeFont, NativeFamily, NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont, sfntTables, T_CMAP,
+  fontRevision, postScriptName, isPostScriptType1, resolveDefault, setDefaultTypeface, loadSystemFontMap, withFonts,
   createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies, fontOf, wrapFont,
 } from "./fonts";
 
@@ -149,15 +149,15 @@ delegate("android/graphics/ColorMatrixColorFilter", {
 delegate("android/graphics/Shader", { "nativeGetFinalizer()J": () => FINALIZER });
 delegate("android/graphics/LinearGradient", {
   "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null) =>
-    handle(gradient(localMatrix(m), measureCtx().createLinearGradient(x0, y0, x1, y1), colors, positions)),
+    handle(gradient(localMatrix(m), scratch2d().createLinearGradient(x0, y0, x1, y1), colors, positions)),
 });
 delegate("android/graphics/RadialGradient", {
   "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null) =>
-    handle(gradient(localMatrix(m), measureCtx().createRadialGradient(fx, fy, fr, x, y, r), colors, positions)),
+    handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), colors, positions)),
 });
 delegate("android/graphics/SweepGradient", {
   "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null) =>
-    handle(gradient(localMatrix(m), measureCtx().createConicGradient(0, cx, cy), colors, positions)),
+    handle(gradient(localMatrix(m), scratch2d().createConicGradient(0, cx, cy), colors, positions)),
 });
 delegate("android/graphics/BitmapShader", {
   "nativeCreate(JJIIIZZJ)J": (m: bigint, b: bigint, tileX: number, tileY: number) =>
@@ -194,7 +194,7 @@ delegate("android/graphics/Typeface", {
   "nativeCreateFromTypefaceWithVariation(JLjava/util/List;)J": (h: bigint, axes: object) => after(createWithVariation(typefaceAt(h), axes), handle),
   "nativeCreateWeightAlias(JI)J": (h: bigint, weight: number) => handle(createWithBaseWeight(typefaceAt(h), weight)),
   "nativeCreateFromArray([JJII)J": (families: BigInt64Array, fallback: bigint, weight: number, italic: number) =>
-    handle(createFromFamilies(Array.from(families, (h) => deref<NativeFamily>(h)), weight, italic, fallback ? deref<NativeTypeface>(fallback) : null)),
+    withFonts(() => handle(createFromFamilies(Array.from(families, (h) => deref<NativeFamily>(h)), weight, italic, fallback ? deref<NativeTypeface>(fallback) : null))),
   "nativeGetStyle(J)I": (h: bigint) => deref<NativeTypeface>(h).apiStyle,
   "nativeGetWeight(J)I": (h: bigint) => deref<NativeTypeface>(h).weight,
   "nativeGetSupportedAxes(J)[I": (h: bigint) => {
@@ -207,12 +207,14 @@ delegate("android/graphics/Typeface", {
     const info = rt.link("android/graphics/Typeface");
     info.ctor[info.staticFieldTable.get(name + ":Landroid/graphics/Typeface;")!] = t;
   },
-  // Minikin's registries of generic families and locales serve native font lookups, which the
-  // browser's font matching does here; warming a font's cache has nothing to warm.
-  ...noops("nativeRegisterGenericFamily(Ljava/lang/String;J)V", "nativeRegisterLocaleList(Ljava/lang/String;)V", "nativeWarmUpCache(Ljava/lang/String;)V"),
+  // the system collections make up the available font set; minikin's registry of locale lists
+  // serves its own lookups, which paint.ts keeps
+  "nativeRegisterGenericFamily(Ljava/lang/String;J)V": (_name: string, h: bigint) => addFontCollections(typefaceAt(h)),
+  "nativeAddFontCollections(J)V": (h: bigint) => addFontCollections(typefaceAt(h)),
+  ...noops("nativeRegisterLocaleList(Ljava/lang/String;)V"),
+  "nativeWarmUpCache(Ljava/lang/String;)V": (path: string) => warmUpCache(path),
   // the font map a process shares with the system server; there is no other process
   "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
-  ...noops("nativeAddFontCollections(J)V"),
   ...stubs(0, "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I"),
 });
 
@@ -234,8 +236,10 @@ delegate("android/graphics/fonts/Font$Builder", {
   "nAddAxis(JIF)V": (b: bigint, tag: number, value: number) => { deref<{ axes: Axis[] }>(b).axes.push({ tag, value }); },
   "nBuild(JLjava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/String;IZI)J": (b: bigint, buffer: JBuffer | null, path: string, locales: string, weight: number, italic: number, ttcIndex: number) => {
     const { axes } = take<{ axes: Axis[] }>(b);
+    // a system font is the mapping of its file: its glyphs load when first shaped or drawn
+    if (buffer && isExternal(addressOf(buffer)) && isPlatformFont(path)) return wrapFont(NativeFont.platform(path, ttcIndex, weight, !!italic, axes, locales));
     return directBytes(buffer, (bytes) => {
-      const font = new NativeFont(bytes, ttcIndex, weight, !!italic, axes, path, locales);
+      const font = NativeFont.of(bytes, ttcIndex, weight, !!italic, axes, path, locales);
       // what FreeType cannot open as a face (no head or hhea) Skia makes no typeface of
       if (!font.faceMetrics) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Failed to create internal object. maybe invalid font data.");
       return wrapFont(font);
@@ -243,14 +247,14 @@ delegate("android/graphics/fonts/Font$Builder", {
   },
   // Skia's makeClone over the same data: new axes, style and collection index
   "nClone(JJIZI)J": (font: bigint, b: bigint, weight: number, italic: number, ttcIndex: number) => {
-    const { axes } = take<{ axes: Axis[] }>(b), f = fontOf(font);
-    return wrapFont(new NativeFont(f.bytes, ttcIndex, weight, !!italic, axes, f.path, f.locales, f.sourceId));
+    const { axes } = take<{ axes: Axis[] }>(b);
+    return wrapFont(fontOf(font).clone(ttcIndex, weight, !!italic, axes));
   },
 });
 delegate("android/graphics/fonts/Font", {
   "nGetReleaseNativeFont()J": () => FINALIZER,
   "nCloneFont(J)J": (h: bigint) => wrapFont(fontOf(h)),
-  "nNewByteBuffer(J)Ljava/nio/ByteBuffer;": (h: bigint) => readOnlyBuffer(fontOf(h).bytes),
+  "nNewByteBuffer(J)Ljava/nio/ByteBuffer;": (h: bigint) => withFonts(() => readOnlyBuffer(fontOf(h).bytes)),
   // identity only: Font.equals compares these
   "nGetMinikinFontPtr(J)J": (h: bigint) => weakHandle(fontOf(h)),
   "nGetSourceId(J)I": (h: bigint) => fontOf(h).sourceId,
@@ -272,17 +276,16 @@ delegate("android/graphics/fonts/Font", {
     return f(descent - ascent + leading);
   },
   "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: JRectF | null) => glyphBounds(fontOf(h), glyph, paintAt(p), rect),
-  "nGetAvailableFontSet()[J": () => systemFonts().then((fonts) => BigInt64Array.from(fonts, wrapFont)),
+  "nGetAvailableFontSet()[J": () => BigInt64Array.from(availableFonts(), wrapFont),
 });
 delegate("android/graphics/fonts/FontFamily$Builder", {
   "nInitBuilder()J": () => handle({ fonts: [] as NativeFont[] }),
   "nAddFont(JJ)V": (b: bigint, font: bigint) => { deref<{ fonts: NativeFont[] }>(b).fonts.push(fontOf(font)); },
-  // minikin rejects a family whose default face has no cmap (no coverage)
+  // minikin rejects a family whose default face has no cmap (no coverage); system fonts have theirs
   "nBuild(JLjava/lang/String;IZZI)J": (b: bigint, langTags: string | null, variant: number) => {
-    const { fonts } = take<{ fonts: NativeFont[] }>(b);
-    const regular = new NativeFamily(fonts, "").closest(400, false);
-    if (!sfntTables(regular.bytes, regular.ttcIndex)?.at.has(T_CMAP)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Failed to create internal object. maybe invalid font data");
-    return mkFamily(fonts, langTags ?? "", variant).then(handle);
+    const family = new NativeFamily(take<{ fonts: NativeFont[] }>(b).fonts, langTags ?? "", variant), regular = family.closest(400, false);
+    if (!isPlatformFont(regular.path) && !sfntTables(regular.bytes, regular.ttcIndex)?.at.has(T_CMAP)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Failed to create internal object. maybe invalid font data");
+    return handle(family);
   },
   "nGetReleaseNativeFamily()J": () => FINALIZER,
 });

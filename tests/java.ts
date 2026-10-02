@@ -29,14 +29,12 @@ export function mountApexData(): Promise<void> {
   })));
 }
 let fontMap: Promise<void> | null = null;
-/** /system/fonts, the font map and text paints the zygote preloads (whose locale scripts are ICU's), as a booted
+/** the font map and text paints the zygote preloads (whose locale scripts are ICU's), as a booted
  *  page has them */
 export function loadSystemFonts(): Promise<void> {
   return fontMap ??= (async () => {
-    const { SYSTEM_FONT_FILES, mountSystemFonts, loadSystemFontMap } = await import("../src/android/fonts");
+    const { loadSystemFontMap } = await import("../src/android/fonts");
     await mountApexData();
-    await mountSystemFonts(await Promise.all(SYSTEM_FONT_FILES.map(async (file) =>
-      new Uint8Array(await Bun.file(new URL(`../vendor/fonts/${file}`, import.meta.url)).arrayBuffer()))));
     await loadSystemFontMap();
     await preloadTextPaint();
   })();

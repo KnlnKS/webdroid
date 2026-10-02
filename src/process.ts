@@ -26,7 +26,6 @@ import { guestClockControl } from "./guest-clock";
 import { nativeRequirements } from "./shell/diagnostics";
 import { native } from "./native/debug";
 import { appHost } from "./android/apphost";
-import { SYSTEM_FAMILIES, fetchSystemFonts, mountSystemFonts } from "./android/fonts";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
 jitStats.on = params.get("jit") !== "0";
@@ -71,16 +70,11 @@ window.addEventListener("pagehide", () => {
   broker.fail(pid, "Process frame unloaded");
 }, { once: true });
 try {
+  mountPlatformData();
   void startZygote();
   const data = await broker.bootstrap(pid);
   setProcessIdentity(pid, data.uid);
-  const systemFonts = new Set(SYSTEM_FAMILIES.map((f) => f.css));
-  for (const font of parent.document.fonts) {
-    if (systemFonts.has(font.family.replace(/^"(.*)"$/, "$1"))) document.fonts.add(font);
-  }
-  await mountSystemFonts(await fetchSystemFonts());
   mountSystemCertificates();
-  mountPlatformData();
   let boot: Install | null = null;
   for (const snapshot of data.registry) {
     const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;

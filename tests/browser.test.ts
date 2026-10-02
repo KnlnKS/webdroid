@@ -16,13 +16,14 @@ beforeAll(async () => {
   ]);
   browser = launched;
   if (!build.success) throw new AggregateError(build.logs, "browser fixture build failed");
-  const bundle = build.outputs[0];
+  const bundle = build.outputs[0], fontIndex = Bun.spawnSync(["bun", "scripts/font-index.ts"]).stdout.toString();
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
-    if (path === "/harfbuzz.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/harfbuzzjs/dist/harfbuzz.wasm`));
+    if (path === "/font-index.json") return new Response(fontIndex, { headers: { "content-type": "application/json" } });
+    if (path === "/harfbuzz.wasm" || path === "/harfbuzz-subset.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/harfbuzzjs/dist${path}`));
     if (path === "/canvaskit.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/canvaskit-wasm/bin/canvaskit.wasm`), { headers: { "content-type": "application/wasm" } });
-    if (path.startsWith("/vendor/aosp/") || path.startsWith("/vendor/fonts/") || path.startsWith("/tests/fixtures/images/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
+    if (path.startsWith("/vendor/aosp/") || path.startsWith("/tests/fixtures/images/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
 }, PAGE_TIMEOUT);

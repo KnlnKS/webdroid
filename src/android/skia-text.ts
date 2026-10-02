@@ -72,8 +72,8 @@ export function loadSkiaText(): Promise<void> {
   if (page.loadSkiaText !== loadSkiaText) return page.loadSkiaText();
   return loading ??= Promise.all([
     CanvasKitInit({ locateFile: () => `/canvaskit.wasm?v=${canvasKitVersion}` }),
-    fetch("/vendor/fonts/Roboto-Regular.ttf").then(response => response.arrayBuffer()),
-    fetch("/vendor/fonts/NotoColorEmoji.ttf").then(response => response.arrayBuffer()),
+    fetch(`/vendor/aosp${SKIA_TEXT_FACE}`).then(response => response.arrayBuffer()),
+    fetch("/vendor/aosp/system/fonts/NotoColorEmoji.ttf").then(response => response.arrayBuffer()),
   ]).then(([canvasKit, data, emojiData]) => {
     const typeface = canvasKit.Typeface.MakeFreeTypeFaceFromData(data);
     if (!typeface) throw new Error("Roboto unavailable to Skia");

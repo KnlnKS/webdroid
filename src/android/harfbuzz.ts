@@ -11,7 +11,7 @@ interface Exports {
   malloc(n: number): Ptr; free(p: Ptr): void;
   hb_blob_create(data: Ptr, length: number, mode: number, user: Ptr, destroy: Ptr): Ptr; hb_blob_destroy(b: Ptr): void;
   hb_face_create(blob: Ptr, index: number): Ptr; hb_face_destroy(f: Ptr): void; hb_face_get_upem(f: Ptr): number;
-  hb_font_create(face: Ptr): Ptr; hb_font_destroy(f: Ptr): void; hb_font_set_variations(f: Ptr, v: Ptr, n: number): void;
+  hb_font_create(face: Ptr): Ptr; hb_font_destroy(f: Ptr): void; hb_font_set_variations(f: Ptr, v: Ptr, n: number): void; hb_font_set_scale(f: Ptr, x: number, y: number): void;
   hb_font_get_nominal_glyph(f: Ptr, cp: number, out: Ptr): number; hb_font_get_variation_glyph(f: Ptr, cp: number, vs: number, out: Ptr): number;
   hb_font_get_glyph_h_advance(f: Ptr, g: number): number; hb_font_get_glyph_extents(f: Ptr, g: number, out: Ptr): number;
   hb_font_draw_glyph(f: Ptr, g: number, funcs: Ptr, data: Ptr): void;
@@ -30,8 +30,9 @@ export const HB_DIRECTION_INVALID = 0, HB_DIRECTION_LTR = 4, HB_DIRECTION_RTL = 
 
 /** one face of a font file in wasm memory, and its fonts by variation settings */
 export interface Face { readonly face: Ptr; readonly data: Ptr; readonly upem: number; readonly color: boolean; readonly fonts: Map<string, Font> }
-/** an hb_font at the face's upem, so positions come in font units; glyph outlines are cached */
-export interface Font { readonly font: Ptr; readonly face: Face; readonly outlines: Map<number, Path2D | null> }
+/** an hb_font whose positions, extents and outlines come in `units` per em: 256 per font unit, so a
+ *  varied advance keeps its fraction; glyph outlines are cached */
+export interface Font { readonly font: Ptr; readonly face: Face; readonly units: number; readonly outlines: Map<number, Path2D | null> }
 
 /** what an outline is drawn into: a Path2D, or a control box */
 export type Sink = Pick<Path2D, "moveTo" | "lineTo" | "quadraticCurveTo" | "bezierCurveTo" | "closePath">;
@@ -126,7 +127,8 @@ export class HarfBuzz {
     const key = axes.length ? axes.map(([t, v]) => t + "=" + v).join(",") : "";
     let f = face.fonts.get(key);
     if (!f) {
-      const font = this.x.hb_font_create(face.face);
+      const font = this.x.hb_font_create(face.face), units = face.upem * 256;
+      this.x.hb_font_set_scale(font, units, units);
       if (axes.length) {
         const at = this.x.malloc(axes.length * 8);
         this.views();
@@ -135,7 +137,7 @@ export class HarfBuzz {
         this.x.hb_font_set_variations(font, at, axes.length);
         this.x.free(at);
       }
-      face.fonts.set(key, f = { font, face, outlines: new Map() });
+      face.fonts.set(key, f = { font, face, units, outlines: new Map() });
     }
     return f;
   }
@@ -253,6 +255,51 @@ export function loadedHarfBuzz(): HarfBuzz {
   if (!ready) throw new Error("HarfBuzz is not loaded");
   return ready;
 }
+/** where the page serves one of harfbuzzjs' builds; Bun reads it from node_modules */
+const wasmUrl = (name: string) => typeof location !== "undefined" && location.protocol.startsWith("http") ? `/${name}`
+  : `file://${process.cwd()}/node_modules/harfbuzzjs/dist/${name}`;
+async function instantiate(name: string, imports: WebAssembly.Imports): Promise<WebAssembly.Exports> {
+  const res = await fetch(wasmUrl(name));
+  if (!res.ok) throw new Error(`${name}: ${res.status}`);
+  return (await WebAssembly.instantiate(await res.arrayBuffer(), imports)).instance.exports;
+}
+
+// hb-subset as harfbuzzjs builds it (a reactor with no imports), loaded on first use per tab
+interface SubsetExports {
+  memory: WebAssembly.Memory; _initialize(): void; malloc(n: number): Ptr; free(p: Ptr): void;
+  hb_blob_create(data: Ptr, length: number, mode: number, user: Ptr, destroy: Ptr): Ptr; hb_blob_destroy(b: Ptr): void;
+  hb_blob_get_length(b: Ptr): number; hb_blob_get_data(b: Ptr, length: Ptr): Ptr;
+  hb_face_create(blob: Ptr, index: number): Ptr; hb_face_destroy(f: Ptr): void; hb_face_reference_blob(f: Ptr): Ptr;
+  hb_subset_input_create_or_fail(): Ptr; hb_subset_input_destroy(i: Ptr): void; hb_subset_input_keep_everything(i: Ptr): void;
+  hb_subset_input_pin_axis_location(i: Ptr, face: Ptr, tag: number, value: number): number; hb_subset_or_fail(face: Ptr, input: Ptr): Ptr;
+}
+declare global { interface Window { __wdHarfBuzzSubset?: Promise<SubsetExports> } }
+/** face `ttcIndex` of a font file as a font of its own, the variation axes in `pins` fixed at their
+ *  values: everything else (glyph ids, layout tables, other axes) kept */
+export async function instanceFace(bytes: Uint8Array, ttcIndex: number, pins: readonly (readonly [number, number])[]): Promise<Uint8Array> {
+  const x = await pageShared("__wdHarfBuzzSubset", async () => {
+    const e = await instantiate("harfbuzz-subset.wasm", {}) as unknown as SubsetExports;
+    e._initialize();
+    return e;
+  });
+  const data = x.malloc(bytes.length);
+  new Uint8Array(x.memory.buffer).set(bytes, data);
+  const blob = x.hb_blob_create(data, bytes.length, HB_MEMORY_MODE_READONLY, 0, 0), face = x.hb_face_create(blob, ttcIndex);
+  const input = x.hb_subset_input_create_or_fail();
+  try {
+    x.hb_subset_input_keep_everything(input);
+    for (const [tag, value] of pins) x.hb_subset_input_pin_axis_location(input, face, tag >>> 0, value);
+    const out = x.hb_subset_or_fail(face, input);
+    if (!out) throw new Error("HarfBuzz could not instance the face");
+    const result = x.hb_face_reference_blob(out);
+    const copy = new Uint8Array(x.memory.buffer, x.hb_blob_get_data(result, 0), x.hb_blob_get_length(result)).slice();
+    x.hb_blob_destroy(result); x.hb_face_destroy(out);
+    return copy;
+  } finally {
+    x.hb_subset_input_destroy(input); x.hb_face_destroy(face); x.hb_blob_destroy(blob); x.free(data);
+  }
+}
+
 async function load(): Promise<HarfBuzz> {
   let exports: Exports;
   const memory = () => exports.memory;
@@ -268,11 +315,6 @@ async function load(): Promise<HarfBuzz> {
     },
     wasi_snapshot_preview1: { proc_exit: (code: number) => { throw new Error(`HarfBuzz exited ${code}`); } },
   };
-  const url = typeof location !== "undefined" && location.protocol.startsWith("http") ? "/harfbuzz.wasm"
-    : `file://${process.cwd()}/node_modules/harfbuzzjs/dist/harfbuzz.wasm`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`harfbuzz.wasm: ${res.status}`);
-  const { instance } = await WebAssembly.instantiate(await res.arrayBuffer(), imports);
-  exports = instance.exports as unknown as Exports;
+  exports = await instantiate("harfbuzz.wasm", imports) as unknown as Exports;
   return new HarfBuzz(exports);
 }

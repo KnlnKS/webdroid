@@ -23,6 +23,9 @@ await Bun.write(join(out, "compile-worker.js"), worker.outputs[0]);
 const linkTable = Bun.spawn(["bun", "scripts/link-table.ts"], { stdout: "pipe", stderr: "inherit" });
 await Bun.write(join(out, "link-table.json"), await new Response(linkTable.stdout).text());
 if (await linkTable.exited !== 0) throw new Error("Link table failed");
+const fontIndex = Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" });
+await Bun.write(join(out, "font-index.json"), await new Response(fontIndex.stdout).text());
+if (await fontIndex.exited !== 0) throw new Error("Font index failed");
 
 async function copyFile(source: string, target = source): Promise<void> {
   await mkdir(dirname(join(out, target)), { recursive: true });
@@ -33,11 +36,11 @@ await Promise.all([
   copyFile("vendor/platform.x509.pem"),
   copyFile("src/native/native-core.wasm", "native-core.wasm"),
   copyFile("vendor/android-cacerts.pem"),
-  cp("vendor/fonts", join(out, "vendor/fonts"), { recursive: true, dereference: true }),
   cp("vendor/microg", join(out, "vendor/microg"), { recursive: true, dereference: true }),
   cp("vendor/sql.js/dist", join(out, "sqljs"), { recursive: true, dereference: true }),
   copyFile("node_modules/canvaskit-wasm/bin/canvaskit.wasm", "canvaskit.wasm"),
   copyFile("node_modules/harfbuzzjs/dist/harfbuzz.wasm", "harfbuzz.wasm"),
+  copyFile("node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm", "harfbuzz-subset.wasm"),
 ]);
 
 const large: Record<string, { parts: number; size: number; partSize: number }> = {};

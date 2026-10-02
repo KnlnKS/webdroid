@@ -53,6 +53,9 @@ await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_0
 await page.evaluate(() => document.fonts.ready);
 await page.evaluate((a) => void (globalThis as any).wd.boot(a), apk);
 await page.waitForFunction(() => (globalThis as any).wd.perf.bootMs > 0, null, { timeout: 120_000 });
+// LineBreakConfig reads the application's target SDK: wait for bindApplication, which follows boot
+while (!await page.evaluate(async () => await (globalThis as any).wd.scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;") !== null))
+  await Bun.sleep(250);
 const ours: string[] = await page.evaluate(async (paras) => {
   const wd = (globalThis as any).wd, out: string[] = [];
   const config = await wd.vcall(await wd.vcall(await wd.vcall(await wd.newObj("android/graphics/text/LineBreakConfig$Builder", "()V"),

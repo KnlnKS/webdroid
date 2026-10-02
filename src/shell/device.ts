@@ -11,7 +11,6 @@ import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
 import { deviceNightMode } from "../android/settings";
-import { fetchSystemFonts, mountSystemFonts } from "../android/fonts";
 import { loadCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
@@ -100,7 +99,6 @@ export function startZygote(): Promise<void> {
     useLinkTable(await table, rt.linkFingerprint());
     await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
     // the runtime's own setup and the system font map need no app: a device's zygote runs them
-    await mountSystemFonts(await fetchSystemFonts());
     await zygoteInit();
   })();
 }

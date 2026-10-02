@@ -58,8 +58,8 @@ describe("font-metrics", () => {
     ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);
 
   test("loaded font metrics preserve fractional ascenders and round integer metrics outward", async () => {
-    // Roboto Bold's own tables, as an app's font: hhea 2146/-555, head yMax/yMin 2163/-555 over 2048 units
-    const bytes = new Uint8Array(await Bun.file("vendor/fonts/Roboto-Bold.ttf").arrayBuffer()), BB = "Ljava/nio/ByteBuffer;";
+    // Noto Serif Bold's own tables, as an app's font: hhea 1900/-500, head yMax/yMin 2181/-571 over 2048 units
+    const bytes = new Uint8Array(await Bun.file("vendor/aosp/system/fonts/NotoSerif-Bold.ttf").arrayBuffer()), BB = "Ljava/nio/ByteBuffer;";
     const buffer = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, bytes.length);
     await vcall(buffer, "put", `([B)${BB}`, new Int8Array(bytes.buffer));
     const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, buffer), "build", "()Landroid/graphics/fonts/Font;");
@@ -67,25 +67,23 @@ describe("font-metrics", () => {
     const paint = newPaint("android/text/TextPaint");
     await setPaintTypeface(paint, await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`));
     paintOf(paint).textSize = 68;
-    expect(await vcall(paint, "ascent", "()F")).toBeCloseTo(-71.25391, 4);
-    expect(metrics(await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "FontMetricsInt")).toEqual([-72, -71, 18, 19, 0]);
+    expect(await vcall(paint, "ascent", "()F")).toBeCloseTo(-63.08594, 4);
+    expect(metrics(await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "FontMetricsInt")).toEqual([-73, -63, 17, 19, 0]);
   });
 
   test("Paint draws the face minikin selects, faking bold two grades short", async () => {
-    const paint = new NativePaint(); paint.textSize = 18;
-    const weighted = async (weight: number) => typefaceOf(await scall(TF, "create", `(L${TF};IZ)L${TF};`, null, weight, 0));
-    // 600 ties Medium and Bold; the earlier face in fonts.xml wins
-    for (const weight of [500, 600]) {
-      paint.tf = await weighted(weight);
-      expect(paint.font()).toBe("500 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
+    const paint = new NativePaint();
+    const weighted = async (family: string, weight: number) => typefaceOf(await scall(TF, "create", `(L${TF};IZ)L${TF};`,
+      await scall(TF, "create", `(Ljava/lang/String;I)L${TF};`, family, 0), weight, 0));
+    const primary = () => { const f = paint.primary(); return [f.font.path.slice(14), f.fakery, f.weight]; };
+    // serif's static faces: the nearer grade, then bold faked from 700 at 900
+    for (const [weight, want] of [[500, ["NotoSerif-Regular.ttf", 0, -1]], [600, ["NotoSerif-Bold.ttf", 0, -1]], [900, ["NotoSerif-Bold.ttf", 1, -1]]] as const) {
+      paint.tf = await weighted("serif", weight);
+      expect(primary()).toEqual([...want]);
     }
-    paint.tf = await weighted(900);
-    expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
-    expect(paint.faked()).toBe(true);
-    paint.tf = null;
-    paint.setFlag(0x20, true);
-    expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
-    expect(paint.faked()).toBe(false);
+    // the variable Roboto takes the weight on its wght axis
+    paint.tf = await weighted("sans-serif", 900);
+    expect(primary()).toEqual(["Roboto-Regular.ttf", 0, 900]);
   });
 
   test("system Paint metrics retain Android fractions before integer rounding", async () => {

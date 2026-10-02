@@ -1,25 +1,24 @@
-// Fonts and shaping: Font, FontFamily, FontFileUtil, Typeface and TextRunShaper. Font comes first:
-// it counts the available fonts before the system font map loads.
+// Fonts and shaping: Font, FontFamily, FontFileUtil, Typeface and TextRunShaper over the reference
+// build's /system/fonts.
 import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jlang";
-import { vfs } from "../../src/shell/vfs";
 import { familyOf, typefaceOf } from "../../src/android/fonts";
 import { loadSystemFonts } from "../../tests/java";
 import { exercise, same, thrown, fontMetrics } from "./harness";
 
-// Expected values are Roboto's own tables: OS/2 weight 400/700, head.fontRevision 0x22354, name ID 6
-// "RobotoStatic-Regular", hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units per em.
-await exercise("Font, FontFamily, FontFileUtil", async () => {
+// Expected values are the reference AVD's for its variable Roboto (OS/2 weight 400, revision 196936,
+// hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units) and Noto Serif Bold.
+await exercise("Font, FontFamily, FontFileUtil (device values)", async () => {
+  await loadSystemFonts();
   const F = "Landroid/graphics/fonts/Font;", FB = "Landroid/graphics/fonts/Font$Builder;", BB = "Ljava/nio/ByteBuffer;";
-  const bytes = async (file: string) => new Uint8Array(await Bun.file(`vendor/fonts/${file}`).arrayBuffer());
-  for (const file of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) vfs.write(`/system/fonts/${file}`, await bytes(file));
+  const bytes = async (file: string) => new Uint8Array(await Bun.file(`vendor/aosp/system/fonts/${file}`).arrayBuffer());
   const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/system/fonts/Roboto-Regular.ttf");
   const regular = await vcall(await newObj("android/graphics/fonts/Font$Builder", "(Ljava/io/File;)V", file), "build", `()${F}`);
   const style = async (f: unknown) => vcall(await vcall(f, "getStyle", "()Landroid/graphics/fonts/FontStyle;"), "toString", "()Ljava/lang/String;");
   same("from a file", [await style(regular), await vcall(regular, "getTtcIndex", "()I"), (await vcall(regular, "getAxes", "()[Landroid/graphics/fonts/FontVariationAxis;")).length,
     await vcall(await vcall(regular, "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"), await vcall(await vcall(regular, "getLocaleList", "()Landroid/os/LocaleList;"), "isEmpty", "()Z"),
     await vcall(await vcall(regular, "getBuffer", `()${BB}`), "capacity", "()I")],
-    ["FontStyle { weight=400, slant=0}", 0, 0, "/system/fonts/Roboto-Regular.ttf", 1, 305656]);
-  const boldBytes = await bytes("Roboto-Bold.ttf"), direct = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, boldBytes.length);
+    ["FontStyle { weight=400, slant=0}", 0, 0, "/system/fonts/Roboto-Regular.ttf", 1, 2371712]);
+  const boldBytes = await bytes("NotoSerif-Bold.ttf"), direct = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, boldBytes.length);
   await vcall(direct, "put", `([B)${BB}`, new Int8Array(boldBytes.buffer));
   const bold = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, direct), "build", `()${F}`);
   same("from a direct buffer", await style(bold), "FontStyle { weight=700, slant=0}");
@@ -58,8 +57,7 @@ await exercise("Font, FontFamily, FontFileUtil", async () => {
   const buffer = await vcall(regular, "getBuffer", `()${BB}`);
   same("FontFileUtil", [await scall("android/graphics/fonts/FontFileUtil", "getRevision", `(${BB}I)J`, buffer, 0),
     await scall("android/graphics/fonts/FontFileUtil", "getPostScriptName", `(${BB}I)Ljava/lang/String;`, buffer, 0),
-    await scall("android/graphics/fonts/FontFileUtil", "isPostScriptType1Font", `(${BB}I)I`, buffer, 0)], [0x22354, "RobotoStatic-Regular", 0]);
-  same("available fonts", await vcall(await scall("android/graphics/fonts/SystemFonts", "getAvailableFonts", "()Ljava/util/Set;"), "size", "()I"), 2);
+    await scall("android/graphics/fonts/FontFileUtil", "isPostScriptType1Font", `(${BB}I)I`, buffer, 0)], [196936, "Roboto-Regular", 0]);
 });
 
 // Expected values are the reference AVD's (API 35), whose Roboto is one variable font: every
@@ -101,7 +99,7 @@ await exercise("Typeface (system font map, styles, weights, builders; device val
 
   // an app's font over the system fallback, and a Builder's style from the font's tables
   const F = "Landroid/graphics/fonts/Font;", FF = "Landroid/graphics/fonts/FontFamily;", CFB = "Landroid/graphics/Typeface$CustomFallbackBuilder;";
-  const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/system/fonts/Roboto-Bold.ttf");
+  const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/system/fonts/NotoSerif-Bold.ttf");
   const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", "(Ljava/io/File;)V", file), "build", `()${F}`);
   const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", `(${F})V`, font), "build", `()${FF}`);
   const custom = async (style: unknown) => {
@@ -117,9 +115,7 @@ await exercise("Typeface (system font map, styles, weights, builders; device val
 });
 
 // Expected values are the reference AVD's (API 35), from TextRunShaper and Font.getGlyphBounds
-// under the same paints. Its sans-serif is one variable Roboto and ours its static instances
-// (Roboto-Regular.ttf is the device's RobotoStatic-Regular), so a style's face is a separate file
-// here; glyph ids differ where the fonts' versions do (noted), and positions agree.
+// under the same paints, over the same fonts.
 await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device values)", async () => {
   await loadSystemFonts();
   const P = "Landroid/graphics/Paint;", F = "Landroid/graphics/fonts/Font;", T = "Landroid/graphics/Typeface;";
@@ -152,18 +148,17 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   const ids = [];
   for (let i = 0; i < await vcall(context, "glyphCount", "()I"); i++) ids.push(`${await vcall(context, "getGlyphId", "(I)I", i)}@${await vcall(context, "getGlyphX", "(I)F", i)}`);
   same("a char[] in context", `${await vcall(context, "getAdvance", "()F")} ${ids.join(" ")}`, "203 45@0 74@29 81@50 81@60 84@70 5@93 92@103 84@133 87@156 81@170 73@180");
-  // the device's ligatures and precomposed letters are 1836, 1834, 2292 and 2299, its emoji 571 and 856;
   // the flags font has only bitmaps: its advances are unhinted, its descent its strike's (27 px at 109 ppem)
-  await shaped("office fifty", "177 -37.109375 9.765625 | 84@0 Roboto-Regular.ttf | 1833@23 | 72@57 | 74@78 | 5@99 | 1831@109 | 75@131 | 89@145 | 94@158");
-  await shaped("é ñ", "53 -37.109375 9.765625 | 2289@0 Roboto-Regular.ttf | 5@21 | 2296@31");
-  await shaped("a👍🏽b👨‍👩‍👧🇨🇦", "193.80469 -37.109375 9.9082575 | 70@0 Roboto-Regular.ttf | 550@22 NotoColorEmoji.ttf | 71@72 Roboto-Regular.ttf | 820@94 NotoColorEmoji.ttf | 65@144 NotoColorEmojiFlags.ttf");
+  await shaped("office fifty", "177 -37.109375 9.765625 | 84@0 Roboto-Regular.ttf | 1836@23 | 72@57 | 74@78 | 5@99 | 1834@109 | 75@131 | 89@145 | 94@158");
+  await shaped("é ñ", "53 -37.109375 9.765625 | 2292@0 Roboto-Regular.ttf | 5@21 | 2299@31");
+  await shaped("a👍🏽b👨‍👩‍👧🇨🇦", "193.80469 -37.109375 9.9082575 | 70@0 Roboto-Regular.ttf | 571@22 NotoColorEmoji.ttf | 71@72 Roboto-Regular.ttf | 856@94 NotoColorEmoji.ttf | 65@144 NotoColorEmojiFlags.ttf");
   await set("setTextSize", "(F)V", 20);
   await set("setLetterSpacing", "(F)V", 0.1);
   await shaped("AB AB", "65 -18.554688 4.8828125 | 38@1 Roboto-Regular.ttf | 39@16 | 5@30 | 38@37 | 39@52");
   await set("setLetterSpacing", "(F)V", 0.05);
   await shaped("office", "57 -18.554688 4.8828125 | 84@0.5 Roboto-Regular.ttf | 75@12.5 | 75@20.5 | 78@28.5 | 72@34.5 | 74@45.5");
   await set("setLetterSpacing", "(F)V", 0.02);
-  await shaped("office", "50.600002 -18.554688 4.8828125 | 84@0.19999999 Roboto-Regular.ttf | 1833@11.599999 | 72@28.999998 | 74@39.4");
+  await shaped("office", "50.600002 -18.554688 4.8828125 | 84@0.19999999 Roboto-Regular.ttf | 1836@11.599999 | 72@28.999998 | 74@39.4");
   await set("setLetterSpacing", "(F)V", 0);
   await set("setTextScaleX", "(F)V", 1.5);
   await shaped("AB AB", "85 -18.554688 4.8828125 | 38@0 Roboto-Regular.ttf | 39@20 | 5@39 | 38@46 | 39@66");
@@ -171,28 +166,29 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   await set("setTextSkewX", "(F)V", -0.25);
   await shaped("AB", "25.507812 -18.554688 4.8828125 | 38@0 Roboto-Regular.ttf | 39@13.046875");
   await set("setTextSkewX", "(F)V", 0);
-  // the device's variable Roboto kerns "oy" by 14.8 units at its default instance, the static 15
-  await shaped("Hello you", "81.853516 -18.554688 4.8828125 | 90@0 Roboto-Regular.ttf | 84@11 | 94@21.853516 | 5@30.853516 | 84@35.853516 | 81@46.853516 | 81@51.853516 | 74@56.853516 | 45@67.853516", true);
+  // kerning lands on minikin's 1/256 px grid: "oy" is -15 units, -37.5/256 px, rounded to -37/256
+  await shaped("Hello you", "81.85547 -18.554688 4.8828125 | 90@0 Roboto-Regular.ttf | 84@11 | 94@21.855469 | 5@30.855469 | 84@35.85547 | 81@46.85547 | 81@51.85547 | 74@56.85547 | 45@67.85547", true);
   const typeface = async (t: unknown, text: string, want: string) => { await set("setTypeface", `(${T})${T}`, t); await shaped(text, want); };
   const create = (base: unknown, style: number) => scall("android/graphics/Typeface", "create", `(${T}I)${T}`, base, style);
   const medium = await scall("android/graphics/Typeface", "create", `(Ljava/lang/String;I)${T}`, "sans-serif-medium", 0);
-  // the device draws these from its variable Roboto at wght 700, 500 and 900, and ital 1
-  await typeface(await create(null, 1), "Bold", "40 -18.554688 4.8828125 | 39@0 Roboto-Bold.ttf | 84@13 | 81@24 | 73@29");
-  await typeface(medium, "Med", "40 -18.554688 4.8828125 | 50@0 Roboto-Medium.ttf | 74@18 | 73@29"); // the device's M at wght 500: 17
-  await typeface(await create(null, 2), "Ital", "27 -18.554688 4.8828125 | 46@0 Roboto-Italic.ttf | 89@5 | 70@11 | 81@22");
-  await typeface(await scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, medium, 900, 0), "Blk", "29 -18.554688 4.8828125 | 39@0 Roboto-Bold.ttf FB | 81@13 FB | 80@18 FB"); // the device: wght 900, no fakery, 30
+  // the variable Roboto at wght 700, 500 and 900, and ital 1
+  await typeface(await create(null, 1), "Bold", "40 -18.554688 4.8828125 | 39@0 Roboto-Regular.ttf | 84@13 | 81@24 | 73@29");
+  await typeface(medium, "Med", "39 -18.554688 4.8828125 | 50@0 Roboto-Regular.ttf | 74@17 | 73@28");
+  await typeface(await create(null, 2), "Ital", "27 -18.554688 4.8828125 | 46@0 Roboto-Regular.ttf | 89@5 | 70@11 | 81@22");
+  // the device: 80@19, 30: FreeType's hinter widens l (5.498 px at wght 900) to 6
+  await typeface(await scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, medium, 900, 0), "Blk", "29 -18.554688 4.8828125 | 39@0 Roboto-Regular.ttf | 81@13 | 80@18");
   await set("setTypeface", `(${T})${T}`, null);
   await set("setFakeBoldText", "(Z)V", 1);
   await shaped("Fb", "22 -18.554688 4.8828125 | 43@0 Roboto-Regular.ttf | 71@11");
   await set("setFakeBoldText", "(Z)V", 0);
   await set("setFontFeatureSettings", "(Ljava/lang/String;)V", "\"smcp\" 1");
-  await shaped("Small", "56 -18.554688 4.8828125 | 56@0 Roboto-Regular.ttf | 1883@12 | 1969@27 | 1884@38 | 1884@47"); // the device: 1886, 1972, 1887
+  await shaped("Small", "56 -18.554688 4.8828125 | 56@0 Roboto-Regular.ttf | 1886@12 | 1972@27 | 1887@38 | 1887@47");
   await set("setFontFeatureSettings", "(Ljava/lang/String;)V", null);
 
   // Skia's bounds of hinted outlines: at 13.5 px the device's hinting lifts j's dot a pixel (-11)
   await shaped("Agj", "29 -18.554688 4.8828125 | 38@0 Roboto-Regular.ttf | 76@13 | 79@24");
-  // the device's variable Roboto is set to wght 400 and ital 0; a static face has no axes to set
-  same("overrides", `${await vcall(glyphs, "getWeightOverride", "(I)F", 0)} ${await vcall(glyphs, "getItalicOverride", "(I)F", 0)}`, `${2 ** -149} ${2 ** -149}`);
+  // the variable Roboto is set to wght 400 and ital 0
+  same("overrides", `${await vcall(glyphs, "getWeightOverride", "(I)F", 0)} ${await vcall(glyphs, "getItalicOverride", "(I)F", 0)}`, "400 0");
   const font = await vcall(glyphs, "getFont", `(I)${F}`, 0), rect = await newObj("android/graphics/RectF", "()V") as Record<string, number>;
   const bounds = [];
   for (const [size, scale, skew] of [[13.5, 1, 0], [40, 1, 0], [40, 1.5, -0.25]]) {
@@ -202,4 +198,14 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   const want = ["9 0 -10 9 0", "8 0 -8 7 3", "3 -1 -10 3 3", "26 0 -29 26 0", "22 1 -22 20 9", "10 -2 -29 7 9",
     "39.140625 0 -29 39 0", "33.691406 3 -22 35 9", "14.355469 -4 -29 18 9"];
   same("getGlyphBounds", bounds.join(" | "), want.join(" | "));
+
+  // text bounds, and metrics from the fonts the text uses: Noto Sans CJK's extent for CJK (the
+  // device's hinting lifts the CJK bounds' top a pixel, to -35)
+  await set("setTextSize", "(F)V", 40); await set("setTextScaleX", "(F)V", 1); await set("setTextSkewX", "(F)V", 0);
+  const box = await newObj("android/graphics/Rect", "()V") as Record<string, number>, fmi = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
+  const textBounds = async (text: string) => { await vcall(paint, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", text, 0, text.length, box); return `${box.left} ${box.top} ${box.right} ${box.bottom}`; };
+  await vcall(paint, "getFontMetricsInt", "(Ljava/lang/CharSequence;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V", "日本語", 0, 3, 0, 3, 0, fmi);
+  same("text bounds and metrics", [await textBounds("Agj office"), await textBounds("日本語"), await vcall(paint, "measureText", "(Ljava/lang/String;)F", "日本語"),
+    await vcall(fmi, "toString", "()Ljava/lang/String;")].join(" | "),
+    "0 -31 166 9 | 7 -34 119 4 | 120 | FontMetricsInt: top=-47 ascent=-46 descent=12 bottom=12 leading=0");
 });
