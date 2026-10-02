@@ -1,6 +1,7 @@
 // Registered TS descriptors that AOSP does not declare: every native spec method must exist on
 // its class or an AOSP supertype with the same name, descriptor and staticness, and every JNI
-// delegate must be a native method its class declares.
+// delegate must be a native method its class declares. A spec method standing in for an AOSP
+// bytecode body is a reimplementation (plan §2) unless provenance's TS_SPECS allows its class.
 //   bun run desccheck [--write-baseline]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -8,10 +9,10 @@ import { ACC, rt } from "../src/jvm/runtime";
 import { descToName } from "../src/jvm/abi";
 import type { ClassDef, DexFile } from "../src/jvm/dex";
 import { jarDexes } from "../src/android/framework";
-import { PLATFORM_JARS } from "../src/jvm/provenance";
+import { PLATFORM_JARS, tsSpecAllowance } from "../src/jvm/provenance";
 import "../src/natives";
 
-const NO_INDEX = 0xffffffff, PRIVATE = 0x2;
+const NO_INDEX = 0xffffffff, PRIVATE = 0x2, HAS_CODE = 1 << 30;
 const aosp = (jar: string) => resolve(import.meta.dir, "../vendor/aosp", jar);
 
 export const hasPlatformJars = () => PLATFORM_JARS.every((jar) => existsSync(aosp(jar)));
@@ -34,7 +35,7 @@ export function descriptorMismatches(): Map<string, string[]> {
     declared.set(name, m = new Map());
     const def = defs.get(name);
     if (def) for (const e of [...def.directMethods, ...def.virtualMethods]) {
-      m.set(def.dex.method(e.methodIdx).name + def.dex.methodDesc(e.methodIdx), e.flags);
+      m.set(def.dex.method(e.methodIdx).name + def.dex.methodDesc(e.methodIdx), e.flags | (e.codeOff ? HAS_CODE : 0));
     }
     return m;
   };
@@ -79,6 +80,7 @@ export function descriptorMismatches(): Map<string, string[]> {
       const flags = resolve(spec.name, sig);
       if (flags === undefined) report(spec.name, missing(spec.name, key, sig));
       else if (!!(flags & ACC.STATIC) !== isStatic) report(spec.name, `${isStatic ? "static" : "instance"} ${sig} is ${isStatic ? "instance" : "static"} in AOSP`);
+      else if (flags & HAS_CODE && !tsSpecAllowance(spec.name)) report(spec.name, `reimplements ${key}`);
     }
   }
   for (const key of rt.jni.keys()) {

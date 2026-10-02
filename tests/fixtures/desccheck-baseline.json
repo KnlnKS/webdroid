@@ -1,15 +1,44 @@
 {
- "android/graphics/drawable/Drawable": [
-  "missing invalidateDrawable(Landroid/graphics/drawable/Drawable;)V",
-  "missing scheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V",
-  "missing unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V"
+ "android/print/PrintDocumentAdapter": [
+  "reimplements <init>()V",
+  "reimplements onFinish()V",
+  "reimplements onStart()V"
+ ],
+ "android/print/PrintJob": [
+  "reimplements getInfo()Landroid/print/PrintJobInfo;",
+  "reimplements isCancelled()Z",
+  "reimplements isCompleted()Z",
+  "reimplements isFailed()Z"
+ ],
+ "android/print/PrintManager": [
+  "reimplements print(Ljava/lang/String;Landroid/print/PrintDocumentAdapter;Landroid/print/PrintAttributes;)Landroid/print/PrintJob;"
+ ],
+ "android/util/StatsEvent": [
+  "reimplements getAtomId()I",
+  "reimplements getBytes()[B",
+  "reimplements getNumBytes()I",
+  "reimplements release()V",
+  "reimplements static newBuilder()Landroid/util/StatsEvent$Builder;"
+ ],
+ "android/util/StatsEvent$Builder": [
+  "reimplements addBooleanAnnotation(BZ)Landroid/util/StatsEvent$Builder;",
+  "reimplements addIntAnnotation(BI)Landroid/util/StatsEvent$Builder;",
+  "reimplements build()Landroid/util/StatsEvent;",
+  "reimplements setAtomId(I)Landroid/util/StatsEvent$Builder;",
+  "reimplements usePooledBuffer()Landroid/util/StatsEvent$Builder;",
+  "reimplements writeBoolean(Z)Landroid/util/StatsEvent$Builder;",
+  "reimplements writeByteArray([B)Landroid/util/StatsEvent$Builder;",
+  "reimplements writeFloat(F)Landroid/util/StatsEvent$Builder;",
+  "reimplements writeInt(I)Landroid/util/StatsEvent$Builder;",
+  "reimplements writeLong(J)Landroid/util/StatsEvent$Builder;",
+  "reimplements writeLongArray([J)Landroid/util/StatsEvent$Builder;",
+  "reimplements writeString(Ljava/lang/String;)Landroid/util/StatsEvent$Builder;"
+ ],
+ "android/util/StatsLog": [
+  "reimplements static write(Landroid/util/StatsEvent;)V"
  ],
  "java/lang/reflect/AccessibleObject": [
   "missing trySetAccessible()Z"
- ],
- "java/nio/channels/FileChannel$MapMode": [
-  "missing static valueOf(Ljava/lang/String;)Ljava/nio/channels/FileChannel$MapMode;",
-  "missing static values()[Ljava/nio/channels/FileChannel$MapMode;"
  ],
  "javax/microedition/khronos/egl/EGL11": [
   "missing eglSwapInterval(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z"

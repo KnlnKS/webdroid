@@ -43,8 +43,9 @@ export function isBytecode(name: string): boolean {
   return false;
 }
 
-/** §2: the only classes in libcore's namespaces a TS spec may implement, by exact name or package
- *  prefix (ending in `/`), each with why AOSP's bytecode cannot answer for it */
+/** §2: the only classes whose AOSP bytecode bodies a TS spec may stand in for (anywhere else a spec
+ *  implements natives only), by exact name or package prefix (ending in `/`), each with why AOSP's
+ *  bytecode cannot answer for it. In libcore's namespaces a spec needs an entry even for natives. */
 export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${string}`> = {
   "java/lang/Object": "vm: object model",
   "java/lang/Class": "vm: class objects over the JVM's link state",
@@ -68,6 +69,8 @@ export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${str
   "com/android/okhttp/HttpsHandler": "boundary: HTTPS over the fetch proxy",
   "com/android/org/conscrypt/SSLParametersImpl": "boundary: TLS at the relay",
   "javax/microedition/khronos/": "boundary: GL over the browser's WebGL",
+  "android/net/ssl/SSLSockets": "boundary: TLS at the relay, whose sockets are not Conscrypt's",
+  "android/webkit/WebViewFactory": "boundary: the WebView provider over the browser",
 };
 
 /** the TS_SPECS key that allows `name`, if any */
