@@ -4,7 +4,7 @@ import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
 import { deref } from "../../src/android/handles";
 import { presentSurface, surfaceTextureOf } from "../../src/android/glsurface";
 import { loadSystemFonts } from "../../tests/java";
-import { exercise, same, near, thrown, statics, listener, fontMetrics, vectorProbeLines } from "./harness";
+import { exercise, same, near, thrown, statics, listener, fontMetrics, vectorProbeLines, ltrb } from "./harness";
 
 await exercise("Matrix (compose, map, invert, fit, poly, values)", async () => {
   const M = () => newObj("android/graphics/Matrix", "()V");
@@ -282,7 +282,7 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
       else { same(`${what} [${i}] verb`, g[0], e[0]); near(`${what} [${i}]`, gv, ev); }
     });
   };
-  const rectOf = (r: any) => [r.left, r.top, r.right, r.bottom] as number[];
+  const rectOf = (r: object) => ltrb(r, "RectF");
 
   const mixed = await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 100, 0], ["quadTo", "(FFFF)V", 150, 0, 150, 50],
     ["cubicTo", "(FFFFFF)V", 150, 100, 100, 150, 50, 150], ["moveTo", "(FF)V", 5, 5], ["moveTo", "(FF)V", 200, 200],
@@ -420,7 +420,7 @@ await exercise("Region, RegionIterator (device values)", async () => {
   const op = (r: unknown, l: number, t: number, rr: number, b: number, o: string) => vcall(r, "op", `(IIII${OP})Z`, l, t, rr, b, ops[`s$${o}`]);
   const rects = async (r: unknown) => {
     const it = await newObj("android/graphics/RegionIterator", `(${R})V`, r), rc = await newObj("android/graphics/Rect", "()V"), out: string[] = [];
-    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
+    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(ltrb(rc).join(","));
     return out.join(" ");
   };
   const dump = async (p: unknown) => {
@@ -635,7 +635,7 @@ await exercise("NinePatch (device values)", async () => {
   const rects = async (r: unknown) => {
     if (!r) return "null";
     const it = await newObj("android/graphics/RegionIterator", "(Landroid/graphics/Region;)V", r), rc = await newObj("android/graphics/Rect", "()V"), out: string[] = [];
-    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(`${rc.left},${rc.top},${rc.right},${rc.bottom}`);
+    while (await vcall(it, "next", "(Landroid/graphics/Rect;)Z", rc)) out.push(ltrb(rc).join(","));
     return out.join(" ");
   };
   const transparent = async (np: unknown, ...dst: number[]) =>

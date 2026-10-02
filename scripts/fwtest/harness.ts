@@ -46,3 +46,6 @@ export const fontMetrics = (fm: object, cls = "FontMetrics") =>
 const vectorProbe = (await Bun.file("tests/fixtures/vector-drawable.txt").text()).trim().split("\n");
 /** VectorDrawableProbe's lines with `tag` (scripts/vector-probe.ts), the tag removed */
 export const vectorProbeLines = (tag: string) => vectorProbe.filter((l) => l.startsWith(tag + " ")).map((l) => l.slice(tag.length + 1));
+/** a Java Rect's (or RectF's) left, top, right and bottom: instance fields are mangled properties */
+export const ltrb = (r: object, cls: "Rect" | "RectF" = "Rect") =>
+  ["left", "top", "right", "bottom"].map((k) => (r as Record<string, number>)[declaredField(`android/graphics/${cls}`, k)]);

@@ -3,7 +3,7 @@
 import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jlang";
 import { familyOf, typefaceOf } from "../../src/android/fonts";
 import { loadSystemFonts } from "../../tests/java";
-import { exercise, same, thrown, fontMetrics } from "./harness";
+import { exercise, same, thrown, fontMetrics, ltrb } from "./harness";
 
 // Expected values are the reference AVD's for its variable Roboto (OS/2 weight 400, revision 196936,
 // hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units) and Noto Serif Bold.
@@ -189,11 +189,11 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   await shaped("Agj", "29 -18.554688 4.8828125 | 38@0 Roboto-Regular.ttf | 76@13 | 79@24");
   // the variable Roboto is set to wght 400 and ital 0
   same("overrides", `${await vcall(glyphs, "getWeightOverride", "(I)F", 0)} ${await vcall(glyphs, "getItalicOverride", "(I)F", 0)}`, "400 0");
-  const font = await vcall(glyphs, "getFont", `(I)${F}`, 0), rect = await newObj("android/graphics/RectF", "()V") as Record<string, number>;
+  const font = await vcall(glyphs, "getFont", `(I)${F}`, 0), rect = await newObj("android/graphics/RectF", "()V") as object;
   const bounds = [];
   for (const [size, scale, skew] of [[13.5, 1, 0], [40, 1, 0], [40, 1.5, -0.25]]) {
     await set("setTextSize", "(F)V", size); await set("setTextScaleX", "(F)V", scale); await set("setTextSkewX", "(F)V", skew);
-    for (const glyph of [38, 76, 79]) bounds.push(`${await vcall(font, "getGlyphBounds", `(I${P}Landroid/graphics/RectF;)F`, glyph, paint, rect)} ${rect.left} ${rect.top} ${rect.right} ${rect.bottom}`);
+    for (const glyph of [38, 76, 79]) bounds.push(`${await vcall(font, "getGlyphBounds", `(I${P}Landroid/graphics/RectF;)F`, glyph, paint, rect)} ${ltrb(rect, "RectF").join(" ")}`);
   }
   const want = ["9 0 -10 9 0", "8 0 -8 7 3", "3 -1 -10 3 3", "26 0 -29 26 0", "22 1 -22 20 9", "10 -2 -29 7 9",
     "39.140625 0 -29 39 0", "33.691406 3 -22 35 9", "14.355469 -4 -29 18 9"];
@@ -202,8 +202,8 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   // text bounds, and metrics from the fonts the text uses: Noto Sans CJK's extent for CJK (the
   // device's hinting lifts the CJK bounds' top a pixel, to -35)
   await set("setTextSize", "(F)V", 40); await set("setTextScaleX", "(F)V", 1); await set("setTextSkewX", "(F)V", 0);
-  const box = await newObj("android/graphics/Rect", "()V") as Record<string, number>, fmi = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
-  const textBounds = async (text: string) => { await vcall(paint, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", text, 0, text.length, box); return `${box.left} ${box.top} ${box.right} ${box.bottom}`; };
+  const box = await newObj("android/graphics/Rect", "()V") as object, fmi = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
+  const textBounds = async (text: string) => { await vcall(paint, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", text, 0, text.length, box); return ltrb(box).join(" "); };
   await vcall(paint, "getFontMetricsInt", "(Ljava/lang/CharSequence;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V", "日本語", 0, 3, 0, 3, 0, fmi);
   same("text bounds and metrics", [await textBounds("Agj office"), await textBounds("日本語"), await vcall(paint, "measureText", "(Ljava/lang/String;)F", "日本語"),
     await vcall(fmi, "toString", "()Ljava/lang/String;")].join(" | "),

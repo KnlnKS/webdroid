@@ -2,7 +2,7 @@ import { declaredField } from "../../src/jvm/runtime";
 // Bitmap, BitmapFactory, BitmapRegionDecoder and ImageDecoder against the reference AVD.
 import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
 import { mangleStaticField } from "../../src/jvm/abi";
-import { exercise, same, thrown, statics, listener } from "./harness";
+import { exercise, same, thrown, statics, listener, ltrb } from "./harness";
 
 // Bitmap, BitmapFactory and BitmapRegionDecoder against the reference AVD: every expected value below
 // was printed by the same calls there (images in tests/fixtures/images). Headless there is no image
@@ -166,16 +166,16 @@ await exercise("BitmapFactory: bounds, sampling, density, configs, nine-patch, i
   for (const [config, want] of [["ALPHA_8", "ARGB_8888"], ["HARDWARE", "HARDWARE"], ["ARGB_4444", "ARGB_8888"], [null, "ARGB_8888"]])
     same(`png as ${config}`, (await decoded(png, { inPreferredConfig: config })).split(" ")[1], want);
   same("mutable unpremultiplied", (await decoded(png, { inMutable: 1, inPremultiplied: 0 })).split(" dens")[0], "10x6 ARGB_8888 rb=40 bc=240 abc=240 alpha=true premul=false mut=true");
-  const pad = await newObj("android/graphics/Rect", "(IIII)V", 7, 7, 7, 7) as Record<string, number>;
+  const pad = await newObj("android/graphics/Rect", "(IIII)V", 7, 7, 7, 7) as object;
   const decodeStream = async (bytes: Int8Array, o: unknown) => scall(BF, "decodeStream", "(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;",
     await newObj("java/io/ByteArrayInputStream", "([B)V", bytes), pad, o);
-  const padding = () => [pad.left, pad.top, pad.right, pad.bottom].join(",");
+  const padding = () => ltrb(pad).join(",");
   await decodeStream(png, null);
   same("no nine-patch padding", padding(), "-1,-1,-1,-1");
   const np = await decodeStream(patch, null);
   same("nine-patch", `${await info(np)} pad ${padding()} chunk ${[...await vcall(np, "getNinePatchChunk", "()[B")]}`,
     "48x48 ARGB_8888 rb=192 bc=9216 abc=9216 alpha=false premul=false mut=false pad 0,0,0,0 chunk 1,2,2,9,32,0,0,0,40,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,48,0,0,0,24,0,0,0,25,0,0,0,41,0,0,0,42,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,34,34,34,-1,34,34,34,-1,34,34,34,-1,34,34,34,-1,34,34,34,-1,34,34,34,-1");
-  const optical = async (b: unknown) => { const r = await newObj("android/graphics/Rect", "()V") as Record<string, number>; await vcall(b, "getOpticalInsets", "(Landroid/graphics/Rect;)V", r); return [r.left, r.top, r.right, r.bottom].join(","); };
+  const optical = async (b: unknown) => { const r = await newObj("android/graphics/Rect", "()V") as object; await vcall(b, "getOpticalInsets", "(Landroid/graphics/Rect;)V", r); return ltrb(r).join(","); };
   same("optical insets", [await optical(np), await optical(await decodeStream(insets, null))].join(" "), "0,0,0,0 1,2,3,4");
   same("nine-patch 160 to 240", `${(await info(await decodeStream(patch, await opts({ inDensity: 160, inTargetDensity: 240 })))).split(" ")[0]} pad ${padding()}`, "72x72 pad 0,0,0,0");
   const reuse = await create(10, 6, "ARGB_8888"), bigger = await create(20, 20, "ARGB_8888");
@@ -239,9 +239,9 @@ await exercise("ImageDecoder: headers, targets, allocators, partial input, drawa
   same("alpha mask of colour", (await info(await bitmap(png, async (d) => { await vcall(d, "setDecodeAsAlphaMaskEnabled", "(Z)V", 1); await vcall(d, "setAllocator", "(I)V", 1); }))).split(" ")[1], "ARGB_8888");
   same("low RAM", await info(await bitmap(jpg, async (d) => { await vcall(d, "setMemorySizePolicy", "(I)V", 0); await vcall(d, "setAllocator", "(I)V", 1); })),
     "10x6 RGB_565 rb=20 bc=120 abc=120 alpha=false premul=false mut=false");
-  const pad = await newObj("android/graphics/Rect", "()V") as Record<string, number>;
+  const pad = await newObj("android/graphics/Rect", "()V") as object;
   await bitmap(await image("patch.9.png"), (d) => vcall(d, "setOutPaddingRect", "(Landroid/graphics/Rect;)V", pad));
-  same("nine-patch padding", [pad.left, pad.top, pad.right, pad.bottom].join(","), "0,0,0,0");
+  same("nine-patch padding", ltrb(pad).join(","), "0,0,0,0");
   let seen = "";
   const partial = listener("onPartialImage", "(Landroid/graphics/ImageDecoder$DecodeException;)Z", async (e: unknown) => {
     seen = `${await vcall(e, "getError", "()I")} ${await vcall(e, "getMessage", "()Ljava/lang/String;")} ${await vcall(e, "getCause", "()Ljava/lang/Throwable;")}`;
