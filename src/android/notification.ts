@@ -10,7 +10,7 @@ import { JObj, rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall, callUncaught } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
-import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, type ParcelData } from "./binder";
+import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { preferenceStore } from "./sharedprefs";
@@ -20,7 +20,6 @@ import { coverTop, foreground } from "./server/atm";
 import { permissionGranted, grantPrompted } from "./permissions";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
-const LIST = "android/content/pm/ParceledListSlice";
 const DEFAULT_CHANNEL = "miscellaneous", RANKER_GROUP = "ranker_group";
 const POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS";
 const IMPORTANCE_NONE = 0, IMPORTANCE_DEFAULT = 3, IMPORTANCE_UNSPECIFIED = -1000;
@@ -75,7 +74,6 @@ const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
 
 /** what a binder call hands the service: a copy of the caller's object */
 function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield unparcelled(cls, yield parcelled(o)); }
-const listSlice = (items: unknown[]) => newObj(LIST, "(Ljava/util/List;)V", newArrayList(items));
 function* sliceItems(slice: JObj | null): Gen<JObj[]> {
   return slice ? yield toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")) : fail("java/lang/NullPointerException", null);
 }
@@ -667,7 +665,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     const mine = notificationStore.posted.filter((r) => r.userId === userId && (r.pkg === pkg || r.opPkg === pkg));
     const sbns: JObj[] = [];
     for (const r of hashOrder(mine, (r) => r.key)) sbns.push(yield* statusBarNotification(r));
-    return yield listSlice(sbns);
+    return yield parceledList(sbns);
   }),
 
   "createNotificationChannelGroups(Ljava/lang/String;Landroid/content/pm/ParceledListSlice;)V": driven(function* (pkg: string, slice: JObj | null) {
@@ -694,7 +692,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     }),
   "getNotificationChannels(Ljava/lang/String;Ljava/lang/String;I)Landroid/content/pm/ParceledListSlice;": driven(function* (callingPkg: string, pkg: string, userId: number) {
     if (!canNotifyAsPackage(callingPkg, pkg, userId)) fail("java/lang/SecurityException", `Pkg ${callingPkg} cannot read channels for ${pkg} in ${userId}`);
-    return yield listSlice(yield* (yield* preferences(pkg)).channels(false));
+    return yield parceledList(yield* (yield* preferences(pkg)).channels(false));
   }),
   "deleteNotificationChannel(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (pkg: string, channelId: string) {
     checkCallerIsSystemOrSameApp(pkg);
@@ -720,7 +718,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
       yield vcall(group, "addChannel", "(Landroid/app/NotificationChannel;)V", channel);
     }
     for (const id of prefs.ids(GROUP_KEY)) if (!groups.has(id)) groups.set(id, (yield* prefs.read(GROUP_KEY, id))!);
-    return yield listSlice(hashOrder([...groups], ([id]) => id).map(([, group]) => group));
+    return yield parceledList(hashOrder([...groups], ([id]) => id).map(([, group]) => group));
   }),
   "deleteNotificationChannelGroup(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (pkg: string, groupId: string | null) {
     checkCallerIsSystemOrSameApp(pkg);

@@ -16,7 +16,7 @@ import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os";
 import { GL_ES_VERSION } from "./pm";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions";
 import { deviceConfiguration } from "./resnative";
-import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
+import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, parceledList } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
 import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue";
@@ -53,9 +53,9 @@ const activityManager: NativeSpec["methods"] = {
   "getServices(II)Ljava/util/List;": () => newArrayList(),
   // no exits or starts are recorded, and nothing restricts this app or drives it as a monkey
   "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": () =>
-    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+    parceledList(),
   "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () =>
-    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+    parceledList(),
   "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
   "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
@@ -177,7 +177,7 @@ rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends 
   "getFocusColor()I": () => systemResource("color", "accessibility_focus_highlight_color", "getColor", "(ILandroid/content/res/Resources$Theme;)I", null),
   "getEnabledAccessibilityServiceList(II)Ljava/util/List;": () => newArrayList(),
   "getInstalledAccessibilityServiceList(I)Landroid/content/pm/ParceledListSlice;": () =>
-    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+    parceledList(),
   ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;I)V", "interrupt(I)V"),
 } });
 hostStub("accessibility", "webdroid/AccessibilityManagerService");

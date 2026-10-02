@@ -3,9 +3,9 @@
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
+import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
-import { hostStub } from "./binder";
+import { hostStub, parceledList } from "./binder";
 import { launcherActivity } from "./pm";
 
 const MAX_PER_ACTIVITY = 15, MAX_UPDATES_PER_INTERVAL = 10;
@@ -67,7 +67,6 @@ async function remove(pkg: string, ids: JObj | null): Promise<void> {
   const shortcuts = dynamicOf(pkg);
   for (const id of (await toJsArray(ids)) as string[]) shortcuts.delete(id);
 }
-const listSlice = async (list: JObj[]) => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(list));
 const complete = (future: JObj, value: unknown) => vcall(future, "complete", "(Ljava/lang/Object;)Z", value);
 
 const SLICE = "Landroid/content/pm/ParceledListSlice;", LIST = "Ljava/util/List;", S = "Ljava/lang/String;", FUTURE = "Lcom/android/internal/infra/AndroidFuture;";
@@ -110,9 +109,9 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
   [`getShortcuts(${S}II)${SLICE}`]: driven(function* (pkg: string, flags: number) {
     const clones: JObj[] = [];
     if (flags & MATCH_DYNAMIC) for (const si of dynamicOf(pkg).values()) clones.push(yield vcall(si, "clone", `(I)${SI}`, CLONE_REMOVE_FOR_CREATOR));
-    return yield listSlice(clones);
+    return yield parceledList(clones);
   }),
-  [`getShareTargets(${S}Landroid/content/IntentFilter;I)${SLICE}`]: () => listSlice([]),
+  [`getShareTargets(${S}Landroid/content/IntentFilter;I)${SLICE}`]: () => parceledList(),
   [`hasShareTargets(${S}${S}I)Z`]: () => 0,
   [`getMaxShortcutCountPerActivity(${S}I)I`]: () => MAX_PER_ACTIVITY,
   [`getIconMaxDimensions(${S}I)I`]: () => Math.round(device.dp(96)),

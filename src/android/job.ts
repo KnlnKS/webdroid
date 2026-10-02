@@ -5,9 +5,8 @@
 
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
-import { newArrayList } from "../jvm/natives/jcoll";
 import { bindAsSystem } from "./server/activeservices";
-import { hostStub } from "./binder";
+import { hostStub, parceledList } from "./binder";
 import { batteryLow, netUp } from "./services";
 import { device } from "../shell/config";
 import type { JComponentName } from "./intent";
@@ -97,7 +96,7 @@ function* scheduleJob(namespace: string | null, info: JObj, item?: JObj): Gen<nu
   return 1;   // RESULT_SUCCESS
 }
 const slice = (jobs: Map<number, ScheduledJob> | undefined) =>
-  newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList([...jobs?.values() ?? []].map((job) => job.spec.info)));
+  parceledList([...jobs?.values() ?? []].map((job) => job.spec.info));
 rt.register({ name: "webdroid/JobSchedulerService", ctor: class extends JObj {}, sup: "android/app/job/IJobScheduler$Stub", methods: {
   "schedule(Ljava/lang/String;Landroid/app/job/JobInfo;)I": driven(scheduleJob),
   "enqueue(Ljava/lang/String;Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I": driven(scheduleJob),

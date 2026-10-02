@@ -4,8 +4,7 @@
 // through the broker, whose request lands in that process's ActiveServices.
 import { rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, callUncaught } from "../../jvm/natives/jlang";
-import { newArrayList } from "../../jvm/natives/jcoll";
-import { hostedService, notConnected } from "../binder";
+import { hostedService, notConnected, parceledList } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
@@ -96,7 +95,7 @@ function sendArgs(s: ServiceRecord): Promise<void> | undefined {
   if (!s.pendingStarts.length) return;
   const starts = s.pendingStarts.splice(0);
   const args = Promise.all(starts.map(([intent, id]) => newObj("android/app/ServiceStartArgs", `(ZII${INTENT})V`, 0, id, 0, intent)))
-    .then((list) => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(list)));
+    .then(parceledList);
   return scheduleOnApp("scheduleServiceArgs", `(${BINDER}Landroid/content/pm/ParceledListSlice;)V`, s.token, args);
 }
 /** bringUpServiceLocked: create, then request the bindings clients wait on, then deliver starts */
