@@ -13,7 +13,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
 import { mkPfd, pfdBackingBytes } from "./os";
-import { mkCursor } from "./sqlite";
+import { matrixCursor } from "./sqlite";
 import { mimeOf } from "../mime";
 import { registerSystemProvider, DOCUMENTS_PROVIDER, AS, URI, B, SIGNAL } from "./systemproviders";
 
@@ -255,7 +255,7 @@ async function docQuery(u: JUriLike, projection: string[] | null): Promise<JObj>
   const id = documentId(u, true);
   const rows = isChildrenUri(u) ? await docChildren(id) : [await docRow(id)].filter((r) => r !== null);
   const cols = projection?.length ? projection : DOC_COLUMNS;
-  return mkCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); }));
+  return matrixCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); }));
 }
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
   process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER, methods: {

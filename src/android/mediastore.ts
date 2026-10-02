@@ -1,7 +1,7 @@
 import type { Database } from "sql.js";
 import { vfs } from "../shell/vfs";
 import { mimeOf, MIME_EXT } from "../mime";
-import { sqliteStore, mkCursor, contentValues } from "./sqlite";
+import { sqliteStore, matrixCursor, contentValues } from "./sqlite";
 import { type JUri, mkUri } from "./net";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { scall } from "../jvm/natives/jlang";
@@ -240,7 +240,7 @@ const selectedPaths = async (table: Table, selection: string | null, args: strin
   (await select(table, ["_data"], selection, args, null, match)).map(([path]) => path as string);
 async function mediaQuery(uri: JUri, projection: string[] | null, selection: string | null, args: string[] | null, sort: string | null, match: MediaMatch) {
   const table = tableOf(uri), requested = projection?.length ? projection : columns;
-  return table ? mkCursor(requested, await select(table, requested, selection, args, sort, match)) : null;
+  return table ? matrixCursor(requested, await select(table, requested, selection, args, sort, match)) : null;
 }
 
 // ── MediaProvider, the media authority's IContentProvider: a query's selection, sort and limit come

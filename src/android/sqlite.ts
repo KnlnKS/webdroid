@@ -1,46 +1,81 @@
-// android.database.* over sql.js, with snapshots in the shared private-file store.
+// android.database.sqlite's native half (android_database_SQLiteConnection.cpp, SQLiteGlobal) and
+// androidx.sqlite's bundled driver, over SQLite's C API in sql.js; SQLiteDatabase, its connection
+// pool, sessions and cursors run from AOSP bytecode above them.
+//
+// Each connection is its own sqlite3 handle on its file's one Emscripten file, so a write on one is
+// visible to the next statement on another, and what lives on a connection (the TEMP schema,
+// PRAGMAs) lasts as long as it does. The file's bytes reach the VFS in debounced snapshots.
 
-import initSqlJs, { type Database, type Statement } from "sql.js";
-import { i8, u8, mangleField } from "../jvm/abi";
+import initSqlJs, { type Database } from "sql.js";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { i8, u8, mangleField, jarray, strArray } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
-import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall, newObj, defineException } from "../jvm/natives/jlang";
-import { unbox } from "../jvm/natives/jbox";
-import { arrayMapEntries, newArrayList } from "../jvm/natives/jcoll";
-import { pathOf } from "../jvm/natives/jio";
-import { JAbstractCursor } from "./abstractcursor";
+import { newObj, vcall } from "../jvm/natives/jlang";
+import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
+import { arrayMapEntries } from "../jvm/natives/jcoll";
+import { handle, deref, release } from "./handles";
+import { type NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, integer } from "./cursorwindow";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
-let SQL: SqlJs | null = null;
-type SharedDatabase = { db: Database; transactions: Set<() => boolean> };
-type SQLiteStore = { sql: () => Promise<NonNullable<typeof SQL>>; files: Map<string, SharedDatabase> };
+/** the C API vendor/sql.js/sqljs.patch exports */
+type Sql = SqlJs & {
+  HEAPU8: Uint8Array;
+  _malloc(size: number): number;
+  _free(ptr: number): void;
+  stringToNewUTF8(s: string): number;
+  UTF8ToString(ptr: number, maxBytes?: number): string;
+  addFunction(fn: (...args: number[]) => number, sig: string): number;
+  _sqlite3_prepare_v2(db: number, sql: number, bytes: number, out: number, tail: number): number;
+  _sqlite3_finalize(st: number): number;
+  _sqlite3_reset(st: number): number;
+  _sqlite3_clear_bindings(st: number): number;
+  _sqlite3_step(st: number): number;
+  _sqlite3_bind_text(st: number, i: number, text: number, bytes: number, destructor: number): number;
+  _sqlite3_bind_blob(st: number, i: number, data: number, bytes: number, destructor: number): number;
+  _sqlite3_bind_double(st: number, i: number, v: number): number;
+  _sqlite3_bind_int64(st: number, i: number, v: bigint): number;
+  _sqlite3_bind_parameter_count(st: number): number;
+  _sqlite3_stmt_readonly(st: number): number;
+  _sqlite3_column_count(st: number): number;
+  _sqlite3_column_name(st: number, i: number): number;
+  _sqlite3_column_type(st: number, i: number): number;
+  _sqlite3_column_int64(st: number, i: number): bigint;
+  _sqlite3_column_double(st: number, i: number): number;
+  _sqlite3_column_text(st: number, i: number): number;
+  _sqlite3_column_blob(st: number, i: number): number;
+  _sqlite3_column_bytes(st: number, i: number): number;
+  _sqlite3_changes(db: number): number;
+  _sqlite3_total_changes(db: number): number;
+  _sqlite3_last_insert_rowid(db: number): bigint;
+  _sqlite3_get_autocommit(db: number): number;
+  _sqlite3_extended_errcode(db: number): number;
+  _sqlite3_errmsg(db: number): number;
+  _sqlite3_create_collation_v2(db: number, name: number, encoding: number, arg: number, compare: number, destroy: number): number;
+};
+const ROW = 100, DONE = 101, INTEGER = 1, FLOAT = 2, TEXT = 3, BLOB = 4, UTF8 = 1, TRANSIENT = -1;
+
+/** one database file every connection to it shares; `db` holds the Emscripten file and takes the snapshots */
+type SharedDatabase = { path: string; db: Database; connections: Set<Connection>; saving: ReturnType<typeof setTimeout> | null; mtime: number };
+type SQLiteStore = { sql: () => Promise<SqlJs>; files: Map<string, SharedDatabase> };
 let sqlReady: Promise<SqlJs> | null = null;
 export let sqliteStore: SQLiteStore = { files: new Map(), sql: () => sqlReady ??= initSqlJs({ locateFile: (f: string) => "/sqljs/" + f }) };
 export function useSQLiteStore(store: SQLiteStore): void { sqliteStore = store; }
-async function ensureSql(): Promise<NonNullable<typeof SQL>> {
-  if (!SQL) SQL = await sqliteStore.sql();
-  return SQL;
-}
+let C!: Sql;
+const loadSql = async () => C ??= await sqliteStore.sql() as Sql;
 
 /** sql.js keeps each Database's bytes in an Emscripten VFS file; @types/sql.js omits the name. */
-function vfsDb(db: Database): Database & { filename: string } {
-  if (!("filename" in db) || typeof db.filename !== "string") throw new Error("sql.js database filename unavailable");
-  return Object.assign(db, { filename: db.filename });
-}
-// sql.js's Database.export() CLOSES and re-opens the connection (its own doc says so), which
-// destroys everything that lives on a connection rather than in the file: the TEMP schema, the
-// PRAGMAs, and every live prepared statement. A debounced save therefore deleted Room's TEMP
-// room_table_modification_log and its triggers moments after Room created them, and a save
-// landing inside a transaction rolled that transaction back. Snapshot the file through a
-// THROWAWAY connection instead: point its filename at ours so its export() reads our bytes
-// while closing only its own handle, then restore the name so its close() unlinks its own file.
-function snapshotBytes(sql: NonNullable<typeof SQL>, db: Database): Uint8Array | null {
+const named = (db: Database) => db as Database & { filename: string; db: number };
+// sql.js's Database.export() CLOSES and re-opens the connection, which destroys everything that lives
+// on a connection rather than in the file: the TEMP schema, the PRAGMAs, and every live prepared
+// statement. Snapshot the file through a THROWAWAY connection instead: point its filename at ours so
+// its export() reads our bytes while closing only its own handle, then restore the name so its
+// close() unlinks its own file.
+function snapshotBytes(db: Database): Uint8Array | null {
   // The main file alone omits WAL pages; a reader can prevent a complete checkpoint.
   const checkpoint = db.exec("PRAGMA wal_checkpoint(PASSIVE)")[0]?.values[0];
   if (checkpoint && (checkpoint[0] || checkpoint[1] !== checkpoint[2])) return null;
-  const shadow = vfsDb(new sql.Database());
-  const own = shadow.filename;
-  shadow.filename = vfsDb(db).filename;
+  const shadow = named(new C.Database()), own = shadow.filename;
+  shadow.filename = named(db).filename;
   try {
     return shadow.export();
   } finally {
@@ -48,715 +83,353 @@ function snapshotBytes(sql: NonNullable<typeof SQL>, db: Database): Uint8Array |
     try { shadow.close(); } catch { /* */ }
   }
 }
-
-class JSQLiteDatabase extends JObj {
-  db: Database | null = null;
-  path = ":memory:";
-  version = 0;
-  open = true;
-  readOnly = false;
-  txDepth = 0;
-  txOk = false;
-  txListener: unknown = null;
-  saveTimer: ReturnType<typeof setTimeout> | null = null;
-  /** a connection of its own (SQLiteOpenHelper's) rather than the path's shared one, so close() closes it */
-  separate = false;
-  txActive: (() => boolean) | null = null;
-  scheduleSave() {
-    if (this.readOnly || this.path === ":memory:") { this.release(); return; }
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(async () => {
-      this.saveTimer = null;
-      // Mid-transaction the file can hold spilled uncommitted pages whose undo lives in the
-      // journal we do not copy; wait for the commit instead of persisting a torn snapshot.
-      if (this.txDepth > 0 || [...sqliteStore.files.get(this.path)?.transactions ?? []].some((active) => active())) { this.scheduleSave(); return; }
-      if (!SQL || !this.db) return;
-      try {
-        const bytes = snapshotBytes(SQL, this.db);
-        if (bytes) {
-          vfs.write(this.path, bytes);
-          await vfs.flush();
-          globalThis.localStorage?.removeItem("wd:db:" + this.path);
-          this.release();
-        }
-        else this.scheduleSave();
-      } catch (e) {
-        if (e instanceof Error && e.message.includes("locked")) this.scheduleSave();
-        else { console.warn("[sqlite] persist failed", e); this.release(); }
-      }
-    }, 400);
-  }
-  /** a closed connection's handle goes once its last snapshot is taken */
-  release() {
-    if (this.open || !this.db) return;
-    if (this.txActive) sqliteStore.files.get(this.path)?.transactions.delete(this.txActive);
-    this.db.close();
-    this.db = null;
-  }
-}
-const dbCache = new Map<string, JSQLiteDatabase>();
-const readOnlyCache = new Map<string, JSQLiteDatabase>();
-function sharedConnection(sql: NonNullable<typeof SQL>, source: Database): Database {
-  const db = vfsDb(new sql.Database()), own = db.filename;
-  db.filename = vfsDb(source).filename;
-  try { db.export(); }
-  catch (e) { db.filename = own; db.close(); throw e; }
+/** another sqlite3 handle on `source`'s file: export() re-opens under the borrowed name */
+function sharedConnection(source: Database): Database {
+  const db = named(new C.Database()), own = db.filename;
+  db.filename = named(source).filename;
+  try { db.export(); } catch (e) { db.filename = own; db.close(); throw e; }
   const close = db.close.bind(db);
   db.close = () => { db.filename = own; close(); };
   return db;
 }
-function readOnlyConnection(sql: NonNullable<typeof SQL>, source: Database): Database {
-  const db = sharedConnection(sql, source);
-  const exec = db.exec.bind(db), prepare = db.prepare.bind(db);
-  const protect = (stmt: Statement): Statement => {
-    const step = stmt.step.bind(stmt), reset = stmt.reset.bind(stmt);
-    let fresh = true;
-    stmt.reset = () => { fresh = true; return reset(); };
-    stmt.step = () => {
-      if (!fresh) { const more = step(); fresh = !more; return more; }
-      exec("PRAGMA query_only=ON");
-      try { const more = step(); fresh = !more; return more; } finally { exec("PRAGMA query_only=ON"); }
-    };
-    exec("PRAGMA query_only=ON");
-    return stmt;
-  };
-  db.prepare = (text, args) => {
-    exec("PRAGMA query_only=ON");
-    try { return protect(prepare(text, args)); } finally { exec("PRAGMA query_only=ON"); }
-  };
-  db.exec = (text, args) => {
-    exec("PRAGMA query_only=ON");
-    const out: ReturnType<Database["exec"]> = [], statements = db.iterateStatements(text);
-    try {
-      for (const stmt of statements) {
-        protect(stmt);
-        if (args) stmt.bind(args);
-        let result: ReturnType<Database["exec"]>[number] | null = null;
-        while (stmt.step()) {
-          if (!result) out.push(result = { columns: stmt.getColumnNames(), values: [] });
-          result.values.push(stmt.get());
-        }
-      }
-      return out;
-    } finally {
-      // sql.js's iterator has no return(); drain it to release its SQL buffer after a failed step.
-      try { while (!statements.next().done) exec("PRAGMA query_only=ON"); } catch { /* */ }
-      exec("PRAGMA query_only=ON");
-    }
-  };
-  db.run = (text, args) => { db.exec(text, args); return db; };
-  exec("PRAGMA query_only=ON");
-  return db;
-}
-/** ContextImpl.getDatabasePath: an absolute name is the path itself (Room/WorkManager hand
- *  over `<noBackupFilesDir>/x.db`); a relative one lives in databases/ and may not contain '/' */
-export function dbPath(pkg: string, name: string): string {
-  if (name.startsWith("/")) return name;
-  if (name.includes("/")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `File ${name} contains a path separator`);
-  return `/data/data/${pkg}/databases/${name}`;
-}
-export async function openDatabase(path: string, flags = 0x10000000, separate = false): Promise<JSQLiteDatabase> {
-  if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "path must not be empty");
-  const readOnly = (flags & 1) !== 0;
-  const sql = await ensureSql();
-  let jdb = path === ":memory:" || separate ? undefined : dbCache.get(path);
-  if (readOnly) {
-    const writer = await openDatabase(path, flags & ~1 & ~0x10000000);
-    const cached = readOnlyCache.get(path);
-    if (cached?.open) return cached;
-    const reader = new JSQLiteDatabase();
-    reader.path = path; reader.readOnly = true;
-    reader.db = readOnlyConnection(sql, writer.db!);
-    readOnlyCache.set(path, reader);
-    return reader;
-  }
-  if (jdb?.open) return jdb;
-  jdb = new JSQLiteDatabase();
-  jdb.path = path;
-  jdb.separate = separate;
-  // a database the app streamed in may be disk-backed
-  let data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null);
-  let legacy = false;
-  const shared = path === ":memory:" ? undefined : sqliteStore.files.get(path);
-  try {
-    const raw = !data && globalThis.localStorage?.getItem("wd:db:" + path);
-    if (raw) { data = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0)); legacy = true; }
-  } catch { /* */ }
-  if (!shared && !data && path !== ":memory:" && !(flags & 0x10000000)) {
-    throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Database does not exist: " + path);
-  }
-  if (path === ":memory:") jdb.db = new sql.Database();
-  else {
-    const file = shared ?? { db: data ? new sql.Database(data) : new sql.Database(), transactions: new Set<() => boolean>() };
-    sqliteStore.files.set(path, file);
-    jdb.db = sharedConnection(sql, file.db);
-    const connection = jdb;
-    file.transactions.add(jdb.txActive = () => connection.txDepth > 0);
-    // opening creates the (empty) file, which callers chmod or stat before the first snapshot
-    if (!shared && !data) {
-      vfs.mkdir(path.slice(0, path.lastIndexOf("/")));
-      vfs.write(path, new Uint8Array(0));
-    }
-  }
-  jdb.db.exec("PRAGMA user_version");
-  if (path !== ":memory:" && !separate) dbCache.set(path, jdb);
-  if (legacy) jdb.scheduleSave();
-  return jdb;
-}
 
-function bindArgs(args: unknown[] | null): (string | number | bigint | Uint8Array | null)[] {
-  if (!args) return [];
-  return args.map((a) => {
-    if (a === null || a === undefined) return null;
-    if (typeof a === "bigint") return a;
-    if (typeof a === "number" || typeof a === "string") return a;
-    if (a instanceof Int8Array) return u8(a);
-    const boxed = unbox(a);
-    if (boxed !== undefined) return boxed;
-    return String(a);
-  });
+function scheduleSave(file: SharedDatabase) {
+  if (file.saving) clearTimeout(file.saving);
+  file.saving = setTimeout(() => void save(file), 400);
 }
-
-/** a cursor over rows already in hand; MatrixCursor and every in-process query result */
-class JCursor extends JAbstractCursor {
-  cols: string[] = [];
-  rows: unknown[][] = [];
-  val(i: number): unknown { const v = this.rows[this.mPos]?.[i] ?? null; return unbox(v) ?? v; }
-}
-export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
-  rt.link("webdroid/Cursor");
-  const c = new JCursor();
-  c.cols = cols;
-  c.rows = rows;
-  return c;
-}
-function integerRow(stmt: Statement): unknown[] {
-  const row = stmt.get();
-  if (!row.some((v) => typeof v === "number" && Math.abs(v) > Number.MAX_SAFE_INTEGER)) return row;
-  return (stmt.get as (params: undefined, config: { useBigInt: boolean }) => unknown[])(undefined, { useBigInt: true });
-}
-const longValue = (v: unknown): bigint => typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0)));
-function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null): JCursor {
-  const c = mkCursor([], []);
+async function save(file: SharedDatabase) {
+  file.saving = null;
+  // unlinked (deleteDatabase) or replaced by a newer file at the path: nothing to persist
+  if (sqliteStore.files.get(file.path) !== file || !vfs.exists(file.path)) return;
+  // mid-transaction the file can hold uncommitted pages whose undo lives in a journal we do not copy
+  for (const c of file.connections) if (!C._sqlite3_get_autocommit(c.ptr)) return scheduleSave(file);
   try {
-    const stmt = jdb.db!.prepare(sqlStr);
-    try {
-      stmt.bind(bindArgs(args) as never);
-      c.cols = stmt.getColumnNames();
-      while (stmt.step()) c.rows.push(integerRow(stmt));
-    } finally { stmt.free(); }
+    const bytes = snapshotBytes(file.db);
+    if (!bytes) return scheduleSave(file);
+    vfs.write(file.path, bytes);
+    file.mtime = vfs.mtime(file.path);
+    await vfs.flush();
+    globalThis.localStorage?.removeItem("wd:db:" + file.path);
   } catch (e) {
-    throw sqliteExc(String(e), sqlStr);
+    if (e instanceof Error && e.message.includes("locked")) scheduleSave(file);
+    else console.warn("[sqlite] persist failed", e);
   }
+}
+/** a snapshot an older build kept in localStorage */
+function legacySnapshot(path: string): Uint8Array | null {
+  try {
+    const raw = globalThis.localStorage?.getItem("wd:db:" + path);
+    return raw ? Uint8Array.from(atob(raw), (c) => c.charCodeAt(0)) : null;
+  } catch { return null; }
+}
+
+class Connection {
+  readonly ptr: number;
+  cancelable = false;
+  canceled = false;
+  constructor(readonly db: Database, readonly file: SharedDatabase | null) { this.ptr = named(db).db; }
+}
+const conn = (h: bigint) => deref<Connection>(h);
+
+// ── errors, as android_database_SQLiteCommon.cpp's throw_sqlite3_exception raises them
+const CODES = ["OK", "ERROR", "INTERNAL", "PERM", "ABORT", "BUSY", "LOCKED", "NOMEM", "READONLY", "INTERRUPT", "IOERR", "CORRUPT",
+  "NOTFOUND", "FULL", "CANTOPEN", "PROTOCOL", "EMPTY", "SCHEMA", "TOOBIG", "CONSTRAINT", "MISMATCH", "MISUSE", "NOLFS", "AUTH",
+  "FORMAT", "RANGE", "NOTADB", "NOTICE", "WARNING"];
+const CONSTRAINTS = ["", "CHECK", "COMMITHOOK", "FOREIGNKEY", "FUNCTION", "NOTNULL", "PRIMARYKEY", "TRIGGER", "UNIQUE", "VTAB", "ROWID", "PINNED", "DATATYPE"];
+const EXCEPTIONS: Record<number, string> = {
+  3: "SQLiteAccessPermException", 4: "SQLiteAbortException", 5: "SQLiteDatabaseLockedException", 6: "SQLiteTableLockedException",
+  7: "SQLiteOutOfMemoryException", 8: "SQLiteReadOnlyDatabaseException", 10: "SQLiteDiskIOException", 11: "SQLiteDatabaseCorruptException",
+  13: "SQLiteFullException", 14: "SQLiteCantOpenDatabaseException", 18: "SQLiteBlobTooBigException", 19: "SQLiteConstraintException",
+  20: "SQLiteDatatypeMismatchException", 21: "SQLiteMisuseException", 25: "SQLiteBindOrColumnIndexOutOfRangeException",
+  26: "SQLiteDatabaseCorruptException", 101: "SQLiteDoneException",
+};
+function codeName(code: number): string {
+  const primary = code & 0xff, name = primary === ROW ? "ROW" : primary === DONE ? "DONE" : CODES[primary] ?? "UNKNOWN";
+  return `SQLITE_${name}${primary === 19 && code >> 8 ? "_" + CONSTRAINTS[code >> 8] : ""}[${code}]`;
+}
+function sqliteException(code: number, sqliteMessage: string | null, message: string | null = null): unknown {
+  const primary = code & 0xff;
+  const cls = primary === 9 ? "android/os/OperationCanceledException" : "android/database/sqlite/" + (EXCEPTIONS[primary] ?? "SQLiteException");
+  return rt.mkThrowable(cls, sqliteMessage === null || primary === DONE ? message
+    : `${sqliteMessage} (code ${code} ${codeName(code)})${message ? ": " + message : ""}`);
+}
+const dbException = (c: Connection, message: string | null = null) =>
+  sqliteException(C._sqlite3_extended_errcode(c.ptr), C.UTF8ToString(C._sqlite3_errmsg(c.ptr)), message);
+const check = (c: Connection, rc: number) => { if (rc) throw dbException(c); };
+const noHandle = (message: string) => sqliteException(0, "unknown error", message);
+
+// ── collations: register_android_functions' UNICODE and register_localized_collators' LOCALIZED (ICU, primary strength)
+const collators = new Map<string, number>();
+function collate(c: Connection, name: string, locale: string, options: Intl.CollatorOptions) {
+  const key = `${name}:${locale}`;
+  let compare = collators.get(key);
+  if (compare === undefined) {
+    let collator: Intl.Collator;
+    try { collator = new Intl.Collator(locale, options); } catch { collator = new Intl.Collator("und", options); }
+    compare = C.addFunction((_arg, n1, p1, n2, p2) => collator.compare(C.UTF8ToString(p1, n1), C.UTF8ToString(p2, n2)), "iiiiii");
+    collators.set(key, compare);
+  }
+  const text = C.stringToNewUTF8(name);
+  try { check(c, C._sqlite3_create_collation_v2(c.ptr, text, UTF8, 0, compare, 0)); } finally { C._free(text); }
+}
+
+/** SQLiteConnection.nativeOpen's flags: CREATE_IF_NECESSARY opens read-write whatever OPEN_READONLY says */
+async function openConnection(path: string, readOnly: boolean, create: boolean): Promise<Connection> {
+  await loadSql();
+  let c: Connection;
+  if (path === ":memory:") c = new Connection(new C.Database(), null);
+  else {
+    // a file deleted, or replaced while no connection had it open, is read afresh
+    const current = (f: SharedDatabase | undefined) => !!f && vfs.exists(path) && (f.connections.size > 0 || vfs.mtime(path) === f.mtime);
+    let file = sqliteStore.files.get(path);
+    if (!current(file)) {
+      const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null) ?? legacySnapshot(path);
+      const cantOpen = !data && (readOnly || !create || !vfs.isDir(path.slice(0, path.lastIndexOf("/")) || "/"));
+      if (cantOpen) throw sqliteException(14, "unable to open database file", "Could not open database");
+      file = sqliteStore.files.get(path);
+      if (!current(file)) {
+        if (file && !file.connections.size) file.db.close();
+        file = { path, db: new C.Database(data), connections: new Set(), saving: null, mtime: 0 };
+        sqliteStore.files.set(path, file);
+        // opening creates the (empty) file, which callers chmod or stat before the first snapshot
+        if (!data) vfs.write(path, new Uint8Array(0));
+        else if (!vfs.exists(path)) scheduleSave(file);
+        file.mtime = vfs.mtime(path);
+      }
+    }
+    c = new Connection(sharedConnection(file!.db), file!);
+    file!.connections.add(c);
+    if (readOnly) c.db.exec("PRAGMA query_only=1");
+  }
+  collate(c, "UNICODE", "und", {});
   return c;
 }
-function sqliteExc(msg: string, sql: string): unknown {
-  console.warn("[sqlite]", msg, "SQL:", sql.slice(0, 200));
-  return rt.mkThrowable("android/database/sqlite/" + (msg.includes("readonly") ? "SQLiteReadOnlyDatabaseException" : "SQLiteException"), msg + " while executing: " + sql.slice(0, 120));
+function closeConnection(c: Connection) {
+  c.db.close();
+  c.file?.connections.delete(c);
 }
-/** run a modifying statement, then schedule the snapshot it dirtied */
-function runWrite(jdb: JSQLiteDatabase, sql: string, args: unknown[] | null): void {
-  try { jdb.db!.run(sql, bindArgs(args) as never); } catch (e) { throw sqliteExc(String(e), sql); }
-  jdb.scheduleSave();
+
+// ── statements: the long a PreparedStatement holds is the sqlite3_stmt pointer itself
+let out = 0;
+/** sqlite3_prepare_v2's statement, or `error`'s exception */
+function prepare(c: Connection, sql: string, error: () => unknown): number {
+  const text = C.stringToNewUTF8(sql), at = out ||= C._malloc(4);
+  try {
+    if (C._sqlite3_prepare_v2(c.ptr, text, -1, at, 0)) throw error();
+    return C.HEAPU8[at] | C.HEAPU8[at + 1] << 8 | C.HEAPU8[at + 2] << 16 | C.HEAPU8[at + 3] << 24;
+  } finally { C._free(text); }
 }
-const lastInsertRowId = (jdb: JSQLiteDatabase) => longValue(runQuery(jdb, "SELECT last_insert_rowid()", null).rows[0]?.[0] ?? -1);
-/** the first column of a query's first row, as simpleQueryForLong/longForQuery read it */
-const firstLong = (c: JCursor) => longValue(c.rows[0]?.[0]);
-const firstString = (c: JCursor) => c.rows.length ? String(c.rows[0][0] ?? "") : null;
+function bindText(st: number, i: number, value: string): number {
+  const text = C.stringToNewUTF8(value);
+  try { return C._sqlite3_bind_text(st, i, text, -1, TRANSIENT); } finally { C._free(text); }
+}
+function bindBlob(st: number, i: number, value: Int8Array): number {
+  const data = C._malloc(value.length || 1);
+  C.HEAPU8.set(u8(value), data);
+  try { return C._sqlite3_bind_blob(st, i, data, value.length, TRANSIENT); } finally { C._free(data); }
+}
+const bindNull = (st: number, i: number) => C._sqlite3_bind_blob(st, i, 0, 0, 0);
+function columnText(st: number, i: number): string | null {
+  const text = C._sqlite3_column_text(st, i);
+  return text ? C.UTF8ToString(text, C._sqlite3_column_bytes(st, i)) : null;
+}
+function columnBlob(st: number, i: number): Int8Array {
+  const data = C._sqlite3_column_blob(st, i);
+  return i8(C.HEAPU8.slice(data, data + C._sqlite3_column_bytes(st, i)));
+}
+const columnName = (st: number, i: number) => { const name = C._sqlite3_column_name(st, i); return name ? C.UTF8ToString(name) : null; };
+/** sqlite3_step, interrupted as the progress handler interrupts a cancelled connection */
+function step(c: Connection, st: number): number {
+  if (c.cancelable && c.canceled) throw sqliteException(9, "interrupted");
+  return C._sqlite3_step(st);
+}
+/** a statement that may have changed the file schedules its snapshot */
+const stepped = (c: Connection, st: number) => { if (c.file && !C._sqlite3_stmt_readonly(st)) scheduleSave(c.file); };
+function executeNonQuery(c: Connection, st: number, isPragma = false) {
+  let rc = step(c, st);
+  if (isPragma) while (rc === ROW) rc = step(c, st);
+  stepped(c, st);
+  if (rc === ROW) throw noHandle("Queries can be performed using SQLiteDatabase query or rawQuery methods only.");
+  if (rc !== DONE) throw dbException(c);
+}
+function executeOneRowQuery(c: Connection, st: number): boolean {
+  const rc = step(c, st);
+  stepped(c, st);
+  if (rc !== ROW) throw dbException(c);
+  return C._sqlite3_column_count(st) >= 1;
+}
 
-const cursorMethods: NativeSpec["methods"] = {
-  "getCount()I": function (this: JCursor) { return this.rows.length; },
-  "getColumnNames()[Ljava/lang/String;": function (this: JCursor) {
-    (this.cols as { $t?: string }).$t ??= "Ljava/lang/String;";
-    return this.cols;
-  },
-  "getString(I)Ljava/lang/String;": function (this: JCursor, i: number) {
-    const v = this.val(i);
-    return v === null ? null : String(v);
-  },
-  "getInt(I)I": function (this: JCursor, i: number) { return Math.trunc(Number(this.val(i) ?? 0)) | 0; },
-  "getLong(I)J": function (this: JCursor, i: number) { return longValue(this.val(i)); },
-  "getDouble(I)D": function (this: JCursor, i: number) { return Number(this.val(i) ?? 0); },
-  "getFloat(I)F": function (this: JCursor, i: number) { return Math.fround(Number(this.val(i) ?? 0)); },
-  "getShort(I)S": function (this: JCursor, i: number) { return (Number(this.val(i) ?? 0) << 16) >> 16; },
-  "getBlob(I)[B": function (this: JCursor, i: number) {
-    const v = this.val(i);
-    if (v instanceof Uint8Array) return i8(v);
-    return v === null ? null : new Int8Array(0);
-  },
-  "isNull(I)Z": function (this: JCursor, i: number) { return this.val(i) === null ? 1 : 0; },
-  "getType(I)I": function (this: JCursor, i: number) {
-    const v = this.val(i);
-    if (v === null) return 0;
-    if (typeof v === "bigint") return 1;
-    if (typeof v === "number") return Number.isInteger(v) ? 1 : 2;
-    if (typeof v === "string") return 3;
-    return 4;
-  },
-};
-rt.register({ name: "android/database/Cursor", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"] });
-const ABSTRACT_CURSOR = "android/database/AbstractCursor";
-rt.register({ name: "webdroid/Cursor", ctor: JCursor, sup: ABSTRACT_CURSOR, methods: {
-  ...cursorMethods,
-  // row iteration's hot path; nothing subclasses this class, so no getCount/onMove override can intervene
-  "moveToNext()Z": function (this: JCursor) {
-    if (this.mPos + 1 < this.rows.length) { this.mPos++; return 1; }
-    this.mPos = this.rows.length;
-    return 0;
-  },
-} });
-class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
-rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {
-  "add(Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, value: unknown) {
-    if (this.index === this.row.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "No more columns left");
-    this.row[this.index++] = value; return this;
-  },
-  "add(Ljava/lang/String;Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, name: string, value: unknown) {
-    for (let i = 0; i < this.cursor.cols.length; i++) if (this.cursor.cols[i] === name) this.row[i] = value;
-    return this;
-  },
-} });
-rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, sup: ABSTRACT_CURSOR, methods: {
-  ...cursorMethods,
-  "<init>([Ljava/lang/String;)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
-  "<init>([Ljava/lang/String;I)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
-  "newRow()Landroid/database/MatrixCursor$RowBuilder;": function (this: JCursor) {
-    rt.link("android/database/MatrixCursor$RowBuilder");
-    const builder = new JRowBuilder(); builder.cursor = this; builder.row = Array(this.cols.length).fill(null);
-    this.rows.push(builder.row); return builder;
-  },
-  "addRow([Ljava/lang/Object;)V": function (this: JCursor, row: unknown[]) {
-    if (row.length !== this.cols.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "columnNames.length != columnValues.length");
-    this.rows.push(row.slice());
-  },
-} });
+/** copyRow: the statement's current row into the window's next one; false when it does not fit */
+function copyRow(w: NativeWindow, st: number, cols: number): boolean {
+  if (!w.allocRow()) return false;
+  const row = w.rows - 1;
+  for (let i = 0; i < cols; i++) {
+    let fits = true;
+    switch (C._sqlite3_column_type(st, i)) {
+      case INTEGER: {
+        const d = C._sqlite3_column_double(st, i);
+        fits = w.put(row, i, FIELD_INTEGER, Number.isSafeInteger(d) ? d : integer(C._sqlite3_column_int64(st, i)));
+        break;
+      }
+      case FLOAT: fits = w.put(row, i, FIELD_FLOAT, C._sqlite3_column_double(st, i)); break;
+      case TEXT: {
+        const text = C._sqlite3_column_text(st, i), n = C._sqlite3_column_bytes(st, i);
+        fits = w.put(row, i, FIELD_STRING, C.UTF8ToString(text, n), n + 1);
+        break;
+      }
+      case BLOB: { const b = columnBlob(st, i); fits = w.put(row, i, FIELD_BLOB, b, b.length); break; }
+    }
+    if (!fits) { w.freeLastRow(); return false; }
+  }
+  return true;
+}
+/** nativeExecuteForCursorWindow: rows from startPos into the window, refilling from later rows when
+ *  it fills before requiredPos, and counting every row on request; (startPos << 32) | totalRows */
+function fillWindow(c: Connection, st: number, w: NativeWindow, startPos: number, requiredPos: number, countAllRows: number): bigint {
+  if (w.readOnly) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to clear the cursor window, status=-38");
+  w.clear();
+  const cols = w.cols = C._sqlite3_column_count(st);
+  let total = 0, added = 0, full = false;
+  try {
+    while (!full || countAllRows) {
+      const rc = step(c, st);
+      if (rc === DONE) break;
+      if (rc !== ROW) throw dbException(c);
+      if (startPos >= ++total || full) continue;
+      let fits = copyRow(w, st, cols);
+      if (!fits && added && startPos + added <= requiredPos) {
+        // filled before the one row really wanted: start again from here
+        w.clear();
+        w.cols = cols;
+        startPos += added;
+        added = 0;
+        fits = copyRow(w, st, cols);
+      }
+      if (fits) added++; else full = true;
+    }
+  } finally {
+    C._sqlite3_reset(st);
+    stepped(c, st);
+  }
+  if (total > 0 && added === 0) throw sqliteException(18, null, `Row too big to fit into CursorWindow requiredPos=${requiredPos}, totalRows=${total}`);
+  return BigInt(startPos) << 32n | BigInt(total);
+}
 
+const OPEN_READONLY = 1, CREATE_IF_NECESSARY = 0x10000000;
+const st = (h: bigint) => Number(h);
+rt.registerJnis("android/database/sqlite/SQLiteConnection", {
+  "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": async (path: string, flags: number) =>
+    handle(await openConnection(path, (flags & OPEN_READONLY) !== 0 && !(flags & CREATE_IF_NECESSARY), (flags & CREATE_IF_NECESSARY) !== 0)),
+  "nativeClose(J)V": (h: bigint) => { closeConnection(conn(h)); release(h); },
+  "nativeRegisterLocalizedCollators(JLjava/lang/String;)V": (h: bigint, locale: string) =>
+    collate(conn(h), "LOCALIZED", locale.replaceAll("_", "-"), { sensitivity: "base" }),
+  "nativePrepareStatement(JLjava/lang/String;)J": (h: bigint, sql: string) => {
+    const c = conn(h);
+    return BigInt(prepare(c, sql, () => dbException(c, ", while compiling: " + sql)));
+  },
+  "nativeFinalizeStatement(JJ)V": (_h: bigint, s: bigint) => { C._sqlite3_finalize(st(s)); },
+  "nativeGetParameterCount(JJ)I": (_h: bigint, s: bigint) => C._sqlite3_bind_parameter_count(st(s)),
+  "nativeIsReadOnly(JJ)Z": (_h: bigint, s: bigint) => C._sqlite3_stmt_readonly(st(s)),
+  "nativeGetColumnCount(JJ)I": (_h: bigint, s: bigint) => C._sqlite3_column_count(st(s)),
+  "nativeGetColumnName(JJI)Ljava/lang/String;": (_h: bigint, s: bigint, i: number) => columnName(st(s), i),
+  "nativeBindNull(JJI)V": (h: bigint, s: bigint, i: number) => check(conn(h), bindNull(st(s), i)),
+  "nativeBindLong(JJIJ)V": (h: bigint, s: bigint, i: number, v: bigint) => check(conn(h), C._sqlite3_bind_int64(st(s), i, v)),
+  "nativeBindDouble(JJID)V": (h: bigint, s: bigint, i: number, v: number) => check(conn(h), C._sqlite3_bind_double(st(s), i, v)),
+  "nativeBindString(JJILjava/lang/String;)V": (h: bigint, s: bigint, i: number, v: string) => check(conn(h), bindText(st(s), i, v)),
+  "nativeBindBlob(JJI[B)V": (h: bigint, s: bigint, i: number, v: Int8Array) => check(conn(h), bindBlob(st(s), i, v)),
+  "nativeResetStatementAndClearBindings(JJ)V": (h: bigint, s: bigint) => {
+    const rc = C._sqlite3_reset(st(s));
+    check(conn(h), rc || C._sqlite3_clear_bindings(st(s)));
+  },
+  "nativeExecute(JJZ)V": (h: bigint, s: bigint, isPragma: number) => executeNonQuery(conn(h), st(s), !!isPragma),
+  "nativeExecuteForChangedRowCount(JJ)I": (h: bigint, s: bigint) => {
+    const c = conn(h);
+    executeNonQuery(c, st(s));
+    return C._sqlite3_changes(c.ptr);
+  },
+  "nativeExecuteForLastInsertedRowId(JJ)J": (h: bigint, s: bigint) => {
+    const c = conn(h);
+    executeNonQuery(c, st(s));
+    return C._sqlite3_changes(c.ptr) > 0 ? C._sqlite3_last_insert_rowid(c.ptr) : -1n;
+  },
+  "nativeExecuteForLong(JJ)J": (h: bigint, s: bigint) => executeOneRowQuery(conn(h), st(s)) ? C._sqlite3_column_int64(st(s), 0) : -1n,
+  "nativeExecuteForString(JJ)Ljava/lang/String;": (h: bigint, s: bigint) => executeOneRowQuery(conn(h), st(s)) ? columnText(st(s), 0) : null,
+  "nativeExecuteForCursorWindow(JJJIIZ)J": (h: bigint, s: bigint, w: bigint, startPos: number, requiredPos: number, countAllRows: number) =>
+    fillWindow(conn(h), st(s), deref<NativeWindow>(w), startPos, requiredPos, countAllRows),
+  "nativeChanges(J)J": (h: bigint) => BigInt(C._sqlite3_changes(conn(h).ptr)),
+  "nativeTotalChanges(J)J": (h: bigint) => BigInt(C._sqlite3_total_changes(conn(h).ptr)),
+  "nativeLastInsertRowId(J)I": (h: bigint) => Number(BigInt.asIntN(32, C._sqlite3_last_insert_rowid(conn(h).ptr))),
+  "nativeCancel(J)V": (h: bigint) => { conn(h).canceled = true; },
+  "nativeResetCancel(JZ)V": (h: bigint, cancelable: number) => { const c = conn(h); c.canceled = false; c.cancelable = !!cancelable; },
+});
+// sqlite3_release_memory frees nothing without SQLITE_ENABLE_MEMORY_MANAGEMENT, which sql.js does not define
+rt.registerJni("android/database/sqlite/SQLiteGlobal", "nativeReleaseMemory()I", () => 0);
+
+// ── androidx.sqlite's bundled driver (libsqliteJni): its statement natives name only the statement
+const bundled = new Map<number, Connection>();
+const bundledConn = (s: bigint) => bundled.get(st(s)) ?? rt.npe();
+const bundledError = (c: Connection) =>
+  rt.mkThrowable("android/database/SQLException", `Error code: ${C._sqlite3_extended_errcode(c.ptr)}, message: ${C.UTF8ToString(C._sqlite3_errmsg(c.ptr))}`);
+const bundledCheck = (c: Connection, rc: number) => { if (rc) throw bundledError(c); };
+rt.claimNativeLib("sqliteJni");
+rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteDriverKt", {
+  "nativeThreadSafeMode()I": () => 0,
+  "nativeOpen(Ljava/lang/String;I)J": async (name: string, flags: number) =>
+    handle(await openConnection(name || ":memory:", (flags & 3) === 1, (flags & 6) === 6)),
+});
+rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteConnectionKt", {
+  "nativePrepare(JLjava/lang/String;)J": (h: bigint, sql: string) => {
+    const c = conn(h), s = prepare(c, sql, () => bundledError(c));
+    bundled.set(s, c);
+    return BigInt(s);
+  },
+  "nativeClose(J)V": (h: bigint) => {
+    const c = conn(h);
+    for (const [s, owner] of bundled) if (owner === c) { C._sqlite3_finalize(s); bundled.delete(s); }
+    closeConnection(c);
+    release(h);
+  },
+  "nativeInTransaction(J)Z": (h: bigint) => +!C._sqlite3_get_autocommit(conn(h).ptr),
+  "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V": () => {
+    throw rt.mkThrowable("android/database/SQLException", "Error code: 1, message: not authorized");
+  },
+});
+rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", {
+  "nativeBindBlob(JI[B)V": (s: bigint, i: number, v: Int8Array) => bundledCheck(bundledConn(s), bindBlob(st(s), i, v)),
+  "nativeBindDouble(JID)V": (s: bigint, i: number, v: number) => bundledCheck(bundledConn(s), C._sqlite3_bind_double(st(s), i, v)),
+  "nativeBindLong(JIJ)V": (s: bigint, i: number, v: bigint) => bundledCheck(bundledConn(s), C._sqlite3_bind_int64(st(s), i, v)),
+  "nativeBindNull(JI)V": (s: bigint, i: number) => bundledCheck(bundledConn(s), bindNull(st(s), i)),
+  "nativeBindText(JILjava/lang/String;)V": (s: bigint, i: number, v: string) => bundledCheck(bundledConn(s), bindText(st(s), i, v)),
+  "nativeClearBindings(J)V": (s: bigint) => bundledCheck(bundledConn(s), C._sqlite3_clear_bindings(st(s))),
+  "nativeStep(J)Z": (s: bigint) => {
+    const c = bundledConn(s), rc = step(c, st(s));
+    stepped(c, st(s));
+    if (rc === ROW) return 1;
+    if (rc === DONE) return 0;
+    return bundledCheck(c, rc), 0;
+  },
+  "nativeReset(J)V": (s: bigint) => bundledCheck(bundledConn(s), C._sqlite3_reset(st(s))),
+  "nativeClose(J)V": (s: bigint) => { if (bundled.delete(st(s))) C._sqlite3_finalize(st(s)); },
+  "nativeGetColumnCount(J)I": (s: bigint) => C._sqlite3_column_count(st(s)),
+  "nativeGetColumnName(JI)Ljava/lang/String;": (s: bigint, i: number) => columnName(st(s), i),
+  "nativeGetColumnType(JI)I": (s: bigint, i: number) => C._sqlite3_column_type(st(s), i),
+  "nativeGetLong(JI)J": (s: bigint, i: number) => C._sqlite3_column_int64(st(s), i),
+  "nativeGetDouble(JI)D": (s: bigint, i: number) => C._sqlite3_column_double(st(s), i),
+  "nativeGetText(JI)Ljava/lang/String;": (s: bigint, i: number) => columnText(st(s), i) ?? "",
+  "nativeGetBlob(JI)[B": (s: bigint, i: number) => columnBlob(st(s), i),
+});
+
+// ── the hosted system providers' side of android.database
 const CV_MAP = mangleField("android/content/ContentValues", "mMap");
 /** a ContentValues' entries, with boxed numbers unwrapped */
 export const contentValues = (values: JObj): Map<string, unknown> =>
   new Map(arrayMapEntries((values as unknown as Record<string, JObj>)[CV_MAP]).map(([k, v]) => [k as string, unbox(v) ?? v]));
-
-/** SQLiteDatabase.query, with or without its trailing limit */
-function tableQuery(this: JSQLiteDatabase, table: string, cols: string[] | null, sel: string | null, selArgs: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null = null) {
-  return runQuery(this, buildQuery(table, cols, sel, groupBy, having, orderBy, limit), selArgs);
-}
-const dbMethods: NonNullable<NativeSpec["methods"]> = {
-  "static create(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;": () => openDatabase(":memory:"),
-  // AOSP's SQLiteOpenHelper opens through these: each call a connection of its own
-  "static createInMemory(Landroid/database/sqlite/SQLiteDatabase$OpenParams;)Landroid/database/sqlite/SQLiteDatabase;":
-    (params: JObj) => openWithParams(":memory:", params),
-  "static openDatabase(Ljava/io/File;Landroid/database/sqlite/SQLiteDatabase$OpenParams;)Landroid/database/sqlite/SQLiteDatabase;":
-    (file: JObj, params: JObj) => openWithParams(pathOf(file), params),
-  "static deleteDatabase(Ljava/io/File;)Z": (file: JObj) => {
-    const path = pathOf(file);
-    sqliteStore.files.delete(path);
-    const deleted = vfs.delete(path);
-    for (const suffix of ["-journal", "-shm", "-wal"]) vfs.delete(path + suffix);
-    if (dbCache.get(path)?.open === false) dbCache.delete(path);
-    return deleted ? 1 : 0;
-  },
-  "reopenReadWrite()V": function (this: JSQLiteDatabase) {
-    const file = sqliteStore.files.get(this.path);
-    if (!this.readOnly || !this.open || !file || !SQL) return;
-    if (readOnlyCache.get(this.path) === this) readOnlyCache.delete(this.path);
-    this.db!.close();
-    this.db = sharedConnection(SQL, file.db);
-    this.readOnly = false;
-    this.separate = true;
-    file.transactions.add(this.txActive = () => this.txDepth > 0);
-  },
-  "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)Landroid/database/sqlite/SQLiteDatabase;":
-    function (path: string, _factory: unknown, flags: number) { return openDatabase(path, flags); },
-  "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;ILandroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;":
-    function (path: string, _factory: unknown, flags: number, _errorHandler: unknown) { return openDatabase(path, flags); },
-  "execSQL(Ljava/lang/String;)V": function (this: JSQLiteDatabase, sql: string) {
-    try { this.db!.exec(sql); } catch (e) { throw sqliteExc(String(e), sql); }
-    this.scheduleSave();
-  },
-  "execSQL(Ljava/lang/String;[Ljava/lang/Object;)V": function (this: JSQLiteDatabase, sql: string, args: unknown[]) { runWrite(this, sql, args); },
-  "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
-    function (this: JSQLiteDatabase, factory: unknown, sql: string, args: unknown[] | null, editTable: string | null) {
-      if (!factory) return runQuery(this, sql, args);
-      rt.link("android/database/sqlite/SQLiteQuery");
-      rt.link("android/database/sqlite/SQLiteDirectCursorDriver");
-      const query = new JSQLiteQuery(), driver = new JSQLiteCursorDriver();
-      query.jdb = this; query.sql = sql; query.binds = args?.slice() ?? []; driver.query = query;
-      return vcall(factory, "newCursor", "(Landroid/database/sqlite/SQLiteDatabase;Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)Landroid/database/Cursor;", this, driver, editTable, query);
-    },
-  "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
-    driven(function* (this: JSQLiteDatabase, factory: unknown, sql: string, args: unknown[] | null, editTable: string | null, signal: unknown): Gen {
-      if (signal) yield vcall(signal, "throwIfCanceled", "()V");
-      return callSelf(dbMethods,
-        "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
-        this, factory, sql, args, editTable);
-    }),
-  "rawQuery(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;": function (this: JSQLiteDatabase, sql: string, args: unknown[] | null) {
-    return runQuery(this, sql, args);
-  },
-  "rawQuery(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": driven(function* (this: JSQLiteDatabase, sql: string, args: unknown[] | null, signal: unknown): Gen {
-    if (signal) yield vcall(signal, "throwIfCanceled", "()V");
-    return runQuery(this, sql, args);
-  }),
-  "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;": tableQuery,
-  "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;": tableQuery,
-  "insert(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J":
-    function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JObj) {
-      return doInsert(this, table, cv, "");
-    },
-  "insertOrThrow(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J":
-    function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JObj) {
-      return doInsert(this, table, cv, "", true);
-    },
-  "insertWithOnConflict(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;I)J":
-    function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JObj, conflict: number) {
-      const or = ["", "", "", "", " OR IGNORE", " OR REPLACE"][conflict] ?? "";
-      return doInsert(this, table, cv, or);
-    },
-  "replace(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J":
-    function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JObj) {
-      return doInsert(this, table, cv, " OR REPLACE");
-    },
-  "replaceOrThrow(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J":
-    function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JObj) {
-      return doInsert(this, table, cv, " OR REPLACE", true);
-    },
-  "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
-    function (this: JSQLiteDatabase, table: string, cv: JObj, where: string | null, args: unknown[] | null) {
-      const values = contentValues(cv);
-      const sets = [...values.keys()].map((k) => `"${k}"=?`).join(",");
-      const sql = `UPDATE "${table}" SET ${sets}${where ? " WHERE " + where : ""}`;
-      const vals = [...values.values()];
-      runWrite(this, sql, [...vals, ...(args ?? [])]);
-      return this.db!.getRowsModified();
-    },
-  "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I":
-    function (this: JSQLiteDatabase, table: string, where: string | null, args: unknown[] | null) {
-      runWrite(this, `DELETE FROM "${table}"${where ? " WHERE " + where : ""}`, args);
-      return this.db!.getRowsModified();
-    },
-  "beginTransaction()V": function (this: JSQLiteDatabase) {
-    if (this.txDepth === 0) this.db!.exec("BEGIN");
-    this.txDepth++;
-    this.txOk = false;
-  },
-  "beginTransactionNonExclusive()V": function (this: JSQLiteDatabase) {
-    callSelf(dbMethods, "beginTransaction()V", this);
-  },
-  "beginTransactionWithListener(Landroid/database/sqlite/SQLiteTransactionListener;)V": function (this: JSQLiteDatabase, listener: unknown) {
-    if (listener === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "transactionListener must not be null");
-    callSelf(dbMethods, "beginTransaction()V", this);
-    if (this.txDepth === 1) this.txListener = listener;
-    return vcall(listener, "onBegin", "()V");
-  },
-  "beginTransactionWithListenerNonExclusive(Landroid/database/sqlite/SQLiteTransactionListener;)V": function (this: JSQLiteDatabase, listener: unknown) {
-    return callSelf(dbMethods, "beginTransactionWithListener(Landroid/database/sqlite/SQLiteTransactionListener;)V", this, listener);
-  },
-  "setTransactionSuccessful()V": function (this: JSQLiteDatabase) { this.txOk = true; },
-  "endTransaction()V": function (this: JSQLiteDatabase) {
-    this.txDepth--;
-    if (this.txDepth <= 0) {
-      this.txDepth = 0;
-      const successful = this.txOk, listener = this.txListener;
-      this.txListener = null;
-      const finish = (commit: boolean) => {
-        try { this.db!.exec(commit ? "COMMIT" : "ROLLBACK"); } catch { /* */ }
-        this.scheduleSave();
-      };
-      if (!listener) { finish(successful); return; }
-      return Promise.resolve(vcall(listener, successful ? "onCommit" : "onRollback", "()V")).then(
-        () => finish(successful),
-        (error) => { finish(false); throw error; },
-      );
-    }
-  },
-  "inTransaction()Z": function (this: JSQLiteDatabase) { return this.txDepth > 0 ? 1 : 0; },
-  "isOpen()Z": function (this: JSQLiteDatabase) { return this.open ? 1 : 0; },
-  "close()V": function (this: JSQLiteDatabase) {
-    if (this.readOnly) { if (this.open) this.db!.close(); this.open = false; return; }
-    if (this.separate && this.open) {
-      this.open = false;
-      if (this.txDepth > 0) { this.txDepth = 0; try { this.db!.exec("ROLLBACK"); } catch { /* */ } }
-    }
-    this.scheduleSave();
-  },
-  "getVersion()I": function (this: JSQLiteDatabase) {
-    const r = this.db!.exec("PRAGMA user_version");
-    return Number(r[0]?.values[0]?.[0] ?? 0);
-  },
-  "setVersion(I)V": function (this: JSQLiteDatabase, v: number) {
-    this.db!.exec("PRAGMA user_version = " + v);
-    this.scheduleSave();
-  },
-  "getPath()Ljava/lang/String;": function (this: JSQLiteDatabase) { return this.path; },
-  "static findEditTable(Ljava/lang/String;)Ljava/lang/String;": (tables: string | null) => {
-    if (!tables) throw rt.mkThrowable("java/lang/IllegalStateException", "Invalid tables");
-    const space = tables.indexOf(" "), comma = tables.indexOf(",");
-    if (space > 0 && (space < comma || comma < 0)) return tables.slice(0, space);
-    if (comma > 0 && (comma < space || space < 0)) return tables.slice(0, comma);
-    return tables;
-  },
-  "validateSql(Ljava/lang/String;Landroid/os/CancellationSignal;)V": driven(function* (this: JSQLiteDatabase, sql: string, signal: unknown): Gen {
-    if (signal) yield vcall(signal, "throwIfCanceled", "()V");
-    try { this.db!.prepare(sql).free(); } catch (e) { throw sqliteExc(String(e), sql); }
-  }),
-  "getAttachedDbs()Ljava/util/List;": async function (this: JSQLiteDatabase) {
-    return newArrayList([await newObj("android/util/Pair", "(Ljava/lang/Object;Ljava/lang/Object;)V", "main", this.path)]);
-  },
-  "isReadOnly()Z": function (this: JSQLiteDatabase) { return this.readOnly ? 1 : 0; },
-  "setForeignKeyConstraintsEnabled(Z)V": function (this: JSQLiteDatabase, on: number) {
-    this.db!.exec("PRAGMA foreign_keys = " + (on ? "ON" : "OFF"));
-  },
-  "setMaximumSize(J)J": (v: bigint) => v,
-  "compileStatement(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;": function (this: JSQLiteDatabase, sql: string) {
-    rt.link("android/database/sqlite/SQLiteStatement");
-    const st = new JSQLiteStatement();
-    st.jdb = this;
-    st.sql = sql;
-    return st;
-  },
-  ...noops("setMaxSqlCacheSize(I)V", "disableWriteAheadLogging()V", "setLocale(Ljava/util/Locale;)V"),
-  ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
-    "yieldIfContendedSafely()Z", "static releaseMemory()I"),
-};
-function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): string {
-  const c = cols?.length ? cols.join(",") : "*";
-  let sql = `SELECT ${c} FROM "${table}"`;
-  if (sel) sql += " WHERE " + sel;
-  if (groupBy) sql += " GROUP BY " + groupBy;
-  if (having) sql += " HAVING " + having;
-  if (orderBy) sql += " ORDER BY " + orderBy;
-  if (limit) sql += " LIMIT " + limit;
-  return sql;
-}
-function doInsert(jdb: JSQLiteDatabase, table: string, cv: JObj, or: string, doThrow = false): bigint {
-  const values = contentValues(cv), keys = [...values.keys()];
-  const sql = keys.length
-    ? `INSERT${or} INTO "${table}" (${keys.map((k) => `"${k}"`).join(",")}) VALUES (${keys.map(() => "?").join(",")})`
-    : `INSERT${or} INTO "${table}" DEFAULT VALUES`;
-  try {
-    jdb.db!.run(sql, bindArgs([...values.values()]) as never);
-  } catch (e) {
-    if (doThrow) throw sqliteExc(String(e), sql);
-    console.warn("[sqlite insert]", e);
-    return -1n;
-  }
-  jdb.scheduleSave();
-  return lastInsertRowId(jdb);
-}
-class JSQLiteProgram extends JObj {
-  jdb: JSQLiteDatabase | null = null;
-  sql = "";
-  binds: unknown[] = [];
-}
-rt.register({
-  name: "android/database/sqlite/SQLiteProgram", ctor: JSQLiteProgram, ifaces: ["java/io/Closeable"], fields: { mSql: "sql" },
-  methods: {
-    "bindString(ILjava/lang/String;)V": function (this: JSQLiteProgram, i: number, v: string) { this.binds[i - 1] = v; },
-    "bindLong(IJ)V": function (this: JSQLiteProgram, i: number, v: bigint) { this.binds[i - 1] = v; },
-    "bindDouble(ID)V": function (this: JSQLiteProgram, i: number, v: number) { this.binds[i - 1] = v; },
-    "bindNull(I)V": function (this: JSQLiteProgram, i: number) { this.binds[i - 1] = null; },
-    "bindBlob(I[B)V": function (this: JSQLiteProgram, i: number, v: Int8Array) { this.binds[i - 1] = v; },
-    "clearBindings()V": function (this: JSQLiteProgram) { this.binds = []; },
-    "close()V": () => {},
-  },
+/** a SQLite value as MatrixCursor holds it: INTEGER a Long, REAL a Double */
+const cell = (v: unknown) => typeof v === "number" ? Number.isInteger(v) ? boxLong(BigInt(v)) : boxDouble(v)
+  : typeof v === "bigint" ? boxLong(v) : v instanceof Uint8Array ? i8(v.slice()) : v;
+/** a MatrixCursor over rows in hand */
+export const matrixCursor = driven(function* matrixCursor(columns: string[], rows: unknown[][]): Gen<JObj> {
+  const cursor: JObj = yield newObj("android/database/MatrixCursor", "([Ljava/lang/String;I)V", strArray(columns), rows.length);
+  for (const row of rows) yield vcall(cursor, "addRow", "([Ljava/lang/Object;)V", jarray(row.map(cell)));
+  return cursor;
 });
-class JSQLiteQuery extends JSQLiteProgram {}
-class JSQLiteCursorDriver extends JObj { query: JSQLiteQuery | null = null; }
-rt.register({ name: "android/database/sqlite/SQLiteQuery", ctor: JSQLiteQuery, sup: "android/database/sqlite/SQLiteProgram" });
-rt.markers("android/database/sqlite/SQLiteCursorDriver");
-rt.register({ name: "android/database/sqlite/SQLiteDirectCursorDriver", ctor: JSQLiteCursorDriver, ifaces: ["android/database/sqlite/SQLiteCursorDriver"], methods: {
-  "setBindArguments([Ljava/lang/String;)V": function (this: JSQLiteCursorDriver, args: string[]) { if (this.query) this.query.binds = args.slice(); },
-} });
-rt.register({ name: "android/database/sqlite/SQLiteCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor"], methods: {
-  ...cursorMethods,
-  "<init>(Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)V": function (this: JCursor, _driver: unknown, _editTable: string | null, query: JSQLiteQuery) {
-    const cursor = runQuery(query.jdb!, query.sql, query.binds);
-    this.cols = cursor.cols; this.rows = cursor.rows;
-  },
-} });
-class JSQLiteStatement extends JSQLiteProgram {}
-rt.register({
-  name: "android/database/sqlite/SQLiteStatement", ctor: JSQLiteStatement, sup: "android/database/sqlite/SQLiteProgram",
-  methods: {
-    "execute()V": function (this: JSQLiteStatement) { runWrite(this.jdb!, this.sql, this.binds); },
-    "executeInsert()J": function (this: JSQLiteStatement) {
-      runWrite(this.jdb!, this.sql, this.binds);
-      return lastInsertRowId(this.jdb!);
-    },
-    "executeUpdateDelete()I": function (this: JSQLiteStatement) {
-      runWrite(this.jdb!, this.sql, this.binds);
-      return this.jdb!.db!.getRowsModified();
-    },
-    "simpleQueryForLong()J": function (this: JSQLiteStatement) { return firstLong(runQuery(this.jdb!, this.sql, this.binds)); },
-    "simpleQueryForString()Ljava/lang/String;": function (this: JSQLiteStatement) { return firstString(runQuery(this.jdb!, this.sql, this.binds)); },
-    "close()V": () => {},
-  },
-});
-rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatabase, ifaces: ["java/io/Closeable"],
-  statics: { OPEN_READONLY: 1, OPEN_READWRITE: 0, CREATE_IF_NECESSARY: 0x10000000, ENABLE_WRITE_AHEAD_LOGGING: 0x20000000, NO_LOCALIZED_COLLATORS: 0x10, CONFLICT_NONE: 0, CONFLICT_ROLLBACK: 1, CONFLICT_ABORT: 2, CONFLICT_FAIL: 3, CONFLICT_IGNORE: 4, CONFLICT_REPLACE: 5 },
-  methods: dbMethods });
-defineException("android/database/SQLException", "java/lang/RuntimeException");
-defineException("android/database/sqlite/SQLiteException", "android/database/SQLException");
-for (const n of ["SQLiteConstraintException", "SQLiteDatabaseLockedException", "SQLiteFullException", "SQLiteAbortException", "SQLiteCantOpenDatabaseException", "SQLiteReadOnlyDatabaseException"])
-  defineException("android/database/sqlite/" + n, "android/database/sqlite/SQLiteException");
-rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
-// DatabaseUtils.getSqlStatementType: AOSP classifies by the first three letters
-const STATEMENT_TYPES: Record<string, number> = {
-  SEL: 1, INS: 2, UPD: 2, REP: 2, DEL: 2, ATT: 3, BEG: 4, COM: 5, END: 5, ROL: 6, PRA: 7, CRE: 8, DRO: 8, ALT: 8, ANA: 9, DET: 9,
-};
-function sqlStatementType(sql: string | null): number {
-  if (sql === null) return rt.npe();
-  const text = sql.trim().toUpperCase(), type = text.length < 3 ? 99 : STATEMENT_TYPES[text.slice(0, 3)] ?? 99;
-  return type === 6 && text.includes(" TO ") ? 99 : type; // ROLLBACK TO a savepoint is not an abort
-}
-rt.register({
-  name: "android/database/DatabaseUtils", ctor: class extends JObj {},
-  statics: { STATEMENT_SELECT: 1, STATEMENT_UPDATE: 2, STATEMENT_ATTACH: 3, STATEMENT_BEGIN: 4, STATEMENT_COMMIT: 5,
-    STATEMENT_ABORT: 6, STATEMENT_PRAGMA: 7, STATEMENT_DDL: 8, STATEMENT_UNPREPARED: 9, STATEMENT_OTHER: 99 },
-  methods: {
-    "static getSqlStatementType(Ljava/lang/String;)I": sqlStatementType,
-    "static appendEscapedSQLString(Ljava/lang/StringBuilder;Ljava/lang/String;)V": (builder: { s: string } | null, value: string | null) => {
-      if (!builder) return rt.npe();
-      builder.s += "'" + String(value).replaceAll("'", "''") + "'";
-    },
-    "static sqlEscapeString(Ljava/lang/String;)Ljava/lang/String;": (value: string | null) => "'" + String(value).replaceAll("'", "''") + "'",
-    "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string) =>
-      firstLong(runQuery(db, `SELECT COUNT(*) FROM "${table}"`, null)),
-    "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string, where: string | null, args: unknown[]) =>
-      firstLong(runQuery(db, `SELECT COUNT(*) FROM "${table}"` + (where ? " WHERE " + where : ""), args)),
-    "static longForQuery(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)J":
-      (db: JSQLiteDatabase, sql: string, args: unknown[]) => firstLong(runQuery(db, sql, args)),
-    "static stringForQuery(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)Ljava/lang/String;":
-      (db: JSQLiteDatabase, sql: string, args: unknown[]) => firstString(runQuery(db, sql, args)),
-    "static executeInsert(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/Object;)J":
-      (db: JSQLiteDatabase, sql: string, args: unknown[] | null) => { runWrite(db, sql, args); return db.db!.getRowsModified() > 0 ? lastInsertRowId(db) : -1n; },
-    "static executeUpdateDelete(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/Object;)I":
-      (db: JSQLiteDatabase, sql: string, args: unknown[] | null) => { runWrite(db, sql, args); return db.db!.getRowsModified(); },
-  },
-});
-
-/** SQLiteDatabase.openDatabase(File, OpenParams), read through AOSP's OpenParams getters */
-const openWithParams = driven(function* (path: string, params: JObj | null): Gen {
-  if (!params) return rt.npe();
-  const flags = (yield vcall(params, "getOpenFlags", "()I")) as number;
-  const synchronous = (yield vcall(params, "getSynchronousMode", "()Ljava/lang/String;")) as string | null;
-  const jdb = (yield openDatabase(path, flags, true)) as JSQLiteDatabase;
-  if (synchronous !== null) jdb.db!.exec("PRAGMA synchronous='" + synchronous.replace(/'/g, "''") + "'");
-  return jdb;
-});
-rt.markers("android/database/DatabaseErrorHandler");
-rt.markers("android/database/sqlite/SQLiteTransactionListener");
-
-// ── androidx.sqlite bundled driver (libsqliteJni) over sql.js; handles are opaque bigints.
-interface BStmt {
-  st: import("sql.js").Statement;
-  sql: string;
-  conn: BConn;
-  params: (string | number | bigint | Uint8Array | null)[];
-  bound: boolean;
-  row: unknown[] | null;
-  names: string[];
-}
-interface BConn { jdb: JSQLiteDatabase; db: Database; tx: number; }
-let nextHandle = 1n;
-const bConns = new Map<bigint, BConn>();
-const bStmts = new Map<bigint, BStmt>();
-const bstmt = (h: bigint): BStmt => {
-  const st = bStmts.get(h);
-  if (!st) throw rt.mkThrowable("android/database/sqlite/SQLiteException", "bad stmt handle");
-  return st;
-};
-const jni = (cls: string, sig: string, fn: (...a: never[]) => unknown) =>
-  rt.registerJni("androidx/sqlite/driver/bundled/" + cls, sig, fn);
-rt.claimNativeLib("sqliteJni");
-jni("BundledSQLiteDriverKt", "nativeThreadSafeMode()I", () => 0);
-jni("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J", async (name: string, flags: number) => {
-  const mode = flags & 3;
-  if (mode !== 1 && mode !== 2) throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Invalid SQLite open flags");
-  const sql = await ensureSql();
-  let jdb: JSQLiteDatabase, db: Database;
-  if (!name || name === ":memory:") {
-    jdb = new JSQLiteDatabase(); jdb.db = db = new sql.Database();
-  } else {
-    jdb = await openDatabase(name, mode === 2 && flags & 4 ? 0x10000000 : 0);
-    db = mode === 1 ? readOnlyConnection(sql, jdb.db!) : sharedConnection(sql, jdb.db!);
-  }
-  const h = nextHandle++;
-  bConns.set(h, { jdb, db, tx: 0 });
-  return h;
-});
-jni("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J", (db: bigint, sql: string) => {
-  const conn = bConns.get(db);
-  if (!conn?.jdb.db) throw rt.mkThrowable("android/database/sqlite/SQLiteException", "connection closed");
-  const st = conn.db.prepare(sql);
-  const h = nextHandle++;
-  bStmts.set(h, { st, sql, conn, params: [], bound: false, row: null, names: st.getColumnNames() });
-  return h;
-});
-jni("BundledSQLiteConnectionKt", "nativeClose(J)V", (db: bigint) => {
-  const conn = bConns.get(db);
-  if (!conn) return;
-  for (const [handle, stmt] of bStmts) if (stmt.conn === conn) { stmt.st.free(); bStmts.delete(handle); }
-  conn.db.close();
-  conn.jdb.txDepth = Math.max(0, conn.jdb.txDepth - conn.tx);
-  if (conn.jdb.path !== ":memory:") conn.jdb.scheduleSave();
-  bConns.delete(db);
-});
-jni("BundledSQLiteConnectionKt", "nativeInTransaction(J)Z", (db: bigint) => (bConns.get(db)?.tx ? 1 : 0));
-jni("BundledSQLiteConnectionKt", "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V", () => {
-  throw rt.mkThrowable("android/database/sqlite/SQLiteException", "extensions unsupported");
-});
-const stJni: Record<string, (...a: never[]) => unknown> = {
-  "nativeBindBlob(JI[B)V": (h: bigint, i: number, b: Int8Array) => {
-    bstmt(h).params[i - 1] = new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length));
-  },
-  "nativeBindDouble(JID)V": (h: bigint, i: number, v: number) => { bstmt(h).params[i - 1] = v; },
-  "nativeBindLong(JIJ)V": (h: bigint, i: number, v: bigint) => { bstmt(h).params[i - 1] = v; },
-  "nativeBindNull(JI)V": (h: bigint, i: number) => { bstmt(h).params[i - 1] = null; },
-  "nativeBindText(JILjava/lang/String;)V": (h: bigint, i: number, v: string) => { bstmt(h).params[i - 1] = v; },
-  "nativeClearBindings(J)V": (h: bigint) => { const s = bstmt(h); s.params = []; s.bound = false; },
-  "nativeStep(J)Z": (h: bigint) => {
-    const s = bstmt(h);
-    if (!s.bound) {
-      if (s.params.length) s.st.bind(s.params.map((p) => p === undefined ? null : p) as never);
-      s.bound = true;
-    }
-    const has = s.st.step();
-    s.row = has ? integerRow(s.st) : null;
-    if (!has) {
-      const head = s.sql.trimStart().slice(0, 8).toUpperCase();
-      // txDepth on the JSQLiteDatabase is what gates persistence; every path that opens a
-      // transaction on the shared connection has to keep it up to date.
-      if (head.startsWith("BEGIN")) { s.conn.tx++; s.conn.jdb.txDepth++; }
-      else if (head.startsWith("COMMIT") || head.startsWith("ROLLBACK") || head.startsWith("END")) {
-        s.conn.tx = Math.max(0, s.conn.tx - 1);
-        s.conn.jdb.txDepth = Math.max(0, s.conn.jdb.txDepth - 1);
-      }
-      s.conn.jdb.scheduleSave();
-    }
-    return has ? 1 : 0;
-  },
-  "nativeReset(J)V": (h: bigint) => { const s = bstmt(h); s.st.reset(); s.bound = false; s.row = null; },
-  "nativeClose(J)V": (h: bigint) => { const s = bStmts.get(h); if (s) { try { s.st.free(); } catch { /* */ } bStmts.delete(h); } },
-  "nativeGetColumnCount(J)I": (h: bigint) => bstmt(h).names.length,
-  "nativeGetColumnName(JI)Ljava/lang/String;": (h: bigint, i: number) => bstmt(h).names[i] ?? "",
-  "nativeGetColumnType(JI)I": (h: bigint, i: number) => {
-    const v = bstmt(h).row?.[i];
-    if (v === null || v === undefined) return 5;
-    if (v instanceof Uint8Array) return 4;
-    if (typeof v === "string") return 3;
-    return typeof v === "bigint" || Number.isInteger(v) ? 1 : 2;
-  },
-  "nativeGetLong(JI)J": (h: bigint, i: number) => longValue(bstmt(h).row?.[i]),
-  "nativeGetDouble(JI)D": (h: bigint, i: number) => Number(bstmt(h).row?.[i] ?? 0),
-  "nativeGetText(JI)Ljava/lang/String;": (h: bigint, i: number) => {
-    const v = bstmt(h).row?.[i];
-    return v === null || v === undefined ? "" : String(v);
-  },
-  "nativeGetBlob(JI)[B": (h: bigint, i: number) => {
-    const v = bstmt(h).row?.[i];
-    const u = v instanceof Uint8Array ? v : new Uint8Array(0);
-    return new Int8Array(u.buffer.slice(u.byteOffset, u.byteOffset + u.length));
-  },
-};
-for (const [sig, fn] of Object.entries(stJni)) jni("BundledSQLiteStatementKt", sig, fn);

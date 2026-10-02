@@ -7,7 +7,7 @@ const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
 const { newObj, vcall } = await import(W + "/src/jvm/natives/jlang");
 const { setAppHost } = await import(W + "/src/android/apphost");
-const { testAppHost } = await import(W + "/tests/java");
+const { testAppHost, loadPlatform } = await import(W + "/tests/java");
 const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
 const { Resources } = await import(W + "/src/android/res");
 const { TV } = await import(W + "/src/android/axml");
@@ -48,6 +48,8 @@ rt.register({ name: "webdroid/test/Provider", ctor: class extends JObj {}, sup: 
 } });
 
 rt.linkNatives();
+// framework-res: CursorWindow sizes itself from Resources.getSystem()
+await loadPlatform();
 await startMainLooper();
 const client = install(CLIENT), owner = install(OWNER, [{ name: "provider", attrs: [attr("name", ".Data"), attr("authorities", AUTHORITY), attr("exported", "true")], children: [] }]);
 setProcessIdentity(HERE, client.uid); setProcessName(CLIENT);

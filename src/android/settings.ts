@@ -15,7 +15,7 @@ import { mangleStaticField } from "../jvm/abi";
 import { once } from "../jvm/suspend";
 import { callingIdentity, asSystem } from "./binder";
 import { mkUri, uriParts, uriDecode, type JUri } from "./net";
-import { mkCursor, contentValues } from "./sqlite";
+import { matrixCursor, contentValues } from "./sqlite";
 import { packages, type PackageRecord } from "./packages";
 import { reportUncaught, type JBundle } from "./os";
 import { notifyContent } from "./server/content";
@@ -191,7 +191,7 @@ function projectionOf(projection: string[] | null): string[] {
   return [...projection];
 }
 const cursorOf = (columns: string[], rows: [string, string, string][]) =>
-  mkCursor(columns, rows.map(([id, name, value]) => columns.map((column) =>
+  matrixCursor(columns, rows.map(([id, name, value]) => columns.map((column) =>
     column === "_id" ? id : column === "name" ? name : column === "value" ? value : "false")));
 
 // ── writes
@@ -315,12 +315,12 @@ function validTable(uri: JUri): string {
 const query = driven(function* query$(uri: JUri, projection: string[] | null, where: string | null, whereArgs: string[] | null): Gen {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, true);
   const columns = projectionOf(projection);
-  if (LEGACY_TABLES.has(table)) return mkCursor(columns, []);
+  if (LEGACY_TABLES.has(table)) return yield matrixCursor(columns, []);
   const c = caller();
-  if (name === null) return cursorOf(columns, yield* readableRows(c, table as Table));
+  if (name === null) return yield cursorOf(columns, yield* readableRows(c, table as Table));
   const value = yield* readSetting(c, table as Table, name);
   const index = namesOf(table as Table).indexOf(name);
-  return cursorOf(columns, value === null ? [] : [[String(index < 0 ? 0 : index + 1), name, value]]);
+  return yield cursorOf(columns, value === null ? [] : [[String(index < 0 ? 0 : index + 1), name, value]]);
 });
 const named = (values: JObj | null): [string | null, string | null] => {
   const map = values ? contentValues(values) : new Map<string, unknown>(), value = map.get("value");

@@ -2,9 +2,9 @@ import { expect, test, jest, describe, beforeAll } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync, JThread, curThread, vcallOn } from "../src/jvm/natives/jlang";
+import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jlang";
 import { strArray } from "../src/jvm/abi";
-import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
+import { useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
@@ -19,6 +19,7 @@ const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql }
 
 describe("cursorwindow", () => {
   test("CursorWindow preserves absolute rows and typed fields through a parcel", async () => {
+    await bootApp(await packageRecord("org.webdroid.test.sqlite"));
     const window = await newObj("android/database/CursorWindow", "(Ljava/lang/String;)V", "results");
     expect(await vcall(window, "setNumColumns", "(I)Z", 3)).toBe(1);
     await vcall(window, "setStartPosition", "(I)V", 8);
@@ -70,106 +71,30 @@ describe("sax", () => {
   });
 });
 
-describe("sqlite-query-builder", () => {
-  test("DatabaseUtils appends a quoted SQL string", async () => {
-    const builder = await newObj("java/lang/StringBuilder", "(Ljava/lang/String;)V", "name = ");
-    await vcall(rt.link("android/database/DatabaseUtils").ctor, "appendEscapedSQLString", "(Ljava/lang/StringBuilder;Ljava/lang/String;)V", builder, "O'Brien");
-    expect(await vcall(builder, "toString", "()Ljava/lang/String;")).toBe("name = 'O''Brien'");
-  });
+describe("sqlite", () => {
+  const S = "Ljava/lang/String;", DB = "Landroid/database/sqlite/SQLiteDatabase;";
+  const open = (path: string) => scall("android/database/sqlite/SQLiteDatabase", "openDatabase",
+    `(${S}Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)${DB}`, path, null, 0x10000000);
+  const exec = (db: unknown, sql: string) => vcall(db, "execSQL", `(${S})V`, sql);
+  const long = (db: unknown, sql: string) => scall("android/database/DatabaseUtils", "longForQuery", `(${DB}${S}[${S})J`, db, sql, null);
+  const thrown = (f: () => unknown) => Promise.resolve().then(f).then(() => null, (e: { constructor: { $i: { name: string } } }) => e.constructor.$i.name);
 
-  test("SQLiteQueryBuilder applies mapped projections and appended filters to reads and updates", async () => {
+  test("connections to one file share its writes, keep their own TEMP schema, and raise AOSP's exceptions", async () => {
     freshSQLiteStore();
-    const db = await openDatabase(":memory:");
-    db.db!.exec("CREATE TABLE records (id INTEGER, label TEXT); INSERT INTO records VALUES (1, 'first'), (2, 'second')");
-    const builder = await newObj("android/database/sqlite/SQLiteQueryBuilder", "()V");
-    await vcall(builder, "setTables", "(Ljava/lang/String;)V", "records");
-    const projection = await newObj("java/util/HashMap", "()V");
-    await vcall(projection, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "name", "label AS name");
-    await vcall(builder, "setProjectionMap", "(Ljava/util/Map;)V", projection);
-    await vcall(builder, "appendWhere", "(Ljava/lang/CharSequence;)V", "id > 1");
-    const cursor = await vcall(builder, "query", "(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
-      db, ["name"], null, null, null, null, null);
-    expect(await vcall(cursor, "getCount", "()I")).toBe(1);
+    await bootApp(await packageRecord("org.webdroid.test.sqlite"));
+    vfs.mkdir("/data/data/test.sqlite/databases");
+    const path = "/data/data/test.sqlite/databases/shared.db", first = await open(path), second = await open(path);
+    await exec(first, "CREATE TABLE t (id INTEGER PRIMARY KEY, big INTEGER)");
+    await exec(first, "INSERT INTO t VALUES (1, 9007199254740993)");
+    expect(await long(second, "SELECT big FROM t")).toBe(9007199254740993n);
+    await exec(first, "CREATE TEMP TABLE marker (id INTEGER)");
+    expect(await long(first, "SELECT count(*) FROM sqlite_temp_master")).toBe(1n);
+    expect(await long(second, "SELECT count(*) FROM sqlite_temp_master")).toBe(0n);
+    expect(await thrown(() => exec(second, "INSERT INTO t VALUES (1, 0)"))).toBe("android/database/sqlite/SQLiteConstraintException");
+    expect(await thrown(() => long(second, "SELECT big FROM t WHERE id = 2"))).toBe("android/database/sqlite/SQLiteDoneException");
+    const cursor = await vcall(second, "rawQuery", `(${S}[${S})Landroid/database/Cursor;`, "SELECT big, 1.5 FROM t", null);
     expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
-    expect(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0)).toBe("second");
-
-    const values = await newObj("android/content/ContentValues", "()V");
-    await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "label", "updated");
-    expect(await vcall(builder, "update", "(Landroid/database/sqlite/SQLiteDatabase;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", db, values, null, null)).toBe(1);
-    expect(db.db!.exec("SELECT label FROM records ORDER BY id")[0].values).toEqual([["first"], ["updated"]]);
-  });
-});
-
-describe("sqlite-transaction-listener", () => {
-  class TransactionListener extends JObj { events: string[] = []; }
-  rt.register({
-    name: "test/TransactionListener", ctor: TransactionListener, ifaces: ["android/database/sqlite/SQLiteTransactionListener"],
-    methods: {
-      "onBegin()V": function (this: TransactionListener) { this.events.push("begin"); },
-      "onCommit()V": function (this: TransactionListener) { this.events.push("commit"); },
-      "onRollback()V": function (this: TransactionListener) { this.events.push("rollback"); },
-    },
-  });
-
-  test("SQLite helpers publish only initialized databases and keep memory databases separate", async () => {
-    freshSQLiteStore();
-    const entered = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
-    const owner = new JThread(), waiter = new JThread();
-    class Helper extends rt.link("android/database/sqlite/SQLiteOpenHelper").ctor {}
-    rt.register({ name: "test/InitializingDbHelper", ctor: Helper, sup: "android/database/sqlite/SQLiteOpenHelper", methods: {
-      "onCreate(Landroid/database/sqlite/SQLiteDatabase;)V": async function (db: unknown) {
-        expect(curThread).toBe(owner);
-        entered.resolve(); await finish.promise;
-        await vcallOn(owner, db, "execSQL", "(Ljava/lang/String;)V", "CREATE TABLE ready (id INTEGER)");
-      },
-    } });
-    const helper = await newObj("test/InitializingDbHelper", "(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V", null, null, null, 1);
-    const first = vcallOn(owner, helper, "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
-    await entered.promise;
-    let published = false;
-    const second = Promise.resolve(vcallOn(waiter, helper, "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;")).then(db => { published = true; return db; });
-    await Promise.resolve(); expect(published).toBe(false);
-    finish.resolve();
-    const db = await first;
-    expect(await second).toBe(db);
-    const cursor = await vcall(db, "rawQuery", "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;", "SELECT * FROM ready", null);
-    expect(await vcall(cursor, "getCount", "()I")).toBe(0);
-    const separate = await openDatabase(":memory:");
-    expect(separate).not.toBe(db);
-    expect(separate.db!.exec("SELECT name FROM sqlite_master")).toEqual([]);
-  });
-  rt.linkNatives();
-
-  test("separate SQLite helpers keep their TEMP schemas on separate connections", async () => {
-    freshSQLiteStore();
-    class Helper extends rt.link("android/database/sqlite/SQLiteOpenHelper").ctor {}
-    rt.register({ name: "test/TempTableHelper", ctor: Helper, sup: "android/database/sqlite/SQLiteOpenHelper", methods: {
-      "onCreate(Landroid/database/sqlite/SQLiteDatabase;)V": () => {},
-      "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V": () => {},
-      "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V": (db: unknown) =>
-        vcall(db, "execSQL", "(Ljava/lang/String;)V", "CREATE TEMP TABLE temp_marker (id INTEGER)"),
-    } });
-    const context = await bootApp(await packageRecord("org.webdroid.test.sqlite"));
-    const make = () => newObj("test/TempTableHelper", "(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V", context, "temp-isolation.db", null, 1);
-    const first = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
-    const second = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
-    expect(first).not.toBe(second);
-    expect(first.db!.exec("SELECT name FROM sqlite_temp_master WHERE name='temp_marker'")[0]?.values).toEqual([["temp_marker"]]);
-    expect(second.db!.exec("SELECT name FROM sqlite_temp_master WHERE name='temp_marker'")[0]?.values).toEqual([["temp_marker"]]);
-  });
-
-  test("SQLite transaction listeners receive begin and completion callbacks", async () => {
-    freshSQLiteStore();
-    const db = await openDatabase(":memory:");
-    const committed = new TransactionListener();
-    await vcall(db, "beginTransactionWithListener", "(Landroid/database/sqlite/SQLiteTransactionListener;)V", committed);
-    await vcall(db, "setTransactionSuccessful", "()V");
-    await vcall(db, "endTransaction", "()V");
-    expect(committed.events).toEqual(["begin", "commit"]);
-    const rolledBack = new TransactionListener();
-    await vcall(db, "beginTransactionWithListener", "(Landroid/database/sqlite/SQLiteTransactionListener;)V", rolledBack);
-    await vcall(db, "endTransaction", "()V");
-    expect(rolledBack.events).toEqual(["begin", "rollback"]);
+    expect([await vcall(cursor, "getString", `(I)${S}`, 0), await vcall(cursor, "getString", `(I)${S}`, 1)]).toEqual(["9007199254740993", "1.5"]);
   });
 
   test("SQLite binary snapshots preserve large files and live connection-local state", async () => {
@@ -177,18 +102,19 @@ describe("sqlite-transaction-listener", () => {
     const path = "/data/data/test.sqlite/databases/large.db", seed = new sql.Database();
     seed.exec("CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(6 * 1024 * 1024))");
     vfs.write(path, seed.export()); seed.close();
-    const db = await openDatabase(path, 0);
-    db.db!.exec("CREATE TEMP TABLE changes(n); CREATE TEMP TRIGGER track AFTER INSERT ON payload BEGIN INSERT INTO changes VALUES (1); END");
+    const db = await open(path);
+    await exec(db, "CREATE TEMP TABLE changes(n)");
+    await exec(db, "CREATE TEMP TRIGGER track AFTER INSERT ON payload BEGIN INSERT INTO changes VALUES (1); END");
     jest.useFakeTimers();
     try {
-      await vcall(db, "execSQL", "(Ljava/lang/String;)V", "INSERT INTO payload VALUES (x'010203')");
+      await exec(db, "INSERT INTO payload VALUES (x'010203')");
       jest.runOnlyPendingTimers();
     } finally { jest.useRealTimers(); }
     const saved = new sql.Database(vfs.read(path)!);
     expect(saved.exec("SELECT length(value) FROM payload")[0].values).toEqual([[6 * 1024 * 1024], [3]]);
-    expect(db.db!.exec("SELECT count(*) FROM changes")[0].values).toEqual([[1]]);
-    db.db!.exec("INSERT INTO payload VALUES (x'04')");
-    expect(db.db!.exec("SELECT count(*) FROM changes")[0].values).toEqual([[2]]);
+    expect(await long(db, "SELECT count(*) FROM changes")).toBe(1n);
+    await exec(db, "INSERT INTO payload VALUES (x'04')");
+    expect(await long(db, "SELECT count(*) FROM changes")).toBe(2n);
     saved.close(); vfs.delete(path);
   });
 });

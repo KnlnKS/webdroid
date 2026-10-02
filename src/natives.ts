@@ -36,7 +36,6 @@ import "./android/accounts";
 import "./android/devicepolicy";
 import "./android/parcel";
 import "./android/cursorwindow";
-import "./android/abstractcursor";
 import "./android/binder";
 import "./android/remotecallbacklist";
 import "./android/mediasession";

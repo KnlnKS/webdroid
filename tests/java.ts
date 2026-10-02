@@ -73,7 +73,7 @@ export async function fakeStyles(strings: string[], styles: Record<number, [numb
 }
 
 /** framework.jar, the main looper, framework-res as the system package and the device's locales, as a booted page has them */
-async function loadPlatform(): Promise<void> {
+export async function loadPlatform(): Promise<void> {
   const { loadFramework } = await import("../src/android/framework");
   await loadFrameworkJar();
   const fetch = globalThis.fetch;

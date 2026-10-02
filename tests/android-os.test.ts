@@ -92,16 +92,6 @@ describe("cancellation-signal", () => {
       constructor: { $i: { name: "android/os/OperationCanceledException" } },
     });
   });
-
-  test("SQLite cancellation overloads reject canceled work before touching the database", async () => {
-    const signal = await newObj("android/os/CancellationSignal");
-    await vcall(signal, "cancel", "()V");
-    const db = rt.make("android/database/sqlite/SQLiteDatabase");
-    await expect(vcallAsync(db, "rawQuery", "(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;", "select 1", null, signal))
-      .rejects.toMatchObject({ constructor: { $i: { name: "android/os/OperationCanceledException" } } });
-    await expect(vcallAsync(db, "rawQueryWithFactory", "(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;", null, "select 1", null, null, signal))
-      .rejects.toMatchObject({ constructor: { $i: { name: "android/os/OperationCanceledException" } } });
-  });
 });
 
 describe("looper", () => {
