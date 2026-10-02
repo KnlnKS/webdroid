@@ -582,8 +582,8 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-05 (Stage E: 2026-10-01). Stage F's work is on `knlnks/bytecode-stage-f`
-(worktree `../webdroid-stage-f`, not pushed); read "Stage F handoff" first, then "Latest handoff".
+Last updated 2026-10-05 (Stage E: 2026-10-01). Stage F is merged into `knlnks/bytecode` (not pushed);
+read "Stage F handoff" first, then "Latest handoff".
 The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
@@ -605,7 +605,7 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
 **Review fixes (2026-10-06)** are in; see the history's review entry.
 
 **Open:**
-0. `knlnks/q-async` (worktree `../webdroid-q-async`, on top of this branch) holds the runtime
+0. Branch `knlnks/q-async` (no worktree; on top of Stage F) holds the runtime
    thread-ownership check (Java entered from a turn no thread owns is refused; it replaces the
    async-natives lint and its baseline) and helpers that suspend only when they must. It waits on
    §4.1/§4.3: it makes Mihon onboarding's theme taps lose an app timing race about half the time
@@ -617,9 +617,8 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
 3. The async-natives baseline (ATM, WM, IMM, surfaces, intentipc) and the `.then`/timer callbacks
    the lint cannot see; MediaDataSource.readAt runs from a host read callback.
 4. Class-init re-entry is judged by JThread identity while main-loop jobs share mainThread.
-5. This branch is rebased onto `knlnks/bytecode` after Stage E2 and ready to fast-forward it. The
-   sql.js patch rebuilds each checkout's `vendor/sql.js/dist` on its first bun command, so give a
-   checkout its own dist rather than a symlink to a shared one.
+5. Stage F's sql.js patch rebuilds each checkout's `vendor/sql.js/dist` on its first bun command,
+   so give a worktree its own dist rather than a symlink to a shared one.
 
 ### Stage E handoff (2026-10-01): Stage E is complete
 
