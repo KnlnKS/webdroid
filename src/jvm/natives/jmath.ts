@@ -2,15 +2,13 @@
 // bigOf/mkBigInteger, which read and write its own sign and big-endian int[] magnitude; NativeBN,
 // the BIGNUM boundary its modPow, multiply and divide take for large operands, is JS bigint.
 
-import { rt, declaredField, JObj, type Intrinsic } from "../runtime";
+import { rt, JObj, type Intrinsic } from "../runtime";
 import { handle, deref, release } from "../../android/handles";
 import { jarray, mangleField } from "../abi";
 
 const BIG_INTEGER = "java/math/BigInteger";
-type Fields = Record<string, unknown>;
-let signumProp: string | undefined, magProp: string | undefined;
-const signum = () => signumProp ??= declaredField(BIG_INTEGER, "signum");
-const mag = () => magProp ??= declaredField(BIG_INTEGER, "mag");
+const SIG = mangleField(BIG_INTEGER, "signum"), MAG = mangleField(BIG_INTEGER, "mag"), WORDS = MAG + "$w";
+type BI = Record<string, any>;
 
 /** big-endian 32-bit words, most significant first → the magnitude */
 function wordsToBig(m: Int32Array, len = m.length, littleEndian = false): bigint {
@@ -31,25 +29,30 @@ function bigToWords(v: bigint): Int32Array {
 
 /** a java.math.BigInteger's value */
 export function bigOf(b: JObj): bigint {
-  const f = b as unknown as Fields, s = f[signum()] as number, v = wordsToBig(f[mag()] as Int32Array);
-  return s < 0 ? -v : v;
+  const f = b as unknown as BI, v = wordsToBig(f[MAG]);
+  return f[SIG] < 0 ? -v : v;
 }
 /** a java.math.BigInteger holding `v` */
 export function mkBigInteger(v: bigint): JObj | Promise<JObj> {
   const info = rt.link(BIG_INTEGER), init = rt.initClass(info);
   const make = () => {
-    const b = new info.ctor() as JObj, f = b as unknown as Fields;
-    f[signum()] = v < 0n ? -1 : v > 0n ? 1 : 0;
-    f[mag()] = bigToWords(v < 0n ? -v : v);
+    const b = new info.ctor() as JObj, f = b as unknown as BI;
+    f[SIG] = v < 0n ? -1 : v > 0n ? 1 : 0;
+    f[MAG] = bigToWords(v < 0n ? -v : v);
     return b;
   };
   return init ? init.then(make) : make();
 }
-export function modInverse(a: bigint, m: bigint): bigint {
+/** a⁻¹ mod m, null when a is not invertible */
+function inverse(a: bigint, m: bigint): bigint | null {
   let [r0, r1, t0, t1] = [((a % m) + m) % m, m, 1n, 0n];
   while (r0 !== 0n) { const q = r1 / r0; [r0, r1] = [r1 - q * r0, r0]; [t0, t1] = [t1 - q * t0, t0]; }
-  if (r1 !== 1n) throw rt.mkThrowable("java/lang/ArithmeticException", "BigInteger not invertible.");
-  return ((t1 % m) + m) % m;
+  return r1 === 1n ? ((t1 % m) + m) % m : null;
+}
+export function modInverse(a: bigint, m: bigint): bigint {
+  const v = inverse(a, m);
+  if (v === null) throw rt.mkThrowable("java/lang/ArithmeticException", "BigInteger not invertible.");
+  return v;
 }
 /** b^e mod m for e ≥ 0, m > 0: left to right over windows of up to five exponent bits ending in a
  *  one, each a multiplication by a precomputed odd power (a fifth fewer products than bit by bit) */
@@ -108,8 +111,6 @@ rt.registerJni("libcore/math/NativeBN", "BN_mod_exp(JJJJ)V", (r: bigint, a: bigi
 // non-invertible values, non-ASCII digits) to the AOSP body. The value is cached on the immutable
 // object as `$v`, and an intrinsic's result holds only that: its `mag` is an accessor on the
 // class, installed before any instance exists, that writes the words out when bytecode reads them.
-const SIG = mangleField(BIG_INTEGER, "signum"), MAG = mangleField(BIG_INTEGER, "mag"), WORDS = MAG + "$w";
-type BI = Record<string, any>;
 let klass: (new () => BI) | null = null, zero: BI | null = null, one: BI | null = null;
 const cls = () => klass ??= rt.link(BIG_INTEGER).ctor as never;
 const statik = (name: string) => (cls() as unknown as BI)[rt.link(BIG_INTEGER).staticFieldTable.get(name + ":Ljava/math/BigInteger;")!] as BI;
@@ -171,6 +172,15 @@ function parse(s: unknown, radix: number): bigint | null {
   else { v = 0n; const R = BigInt(radix); for (const ch of body.toLowerCase()) v = v * R + BigInt(parseInt(ch, 36)); }
   return neg ? -v : v;
 }
+/** shiftLeft (`dir` 1) and shiftRight (-1); a negative distance shifts the other way */
+const shift = (dir: 1 | -1): Intrinsic => (base) => function (this: BI, n: number) {
+  const v = val(this);
+  if (n === 0) return this;
+  if (v === 0n) return ZERO();
+  if (n === -2147483648) return base.call(this, n);
+  const left = n * dir;
+  return make(left > 0 ? v << BigInt(left) : v >> BigInt(-left));
+};
 const bitLen = (v: bigint) => { const m = v < 0n ? ~v : v; return m === 0n ? 0 : m.toString(2).length; };
 const B = "Ljava/math/BigInteger;";
 const intrinsics: Record<string, Intrinsic> = {
@@ -197,10 +207,8 @@ const intrinsics: Record<string, Intrinsic> = {
   [`divideAndRemainder(${B})[${B}`]: binary((x, y) => y === 0n ? null : jarray([make(x / y), make(x % y)], B) as never),
   [`gcd(${B})${B}`]: binary((x, y) => { let a = x < 0n ? -x : x, b = y < 0n ? -y : y; while (b) [a, b] = [b, a % b]; return make(a); }),
   [`modInverse(${B})${B}`]: binary((x, m) => {
-    if (m <= 0n) return null;
-    let [r0, r1, t0, t1] = [((x % m) + m) % m, m, 1n, 0n];
-    while (r0 !== 0n) { const q = r1 / r0; [r0, r1] = [r1 - q * r0, r0]; [t0, t1] = [t1 - q * t0, t0]; }
-    return r1 === 1n ? make(((t1 % m) + m) % m) : null;
+    const v = m > 0n ? inverse(x, m) : null;
+    return v === null ? null : make(v);
   }),
   [`modPow(${B}${B})${B}`]: (base) => function (this: BI, e: BI | null, m: BI | null) {
     if (!isBI(e) || !isBI(m)) return base.call(this, e, m);
@@ -208,18 +216,8 @@ const intrinsics: Record<string, Intrinsic> = {
     return n <= 0n || p < 0n ? base.call(this, e, m) : make(modPow(x, p, n));
   },
   [`pow(I)${B}`]: (base) => function (this: BI, e: number) { return e < 0 ? base.call(this, e) : e === 0 ? ONE() : make(val(this) ** BigInt(e)); },
-  [`shiftLeft(I)${B}`]: (base) => function (this: BI, n: number) {
-    const v = val(this);
-    if (n === 0) return this;
-    if (v === 0n) return ZERO();
-    return n === -2147483648 ? base.call(this, n) : make(n > 0 ? v << BigInt(n) : v >> BigInt(-n));
-  },
-  [`shiftRight(I)${B}`]: (base) => function (this: BI, n: number) {
-    const v = val(this);
-    if (n === 0) return this;
-    if (v === 0n) return ZERO();
-    return n === -2147483648 ? base.call(this, n) : make(n > 0 ? v >> BigInt(n) : v << BigInt(-n));
-  },
+  [`shiftLeft(I)${B}`]: shift(1),
+  [`shiftRight(I)${B}`]: shift(-1),
   [`compareTo(${B})I`]: (base) => function (this: BI, o: BI | null) {
     if (!isBI(o)) return base.call(this, o);
     const x = val(this), y = val(o);
