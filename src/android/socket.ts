@@ -1,6 +1,6 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // model native code shares (src/native/net.ts): a descriptor from either side is the same socket.
-import { rt, JObj, declaredField } from "../jvm/runtime";
+import { rt, JObj, declaredField, driven } from "../jvm/runtime";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
@@ -210,11 +210,15 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     const bytes = family === AF_INET ? parseIpv4(text) : family === AF_INET6 ? parseIpv6(text) : null;
     return bytes ? inetAddress({ address: bytes }) : null;
   },
-  "getifaddrs()[Landroid/system/StructIfaddrs;": () => Promise.all(INTERFACES.flatMap((i) => i.addresses.map(async ({ address, prefix }) => {
-    const mask = Array.from({ length: address.length }, (_, k) => 255 & ~(255 >> Math.max(0, Math.min(8, prefix - 8 * k))));
-    return newObj("android/system/StructIfaddrs", `(Ljava/lang/String;I${INET}${INET}${INET}[B)V`, i.name, i.flags,
-      await inetAddress({ address }), await inetAddress({ address: mask }), null, null);
-  }))).then((list) => jarray(list, "Landroid/system/StructIfaddrs;")),
+  "getifaddrs()[Landroid/system/StructIfaddrs;": driven(function* () {
+    const list: JObj[] = [];
+    for (const i of INTERFACES) for (const { address, prefix } of i.addresses) {
+      const mask = Array.from({ length: address.length }, (_, k) => 255 & ~(255 >> Math.max(0, Math.min(8, prefix - 8 * k))));
+      list.push(yield newObj("android/system/StructIfaddrs", `(Ljava/lang/String;I${INET}${INET}${INET}[B)V`, i.name, i.flags,
+        yield inetAddress({ address }), yield inetAddress({ address: mask }), null, null));
+    }
+    return jarray(list, "Landroid/system/StructIfaddrs;");
+  }),
   "if_nametoindex(Ljava/lang/String;)I": (name: string | null) => iface(name)?.index ?? 0,
   "if_indextoname(I)Ljava/lang/String;": (index: number) => INTERFACES.find((i) => i.index === index)?.name ?? null,
   [`ioctlFlags(${FD}Ljava/lang/String;)I`]: (_d: JObj | null, name: string | null) => { const i = iface(name); if (!i) throw errno("ioctl", E.NODEV); return i.flags; },
