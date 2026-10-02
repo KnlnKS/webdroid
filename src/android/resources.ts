@@ -3,7 +3,7 @@
 
 import { rt, driven, setDeclared, type Gen, type JObj } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration } from "./resnative";
+import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration, javaLocales } from "./resnative";
 import { device } from "../shell/config";
 
 /** the device's DisplayMetrics, as Display.getMetrics fills one */
@@ -51,7 +51,7 @@ export const javaConfiguration = driven(function* javaConfiguration(c: JConfigur
   const config = yield newObj("android/content/res/Configuration", "()V");
   yield vcall(config, "setToDefaults", "()V");
   for (const k of CONFIG_FIELDS) (config as Record<string, number>)[rt.fieldProp("android/content/res/Configuration", k)!] = c[k];
-  yield vcall(config, "setLocales", "(Landroid/os/LocaleList;)V", c.locales);
+  yield vcall(config, "setLocales", "(Landroid/os/LocaleList;)V", yield javaLocales(c.locales));
   // the display's window configuration, which the global configuration carries on a device
   const windowConfig = (config as Record<string, unknown>)[rt.fieldProp("android/content/res/Configuration", "windowConfiguration")!];
   const bounds = yield newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height);

@@ -1,5 +1,5 @@
 import type { Resources } from "./res";
-import type { JLocaleList } from "./resnative";
+import type { Locales } from "./resnative";
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {
@@ -11,7 +11,7 @@ export interface AppHost {
   splits: string[];
   setApplicationNightMode: (mode: number) => void;
   /** LocaleManager.setApplicationLocales: persist the list and deliver the configuration change */
-  setApplicationLocales: (locales: JLocaleList) => void;
+  setApplicationLocales: (locales: Locales) => void;
 }
 export let appHost: AppHost | null = null;
 export function setAppHost(h: AppHost | null) { appHost = h; }

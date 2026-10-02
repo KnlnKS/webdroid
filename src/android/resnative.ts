@@ -1,15 +1,14 @@
 // The device configuration and its languages: the values AOSP's Configuration and LocaleList
-// are built from (resources.ts), android.os.LocaleList and LocaleManager, and android.util.Xml.
+// are built from (resources.ts), LocaleManager, and android.util.Xml.
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
-import { vcall, after, scall, newObj } from "../jvm/natives/jlang";
+import { vcall, after, scall, newObj, construct } from "../jvm/natives/jlang";
+import { jarray } from "../jvm/abi";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues";
 import { mkPfd } from "./os";
-import { type JParcel, readString, writeString } from "./parcel";
-import { parcelCreator } from "./parcelable";
 import { appHost } from "./apphost";
 import { hostStub } from "./binder";
 
@@ -18,27 +17,27 @@ export function mkAssetFd(bytes: Uint8Array, pfd: unknown = null): Promise<unkno
   return newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", pfd ?? mkPfd(bytes, null), 0n, BigInt(bytes.length));
 }
 /** Locales with their tags, which configuration comparisons and resource selection read */
-export class JLocaleList extends JObj { values: JLocale[] = []; tags: string[] = []; }
-const emptyLocaleList = new JLocaleList();
+export type Locales = { values: JLocale[]; tags: string[] };
+const emptyLocales: Locales = { values: [], tags: [] };
 /** the device's languages, from boot (initDeviceLocales) */
-let localeList = emptyLocaleList;
-/** LocaleList.setDefault's list, once the process set one */
-let defaultList: JLocaleList | null = null;
-function withTags(values: JLocale[]): JLocaleList | Promise<JLocaleList> {
-  const tags = values.map(localeTag), list = (tags: string[]) => Object.assign(new JLocaleList(), { values, tags });
+let localeList = emptyLocales;
+function withTags(values: JLocale[]): Locales | Promise<Locales> {
+  const tags = values.map(localeTag), list = (tags: string[]) => ({ values, tags });
   return tags.some((tag) => tag instanceof Promise) ? Promise.all(tags).then(list) : list(tags as string[]);
 }
-const sameTags = (a: JLocaleList, b: JLocaleList) => a.tags.length === b.tags.length && a.tags.every((tag, i) => tag === b.tags[i]);
-/** Configuration.locale is a public field an app may assign: its list follows it */
-function syncLocales(c: JConfiguration): void | Promise<void> {
-  if (c.locale === (c.locales.values[0] ?? null)) return;
-  if (!c.locale) { c.locales = emptyLocaleList; return; }
-  return after(withTags([c.locale]), (list) => { c.locales = list; });
-}
+const sameTags = (a: Locales, b: Locales) => a.tags.length === b.tags.length && a.tags.every((tag, i) => tag === b.tags[i]);
+/** an android.os.LocaleList of them */
+export const javaLocales = (l: Locales): JObj | Promise<JObj> => construct("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray(l.values, "Ljava/util/Locale;"));
+/** the Locales of an android.os.LocaleList */
+const localesOf = driven(function* localesOf(list: JObj): Gen<Locales> {
+  const values: JLocale[] = [];
+  for (let i = 0, n: number = yield vcall(list, "size", "()I"); i < n; i++) values.push(yield vcall(list, "get", "(I)Ljava/util/Locale;", i));
+  return (yield withTags(values)) as Locales;
+});
 /** the resource qualifier language of a configuration's first locale */
 const configLang = (c: JConfiguration) => { const lang = c.locales.tags[0]?.split("-")[0] ?? ""; return lang === "und" ? "" : lang; };
-function setLocales(c: JConfiguration, list: JLocaleList | null): void {
-  c.locales = list || emptyLocaleList;
+function setLocales(c: JConfiguration, list: Locales): void {
+  c.locales = list;
   c.locale = c.locales.values[0] ?? null;
   c.screenLayout = (c.screenLayout & ~0xc0) | (((c.locales.tags[0] ? tagDirection(c.locales.tags[0]) : 0) + 1) << 6);
 }
@@ -51,7 +50,7 @@ export class JConfiguration extends JObj {
   // UI_MODE_TYPE_NORMAL | the device's night bit
   uiMode = 0x01 | (device.night ? 0x20 : 0x10);
   locale: JLocale | null = null;
-  locales = emptyLocaleList;
+  locales = emptyLocales;
   mcc = 0; mnc = 0; touchscreen = 3; keyboard = 1; keyboardHidden = 2; navigation = 1;
   navigationHidden = 2; hardKeyboardHidden = 2; screenLayout = 0x10 | sizeClass(device.smallestWidthDp); // SCREENLAYOUT_LONG_NO
   fontWeightAdjustment = 0;  // accessibility "bold text" is off, so no weight is added
@@ -62,7 +61,7 @@ export const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", 
   "fontWeightAdjustment", "colorMode"] as const;
 // API 33 per-app languages: the app's own list, empty to follow the system's. The host persists
 // it and delivers the configuration change; adopting it is applyApplicationLocales below.
-let appLocales = emptyLocaleList;
+let appLocales = emptyLocales;
 // ILocaleManager, under AOSP's LocaleManager: an app reads and sets its own languages; another
 // app's need READ_APP_SPECIFIC_LOCALES or CHANGE_CONFIGURATION, which no app holds here
 const ownLocales = (pkg: string | null, permission: string) => {
@@ -71,65 +70,17 @@ const ownLocales = (pkg: string | null, permission: string) => {
 rt.register({ name: "webdroid/LocaleManagerService", ctor: class extends JObj {}, sup: "android/app/ILocaleManager$Stub", methods: {
   "getApplicationLocales(Ljava/lang/String;I)Landroid/os/LocaleList;": (pkg: string | null) => {
     ownLocales(pkg, "android.permission.READ_APP_SPECIFIC_LOCALES");
-    return appLocales;
+    return javaLocales(appLocales);
   },
-  "setApplicationLocales(Ljava/lang/String;ILandroid/os/LocaleList;Z)V": (pkg: string | null, _user: number, list: JLocaleList | null) => {
+  "setApplicationLocales(Ljava/lang/String;ILandroid/os/LocaleList;Z)V": (pkg: string | null, _user: number, list: JObj | null) => {
     ownLocales(pkg, "android.permission.CHANGE_CONFIGURATION");
-    if (!list) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
-    appHost?.setApplicationLocales(list);
+    return after(localesOf(list ?? rt.npe()), (locales) => appHost?.setApplicationLocales(locales));
   },
-  "getSystemLocales()Landroid/os/LocaleList;": () => localeList,
+  "getSystemLocales()Landroid/os/LocaleList;": () => javaLocales(localeList),
   // no app has an override of its LocaleConfig
   "getOverrideLocaleConfig(Ljava/lang/String;I)Landroid/app/LocaleConfig;": () => null,
 } });
 hostStub("locale", "webdroid/LocaleManagerService");
-/** a list of distinct locales, the first of each tag kept */
-function initLocaleList(this: JLocaleList, locales: JLocale[]) {
-  if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
-  return after(withTags(locales), ({ values, tags }) => {
-    const first = tags.map((tag, i) => tags.indexOf(tag) === i);
-    this.values = values.filter((_, i) => first[i]); this.tags = tags.filter((_, i) => first[i]);
-  });
-}
-rt.register({
-  name: "android/os/LocaleList", ctor: JLocaleList, ifaces: ["android/os/Parcelable"],
-  statics: { get CREATOR() { return parcelCreator("android/os/LocaleList", readLocaleList); } },
-  methods: {
-    "<init>([Ljava/util/Locale;)V": initLocaleList,
-    // `top` first, then the rest of `others` without it
-    "<init>(Ljava/util/Locale;Landroid/os/LocaleList;)V": function (this: JLocaleList, top: JLocale | null, others: JLocaleList | null) {
-      if (!top) throw rt.mkThrowable("java/lang/NullPointerException", "topLocale is null");
-      return initLocaleList.call(this, [top, ...(others?.values ?? [])]);
-    },
-    "static getDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => defaultList ?? theConfig.locales),
-    // the process default ActivityThread sets from its configuration, with its best locale first
-    "static setDefault(Landroid/os/LocaleList;I)V": (list: JLocaleList | null, index: number) => {
-      if (!list) throw rt.mkThrowable("java/lang/NullPointerException", "locales is null");
-      if (list.values.length === 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "locales is empty");
-      defaultList = list;
-      return scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", list.values[index]);
-    },
-    "static setDefault(Landroid/os/LocaleList;)V": function (list: JLocaleList | null) {
-      return vcall(rt.link("android/os/LocaleList").ctor, "setDefault", "(Landroid/os/LocaleList;I)V", list, 0);
-    },
-    "static getAdjustedDefault()Landroid/os/LocaleList;": () => after(syncLocales(theConfig), () => theConfig.locales),
-    "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
-    "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen {
-      const values: JLocale[] = [];
-      for (const t of (tags ?? "").split(",").filter(Boolean)) values.push(yield localeForTag(t.trim()));
-      return withTags(values);
-    }),
-    "get(I)Ljava/util/Locale;": function (this: JLocaleList, i: number) { return this.values[i] ?? null; },
-    "size()I": function (this: JLocaleList) { return this.values.length; },
-    "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },
-    "toLanguageTags()Ljava/lang/String;": function (this: JLocaleList) { return this.tags.join(","); },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JLocaleList, parcel: JParcel) { writeString(parcel, this.tags.join(",")); },
-  },
-});
-function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
-  return vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", readString(parcel));
-}
 /**
  * The device's configuration. AOSP's Resources take it as a Configuration of their own
  * (resources.ts javaConfiguration) at boot and on every change the shell delivers; night mode,
@@ -155,7 +106,7 @@ export function syncDeviceOrientation(): void {
 /** Adopt the app's language list (empty: the system's) as the platform's configuration change
  *  does: Configuration, resource selection and the default Locale follow it. Returns whether
  *  the effective locales moved. */
-export function applyApplicationLocales(list: JLocaleList): boolean {
+export function applyApplicationLocales(list: Locales): boolean {
   appLocales = list;
   const next = list.values.length ? list : localeList;
   if (sameTags(next, theConfig.locales)) return false;
@@ -164,8 +115,11 @@ export function applyApplicationLocales(list: JLocaleList): boolean {
   void scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", theConfig.locale);
   return true;
 }
-export const localesFromTags = (tags: string): Promise<JLocaleList> =>
-  vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", tags);
+export const localesFromTags = driven(function* localesFromTags(tags: string): Gen<Locales> {
+  const values: JLocale[] = [];
+  for (const t of tags.split(",").filter(Boolean)) values.push(yield localeForTag(t.trim()));
+  return (yield withTags(values)) as Locales;
+});
 /** The device's own night setting changed. Returns whether anything moved. */
 export function setDeviceNight(night: boolean): boolean {
   if (night === isNight()) return false;

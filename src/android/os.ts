@@ -67,7 +67,6 @@ rt.register({
     get CPU_ABI() { return (is64BitProcess() ? abi64 : abi32)[0]; },
     get CPU_ABI2() { return (is64BitProcess() ? abi64 : abi32)[1] ?? ""; },
   },
-  methods: { "static getSerial()Ljava/lang/String;": () => "unknown", "static getRadioVersion()Ljava/lang/String;": () => null },
 });
 class JBuildVersion extends JObj {}
 rt.register({

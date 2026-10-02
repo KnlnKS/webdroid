@@ -146,6 +146,18 @@ rt.register({ name: "webdroid/TimeDetectorService", ctor: class extends JObj {},
     newObj("android/app/time/UnixEpochTime", "(JJ)V", BigInt(Math.floor(uptimeMillis())), BigInt(Math.floor(wallMillis()))),
 } });
 hostStub("time_detector", "webdroid/TimeDetectorService");
+// IDeviceIdentifiersPolicyService: ro.serialno is unset, so a caller that may read the serial gets
+// Build.UNKNOWN; TelephonyPermissions admits READ_PRIVILEGED_PHONE_STATE, or READ_PHONE_STATE below Q
+rt.register({ name: "webdroid/DeviceIdentifiersPolicyService", ctor: class extends JObj {}, sup: "android/os/IDeviceIdentifiersPolicyService$Stub", methods: {
+  "getSerialForPackage(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": async (pkg: string | null) => {
+    const { uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg);
+    if (record?.uid !== uid) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid callingPackage or callingPackage does not belong to caller's uid:" + uid);
+    if (await checkUidPermission("android.permission.READ_PRIVILEGED_PHONE_STATE", uid) === 0) return "unknown";
+    if (record.sdk.target < 29 && await checkUidPermission("android.permission.READ_PHONE_STATE", uid) === 0) return "unknown";
+    throw rt.mkThrowable("java/lang/SecurityException", `getSerial: The uid ${uid} does not meet the requirements to access device identifiers.`);
+  },
+} });
+hostStub("device_identifiers", "webdroid/DeviceIdentifiersPolicyService");
 // StatusBarManagerService: quick settings never bind a tile, so a tile's listening request has no panel to reach
 rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj {}, sup: "com/android/internal/statusbar/IStatusBarService$Stub",
   methods: noops("requestTileServiceListeningState(Landroid/content/ComponentName;I)V") });

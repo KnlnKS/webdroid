@@ -15,7 +15,7 @@ import { loadCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/code
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
-import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
+import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type Locales } from "../android/resnative";
 import { setAppHost } from "../android/apphost";
 import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk, registerSplit } from "../android/assetmanager";
@@ -198,7 +198,7 @@ function applyConfigChange(): void { void onMain(configurationChanged).catch(rep
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
-function setApplicationLocales(pkg: string, locales: JLocaleList): void {
+function setApplicationLocales(pkg: string, locales: Locales): void {
   const prefs = getPrefs(pkg, "__system_locales");
   prefs.map.set("tags", locales.tags.join(","));
   prefs.persist();
