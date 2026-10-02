@@ -1,8 +1,8 @@
 // Compiled method bodies persisted across launches (docs/bytecode-first-plan.md §4.4). A launch
 // records the source of every hot and resumable body it compiles; the next launch of the same
-// package, on the same bundle, installs those bodies from scripts in Cache Storage instead of
+// package, on the same build, installs those bodies from scripts in Cache Storage instead of
 // preparing, interpreting and compiling them again, and the service worker serving the scripts
-// lets V8 reuse their code cache. A body's source depends only on its dex and this bundle, so the
+// lets V8 reuse their code cache. A body's source depends only on its dex and the build, so the
 // key is the dex signature and method index. Saves append a chunk of the bodies not yet written,
 // so their cost follows what is new rather than what the app has accumulated. Bodies a launch
 // first needed before its first frame go to startup chunks, which the next launch awaits; the
@@ -19,7 +19,6 @@ export type Factory = (C: unknown, D: unknown, R: unknown, S: unknown, P: unknow
 const CACHE = "wd-code";
 /** loads with more chunks than this rewrite them as one */
 const MAX_CHUNKS = 8;
-const bundle = new URL(import.meta.url).pathname.replace(/[^\w.-]+/g, "_");
 /** "s" until the realm's first frame, then "l": which chunks a body recorded now belongs to */
 type Phase = "s" | "l";
 let phase: Phase = "s";
@@ -133,31 +132,45 @@ export function codeText(bodies: Iterable<[string, string]> = [...pending].map((
   return text + "};\n";
 }
 
-/** load `app`'s persisted bodies; a launch without them records its own */
-export async function loadCode(app: string): Promise<void> {
+let platformCode: Promise<void> | null = null;
+/** load the platform's persisted bodies: a zygote awaits them before it runs platform code */
+export const loadPlatformCode = (): Promise<void> => platformCode ??= (async () => {
   if (typeof caches === "undefined") return;
-  dir = `/wd-code/${bundle}/${encodeURIComponent(app)}/`;
+  // the build every realm shares: the page and a process frame are bundled apart, but emit the same bodies
+  const build = (await fetchLinkTable())?.build ?? new URL(import.meta.url).pathname.replace(/[^\w.-]+/g, "_");
   // the bodies depend on which platform classes run from bytecode, so a cut has a store of its own
   const platform = `@platform${BYTECODE.length ? "-" + [...BYTECODE.join(",")].reduce((h, c) => Math.imul(h, 31) + c.charCodeAt(0) | 0, 0).toString(36) : ""}`;
-  platformDir = `/wd-code/${bundle}/${platform}/`;
+  root = `/wd-code/${build}/`;
+  await loadStore(platformDir = `${root}${platform}/`, `/${platform}/`);
+})();
+let root = "";
+
+/** load `app`'s persisted bodies; a launch without them records its own */
+export async function loadCode(app: string): Promise<void> {
+  await loadPlatformCode();
+  if (!root) return;
   addEventListener("pagehide", () => void saveCode());
+  await loadStore(dir = `${root}${encodeURIComponent(app)}/`, `/${encodeURIComponent(app)}/`);
+}
+
+/** import a store's startup chunks and note its later ones; another build's chunks of it are stale */
+async function loadStore(store: string, suffix: string): Promise<void> {
   try {
-    const cache = await caches.open(CACHE), mine: string[] = [], suffixes = [`/${encodeURIComponent(app)}/`, `/${platform}/`];
+    const cache = await caches.open(CACHE), paths: string[] = [];
     for (const request of await cache.keys()) {
       const path = new URL(request.url).pathname;
-      if (path.startsWith(dir) || path.startsWith(platformDir)) mine.push(path);
-      // an older bundle's chunks for this app or the platform are stale; other apps' belong to other realms
-      else if (suffixes.some((suffix) => path.includes(suffix))) void cache.delete(request);
+      if (path.startsWith(store)) paths.push(path);
+      else if (path.includes(suffix)) void cache.delete(request);
     }
     // through the service worker when it controls the page, so V8 can reuse its code cache
     const direct = !!navigator.serviceWorker?.controller;
     importChunk = async (path) =>
       (await import(/* @vite-ignore */ direct ? path : URL.createObjectURL(await (await cache.match(path))!.blob()))).default;
-    const laterPaths = mine.filter((path) => path.startsWith(`${dir}l-`) || path.startsWith(`${platformDir}l-`));
-    later = laterPaths.length ? laterPaths : null;
-    useCode(Object.assign({}, ...await Promise.all(mine.filter((path) => !laterPaths.includes(path)).map(importChunk))));
-    startupKeys = new Set(Object.keys(loaded));
-    compact = mine.filter((path) => path.startsWith(dir!)).length > MAX_CHUNKS || mine.filter((path) => path.startsWith(platformDir!)).length > MAX_CHUNKS;
+    const laterPaths = paths.filter((path) => path.startsWith(`${store}l-`));
+    if (laterPaths.length) (later ??= []).push(...laterPaths);
+    for (const bodies of await Promise.all(paths.filter((path) => !laterPaths.includes(path)).map(importChunk)))
+      for (const key in bodies) { loaded[key] = bodies[key]; startupKeys.add(key); }
+    compact ||= paths.length > MAX_CHUNKS;
   } catch (e) { console.warn("[webdroid] persisted code unavailable", e); }
 }
 let importChunk: (path: string) => Promise<Record<string, Factory>> = async () => ({});
@@ -228,16 +241,18 @@ function saveCode(): Promise<void> {
 /** a gap: its method list (0 direct, 1 virtual), index there, mangled name and how it is filled
  *  (0 the platform body, 1 its JNI binding, 2 the superclass's implementation) */
 export type Gap = [list: number, index: number, mangled: string, kind: number];
-type LinkTable = { fingerprint: string; gaps: Record<string, Gap[]> };
+/** `build` identifies the source the page was built from, which decides every emitted body */
+type LinkTable = { fingerprint: string; build: string; gaps: Record<string, Gap[]> };
 let gaps: Record<string, Gap[]> | null = null, foundGaps: Record<string, Gap[]> | null = null;
+let table: Promise<LinkTable | null> | null = null;
 /** the served table for this bytecode switch, if the page has one to ask */
-export async function fetchLinkTable(): Promise<LinkTable | null> {
+export const fetchLinkTable = (): Promise<LinkTable | null> => table ??= (async () => {
   if (typeof location === "undefined") return null;
   try {
     const res = await fetch(`/link-table.json${BYTECODE.length ? "?bytecode=" + encodeURIComponent(BYTECODE.join(",")) : ""}`);
     return res.ok ? await res.json() : null;
   } catch (e) { console.warn("[webdroid] link table unavailable", e); return null; }
-}
+})();
 /** replay `table` if it was made for these specs and this platform; otherwise each boot finds its own */
 export function useLinkTable(table: LinkTable | null, fingerprint: string): void {
   gaps = table?.fingerprint === fingerprint ? table.gaps : null;

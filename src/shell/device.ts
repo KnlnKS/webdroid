@@ -11,7 +11,7 @@ import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
 import { deviceNightMode } from "../android/settings";
-import { loadCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
+import { loadCode, loadPlatformCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
 import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
@@ -96,7 +96,8 @@ let zygote: Promise<void> | null = null;
 export function startZygote(): Promise<void> {
   return zygote ??= (async () => {
     const table = fetchLinkTable();
-    await Promise.all([loadFramework(), loadPlatformDex()]);
+    // persisted platform bodies first: zygoteInit runs platform code, as a device's runs its boot image
+    await Promise.all([loadFramework(), loadPlatformDex(), loadPlatformCode()]);
     useLinkTable(await table, rt.linkFingerprint());
     await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
     // the runtime's own setup and the system font map need no app: a device's zygote runs them
