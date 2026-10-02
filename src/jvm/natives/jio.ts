@@ -57,16 +57,16 @@ export const heldByteWrites: NativeSpec["methods"] = {
   },
 };
 /** every byte an InputStream has left, through its virtual read */
-export async function readStreamFully(s: unknown): Promise<Uint8Array> {
+export const readStreamFully = driven(function* (s: unknown): Gen<Uint8Array> {
   const chunks: Uint8Array[] = [];
   const tmp = new Int8Array(1 << 16);
   for (;;) {
-    const n = await vcall(s, "read", "([BII)I", tmp, 0, tmp.length) as number;
+    const n: number = yield vcall(s, "read", "([BII)I", tmp, 0, tmp.length);
     if (n <= 0) break;
     chunks.push(new Uint8Array(tmp.buffer.slice(0, n)));
   }
   return concat(chunks);
-}
+});
 
 
 const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;

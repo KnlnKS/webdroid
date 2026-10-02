@@ -5,6 +5,7 @@
 // leaf for the host that CA issued. Hostname verification and the platform trust manager accept it;
 // a pinned key does not match it.
 import { jarray } from "../abi";
+import { driven, type Gen } from "../runtime";
 import { newObj, vcall, scall } from "./jlang";
 import { vfs } from "../../shell/vfs";
 import { BytesFile } from "../../shell/lazyfile";
@@ -60,10 +61,10 @@ function leafFor(host: string): Uint8Array {
   return der;
 }
 /** the chain a relay-terminated session to `host` presents: its leaf, then the relay CA */
-export async function relayChain(host: string): Promise<unknown[]> {
-  const factory = await scall("java/security/cert/CertificateFactory", "getInstance", "(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;", "X.509");
-  const parse = async (der: Uint8Array) => vcall(factory, "generateCertificate", "(Ljava/io/InputStream;)Ljava/security/cert/Certificate;",
-    await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(der)));
-  const leaf = leafFor(host);
-  return jarray([await parse(leaf), await parse(ca().der)], "Ljava/security/cert/Certificate;");
-}
+export const relayChain = driven(function* (host: string): Gen<unknown[]> {
+  const factory = yield scall("java/security/cert/CertificateFactory", "getInstance", "(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;", "X.509");
+  const chain: unknown[] = [];
+  for (const der of [leafFor(host), ca().der])
+    chain.push(yield vcall(factory, "generateCertificate", "(Ljava/io/InputStream;)Ljava/security/cert/Certificate;", yield newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(der))));
+  return jarray(chain, "Ljava/security/cert/Certificate;");
+});
