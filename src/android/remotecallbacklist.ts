@@ -33,15 +33,15 @@ function item(items: Iterable<JCallback> | null, index: number): JCallback {
   if (index >= 0) for (const callback of items) if (index-- === 0) return callback;
   throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(index));
 }
-async function broadcast(list: JRemoteCallbackList, consumer: unknown, cookie: boolean, both = false): Promise<void> {
+const broadcast = driven(function* (list: JRemoteCallbackList, consumer: unknown, cookie: boolean, both = false): Gen<void> {
   begin(list);
   try {
     for (const entry of list.broadcast!) {
-      if (both) await vcall(consumer, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", entry.callback, entry.cookie);
-      else await vcall(consumer, "accept", "(Ljava/lang/Object;)V", cookie ? entry.cookie : entry.callback);
+      if (both) yield vcall(consumer, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", entry.callback, entry.cookie);
+      else yield vcall(consumer, "accept", "(Ljava/lang/Object;)V", cookie ? entry.cookie : entry.callback);
     }
   } finally { finish(list); }
-}
+});
 rt.register({ name: "android/os/RemoteCallbackList", ctor: JRemoteCallbackList, methods: {
   "<init>()V": () => {},
   "register(Landroid/os/IInterface;)Z": function (this: JRemoteCallbackList, callback: unknown) {
