@@ -6,7 +6,7 @@ import { vcall, vcallOn, curThread, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { isExternal, mapExternal, memoryAt, unmapExternal } from "./jmemory";
+import { isExternal, mapExternal, memoryAt, physical, unmapExternal } from "./jmemory";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
 import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/fs";
@@ -112,7 +112,6 @@ function ioStatus(n: number, reading: boolean): number {
   if (n === -E.INTR) return IOS_INTERRUPTED;
   return lastError(n, reading ? "Read failed" : "Write failed");
 }
-const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
 /** a read into native memory: the bytes land once it completes, since guest memory may move meanwhile */
 function readInto(address: bigint, len: number, read: (target: Uint8Array) => number | Promise<number>): number | Promise<number> {
   const scratch = new Uint8Array(len);

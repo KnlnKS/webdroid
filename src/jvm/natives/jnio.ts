@@ -11,7 +11,7 @@ import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
 import { handle, deref, release } from "../../android/handles";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal } from "./jmemory";
+import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical } from "./jmemory";
 import { BytesFile, type FileSource } from "../../shell/lazyfile";
 export { isExternal };
 
@@ -51,7 +51,6 @@ function layoutOf(b: JBuffer): Layout {
   layouts.set(b.constructor, layout);
   return layout;
 }
-const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
 /** the bytes of a buffer's elements [0, capacity) where its memory holds them; an external
  *  mapping's must be `resident` first */
 export function bufferBytes(b: JBuffer): Uint8Array<ArrayBuffer> {

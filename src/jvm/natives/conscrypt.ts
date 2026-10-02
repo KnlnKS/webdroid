@@ -9,6 +9,7 @@ import { handle, ownedHandle, weakHandle, deref, release } from "../../android/h
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers";
 import { type JBuffer, remainingBytes, resident, addressOf, limit, position, directAddress } from "./jnio";
+import { physical } from "./jmemory";
 import { mem } from "../../native/mem";
 import { after, scall } from "./jlang";
 import { jarray } from "../abi";
@@ -66,7 +67,7 @@ nc("get_cipher_names(Ljava/lang/String;)[Ljava/lang/String;", (selector: string)
 });
 nc("getDirectBufferAddress(Ljava/nio/Buffer;)J", (b: JBuffer) => after(directAddress(b ?? rt.npe()), BigInt));
 /** a direct buffer's bytes by address, as the *Direct natives read them */
-const guest = (address: bigint, len: number) => mem.bytes(mem.txVa(BigInt.asUintN(64, address)), len);
+const guest = (address: bigint, len: number) => mem.bytes(physical(address), len);
 nc("RAND_bytes([B)V", (b: Int8Array | null) => {
   if (!b) throw rt.mkThrowable("java/lang/NullPointerException", null);
   for (let i = 0; i < b.length; i += 65536) crypto.getRandomValues(b.subarray(i, i + 65536));

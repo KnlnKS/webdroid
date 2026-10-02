@@ -119,7 +119,8 @@ export function guestAddress(address: bigint): number | bigint | Promise<number 
   });
 }
 
-const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
+/** where a native address (a Java long) is in guest memory */
+export const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
 /** n bytes at a native address, as a zlib or checksum native reads or writes them (an external
  *  mapping's once resident, read only) */
 export const memoryAt = (address: bigint, n: number): Uint8Array | Promise<Uint8Array> =>

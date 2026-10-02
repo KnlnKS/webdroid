@@ -10,6 +10,7 @@ import { device } from "../../shell/config";
 import { mem } from "../../native/mem";
 import { handle } from "../../android/handles";
 import { nonMovableBytes } from "./jnio";
+import { physical } from "./jmemory";
 import { BOOT_JAR_PATHS } from "../bootclasspath";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
@@ -521,7 +522,6 @@ rt.registerJni("org/apache/harmony/dalvik/ddmc/DdmServer", "nativeSendChunk(I[BI
 // libcore's atomics, CAS loops and LockSupport. A realm is one thread, so every memory order is
 // plain and a read-modify-write is a read then a write.
 class JUnsafe extends JObj {}
-const rawAddress = (address: bigint) => mem.txVa(BigInt.asUintN(64, address));
 const unsafe = new JUnsafe();
 const sunMethods: NativeSpec["methods"] = {
   "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
@@ -532,25 +532,25 @@ const sunMethods: NativeSpec["methods"] = {
     if (!p) throw rt.mkThrowable("java/lang/OutOfMemoryError", null);
     return BigInt(mem.va(p));
   },
-  "freeMemory(J)V": (address: bigint) => mem.free(rawAddress(address)),
-  "putByte(JB)V": (address: bigint, value: number) => mem.st8(rawAddress(address), value),
-  "setMemory(JJB)V": (address: bigint, bytes: bigint, value: number) => mem.memset(rawAddress(address), value, Number(bytes)),
+  "freeMemory(J)V": (address: bigint) => mem.free(physical(address)),
+  "putByte(JB)V": (address: bigint, value: number) => mem.st8(physical(address), value),
+  "setMemory(JJB)V": (address: bigint, bytes: bigint, value: number) => mem.memset(physical(address), value, Number(bytes)),
   // NativeObject's struct accessors (sun.nio.ch's iovecs), with pointers as wide as the guest's
   "addressSize()I": () => 4,
   "pageSize()I": () => 4096,
-  "getByte(J)B": (a: bigint) => mem.ld8s(rawAddress(a)),
-  "getShort(J)S": (a: bigint) => mem.ld16s(rawAddress(a)),
-  "getChar(J)C": (a: bigint) => mem.ld16u(rawAddress(a)),
-  "getInt(J)I": (a: bigint) => mem.ld32(rawAddress(a)),
-  "getLong(J)J": (a: bigint) => mem.ld64(rawAddress(a)),
-  "getFloat(J)F": (a: bigint) => mem.ldf32(rawAddress(a)),
-  "getDouble(J)D": (a: bigint) => mem.ldf64(rawAddress(a)),
-  "putShort(JS)V": (a: bigint, v: number) => mem.st16(rawAddress(a), v),
-  "putChar(JC)V": (a: bigint, v: number) => mem.st16(rawAddress(a), v),
-  "putInt(JI)V": (a: bigint, v: number) => mem.st32(rawAddress(a), v),
-  "putLong(JJ)V": (a: bigint, v: bigint) => mem.st64(rawAddress(a), v),
-  "putFloat(JF)V": (a: bigint, v: number) => mem.stf32(rawAddress(a), v),
-  "putDouble(JD)V": (a: bigint, v: number) => mem.stf64(rawAddress(a), v),
+  "getByte(J)B": (a: bigint) => mem.ld8s(physical(a)),
+  "getShort(J)S": (a: bigint) => mem.ld16s(physical(a)),
+  "getChar(J)C": (a: bigint) => mem.ld16u(physical(a)),
+  "getInt(J)I": (a: bigint) => mem.ld32(physical(a)),
+  "getLong(J)J": (a: bigint) => mem.ld64(physical(a)),
+  "getFloat(J)F": (a: bigint) => mem.ldf32(physical(a)),
+  "getDouble(J)D": (a: bigint) => mem.ldf64(physical(a)),
+  "putShort(JS)V": (a: bigint, v: number) => mem.st16(physical(a), v),
+  "putChar(JC)V": (a: bigint, v: number) => mem.st16(physical(a), v),
+  "putInt(JI)V": (a: bigint, v: number) => mem.st32(physical(a), v),
+  "putLong(JJ)V": (a: bigint, v: bigint) => mem.st64(physical(a), v),
+  "putFloat(JF)V": (a: bigint, v: number) => mem.stf32(physical(a), v),
+  "putDouble(JD)V": (a: bigint, v: number) => mem.stf64(physical(a), v),
   "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
     const info = cls.ci!;
     const p = rt.initClass(info); if (p) yield p;
