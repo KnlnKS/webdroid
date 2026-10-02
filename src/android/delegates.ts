@@ -22,7 +22,7 @@ import { paintAt, preloadPaint, setFontMetrics } from "./paint";
 import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
-import { NativeBitmap } from "./bitmap";
+import { NativeBitmap, colorLongAt } from "./bitmap";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { hasProperty, propertyValue as propValue } from "../shell/properties";
@@ -131,17 +131,19 @@ delegate("android/graphics/ColorMatrixColorFilter", {
 
 // Gradients clamp: Canvas2D has no REPEAT, MIRROR or DECAL gradient, so the tile mode is not used.
 delegate("android/graphics/Shader", { "nativeGetFinalizer()J": () => FINALIZER });
+/** a gradient's ColorLongs, which Shader requires to share the space handle `cs` names, as sRGB ARGB */
+const stopColors = (colors: BigInt64Array, cs: bigint) => Int32Array.from(colors, (c) => colorLongAt(c, cs));
 delegate("android/graphics/LinearGradient", {
-  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null) =>
-    handle(gradient(localMatrix(m), scratch2d().createLinearGradient(x0, y0, x1, y1), colors, positions)),
+  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null, _tile: number, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createLinearGradient(x0, y0, x1, y1), stopColors(colors, cs), positions)),
 });
 delegate("android/graphics/RadialGradient", {
-  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null) =>
-    handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), colors, positions)),
+  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null, _tile: number, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), stopColors(colors, cs), positions)),
 });
 delegate("android/graphics/SweepGradient", {
-  "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null) =>
-    handle(gradient(localMatrix(m), scratch2d().createConicGradient(0, cx, cy), colors, positions)),
+  "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createConicGradient(0, cx, cy), stopColors(colors, cs), positions)),
 });
 delegate("android/graphics/BitmapShader", {
   "nativeCreate(JJIIIZZJ)J": (m: bigint, b: bigint, tileX: number, tileY: number) =>

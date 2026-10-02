@@ -186,20 +186,15 @@ let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
 export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
   return scratch ??= (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas")).getContext("2d") as OffscreenCanvasRenderingContext2D;
 }
-/** a gradient's native instance: its ColorLongs at `positions` (evenly spaced when null), which
- *  SkGradientShader pins to [0, 1] and to no less than the position before */
-export function gradient(local: Affine | null, g: CanvasGradient, colors: BigInt64Array, positions: Float32Array | null): NativeGradient {
+/** a gradient's native instance: its sRGB ARGB colours at `positions` (evenly spaced when null),
+ *  which SkGradientShader pins to [0, 1] and to no less than the position before */
+export function gradient(local: Affine | null, g: CanvasGradient, colors: Int32Array, positions: Float32Array | null): NativeGradient {
   for (let i = 0, prev = 0; i < colors.length; i++) {
     const at = positions ? prev = Math.min(Math.max(positions[i], prev), 1) : i / (colors.length - 1);
-    g.addColorStop(at, cssColor(argbOfColorLong(colors[i])));
+    g.addColorStop(at, cssColor(colors[i]));
   }
   return new NativeGradient(local, g);
 }
-/**
- * A ColorLong is Color.pack()'s encoding: the sRGB case (colour-space id 0, the only one this
- * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
- */
-export const argbOfColorLong = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n)) | 0;
 
 /** the target's whole area in the context's local coordinates, null under a singular transform */
 export function canvasLocalBounds(ctx: Ctx2D): [number, number, number, number] | null {

@@ -10,12 +10,12 @@ import { charsToString } from "../jvm/abi";
 import { deref } from "./handles";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path";
 import { type NativeRegion } from "./region";
-import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
+import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap";
 import { drawGlyphs, cssFont, shapeTextRun } from "./shaping";
 import { fontNatives } from "./fonts";
 import { paintAdvance } from "./minikin";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
-import { cssColor, canvasLocalBounds, tintedBmp, argbOfColorLong, BLEND_MODES, COMPOSITE } from "./graphics";
+import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch";
 import { applyMatrix, matrixAt } from "./matrix";
 import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas";
@@ -325,7 +325,7 @@ const run = (s: string, start: number, end: number) => (start === 0 && end === s
 const optPaint = (nc: NativeCanvas, h: bigint) => (h ? nc.paint(h) : null);
 const DRAWS: Record<string, unknown> = {
   "nDrawColor(JII)V": (h: bigint, c: number, mode: number) => drawColor(drawingCanvas(h), c, mode),
-  "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint, mode: number) => drawColor(drawingCanvas(h), argbOfColorLong(c), mode),
+  "nDrawColor(JJJI)V": (h: bigint, cs: bigint, c: bigint, mode: number) => drawColor(drawingCanvas(h), colorLongAt(c, cs), mode),
   "nDrawPaint(JJ)V": (h: bigint, p: bigint) => { const nc = drawingCanvas(h); nc.drawPaint(nc.paint(p)); },
   "nDrawRect(JFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, p: bigint) => { const nc = drawingCanvas(h); drawRect(nc, l, t, r, b, nc.paint(p)); },
   "nDrawRoundRect(JFFFFFFJ)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, p: bigint) => {

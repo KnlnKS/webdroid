@@ -178,6 +178,15 @@ describe("matrix-fit", () => {
     await vcall(p, "setARGB", "(IIII)V", 0x80, 0x11, 0x22, 0x33);
     expect(await vcall(p, "getColor", "()I")).toBe(0x80112233 | 0);
   });
+
+  test("a Display P3 ColorLong draws converted to sRGB", async () => {
+    const p3 = await scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 7);
+    const color = await scall("android/graphics/Color", "pack", "(FFFFLandroid/graphics/ColorSpace;)J", 0.5, 0.25, 0.75, 1, p3);
+    const p = await newObj("android/graphics/Paint", "()V");
+    await vcall(p, "setColor", "(J)V", color);
+    // P3 (0.5, 0.25, 0.75) through linear light and the gamut matrix: sRGB (137, 59, 198)
+    expect(paintOf(p).color >>> 0).toBe(0xff893bc6);
+  });
 });
 
 describe("path-copy", () => {

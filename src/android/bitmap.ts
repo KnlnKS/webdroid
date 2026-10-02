@@ -19,7 +19,6 @@ import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
 import { nativeParcel, createByteArray, readInt, writeByteArray, writeInt } from "./parcel";
 import { extractBitmapAlpha } from "./maskfilter";
-import { argbOfColorLong } from "./graphics";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -305,16 +304,19 @@ function toSrgb(space: NativeColorSpace, rgb: number[]): number[] {
     return Math.min(1, Math.max(0, v));
   });
 }
-/** a ColorLong (android.graphics.Color's packing) as an ARGB int in sRGB */
+/** a ColorLong (android.graphics.Color's packing) as an ARGB int in sRGB: colour-space id 0 (the low
+ *  six bits) is the sRGB ARGB int in the top 32 bits; any other id packs half-float R, G, B and a
+ *  10-bit alpha, which are converted to sRGB and clamped as Skia stores them in an 8-bit surface */
 function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
-  if (!(color & 0x3fn)) return argbOfColorLong(color);
+  if (!(color & 0x3fn)) return Number(BigInt.asUintN(32, color >> 32n)) | 0;
   const half = (s: bigint) => fromHalf(Number((color >> s) & 0xffffn));
   const [r, g, b] = toSrgb(space ?? { transfer: SRGB_TF, xyz: Float32Array.from(SRGB_D50) }, [half(48n), half(32n), half(16n)]);
   const a = Number((color >> 6n) & 0x3ffn) / 1023;
   const byte = (v: number) => Math.round(v * 255);
   return (byte(a) << 24 | byte(r) << 16 | byte(g) << 8 | byte(b)) | 0;
 }
-/** a ColorLong in the colour space a ColorSpace.Rgb.Native handle names (0 for sRGB), as sRGB ARGB */
+/** a ColorLong in the colour space a ColorSpace.Rgb.Native handle names (0 for sRGB), as sRGB ARGB:
+ *  the decoder for every native that receives a ColorLong (Paint, Canvas, gradients, Bitmap) */
 export const colorLongAt = (color: bigint, cs: bigint) => colorLongArgb(color, cs ? deref<NativeColorSpace>(cs) : null);
 const COLOR_SPACE = "android/graphics/ColorSpace";
 const namedSpace = (index: number) => scall(COLOR_SPACE, "get", "(I)Landroid/graphics/ColorSpace;", index);
