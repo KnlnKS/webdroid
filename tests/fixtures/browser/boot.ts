@@ -5,6 +5,7 @@ import { initDeviceLocales } from "../../../src/android/resnative";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
 import { startMainLooper } from "../../../src/android/mainloop";
+import { callOn, mainThread } from "../../../src/jvm/natives/jlang";
 
 /** framework.jar on the class path and the natives linked, then the font map the zygote preloads
  *  (whose locale scripts are ICU's) and its text paints, as a page boots */
@@ -13,7 +14,7 @@ export async function bootWithFonts(): Promise<void> {
   rt.linkNatives();
   mountPlatformData();
   await startMainLooper();
-  await loadSystemFontMap();
+  await callOn(mainThread, () => rt.drive(loadSystemFontMap()));
   await initDeviceLocales();
   await preloadPaint();
 }

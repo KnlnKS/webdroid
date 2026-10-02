@@ -35,8 +35,9 @@ let fontMap: Promise<void> | null = null;
 export function loadSystemFonts(): Promise<void> {
   return fontMap ??= (async () => {
     const { loadSystemFontMap } = await import("../src/android/fonts");
+    const { callOn, mainThread } = await import("../src/jvm/natives/jlang");
     await mountApexData();
-    await loadSystemFontMap();
+    await callOn(mainThread, () => rt.drive(loadSystemFontMap()));
     await preloadTextPaint();
   })();
 }
