@@ -27,6 +27,8 @@ interface ActivityRecord {
   resultTo: ActivityRecord | null; resultWho: string | null; requestCode: number;
   results: JObj[]; finishing: boolean; translucent: boolean;
   paused: (() => void) | null;
+  /** the pause under way: a finish racing a start's pause must not schedule its destroy first */
+  pausing: Promise<void> | null;
   /** the broker's record of an activity another process started here, or 0 */
   remoteId: number;
   /** the global configuration it last had, and the orientation it asks for */
@@ -43,30 +45,41 @@ const resolveInfoField = () => declaredField("android/content/pm/ResolveInfo", "
 let controller: JObj | null = null;
 const activityClientController = async () => controller ??= await newObj("webdroid/ActivityClientController");
 
-async function schedule(app: JObj, callback: JObj | null, lifecycle: JObj | null): Promise<void> {
+async function schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Promise<void> {
   const tx = await scall(CT + "ClientTransaction", "obtain", `(Landroid/app/IApplicationThread;)L${CT}ClientTransaction;`, app);
-  if (callback) await vcall(tx, "addCallback", `(L${CT}ClientTransactionItem;)V`, callback);
+  for (const callback of [callbacks].flat()) if (callback) await vcall(tx, "addCallback", `(L${CT}ClientTransactionItem;)V`, callback);
   if (lifecycle) await vcall(tx, "setLifecycleStateRequest", `(L${CT}ActivityLifecycleItem;)V`, lifecycle);
   await vcall(app, "scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
 }
 const item = (cls: string, desc: string, ...args: unknown[]) => scall(CT + cls, "obtain", `(${desc})L${CT}${cls};`, ...args);
 
+/** the activity told it is the top resumed one (onTopResumedActivityChanged), told it lost that
+ *  before it pauses */
+let topResumed: ActivityRecord | null = null;
+const topResumedItem = (r: ActivityRecord, onTop: boolean) => {
+  topResumed = onTop ? r : null;
+  return item("TopResumedActivityChangeItem", "Landroid/os/IBinder;Z", r.token, +onTop);
+};
 /** pause the resumed activity and wait for the client to report it */
-async function pause(r: ActivityRecord): Promise<void> {
+function pause(r: ActivityRecord): Promise<void> | undefined {
+  if (r.state === "pausing") return r.pausing!;
   if (r.state !== "resumed") return;
   r.state = "pausing";
-  const paused = new Promise<void>((resolve) => { r.paused = resolve; });
-  await schedule(r.app, null, await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
-  return paused;
+  return r.pausing = (async () => {
+    const paused = new Promise<void>((resolve) => { r.paused = resolve; });
+    await schedule(r.app, topResumed === r ? await topResumedItem(r, false) : null,
+      await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
+    return paused;
+  })();
 }
 const resumeItem = (r: ActivityRecord) => item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", r.token, 1, 0);
 async function resume(r: ActivityRecord): Promise<void> {
   const results = r.results.splice(0);
   r.state = "resumed";
   if (displayHooks.requestOrientation?.(r.orientation)) await configurationChanged();
-  if (await ensureConfiguration(r, results, await resumeItem(r))) return;
+  if (await ensureConfiguration(r, results, await resumeItem(r))) return schedule(r.app, await topResumedItem(r, true), null);
   const delivery = results.length ? await item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
-  await schedule(r.app, delivery, await resumeItem(r));
+  await schedule(r.app, [delivery, await topResumedItem(r, true)], await resumeItem(r));
 }
 
 const CFG = "Landroid/content/res/Configuration;";
@@ -112,6 +125,7 @@ async function stop(r: ActivityRecord): Promise<void> {
 async function destroy(r: ActivityRecord): Promise<void> {
   r.state = "destroying";
   stack.splice(stack.indexOf(r), 1);
+  if (topResumed === r) topResumed = null;
   reportPresentation();
   // a start waiting on its pause goes on: the report would find no record
   const paused = r.paused; r.paused = null; paused?.();
@@ -189,7 +203,7 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
     if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
     const { global, override } = await configurations();
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent: await translucentTheme(info), paused: null, remoteId, config: global, orientation };
+      translucent: await translucentTheme(info), paused: null, pausing: null, remoteId, config: global, orientation };
     stack.push(r);
     reportPresentation();
     const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
@@ -202,7 +216,8 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
       await newObj("android/os/Binder", "()V"), await activityClientController(), await newObj("android/os/Binder", "()V"), 0, null,
       await newObj("android/os/Binder", "()V"), windowInfo);
     r.state = "resumed";
-    await schedule(app, launch, await item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", token, 1, 0));
+    await schedule(app, launch, await resumeItem(r));
+    await schedule(app, await topResumedItem(r, true), null);
   } finally { transitions--; }
 }
 
