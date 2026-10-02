@@ -3,6 +3,7 @@
 // startInput binds it with an IInputMethodSession that hears the editor's selection and text; the
 // page's edits reach the editor through its IRemoteInputConnection; showSoftInput and hideSoftInput
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
+import { once } from "../../jvm/suspend";
 import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
 import { scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
@@ -102,8 +103,7 @@ rt.register({ name: "webdroid/InputMethodSession", ctor: class extends JObj {}, 
     "appPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)V", "finishSession()V", "removeImeSurface()V",
     "updateCursorAnchorInfo(Landroid/view/inputmethod/CursorAnchorInfo;)V"),
 } });
-let sessionStub: JObj | Promise<JObj> | null = null;
-const methodSession = () => sessionStub ??= newObj("webdroid/InputMethodSession");
+const methodSession = once((): JObj | Promise<JObj> => newObj("webdroid/InputMethodSession"));
 
 const emptyInfoList = () => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
   "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", newArrayList());

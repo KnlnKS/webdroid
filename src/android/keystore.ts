@@ -4,6 +4,7 @@
 // the key material, the authorizations KeyMint enforces, and the certificates of asymmetric keys.
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
+import { once } from "../jvm/suspend";
 import { rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
 import { after, newObj, scall } from "../jvm/natives/jlang";
@@ -398,8 +399,7 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
     (d: unknown, params: unknown[]) => createOperation(d, params),
   "deleteKey(Landroid/system/keystore2/KeyDescriptor;)V": (d: unknown) => deleteKey(d),
 } });
-let securityLevel: Promise<JObj> | null = null;
-const teeLevel = () => securityLevel ??= newObj("webdroid/KeystoreSecurityLevel");
+const teeLevel = once((): JObj | Promise<JObj> => newObj("webdroid/KeystoreSecurityLevel"));
 const deleteKey = driven(function* (d: unknown): Gen<void> {
   const e = yield* find(d);
   save(entries().filter((x) => x !== e));

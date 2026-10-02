@@ -3,6 +3,7 @@
 // ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
+import { once } from "../jvm/suspend";
 import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField, reportUncaught } from "../jvm/natives/jlang";
@@ -198,13 +199,8 @@ export const DNS_SERVER = "8.8.8.8";
 const CAPABILITIES = [11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 28, 37];
 export const netUp = (): boolean => typeof navigator === "undefined" || navigator.onLine !== false;
 const NC = "android/net/NetworkCapabilities", NCB = "Landroid/net/NetworkCapabilities$Builder;";
-const networkState = {
-  network: null as Promise<JObj> | null,
-  caps: null as Promise<JObj> | null,
-  link: null as Promise<JObj> | null,
-};
-export const theNetwork = (): Promise<JObj> => networkState.network ??= newObj("android/net/Network", "(I)V", NET_ID);
-const capabilities = () => networkState.caps ??= Promise.resolve(rt.drive(function* (): Gen<JObj> {
+export const theNetwork = once((): JObj | Promise<JObj> => newObj("android/net/Network", "(I)V", NET_ID));
+const capabilities = once(() => rt.drive(function* (): Gen<JObj> {
   let b = yield newObj(`${NC}$Builder`);
   b = yield vcall(b, "addTransportType", `(I)${NCB}`, TRANSPORT_WIFI);
   for (const c of CAPABILITIES) b = yield vcall(b, "addCapability", `(I)${NCB}`, c);
@@ -213,7 +209,7 @@ const capabilities = () => networkState.caps ??= Promise.resolve(rt.drive(functi
   b = yield vcall(b, "setSignalStrength", `(I)${NCB}`, -50);
   return yield vcall(b, "build", `()L${NC};`);
 }()));
-const linkProperties = () => networkState.link ??= Promise.resolve(rt.drive(function* (): Gen<JObj> {
+const linkProperties = once(() => rt.drive(function* (): Gen<JObj> {
   const lp = yield newObj("android/net/LinkProperties");
   yield vcall(lp, "setInterfaceName", "(Ljava/lang/String;)V", "wlan0");
   const dns = yield scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", DNS_SERVER);

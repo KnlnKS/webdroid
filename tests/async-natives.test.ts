@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BASELINE, asyncNativeHazards, undelegatedGenerators } from "../scripts/async-natives";
+import { BASELINE, asyncNativeHazards, sharedSuspensions, undelegatedGenerators } from "../scripts/async-natives";
 
 // Java an async native calls after an await runs as the main thread, not its caller; a driven
 // generator keeps the caller. Known sites are the baseline, a backlog; `bun run async-natives
@@ -13,4 +13,8 @@ test("natives call Java from an async function after an await only at the baseli
 
 test("every driven generator a native calls is run", () => {
   expect(undelegatedGenerators()).toEqual([]);
+});
+
+test("no pending Java result is memoised with ??=, which shares its suspension", () => {
+  expect(sharedSuspensions()).toEqual([]);
 });

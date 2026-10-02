@@ -178,7 +178,28 @@ export function undelegatedGenerators(): string[] {
   return out;
 }
 
+/** `x ??= <Java entry or rt.drive>`: a pending result is a suspension that every frame awaiting it
+ *  joins (src/jvm/suspend.ts), so a second caller resumes inside the first one's stack. `once`
+ *  shares an in-flight computation instead. */
+export function sharedSuspensions(): string[] {
+  const out: string[] = [];
+  for (const [file, source] of sources) {
+    const visit = (n: ts.Node) => {
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken) {
+        let value: ts.Expression = n.right;
+        while (ts.isCallExpression(value) && value.expression.getText() === "Promise.resolve" && value.arguments.length) value = value.arguments[0];
+        const callee = ts.isCallExpression(value) ? value.expression.getText() : "";
+        if (JAVA.has(callee) || callee === "rt.drive") out.push(`${relative(root, file)}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}: ${n.left.getText()}`);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(source);
+  }
+  return out;
+}
+
 if (import.meta.main) {
+  for (const line of sharedSuspensions()) console.log("shared suspension: " + line);
   for (const line of undelegatedGenerators()) console.log("not run: " + line);
   const found = asyncNativeHazards();
   if (process.argv.includes("--write-baseline")) writeFileSync(BASELINE, JSON.stringify(found.map((line) => line.slice(0, line.indexOf(" → "))), null, 1) + "\n");
