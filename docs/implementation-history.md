@@ -1540,6 +1540,23 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Under SwiftShader, the pixel rule's readbacks dominate a step whose screen keeps changing: in
     Komikku's `09 manga`, `getImageData` took 5.7 s of a 7 s step. Its settle exceeds 20 s on a
     loaded host and times out under the parallel gate.
+- 2026-10-04, Stage F and Amazon's launch freeze. With Stage D the only mode, the TS view, widget,
+  window, app, context and lifecycle layers were deleted (about 18,000 lines under `src/`): every
+  spec in them was under a STAGE_D prefix and withheld. Their removal exposed Stage D paths that
+  still read the TS app model, which is always empty under D (app tasks, process importance, the
+  notification prompt, MediaStore requests' PendingIntent context); those now read ATM's stack.
+  - Amazon froze the page at launch in both modes. A pool thread's HttpURLConnection exchange called
+    the app's CookieHandler after `await fetch`, and a plain async native resumes with the main
+    thread's identity. Amazon's cookie jar waits on a lock in `NetworkAccessManager.waitForAccess`,
+    so the exchange, running as "main", entered the monitor the real main thread had released by
+    parking in `wait()`, and both believed they owned it. Main later called `wait()` while a pool
+    thread held the lock. javac's catch-all around a synchronized block covers its own
+    `monitor-exit`, so the IllegalMonitorStateException re-ran the exit forever. `fetchResponse`
+    is now a driven generator, which re-enters the calling thread at each resume, and Amazon
+    reaches its sign-in screen.
+  - Any TS async native that calls Java after an `await` has the same exposure. Driven generators
+    are the safe form. Hosted services still use plain async natives that call Java after host
+    awaits (notification, appwidget, telephony, storagestats); they were not converted.
 
 ## Java, storage and framework semantics
 
