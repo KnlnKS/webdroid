@@ -2,7 +2,7 @@
 // VFS the way installd walks it, with StorageStatsService's checks (decoded from the reference
 // AVD's services.jar): another uid's or the user's stats need PACKAGE_USAGE_STATS, which an app
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
-import { JObj, rt, setDeclared } from "../jvm/runtime";
+import { JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
@@ -40,17 +40,17 @@ async function externalStats(): Promise<JObj> {
 
 const OP_GET_USAGE_STATS = 43, MODE_ALLOWED = 0, MODE_DEFAULT = 3;
 /** StorageStatsService.checkStatsPermission: null when the caller may read others' stats */
-async function statsDenial(uid: number, pkg: string): Promise<string | null> {
-  const context = await serviceContext();
-  const appOps = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "appops");
-  const mode: number = await vcall(appOps, "noteOp", "(IILjava/lang/String;)I", OP_GET_USAGE_STATS, uid, pkg);
+function* statsDenial(uid: number, pkg: string): Gen<string | null> {
+  const context = yield serviceContext();
+  const appOps = yield vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "appops");
+  const mode: number = yield vcall(appOps, "noteOp", "(IILjava/lang/String;)I", OP_GET_USAGE_STATS, uid, pkg);
   if (mode === MODE_ALLOWED) return null;
   if (mode !== MODE_DEFAULT) return `Package ${pkg} from UID ${uid} blocked by mode ${mode}`;
-  return await vcall(context, "checkCallingOrSelfPermission", "(Ljava/lang/String;)I", "android.permission.PACKAGE_USAGE_STATS") === 0 ? null
+  return (yield vcall(context, "checkCallingOrSelfPermission", "(Ljava/lang/String;)I", "android.permission.PACKAGE_USAGE_STATS")) === 0 ? null
     : `Caller does not have android.permission.PACKAGE_USAGE_STATS; callingPackage=${pkg}, callingUid=${uid}`;
 }
-async function enforceStats(pkg: string): Promise<void> {
-  const denial = await statsDenial(callingIdentity().uid, pkg);
+function* enforceStats(pkg: string): Gen<void> {
+  const denial = yield* statsDenial(callingIdentity().uid, pkg);
   if (denial) throw rt.mkThrowable("java/lang/SecurityException", denial);
 }
 const uidPackages = (uid: number) => [...packages.values()].filter((record) => record.uid === uid).map((record) => record.pkg);
@@ -61,26 +61,26 @@ rt.register({ name: "webdroid/StorageStatsService", ctor: class extends JObj {},
   // the VFS keeps no per-uid quota, and vold reserves nothing
   [`isQuotaSupported(${S}${S})Z`]: () => 0,
   [`isReservedSupported(${S}${S})Z`]: () => 0,
-  [`queryStatsForPackage(${S}${S}I${S})Landroid/app/usage/StorageStats;`]: async (_volume: string | null, pkg: string, _user: number, caller: string) => {
+  [`queryStatsForPackage(${S}${S}I${S})Landroid/app/usage/StorageStats;`]: driven(function* (_volume: string | null, pkg: string, _user: number, caller: string) {
     const record = packages.get(pkg);
     if (!record) {
       const missing = rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
-      throw await newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", missing);
+      throw yield newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", missing);
     }
-    if (record.uid !== callingIdentity().uid) await enforceStats(caller);
+    if (record.uid !== callingIdentity().uid) yield* enforceStats(caller);
     return storageStats([pkg]);
-  },
-  [`queryStatsForUid(${S}I${S})Landroid/app/usage/StorageStats;`]: async (_volume: string | null, uid: number, caller: string) => {
-    if (uid !== callingIdentity().uid) await enforceStats(caller);
+  }),
+  [`queryStatsForUid(${S}I${S})Landroid/app/usage/StorageStats;`]: driven(function* (_volume: string | null, uid: number, caller: string) {
+    if (uid !== callingIdentity().uid) yield* enforceStats(caller);
     return storageStats(uidPackages(uid));
-  },
-  [`queryStatsForUser(${S}I${S})Landroid/app/usage/StorageStats;`]: async (_volume: string | null, _user: number, caller: string) => {
-    await enforceStats(caller);
+  }),
+  [`queryStatsForUser(${S}I${S})Landroid/app/usage/StorageStats;`]: driven(function* (_volume: string | null, _user: number, caller: string) {
+    yield* enforceStats(caller);
     return storageStats([...packages.keys()]);
-  },
-  [`queryExternalStatsForUser(${S}I${S})Landroid/app/usage/ExternalStorageStats;`]: async (_volume: string | null, _user: number, caller: string) => {
-    await enforceStats(caller);
+  }),
+  [`queryExternalStatsForUser(${S}I${S})Landroid/app/usage/ExternalStorageStats;`]: driven(function* (_volume: string | null, _user: number, caller: string) {
+    yield* enforceStats(caller);
     return externalStats();
-  },
+  }),
 } });
 hostStub("storagestats", "webdroid/StorageStatsService");
