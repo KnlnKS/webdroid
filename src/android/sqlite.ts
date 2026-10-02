@@ -7,12 +7,9 @@
 // PRAGMAs) lasts as long as it does. The file's bytes reach the VFS in debounced snapshots.
 
 import initSqlJs from "sql.js";
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { i8, u8, mangleField, jarray, strArray } from "../jvm/abi";
+import { rt } from "../jvm/runtime";
+import { i8, u8 } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
-import { newObj, vcall } from "../jvm/natives/jlang";
-import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
-import { arrayMapEntries } from "../jvm/natives/jcoll";
 import { handle, deref, release } from "./handles";
 import { type NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow";
@@ -379,19 +376,4 @@ rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", {
   "nativeGetDouble(JI)D": (s: bigint, i: number) => C._sqlite3_column_double(column(s, i), i),
   "nativeGetText(JI)Ljava/lang/String;": (s: bigint, i: number) => columnText(column(s, i), i) ?? "",
   "nativeGetBlob(JI)[B": (s: bigint, i: number) => columnBlob(column(s, i), i),
-});
-
-// ── the hosted system providers' side of android.database
-const CV_MAP = mangleField("android/content/ContentValues", "mMap");
-/** a ContentValues' entries, with boxed numbers unwrapped */
-export const contentValues = (values: JObj): Map<string, unknown> =>
-  new Map(arrayMapEntries((values as unknown as Record<string, JObj>)[CV_MAP]).map(([k, v]) => [k as string, unbox(v) ?? v]));
-/** a SQLite value as MatrixCursor holds it: INTEGER a Long, REAL a Double */
-const cell = (v: unknown) => typeof v === "number" ? Number.isInteger(v) ? boxLong(BigInt(v)) : boxDouble(v)
-  : typeof v === "bigint" ? boxLong(v) : v instanceof Uint8Array ? i8(v.slice()) : v;
-/** a MatrixCursor over rows in hand */
-export const matrixCursor = driven(function* matrixCursor(columns: string[], rows: unknown[][]): Gen<JObj> {
-  const cursor: JObj = yield newObj("android/database/MatrixCursor", "([Ljava/lang/String;I)V", strArray(columns), rows.length);
-  for (const row of rows) yield vcall(cursor, "addRow", "([Ljava/lang/Object;)V", jarray(row.map(cell)));
-  return cursor;
 });

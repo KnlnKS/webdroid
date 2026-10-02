@@ -3,7 +3,7 @@
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
 import { rt, JObj, declaredField, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, scall, linkInit } from "../../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, after } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService } from "../binder";
@@ -14,7 +14,7 @@ import { startMainActivity } from "./atm";
 import { uptimeMillis } from "../../guest-clock";
 import { systemProviderHolder } from "../systemproviders";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
-import type { JUri } from "../net";
+import { uriText, type JUri } from "../net";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 const pms = () => hostedService("package") as Promise<JObj>;
@@ -131,9 +131,12 @@ export const activityManagerMethods = {
   "removeContentProvider(Landroid/os/IBinder;Z)V": () => {},
   "unstableProviderDied(Landroid/os/IBinder;)V": () => {},
   // ContextImpl's URI permissions, held by UriGrantsManagerService
-  "checkUriPermission(Landroid/net/Uri;IIIILandroid/os/IBinder;)I": (uri: JUri, pid: number, uid: number, modes: number) => checkUriPermission(uri, pid, uid, modes),
-  "grantUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string, uri: JUri, modes: number) => grantUriPermission(pkg, uri, modes),
-  "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, _pkg: string, uri: JUri, modes: number) => revokeUriPermission(uri, modes),
+  "checkUriPermission(Landroid/net/Uri;IIIILandroid/os/IBinder;)I": (uri: JUri | null, _pid: number, uid: number, modes: number) =>
+    after(uriText(uri), (u) => checkUriPermission(u, uid, modes)),
+  "grantUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string, uri: JUri | null, modes: number) =>
+    after(pkg ? uriText(uri) : rt.npe(), (u) => grantUriPermission(pkg, u, modes)),
+  "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, _pkg: string, uri: JUri | null, modes: number) =>
+    after(uriText(uri), (u) => revokeUriPermission(u, modes)),
   // Log.wtf's report, which RuntimeInit sends after logging it: with Settings.Global wtf_is_fatal
   // unset, ActivityManagerService records it and the process lives
   "handleApplicationWtf(Landroid/os/IBinder;Ljava/lang/String;ZLandroid/app/ApplicationErrorReport$ParcelableCrashInfo;I)Z": () => 0,

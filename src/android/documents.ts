@@ -10,14 +10,13 @@
  */
 
 import { rt, JObj } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
-import { mkUri, uriParts, uriText } from "./net";
+import { vcall } from "../jvm/natives/jlang";
+import { uriParts, uriText } from "./net";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
-import { mkPfd, pfdBackingBytes } from "./os";
-import { matrixCursor } from "./sqlite";
+import { mkPfd, pfdBackingBytes, type JBundle } from "./os";
 import { mimeOf } from "../mime";
-import { registerSystemProvider, DOCUMENTS_PROVIDER, AS, URI, B, SIGNAL } from "./systemproviders";
+import { registerSystemProvider, matrixCursor, uriBundle, DOCUMENTS_PROVIDER } from "./systemproviders";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
@@ -27,20 +26,20 @@ const badUri = (u: string) => rt.mkThrowable("java/lang/IllegalArgumentException
 
 /** The document a URI points at: the child under a tree, a bare document, or a tree's root. */
 function documentId(u: string): string {
-  const p = uriParts(u)[1];
+  const p = uriParts(u).segments;
   if (p.length >= 4 && p[0] === "tree" && p[2] === "document") return p[3]!;
   if (p.length >= 2 && (p[0] === "document" || p[0] === "tree")) return p[1]!;
   throw badUri(u);
 }
 /** a URI for `id` in the same shape the one it came from has — tree-scoped, or bare */
 function docUriLike(u: string, id: string): string {
-  const [auth, p] = uriParts(u);
+  const { authority: auth, segments: p } = uriParts(u);
   return p[0] === "tree"
     ? `content://${auth}/tree/${enc(p[1]!)}/document/${enc(id)}`
     : `content://${auth}/document/${enc(id)}`;
 }
 /** a `.../children` URI asks for a directory listing rather than the document itself */
-const isChildrenUri = (u: string) => uriParts(u)[1].at(-1) === "children";
+const isChildrenUri = (u: string) => uriParts(u).segments.at(-1) === "children";
 
 const DIR_MIME = "vnd.android.document/directory";
 // Document flags: SUPPORTS_WRITE | SUPPORTS_DELETE | SUPPORTS_RENAME (+ DIR_SUPPORTS_CREATE)
@@ -237,9 +236,10 @@ async function docQuery(u: string, projection: string[] | null): Promise<JObj> {
   const cols = projection?.length ? projection : DOC_COLUMNS;
   return matrixCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); }));
 }
+const S = "Ljava/lang/String;";
 /** DocumentsProvider.call's document methods, as DocumentsContract sends them: the document in
  *  EXTRA_URI, and a created or renamed one's uri back in it; failures throw as ExternalStorageProvider's do */
-async function docCall(method: string, extras: JObj): Promise<JObj | null> {
+async function docCall(method: string, _arg: string | null, extras: JBundle | null): Promise<JBundle | null> {
   const get = (key: string) => vcall(extras, "getString", `(${S})${S}`, key) as Promise<string | null>;
   const uri = await uriText(await vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "uri")), id = documentId(uri);
   let result: string | null;
@@ -253,16 +253,13 @@ async function docCall(method: string, extras: JObj): Promise<JObj | null> {
     if (!await docDelete(id)) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to delete " + id);
     return null;
   } else throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Method not supported " + method);
-  const out: JObj = await newObj("android/os/Bundle", "()V");
-  await vcall(out, "putParcelable", `(${S}Landroid/os/Parcelable;)V`, "uri", await mkUri(docUriLike(uri, result)));
-  return out;
+  return uriBundle("uri", docUriLike(uri, result));
 }
-const S = "Ljava/lang/String;";
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
-  process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER, methods: {
-    [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: async (_source: unknown, u: JObj, projection: string[] | null) => docQuery(await uriText(u), projection),
-    [`getType(${AS}${URI})${S}`]: async (_source: unknown, u: JObj) => (await docRow(documentId(await uriText(u))))?.mime ?? null,
-    [`openFile(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: async (_source: unknown, u: JObj, mode: string) => docPfd(documentId(await uriText(u)), mode),
-    [`delete(${AS}${URI}${B})I`]: async (_source: unknown, u: JObj) => +await docDelete(documentId(await uriText(u))),
-    [`call(${AS}${S}${S}${S}${B})${B}`]: (_source: unknown, _authority: string, method: string, _arg: string | null, extras: JObj) => docCall(method, extras),
-  } });
+  process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER }, {
+  query: docQuery,
+  getType: async (u) => (await docRow(documentId(u)))?.mime ?? null,
+  openFile: (u, mode) => docPfd(documentId(u), mode),
+  delete: async (u) => +await docDelete(documentId(u)),
+  call: docCall,
+});

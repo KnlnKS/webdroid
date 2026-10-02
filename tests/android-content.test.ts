@@ -25,27 +25,26 @@ import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentip
 import { PendingIntents } from "../src/shell/pendingintents";
 import { javaReadFd } from "../src/native/fs";
 import { Arsc } from "../src/android/arsc";
-import { scall, loadLibcore, loadFrameworkJar, bootApp, packageRecord } from "./java";
+import { scall, loadLibcore, bootApp, packageRecord } from "./java";
 
 describe("android-uri-permission", () => {
-  test("tree URI grants cover descendants with the granted access mode", async () => {
-    await loadFrameworkJar();
+  test("tree URI grants cover descendants with the granted access mode", () => {
     const pkg = "org.webdroid.test.uri";
     const uid = 77123;
-    const tree = await mkUri("content://com.android.externalstorage.documents/tree/test%3A");
+    const tree = "content://com.android.externalstorage.documents/tree/test%3A";
     packages.set(pkg, { uid } as PackageRecord);
     try {
-      await grantUriPermission(pkg, tree, 1 | 0x80);
-      const child = await mkUri(await uriText(tree) + "/document/test%3Afile.txt");
-      const sibling = await mkUri("content://com.android.externalstorage.documents/tree/test%3Aother/document/test%3Aother");
-      expect(await checkUriPermission(child, 1, uid, 1)).toBe(0);
-      expect(await checkUriPermission(child, 1, uid, 2)).toBe(-1);
-      expect(await checkUriPermission(sibling, 1, uid, 1)).toBe(-1);
-      await revokeUriPermission(tree, 1);
-      expect(await checkUriPermission(child, 1, uid, 1)).toBe(-1);
+      grantUriPermission(pkg, tree, 1 | 0x80);
+      const child = tree + "/document/test%3Afile.txt";
+      const sibling = "content://com.android.externalstorage.documents/tree/test%3Aother/document/test%3Aother";
+      expect(checkUriPermission(child, uid, 1)).toBe(0);
+      expect(checkUriPermission(child, uid, 2)).toBe(-1);
+      expect(checkUriPermission(sibling, uid, 1)).toBe(-1);
+      revokeUriPermission(tree, 1);
+      expect(checkUriPermission(child, uid, 1)).toBe(-1);
     } finally {
       packages.delete(pkg);
-      await revokeUriPermission(tree, 3);
+      revokeUriPermission(tree, 3);
     }
   });
 });

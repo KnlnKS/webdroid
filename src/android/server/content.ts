@@ -1,8 +1,7 @@
 // ContentService's observer tree for this process: a change notifies the observers registered at
 // its uri, those above it that asked for descendants, and every one below it unless the sender
 // skips descendants (ObserverNode.collectObserversLocked). AOSP's ContentResolver reaches it as
-// IContentService; the TS ContentResolver registers its ContentObservers here directly. Sync is
-// answered as a device with no sync adapters.
+// IContentService. Sync is answered as a device with no sync adapters.
 import { rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { vcall } from "../../jvm/natives/jlang";
@@ -16,7 +15,7 @@ type Observer = { key: unknown; segments: string[]; descendants: boolean; delive
 const observers: Observer[] = [];
 /** countUriSegments/getUriSegment: the authority, then the path's segments */
 function segmentsOf(uri: string): string[] {
-  const [authority, segments] = uriParts(uri);
+  const { authority, segments } = uriParts(uri);
   return [authority, ...segments];
 }
 function observeContent(uri: string, descendants: boolean, key: unknown, deliver: Observer["deliver"]): void {

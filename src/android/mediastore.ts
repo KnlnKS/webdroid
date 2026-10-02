@@ -1,8 +1,8 @@
 import type { Database } from "sql.js";
 import { vfs } from "../shell/vfs";
 import { mimeOf, MIME_EXT } from "../mime";
-import { sqliteStore, matrixCursor, contentValues } from "./sqlite";
-import { type JUri, mkUri, uriText } from "./net";
+import { sqliteStore } from "./sqlite";
+import { clipUris } from "./net";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { strArray } from "../jvm/abi";
@@ -10,7 +10,8 @@ import { serviceContext } from "./binder";
 import { registerSystemActivity, newIntent, putExtra } from "./intent";
 import { newFile } from "../jvm/natives/jio";
 import type { JBundle } from "./os";
-import { registerSystemProvider, queryArgs, selectionOf, AS, URI, B, CV, SIGNAL } from "./systemproviders";
+import { toJsArray } from "../jvm/natives/jcoll";
+import { registerSystemProvider, matrixCursor, contentValues, uriBundle } from "./systemproviders";
 
 const columns = ["_id", "_data", "_display_name", "title", "mime_type", "media_type", "_size",
   "date_added", "date_modified", "datetaken", "relative_path", "bucket_id", "bucket_display_name",
@@ -211,11 +212,11 @@ export async function mediaDelete(uri: string, selection: string | null, args: s
   for (const path of table ? await selectedPaths(table, selection, args) : []) if (vfs.delete(path)) count++;
   return count;
 }
-async function scannedMediaUri(path: string): Promise<JUri | null> {
+async function scannedMediaUri(path: string): Promise<string | null> {
   if (!path.startsWith("/sdcard/") || !vfs.stat(path)) return null;
   await index();
   const entry = indexed.get(path);
-  return entry ? mkUri(`content://media/external/file/${entry.id}`) : null;
+  return entry ? `content://media/external/file/${entry.id}` : null;
 }
 /** the table's rows a query selects, as `requested` columns. Trashed and pending items are left out
  *  unless the query asks for them, as MediaProvider does. */
@@ -241,33 +242,32 @@ async function select(table: Table, requested: string[], selection: string | nul
 }
 const selectedPaths = async (table: Table, selection: string | null, args: string[] | null, match?: MediaMatch) =>
   (await select(table, ["_data"], selection, args, null, match)).map(([path]) => path as string);
-async function mediaQuery(uri: string, projection: string[] | null, selection: string | null, args: string[] | null, sort: string | null, match: MediaMatch) {
-  const table = tableOf(uri), requested = projection?.length ? projection : columns;
-  return table ? matrixCursor(requested, await select(table, requested, selection, args, sort, match)) : null;
-}
 
-// ── MediaProvider, the media authority's IContentProvider: a query's selection, sort and limit come
-// in its Bundle (ContentResolver.QUERY_ARG_*, MediaStore.QUERY_ARG_MATCH_*), an item opens as its file
+// ── MediaProvider, the media authority's IContentProvider: a query's sort and limit come in its
+// Bundle (ContentResolver.QUERY_ARG_*, MediaStore.QUERY_ARG_MATCH_*), an item opens as its file
 const S = "Ljava/lang/String;", PFD = "android/os/ParcelFileDescriptor";
-const ARG = "android:query-arg-";
+const ARG = "android:query-arg-", GET: Record<string, string> = { Int: `(${S})I`, String: `(${S})${S}`, StringArray: `(${S})[${S}` };
 const QUERY_ARGS = new Set(["sql-selection", "sql-selection-args", "sql-sort-order", "sql-limit", "sort-columns", "sort-direction",
   "limit", "offset", "match-trashed", "match-pending", "match-favorite"].map((key) => ARG + key));
-const query = driven(function* query$(u: string, projection: string[] | null, extras: JBundle | null): Gen {
-  const args: Map<string, unknown> = yield queryArgs(extras);
-  for (const key of args.keys()) if (!QUERY_ARGS.has(key)) throw rt.unimplemented(`MediaProvider query argument ${key}`);
-  const get = <T = number>(key: string) => args.get(ARG + key) as T | undefined;
-  const limit = get("limit"), offset = get("offset");
+const query = driven(function* query$(u: string, projection: string[] | null, selection: string | null, args: string[] | null, extras: JBundle | null): Gen<JObj | null> {
+  const table = tableOf(u), requested = projection?.length ? projection : columns;
+  if (!table) return null;
+  const keys = new Set<string>(extras ? yield toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;")) : []);
+  for (const key of keys) if (!QUERY_ARGS.has(key)) throw rt.unimplemented(`MediaProvider query argument ${key}`);
+  const get = (key: string, type: string): unknown => keys.has(ARG + key) ? vcall(extras, "get" + type, GET[type], ARG + key) : undefined;
+  const limit: number | undefined = yield get("limit", "Int"), offset: number | undefined = yield get("offset", "Int");
   // QUERY_SORT_DIRECTION_DESCENDING is 1
-  const sort = get<string>("sql-sort-order") ?? get<string[]>("sort-columns")?.map((c) => c + (get("sort-direction") === 1 ? " DESC" : " ASC")).join(", ") ?? null;
-  const sqlLimit = get<string>("sql-limit") ?? (limit === undefined ? null : Math.trunc(limit) + (offset ? ` OFFSET ${Math.trunc(offset)}` : ""));
-  return mediaQuery(u, projection, ...selectionOf(args), sort, { trashed: get("match-trashed"), pending: get("match-pending"), favorite: get("match-favorite"), limit: sqlLimit });
+  const direction = (yield get("sort-direction", "Int")) === 1 ? " DESC" : " ASC";
+  const sort = (yield get("sql-sort-order", "String")) ?? ((yield get("sort-columns", "StringArray")) as string[] | undefined)?.map((c) => c + direction).join(", ") ?? null;
+  const sqlLimit = (yield get("sql-limit", "String")) ?? (limit === undefined ? null : limit + (offset ? ` OFFSET ${offset}` : ""));
+  const match = { trashed: yield get("match-trashed", "Int"), pending: yield get("match-pending", "Int"), favorite: yield get("match-favorite", "Int"), limit: sqlLimit };
+  return yield matrixCursor(requested, yield select(table, requested, selection, args, sort, match));
 });
 const openFile = driven(function* openFile$(u: string, mode: string): Gen<JObj> {
   const path: string | null = yield mediaPath(u);
   if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u);
   return yield scall(PFD, "open", `(Ljava/io/File;I)L${PFD};`, yield newFile(path), yield scall(PFD, "parseMode", `(${S})I`, mode));
 });
-const valuesOf = (values: JObj | null) => values ? contentValues(values) : new Map<string, unknown>();
 
 // MediaProvider's consent screen for a create*Request PendingIntent. It is answered by the grant
 // policy runtime permissions follow here: the user allows, and the operation runs.
@@ -287,12 +287,9 @@ registerSystemActivity(MEDIA_REQUEST, async (intent) => {
 function* mediaCall(method: string, extras: JObj | null): Gen<JObj> {
   const op = REQUESTS[method];
   if (!op || !extras) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported call: " + method);
-  const clip: JObj = yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "clip_data");
-  const uris: string[] = [];
-  for (let i = 0, n: number = (yield vcall(clip, "getItemCount", "()I")); i < n; i++)
-    uris.push(yield uriText(yield vcall(yield vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;")));
+  const uris: string[] = yield* clipUris(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "clip_data"));
   if (uris.some((uri) => !isMediaUri(uri) || !/\/\d+$/.test(uri))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "All requested items must be referenced by specific ID");
-  const values = valuesOf(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "content_values"));
+  const values = contentValues(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "content_values"));
   const intent: JObj = yield newIntent(MEDIA_REQUEST);
   yield vcall(intent, "setIdentifier", `(${S})Landroid/content/Intent;`, String(++mediaRequests));
   yield putExtra(intent, "uris", strArray(uris), `[${S}`); yield putExtra(intent, "op", op, S);
@@ -304,28 +301,12 @@ function* mediaCall(method: string, extras: JObj | null): Gen<JObj> {
 }
 // FLAG_SYSTEM | FLAG_HAS_CODE | FLAG_ALLOW_CLEAR_USER_DATA, in its own package's process
 registerSystemProvider("media", { pkg: "com.google.android.providers.media.module", cls: "com.android.providers.media.MediaProvider",
-  process: "com.google.android.providers.media.module", appFlags: 0x45, flags: 0, initOrder: 0, methods: {
-    [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: driven(function* (_source: unknown, u: JUri, projection: string[] | null, extras: JBundle | null): Gen {
-      return yield query(yield uriText(u), projection, extras);
-    }),
-    [`insert(${AS}${URI}${CV}${B})${URI}`]: driven(function* (_source: unknown, u: JUri, values: JObj | null): Gen {
-      const inserted: string | null = yield mediaInsert(yield uriText(u), valuesOf(values));
-      return inserted && (yield mkUri(inserted));
-    }),
-    [`update(${AS}${URI}${CV}${B})I`]: driven(function* (_source: unknown, u: JUri, values: JObj | null, extras: JBundle | null): Gen {
-      return yield mediaUpdate(yield uriText(u), valuesOf(values), ...selectionOf(yield queryArgs(extras)));
-    }),
-    [`delete(${AS}${URI}${B})I`]: driven(function* (_source: unknown, u: JUri, extras: JBundle | null): Gen {
-      return yield mediaDelete(yield uriText(u), ...selectionOf(yield queryArgs(extras)));
-    }),
-    [`getType(${AS}${URI})${S}`]: driven(function* (_source: unknown, u: JUri): Gen { return yield mediaMime(yield uriText(u)); }),
-    [`openFile(${AS}${URI}${S}${SIGNAL})L${PFD};`]: driven(function* (_source: unknown, u: JUri, mode: string): Gen { return yield openFile(yield uriText(u), mode); }),
-    // MediaStore.SCAN_FILE_CALL, which MediaScannerConnection makes, takes the file's path and
-    // answers its row, indexed now; the create*Request calls answer a consent PendingIntent
-    [`call(${AS}${S}${S}${S}${B})${B}`]: driven(function* (_source: unknown, _authority: string, method: string, arg: string | null, extras: JObj | null): Gen {
-      if (method !== "scan_file") return yield* mediaCall(method, extras);
-      const out = yield newObj("android/os/Bundle");
-      yield vcall(out, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "android.intent.extra.STREAM", yield scannedMediaUri(arg ?? ""));
-      return out;
-    }),
-  } });
+  process: "com.google.android.providers.media.module", appFlags: 0x45, flags: 0, initOrder: 0 }, {
+  query, insert: mediaInsert, update: mediaUpdate, delete: mediaDelete, getType: mediaMime, openFile,
+  // MediaStore.SCAN_FILE_CALL, which MediaScannerConnection makes, takes the file's path and
+  // answers its row, indexed now; the create*Request calls answer a consent PendingIntent
+  call: driven(function* (method: string, arg: string | null, extras: JBundle | null): Gen<JBundle> {
+    if (method !== "scan_file") return yield* mediaCall(method, extras);
+    return yield uriBundle("android.intent.extra.STREAM", yield scannedMediaUri(arg ?? ""));
+  }),
+});

@@ -7,22 +7,21 @@
 // app holding WRITE_SETTINGS is not checked against SystemSettingsValidators, which ship in
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { vcall, scall, construct, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
 import { mangleStaticField } from "../jvm/abi";
 import { once } from "../jvm/suspend";
 import { callingIdentity, asSystem } from "./binder";
-import { mkUri, uriParts, uriText, type JUri } from "./net";
-import { matrixCursor, contentValues } from "./sqlite";
+import { uriParts } from "./net";
 import { packages, type PackageRecord } from "./packages";
 import { reportUncaught, type JBundle } from "./os";
 import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
 import { holdsPlatformPermission } from "./permissions";
 import { SettingsStore, type SettingsTable } from "../shell/settings";
-import { registerSystemProvider, queryArgs, selectionOf, AS, URI, B, CV, SIGNAL } from "./systemproviders";
+import { registerSystemProvider, matrixCursor } from "./systemproviders";
 
 export const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
@@ -285,7 +284,7 @@ function* reset(c: Caller, args: JBundle | null): Gen<never> {
 
 /** Arguments: content://settings/<table>[/<name>], or the table with name=? and one argument */
 function* argumentsOf(uri: string, where: string | null, whereArgs: string[] | null, supportAll: boolean): Gen<{ table: string; name: string | null }> {
-  const segments = uriParts(uri)[1];
+  const { segments } = uriParts(uri);
   let name: string | null | undefined;
   if (segments.length === 2 && where === null && whereArgs === null) name = segments[1];
   else if (segments.length === 1) {
@@ -307,12 +306,12 @@ function* tableFor(uri: string, name: string | null): Gen<string> {
   return table;
 }
 function validTable(uri: string): string {
-  const segment = uriParts(uri)[1][0];
+  const segment = uriParts(uri).segments[0];
   if (segment === undefined) return fail(ILLEGAL, "Invalid URI:" + uri);
   if (!TABLES.includes(segment as Table) && !LEGACY_TABLES.has(segment)) fail(ILLEGAL, "Bad root path: " + segment);
   return segment;
 }
-const query = driven(function* query$(uri: string, projection: string[] | null, where: string | null, whereArgs: string[] | null): Gen {
+const query = driven(function* query$(uri: string, projection: string[] | null, where: string | null, whereArgs: string[] | null): Gen<JObj> {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, true);
   const columns = projectionOf(projection);
   if (LEGACY_TABLES.has(table)) return yield matrixCursor(columns, []);
@@ -322,18 +321,18 @@ const query = driven(function* query$(uri: string, projection: string[] | null, 
   const index = namesOf(table as Table).indexOf(name);
   return yield cursorOf(columns, value === null ? [] : [[String(index < 0 ? 0 : index + 1), name, value]]);
 });
-const named = (values: JObj | null): [string | null, string | null] => {
-  const map = values ? contentValues(values) : new Map<string, unknown>(), value = map.get("value");
-  return [map.get("name") as string | null ?? null, value == null ? null : String(value)];
+const named = (values: Map<string, unknown>): [string | null, string | null] => {
+  const value = values.get("value");
+  return [values.get("name") as string | null ?? null, value == null ? null : String(value)];
 };
-const insert = driven(function* insert$(uri: string, values: JObj | null): Gen<JUri | null> {
+const insert = driven(function* insert$(uri: string, values: Map<string, unknown>): Gen<string | null> {
   const table = validTable(uri);
   if (LEGACY_TABLES.has(table)) return null;
   const [name, value] = named(values);
   if (!validKey(name) || !(yield* writeSetting(caller(), table as Table, name, value, SYSTEM_INSERT))) return null;
-  return (yield mkUri(`content://settings/${table}/${encodeURIComponent(name)}`)) as JUri;
+  return `content://settings/${table}/${encodeURIComponent(name)}`;
 });
-const update = driven(function* update$(uri: string, values: JObj | null, where: string | null, whereArgs: string[] | null): Gen<number> {
+const update = driven(function* update$(uri: string, values: Map<string, unknown>, where: string | null, whereArgs: string[] | null): Gen<number> {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, false);
   const [key, value] = named(values);
   if (LEGACY_TABLES.has(table) || !validKey(key)) return 0;
@@ -354,25 +353,12 @@ function openFile(uri: string): never {
     : "Direct file access no longer supported; ringtone playback is available through android.media.Ringtone");
 }
 function mimeType(uri: string): string {
-  const segments = uriParts(uri)[1];
+  const { segments } = uriParts(uri);
   return (segments.length > 1 ? "vnd.android.cursor.item/" : "vnd.android.cursor.dir/") + (segments[0] ?? "");
 }
 
-/** ContentProvider.query/update/delete(Bundle): the selection the Bundle carries */
-const selected = <T>(op: (uri: string, where: string | null, args: string[] | null) => T) => driven(function* selected$(uri: JUri | null, extras: JBundle | null): Gen<T> {
-  return yield op(yield nonNullUri(uri), ...selectionOf(yield queryArgs(extras)));
-});
-const nonNullUri = (uri: JUri | null): string | Promise<string> => uri ? uriText(uri) : fail("java/lang/NullPointerException", "uri");
 // FLAG_SYSTEM | FLAG_PERSISTENT; the provider is singleUser (FLAG_SINGLE_USER)
 registerSystemProvider(SETTINGS_AUTHORITY, { pkg: "com.android.providers.settings", cls: "com.android.providers.settings.SettingsProvider",
-  process: "system", appFlags: 0x9, flags: 0x40000000, initOrder: 100, methods: {
-    [`call(${AS}${S}${S}${S}${B})${B}`]: (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras),
-    [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, uri: JUri | null, projection: string[] | null, args: JBundle | null) =>
-      selected((u, where, whereArgs) => query(u, projection, where, whereArgs))(uri, args),
-    [`insert(${AS}${URI}${CV}${B})${URI}`]: async (_source: unknown, uri: JUri | null, values: JObj | null) => insert(await nonNullUri(uri), values),
-    [`update(${AS}${URI}${CV}${B})I`]: (_source: unknown, uri: JUri | null, values: JObj | null, extras: JBundle | null) =>
-      selected((u, where, args) => update(u, values, where, args))(uri, extras),
-    [`delete(${AS}${URI}${B})I`]: (_source: unknown, uri: JUri | null, extras: JBundle | null) => selected(remove)(uri, extras),
-    [`getType(${AS}${URI})${S}`]: async (_source: unknown, uri: JUri | null) => mimeType(await nonNullUri(uri)),
-    [`openFile(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: async (_source: unknown, uri: JUri | null) => openFile(await nonNullUri(uri)),
-  } });
+  process: "system", appFlags: 0x9, flags: 0x40000000, initOrder: 100 }, {
+  call, query, insert, update, delete: remove, getType: mimeType, openFile,
+});

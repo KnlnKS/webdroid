@@ -1,15 +1,16 @@
 // Content providers system packages publish (SettingsProvider, ExternalStorageProvider, MediaProvider),
 // which no app's manifest declares: ActivityManagerService hands their binders out of getContentProvider.
-import { rt, JObj, setDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { construct, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
+import { construct, newObj, scall, vcall, after } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import type { JBundle } from "./os";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { unbox } from "../jvm/natives/jbox";
+import { arrayMapEntries } from "../jvm/natives/jcoll";
+import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
+import { i8, jarray, strArray } from "../jvm/abi";
 import { newStub } from "./binder";
-import { uriText, type JUri } from "./net";
+import { mkUri, uriText, type JUri } from "./net";
 
-export const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;",
+const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;",
   CV = "Landroid/content/ContentValues;", SIGNAL = "Landroid/os/ICancellationSignal;";
 const S = "Ljava/lang/String;", AFD = "android/content/res/AssetFileDescriptor", PFD = "Landroid/os/ParcelFileDescriptor;";
 const OPEN_FILE = `(${AS}${URI}${S}${SIGNAL})${PFD}`, OPEN_ASSET = `(${AS}${URI}${S}${SIGNAL})L${AFD};`;
@@ -58,18 +59,64 @@ rt.register({ name: "webdroid/SystemContentProvider", ctor: JSystemContentProvid
   }),
 } });
 
-/** a query, update or delete Bundle's arguments by key (ContentResolver.QUERY_ARG_*) */
-export const queryArgs = driven(function* queryArgs$(extras: JBundle | null): Gen<Map<string, unknown>> {
-  const args = new Map<string, unknown>();
-  if (extras) for (const k of (yield toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;"))) as string[]) {
-    const v = yield vcall(extras, "get", `(${S})Ljava/lang/Object;`, k);
-    args.set(k, unbox(v) ?? v);
-  }
-  return args;
+/** the SQL selection and its arguments a query, update or delete Bundle carries (ContentResolver.QUERY_ARG_SQL_*) */
+function* selectionOf(extras: JBundle | null): Gen<[string | null, string[] | null]> {
+  return extras ? [yield vcall(extras, "getString", `(${S})${S}`, "android:query-arg-sql-selection"),
+    yield vcall(extras, "getStringArray", `(${S})[${S}`, "android:query-arg-sql-selection-args")] : [null, null];
+}
+/** a ContentValues' entries, with boxed numbers unwrapped */
+export const contentValues = (values: JObj | null): Map<string, unknown> => new Map(values === null ? [] :
+  arrayMapEntries(getDeclared(values, "android/content/ContentValues", "mMap")).map(([k, v]) => [k as string, unbox(v) ?? v]));
+/** a SQLite value as MatrixCursor holds it: INTEGER a Long, REAL a Double */
+const cell = (v: unknown) => typeof v === "number" ? Number.isInteger(v) ? boxLong(BigInt(v)) : boxDouble(v)
+  : typeof v === "bigint" ? boxLong(v) : v instanceof Uint8Array ? i8(v.slice()) : v;
+/** a MatrixCursor over rows in hand */
+export const matrixCursor = driven(function* matrixCursor(columns: string[], rows: unknown[][]): Gen<JObj> {
+  const cursor: JObj = yield newObj("android/database/MatrixCursor", "([Ljava/lang/String;I)V", strArray(columns), rows.length);
+  for (const row of rows) yield vcall(cursor, "addRow", "([Ljava/lang/Object;)V", jarray(row.map(cell)));
+  return cursor;
 });
-/** the SQL selection and its arguments among a Bundle's */
-export const selectionOf = (args: Map<string, unknown>) => [(args.get("android:query-arg-sql-selection") ?? null) as string | null,
-  (args.get("android:query-arg-sql-selection-args") ?? null) as string[] | null] as const;
+/** a Bundle holding one Uri, as a call answers a document or a scanned file */
+export const uriBundle = driven(function* uriBundle$(key: string, uri: string | null): Gen<JBundle> {
+  const out: JBundle = yield newObj("android/os/Bundle", "()V");
+  yield vcall(out, "putParcelable", `(${S}Landroid/os/Parcelable;)V`, key, uri === null ? null : yield mkUri(uri));
+  return out;
+});
+
+type Maybe<T> = T | Promise<T>;
+/** the IContentProvider calls a hosted provider answers, over uri strings, ContentValues' entries
+ *  and the Bundle's selection; ContentProvider's defaults stand for those it leaves out */
+export interface ProviderOps {
+  query?(uri: string, projection: string[] | null, selection: string | null, selectionArgs: string[] | null, extras: JBundle | null): Maybe<JObj | null>;
+  insert?(uri: string, values: Map<string, unknown>): Maybe<string | null>;
+  update?(uri: string, values: Map<string, unknown>, selection: string | null, selectionArgs: string[] | null): Maybe<number>;
+  delete?(uri: string, selection: string | null, selectionArgs: string[] | null): Maybe<number>;
+  getType?(uri: string): Maybe<string | null>;
+  openFile?(uri: string, mode: string): Maybe<JObj | null>;
+  call?(method: string, arg: string | null, extras: JBundle | null): Maybe<JBundle | null>;
+}
+/** IContentProvider's methods over a provider's operations */
+function transport(ops: ProviderOps): NativeSpec["methods"] {
+  const methods: NativeSpec["methods"] = {};
+  const { query, insert, update, delete: remove, getType, openFile, call } = ops;
+  if (query) methods[`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`] = driven(function* (_source: unknown, uri: JUri | null, projection: string[] | null, extras: JBundle | null): Gen {
+    return yield query(yield uriText(uri), projection, ...(yield* selectionOf(extras)), extras);
+  });
+  if (insert) methods[`insert(${AS}${URI}${CV}${B})${URI}`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null): Gen {
+    const inserted: string | null = yield insert(yield uriText(uri), contentValues(values));
+    return inserted === null ? null : yield mkUri(inserted);
+  });
+  if (update) methods[`update(${AS}${URI}${CV}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null, extras: JBundle | null): Gen {
+    return yield update(yield uriText(uri), contentValues(values), ...(yield* selectionOf(extras)));
+  });
+  if (remove) methods[`delete(${AS}${URI}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, extras: JBundle | null): Gen {
+    return yield remove(yield uriText(uri), ...(yield* selectionOf(extras)));
+  });
+  if (getType) methods[`getType(${AS}${URI})${S}`] = (_source: unknown, uri: JUri | null) => after(uriText(uri), getType);
+  if (openFile) methods[`openFile${OPEN_FILE}`] = (_source: unknown, uri: JUri | null, mode: string) => after(uriText(uri), (u) => openFile(u, mode));
+  if (call) methods[`call(${AS}${S}${S}${S}${B})${B}`] = (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras);
+  return methods;
+}
 
 interface SystemProvider {
   pkg: string; cls: string; process: string;
@@ -83,11 +130,11 @@ interface SystemProvider {
 /** DocumentsContract.PROVIDER_INTERFACE: the action a documents provider's intent filter answers */
 export const DOCUMENTS_PROVIDER = "android.content.action.DOCUMENTS_PROVIDER";
 const providers = new Map<string, SystemProvider>();
-/** a system provider answering `methods` (IContentProvider's) over the base's defaults */
-export function registerSystemProvider(authority: string, provider: Omit<SystemProvider, "binder"> & { methods: NativeSpec["methods"] }): void {
-  const { methods, ...p } = provider, name = "webdroid/" + p.cls.slice(p.cls.lastIndexOf(".") + 1);
+/** a system provider answering `ops` over the base's defaults */
+export function registerSystemProvider(authority: string, p: Omit<SystemProvider, "binder">, ops: ProviderOps): void {
+  const name = "webdroid/" + p.cls.slice(p.cls.lastIndexOf(".") + 1);
   rt.register({ name, ctor: class extends JSystemContentProvider {}, sup: "webdroid/SystemContentProvider",
-    methods: { [`getProviderName()${S}`]: () => p.cls, ...methods } });
+    methods: { [`getProviderName()${S}`]: () => p.cls, ...transport(ops) } });
   providers.set(authority, { ...p, binder: once(() => newStub(name)) });
 }
 /** the system providers by authority, which the package manager lists before the installed ones */
