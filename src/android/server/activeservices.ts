@@ -46,7 +46,7 @@ function* resolve(intent: JObj, resolvedType: string | null): Gen<Target | null>
   if (!info) return null;
   const pkg = getDeclared<string>(info, SI, "packageName");
   return { info, pkg, process: getDeclared<string>(info, SI, "processName"),
-    name: yield newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, getDeclared(info, SI, "name")) };
+    name: yield mkComponentName(pkg, getDeclared(info, SI, "name")) };
 }
 const isLocal = (t: Target) => t.pkg === appHost?.pkg && t.process === (PROCESS_NAME || t.pkg);
 /** retrieveServiceLocked's refusal of the calling package, or null */
@@ -200,7 +200,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   const t = yield* resolve(intent, resolvedType);
   if (!t) return null;
   const denied = yield* denial(t, callingPackage);
-  if (denied) return yield newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", "!", denied);
+  if (denied) return yield mkComponentName("!", denied);
   const bound = yield* withComponent(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
   else callUncaught(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground));

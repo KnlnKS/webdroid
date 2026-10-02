@@ -8,7 +8,7 @@ import { hostedService, notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
-import type { JIntent } from "../intent";
+import { mkComponentName, type JIntent } from "../intent";
 import { scheduleOnApp, compatInfo, thisApp } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 
@@ -60,7 +60,7 @@ function* hears(registration: Registration, intent: JObj, sender: Sender): Gen<b
 export const deliverBroadcast = driven(function* (intent: JObj, component: string | null, ordered: boolean, result: BroadcastResult, sender: Sender | null): Gen<BroadcastResult> {
   const from = sender ?? SYSTEM;
   if (component) {
-    const name = yield newObj("android/content/ComponentName", `(${S}${S})V`, appHost!.pkg, component);
+    const name = yield mkComponentName(appHost!.pkg, component);
     const info = yield vcall(yield hostedService("package"), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
     if (!info) throw new Error("Receiver not installed: " + component);
     const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);

@@ -2,10 +2,11 @@
 // A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { hostStub, parceledList } from "./binder";
+import { mkComponentName } from "./intent";
 import { launcherActivity } from "./pm";
 
 const MAX_PER_ACTIVITY = 15, MAX_UPDATES_PER_INTERVAL = 10;
@@ -22,7 +23,7 @@ const idOf = (si: JObj): Promise<string> => vcall(si, "getId", "()Ljava/lang/Str
 function mainActivity(pkg: string): JObj | Promise<JObj> {
   const launcher = launcherActivity(pkg);
   if (!launcher) throw rt.mkThrowable("java/lang/IllegalStateException", "Launcher activity not found for package " + pkg);
-  return newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, launcher.name);
+  return mkComponentName(pkg, launcher.name);
 }
 /** ShortcutService.fixUpIncomingShortcutInfo: the publisher's own, complete, on an activity, as a copy it no longer holds */
 function* incoming(pkg: string, si: JObj | null, forUpdate = false): Gen<JObj> {
