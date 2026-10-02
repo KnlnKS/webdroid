@@ -51,19 +51,6 @@ rt.register({
   name: "webdroid/FreeRunnable", ctor: JFreeRunnable, ifaces: ["java/lang/Runnable"],
   methods: { "run()V": function (this: JFreeRunnable) { this.free(); } },
 });
-// Framework behaviour gated on the app's targetSdk goes through Compatibility. Every change
-// is "enabled": that is what a platform reports to an app targeting the SDK it was built
-// from, which is the only device profile there is (src/shell/config.ts).
-rt.register({
-  name: "android/compat/Compatibility", ctor: class extends JObj {},
-  methods: {
-    "static isChangeEnabled(J)Z": () => 1,
-    "static setBehaviorChangeDelegate(Landroid/compat/Compatibility$BehaviorChangeDelegate;)V": () => {},
-    "static reportUnconditionalChange(J)V": () => {},
-  },
-});
-rt.markers("android/compat/Compatibility$BehaviorChangeDelegate");
-
 /** a class's free function, which runs on each native allocation once its Java owner is
  *  collected, or at once when the returned Runnable runs, as libcore's Cleaner does */
 class JNativeAllocationRegistry extends JObj { free = 0n; }
