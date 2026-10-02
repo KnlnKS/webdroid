@@ -233,8 +233,7 @@ export function tryBitmapPath(canvas: NativeCanvas, paint: NativePaint, path: Na
   if ((strokeInverse || fillInverse) && canvas.w * canvas.h <= 250_000) {
     const ctx = canvas.ctx, m = ctx.getTransform();
     if (strokeInverse) {
-      const bounds = { left: 0, top: 0, right: 0, bottom: 0 };
-      path.bounds(bounds);
+      const bounds = path.bounds();
       const corners = [[bounds.left, bounds.top], [bounds.right, bounds.top],
         [bounds.right, bounds.bottom], [bounds.left, bounds.bottom]].map(([x, y]) => devicePoint(m, x, y));
       const pad = paint.strokeWidth * Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) + 2;

@@ -304,7 +304,7 @@ rt.registerJnis("android/graphics/text/MeasuredText", {
   // glyph bounds are not known: the advance box over the run extents, rounded out
   "nGetBounds(J[CIILandroid/graphics/Rect;)V": (h: bigint, _c: Uint16Array, start: number, end: number, r: object) => {
     const m = measured(h), [ascent, descent] = extent(m, start, end);
-    setEdges(r, 0, Math.floor(ascent), Math.ceil(widthOf(m, start, end)), Math.ceil(descent));
+    setEdges(r, { left: 0, top: Math.floor(ascent), right: Math.ceil(widthOf(m, start, end)), bottom: Math.ceil(descent) });
   },
   "nGetExtent(J[CII)J": (h: bigint, _c: Uint16Array, start: number, end: number) => {
     const [ascent, descent] = extent(measured(h), start, end);

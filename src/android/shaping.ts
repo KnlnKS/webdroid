@@ -18,6 +18,7 @@ import { type NativePaint, paintAt } from "./paint";
 import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
 import type { Ctx2D } from "./recording";
 import type { NativePath } from "./path";
+import { emptyBox, type Box } from "./graphics";
 
 const f32 = Math.fround;
 /** `f` over the tab's HarfBuzz, again once any font it reached has loaded */
@@ -238,15 +239,12 @@ function glyphBox(hb: HarfBuzz, f: Font, glyph: number, p: NativePaint, fakery =
 /** Font_getGlyphBounds: SkFont::getWidths of one glyph at the paint's size, scale and skew. The
  *  bounds are rounded out to pixels, as FreeType's are for an unhinted glyph (the device's hinted
  *  outlines can differ by a pixel at small sizes). */
-export function glyphBounds(font: NativeFont, glyph: number, p: NativePaint, rect: { left: number; top: number; right: number; bottom: number } | null): number | Promise<number> {
+export function glyphBounds(font: NativeFont, glyph: number, p: NativePaint): [advance: number, bounds: Box] | Promise<[number, Box]> {
   return shaped((hb) => {
-    const f = hbFont(hb, font);
-    if (rect) {
-      const box = glyphBox(hb, f, glyph, p);
-      [rect.left, rect.top, rect.right, rect.bottom] = box ? [Math.floor(box[0]), Math.floor(box[1]), Math.ceil(box[2]), Math.ceil(box[3])] : [0, 0, 0, 0];
-    }
+    const f = hbFont(hb, font), box = glyphBox(hb, f, glyph, p);
     const advance = hb.advance(f, glyph) * (p.textSize / f.units) * p.textScaleX;
-    return f32(hints(paintHinted(p), font) ? Math.round(advance) : advance);
+    return [f32(hints(paintHinted(p), font) ? Math.round(advance) : advance),
+      box ? { left: Math.floor(box[0]), top: Math.floor(box[1]), right: Math.ceil(box[2]), bottom: Math.ceil(box[3]) } : emptyBox];
   });
 }
 /** Layout::getBounds: the union of the laid-out glyphs' bounds at their positions, null for none */

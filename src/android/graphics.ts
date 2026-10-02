@@ -28,19 +28,14 @@ function edgesOf(r: object): string[] {
 }
 /** a Java Rect's or RectF's edges */
 export function edges(r: object): Box {
-  const [l, t, rt, b] = edgesOf(r), o = r as Record<string, number>;
-  return { left: o[l], top: o[t], right: o[rt], bottom: o[b] };
+  const [l, t, rgt, b] = edgesOf(r), o = r as Record<string, number>;
+  return { left: o[l], top: o[t], right: o[rgt], bottom: o[b] };
 }
-export function setEdges(r: object, left: number, top: number, right: number, bottom: number): void {
-  const [l, t, rt, b] = edgesOf(r), o = r as Record<string, number>;
-  o[l] = left; o[t] = top; o[rt] = right; o[b] = bottom;
+export function setEdges(r: object, box: Box): void {
+  const [l, t, rgt, b] = edgesOf(r), o = r as Record<string, number>;
+  o[l] = box.left; o[t] = box.top; o[rgt] = box.right; o[b] = box.bottom;
 }
-/** runs `f` on a copy of Java Rect or RectF `r`'s edges, then stores the copy back */
-export function viaEdges<T>(r: object, f: (b: Box) => T): T {
-  const b = edges(r), out = f(b);
-  setEdges(r, b.left, b.top, b.right, b.bottom);
-  return out;
-}
+export const emptyBox: Readonly<Box> = { left: 0, top: 0, right: 0, bottom: 0 };
 
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;

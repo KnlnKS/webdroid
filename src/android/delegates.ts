@@ -16,7 +16,7 @@
 import { startMainLooper } from "./mainloop";
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
-import { edges, setEdges, viaEdges, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
+import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { paintAt, preloadPaint, setFontMetrics } from "./paint";
@@ -262,7 +262,7 @@ delegate("android/graphics/fonts/Font", {
     return f(descent - ascent + leading);
   },
   "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: object | null) =>
-    rect ? viaEdges(rect, (b) => glyphBounds(fontOf(h), glyph, paintAt(p), b)) : glyphBounds(fontOf(h), glyph, paintAt(p), null),
+    after(glyphBounds(fontOf(h), glyph, paintAt(p)), ([advance, box]) => { if (rect) setEdges(rect, box); return advance; }),
   "nGetAvailableFontSet()[J": () => BigInt64Array.from(availableFonts(), wrapFont),
 });
 delegate("android/graphics/fonts/FontFamily$Builder", {
@@ -351,8 +351,12 @@ delegate("android/graphics/Path", {
     d.set(path(h));
     d.transform(matrixAt(mat));
   },
-  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: object) => viaEdges(r, (b) => path(h).bounds(b)),
-  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: object) => +viaEdges(r, (b) => path(h).isRect(b)),
+  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: object) => setEdges(r, path(h).bounds()),
+  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: object) => {
+    const b = path(h).isRect();
+    if (b) setEdges(r, b);
+    return +!!b;
+  },
   "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(path(h)) ? 1 : 0),
   "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(path(dst), path(a), path(b), op), (done) => +done),
   "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (path(a).isInterpolatable(path(b)) ? 1 : 0),
@@ -399,7 +403,11 @@ delegate("android/graphics/Region", {
   "nativeSetRegion(JJ)V": (h: bigint, src: bigint) => { region(h).set(region(src)); },
   "nativeSetRect(JIIII)Z": (h: bigint, l: number, t: number, r: number, b: number) => +region(h).setRect(l, t, r, b),
   "nativeSetPath(JJJ)Z": (h: bigint, p: bigint, clip: bigint) => +region(h).setPath(path(p), region(clip)),
-  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => +viaEdges(r, (b) => region(h).bounds(b)),
+  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => {
+    const b = region(h).bounds();
+    setEdges(r, b ?? emptyBox);
+    return +!!b;
+  },
   "nativeGetBoundaryPath(JJ)Z": (h: bigint, p: bigint) => +region(h).boundaryPath(path(p)),
   "nativeOp(JIIIII)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => {
     scratch.setRect(l, t, r, b);
@@ -429,8 +437,8 @@ delegate("android/graphics/Region", {
   "quickContains(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickContains(l, t, r, b); },
   "quickReject(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickReject(l, t, r, b); },
   "quickReject(Landroid/graphics/Region;)Z": function (this: object, o: object) {
-    const b = { left: 0, top: 0, right: 0, bottom: 0 };
-    return +(!nativeRegionOf(o).bounds(b) || nativeRegionOf(this).quickReject(b.left, b.top, b.right, b.bottom));
+    const b = nativeRegionOf(o).bounds();
+    return +(!b || nativeRegionOf(this).quickReject(b.left, b.top, b.right, b.bottom));
   },
   "translate(IILandroid/graphics/Region;)V": function (this: object, dx: number, dy: number, dst: object | null) {
     const r = nativeRegionOf(this);
@@ -449,7 +457,7 @@ delegate("android/graphics/RegionIterator", {
   "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => {
     const it = deref<{ rects: number[]; at: number }>(h), { rects } = it;
     if (it.at >= rects.length) return 0;
-    setEdges(r, rects[it.at], rects[it.at + 1], rects[it.at + 2], rects[it.at + 3]);
+    setEdges(r, { left: rects[it.at], top: rects[it.at + 1], right: rects[it.at + 2], bottom: rects[it.at + 3] });
     it.at += 4;
     return 1;
   },

@@ -12,10 +12,10 @@ import { deref, handle, release } from "./handles";
 import { type Mat, mapPoint } from "./matrix";
 import { after } from "../jvm/natives/jlang";
 import { type PathCommands, pathOp as skiaPathOp } from "./skia";
+import type { Box } from "./graphics";
 
 type PathOp = [string, ...number[]];
 type Verb = number[];
-interface Box { left: number; top: number; right: number; bottom: number }
 /** what the pen writes to: Path2D itself, the verb list, or a scan converter */
 export interface Sink {
   moveTo(x: number, y: number): void;
@@ -419,14 +419,13 @@ export class NativePath {
     this.replaceOps(ops);
   }
   /** SkPath::getBounds: every stored point, conic control points included */
-  bounds(r: Box) {
+  bounds(): Box {
     const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }, pen = new Pen(null, box);
     for (const op of this.ops) pen.op(op);
-    if (box.left === Infinity) r.left = r.top = r.right = r.bottom = 0;
-    else { r.left = box.left; r.top = box.top; r.right = box.right; r.bottom = box.bottom; }
+    return box.left === Infinity ? { left: 0, top: 0, right: 0, bottom: 0 } : box;
   }
   /** SkPath::isRect: one contour of axis-aligned lines turning four right angles, closed or implicitly */
-  isRect(r: Box): boolean {
+  isRect(): Box | null {
     const vs = pathVerbs(this.ops), xs: number[] = [], ys: number[] = [];
     let i = 0;
     for (; i < vs.length; i++) {
@@ -434,21 +433,20 @@ export class NativePath {
       if (v[0] === MOVE) { if (xs.length) break; xs.push(v[1]); ys.push(v[2]); }
       else if (v[0] === LINE) { if (v[3] !== xs.at(-1) || v[4] !== ys.at(-1)) { xs.push(v[3]); ys.push(v[4]); } }
       else if (v[0] === CLOSE) { i++; break; }
-      else return false;
+      else return null;
     }
-    for (; i < vs.length; i++) if (vs[i][0] !== MOVE) return false;
+    for (; i < vs.length; i++) if (vs[i][0] !== MOVE) return null;
     if (xs.length > 1 && xs[0] === xs.at(-1) && ys[0] === ys.at(-1)) { xs.pop(); ys.pop(); }
     const dirs: number[] = [];
     for (let k = 0; k < xs.length; k++) {
       const dx = xs[(k + 1) % xs.length] - xs[k], dy = ys[(k + 1) % xs.length] - ys[k];
-      if ((dx === 0) === (dy === 0)) return false;
+      if ((dx === 0) === (dy === 0)) return null;
       const d = dx > 0 ? 0 : dy > 0 ? 1 : dx < 0 ? 2 : 3;
       if (d !== dirs.at(-1)) dirs.push(d);
     }
     if (dirs.length > 1 && dirs[0] === dirs.at(-1)) dirs.pop();
-    if (dirs.length !== 4 || dirs.some((d, k) => ((dirs[(k + 1) & 3] - d) & 1) === 0)) return false;
-    r.left = Math.min(...xs); r.top = Math.min(...ys); r.right = Math.max(...xs); r.bottom = Math.max(...ys);
-    return true;
+    if (dirs.length !== 4 || dirs.some((d, k) => ((dirs[(k + 1) & 3] - d) & 1) === 0)) return null;
+    return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
   }
   /** SkPath::isInterpolatable: the same verbs */
   isInterpolatable(o: NativePath): boolean {

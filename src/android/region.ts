@@ -6,10 +6,10 @@
 import { declaredField } from "../jvm/runtime";
 import { deref } from "./handles";
 import { type NativePath, type Sink, walkPath } from "./path";
+import type { Box } from "./graphics";
 
 /** rows [top, bottom) covered by the spans [xs[0], xs[1]), [xs[2], xs[3]), ... */
 interface Band { top: number; bottom: number; xs: readonly number[] }
-interface Box { left: number; top: number; right: number; bottom: number }
 
 /** SkRegion::Op, which Region.Op's nativeInt carries: difference, intersect, union, xor,
  *  reverse difference, replace */
@@ -35,13 +35,13 @@ export class NativeRegion {
     this.bands = [{ top: t, bottom: b, xs: [l, r] }];
     return true;
   }
-  bounds(out: Box): boolean {
+  /** the bounds, or null for an empty region */
+  bounds(): Box | null {
     const bands = this.bands;
-    if (!bands.length) { out.left = out.top = out.right = out.bottom = 0; return false; }
+    if (!bands.length) return null;
     let l = Infinity, r = -Infinity;
     for (const { xs } of bands) { if (xs[0] < l) l = xs[0]; if (xs[xs.length - 1] > r) r = xs[xs.length - 1]; }
-    out.left = l; out.top = bands[0].top; out.right = r; out.bottom = bands[bands.length - 1].bottom;
-    return true;
+    return { left: l, top: bands[0].top, right: r, bottom: bands[bands.length - 1].bottom };
   }
   /** this = a op b */
   op(a: NativeRegion, b: NativeRegion, op: number): boolean {
@@ -64,9 +64,8 @@ export class NativeRegion {
     return xs[0] <= l && top <= t && xs[1] >= r && bottom >= b;
   }
   quickReject(l: number, t: number, r: number, b: number): boolean {
-    if (this.isEmpty() || l >= r || t >= b) return true;
-    const box = { left: 0, top: 0, right: 0, bottom: 0 };
-    this.bounds(box);
+    const box = this.bounds();
+    if (!box || l >= r || t >= b) return true;
     return !(l < box.right && box.left < r && t < box.bottom && box.top < b);
   }
   translate(dx: number, dy: number, dst: NativeRegion = this) {
@@ -131,9 +130,8 @@ export class NativeRegion {
 
   /** SkRegion::setPath: the path scan-converted without anti-aliasing (SkScan::FillPath), within clip */
   setPath(path: NativePath, clip: NativeRegion): boolean {
-    const box = { left: 0, top: 0, right: 0, bottom: 0 };
-    if (clip.isEmpty() || !path.ops.length || !finite(path)) return path.inverseFill ? this.set(clip) : this.setEmpty();
-    clip.bounds(box);
+    const box = clip.bounds();
+    if (!box || !path.ops.length || !finite(path)) return path.inverseFill ? this.set(clip) : this.setEmpty();
     const filled = new NativeRegion();
     filled.bands = scan(path, box);
     if (path.inverseFill) {
@@ -206,8 +204,7 @@ function findLink(edges: Edge[], i: number) {
 }
 
 function finite(path: NativePath) {
-  const b = { left: 0, top: 0, right: 0, bottom: 0 };
-  path.bounds(b);
+  const b = path.bounds();
   return Number.isFinite(b.left + b.top + b.right + b.bottom);
 }
 

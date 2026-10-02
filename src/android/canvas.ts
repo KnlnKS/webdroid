@@ -12,13 +12,12 @@ import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { viaEdges, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
+import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
 import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
 type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
-type RectLike = { left: number; top: number; right: number; bottom: number };
 /** an open layer: the save count its restore closes, the context drawn into before it, and the close */
 type Layer = { count: number; parent: Ctx2D; close: () => void; behind?: Behind };
 /** what a save-behind set aside: the target's pixels under its bounds, in device space */
@@ -400,8 +399,8 @@ export class NativeCanvas {
     apply(ctx);
     this.persist(apply);
     if (!out && !path.inverseFill) {
-      path.bounds(pathBox);
-      this.narrowOut(pathBox.left, pathBox.top, pathBox.right, pathBox.bottom);
+      const b = path.bounds();
+      this.narrowOut(b.left, b.top, b.right, b.bottom);
     }
     return !this.clipEmpty;
   }
@@ -429,27 +428,23 @@ export class NativeCanvas {
     return !(Math.max(d[0], this.cl - 1) < Math.min(d[2], this.cr + 1) && Math.max(d[1], this.ct - 1) < Math.min(d[3], this.cb + 1));
   }
   /** SkiaCanvas::getClipBounds: the device clip's bounds in local coordinates, rounded */
-  clipBounds(out: RectLike): boolean {
+  clipBounds(): Box | null {
     const matrix = this.ctx.getTransform();
     const a = Math.fround(matrix.a), b = Math.fround(matrix.b), c = Math.fround(matrix.c), d = Math.fround(matrix.d);
     const e = Math.fround(matrix.e), f = Math.fround(matrix.f);
     const det = a * d - b * c;
-    if (!det || !Number.isFinite(det) || this.clipEmpty) {
-      out.left = out.top = out.right = out.bottom = 0;
-      return false;
-    }
+    if (!det || !Number.isFinite(det) || this.clipEmpty) return null;
     const dx = this.cl - e, dy = this.ct - f;
     const ox = (d * dx - c * dy) / det, oy = (a * dy - b * dx) / det;
     const wx = d * (this.cr - this.cl) / det, wy = -b * (this.cr - this.cl) / det;
     const hx = -c * (this.cb - this.ct) / det, hy = a * (this.cb - this.ct) / det;
-    out.left = Math.round(ox + Math.min(0, wx) + Math.min(0, hx));
-    out.top = Math.round(oy + Math.min(0, wy) + Math.min(0, hy));
-    out.right = Math.round(ox + Math.max(0, wx) + Math.max(0, hx));
-    out.bottom = Math.round(oy + Math.max(0, wy) + Math.max(0, hy));
-    return true;
+    return {
+      left: Math.round(ox + Math.min(0, wx) + Math.min(0, hx)), top: Math.round(oy + Math.min(0, wy) + Math.min(0, hy)),
+      right: Math.round(ox + Math.max(0, wx) + Math.max(0, hx)), bottom: Math.round(oy + Math.max(0, wy) + Math.max(0, hy)),
+    };
   }
   /** a layer confines what is drawn in it to its device bounds, rounded out */
-  clipToLayer(bounds: RectLike | null) {
+  clipToLayer(bounds: Box | null) {
     if (!bounds) return;
     const d = deviceBounds(this.ctx.getTransform(), bounds.left, bounds.top, bounds.right, bounds.bottom);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
@@ -466,7 +461,6 @@ export class NativeCanvas {
   }
 }
 const paintScratch = new NativePaint();
-const pathBox: RectLike = { left: 0, top: 0, right: 0, bottom: 0 };
 /** clip everything away: the context's clip only narrows, so it is intersected with a pixel off the target */
 function clipNothing(ctx: Ctx2D) {
   const m = ctx.getTransform();
@@ -562,7 +556,7 @@ function layerStyle(paint: NativePaint | null, alpha = 255): LayerStyle {
 const layerPools: [OffscreenCanvas[], OffscreenCanvas[]] = [[], []];
 /** a cleared raster over the device bounds of `bounds` (the whole target when null), in the
  *  target's device space so every clip and fast path inside keeps its coordinates */
-function openLayer(target: Ctx2D, bounds: RectLike | null, cpu: boolean): LayerRaster {
+function openLayer(target: Ctx2D, bounds: Box | null, cpu: boolean): LayerRaster {
   const W = target.canvas.width, H = target.canvas.height, m = target.getTransform();
   let x0 = 0, y0 = 0, x1 = W, y1 = H;
   if (bounds) {
@@ -597,13 +591,13 @@ function closeLayer(target: Ctx2D, { ctx, pool, x, y, w, h }: LayerRaster, style
   } finally { target.restore(); }
 }
 /** `ops` replayed through a layer over `bounds` of the real `target`, in the target's device space */
-export function drawInLayer(target: Ctx2D, bounds: RectLike | null, style: LayerStyle, ops: DisplayList) {
+export function drawInLayer(target: Ctx2D, bounds: Box | null, style: LayerStyle, ops: DisplayList) {
   const layer = openLayer(target, bounds, false);
   try { replay(layer.ctx, ops); } finally { closeLayer(target, layer, style); }
 }
 /** Canvas.saveLayer: draws until the matching restore land in an offscreen raster, composited
  *  then with what the paint said when the layer was opened */
-export function saveLayer(nc: NativeCanvas, bounds: RectLike | null, paint: NativePaint | null, alpha = 255): number {
+export function saveLayer(nc: NativeCanvas, bounds: Box | null, paint: NativePaint | null, alpha = 255): number {
   const style = layerStyle(paint, alpha);
   const count = nc.save(), parent = nc.ctx;
   let close: () => void;
@@ -747,13 +741,17 @@ rt.registerJnis("android/graphics/Canvas", {
   },
   // a clip by a shader's coverage needs per-pixel clipping, which a 2D context's clip is not
   "nClipShader(JJI)V": unsupported("Canvas.clipShader"),
-  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => +viaEdges(r, (b) => canvasAt(h).clipBounds(b)),
+  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => {
+    const b = canvasAt(h).clipBounds();
+    setEdges(r, b ?? emptyBox);
+    return +!!b;
+  },
   "nQuickReject(JFFFF)Z": (h: bigint, l: number, t: number, r: number, b: number) => +canvasAt(h).quickReject(l, t, r, b),
   "nQuickReject(JJ)Z": (h: bigint, p: bigint) => {
     const path = pathAt(p);
     if (!path.ops.length) return 1;
-    path.bounds(pathBox);
-    return +canvasAt(h).quickReject(pathBox.left, pathBox.top, pathBox.right, pathBox.bottom);
+    const b = path.bounds();
+    return +canvasAt(h).quickReject(b.left, b.top, b.right, b.bottom);
   },
   // high-contrast text is an accessibility setting this device leaves off
   "nIsHighContrastText(J)Z": () => 0,

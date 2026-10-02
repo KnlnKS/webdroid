@@ -260,8 +260,8 @@ function scalePatch(chunk: Int8Array, sx: number, sy: number, w: number, h: numb
 /** NinePatchPeeker::getPadding: the chunk's padding, -1s for an image without one */
 function setPadding(pad: object, chunk: Int8Array | null) {
   const v = chunk && new DataView(chunk.buffer, chunk.byteOffset);
-  if (v) setEdges(pad, v.getInt32(12, true), v.getInt32(20, true), v.getInt32(16, true), v.getInt32(24, true));
-  else setEdges(pad, -1, -1, -1, -1);
+  setEdges(pad, v ? { left: v.getInt32(12, true), top: v.getInt32(20, true), right: v.getInt32(16, true), bottom: v.getInt32(24, true) }
+    : { left: -1, top: -1, right: -1, bottom: -1 });
 }
 /** NinePatchPeeker::createNinePatchInsets */
 const insetsOf = (h: ImageHeader, scale: number) => !h.layout && !h.outline ? null

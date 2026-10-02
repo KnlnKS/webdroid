@@ -196,7 +196,8 @@ rt.registerJnis("android/graphics/Matrix", {
     const m = matrixAt(h), src = edges(srcRect);
     const [x0, y0] = mapPoint(m, src.left, src.top), [x1, y1] = mapPoint(m, src.right, src.top);
     const [x2, y2] = mapPoint(m, src.right, src.bottom), [x3, y3] = mapPoint(m, src.left, src.bottom);
-    setEdges(dstRect, Math.min(x0, x1, x2, x3), Math.min(y0, y1, y2, y3), Math.max(x0, x1, x2, x3), Math.max(y0, y1, y2, y3));
+    setEdges(dstRect, { left: Math.min(x0, x1, x2, x3), top: Math.min(y0, y1, y2, y3),
+      right: Math.max(x0, x1, x2, x3), bottom: Math.max(y0, y1, y2, y3) });
     return +rectStaysRect(m);
   },
   // SkMatrix::setRectToRect: an empty source resets and fails, an empty destination scales to 0

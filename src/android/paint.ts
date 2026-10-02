@@ -9,7 +9,7 @@ import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
 import type { FaceMetrics } from "./sfnt";
-import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges } from "./graphics";
+import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges, emptyBox } from "./graphics";
 import { colorLongAt } from "./bitmap";
 import { NativePath, skCommands, setSkCommands } from "./path";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
@@ -207,8 +207,7 @@ export const strikeThruThickness = (p: NativePaint) => f32(p.textSize * STD_THIC
 /** Paint::getTextBounds: the laid-out glyphs' bounds, rounded out */
 function textBounds(p: NativePaint, bidi: number, s: string, r: object) {
   return after(layoutBounds(s, isRtl(bidi, s), p), (b) => {
-    if (b) setEdges(r, Math.floor(b[0]), Math.floor(b[1]), Math.ceil(b[2]), Math.ceil(b[3]));
-    else setEdges(r, 0, 0, 0, 0);
+    setEdges(r, b ? { left: Math.floor(b[0]), top: Math.floor(b[1]), right: Math.ceil(b[2]), bottom: Math.ceil(b[3]) } : emptyBox);
   });
 }
 
