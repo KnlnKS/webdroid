@@ -26,7 +26,6 @@ import { reportUncaught, PROCESS_PID, setProcessIdentity, setProcessName } from 
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain } from "../android/mainloop";
 import { deliverVsync } from "../android/vsync";
-import { setCanvasTargetSdk } from "../android/canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
@@ -178,7 +177,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest);
-  await setCanvasTargetSdk(target);
   setTargetSdkVersion(target);
   prepared?.();
 

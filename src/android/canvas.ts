@@ -7,7 +7,6 @@ import { isRecording, nestedRecording, recordOrRun, replay, type Ctx2D, type Dis
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
-import { linkInit } from "../jvm/natives/jlang";
 import { NativePath, inversePath } from "./path";
 import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
@@ -540,17 +539,6 @@ function canvasPeer(nc: NativeCanvas, recording: boolean): JavaCanvas {
 export function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): JavaCanvas {
   return canvasPeer(NativeCanvas.over(ctx, w, h), accelerated);
 }
-/** View's constructor tells Canvas the target SDK: what restore underflow, setBitmap and clip ops
- *  may do depends on it */
-export async function setCanvasTargetSdk(target: number): Promise<void> {
-  const info = await linkInit("android/graphics/Canvas"), statics = info.ctor as unknown as Record<string, unknown>;
-  statics[info.staticFieldTable.get("sCompatibilityRestore:Z")!] = +(target < 23);
-  statics[info.staticFieldTable.get("sCompatibilitySetBitmap:Z")!] = +(target < 26);
-  statics[info.staticFieldTable.get("sCompatibilityVersion:I")!] = target;
-  // the window's peer is made without a constructor: its class's statics (MAX_BITMAP_SIZE) must be set
-  await linkInit("android/graphics/RecordingCanvas");
-}
-
 export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: number, radius: number) {
   ctx.beginPath();
   if (radius > 0) ctx.roundRect(l, t, r - l, b - t, radius);
