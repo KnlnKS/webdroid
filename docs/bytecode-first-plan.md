@@ -582,28 +582,28 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-04. The branch is `knlnks/bytecode` (not pushed); read "Latest handoff"
+Last updated 2026-10-04 (Stage E: 2026-10-01). The branch is `knlnks/bytecode` (not pushed); read "Latest handoff"
 first. The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
-each unit's findings. Stage E runs in parallel on `knlnks/bytecode-stage-e1`: its handoff is
-"Stage E handoff" below.
+each unit's findings. Stage E is complete on this branch: its handoff is "Stage E handoff" below.
 
-### Stage E handoff (2026-10-01): E1 is complete
+### Stage E handoff (2026-10-01): Stage E is complete
 
-Stage E1 is on `knlnks/bytecode-stage-e1` (worktree `../webdroid-stage-e1`, not pushed), rebased
-onto `knlnks/bytecode`; rebase again and merge once Stage D's work allows. It touches
-`src/native/`, `src/shell/` (procfs, vfs, properties), `src/android/delegates.ts`
-(SystemProperties reads `src/shell/properties.ts`), `src/jvm/natives/jlang.ts` (the /proc task
-hooks), `server.ts`, `scripts/gen-framework.ts` and `src/jvm/bootclasspath.ts`. Delete
-`../webdroid-e1-base` (detached, used for gate runs) when done.
+E1 ran on its own branch and merged into `knlnks/bytecode` at c7fb0678; E2 followed here
+(b475a694, e26ca414, d6ed44d2). E3 holds as written: EGL/GLES, audio, media codecs and DRM stay
+HLE behind their boundaries.
 
-**Decision:** every arm64 process runs the reference build's bionic; armeabi-v7a keeps the HLE
-libc, now ARM32-only (`docs/decisions/0001-bionic-libc.md`). Findings are in the implementation
-history's "Stage E1" entry. There is no libc flag: an A/B against the HLE needs a worktree at
-33b23028 with `?libc=bionic` unset.
+**E1 decision:** every arm64 process runs the reference build's bionic; armeabi-v7a keeps the HLE
+libc, now ARM32-only (`docs/decisions/0001-bionic-libc.md`, history "Stage E1"). There is no libc
+flag: an A/B against the HLE needs a worktree at 33b23028 with `?libc=bionic` unset.
 
-**What exists.** `src/native/bionic.ts` is the dynamic linker's share of bionic startup (dl.ts is
+**E2 decision:** text measures on HarfBuzz over the reference build's fonts, minikin's algorithms
+stay a TS port the device agrees with, Canvas2D draws text with `fillText` per registered face,
+and Path.op/getFillPath are SkPathOps/SkStroke through CanvasKit
+(`docs/decisions/0002-text-on-harfbuzz-and-skia.md`, history "Stage E2"). `textcmp` passes 72/72.
+
+**What exists (E1).** `src/native/bionic.ts` is the dynamic linker's share of bionic startup (dl.ts is
 the linker): libc_shared_globals, static TLS and each host-created thread's TCB/pthread_internal_t/
 bionic_tls (attached at its first `run()`, torn down as pthread_exit does when its Java thread
 ends), ld-android.so's `__loader_*`, the CFI shadow, the abort message, and the property area
@@ -617,6 +617,14 @@ system), and `src/native/unix.ts` serves logd and netd's dnsproxyd. Only an ARM3
 registers the HLE libc (`libcInit`).
 `scripts/libc-bench/` times libc calls from guest code.
 
+**What exists (E2).** `fonts.ts` holds minikin's Font/FontFamily/FontCollection and hwui's Typeface
+over lazily loaded platform fonts (`FontPending`, `withFonts`, `fontNatives`: text natives rerun
+once a font loads) and the CSS faces Canvas2D draws with; `shaping.ts` is minikin's layout
+(itemization, pieces, HarfBuzz at the 24.8 grid) for measurement, TextRunShaper and drawing;
+`minikin.ts` keeps line breaking and Paint's measurement natives; `skia.ts` is the tab's CanvasKit
+(path ops, stroking, bitmap text). `gen-framework` pulls the fonts; `scripts/font-index.ts` builds
+`/font-index.json`, which the dev server and `build-prod` serve.
+
 **Open:**
 1. Per-call costs above the HLE's core-served versions (snprintf, mutex, libm); act on a measured
    frame or tap only (§4.7).
@@ -626,7 +634,9 @@ registers the HLE libc (`libcInit`).
    (why the per-unit memory model was rejected).
 4. The property store holds only what the device profile answers; recording the AVD's
    properties (and Build's values with them) is Stage D/F work.
-5. Stage E2 (native libraries behind JNI: minikin, HarfBuzz, Skia) and E3 are not started.
+5. Text: hyphenation (patterns in `/system/usr/hyphen-data`), the updatable emoji font under
+   `/data/fonts`, FreeType's hinted advances at heavy variable weights, and each realm's zygote
+   parsing `font_fallback.xml` (the boot image, §4.3, or the serialized font map would remove it).
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 

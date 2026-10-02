@@ -1906,6 +1906,35 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     `__pthread_internal_remove`, all `.symtab` locals); before, its destructors never ran and its
     TLS block and pthread_internal_t leaked.
 
+- **Stage E2: text on HarfBuzz and the reference fonts, paths on Skia** (2026-10-01; decision record
+  `docs/decisions/0002-text-on-harfbuzz-and-skia.md`).
+  - Paint's advances came from the browser's `measureText` (prefix differences per cluster, whole
+    pixels bolted on) while TextRunShaper shaped with HarfBuzz; they now share one layout, each
+    glyph's advance on its cluster's first code unit. A tab has HarfBuzz's space fallback and no
+    letter spacing on the device. A glyph HarfBuzz zeroes (a mark, a soft hyphen) kept a hinting
+    residual (0.047 px) in both paths.
+  - Measuring against real advances exposed the page's fonts: CJK had measured as the host's CJK
+    face, which the browser substituted. The reference build's `/system/fonts` and
+    `font_fallback.xml` replaced four static Roboto files and a hand-written fonts.xml.
+  - minikin runs HarfBuzz at 256 units per pixel over Skia's advances: Skia's advance is truncated
+    to that grid and HarfBuzz rounds kerning onto it ("oy" at 20 px: -15 units = -37.5/256, the
+    device -37/256). HarfBuzz at upem scale rounds a varied advance to whole units, which flipped
+    hinted advances at heavy weights; fonts now run at 256 units per font unit.
+  - A variable face takes the style on its axes: the device draws Roboto at wght 900 without
+    fakery, and italic at ital 1. Chrome sets wght and wdth from a canvas's font but not ital, so
+    an italic variable face is drawn from a HarfBuzz instance with ital pinned; HarfBuzz's
+    subsetter fails on the CFF-based CJK collection, whose faces are extracted as tables instead.
+  - A line's and `getFontMetricsInt(text)`'s extent is the extent of the fonts its pieces used,
+    as minikin's LayoutPieces keep it; text bounds are the laid-out glyphs' boxes.
+  - Every system family is read at zygote boot (Typeface.createFromFamilies resolves styles from
+    OS/2), so laziness needs what the device's serialized font map carries: `/font-index.json`.
+  - `textcmp`'s harness started layouts once `bootMs` was set, but Stage D binds the application
+    afterwards and LineBreakConfig dereferences `currentApplication()`: under a cold server every
+    layout threw. It now waits for the application.
+  - Path.op's TS clipper flattened curves (conics not even sampled), ignored inverse fill types and
+    returned a polygon starting elsewhere; SkPathOps through CanvasKit gives the device's verbs.
+    CanvasKit's binding names two of SkPath's four fill types; the other two pass by value.
+
 ## App investigations and remaining limits
 
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
