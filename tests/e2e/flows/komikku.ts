@@ -22,7 +22,9 @@ export const komikku: Flow = {
       wait: wait.state({ kind: "text", text: "content://com.android.externalstorage.documents" }, 5000, 20000) },
     { id: "permissions-step", label: "Continue to permissions", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1500) },
     { id: "finish-step", label: "Finish onboarding permissions", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1500) },
-    { id: "library", label: "Open library", action: { type: "tapText", text: "Get started" }, wait: wait.quiescent(2500) },
+    // finishing onboarding can leave the welcome page still for seconds before the library replaces it
+    { id: "library", label: "Open library", action: { type: "tapText", text: "Get started" },
+      wait: wait.state({ kind: "text", text: "Updates" }, 5000, 20000) },
     { id: "browse", label: "Browse sources", action: { type: "tapText", text: "Browse" }, wait: wait.quiescent(2000) },
     { id: "local-source", label: "Open local source", action: { type: "tapText", text: "Local source" }, wait: wait.quiescent(2000) },
     { id: "manga", label: "Open local manga", action: { type: "tapText", text: "Compatibility sample" }, wait: wait.quiescent(2500) },
