@@ -3,229 +3,34 @@
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { after, vcall, scall, newObj, staticField, vcallUncaught } from "../jvm/natives/jlang";
-import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdSource } from "../native/fs";
 import { readFully } from "../shell/lazyfile";
 import { type JBuffer, limit, position, remainingBytes, setPosition } from "../jvm/natives/jnio";
 import { onMain } from "./mainloop";
-import { JBundle, reportUncaught } from "./os";
-import { mkUri, uriParts, type JUri } from "./net";
-import { csText } from "../jvm/natives/jchars";
+import { reportUncaught } from "./os";
+import { uriParts, type JUri } from "./net";
 import { scannedMediaUri } from "./mediastore";
 import { presentSurface, windowSurface, type GlSurface } from "./glsurface";
 import { hostStub } from "./binder";
 
-rt.markers("android/media/ImageReader$OnImageAvailableListener");
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 let audioSession = 0;
 export const newAudioSessionId = (): number => ++audioSession;
 
-class JCamcorderProfile extends JObj {
-  duration = 0; quality = 0; fileFormat = 0;
-  videoCodec = 0; videoBitRate = 0; videoFrameRate = 0; videoFrameWidth = 0; videoFrameHeight = 0;
-  audioCodec = 0; audioBitRate = 0; audioSampleRate = 0; audioChannels = 0;
-}
-function checkCamcorderQuality(quality: number): void {
-  if ((quality >= 0 && quality <= 13) || (quality >= 1000 && quality <= 1013) ||
-      (quality >= 2000 && quality <= 2008)) return;
-  throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unsupported quality level: ${quality}`);
-}
-rt.register({
-  name: "android/media/CamcorderProfile", ctor: JCamcorderProfile,
-  fields: ["duration", "quality", "fileFormat", "videoCodec", "videoBitRate", "videoFrameRate",
-    "videoFrameWidth", "videoFrameHeight", "audioCodec", "audioBitRate", "audioSampleRate", "audioChannels"],
-  methods: {
-    "static get(I)Landroid/media/CamcorderProfile;": () => null,
-    "static get(II)Landroid/media/CamcorderProfile;": (_cameraId: number, quality: number) => {
-      checkCamcorderQuality(quality);
-      return null;
-    },
-    "static hasProfile(I)Z": () => 0,
-    "static hasProfile(II)Z": () => 0,
-    "static getAll(Ljava/lang/String;I)Landroid/media/EncoderProfiles;": (_cameraId: string, quality: number) => {
-      checkCamcorderQuality(quality);
-      return null;
-    },
+// No camera is attached (Camera.getNumberOfCameras is 0), so MediaProfiles holds no camcorder
+// profile: get() fails as the native lookup does for a missing profile and getAll() finds none.
+rt.claimNativeLib("media_jni");
+rt.registerJnis("android/media/CamcorderProfile", {
+  "native_init()V": () => {},
+  "native_has_camcorder_profile(II)Z": () => 0,
+  "native_get_camcorder_profile(II)Landroid/media/CamcorderProfile;": () => {
+    throw rt.mkThrowable("java/lang/RuntimeException", "Error retrieving camcorder profile params");
   },
+  "native_get_camcorder_profiles(IIZ)Landroid/media/EncoderProfiles;": () => null,
 });
-rt.register({ name: "android/media/EncoderProfiles", ctor: class extends JObj {} });
-
-rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
-rt.register({ name: "android/media/MediaDataSource", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"],
-  methods: noops("<init>()V"),
-});
-
-rt.register({
-  name: "android/media/session/MediaController$Callback", ctor: class extends JObj {},
-  methods: { ...noops("<init>()V") },
-});
-class JPlaybackCustomAction extends JObj {
-  action = "";
-  name: unknown = null;
-  icon = 0;
-  extras: unknown = null;
-}
-class JPlaybackCustomActionBuilder extends JObj {
-  value = new JPlaybackCustomAction();
-}
-class JPlaybackState extends JObj {
-  state = 0;
-  position = 0n;
-  bufferedPosition = 0n;
-  speed = 0;
-  actions = 0n;
-  errorMessage: unknown = null;
-  updateTime = 0n;
-  customActions: unknown = null;
-  activeQueueItemId = -1n;
-  extras: unknown = null;
-}
-class JPlaybackStateBuilder extends JObj {
-  value = new JPlaybackState();
-  customActions: unknown[] = [];
-}
-class JMediaMetadata extends JObj { values = new Map<string, unknown>(); description: JMediaDescription | null = null; }
-class JMediaMetadataBuilder extends JObj { value = new JMediaMetadata(); }
-class JMediaDescription extends JObj {
-  mediaId: string | null = null;
-  title: unknown = null;
-  subtitle: unknown = null;
-  description: unknown = null;
-  iconBitmap: unknown = null;
-  iconUri: unknown = null;
-  extras: JBundle | null = null;
-  mediaUri: unknown = null;
-}
-class JMediaDescriptionBuilder extends JObj { value = new JMediaDescription(); }
-rt.register({ name: "android/media/MediaDescription", ctor: JMediaDescription, ifaces: ["android/os/Parcelable"], methods: {
-  ...fieldGetters({
-    "getMediaId()Ljava/lang/String;": "mediaId",
-    "getTitle()Ljava/lang/CharSequence;": "title",
-    "getSubtitle()Ljava/lang/CharSequence;": "subtitle",
-    "getDescription()Ljava/lang/CharSequence;": "description",
-    "getIconBitmap()Landroid/graphics/Bitmap;": "iconBitmap",
-    "getIconUri()Landroid/net/Uri;": "iconUri",
-    "getExtras()Landroid/os/Bundle;": "extras",
-    "getMediaUri()Landroid/net/Uri;": "mediaUri",
-  }),
-  "describeContents()I": () => 0,
-  "toString()Ljava/lang/String;": driven(function* (this: JMediaDescription): Gen {
-    return `${this.title == null ? "null" : yield csText(this.title)}, ${this.subtitle == null ? "null" : yield csText(this.subtitle)}, ${this.description == null ? "null" : yield csText(this.description)}`;
-  }),
-} });
-const descriptionFields = {
-  "setMediaId(Ljava/lang/String;)Landroid/media/MediaDescription$Builder;": "mediaId",
-  "setTitle(Ljava/lang/CharSequence;)Landroid/media/MediaDescription$Builder;": "title",
-  "setSubtitle(Ljava/lang/CharSequence;)Landroid/media/MediaDescription$Builder;": "subtitle",
-  "setDescription(Ljava/lang/CharSequence;)Landroid/media/MediaDescription$Builder;": "description",
-  "setIconBitmap(Landroid/graphics/Bitmap;)Landroid/media/MediaDescription$Builder;": "iconBitmap",
-  "setIconUri(Landroid/net/Uri;)Landroid/media/MediaDescription$Builder;": "iconUri",
-  "setExtras(Landroid/os/Bundle;)Landroid/media/MediaDescription$Builder;": "extras",
-  "setMediaUri(Landroid/net/Uri;)Landroid/media/MediaDescription$Builder;": "mediaUri",
-} as const;
-rt.register({ name: "android/media/MediaDescription$Builder", ctor: JMediaDescriptionBuilder, methods: {
-  "<init>()V": () => {},
-  ...Object.fromEntries(Object.entries(descriptionFields).map(([method, field]) => [method,
-    function (this: JMediaDescriptionBuilder, value: unknown) { Reflect.set(this.value, field, value); return this; }])),
-  "build()Landroid/media/MediaDescription;": function (this: JMediaDescriptionBuilder) { return Object.assign(new JMediaDescription(), this.value); },
-} });
-rt.register({ name: "android/media/session/PlaybackState$CustomAction", ctor: JPlaybackCustomAction, ifaces: ["android/os/Parcelable"], methods: fieldGetters({
-  "getAction()Ljava/lang/String;": "action", "getName()Ljava/lang/CharSequence;": "name",
-  "getIcon()I": "icon", "getExtras()Landroid/os/Bundle;": "extras",
-}) });
-rt.register({ name: "android/media/session/PlaybackState$CustomAction$Builder", ctor: JPlaybackCustomActionBuilder, methods: {
-  "<init>(Ljava/lang/String;Ljava/lang/CharSequence;I)V": function (this: JPlaybackCustomActionBuilder, action: string, name: unknown, icon: number) {
-    this.value.action = action; this.value.name = name; this.value.icon = icon;
-  },
-  "setExtras(Landroid/os/Bundle;)Landroid/media/session/PlaybackState$CustomAction$Builder;": function (this: JPlaybackCustomActionBuilder, extras: unknown) { this.value.extras = extras; return this; },
-  "build()Landroid/media/session/PlaybackState$CustomAction;": function (this: JPlaybackCustomActionBuilder) { return Object.assign(new JPlaybackCustomAction(), this.value); },
-} });
-rt.register({ name: "android/media/session/PlaybackState", ctor: JPlaybackState, ifaces: ["android/os/Parcelable"], methods: fieldGetters({
-  "getState()I": "state", "getPosition()J": "position", "getBufferedPosition()J": "bufferedPosition",
-  "getPlaybackSpeed()F": "speed", "getActions()J": "actions", "getErrorMessage()Ljava/lang/CharSequence;": "errorMessage",
-  "getLastPositionUpdateTime()J": "updateTime", "getCustomActions()Ljava/util/List;": "customActions",
-  "getActiveQueueItemId()J": "activeQueueItemId", "getExtras()Landroid/os/Bundle;": "extras",
-}) });
-rt.register({ name: "android/media/session/PlaybackState$Builder", ctor: JPlaybackStateBuilder, methods: {
-  "<init>()V": () => {},
-  "setState(IJFJ)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, state: number, position: bigint, speed: number, time: bigint) {
-    this.value.state = state; this.value.position = position; this.value.speed = speed; this.value.updateTime = time; return this;
-  },
-  "setBufferedPosition(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, position: bigint) { this.value.bufferedPosition = position; return this; },
-  "setActions(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, actions: bigint) { this.value.actions = actions; return this; },
-  "setErrorMessage(Ljava/lang/CharSequence;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, message: unknown) { this.value.errorMessage = message; return this; },
-  "addCustomAction(Landroid/media/session/PlaybackState$CustomAction;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, action: unknown) { this.customActions.push(action); return this; },
-  "setActiveQueueItemId(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, id: bigint) { this.value.activeQueueItemId = id; return this; },
-  "setExtras(Landroid/os/Bundle;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, extras: unknown) { this.value.extras = extras; return this; },
-  "build()Landroid/media/session/PlaybackState;": function (this: JPlaybackStateBuilder) {
-    return Object.assign(new JPlaybackState(), this.value, { customActions: newArrayList(this.customActions.slice()) });
-  },
-} });
-rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces: ["android/os/Parcelable"], methods: {
-  "containsKey(Ljava/lang/String;)Z": function (this: JMediaMetadata, key: string) { return +this.values.has(key); },
-  "keySet()Ljava/util/Set;": function (this: JMediaMetadata) { return newStringSet(this.values.keys()); },
-  "getText(Ljava/lang/String;)Ljava/lang/CharSequence;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
-  "getString(Ljava/lang/String;)Ljava/lang/String;": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return value == null ? null : csText(value); },
-  "getLong(Ljava/lang/String;)J": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return typeof value === "bigint" ? value : 0n; },
-  "getBitmap(Ljava/lang/String;)Landroid/graphics/Bitmap;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
-  "getRating(Ljava/lang/String;)Landroid/media/Rating;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
-  "getDescription()Landroid/media/MediaDescription;": driven(function* (this: JMediaMetadata): Gen {
-    if (this.description) return this.description;
-    const prefix = "android.media.metadata.";
-    const result = new JMediaDescription();
-    const mediaId = this.values.get(prefix + "MEDIA_ID");
-    result.mediaId = typeof mediaId === "string" ? mediaId : null;
-    const display = this.values.get(prefix + "DISPLAY_TITLE");
-    if (display != null && (yield csText(display))) {
-      result.title = display;
-      result.subtitle = this.values.get(prefix + "DISPLAY_SUBTITLE") ?? null;
-      result.description = this.values.get(prefix + "DISPLAY_DESCRIPTION") ?? null;
-    } else {
-      const text: unknown[] = [];
-      for (const key of ["TITLE", "ARTIST", "ALBUM", "ALBUM_ARTIST", "WRITER", "AUTHOR", "COMPOSER"]) {
-        const value = this.values.get(prefix + key);
-        if (value != null && (yield csText(value))) text.push(value);
-        if (text.length === 3) break;
-      }
-      result.title = text[0] ?? null;
-      result.subtitle = text[1] ?? null;
-      result.description = text[2] ?? null;
-    }
-    for (const key of ["DISPLAY_ICON", "ART", "ALBUM_ART"]) {
-      const bitmap = this.values.get(prefix + key);
-      if (bitmap != null) { result.iconBitmap = bitmap; break; }
-    }
-    for (const key of ["DISPLAY_ICON_URI", "ART_URI", "ALBUM_ART_URI"]) {
-      const value = this.values.get(prefix + key);
-      const uri = value == null ? "" : yield csText(value);
-      if (uri) { result.iconUri = mkUri(uri); break; }
-    }
-    const uri = this.values.get(prefix + "MEDIA_URI");
-    if (uri != null) {
-      const text = yield csText(uri);
-      if (text) result.mediaUri = mkUri(text);
-    }
-    return this.description = result;
-  }),
-  "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JMediaMetadata, parcel: unknown): Gen {
-    const bundle = new JBundle(); bundle.map = new Map(this.values);
-    yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle);
-  }),
-} });
-const putMetadata = function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; };
-rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataBuilder, methods: {
-  "<init>()V": () => {},
-  "putText(Ljava/lang/String;Ljava/lang/CharSequence;)Landroid/media/MediaMetadata$Builder;": putMetadata,
-  "putString(Ljava/lang/String;Ljava/lang/String;)Landroid/media/MediaMetadata$Builder;": putMetadata,
-  "putLong(Ljava/lang/String;J)Landroid/media/MediaMetadata$Builder;": putMetadata,
-  "putBitmap(Ljava/lang/String;Landroid/graphics/Bitmap;)Landroid/media/MediaMetadata$Builder;": putMetadata,
-  "putRating(Ljava/lang/String;Landroid/media/Rating;)Landroid/media/MediaMetadata$Builder;": putMetadata,
-  "build()Landroid/media/MediaMetadata;": function (this: JMediaMetadataBuilder) { const value = new JMediaMetadata(); value.values = new Map(this.value.values); return value; },
-} });
 
 // The audio policy's product strategies, as the reference AVD's engine configuration lists them:
 // [name, id, [volume group, legacy stream, [usage, content type, flags, tag][]][]]. AudioAttributes
@@ -481,13 +286,6 @@ rt.register({
     "seekTo(I)V": function (this: JMediaPlayer, ms: number) { if (this.media) this.media.currentTime = ms / 1000; },
   },
 });
-for (const n of ["android/media/MediaPlayer$OnCompletionListener", "android/media/MediaPlayer$OnPreparedListener",
-  "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnInfoListener", "android/media/MediaPlayer$OnSeekCompleteListener",
-  "android/media/MediaPlayer$OnVideoSizeChangedListener",
-  "android/media/SoundPool$OnLoadCompleteListener"]) {
-  rt.register({ name: n, ctor: class extends JObj {} });
-}
-
 // ── SoundPool: one shared AudioContext (never closed), a decoded AudioBuffer per sound id
 // (null while decoding), and a one-shot source + gain node per stream id.
 let actx: AudioContext | null = null;
@@ -839,10 +637,7 @@ rt.register({
     },
   },
 });
-rt.markers("android/media/AudioRouting$OnRoutingChangedListener");
 rt.register({ name: "android/media/AudioTimestamp", ctor: class extends JObj { framePosition = 0n; nanoTime = 0n; }, fields: { framePosition: "framePosition", nanoTime: "nanoTime" }, methods: { "<init>()V": () => {} } });
-rt.markers("android/media/AudioTrack$OnPlaybackPositionUpdateListener",
-  "android/media/AudioRecord$OnRecordPositionUpdateListener");
 
 class JAudioRecord extends JObj { state = 0; recordingState = 1; }
 rt.register({
@@ -898,23 +693,6 @@ rt.register({
       },
   },
 });
-rt.markers("android/media/MediaScannerConnection$OnScanCompletedListener",
-  "android/media/MediaScannerConnection$MediaScannerConnectionClient");
-
-class JPlaybackParams extends JObj { speed = 1; pitch = 1; fallback = 0; defaults = false; }
-rt.register({ name: "android/media/PlaybackParams", ctor: JPlaybackParams, methods: {
-  "<init>()V": function () {},
-  "allowDefaults()Landroid/media/PlaybackParams;": function (this: JPlaybackParams) { this.defaults = true; return this; },
-  "setSpeed(F)Landroid/media/PlaybackParams;": function (this: JPlaybackParams, speed: number) { this.speed = speed; return this; },
-  "getSpeed()F": function (this: JPlaybackParams) { return this.speed; },
-  "setPitch(F)Landroid/media/PlaybackParams;": function (this: JPlaybackParams, pitch: number) {
-    if (pitch < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "pitch must not be negative");
-    this.pitch = pitch; return this;
-  },
-  "getPitch()F": function (this: JPlaybackParams) { return this.pitch; },
-  "setAudioFallbackMode(I)Landroid/media/PlaybackParams;": function (this: JPlaybackParams, mode: number) { this.fallback = mode; return this; },
-  "getAudioFallbackMode()I": function (this: JPlaybackParams) { return this.fallback; },
-} });
 
 // IMediaRouterService, under AOSP's MediaRouter: no remote display provider is installed, so the
 // global state holds no routes (dumpsys media_router on the reference AVD: routes=[]) and an app
@@ -929,8 +707,6 @@ rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, 
 } });
 hostStub("media_router", "webdroid/MediaRouterService");
 
-rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-
 export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
 rt.register({
   name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,
@@ -940,28 +716,3 @@ rt.register({
     "set(IIJI)V": function (this: JBufferInfo, o: number, s: number, t: bigint, f: number) { this.offset = o; this.size = s; this.presentationTimeUs = t; this.flags = f; },
   },
 });
-class JCryptoInfo extends JObj {
-  numSubSamples = 0; numBytesOfClearData: Int32Array | null = null; numBytesOfEncryptedData: Int32Array | null = null;
-  key: Int8Array | null = null; iv: Int8Array | null = null; mode = 0; pattern: unknown = null;
-}
-rt.register({
-  name: "android/media/MediaCodec$CryptoInfo", ctor: JCryptoInfo,
-  fields: ["numSubSamples", "numBytesOfClearData", "numBytesOfEncryptedData", "key", "iv", "mode"],
-  methods: {
-    "<init>()V": function () {},
-    "set(I[I[I[B[BI)V": function (this: JCryptoInfo, count: number, clear: Int32Array | null, encrypted: Int32Array | null, key: Int8Array | null, iv: Int8Array | null, mode: number) {
-      this.numSubSamples = count; this.numBytesOfClearData = clear; this.numBytesOfEncryptedData = encrypted; this.key = key; this.iv = iv; this.mode = mode;
-    },
-    "setPattern(Landroid/media/MediaCodec$CryptoInfo$Pattern;)V": function (this: JCryptoInfo, p: unknown) { this.pattern = p; } },
-});
-class JCryptoPattern extends JObj { encrypt = 0; skip = 0; }
-rt.register({
-  name: "android/media/MediaCodec$CryptoInfo$Pattern", ctor: JCryptoPattern,
-  methods: {
-    "<init>(II)V": function (this: JCryptoPattern, e: number, s: number) { this.encrypt = e; this.skip = s; },
-    "set(II)V": function (this: JCryptoPattern, e: number, s: number) { this.encrypt = e; this.skip = s; },
-    "getEncryptBlocks()I": function (this: JCryptoPattern) { return this.encrypt; },
-    "getSkipBlocks()I": function (this: JCryptoPattern) { return this.skip; },
-  },
-});
-

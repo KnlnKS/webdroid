@@ -1,6 +1,6 @@
-import { JObj, rt, noops } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { idHash, newObj, stringHash, vcall } from "../jvm/natives/jlang";
+import { idHash, newObj, vcall } from "../jvm/natives/jlang";
 import type { JBundle } from "./os";
 import { myLooper, postTo } from "./mainloop";
 
@@ -28,33 +28,6 @@ class JMediaSession extends JObj {
 class JSessionToken extends JObj { constructor(readonly session: JMediaSession) { super(); } }
 class JMediaController extends JObj { session!: JMediaSession; controls = new JTransportControls(); }
 class JTransportControls extends JObj { session!: JMediaSession; }
-class JRemoteUserInfo extends JObj { packageName = ""; pid = -1; uid = -1; }
-class JQueueItem extends JObj { description: unknown = null; id = -1n; }
-rt.register({ name: "android/media/session/MediaSession$QueueItem", ctor: JQueueItem, ifaces: ["android/os/Parcelable"], methods: {
-  "<init>(Landroid/media/MediaDescription;J)V": function (this: JQueueItem, description: unknown, id: bigint) {
-    if (description == null || id === -1n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid queue item");
-    this.description = description; this.id = id;
-  },
-  "getDescription()Landroid/media/MediaDescription;": function (this: JQueueItem) { return this.description; },
-  "getQueueId()J": function (this: JQueueItem) { return this.id; },
-  "describeContents()I": () => 0,
-} });
-rt.register({ name: "android/media/session/MediaSessionManager$RemoteUserInfo", ctor: JRemoteUserInfo,
-  fields: { mPackageName: "packageName", mPid: "pid", mUid: "uid" }, methods: {
-    "<init>(Ljava/lang/String;II)V": function (this: JRemoteUserInfo, packageName: string | null, pid: number, uid: number) {
-      if (packageName === null) rt.npe();
-      this.packageName = packageName!; this.pid = pid; this.uid = uid;
-    },
-    "getPackageName()Ljava/lang/String;": function (this: JRemoteUserInfo) { return this.packageName; },
-    "getPid()I": function (this: JRemoteUserInfo) { return this.pid; },
-    "getUid()I": function (this: JRemoteUserInfo) { return this.uid; },
-    "equals(Ljava/lang/Object;)Z": function (this: JRemoteUserInfo, other: unknown) {
-      return other instanceof JRemoteUserInfo && this.packageName === other.packageName && this.pid === other.pid && this.uid === other.uid ? 1 : 0;
-    },
-    "hashCode()I": function (this: JRemoteUserInfo) {
-      return Math.imul(31, Math.imul(31, Math.imul(31, 1) + stringHash(this.packageName)) + this.pid) + this.uid | 0;
-    },
-  } });
 async function initialize(session: JMediaSession, context: JObj | null, tag: string) {
   if (!context) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context cannot be null");
   if (!tag) throw rt.mkThrowable("java/lang/IllegalArgumentException", "tag cannot be null or empty");
@@ -103,9 +76,6 @@ rt.register({ name: "android/media/session/MediaSession$Token", ctor: JSessionTo
   "hashCode()I": function (this: JSessionToken) { return idHash(this.session); },
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
-} });
-rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class extends JObj {}, methods: {
-  ...noops("<init>()V"),
 } });
 rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
   "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, context: JObj | null, token: JSessionToken | null) {

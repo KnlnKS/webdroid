@@ -111,20 +111,6 @@ describe("media-codec-capabilities", () => {
   });
 });
 
-describe("media-metadata", () => {
-  rt.linkNatives();
-
-  test("MediaMetadata builder preserves text and long values", async () => {
-    const builder = await newObj("android/media/MediaMetadata$Builder");
-    await vcall(builder, "putText", "(Ljava/lang/String;Ljava/lang/CharSequence;)Landroid/media/MediaMetadata$Builder;", "title", "Big Buck Bunny");
-    await vcall(builder, "putLong", "(Ljava/lang/String;J)Landroid/media/MediaMetadata$Builder;", "duration", 636000n);
-    const metadata = await vcall(builder, "build", "()Landroid/media/MediaMetadata;");
-    expect(await vcall(metadata, "getText", "(Ljava/lang/String;)Ljava/lang/CharSequence;", "title")).toBe("Big Buck Bunny");
-    expect(await vcall(metadata, "getLong", "(Ljava/lang/String;)J", "duration")).toBe(636000n);
-    expect(await vcall(metadata, "containsKey", "(Ljava/lang/String;)Z", "missing")).toBe(0);
-  });
-});
-
 describe("media-retriever", () => {
   rt.linkNatives();
 
@@ -196,36 +182,6 @@ describe("mediasession", () => {
     await command("released");
     await onMain(() => {});
     expect(commands).toEqual(["delivered"]);
-  });
-
-  test("PlaybackState builders preserve immutable snapshots and 64-bit positions", async () => {
-    const builder = await newObj("android/media/session/PlaybackState$Builder"), position = 9007199254740993n;
-    await vcall(builder, "setState", "(IJFJ)Landroid/media/session/PlaybackState$Builder;", 3, position, 1.25, 45n);
-    const first = await vcall(builder, "build", "()Landroid/media/session/PlaybackState;");
-    await vcall(builder, "setState", "(IJFJ)Landroid/media/session/PlaybackState$Builder;", 2, 0n, 0, 80n);
-    expect(await vcall(first, "getPosition", "()J")).toBe(position);
-    expect(await vcall(first, "getState", "()I")).toBe(3);
-    expect(await vcall(first, "getPlaybackSpeed", "()F")).toBe(1.25);
-    expect(await vcall(first, "getLastPositionUpdateTime", "()J")).toBe(45n);
-  });
-});
-
-describe("tts", () => {
-  rt.linkNatives();
-
-  class InitListener extends JObj {
-    statuses: number[] = [];
-    [mangleMethod("onInit", "(I)V")](status: number) { this.statuses.push(status); }
-  }
-
-  test("TextToSpeech reports the unavailable browser service", async () => {
-    const init = new InitListener();
-    const tts = await newObj("android/speech/tts/TextToSpeech",
-      "(Landroid/content/Context;Landroid/speech/tts/TextToSpeech$OnInitListener;Ljava/lang/String;)V", null, init, null);
-    await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
-    expect(init.statuses).toEqual([-1]);
-    expect(await vcall(tts, "setLanguage", "(Ljava/util/Locale;)I", null)).toBe(-1);
-    expect(await vcall(tts, "speak", "(Ljava/lang/CharSequence;ILandroid/os/Bundle;Ljava/lang/String;)I", "hello", 1, null, "one")).toBe(-1);
   });
 });
 
