@@ -6,7 +6,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
-import { vcall, callOn, newObj, staticField, JThread } from "../jvm/natives/jlang";
+import { after, vcall, callOn, newObj, staticField, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";
@@ -88,10 +88,10 @@ prop("GeolocationEnabled", "Z", null); prop("NeedInitialFocus", "Z", null);
 prop("LayoutAlgorithm", "Landroid/webkit/WebSettings$LayoutAlgorithm;"); prop("PluginState", "Landroid/webkit/WebSettings$PluginState;");
 prop("RenderPriority", "Landroid/webkit/WebSettings$RenderPriority;", null);
 rt.register({ name: "webdroid/WebSettings", ctor: WebSettingsAdapter, sup: "android/webkit/WebSettings", methods: settingsMethods });
-async function newSettings(): Promise<WebSettingsAdapter> {
+function* newSettings(): Gen<WebSettingsAdapter> {
   const s = inst<WebSettingsAdapter>("webdroid/WebSettings");
-  s.v.layoutAlgorithm = await staticField("android/webkit/WebSettings$LayoutAlgorithm", "NARROW_COLUMNS");
-  s.v.pluginState = await staticField("android/webkit/WebSettings$PluginState", "OFF");
+  s.v.layoutAlgorithm = yield staticField("android/webkit/WebSettings$LayoutAlgorithm", "NARROW_COLUMNS");
+  s.v.pluginState = yield staticField("android/webkit/WebSettings$PluginState", "OFF");
   return s;
 }
 
@@ -491,28 +491,31 @@ export class WebViewChromium extends JObj {
          [this.client, "onPageFinished", WV_S, view, url]] as [unknown, string, string, ...unknown[]][]
       : [[this.chrome, "onProgressChanged", "(Landroid/webkit/WebView;I)V", view, 100], [this.chrome, "onReceivedTitle", WV_S, view, this.title],
          [this.client, "onPageCommitVisible", WV_S, view, url], [this.client, "onPageFinished", WV_S, view, url]] as [unknown, string, string, ...unknown[]][])];
-    void onMain(async () => { for (const [o, n, d, ...a] of steps) { if (this.gen !== g) return; if (o) await vcall(o, n, d, ...a); } });
+    const self = this;
+    void onMain(() => rt.drive(function* () { for (const [o, n, d, ...a] of steps) { if (self.gen !== g) return; if (o) yield vcall(o, n, d, ...a); } }()));
   }
   /** an uncaught page error, as Chromium reports it; unhandled messages go to logcat's chromium tag */
   consoleMessage(data: unknown) {
     const { message, source, line } = (data ?? {}) as { message?: unknown; source?: unknown; line?: unknown };
     const msg = String(message), src = typeof source === "string" ? unmap(source) : "", n = typeof line === "number" ? line : 0;
-    void onMain(async () => {
-      const level = await staticField("android/webkit/ConsoleMessage$MessageLevel", "ERROR");
-      const m = await newObj("android/webkit/ConsoleMessage", "(Ljava/lang/String;Ljava/lang/String;ILandroid/webkit/ConsoleMessage$MessageLevel;)V", msg, src, n, level);
-      if (!this.chrome || !await vcall(this.chrome, "onConsoleMessage", "(Landroid/webkit/ConsoleMessage;)Z", m))
+    const self = this;
+    void onMain(() => rt.drive(function* () {
+      const level = yield staticField("android/webkit/ConsoleMessage$MessageLevel", "ERROR");
+      const m = yield newObj("android/webkit/ConsoleMessage", "(Ljava/lang/String;Ljava/lang/String;ILandroid/webkit/ConsoleMessage$MessageLevel;)V", msg, src, n, level);
+      if (!self.chrome || !(yield vcall(self.chrome, "onConsoleMessage", "(Landroid/webkit/ConsoleMessage;)Z", m)))
         console.log("[I/chromium]", `[INFO:CONSOLE(${n})] "${msg}", source: ${src} (${n})`);
-    });
+    }()));
   }
   fragmentNavigated(url: string) {
     const g = this.gen, cur = this.hist[this.idx];
     this.url = url;
     if (cur) { cur.url = url; if (cur.src) cur.src = srcFor(url, this); }
-    void onMain(async () => {
-      if (this.gen !== g) return;
-      await vcall(this.client, "doUpdateVisitedHistory", "(Landroid/webkit/WebView;Ljava/lang/String;Z)V", this.view, url, 0);
-      if (this.gen === g) await vcall(this.client, "onPageFinished", WV_S, this.view, url);
-    });
+    const self = this;
+    void onMain(() => rt.drive(function* () {
+      if (self.gen !== g) return;
+      yield vcall(self.client, "doUpdateVisitedHistory", "(Landroid/webkit/WebView;Ljava/lang/String;Z)V", self.view, url, 0);
+      if (self.gen === g) yield vcall(self.client, "onPageFinished", WV_S, self.view, url);
+    }()));
   }
   /** a link click in the frame is the app's to override, as Chromium asks before navigating */
   private hookLinks(doc: Document) {
@@ -546,14 +549,14 @@ export class WebViewChromium extends JObj {
     prototype.submit = function (this: HTMLFormElement) { submit(this, null); };
   }
   private navigate(href: string, replace = false) {
-    void onMain(async () => {
-      if (await vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, mkRequest(href, true))) return;
+    void onMain(() => after(vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, mkRequest(href, true)), (overridden) => {
+      if (overridden) return;
       if (replace && this.idx >= 0 && !/^javascript:/i.test(href)) {
         const entry = { url: href, src: srcFor(href, this) };
         this.hist[this.idx] = entry;
         this.go(entry, false);
       } else this.loadUrl(href);
-    });
+    }));
   }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
   evalJs(js: string): string | Promise<string> {
@@ -591,20 +594,23 @@ export class WebViewChromium extends JObj {
   }
   /** AwContents.dispatchKeyEvent: an override the client claims, and keys the page cannot take,
    *  go through View's dispatch; the page's navigation keys reach the focused element */
-  async keyEvent(event: JObj): Promise<number> {
-    const superDispatch = () => vcall(this.access, "super_dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event);
-    if (await vcall(this.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", this.view, event)) return superDispatch();
-    const code: number = await vcall(event, "getKeyCode", "()I"), key = navigationKeys[code];
-    if (!key || !this.hold.el || !this.loaded) return superDispatch();
-    const type = await vcall(event, "getAction", "()I") === 0 ? "keydown" : "keyup";
-    const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
-      repeat: (await vcall(event, "getRepeatCount", "()I")) > 0 };
-    const generation = this.gen;
-    // Renderer handlers can call back into Java; never hold the main queue awaiting them.
-    void Promise.resolve(this.evalJs(`(document.activeElement || document.body).dispatchEvent(new KeyboardEvent(${JSON.stringify(type)}, ${JSON.stringify(init)}))`)).then((unhandled) => {
-      if (unhandled === "true" && this.gen === generation) void onMain(() => vcall(this.client, "onUnhandledKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V", this.view, event));
-    });
-    return 1;
+  keyEvent(event: JObj): unknown {
+    const self = this;
+    return rt.drive(function* (): Gen {
+      const superDispatch = () => vcall(self.access, "super_dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event);
+      if (yield vcall(self.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", self.view, event)) return superDispatch();
+      const code: number = yield vcall(event, "getKeyCode", "()I"), key = navigationKeys[code];
+      if (!key || !self.hold.el || !self.loaded) return superDispatch();
+      const type = (yield vcall(event, "getAction", "()I")) === 0 ? "keydown" : "keyup";
+      const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
+        repeat: (yield vcall(event, "getRepeatCount", "()I")) > 0 };
+      const generation = self.gen;
+      // Renderer handlers can call back into Java; never hold the main queue awaiting them.
+      void Promise.resolve(self.evalJs(`(document.activeElement || document.body).dispatchEvent(new KeyboardEvent(${JSON.stringify(type)}, ${JSON.stringify(init)}))`)).then((unhandled) => {
+        if (unhandled === "true" && self.gen === generation) void onMain(() => vcall(self.client, "onUnhandledKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V", self.view, event));
+      });
+      return 1;
+    }());
   }
   contentWidth() { return this.hold.remote ? this.remoteWidth : win(this)?.document.documentElement.scrollWidth ?? 0; }
   contentHeight() { return this.hold.remote ? this.remoteHeight : win(this)?.document.documentElement.scrollHeight ?? 0; }
@@ -800,7 +806,7 @@ rt.register({
     },
     "createWebView(Landroid/webkit/WebView;Landroid/webkit/WebView$PrivateAccess;)Landroid/webkit/WebViewProvider;": driven(function* (view: JObj, access: JObj): Gen {
       const p = inst<WebViewChromium>("webdroid/WebViewProvider");
-      p.view = view; p.access = access; p.settings = yield newSettings();
+      p.view = view; p.access = access; p.settings = yield* newSettings();
       p.hold.functor = createFunctor(p.size);
       return p;
     }),

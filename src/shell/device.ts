@@ -25,6 +25,7 @@ import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { reportUncaught } from "../jvm/natives/jlang";
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain } from "../android/mainloop";
+import { after } from "../jvm/natives/jlang";
 import { deliverVsync } from "../android/vsync";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
@@ -145,7 +146,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   if (profile) compileProfile(rt, Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]), profile);
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
-  await initDeviceLocales();
+  await onMain(initDeviceLocales);
   await vfs.prepare(pkg);
   // installd's createAppData: the data directory with its cache directories, which apps stat
   // before ContextImpl ever creates them
@@ -159,10 +160,10 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
   for (const sp of install.splits) registerSplit(apkPath(sp.name));
   const { target } = usesSdk(manifest);
-  const jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
+  const jres = await onMain(() => after(javaConfiguration(deviceConfiguration()), (config) => loadResources(apkPath(), config)));
   // ActivityThread.handleBindApplication: the system Resources take the device configuration and
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
-  await applyDeviceConfiguration();
+  await onMain(applyDeviceConfiguration);
   const res = nativeRes(jres);
   const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
@@ -173,7 +174,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     setApplicationLocales: (locales) => { setApplicationLocales(pkg, locales); },
   });
   const savedLocales = getPrefs(pkg, "__system_locales").map.get("tags");
-  if (typeof savedLocales === "string" && savedLocales) applyApplicationLocales(await localesFromTags(savedLocales));
+  if (typeof savedLocales === "string" && savedLocales) await onMain(() => after(localesFromTags(savedLocales), applyApplicationLocales));
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest);

@@ -14,7 +14,7 @@ import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
 /** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */
-export const broadcastTransport: { send: (intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult) => Promise<BroadcastResult> } =
+export const broadcastTransport: { send: (intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult) => BroadcastResult | Promise<BroadcastResult> } =
   { send: notConnected };
 /** broadcasts the system keeps current (BatteryService's BATTERY_CHANGED), by action. As in
  *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */

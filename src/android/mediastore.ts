@@ -7,7 +7,7 @@ import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { strArray } from "../jvm/abi";
 import { serviceContext } from "./binder";
-import { registerSystemActivity, newIntent, putExtra } from "./intent";
+import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent";
 import { newFile } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { registerSystemProvider, matrixCursor, contentValues, uriBundle } from "./systemproviders";
@@ -274,13 +274,13 @@ const MEDIA_REQUEST = "webdroid.provider.action.MEDIA_REQUEST";
 const REQUESTS: Record<string, string> = { create_delete_request: "delete", create_write_request: "write",
   create_trash_request: "trash", create_favorite_request: "favorite" };
 let mediaRequests = 0;
-registerSystemActivity(MEDIA_REQUEST, async (intent) => {
-  const op: string | null = await vcall(intent, "getStringExtra", `(${S})${S}`, "op");
-  const uris: string[] = [...await vcall(intent, "getStringArrayExtra", `(${S})[${S}`, "uris") ?? []];
-  if (op === "delete") for (const uri of uris) await mediaDelete(uri, null, null);
-  else if (op === "trash" || op === "favorite") await mediaFlag(uris, op === "trash" ? "is_trashed" : "is_favorite", !!await vcall(intent, "getIntExtra", `(${S}I)I`, "value", 0));
-  return newIntent();
-});
+registerSystemActivity(MEDIA_REQUEST, driven(function* (intent: JIntent): Gen<JIntent> {
+  const op: string | null = yield vcall(intent, "getStringExtra", `(${S})${S}`, "op");
+  const uris: string[] = [...(yield vcall(intent, "getStringArrayExtra", `(${S})[${S}`, "uris")) ?? []];
+  if (op === "delete") for (const uri of uris) yield mediaDelete(uri, null, null);
+  else if (op === "trash" || op === "favorite") yield mediaFlag(uris, op === "trash" ? "is_trashed" : "is_favorite", !!(yield vcall(intent, "getIntExtra", `(${S}I)I`, "value", 0)));
+  return yield newIntent();
+}));
 /** MediaStore.createRequest's call: the items in EXTRA_CLIP_DATA, the flag in EXTRA_CONTENT_VALUES,
  *  and the consent screen's PendingIntent back in EXTRA_RESULT */
 function* mediaCall(method: string, extras: JObj | null): Gen<JObj> {

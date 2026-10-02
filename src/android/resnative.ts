@@ -13,9 +13,8 @@ import { appHost } from "./apphost";
 import { hostStub } from "./binder";
 
 /** an AssetFileDescriptor over bytes, the whole of a ParcelFileDescriptor served over them */
-export async function mkAssetFd(bytes: Uint8Array, pfd: unknown = null): Promise<unknown> {
-  return newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", pfd ?? await mkPfd(bytes), 0n, BigInt(bytes.length));
-}
+export const mkAssetFd = (bytes: Uint8Array, pfd: unknown = null): unknown => after(pfd ?? mkPfd(bytes),
+  (fd) => newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", fd, 0n, BigInt(bytes.length)));
 /** Locales with their tags, which configuration comparisons and resource selection read */
 export type Locales = { values: JLocale[]; tags: string[] };
 const emptyLocales: Locales = { values: [], tags: [] };

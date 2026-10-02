@@ -4,8 +4,8 @@
 // page's edits reach the editor through its IRemoteInputConnection; showSoftInput and hideSoftInput
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
 import { once } from "../../jvm/suspend";
-import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
-import { scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
+import { rt, JObj, noops, stubs, declaredField, driven, type Gen } from "../../jvm/runtime";
+import { after, callUncaught, scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
 import { onMain } from "../mainloop";
@@ -33,21 +33,21 @@ function startInput(window: JObj, info: JObj, connection: JObj, id: number): Ses
     start: Math.max(0, editorField(info, "initialSelStart")), end: Math.max(0, editorField(info, "initialSelEnd")),
     imeOptions: editorField(info, "imeOptions"), actionId: editorField(info, "actionId"),
     // an IME's RemoteInputConnection reports a command sent while its session is current
-    call: async (name, args, ...values) => {
-      s.header ??= await newObj(HEADER, "(I)V", s.id);
-      await vcall(connection, name, `(L${HEADER};${args})V`, s.header, ...values);
+    call: (name, args, ...values) => rt.drive(function* (): Gen<boolean> {
+      s.header ??= yield newObj(HEADER, "(I)V", s.id);
+      yield vcall(connection, name, `(L${HEADER};${args})V`, s.header, ...values);
       return session === s;
-    },
+    }()),
   };
   session = s;
   serveInput(s);
-  void onMain(async () => {
-    const request = await newObj("android/view/inputmethod/ExtractedTextRequest", "()V");
-    const future = await newObj("com/android/internal/infra/AndroidFuture", "()V");
-    await s.call("getExtractedText", "Landroid/view/inputmethod/ExtractedTextRequest;ILcom/android/internal/infra/AndroidFuture;", request, GET_EXTRACTED_TEXT_MONITOR, future);
-    const extracted = await vcall(future, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", null);
-    if (extracted && session === s) await extractedInput(s, extracted);
-  });
+  callUncaught(() => onMain(() => rt.drive(function* (): Gen<void> {
+    const request = yield newObj("android/view/inputmethod/ExtractedTextRequest");
+    const future = yield newObj("com/android/internal/infra/AndroidFuture");
+    yield s.call("getExtractedText", "Landroid/view/inputmethod/ExtractedTextRequest;ILcom/android/internal/infra/AndroidFuture;", request, GET_EXTRACTED_TEXT_MONITOR, future);
+    const extracted = yield vcall(future, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", null);
+    if (extracted && session === s) yield extractedInput(s, extracted);
+  }())));
   return s;
 }
 function finishInput(): void {
@@ -64,28 +64,27 @@ function showSoftInput(visible: boolean): number {
   if (visible && shown) return RESULT_UNCHANGED_SHOWN;
   shown = visible;
   showInput(visible);
-  void setImeShown(visible);
+  callUncaught(() => setImeShown(visible));
   return visible ? RESULT_SHOWN : RESULT_HIDDEN;
 }
 let shown = false;
 /** showSoftInput and hideSoftInput from the client: only the window being served may show it */
-async function softInput(window: JObj, visible: boolean, receiver: JObj | null): Promise<number> {
+function softInput(window: JObj, visible: boolean, receiver: JObj | null): unknown {
   if (visible && session?.window !== window) return 0;
   const result = showSoftInput(visible);
-  if (receiver) await vcall(receiver, "send", "(ILandroid/os/Bundle;)V", result, null);
-  return 1;
+  return after(receiver && vcall(receiver, "send", "(ILandroid/os/Bundle;)V", result, null), () => 1);
 }
 
 const SOFT_INPUT_MASK_STATE = 0xf, SOFT_INPUT_STATE_VISIBLE = 4, SOFT_INPUT_STATE_ALWAYS_VISIBLE = 5, SOFT_INPUT_IS_FORWARD_NAVIGATION = 0x100;
-async function startInputOrWindowGainedFocus(window: JObj, info: JObj | null, connection: JObj | null, softInputMode: number): Promise<JObj> {
-  if (!info || !connection) { finishInput(); return staticField(BIND, "NULL_EDITOR_INFO"); }
+function* startInputOrWindowGainedFocus(window: JObj, info: JObj | null, connection: JObj | null, softInputMode: number): Gen<JObj> {
+  if (!info || !connection) { finishInput(); return yield staticField(BIND, "NULL_EDITOR_INFO"); }
   startInput(window, info, connection, 0);
   // DefaultImeVisibilityApplier: an always-visible window shows the keyboard for its editor, a
   // visible one only when navigated forward to
   const state = softInputMode & SOFT_INPUT_MASK_STATE;
   if (state === SOFT_INPUT_STATE_ALWAYS_VISIBLE || state === SOFT_INPUT_STATE_VISIBLE && (softInputMode & SOFT_INPUT_IS_FORWARD_NAVIGATION)) showSoftInput(true);
-  return newObj(BIND, "(ILcom/android/internal/inputmethod/IInputMethodSession;Landroid/util/SparseArray;Landroid/view/InputChannel;Ljava/lang/String;IZ)V",
-    SUCCESS_WITH_IME_SESSION, await methodSession(), null, null, IME_ID, ++bindSequence, 0);
+  return yield newObj(BIND, "(ILcom/android/internal/inputmethod/IInputMethodSession;Landroid/util/SparseArray;Landroid/view/InputChannel;Ljava/lang/String;IZ)V",
+    SUCCESS_WITH_IME_SESSION, yield methodSession(), null, null, IME_ID, ++bindSequence, 0);
 }
 
 // IInputMethodSession: what the client tells the input method about the editor it serves
@@ -103,17 +102,18 @@ rt.register({ name: "webdroid/InputMethodSession", ctor: class extends JObj {}, 
     "appPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)V", "finishSession()V", "removeImeSurface()V",
     "updateCursorAnchorInfo(Landroid/view/inputmethod/CursorAnchorInfo;)V"),
 } });
-const methodSession = once((): JObj | Promise<JObj> => newObj("webdroid/InputMethodSession"));
+const methodSession = once(() => newObj("webdroid/InputMethodSession"));
 
 const emptyInfoList = () => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
   "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", newArrayList());
 rt.register({ name: "webdroid/InputMethodManagerService", ctor: class extends JObj {}, sup: "com/android/internal/view/IInputMethodManager$Stub", methods: {
   [`startInputOrWindowGainedFocus${START})L${BIND};`]:
     (_reason: number, _client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null) =>
-      startInputOrWindowGainedFocus(window, info, connection, mode),
+      rt.drive(startInputOrWindowGainedFocus(window, info, connection, mode)),
   [`startInputOrWindowGainedFocusAsync${START}I)V`]:
-    async (_reason: number, client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null, _a11y: JObj, _sdk: number, _user: number, _back: JObj, seq: number) =>
-      vcall(client, "onStartInputResult", `(L${BIND};I)V`, await startInputOrWindowGainedFocus(window, info, connection, mode), seq),
+    driven(function* (_reason: number, client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null, _a11y: JObj, _sdk: number, _user: number, _back: JObj, seq: number) {
+      yield vcall(client, "onStartInputResult", `(L${BIND};I)V`, yield* startInputOrWindowGainedFocus(window, info, connection, mode), seq);
+    }),
   "getEnabledInputMethodList(I)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;": emptyInfoList,
   "getInputMethodList(II)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;": emptyInfoList,
   "getEnabledInputMethodListLegacy(I)Ljava/util/List;": () => newArrayList(),

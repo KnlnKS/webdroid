@@ -16,11 +16,11 @@ import { processState, PROCESS_STATE_SERVICE } from "./atm";
 
 /** the services of another process, through the broker; `flags` are bindService's (BIND_AUTO_CREATE when omitted) */
 export const serviceTransport: {
-  bind: (owner: PackageRecord, process: string, intent: JIntent, key: string, flags?: number) => Promise<unknown>;
-  unbind: (owner: PackageRecord, process: string, key: string) => Promise<void>;
-  start: (owner: PackageRecord, process: string, intent: JIntent, foreground: boolean) => Promise<void>;
-  stop: (owner: PackageRecord, process: string, intent: JIntent) => Promise<void>;
-  peek: (owner: PackageRecord, process: string, intent: JIntent) => Promise<unknown>;
+  bind: (owner: PackageRecord, process: string, intent: JIntent, key: string, flags?: number) => unknown;
+  unbind: (owner: PackageRecord, process: string, key: string) => unknown;
+  start: (owner: PackageRecord, process: string, intent: JIntent, foreground: boolean) => unknown;
+  stop: (owner: PackageRecord, process: string, intent: JIntent) => unknown;
+  peek: (owner: PackageRecord, process: string, intent: JIntent) => unknown;
 } = { bind: notConnected, unbind: notConnected, start: notConnected, stop: notConnected, peek: notConnected };
 
 const SI = "android/content/pm/ServiceInfo", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;";

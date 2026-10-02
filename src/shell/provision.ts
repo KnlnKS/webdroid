@@ -8,6 +8,8 @@ import { vfs } from "./vfs";
 import { packages, signaturePermissions, componentState } from "../android/packages";
 import { mkComponentName, newIntent, putExtra } from "../android/intent";
 import { vcall } from "../jvm/natives/jlang";
+import { rt, type Gen } from "../jvm/runtime";
+import { asSystem } from "../android/binder";
 import { serviceTransport } from "../android/server/activeservices";
 import { hexBytes } from "../jvm/abi";
 
@@ -42,16 +44,17 @@ export function provisionPackages(): Promise<void> {
     vfs.mount(installedPath(record.pkg), packed);
   })).then(() => {});
 }
-export async function provisionServices(options: { attestationEnabled: boolean }): Promise<void> {
+/** the system starting each package's provisioning service */
+export const provisionServices = (options: { attestationEnabled: boolean }): Promise<void> => asSystem(() => rt.drive(function* (): Gen<void> {
   for (const spec of SYSTEM_PACKAGES) {
     if (!spec.provision) continue;
     const owner = packages.get(spec.pkg)!, component = owner.components.service.get(spec.provision.component);
     if (!component) throw new Error("Provisioning service unavailable: " + spec.pkg);
-    const intent = await newIntent();
-    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(spec.pkg, spec.provision.component));
+    const intent = yield newIntent();
+    yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield mkComponentName(spec.pkg, spec.provision.component));
     const extras = { ...spec.provision.extras,
       ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
-    for (const [key, value] of Object.entries(extras)) await putExtra(intent, key, +value, "Z");
-    await serviceTransport.start(owner, owner.process(component), intent, false);
+    for (const [key, value] of Object.entries(extras)) yield putExtra(intent, key, +value, "Z");
+    yield serviceTransport.start(owner, owner.process(component), intent, false);
   }
-}
+}()));

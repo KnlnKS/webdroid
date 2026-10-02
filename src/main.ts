@@ -9,7 +9,7 @@ import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
 import { rt } from "./jvm/runtime";
-import { newObj, vcall, scall, threadStates } from "./jvm/natives/jlang";
+import { newObj, vcall, scall, strictThreadOwnership, threadStates } from "./jvm/natives/jlang";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
 import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
@@ -36,6 +36,7 @@ import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
 
+strictThreadOwnership();
 const params = new URLSearchParams(location.search);
 const hotThreshold = Number(params.get("jvmHotness") ?? DEFAULT_HOT_THRESHOLD);
 if (!JVM_HOT_THRESHOLDS.includes(hotThreshold)) throw new Error(`invalid jvmHotness ${hotThreshold}`);

@@ -194,7 +194,7 @@ function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
 
 // ── components
 interface Component { owner: PackageRecord; kind: ComponentKind; name: string; node: XmlNode }
-interface Match extends Component { priority: number; isDefault: boolean }
+export interface Match extends Component { priority: number; isDefault: boolean }
 const hasFilters = (node: XmlNode) => node.children.some((n) => n.name === "intent-filter");
 /** ComponentInfo.exported: declared, else whether it has an intent filter (a provider: below API 17) */
 export const exported = (c: Component): boolean => c.owner.flag(c.node, "exported", c.kind === "provider" ? c.owner.sdk.target < 17 : hasFilters(c.node));

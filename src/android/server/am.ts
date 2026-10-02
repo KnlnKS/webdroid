@@ -3,7 +3,7 @@
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
 import { rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, scall, linkInit, staticField, after } from "../../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService } from "../binder";
@@ -31,32 +31,33 @@ let lane: Promise<unknown> = Promise.resolve();
 /** a call on this process's IApplicationThread after those made before it, as the system server's
  *  calls reach a process in order; arguments may be pending */
 export function scheduleOnApp(name: string, desc: string, ...args: unknown[]): Promise<void> {
-  const call = lane.then(async () => { await vcall(thisApp(), name, desc, ...await Promise.all(args)); });
+  const thread = curThread;
+  const call = lane.then(() => Promise.all(args)).then((ready) => callOn(thread, () => vcall(thisApp(), name, desc, ...ready)));
   lane = call.catch(() => {});
   return call;
 }
 export const compatInfo = () => staticField<JObj>("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
-async function bind(app: JObj): Promise<void> {
+const bind = driven(function* (app: JObj): Gen<void> {
   const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;
   appThread = app;
-  const pm = await pms();
-  const info = await vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
-  const slice = await vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, GET_META_DATA, null);
-  const providers = await scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
-    slice ? await vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
-  const { global } = await configurations();
-  const compat = await compatInfo();
+  const pm = yield pms();
+  const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
+  const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, GET_META_DATA, null);
+  const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
+    slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
+  const { global } = yield configurations();
+  const compat = yield compatInfo();
   const now = BigInt(Math.floor(uptimeMillis()));
-  await vcall(app, "bindApplication",
+  yield vcall(app, "bindApplication",
     "(Ljava/lang/String;Landroid/content/pm/ApplicationInfo;Ljava/lang/String;Ljava/lang/String;ZLandroid/content/pm/ProviderInfoList;" +
     "Landroid/content/ComponentName;Landroid/app/ProfilerInfo;Landroid/os/Bundle;Landroid/app/IInstrumentationWatcher;Landroid/app/IUiAutomationConnection;" +
     "IZZZZLandroid/content/res/Configuration;Landroid/content/res/CompatibilityInfo;Ljava/util/Map;Landroid/os/Bundle;Ljava/lang/String;" +
     "Landroid/content/AutofillOptions;Landroid/content/ContentCaptureOptions;[J[JLandroid/os/SharedMemory;JJ)V",
     process, info, null, null, 0, providers, null, null, null, null, null, 0, 0, 0, 0, 0, global, compat, null,
-    await newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), null, now, now);
-  if (launcher) await startMainActivity(app, pkg);
-}
+    yield newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), null, now, now);
+  if (launcher) yield startMainActivity(app, pkg);
+});
 
 // ContentProviders this process published, by authority. ActivityThread finds its own before it
 // asks; system_server's come from their hosts, and another process's from that process through the
@@ -94,7 +95,7 @@ export async function publishedProvider(authority: string): Promise<JObj | null>
   return holder && getDeclared<JObj>(holder, HOLDER, "provider");
 }
 /** the broker's: the binder another process publishes for an authority, starting that process */
-export const providerProcesses: { get: (pkg: string, process: string, authority: string) => Promise<JObj | null> } = { get: async () => null };
+export const providerProcesses: { get: (pkg: string, process: string, authority: string) => JObj | null | Promise<JObj | null> } = { get: () => null };
 
 /** getContentProviderImpl: system_server's provider, this process's own, or a holder for the
  *  package manager's: a local one (newHolder(null, true)) when it may run here, multiprocess or
@@ -140,21 +141,21 @@ export const activityManagerMethods = {
 /** ActivityThread.main for this process: its thread attaches to the activity manager, which binds
  *  the application and, for the app the user launched, its launcher activity. A process started
  *  for another's component runs just that. The main looper is already running. */
-export async function startActivityThread(launched: boolean): Promise<void> {
+export const startActivityThread = driven(function* (launched: boolean): Gen<void> {
   launcher = launched;
   const AT = "android/app/ActivityThread";
-  await scall(AT + "$AndroidOs", "install", "()V");
-  await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
-  await scall("android/os/Environment", "initForCurrentUser", "()V");
-  await scall("com/android/org/conscrypt/TrustedCertificateStore", "setDefaultUserDirectory", "(Ljava/io/File;)V",
-    await scall("android/os/Environment", "getUserConfigDirectory", "(I)Ljava/io/File;", await scall("android/os/UserHandle", "myUserId", "()I")));
-  await scall(AT, "initializeMainlineModules", "()V");
-  await scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", "<pre-initialized>");
-  const thread = await newObj(AT, "()V");
-  await vcall(thread, "attach", "(ZJ)V", 0, 0n);
-  const statics = (await linkInit(AT)).ctor as Record<string, unknown>;
-  statics[mangleStaticField("sMainThreadHandler")] ??= await vcall(thread, "getHandler", "()Landroid/os/Handler;");
-}
+  yield scall(AT + "$AndroidOs", "install", "()V");
+  yield scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
+  yield scall("android/os/Environment", "initForCurrentUser", "()V");
+  yield scall("com/android/org/conscrypt/TrustedCertificateStore", "setDefaultUserDirectory", "(Ljava/io/File;)V",
+    yield scall("android/os/Environment", "getUserConfigDirectory", "(I)Ljava/io/File;", yield scall("android/os/UserHandle", "myUserId", "()I")));
+  yield scall(AT, "initializeMainlineModules", "()V");
+  yield scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", "<pre-initialized>");
+  const thread = yield newObj(AT, "()V");
+  yield vcall(thread, "attach", "(ZJ)V", 0, 0n);
+  const statics = (yield linkInit(AT)).ctor as Record<string, unknown>;
+  statics[mangleStaticField("sMainThreadHandler")] ??= yield vcall(thread, "getHandler", "()Landroid/os/Handler;");
+});
 
 // ActivityThread's natives: heapprofd never profiles this process, and the renderer holds no
 // resources a trim could purge

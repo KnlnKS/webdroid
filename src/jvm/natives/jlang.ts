@@ -30,13 +30,15 @@ const joinIterable = driven(function* (separator: unknown, parts: unknown): Gen<
   return yield* joinCharSequences(separator, values);
 });
 
-/** Does a Java thread own this event-loop turn? A frame that suspends releases it (rt.su) to the
- *  main thread's identity; a resumed frame or driven generator takes its thread back (rt.st), and
- *  host code enters with onMain or callOn. Java entered from a turn nothing owns (a plain async
- *  function or a timer resuming) would run as whichever thread ran last, so the entry helpers
- *  refuse it. Bun's host tools and tests own every turn; a page's realms are strict. */
+/** Does a Java thread own this event-loop turn? A resumed activation takes its thread (rt.st) and
+ *  releases it (rt.su); host code enters with onMain or callOn. Java entered from a turn nothing owns
+ *  (an async function or timer resuming) would run as whichever thread ran last, so the entry
+ *  helpers refuse it in a page's realms; Bun's host tools and tests own every turn. */
 let owned = true, strictOwnership = false;
 export function strictThreadOwnership(): void { strictOwnership = true; owned = false; }
+/** no Java thread owns the turn from here (a frame suspended, a native thread parked): the main
+ *  thread's identity is left for code that reads it */
+export function releaseThread(): void { setCurThread(mainThread); owned = !strictOwnership; }
 function unowned(what: string): never {
   throw new Error(`[webdroid unowned] ${what} from a turn no Java thread owns: enter with onMain, callOn or a driven generator`);
 }
@@ -65,14 +67,15 @@ export function vcallOn(thread: JThread, obj: unknown, name: string, desc: strin
 /** `call` on `thread`, which owns the turn while it runs */
 export function callOn<T>(thread: JThread, call: () => T): T {
   const previous = curThread, was = owned;
-  owned = true; setCurThread(thread);
-  try { return call(); } finally { owned = was; setCurThread(previous); }
+  setCurThread(thread);
+  try { return call(); } finally { setCurThread(previous); owned = was; }
 }
-/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread that asked */
+/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread that asked (if one
+ *  owned the turn that asked) */
 export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
   if (!(r instanceof Promise)) return f(r);
   const thread = curThread;
-  return r.then((v) => callOn(thread, () => f(v)));
+  return owned ? r.then((v) => callOn(thread, () => f(v))) : r.then(f);
 }
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
@@ -443,10 +446,8 @@ rt.register({
 const bootLoader = new JClassLoader();
 export function systemClassLoader(): unknown { return rt.classLoader ?? bootLoader; }
 /** a classpath entry as an InputStream, or null when the apk has no such file */
-export async function classpathStream(path: string, runtime: Runtime = rt): Promise<unknown> {
-  const bytes = await runtime.readClasspath(path);
-  return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", i8(bytes)) : null;
-}
+export const classpathStream = (path: string, runtime: Runtime = rt): unknown =>
+  after(runtime.readClasspath(path), (bytes) => bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", i8(bytes)) : null);
 
 export class JThrowable extends JObj {
   msg: string | null = null;
@@ -558,20 +559,20 @@ const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen
   yield vcall(out, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
 });
 /** JVM-shaped stack trace text: header from the (overridable) toString, then the trace's frames. */
-export async function stackTraceText(t: JThrowable): Promise<string> {
-  const frames = async (c: JThrowable) => {
-    let text = "";
-    for (const e of c.trace ??= throwableTrace(c)) text += "\n\tat " + await vcall(e, "toString", "()Ljava/lang/String;");
+export const stackTraceText = driven(function* (t: JThrowable): Gen<string> {
+  function* described(c: JThrowable): Gen<string> {
+    let text = String(yield vcall(c, "toString", "()Ljava/lang/String;"));
+    for (const e of c.trace ??= throwableTrace(c)) text += "\n\tat " + (yield vcall(e, "toString", "()Ljava/lang/String;"));
     return text;
-  };
-  let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + await frames(t);
+  }
+  let out = yield* described(t);
   const seen = new Set<JThrowable>([t]);
-  for (let c = await causeOf(t); c && !seen.has(c); c = await causeOf(c)) {
+  for (let c: JThrowable | null = yield causeOf(t); c && !seen.has(c); c = yield causeOf(c)) {
     seen.add(c);
-    out += "\nCaused by: " + String(await vcall(c, "toString", "()Ljava/lang/String;")) + await frames(c);
+    out += "\nCaused by: " + (yield* described(c));
   }
   return out;
-}
+});
 /** Throwable.getCause, which libcore's InvocationTargetException, UndeclaredThrowableException and
  *  PrivilegedActionException answer from their own fields */
 const causeOf = (t: JThrowable): JThrowable | null | Promise<JThrowable | null> => vcall(t, "getCause", "()Ljava/lang/Throwable;");
@@ -1243,8 +1244,8 @@ export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
 rt.th = () => curThread;
-rt.st = (t) => { owned = true; setCurThread(t as JThread); };
-rt.su = () => { owned = !strictOwnership; setCurThread(mainThread); };
+rt.st = (t) => setCurThread(t as JThread);
+rt.su = releaseThread;
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
@@ -1264,7 +1265,9 @@ export async function dispatchUncaught(t: JThread, e: unknown): Promise<void> {
   catch (inner) { console.error("[thread " + t.jname + "] uncaught handler failed", rt.jx(inner)); }
 }
 export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
+/** run as `t` from here: the code that follows owns the turn as that thread */
 export function setCurThread(t: JThread) {
+  owned = true;
   if (t === curThread) return;
   curThread = t;
   threadSwitch.hook?.(t);

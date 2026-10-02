@@ -4,7 +4,7 @@
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleField, jarray } from "../jvm/abi";
-import { newObj, scall, vcall, staticField, reportUncaught } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall, staticField, reportUncaught } from "../jvm/natives/jlang";
 import { hostStub } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
@@ -90,7 +90,5 @@ rt.register({ name: "webdroid/DisplayManagerService", ctor: class extends JObj {
 hostStub("display", "webdroid/DisplayManagerService");
 
 /** the app's view of display 0, as ContextImpl.getDisplay gives it */
-export async function defaultDisplay(): Promise<JObj> {
-  const global = await scall("android/hardware/display/DisplayManagerGlobal", "getInstance", "()Landroid/hardware/display/DisplayManagerGlobal;");
-  return vcall(global, "getRealDisplay", "(I)Landroid/view/Display;", 0);
-}
+export const defaultDisplay = (): JObj | Promise<JObj> => after(scall("android/hardware/display/DisplayManagerGlobal", "getInstance", "()Landroid/hardware/display/DisplayManagerGlobal;"),
+  (global) => vcall(global, "getRealDisplay", "(I)Landroid/view/Display;", 0));

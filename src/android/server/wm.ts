@@ -1,8 +1,8 @@
 // WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
-import { rt, JObj, noops, stubs, getDeclared } from "../../jvm/runtime";
-import { newObj, vcall, scall } from "../../jvm/natives/jlang";
+import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { after, callOn, newObj, vcall, scall, JThread } from "../../jvm/natives/jlang";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
 import { uptimeMillis } from "../../guest-clock";
@@ -76,98 +76,98 @@ const lp = <T>(attrs: JObj, name: string) => getDeclared<T>(attrs, LP, name);
 
 const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/Rect", "(IIII)V", l, t, r, b);
 const displayRect = () => rect(0, 0, device.width, device.height);
-const insetsType = async (name: string): Promise<number> => scall("android/view/WindowInsets$Type", name, "()I");
+const insetsType = (name: string): number | Promise<number> => scall("android/view/WindowInsets$Type", name, "()I");
 
 /** the display's insets: the status bar (when the profile has one) and the gesture navigation bar */
-async function insetsState(): Promise<JObj> {
-  const state = await newObj("android/view/InsetsState", "()V");
-  await vcall(state, "setDisplayFrame", "(Landroid/graphics/Rect;)V", await displayRect());
+function* insetsState(): Gen<JObj> {
+  const state = yield newObj("android/view/InsetsState", "()V");
+  yield vcall(state, "setDisplayFrame", "(Landroid/graphics/Rect;)V", yield displayRect());
   const { width: w, height: h, statusBar, navBar } = device;
-  const add = async (index: number, type: number, l: number, t: number, r: number, b: number, visible = true) => {
-    const id = await scall("android/view/InsetsSource", "createId", "(Ljava/lang/Object;II)I", null, index, type);
-    const source = await newObj("android/view/InsetsSource", "(II)V", id, type);
-    await vcall(source, "setFrame", "(IIII)Landroid/view/InsetsSource;", l, t, r, b);
-    await vcall(source, "setVisible", "(Z)Landroid/view/InsetsSource;", +visible);
-    await vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
+  const add = function* (index: number, type: number, l: number, t: number, r: number, b: number, visible = true): Gen<void> {
+    const id = yield scall("android/view/InsetsSource", "createId", "(Ljava/lang/Object;II)I", null, index, type);
+    const source = yield newObj("android/view/InsetsSource", "(II)V", id, type);
+    yield vcall(source, "setFrame", "(IIII)Landroid/view/InsetsSource;", l, t, r, b);
+    yield vcall(source, "setVisible", "(Z)Landroid/view/InsetsSource;", +visible);
+    yield vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
   };
-  if (statusBar) await add(0, await insetsType("statusBars"), 0, 0, w, statusBar);
+  if (statusBar) yield* add(0, yield insetsType("statusBars"), 0, 0, w, statusBar);
   if (navBar) {
-    await add(0, await insetsType("navigationBars"), 0, h - navBar, w, h);
-    await add(1, await insetsType("mandatorySystemGestures"), 0, h - navBar, w, h);
+    yield* add(0, yield insetsType("navigationBars"), 0, h - navBar, w, h);
+    yield* add(1, yield insetsType("mandatorySystemGestures"), 0, h - navBar, w, h);
   }
   // the input method's window: the browser keyboard, which the page lays out outside the display
-  await add(0, await insetsType("ime"), 0, h, w, h, imeShown);
+  yield* add(0, yield insetsType("ime"), 0, h, w, h, imeShown);
   return state;
 }
 let imeShown = false;
 /** the input method window shows or hides: every window hears the new state */
-export async function setImeShown(shown: boolean): Promise<void> {
+export const setImeShown = driven(function* (shown: boolean): Gen<void> {
   if (imeShown === shown) return;
   imeShown = shown;
-  const state = await insetsState(), controls = await newObj("android/view/InsetsSourceControl$Array", "()V");
-  for (const ws of windows.values()) await vcall(ws.client, "insetsControlChanged", "(Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;)V", state, controls);
-}
+  const state = yield* insetsState(), controls = yield newObj("android/view/InsetsSourceControl$Array", "()V");
+  for (const ws of windows.values()) yield vcall(ws.client, "insetsControlChanged", "(Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;)V", state, controls);
+});
 
 /** the device's configuration, and a full-screen task's override of it: what activities and
  *  windows are laid out against */
-export async function configurations(): Promise<{ global: JObj; override: JObj }> {
-  const global = await javaConfiguration(deviceConfiguration()) as JObj;
-  const override = await newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
+export const configurations = driven(function* (): Gen<{ global: JObj; override: JObj }> {
+  const global = yield javaConfiguration(deviceConfiguration()) as JObj;
+  const override = yield newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
   const windowConfig = getDeclared<JObj>(override, "android/content/res/Configuration", "windowConfiguration");
-  await vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);
+  yield vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);
   return { global, override };
-}
-async function mergedConfiguration(out: JObj): Promise<void> {
-  const { global, override } = await configurations();
-  await vcall(out, "setConfiguration", "(Landroid/content/res/Configuration;Landroid/content/res/Configuration;)V", global, override);
+});
+function* mergedConfiguration(out: JObj): Gen<void> {
+  const { global, override } = yield configurations();
+  yield vcall(out, "setConfiguration", "(Landroid/content/res/Configuration;Landroid/content/res/Configuration;)V", global, override);
 }
 
-async function addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: JObj | null, outState: JObj | null, outFrame: JObj | null, outScale: Float32Array | null): Promise<number> {
-  const copy = await newObj(LP, "()V");
-  await vcall(copy, "copyFrom", `(L${LP};)I`, attrs);
+function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: JObj | null, outState: JObj | null, outFrame: JObj | null, outScale: Float32Array | null): Gen<number> {
+  const copy = yield newObj(LP, "()V");
+  yield vcall(copy, "copyFrom", `(L${LP};)I`, attrs);
   const type = lp<number>(attrs, "type"), token = lp<JObj | null>(attrs, "token");
   const parent = isSubWindow(type) && token ? windows.get(token) ?? null : null;
-  const title = String(await vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;") ?? "");
+  const title = String((yield vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;")) ?? "");
   const ws = new WindowState(window, copy, parent, title, type, windowZ(type, token, ++seq));
   ws.visibility = visibility;
-  ws.requestedVisibleTypes = await insetsType("defaultVisible");
+  ws.requestedVisibleTypes = yield insetsType("defaultVisible");
   windows.set(window, ws);
   if (outChannel) {
-    const pair: JObj[] = await scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
+    const pair: JObj[] = yield scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
     ws.channel = channelOf(pair[0]);
-    await vcall(pair[1], "copyTo", "(Landroid/view/InputChannel;)V", outChannel);
+    yield vcall(pair[1], "copyTo", "(Landroid/view/InputChannel;)V", outChannel);
   }
   // after the channel exists, which the focus event travels on
   updateFocus();
-  if (outState) await vcall(outState, "set", "(Landroid/view/InsetsState;)V", await insetsState());
-  if (outFrame) await vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
+  if (outState) yield vcall(outState, "set", "(Landroid/view/InsetsState;)V", yield* insetsState());
+  if (outFrame) yield vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
   if (outScale) outScale[0] = 1;
   return ADD_OKAY | ADD_FLAG_IN_TOUCH_MODE | ADD_FLAG_APP_VISIBLE;
 }
 
-async function relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: JObj): Promise<number> {
+function* relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: JObj): Gen<number> {
   const ws = windows.get(window);
   if (!ws) return 0;
-  if (attrs) await vcall(ws.attrs, "copyFrom", `(L${LP};)I`, attrs);
+  if (attrs) yield vcall(ws.attrs, "copyFrom", `(L${LP};)I`, attrs);
   const R = (name: string) => getDeclared<JObj>(result, "android/view/WindowRelayoutResult", name);
-  const state = await insetsState();
+  const state = yield* insetsState();
   ws.requested = { width, height };
-  await computeFrames(ws, state, R("frames"));
-  await mergedConfiguration(R("mergedConfiguration"));
-  await vcall(R("insetsState"), "set", "(Landroid/view/InsetsState;)V", state);
+  yield* computeFrames(ws, state, R("frames"));
+  yield* mergedConfiguration(R("mergedConfiguration"));
+  yield vcall(R("insetsState"), "set", "(Landroid/view/InsetsState;)V", state);
   const frame = edges(getDeclared<JObj>(R("frames"), "android/window/ClientWindowFrames", "frame"));
   let res = 0;
   const firstTime = ws.visibility !== VISIBLE && visibility === VISIBLE;
   ws.visibility = visibility;
   if (visibility === VISIBLE) {
-    if (!ws.javaSurface) { ws.javaSurface = await javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
-    await vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
+    if (!ws.javaSurface) { ws.javaSurface = yield javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
+    yield vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
     // the surface extends past the frame by its insets (room for a shadow)
     const insets = edges(lp<JObj>(ws.attrs, "surfaceInsets"));
     ws.layer.x = frame.left - insets.left - (ws.parent?.layer.x ?? 0);
     ws.layer.y = frame.top - insets.top - (ws.parent?.layer.y ?? 0);
   } else {
-    await vcall(R("surfaceControl"), "release", "()V");
+    yield vcall(R("surfaceControl"), "release", "()V");
   }
   ws.frame = frame;
   ws.layer.hidden = visibility !== VISIBLE;
@@ -178,24 +178,24 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
 }
 
 /** WindowLayout's frames for a window at the size it last asked for */
-async function computeFrames(ws: WindowState, state: JObj, out: JObj): Promise<void> {
-  const display = await displayRect();
-  await vcall(await newObj("android/view/WindowLayout", "()V"), "computeFrames",
+function* computeFrames(ws: WindowState, state: JObj, out: JObj): Gen<void> {
+  const display = yield displayRect();
+  yield vcall(yield newObj("android/view/WindowLayout", "()V"), "computeFrames",
     `(L${LP};Landroid/view/InsetsState;Landroid/graphics/Rect;Landroid/graphics/Rect;IIIIFLandroid/window/ClientWindowFrames;)V`,
     ws.attrs, state, display, display, WINDOWING_MODE_FULLSCREEN, ws.requested.width, ws.requested.height, ws.requestedVisibleTypes, 1, out);
 }
 /** WindowState.reportResized after the display or configuration changed: each window's new frames,
  *  configuration and insets, its next traversal forced to relayout */
-export async function resizeWindows(): Promise<void> {
-  const state = await insetsState();
+export const resizeWindows = driven(function* (): Gen<void> {
+  const state = yield* insetsState();
   for (const ws of [...windows.values()]) {
-    const frames = await newObj("android/window/ClientWindowFrames", "()V"), merged = await newObj("android/util/MergedConfiguration", "()V");
-    await computeFrames(ws, state, frames);
-    await mergedConfiguration(merged);
-    await vcall(ws.client, "resized", "(Landroid/window/ClientWindowFrames;ZLandroid/util/MergedConfiguration;Landroid/view/InsetsState;ZZIIZLandroid/window/ActivityWindowInfo;)V",
+    const frames = yield newObj("android/window/ClientWindowFrames", "()V"), merged = yield newObj("android/util/MergedConfiguration", "()V");
+    yield* computeFrames(ws, state, frames);
+    yield* mergedConfiguration(merged);
+    yield vcall(ws.client, "resized", "(Landroid/window/ClientWindowFrames;ZLandroid/util/MergedConfiguration;Landroid/view/InsetsState;ZZIIZLandroid/window/ActivityWindowInfo;)V",
       frames, 0, merged, state, 1, 0, 0, 0, 0, null);
   }
-}
+});
 
 /** WindowState's dim layer: a black effect layer under a FLAG_DIM_BEHIND window, at its dimAmount */
 function updateDim(ws: WindowState): void {
@@ -251,52 +251,52 @@ export function windowZOf(client: JObj): number {
   // a sub-window's Z is relative to its parent's, and within the steps between its parent's siblings
   return !ws ? -Infinity : ws.parent ? ws.parent.layer.z + ws.layer.z / 10 : ws.layer.z;
 }
+/** InputDispatcher's thread, on which host input becomes events */
+const inputDispatcher = Object.assign(new JThread(), { jname: "InputDispatcher" });
+const onInputThread = async <T>(work: Gen<T>): Promise<T> => callOn(inputDispatcher, () => rt.drive(work));
 /** a key from the virtual keyboard (device -1) to the focused window: DOWN, then UP */
-export async function dispatchKey(keyCode: number): Promise<void> {
+export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(function* (): Gen<void> {
   const ws = focused;
   if (!ws?.channel) return;
   const down = BigInt(Math.floor(uptimeMillis()));
   for (const action of [ACTION_DOWN, ACTION_UP]) {
     const now = action === ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
-    const event = await newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, -1, 0, 0x8, SOURCE_KEYBOARD);
-    await publish(ws.channel, event);
+    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, -1, 0, 0x8, SOURCE_KEYBOARD);
+    yield publish(ws.channel, event);
   }
-}
+}());
 /** a touchscreen event at display (x, y): the window touched at DOWN gets the gesture, in its own
  *  coordinates. Resolves whether it handled the event. */
-export async function dispatchTouch(action: number, x: number, y: number, downTime: bigint, eventTime: bigint): Promise<boolean> {
+export const dispatchTouch = (action: number, x: number, y: number, downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
   if (action === ACTION_DOWN) touchTarget = touchedWindow(x, y);
   const ws = touchTarget;
   if (action === ACTION_UP || action === ACTION_CANCEL) touchTarget = null;
   if (!ws?.channel) return false;
-  const event = await scall("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", downTime, eventTime, action, x, y, 0);
-  await vcall(event, "setSource", "(I)V", SOURCE_TOUCHSCREEN);
-  await vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
-  return publish(ws.channel, event);
-}
+  const event = yield scall("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", downTime, eventTime, action, x, y, 0);
+  yield vcall(event, "setSource", "(I)V", SOURCE_TOUCHSCREEN);
+  yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
+  return yield publish(ws.channel, event);
+}());
 
 const SESSION = "Landroid/view/IWindow;";
 rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: "android/view/IWindowSession$Stub", methods: {
   [`addToDisplayAsUser(${SESSION}L${LP};IIIILandroid/view/InputChannel;Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;Landroid/graphics/Rect;[F)I`]:
     (window: JObj, attrs: JObj, visibility: number, _display: number, _user: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
-      addWindow(window, attrs, visibility, channel, state, frame, scale),
+      rt.drive(addWindow(window, attrs, visibility, channel, state, frame, scale)),
   [`addToDisplay(${SESSION}L${LP};IIILandroid/view/InputChannel;Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;Landroid/graphics/Rect;[F)I`]:
     (window: JObj, attrs: JObj, visibility: number, _display: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
-      addWindow(window, attrs, visibility, channel, state, frame, scale),
+      rt.drive(addWindow(window, attrs, visibility, channel, state, frame, scale)),
   [`addToDisplayWithoutInputChannel(${SESSION}L${LP};IILandroid/view/InsetsState;Landroid/graphics/Rect;[F)I`]:
     (window: JObj, attrs: JObj, visibility: number, _display: number, state: JObj | null, frame: JObj | null, scale: Float32Array | null) =>
-      addWindow(window, attrs, visibility, null, state, frame, scale),
+      rt.drive(addWindow(window, attrs, visibility, null, state, frame, scale)),
   [`relayout(${SESSION}L${LP};IIIIIILandroid/view/WindowRelayoutResult;)I`]:
     (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number, _flags: number, _seq: number, _sync: number, result: JObj) =>
-      relayout(window, attrs, w, h, visibility, result),
-  [`relayoutAsync(${SESSION}L${LP};IIIIII)V`]: async (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number) => {
-    const result = await newObj("android/view/WindowRelayoutResult", "()V");
-    await relayout(window, attrs, w, h, visibility, result);
-  },
-  [`finishDrawing(${SESSION}Landroid/view/SurfaceControl$Transaction;I)V`]: async (window: JObj, transaction: JObj | null) => {
-    if (transaction) await vcall(transaction, "apply", "()V");
-    scheduleComposite();
-  },
+      rt.drive(relayout(window, attrs, w, h, visibility, result)),
+  [`relayoutAsync(${SESSION}L${LP};IIIIII)V`]: driven(function* (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number) {
+    yield* relayout(window, attrs, w, h, visibility, yield newObj("android/view/WindowRelayoutResult"));
+  }),
+  [`finishDrawing(${SESSION}Landroid/view/SurfaceControl$Transaction;I)V`]: (_window: JObj, transaction: JObj | null) =>
+    after(transaction && vcall(transaction, "apply", "()V"), scheduleComposite),
   "remove(Landroid/os/IBinder;)V": removeWindow,
   [`updateRequestedVisibleTypes(${SESSION}I)V`]: (window: JObj, types: number) => { const ws = windows.get(window); if (ws) ws.requestedVisibleTypes = types; },
   // back reaches the focused window as a key, which its ViewRootImpl hands its own callbacks
@@ -315,9 +315,9 @@ rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: 
 rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
   "openSession(Landroid/view/IWindowSessionCallback;)Landroid/view/IWindowSession;": () => newObj("webdroid/WindowSession"),
   "getCurrentAnimatorScale()F": () => 1,
-  "getWindowInsets(ILandroid/os/IBinder;Landroid/view/InsetsState;)Z": async (_display: number, _token: JObj, out: JObj) => {
-    await vcall(out, "set", "(Landroid/view/InsetsState;)V", await insetsState()); return 0;
-  },
+  "getWindowInsets(ILandroid/os/IBinder;Landroid/view/InsetsState;)Z": driven(function* (_display: number, _token: JObj, out: JObj) {
+    yield vcall(out, "set", "(Landroid/view/InsetsState;)V", yield* insetsState()); return 0;
+  }),
   "hasNavigationBar(I)Z": () => +(device.navBar > 0),
   "getDefaultDisplayRotation()I": () => device.width > device.height ? 1 : 0,
   "watchRotation(Landroid/view/IRotationWatcher;I)I": () => device.width > device.height ? 1 : 0,
@@ -338,7 +338,7 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   // a WindowContext's windows go on the one display, under its configuration
   ...Object.fromEntries([`attachWindowContextToDisplayArea(Landroid/app/IApplicationThread;Landroid/os/IBinder;IILandroid/os/Bundle;)`,
     `attachWindowContextToDisplayContent(Landroid/app/IApplicationThread;Landroid/os/IBinder;I)`].map((sig) =>
-    [sig + "Landroid/window/WindowContextInfo;", async () => newObj("android/window/WindowContextInfo", "(Landroid/content/res/Configuration;I)V", (await configurations()).global, 0)])),
+    [sig + "Landroid/window/WindowContextInfo;", () => after(configurations(), ({ global }) => newObj("android/window/WindowContextInfo", "(Landroid/content/res/Configuration;I)V", global, 0))])),
   "detachWindowContext(Landroid/os/IBinder;)V": () => {},
   // nothing records the screen
   "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,

@@ -4,7 +4,7 @@
 import { rt, type JObj } from "../runtime";
 import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles";
 import { concat, i8, jarray, u8 } from "../abi";
-import { vcall } from "./jlang";
+import { callOn, curThread, vcall, type JThread } from "./jlang";
 import { boxInt } from "./jbox";
 import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt";
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
@@ -151,24 +151,27 @@ nc(`X509_check_issued(J${X}J${X})I`, (issuerH: bigint, _a: JObj, subjectH: bigin
 });
 
 // ── BIOs over Java streams
+/** a BIO and the thread of the native reading it, which each read of the Java stream runs on */
 type Bio = { in?: JObj; out?: JObj; eof?: boolean };
+type Reader = { b: Bio; thread: JThread };
 const bioOf = (h: bigint): Bio => { const b = deref<Bio>(h); if (!b) throw rt.mkThrowable("java/lang/NullPointerException", "bio == null"); return b; };
+const reader = (h: bigint): Reader => ({ b: bioOf(h), thread: curThread });
 nc("create_BIO_InputStream(Lcom/android/org/conscrypt/OpenSSLBIOInputStream;Z)J", (s: JObj) => handle({ in: s ?? rt.npe() } satisfies Bio));
 nc("create_BIO_OutputStream(Ljava/io/OutputStream;)J", (s: JObj) => handle({ out: s ?? rt.npe() } satisfies Bio));
 nc("BIO_free_all(J)V", (h: bigint) => release(h));
 /** exactly `n` bytes, or fewer at the end of the stream */
-async function readExact(b: Bio, n: number): Promise<Uint8Array<ArrayBuffer>> {
+async function readExact({ b, thread }: Reader, n: number): Promise<Uint8Array<ArrayBuffer>> {
   const out = new Uint8Array(n);
   let got = 0;
   while (got < n) {
-    const buf = new Int8Array(n - got), r: number = await vcall(b.in, "read", "([B)I", buf);
+    const buf = new Int8Array(n - got), r: number = await callOn(thread, () => vcall(b.in, "read", "([B)I", buf));
     if (r <= 0) break;
     out.set(u8(buf).subarray(0, r), got); got += r;
   }
   return out.subarray(0, got);
 }
 /** one DER element, read no further than its end */
-async function readDer(b: Bio): Promise<Uint8Array> {
+async function readDer(b: Reader): Promise<Uint8Array> {
   const head = await readExact(b, 2);
   if (head.length < 2) throw decodeError();
   let lenBytes = new Uint8Array(0), len = head[1];
@@ -184,17 +187,17 @@ async function readDer(b: Bio): Promise<Uint8Array> {
   return concat([head, lenBytes, body]);
 }
 /** the next non-empty line; OpenSSLBIOInputStream.gets drops the newline and fills the buffer at most */
-async function readLine(b: Bio): Promise<string | null> {
+async function readLine({ b, thread }: Reader): Promise<string | null> {
   let line = "";
   for (;;) {
-    const buf = new Int8Array(1024), r: number = await vcall(b.in, "gets", "([B)I", buf);
+    const buf = new Int8Array(1024), r: number = await callOn(thread, () => vcall(b.in, "gets", "([B)I", buf));
     if (r <= 0) return line || null;
     line += String.fromCharCode(...u8(buf).subarray(0, r));
     if (r < buf.length) return line;
   }
 }
 /** the body of the next PEM block with one of `labels`, skipping other text and blocks */
-async function readPem(b: Bio, labels: string[]): Promise<Uint8Array> {
+async function readPem(b: Reader, labels: string[]): Promise<Uint8Array> {
   let label: string | null = null, body = "";
   for (;;) {
     const line = await readLine(b);
@@ -207,19 +210,19 @@ async function readPem(b: Bio, labels: string[]): Promise<Uint8Array> {
   try { return Uint8Array.from(atob(body), (c) => c.charCodeAt(0)); } catch { throw sslError("java/lang/RuntimeException", 9, 100, "BAD_BASE64_DECODE"); }
 }
 const CERT_LABELS = ["CERTIFICATE", "X509 CERTIFICATE"];
-nc("d2i_X509_bio(J)J", (h: bigint) => readDer(bioOf(h)).then((der) => ownedHandle(parse(der))));
-nc("PEM_read_bio_X509(J)J", (h: bigint) => readPem(bioOf(h), CERT_LABELS).then((der) => ownedHandle(parse(der))));
-nc("PEM_read_bio_PUBKEY(J)J", (h: bigint) => readPem(bioOf(h), ["PUBLIC KEY"]).then((der) => {
+nc("d2i_X509_bio(J)J", (h: bigint) => readDer(reader(h)).then((der) => ownedHandle(parse(der))));
+nc("PEM_read_bio_X509(J)J", (h: bigint) => readPem(reader(h), CERT_LABELS).then((der) => ownedHandle(parse(der))));
+nc("PEM_read_bio_PUBKEY(J)J", (h: bigint) => readPem(reader(h), ["PUBLIC KEY"]).then((der) => {
   try { return newKey(parsePublicKey(der)); } catch (e) { if (e instanceof DerError) throw decodeError(); throw e; }
 }));
-nc("BIO_read(J[B)I", async (h: bigint, buf: Int8Array) => { const r = await readExact(bioOf(h), buf.length); region(buf, 0, r.length).set(r); return r.length; });
+nc("BIO_read(J[B)I", async (h: bigint, buf: Int8Array) => { const r = await readExact(reader(h), buf.length); region(buf, 0, r.length).set(r); return r.length; });
 nc("BIO_write(J[BII)V", (h: bigint, buf: Int8Array, off: number, len: number) => vcall(bioOf(h).out, "write", "([BII)V", buf, off, len));
 
 // ── certificate bundles: PkiPath (SEQUENCE OF Certificate) and PKCS#7 SignedData's certificates
 const OID_SIGNED_DATA = "1.2.840.113549.1.7.2", OID_DATA = "1.2.840.113549.1.7.1";
 const handles = (xs: X509[]) => BigInt64Array.from(xs, (x) => ownedHandle(x));
 nc("ASN1_seq_pack_X509([J)[B", (hs: BigInt64Array) => i8(seq(...Array.from(hs, (h) => x509Of(h).der))));
-nc("ASN1_seq_unpack_X509_bio(J)[J", (h: bigint) => readDer(bioOf(h)).then((der) =>
+nc("ASN1_seq_unpack_X509_bio(J)[J", (h: bigint) => readDer(reader(h)).then((der) =>
   handles(decoded(() => children(parseOne(der, SEQUENCE).body).map((t) => parse(t.raw.slice()))))));
 nc("i2d_PKCS7([J)[B", (hs: BigInt64Array) => {
   const certs = Array.from(hs, (h) => x509Of(h).der);
@@ -236,8 +239,8 @@ function pkcs7Certs(der: Uint8Array, which: number): BigInt64Array {
     return certs ? children(certs.body).map((t) => parse(t.raw.slice())) : [];
   }));
 }
-nc("d2i_PKCS7_bio(JI)[J", (h: bigint, which: number) => readDer(bioOf(h)).then((der) => pkcs7Certs(der, which)));
-nc("PEM_read_bio_PKCS7(JI)[J", (h: bigint, which: number) => readPem(bioOf(h), ["PKCS7", "PKCS #7 SIGNED DATA", "CERTIFICATE"]).then((der) => pkcs7Certs(der, which)));
+nc("d2i_PKCS7_bio(JI)[J", (h: bigint, which: number) => readDer(reader(h)).then((der) => pkcs7Certs(der, which)));
+nc("PEM_read_bio_PKCS7(JI)[J", (h: bigint, which: number) => readPem(reader(h), ["PKCS7", "PKCS #7 SIGNED DATA", "CERTIFICATE"]).then((der) => pkcs7Certs(der, which)));
 
 // ── the CBS/CBB reader and writer conscrypt's AlgorithmParameters encode through
 const asn1Io = () => rt.mkThrowable("java/io/IOException", "Error reading ASN.1 encoding");

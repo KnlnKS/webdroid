@@ -604,8 +604,9 @@ lazy-method installation and mangling (~120 ms of a warm FitNotes launch), clini
 every step (FitNotes 39/39 at 7.4% content); live flows run one at a time render Harmonic 14/14,
 Lichess 15/15, Reddit 6/6, Resy 15/15, TikTok 13/13, ChatGPT 24/24 and YouTube 16/16. Harmonic,
 Reddit, TikTok, ChatGPT and YouTube had wedged (also at 9b1b5a0b) until the connectivity service's
-memoised suspensions were fixed (history, 2026-10-02); `bun run async-natives` now rejects that
-shape. An action's main-loop queries are now bounded, so a wedged step no longer holds `run-full`.
+memoised suspensions were fixed (history, 2026-10-02); `scripts/generators.ts` (in `bun run test`)
+now rejects that shape. An action's main-loop queries are now bounded, so a wedged step no longer
+holds `run-full`.
 Cleanup: four area passes removed dead code and duplicate helpers (`src` −171 lines net);
 hand-written TS in `src/android` + `src/jvm/natives` is 41,455 lines. Since then String case
 mapping follows the locale and `bun run fwtest` passes 30/30 (its nine failures were stale harness

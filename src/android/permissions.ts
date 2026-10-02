@@ -7,7 +7,7 @@ import { vcall, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { type XmlNode, attrStr, attr } from "./axml";
 import { appHost } from "./apphost";
-import { registerSystemActivity, newIntent, putExtra } from "./intent";
+import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent";
 import { PackageRecord, packages, signaturePermissions, usesSdk } from "./packages";
 import { hostStub } from "./binder";
 import { permissionInfo$ } from "./pm";
@@ -76,13 +76,13 @@ export const grantPrompted = (pkg: string, name: string): void => permissionStor
 // GrantPermissionsActivity, which Activity.requestPermissions starts: asking grants, and the
 // answer is the names with their results
 const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
-registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", async (intent) => {
-  const names: string[] = await vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES") ?? jarray([], "Ljava/lang/String;");
-  const result = await newIntent();
-  await putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
-  await putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
+registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", driven(function* (intent: JIntent): Gen<JIntent> {
+  const names: string[] = (yield vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES")) ?? jarray([], "Ljava/lang/String;");
+  const result = yield newIntent();
+  yield putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
+  yield putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
   return result;
-});
+}));
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   for (const owner of packages.values()) {
     const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);

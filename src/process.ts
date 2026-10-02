@@ -10,6 +10,7 @@ import { apkCertificates, packageArchive } from "./android/packagearchive";
 import { zipTree } from "./jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
+import { strictThreadOwnership } from "./jvm/natives/jlang";
 import { setBackgroundRealm } from "./jvm/yield";
 import { jitStats } from "./native/core";
 import { openInstallApks, type Install } from "./shell/install";
@@ -27,6 +28,7 @@ import { nativeRequirements } from "./shell/diagnostics";
 import { native } from "./native/debug";
 import { appHost } from "./android/apphost";
 
+strictThreadOwnership();
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
 jitStats.on = params.get("jit") !== "0";
 configureJvmCoverage(params.get("fuzzCoverage") === "1");

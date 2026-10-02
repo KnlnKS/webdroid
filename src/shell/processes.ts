@@ -7,11 +7,11 @@ import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
-import { binderTransport, receiveTransaction, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportBinder, importBinder, exportParcel, parcelled, unparcelled, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
+import { asSystem, binderTransport, receiveTransaction, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportBinder, importBinder, exportParcel, parcelled, unparcelled, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
-import { type JIntent, newIntent, type ComponentRef } from "../android/intent";
+import { newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID } from "../android/os";
-import { reportUncaught } from "../jvm/natives/jlang";
+import { after, callUncaught, reportUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, serviceTransport } from "../android/server/activeservices";
 import { apkPath, vfs } from "./vfs";
@@ -20,14 +20,14 @@ import { device, formatScreen } from "./config";
 import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult, type Sender } from "../android/server/broadcastqueue";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
-import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider } from "../android/pm";
+import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, type Match } from "../android/pm";
 import { checkPermission, PermissionStore, usePermissionStore } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { notificationStore, useNotificationStore } from "../android/notification";
 import { settingsStore, useSettingsStore } from "../android/settings";
-import { rt } from "../jvm/runtime";
+import { rt, driven, type Gen } from "../jvm/runtime";
 import { useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import type { WebCookies } from "./webcookies";
@@ -42,11 +42,12 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
   for (const permission of permissions) if (await permissionDenied(permission, pkg)) return true;
   return false;
 }
-const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
-const resultData = async (result: BroadcastResult): Promise<BroadcastData> =>
-  ({ ...result, extras: result.extras && await parcelled(result.extras) });
-const broadcastResult = async (data: BroadcastData): Promise<BroadcastResult> =>
-  ({ ...data, extras: data.extras && await unparcelled("android/os/Bundle", data.extras) });
+/** the broker's work with Java objects, and a process's on the broker's requests, as system_server does it */
+const asBroker = <T>(work: Gen<T>): Promise<T> => asSystem(() => rt.drive(work));
+const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
+  after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
+const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
+  after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
 type ServiceRequest = { kind: "bind"; intent: ParcelData; key: string; flags?: number } | { kind: "unbind"; key: string }
   | { kind: "stop"; intent: ParcelData } | { kind: "peek"; intent: ParcelData }
@@ -126,7 +127,8 @@ class ProcessBroker {
   async boot(): Promise<void> {
     if (this.booted) return;
     this.booted = true;
-    await this.broadcast(null, await encodeIntent(await newIntent("android.intent.action.BOOT_COMPLETED")), ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
+    const intent = await asBroker(function* () { return yield encodeIntent(yield newIntent("android.intent.action.BOOT_COMPLETED")); }());
+    await this.broadcast(null, intent, ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
 
   foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
@@ -139,7 +141,7 @@ class ProcessBroker {
     this.entry(pid);
     this.clipboard = data ? this.copyClipboard(data) : null;
     for (const watcher of this.clipboardWatchers) {
-      if (this.alive(watcher)) void this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()).catch(reportUncaught);
+      if (this.alive(watcher)) callUncaught(() => this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()));
     }
   }
   getClipboard(pid: number): ParcelData | null {
@@ -301,7 +303,7 @@ class ProcessBroker {
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     for (const [key, binding] of entry.bindings)
-      void this.service(null, binding.pkg, binding.process, { kind: "unbind", key }).catch(reportUncaught);
+      callUncaught(() => this.service(null, binding.pkg, binding.process, { kind: "unbind", key }));
     entry.bindings.clear();
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
@@ -353,24 +355,28 @@ class ProcessBroker {
     }
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.contentProvider(authority));
   }
-  async broadcast(pid: number | null, data: ParcelData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
-    const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data), sender = caller && { uid: caller.uid, pkg: caller.pkg };
-    const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
-    for (const receiver of await queryReceivers(intent)) {
-      const pkg = receiver.owner.pkg, permission = componentPermission(receiver);
-      // the platform package's receivers are system_server's, whose part the shell plays itself
-      if (pkg === "android" || caller && !exported(receiver) && pkg !== caller.pkg) continue;
-      if (caller && permission && await permissionDenied(permission, caller.pkg)) continue;
-      targets.push({ entry: this.connect(pkg, componentProcess(receiver)), component: receiver.name, priority: receiver.priority });
-    }
-    targets.sort((a, b) => b.priority - a.priority);
-    let result = initial ?? await resultData({ code: 0, data: null, extras: null, aborted: false });
-    for (const target of targets) {
-      if (await someDenied(permissions, target.entry.pkg)) continue;
-      result = await this.request(target.entry, (endpoint) => endpoint.broadcast(data, target.component, ordered, result, sender));
-      if (ordered && result.aborted) break;
-    }
-    return result;
+  broadcast(pid: number | null, data: ParcelData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
+    const broker = this;
+    return asBroker(function* (): Gen<BroadcastData> {
+      const caller = pid === null ? null : broker.entry(pid), intent = yield decodeIntent(data), sender = caller && { uid: caller.uid, pkg: caller.pkg };
+      const targets: { entry: Entry; component: string | null; priority: number }[] = [...broker.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
+      for (const receiver of (yield queryReceivers(intent)) as Match[]) {
+        const pkg = receiver.owner.pkg, permission = componentPermission(receiver);
+        // the platform package's receivers are system_server's, whose part the shell plays itself
+        if (pkg === "android" || caller && !exported(receiver) && pkg !== caller.pkg) continue;
+        if (caller && permission && (yield permissionDenied(permission, caller.pkg))) continue;
+        targets.push({ entry: broker.connect(pkg, componentProcess(receiver)), component: receiver.name, priority: receiver.priority });
+      }
+      targets.sort((a, b) => b.priority - a.priority);
+      let result: BroadcastData = initial ?? (yield resultData({ code: 0, data: null, extras: null, aborted: false }));
+      for (const target of targets) {
+        if (yield someDenied(permissions, target.entry.pkg)) continue;
+        const sent = result;
+        result = yield broker.request(target.entry, (endpoint) => endpoint.broadcast(data, target.component, ordered, sent, sender));
+        if (ordered && result.aborted) break;
+      }
+      return result;
+    }());
   }
   private entry(pid: number): Entry {
     const entry = this.entries.get(pid);
@@ -426,7 +432,7 @@ export function connectProcess(): ProcessEndpoint {
   };
   activityTransport.finished = (id, code, data) => {
     setVisible(false);
-    void Promise.resolve(resultIntent(data)).then((encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)).catch(reportUncaught);
+    callUncaught(() => after(data && encodeIntent(data), (encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)));
   };
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
@@ -441,9 +447,11 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.last = () => broker.location.last;
   locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
-  providerProcesses.get = async (pkg, process, authority) => importBinder(await remote(broker.contentProvider(PROCESS_PID, pkg, process, authority)));
-  broadcastTransport.send = async (intent, permissions, ordered, initial) => broadcastResult(await remote(
-    broker.broadcast(PROCESS_PID, await encodeIntent(intent), permissions, ordered, initial && await resultData(initial))));
+  providerProcesses.get = (pkg, process, authority) => after(remote(broker.contentProvider(PROCESS_PID, pkg, process, authority)), importBinder);
+  broadcastTransport.send = driven(function* (intent, permissions, ordered, initial) {
+    const data = yield encodeIntent(intent), from = initial && (yield resultData(initial));
+    return (yield broadcastResult(yield remote(broker.broadcast(PROCESS_PID, data, permissions, ordered, from)))) as BroadcastResult;
+  });
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
@@ -464,40 +472,47 @@ export function connectProcess(): ProcessEndpoint {
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(broker.service(PROCESS_PID, pkg, process, request));
-  serviceTransport.bind = async (owner, process, intent, key, flags) => importBinder(await service(owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key, flags }));
+  serviceTransport.bind = driven(function* (owner, process, intent, key, flags) {
+    return yield importBinder(yield service(owner.pkg, process, { kind: "bind", intent: yield encodeIntent(intent), key, flags }));
+  });
   serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
-  serviceTransport.start = async (owner, process, intent, foreground) => { await service(owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground }); };
-  serviceTransport.stop = async (owner, process, intent) => { await service(owner.pkg, process, { kind: "stop", intent: await encodeIntent(intent) }); };
-  serviceTransport.peek = async (owner, process, intent) => importBinder(await service(owner.pkg, process, { kind: "peek", intent: await encodeIntent(intent) }));
+  serviceTransport.start = driven(function* (owner, process, intent, foreground) { yield service(owner.pkg, process, { kind: "start", intent: yield encodeIntent(intent), foreground }); });
+  serviceTransport.stop = driven(function* (owner, process, intent) { yield service(owner.pkg, process, { kind: "stop", intent: yield encodeIntent(intent) }); });
+  serviceTransport.peek = driven(function* (owner, process, intent) {
+    return yield importBinder(yield service(owner.pkg, process, { kind: "peek", intent: yield encodeIntent(intent) }));
+  });
   return {
     clipboardChanged: async () => clipboardChanged(),
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device")).pressBack();
-      if (request.kind === "visibility") {
-        await taskVisibility(request.phase);
-        if (request.phase !== "pause") setVisible(request.phase !== "stop");
-      } else if (request.kind === "launch") {
-        await startActivityInProcess(request.component, await decodeIntent(request.intent), request.id, request.caller);
-        setVisible(true);
-      } else {
-        const deliver = requests.get(request.request);
-        requests.delete(request.request);
-        deliver?.(request.code, request.data ? await decodeIntent(request.data) : null);
-      }
+      return asBroker(function* (): Gen<void> {
+        if (request.kind === "visibility") {
+          yield taskVisibility(request.phase);
+          if (request.phase !== "pause") setVisible(request.phase !== "stop");
+        } else if (request.kind === "launch") {
+          yield startActivityInProcess(request.component, yield decodeIntent(request.intent), request.id, request.caller);
+          setVisible(true);
+        } else {
+          const deliver = requests.get(request.request);
+          requests.delete(request.request);
+          deliver?.(request.code, request.data ? yield decodeIntent(request.data) : null);
+        }
+      }());
     },
     transact: receiveTransaction,
-    contentProvider: async (authority) => exportBinder(await publishedProvider(authority)),
-    broadcast: async (intent, component, ordered, data, sender) =>
-      resultData(await deliverQueued(await decodeIntent(intent), component, ordered, await broadcastResult(data), sender)),
-    service: async (request) => {
-      if (request.kind === "pending") { await executePendingIntent(request.operation, request.fill, request.alarmCount); return null; }
-      if (request.kind === "unbind") { await hostedServices.unbind(request.key); return null; }
-      const intent = await decodeIntent(request.intent);
-      if (request.kind === "bind") return exportBinder(await hostedServices.bind(intent, request.key, request.flags));
-      if (request.kind === "peek") return exportBinder(await hostedServices.peek(intent));
-      await hostedServices[request.kind](intent);
+    contentProvider: (authority) => asBroker(function* (): Gen<BinderHandle | null> { return exportBinder(yield publishedProvider(authority)); }()),
+    broadcast: (intent, component, ordered, data, sender) => asBroker(function* (): Gen<BroadcastData> {
+      return yield resultData(yield deliverQueued(yield decodeIntent(intent), component, ordered, yield broadcastResult(data), sender));
+    }()),
+    service: (request) => asBroker(function* (): Gen<BinderHandle | null> {
+      if (request.kind === "pending") { yield executePendingIntent(request.operation, request.fill, request.alarmCount); return null; }
+      if (request.kind === "unbind") { yield hostedServices.unbind(request.key); return null; }
+      const intent = yield decodeIntent(request.intent);
+      if (request.kind === "bind") return exportBinder(yield hostedServices.bind(intent, request.key, request.flags));
+      if (request.kind === "peek") return exportBinder(yield hostedServices.peek(intent));
+      yield hostedServices[request.kind](intent);
       return null;
-    },
+    }()),
   };
 }
 export function registerForegroundProcess(): void {

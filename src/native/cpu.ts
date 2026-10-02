@@ -3,7 +3,7 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { Runtime } from "../jvm/runtime";
-import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
@@ -532,15 +532,18 @@ export class Cpu {
   async run(): Promise<void> {
     if (this.libc === "none" && threadHooks) await threadHooks.start(this);
     this.loops++;
-    try { await this.loop(); } finally { this.loops--; }
+    const sync = { on: true }, loop = this.loop(sync);
+    sync.on = false;
+    try { await loop; } finally { this.loops--; }
   }
-  private async loop(): Promise<void> {
-    const myDepth = this.depth;
+  /** `sync.on` while the caller is still on the stack: a frame that never parked leaves it its thread */
+  private async loop(sync: { on: boolean }): Promise<void> {
+    const caller = curThread, myDepth = this.depth;
     let budgetStreak = 0;
     try {
       for (;;) {
         setCurThread(this.jthread);
-        if (processExited) { setCurThread(mainThread); await new Promise<never>(() => {}); }
+        if (processExited) { releaseThread(); await new Promise<never>(() => {}); }
         for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(sig);
         const t0 = performance.now(), ic0 = this.ic;
         let sliceMs = 0;
@@ -567,13 +570,13 @@ export class Cpu {
           this.parkedAt = myDepth;
           this.pump();
           this.state = "park";
-          setCurThread(mainThread);
+          releaseThread();
           const v = await p;
           // a handler delivered while we were parked may still be running on top of this frame,
           // parked in its own host call (sigsuspend): the flag is its until it finishes
           this.state = "idle";
           while (this.depth > myDepth) {
-            setCurThread(mainThread);
+            releaseThread();
             await new Promise<void>((r) => this.idle.push(r));
           }
           this.parkedAt = outerParked;
@@ -584,7 +587,7 @@ export class Cpu {
           continue;
         }
         this.state = "yield";
-        setCurThread(mainThread);
+        releaseThread();
         budgetStreak++;
         // All guest pthreads share one JS thread, where a device would run them on other cores:
         // while input is being handled or frames are being presented, sustained background work
@@ -600,7 +603,7 @@ export class Cpu {
           });
         else await yieldToLoop();
       }
-    } finally { setCurThread(mainThread); }
+    } finally { if (sync.on) setCurThread(caller); else releaseThread(); }
   }
 
   /** exempt from the background share: the UI thread, a running signal handler, a frame producer */
@@ -718,7 +721,7 @@ export class Cpu {
   private async deliverFromLoop(sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
     this.state = "deliver";
     const delivery = this.deliver(sig, info);
-    setCurThread(mainThread);
+    releaseThread();
     await delivery;
     setCurThread(this.jthread);
   }

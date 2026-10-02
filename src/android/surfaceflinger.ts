@@ -5,7 +5,8 @@
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
 import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
+import { after, callUncaught, newObj, vcall } from "../jvm/natives/jlang";
+import { asSystem } from "./binder";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { canvasOf } from "./canvas";
 import { perf } from "../perf";
@@ -170,11 +171,8 @@ function applyOps(t: Transaction): void {
   if (ops.length) scheduleComposite();
 }
 /** a Java SurfaceControl over `layer` */
-export async function javaSurfaceControl(layer: Layer, callsite: string): Promise<JObj> {
-  const sc = await newObj("android/view/SurfaceControl", "()V");
-  await vcall(sc, "assignNativeObject", "(JLjava/lang/String;)V", handle({ layer } satisfies Control), callsite);
-  return sc;
-}
+export const javaSurfaceControl = (layer: Layer, callsite: string): JObj | Promise<JObj> => after(newObj("android/view/SurfaceControl"),
+  (sc) => after(vcall(sc, "assignNativeObject", "(JLjava/lang/String;)V", handle({ layer } satisfies Control), callsite), () => sc));
 /** a root layer on the display: what a window's surface hangs from */
 export function displayLayer(name: string, z: number): Layer {
   const layer = new Layer(name, 0);
@@ -260,15 +258,15 @@ rt.registerJnis("android/view/SurfaceControl", {
     "nativeSetDesiredHdrHeadroom(JJF)V",
   ].map((sig) => [sig, () => {}])),
   "nativeAddTransactionCommittedListener(JLandroid/view/SurfaceControl$TransactionCommittedListener;)V": (t: bigint, listener: JObj) => {
-    tx(t).ops.push(() => queueMicrotask(() => void vcall(listener, "onTransactionCommitted", "()V")));
+    tx(t).ops.push(() => queueMicrotask(() => callUncaught(() => asSystem(() => vcall(listener, "onTransactionCommitted", "()V")))));
   },
   // composition is synchronous, so the present fence has signaled by the time the stats arrive
   "nativeAddTransactionCompletedListener(JLjava/util/function/Consumer;)V": (t: bigint, consumer: JObj) => {
-    tx(t).ops.push(() => queueMicrotask(async () => {
+    tx(t).ops.push(() => queueMicrotask(() => callUncaught(() => asSystem(() => {
       const now = BigInt(Math.round(uptimeMillis() * 1e6));
-      const stats = await newObj("android/view/SurfaceControl$TransactionStats", "(JJ)V", now, handle({ signaled: now, refs: 1 }));
-      await vcall(consumer, "accept", "(Ljava/lang/Object;)V", stats);
-    }));
+      return after(newObj("android/view/SurfaceControl$TransactionStats", "(JJ)V", now, handle({ signaled: now, refs: 1 })),
+        (stats) => vcall(consumer, "accept", "(Ljava/lang/Object;)V", stats));
+    }))));
   },
 });
 
@@ -301,7 +299,7 @@ export function surfaceBuffer(s: Surface): OffscreenCanvas | null {
 /** BLASTBufferQueue's onFrameAvailable: the drawn buffer latches on the queue's layer, through the
  *  transaction a sync asked for if one is waiting, else at once. Latching releases the frame the
  *  layer held, as acquiring the next buffer releases the last. */
-export async function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?? null): Promise<void> {
+export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?? null): unknown {
   const q = s.queue, layer = q?.control?.layer;
   if (!q || !layer) { if (buffer !== q?.canvas) releaseFrame(buffer); return; }
   q.frame++;
@@ -314,10 +312,12 @@ export async function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.ca
   const sync = q.sync;
   if (sync) {
     if (q.acquireSingle) q.sync = null;
-    const t = await newObj("android/view/SurfaceControl$Transaction", "()V");
-    tx((t as Record<string, bigint>)[transactionField()]).ops.push(...latch.ops);
-    await vcall(sync, "accept", "(Ljava/lang/Object;)V", t);
-  } else applyOps(latch);
+    return after(newObj("android/view/SurfaceControl$Transaction"), (t) => {
+      tx((t as Record<string, bigint>)[transactionField()]).ops.push(...latch.ops);
+      return vcall(sync, "accept", "(Ljava/lang/Object;)V", t);
+    });
+  }
+  applyOps(latch);
 }
 let txField: string | null = null;
 const transactionField = () => txField ??= declaredField("android/view/SurfaceControl$Transaction", "mNativeObject");
@@ -336,7 +336,7 @@ export function glSurfaceOf(s: Surface): GlSurface | null {
   return q.gl ??= {
     present: null, frames: 0,
     get width() { return q.width; }, get height() { return q.height; },
-    post: (frame) => void queueBuffer(s, frame).catch(reportUncaught),
+    post: (frame) => callUncaught(() => queueBuffer(s, frame)),
   };
 }
 

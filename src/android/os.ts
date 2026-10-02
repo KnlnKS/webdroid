@@ -93,7 +93,7 @@ export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
 /** set while the zygote initializes what every app inherits: it runs as root */
 let zygoteRunning = false;
-export async function asZygote(init: () => Promise<void>): Promise<void> {
+export async function asZygote(init: () => unknown): Promise<void> {
   zygoteRunning = true;
   try { await init(); } finally { zygoteRunning = false; }
 }

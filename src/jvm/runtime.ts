@@ -205,9 +205,10 @@ export class Runtime {
   onMissing: (what: string) => void = () => {};
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   onUncaught: (throwable: unknown) => void = () => {};
-  /** current-thread hooks (set by jlang): a compiled frame pins its thread after every await
-   *  (st) and releases it when it suspends (su), so a parked worker never leaves its identity
-   *  behind for the native main-thread drivers that resume next */
+  /** current-thread hooks (set by jlang): a resumed activation pins its thread (st) and releases it
+   *  when it finishes or suspends again (su), so a parked worker never leaves its identity behind
+   *  for what the event loop runs next. One running from its caller's call leaves the thread to
+   *  that caller, which goes on as its own thread whether or not the callee suspended. */
   th: () => unknown = () => null;
   st: (t: unknown) => void = () => {};
   su: (t: unknown) => void = () => {};
@@ -249,14 +250,12 @@ export class Runtime {
     }
   }
   /**
-   * A compiled frame whose callee suspended: release the thread, and once `pending` settles
-   * continue the saved frame in the method's resumable body, at resume point `r` (or at `next`
-   * when 0).
+   * A compiled frame whose callee suspended: once `pending` settles, continue the saved frame in
+   * the method's resumable body, at resume point `r` (or at `next` when 0).
    */
   /** a hot frame suspending at site `r` (0: a fuel yield, waiting on `fu`), with registers `v` */
   dfr(resume: () => ResumeBody, self: unknown, r: number, next: number, th: unknown, t: unknown, u: unknown, ex: unknown,
     fu: Promise<unknown>, ...v: unknown[]): Promise<unknown> {
-    this.su(th);
     const pending = (r ? u instanceof Promise ? u : t : fu) as Promise<unknown>;
     const F = { v, next, r, $th: th, $s: 1, $t: t, $u: u, $ex: ex, val: undefined as unknown, e: false, x: undefined as unknown };
     return suspendWith(pending, (value, threw) => {
@@ -905,8 +904,7 @@ export class Runtime {
       info.initP = (async () => {
         try {
           await pending;
-          let more;
-          try { more = after?.(); } finally { this.su(null); } // the <clinit> run here releases its thread
+          const more = (() => { try { return after?.(); } finally { this.su(null); } })(); // the <clinit> run here releases its thread
           if (more) await more;
         } catch (e) { throw failed(e); }
         settle();

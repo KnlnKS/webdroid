@@ -175,18 +175,16 @@ export function asSystem<T>(call: () => T | Promise<T>): Promise<T> {
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);
   if (!binder || request.handle.pid !== PROCESS_PID) throw rt.mkThrowable("android/os/DeadObjectException", "Binder is dead");
-  const run = async (): Promise<TransactionReply> => {
+  const run = () => withCallingIdentity(caller, () => rt.drive(function* (): Gen<TransactionReply> {
     const data = new NativeParcel(), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
     try {
-      await fillParcel(data, request.data);
-      return await withCallingIdentity(caller, async () => {
-        let handled = 0;
-        try { handled = await vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
-        catch (error) { reportUncaught(error); } // "Uncaught remote exception!": the caller sees UNKNOWN_TRANSACTION
-        return { handled, data: await exportParcel(reply) };
-      });
+      yield fillParcel(data, request.data);
+      let handled = 0;
+      try { handled = yield vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
+      catch (error) { reportUncaught(error); } // "Uncaught remote exception!": the caller sees UNKNOWN_TRANSACTION
+      return { handled, data: yield exportParcel(reply) };
     } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
-  };
+  }()));
   if (!(request.flags & 1)) return run();
   const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(reportUncaught);
   oneWay.set(request.handle.id, pending);
@@ -300,7 +298,8 @@ rt.registerJnis("android/os/BinderProxy", {
     if (!binderTransport.alive(target.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
     if (!deaths.has(recipient)) deaths.set(recipient, binderTransport.watch(target.pid, () => {
       deaths.delete(recipient);
-      void (async () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this))().catch(reportUncaught);
+      // binderDied arrives on a binder thread
+      callUncaught(() => withCallingIdentity(SYSTEM_CALLER, () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this)));
     }));
   },
   "unlinkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JObj, recipient: unknown) {

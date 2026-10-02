@@ -111,7 +111,8 @@ test("DEX tiers retain synchronous prefixes, catch/finally and thread identity a
     const result = call(1, 7);
     expect(f.seen.map(([value]) => value)).toEqual([-1, 7]);
     const pending = await f.next();
-    expect(f.thread()).toBe(f.main);
+    // a call that suspends leaves its caller's thread; the activation releases it once resumed
+    expect(f.thread()).toBe(f.worker);
     if (reject) pending.reject(f.R.mkThrowable("java/lang/RuntimeException", "probe")); else pending.resolve(7);
     expect(await result).toBe(reject ? -1 : 8);
     expect(f.seen.map(([value]) => value)).toEqual([-1, 7, reject ? 3 : 2, 4]);

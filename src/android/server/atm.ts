@@ -3,14 +3,14 @@
 // ActivityTaskSupervisor gives them. Starting pauses the resumed activity, launches and resumes the
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
-import { rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared } from "../../jvm/runtime";
-import { newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
+import { rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { after, callUncaught, newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { once } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
-import { hostedService, systemToken } from "../binder";
+import { asSystem, hostedService, systemToken } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
 import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler } from "../intent";
@@ -58,14 +58,13 @@ export const foreground = (): boolean => stack.some((r) => r.state === "resumed"
 export const processState = (component: number): number => foreground() ? PROCESS_STATE_TOP : component;
 const pms = () => hostedService("package") as Promise<JObj>;
 const resolveInfoField = () => declaredField("android/content/pm/ResolveInfo", "activityInfo");
-let controller: JObj | null = null;
-const activityClientController = async () => controller ??= await newObj("webdroid/ActivityClientController");
+const activityClientController = once(() => newObj("webdroid/ActivityClientController"));
 
-async function schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Promise<void> {
-  const tx = await scall(CT + "ClientTransaction", "obtain", `(Landroid/app/IApplicationThread;)L${CT}ClientTransaction;`, app);
-  for (const callback of [callbacks].flat()) if (callback) await vcall(tx, "addCallback", `(L${CT}ClientTransactionItem;)V`, callback);
-  if (lifecycle) await vcall(tx, "setLifecycleStateRequest", `(L${CT}ActivityLifecycleItem;)V`, lifecycle);
-  await vcall(app, "scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
+function* schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<void> {
+  const tx = yield scall(CT + "ClientTransaction", "obtain", `(Landroid/app/IApplicationThread;)L${CT}ClientTransaction;`, app);
+  for (const callback of [callbacks].flat()) if (callback) yield vcall(tx, "addCallback", `(L${CT}ClientTransactionItem;)V`, callback);
+  if (lifecycle) yield vcall(tx, "setLifecycleStateRequest", `(L${CT}ActivityLifecycleItem;)V`, lifecycle);
+  yield vcall(app, "scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
 }
 const item = (cls: string, desc: string, ...args: unknown[]) => scall(CT + cls, "obtain", `(${desc})L${CT}${cls};`, ...args);
 
@@ -76,41 +75,42 @@ function pause(r: ActivityRecord): Promise<void> {
   if (r.state !== "resumed") return Promise.resolve();
   r.state = "pausing";
   const reported = Promise.withResolvers<void>();
-  const done = (async () => {
-    await schedule(r.app, await topResumedItem(r, false), await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
-    await reported.promise;
-  })();
+  // a promise of its own, which every pause of `r` waits on
+  const done = (async () => { await rt.drive(function* (): Gen<void> {
+    yield* schedule(r.app, yield topResumedItem(r, false), yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
+    yield reported.promise;
+  }()); })();
   r.pausing = { done, settle: reported.resolve };
   return done;
 }
 const settlePause = (r: ActivityRecord) => { r.pausing?.settle(); r.pausing = null; };
 const resumeItem = (r: ActivityRecord) => item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", r.token, 1, 0);
-async function resume(r: ActivityRecord): Promise<void> {
+function* resume(r: ActivityRecord): Gen<void> {
   const results = r.results.splice(0);
   r.state = "resumed";
-  if (displayHooks.requestOrientation?.(r.orientation)) await configurationChanged();
-  const top = await topResumedItem(r, true);
-  if (await ensureConfiguration(r, results, await resumeItem(r), top)) return;
-  const delivery = results.length ? await item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
-  await schedule(r.app, [delivery, top], await resumeItem(r));
+  if (displayHooks.requestOrientation?.(r.orientation)) yield configurationChanged();
+  const top = yield topResumedItem(r, true);
+  if (yield* ensureConfiguration(r, results, yield resumeItem(r), top)) return;
+  const delivery = results.length ? yield item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
+  yield* schedule(r.app, [delivery, top], yield resumeItem(r));
 }
 
 const CFG = "Landroid/content/res/Configuration;";
 /** ActivityRecord.ensureActivityConfiguration: an activity that declared every changed bit in its
  *  configChanges hears the change; any other relaunches, ending at `lifecycle` with `results`
  *  delivered and `after` run. Returns whether it relaunched. */
-async function ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj, after: JObj | null = null): Promise<boolean> {
-  const { global, override } = await configurations();
-  const changes: number = await vcall(r.config, "diff", `(${CFG})I`, global);
+function* ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj, after: JObj | null = null): Gen<boolean> {
+  const { global, override } = yield configurations();
+  const changes: number = yield vcall(r.config, "diff", `(${CFG})I`, global);
   if (!changes) return false;
   r.config = global;
-  const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
-  if (!(changes & ~await vcall(r.info, "getRealConfigChanged", "()I"))) {
-    await schedule(r.app, await item("ActivityConfigurationChangeItem", `Landroid/os/IBinder;${CFG}Landroid/window/ActivityWindowInfo;`, r.token, override, windowInfo), null);
+  const windowInfo = yield newObj("android/window/ActivityWindowInfo", "()V");
+  if (!(changes & ~(yield vcall(r.info, "getRealConfigChanged", "()I")))) {
+    yield* schedule(r.app, yield item("ActivityConfigurationChangeItem", `Landroid/os/IBinder;${CFG}Landroid/window/ActivityWindowInfo;`, r.token, override, windowInfo), null);
     return false;
   }
-  const merged = await newObj("android/util/MergedConfiguration", `(${CFG}${CFG})V`, global, override);
-  await schedule(r.app, [await item("ActivityRelaunchItem", "Landroid/os/IBinder;Ljava/util/List;Ljava/util/List;ILandroid/util/MergedConfiguration;ZLandroid/window/ActivityWindowInfo;",
+  const merged = yield newObj("android/util/MergedConfiguration", `(${CFG}${CFG})V`, global, override);
+  yield* schedule(r.app, [yield item("ActivityRelaunchItem", "Landroid/os/IBinder;Ljava/util/List;Ljava/util/List;ILandroid/util/MergedConfiguration;ZLandroid/window/ActivityWindowInfo;",
     r.token, results.length ? newArrayList(results) : null, null, changes, merged, 1, windowInfo), after], lifecycle);
   return true;
 }
@@ -118,25 +118,25 @@ async function ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle
 export const displayHooks: { requestOrientation?: (request: number) => boolean } = {};
 /** ActivityTaskManagerService.updateConfigurationLocked: the process hears the new configuration,
  *  then each visible activity (the others when they next resume), then each window its new frames */
-export async function configurationChanged(): Promise<void> {
+export const configurationChanged = driven(function* (): Gen<void> {
   notifyDisplayChanged();
-  const { global } = await configurations();
-  await schedule(thisApp(), await item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
+  const { global } = yield configurations();
+  yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
   for (const r of [...stack]) {
-    if (r.state === "resumed") await ensureConfiguration(r, [], await resumeItem(r));
-    else if (r.state === "paused") await ensureConfiguration(r, [], await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, 0, 0, 0, 0));
+    if (r.state === "resumed") yield* ensureConfiguration(r, [], yield resumeItem(r));
+    else if (r.state === "paused") yield* ensureConfiguration(r, [], yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, 0, 0, 0, 0));
   }
-  await resizeWindows();
-}
+  yield resizeWindows();
+});
 /** the orientation the top activity asks for, or unspecified */
 export const topOrientation = (): number => stack.at(-1)?.orientation ?? -1;
-async function stop(r: ActivityRecord): Promise<void> {
+function* stop(r: ActivityRecord): Gen<void> {
   if (r.state !== "paused") return;
   r.state = "stopping";
-  await schedule(r.app, null, await item("StopActivityItem", "Landroid/os/IBinder;", r.token));
+  yield* schedule(r.app, null, yield item("StopActivityItem", "Landroid/os/IBinder;", r.token));
 }
 /** take it off the stack, once, telling the broker what a remote caller is owed */
-async function destroy(r: ActivityRecord): Promise<void> {
+function* destroy(r: ActivityRecord): Gen<void> {
   const i = stack.indexOf(r);
   if (i < 0) return;
   stack.splice(i, 1);
@@ -145,7 +145,7 @@ async function destroy(r: ActivityRecord): Promise<void> {
   // a start waiting on its pause goes on: the report would find no record
   settlePause(r);
   if (r.remote) activityTransport.finished?.(r.remote.id, r.owed?.code ?? RESULT_CANCELED, r.owed?.data ?? null);
-  await schedule(r.app, null, await item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
+  yield* schedule(r.app, null, yield item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
 }
 
 /** activity starts and finishes still waiting on their clients' lifecycle reports */
@@ -158,239 +158,239 @@ const FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, FLAG_SINGLE_TOP = 0x20000000, FLAG_NE
  *  SINGLE_TOP start of the top activity, a singleTask/singleInstance activity, or CLEAR_TOP clear
  *  what is above it and hand it the intent; REORDER_TO_FRONT brings it to the top; CLEAR_TASK with
  *  NEW_TASK empties the task first. Returns whether the existing instance took the intent. */
-async function reuseActivity(intent: JObj, info: JObj): Promise<boolean> {
-  const flags: number = await vcall(intent, "getFlags", "()I"), mode = getDeclared<number>(info, AI, "launchMode");
+function* reuseActivity(intent: JObj, info: JObj): Gen<boolean> {
+  const flags: number = yield vcall(intent, "getFlags", "()I"), mode = getDeclared<number>(info, AI, "launchMode");
   if ((flags & FLAG_CLEAR_TASK) && (flags & FLAG_NEW_TASK)) {
-    await clearAbove(null);
+    yield* clearAbove(null);
     return false;
   }
   const name = getDeclared<string>(info, AI, "name");
   const existing = [...stack].reverse().find((r) => !r.finishing && getDeclared<string>(r.info, AI, "name") === name);
   if (!existing) return false;
   const singleTop = mode === LAUNCH_SINGLE_TOP || (flags & FLAG_SINGLE_TOP) !== 0;
-  if (existing === stack.at(-1) && (singleTop || mode >= LAUNCH_SINGLE_TASK)) return newIntent(existing, intent).then(() => true);
+  if (existing === stack.at(-1) && (singleTop || mode >= LAUNCH_SINGLE_TASK)) { yield* newIntent(existing, intent); return true; }
   if (mode >= LAUNCH_SINGLE_TASK || (flags & FLAG_ACTIVITY_CLEAR_TOP)) {
     // a standard activity under CLEAR_TOP without SINGLE_TOP is itself replaced by a new instance
     const reuse = mode !== LAUNCH_MULTIPLE || singleTop;
-    await clearAbove(reuse ? existing : stack[stack.indexOf(existing) - 1] ?? null);
-    if (reuse) await newIntent(existing, intent);
+    yield* clearAbove(reuse ? existing : stack[stack.indexOf(existing) - 1] ?? null);
+    if (reuse) yield* newIntent(existing, intent);
     return reuse;
   }
   if (flags & FLAG_REORDER_TO_FRONT) {
     const top = stack.at(-1)!;
-    await pause(top);
+    yield pause(top);
     stack.splice(stack.indexOf(existing), 1);
     stack.push(existing);
     existing.state = "paused";
-    await newIntent(existing, intent);
-    await resume(existing);
+    yield* newIntent(existing, intent);
+    yield* resume(existing);
     return true;
   }
   return false;
 }
 /** finish every activity above `target` (all of them for null): those covered are destroyed, and
  *  the top finishes, resuming what is then below it; each owes its caller RESULT_CANCELED */
-async function clearAbove(target: ActivityRecord | null): Promise<void> {
+function* clearAbove(target: ActivityRecord | null): Gen<void> {
   const above = stack.slice(target ? stack.indexOf(target) + 1 : 0);
   for (const r of above.slice(0, -1)) {
     if (r.finishing) continue;
     r.finishing = true;
-    await owedResult(r, RESULT_CANCELED, null);
-    await destroy(r);
+    yield* owedResult(r, RESULT_CANCELED, null);
+    yield* destroy(r);
   }
   const top = above.at(-1);
-  if (top) await finish(top, RESULT_CANCELED, null);
+  if (top) yield* finish(top, RESULT_CANCELED, null);
 }
 /** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a temporary pause when resumed */
-async function newIntent(r: ActivityRecord, intent: JObj): Promise<void> {
-  const referrer = await newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", intent, appHost!.pkg);
-  await schedule(r.app, await item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", r.token, newArrayList([referrer]), +(r.state === "resumed")), null);
+function* newIntent(r: ActivityRecord, intent: JObj): Gen<void> {
+  const referrer = yield newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", intent, appHost!.pkg);
+  yield* schedule(r.app, yield item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", r.token, newArrayList([referrer]), +(r.state === "resumed")), null);
 }
 
 /** ActivityStarter: a resolved activity on top of this process's task, or the instance already there that takes the intent */
-async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number,
-  remote: ActivityRecord["remote"] = null): Promise<void> {
+function* startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number,
+  remote: ActivityRecord["remote"] = null): Gen<void> {
   transitions++;
   try {
-    if (await reuseActivity(intent, info)) return;
-    const token = await systemToken();
+    if (yield* reuseActivity(intent, info)) return;
+    const token = yield systemToken();
     const prev = stack.at(-1);
     const orientation = getDeclared<number>(info, AI, "screenOrientation");
-    if (prev) await pause(prev);
+    if (prev) yield pause(prev);
     // the display turns for an activity that fixes its orientation before it launches
-    if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
-    const { global, override } = await configurations();
+    if (displayHooks.requestOrientation?.(orientation)) yield configurationChanged();
+    const { global, override } = yield configurations();
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent: await translucentTheme(info), pausing: null, owed: null, remote, config: global, orientation };
+      translucent: yield* translucentTheme(info), pausing: null, owed: null, remote, config: global, orientation };
     stack.push(r);
     reportPresentation();
-    const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
-    const launch = await item("LaunchActivityItem",
+    const windowInfo = yield newObj("android/window/ActivityWindowInfo", "()V");
+    const launch = yield item("LaunchActivityItem",
       "Landroid/os/IBinder;Landroid/content/Intent;ILandroid/content/pm/ActivityInfo;Landroid/content/res/Configuration;Landroid/content/res/Configuration;" +
       "ILjava/lang/String;Lcom/android/internal/app/IVoiceInteractor;ILandroid/os/Bundle;Landroid/os/PersistableBundle;Ljava/util/List;Ljava/util/List;" +
       "Landroid/app/ActivityOptions$SceneTransitionInfo;ZLandroid/app/ProfilerInfo;Landroid/os/IBinder;Landroid/app/IActivityClientController;" +
       "Landroid/os/IBinder;ZLandroid/os/IBinder;Landroid/os/IBinder;Landroid/window/ActivityWindowInfo;",
       token, intent, stack.length, info, global, override, 0, null, null, PROCESS_STATE_TOP, null, null, null, null, null, 1, null,
-      await newObj("android/os/Binder", "()V"), await activityClientController(), await newObj("android/os/Binder", "()V"), 0, null,
-      await newObj("android/os/Binder", "()V"), windowInfo);
+      yield newObj("android/os/Binder", "()V"), yield activityClientController(), yield newObj("android/os/Binder", "()V"), 0, null,
+      yield newObj("android/os/Binder", "()V"), windowInfo);
     r.state = "resumed";
-    await schedule(app, [launch, await topResumedItem(r, true)], await resumeItem(r));
+    yield* schedule(app, [launch, yield topResumedItem(r, true)], yield resumeItem(r));
   } finally { transitions--; }
 }
 
 const STYLEABLE = "com/android/internal/R$styleable";
 /** the package's resources as AttributeCache reads them, through a package context of the system
  *  context: an activity may start before the Application exists */
-let resources: Promise<JObj> | null = null;
-const packageResources = () => resources ??= (async () => {
-  const system = await vcall(await scall("android/app/ActivityThread", "currentActivityThread", "()Landroid/app/ActivityThread;"), "getSystemContext", "()Landroid/app/ContextImpl;");
-  return vcall(await vcall(system, "createPackageContext", "(Ljava/lang/String;I)Landroid/content/Context;", appHost!.pkg, 0), "getResources", "()Landroid/content/res/Resources;");
-})();
+const packageResources = once(driven(function* (): Gen<JObj> {
+  const system = yield vcall(yield scall("android/app/ActivityThread", "currentActivityThread", "()Landroid/app/ActivityThread;"), "getSystemContext", "()Landroid/app/ContextImpl;");
+  return yield vcall(yield vcall(system, "createPackageContext", "(Ljava/lang/String;I)Landroid/content/Context;", appHost!.pkg, 0), "getResources", "()Landroid/content/res/Resources;");
+}));
 /** ActivityRecord's occludesParent from the activity's theme: one translucent or floating, or showing
  *  the wallpaper, lets what is under it show */
-async function translucentTheme(info: JObj): Promise<boolean> {
-  const theme = await vcall(await packageResources(), "newTheme", "()Landroid/content/res/Resources$Theme;");
-  await vcall(theme, "applyStyle", "(IZ)V", await vcall(info, "getThemeResource", "()I"), 1);
-  const statics = (await linkInit(STYLEABLE)).ctor as Record<string, unknown>;
-  const a = await vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", statics[mangleStaticField("Window")]);
+function* translucentTheme(info: JObj): Gen<boolean> {
+  const theme = yield vcall(yield packageResources(), "newTheme", "()Landroid/content/res/Resources$Theme;");
+  yield vcall(theme, "applyStyle", "(IZ)V", yield vcall(info, "getThemeResource", "()I"), 1);
+  const statics = (yield linkInit(STYLEABLE)).ctor as Record<string, unknown>;
+  const a = yield vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", statics[mangleStaticField("Window")]);
   try {
-    return !!await scall(AI, "isTranslucentOrFloating", "(Landroid/content/res/TypedArray;)Z", a) ||
-      !!await vcall(a, "getBoolean", "(IZ)Z", statics[mangleStaticField("Window_windowShowWallpaper")], 0);
-  } finally { await vcall(a, "recycle", "()V"); }
+    return !!(yield scall(AI, "isTranslucentOrFloating", "(Landroid/content/res/TypedArray;)Z", a)) ||
+      !!(yield vcall(a, "getBoolean", "(IZ)Z", statics[mangleStaticField("Window_windowShowWallpaper")], 0));
+  } finally { yield vcall(a, "recycle", "()V"); }
 }
 /** the broker shows the process under this one while every activity here lets it show through */
 const reportPresentation = () => activityTransport.presentation?.(stack.length > 0 && stack.every((r) => r.translucent));
 
 /** the launcher activity of `pkg`, as the home screen starts it */
-export async function startMainActivity(app: JObj, pkg: string): Promise<void> {
-  const intent = await newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.MAIN");
-  await vcall(intent, "addCategory", "(Ljava/lang/String;)Landroid/content/Intent;", "android.intent.category.LAUNCHER");
-  await vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
-  await vcall(intent, "addFlags", "(I)Landroid/content/Intent;", 0x10200000);   // NEW_TASK | RESET_TASK_IF_NEEDED
-  const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, GET_META_DATA, 0);
+export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<void> {
+  const intent = yield newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.MAIN");
+  yield vcall(intent, "addCategory", "(Ljava/lang/String;)Landroid/content/Intent;", "android.intent.category.LAUNCHER");
+  yield vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
+  yield vcall(intent, "addFlags", "(I)Landroid/content/Intent;", 0x10200000);   // NEW_TASK | RESET_TASK_IF_NEEDED
+  const resolved = yield vcall(yield pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, GET_META_DATA, 0);
   const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
   if (!info) throw new Error(`no launcher activity in ${pkg}`);
-  await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;",
-    await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
-  await startActivity(app, intent, info, null, null, -1);
-}
+  yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+    yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+  yield* startActivity(app, intent, info, null, null, -1);
+});
 
 const AI = "android/content/pm/ActivityInfo";
 /** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
-export async function startActivityFor(app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode = -1): Promise<number> {
+export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
   try {
-    const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
+    const resolved = yield vcall(yield pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
       intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
     const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
-    const q = await intentQuery(intent), system = systemActivity(q, false) ??
+    const q = yield intentQuery(intent), system = systemActivity(q, false) ??
       (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
-    if (system) { void runSystemActivity(system, intent, resultRecord, resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
+    if (system) { callUncaught(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode))); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
-    const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
-    await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+    const copy = yield newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
+    yield vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
     const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
-    if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, resultRecord, resultWho, requestCode).catch(reportUncaught);
+    if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) callUncaught(() => rt.drive(startActivity(app, copy, info, resultRecord, resultWho, requestCode)));
     else if (activityTransport.launch) {
-      await activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
+      yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
         caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
-        deliver: (resultCode, data) => void deliverResult(resultRecord, resultWho, requestCode, resultCode, data).catch(reportUncaught),
+        deliver: (resultCode, data) => callUncaught(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data)))),
       } : undefined);
     }
     else return START_INTENT_NOT_RESOLVED;
     return START_SUCCESS;
   } finally { transitions--; }
-}
+});
 const RESULT_OK = -1;
 /** an activity the platform package answers over the browser (DocumentsUI's pickers, share, the
  *  browser): it covers its caller, which resumes with any result it asked for */
-async function runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Promise<void> {
+function* runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Gen<void> {
   let data: JObj | null = null;
-  try { data = await run(intent); } catch (error) { reportUncaught(error); }
-  await deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data);
+  try { data = yield run(intent); } catch (error) { reportUncaught(error); }
+  yield* deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data);
 }
 /** a result from an activity that covered `to` elsewhere (the browser, another process): the
  *  caller takes it as it resumes */
-async function deliverResult(to: ActivityRecord | null, resultWho: string | null, requestCode: number, resultCode: number, data: JObj | null): Promise<void> {
+function* deliverResult(to: ActivityRecord | null, resultWho: string | null, requestCode: number, resultCode: number, data: JObj | null): Gen<void> {
   if (!to || to.finishing) return;
-  if (resultCode === RESULT_OK && data) await grantResultUris(appHost!.pkg, data);
-  if (requestCode >= 0) to.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, resultCode, data));
-  if (stack.at(-1) === to) await coverTop();
+  if (resultCode === RESULT_OK && data) yield grantResultUris(appHost!.pkg, data);
+  if (requestCode >= 0) to.results.push(yield newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, resultCode, data));
+  if (stack.at(-1) === to) yield coverTop();
 }
 /** the pause and resume a system window over the top activity leaves behind (a permission prompt) */
-export async function coverTop(): Promise<void> {
+export const coverTop = driven(function* (): Gen<void> {
   const top = stack.at(-1);
-  if (top?.state === "resumed") { await pause(top); await resume(top); }
-}
+  if (top?.state === "resumed") { yield pause(top); yield* resume(top); }
+});
 /** the broker's launch of one of this process's activities for another process */
-export async function startActivityInProcess(component: string, intent: JObj, remoteId: number, caller: ComponentRef | null): Promise<void> {
-  const name = await mkComponentName(appHost!.pkg, component.replaceAll("/", "."));
-  const info = await vcall(await pms(), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
+export const startActivityInProcess = driven(function* (component: string, intent: JObj, remoteId: number, caller: ComponentRef | null): Gen<void> {
+  const name = yield mkComponentName(appHost!.pkg, component.replaceAll("/", "."));
+  const info = yield vcall(yield pms(), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
   if (!info) throw new Error("Activity not installed: " + component);
-  await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
-  await startActivity(thisApp(), intent, info, null, null, -1, { id: remoteId, caller });
-}
+  yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
+  yield* startActivity(thisApp(), intent, info, null, null, -1, { id: remoteId, caller });
+});
 /** the broker showing or hiding this process: its top activity pauses, what is paused stops, and
  *  the top resumes (the launcher activity starts again in an emptied app process, as its icon
  *  would). Shown behind a translucent process, a stopped top starts again without resuming, as
  *  ActivityRecord.makeActiveIfNeeded does. */
-export async function taskVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
+export const taskVisibility = driven(function* (phase: "pause" | "stop" | "resume" | "visible"): Gen<void> {
   const top = stack.at(-1), pkg = appHost!.pkg;
-  if (!top) { if (phase === "resume" && userLaunched()) await startMainActivity(thisApp(), pkg); return; }
-  if (phase === "pause") await pause(top);
-  else if (phase === "stop") for (const r of [...stack]) await stop(r);
-  else if (phase === "resume" && top.state !== "resumed") await resume(top);
+  if (!top) { if (phase === "resume" && userLaunched()) yield startMainActivity(thisApp(), pkg); return; }
+  if (phase === "pause") yield pause(top);
+  else if (phase === "stop") for (const r of [...stack]) yield* stop(r);
+  else if (phase === "resume" && top.state !== "resumed") yield* resume(top);
   else if (phase === "visible" && top.state === "stopped") {
     top.state = "paused";
-    await schedule(top.app, null, await item("StartActivityItem", "Landroid/os/IBinder;Landroid/app/ActivityOptions$SceneTransitionInfo;", top.token, null));
+    yield* schedule(top.app, null, yield item("StartActivityItem", "Landroid/os/IBinder;Landroid/app/ActivityOptions$SceneTransitionInfo;", top.token, null));
   }
-}
+});
 
 /** the result a finishing activity owes the one that started it for one */
-async function owedResult(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<void> {
+function* owedResult(r: ActivityRecord, resultCode: number, data: JObj | null): Gen<void> {
   r.owed = { code: resultCode, data };
   if (r.resultTo)
-    r.resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
+    r.resultTo.results.push(yield newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
 }
-async function finish(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<boolean> {
+function* finish(r: ActivityRecord, resultCode: number, data: JObj | null): Gen<boolean> {
   transitions++;
   try {
     if (r.finishing) return true;
     r.finishing = true;
-    await owedResult(r, resultCode, data);
+    yield* owedResult(r, resultCode, data);
     const wasTop = stack.at(-1) === r;
-    await pause(r);
+    yield pause(r);
     const below = stack[stack.indexOf(r) - 1];
-    if (wasTop && below) await resume(below);
-    await destroy(r);
+    if (wasTop && below) yield* resume(below);
+    yield* destroy(r);
     return true;
   } finally { transitions--; }
 }
 
-const isComponent = async (r: ActivityRecord, component: JObj | null) => !!component &&
-  getDeclared<string>(r.info, AI, "packageName") === await vcall(component, "getPackageName", "()Ljava/lang/String;") &&
-  getDeclared<string>(r.info, AI, "name") === await vcall(component, "getClassName", "()Ljava/lang/String;");
+function* isComponent(r: ActivityRecord, component: JObj | null): Gen<boolean> {
+  return !!component && getDeclared<string>(r.info, AI, "packageName") === (yield vcall(component, "getPackageName", "()Ljava/lang/String;")) &&
+    getDeclared<string>(r.info, AI, "name") === (yield vcall(component, "getClassName", "()Ljava/lang/String;"));
+}
 /** ActivityRecord.navigateUpTo: finish up to the nearest instance of the destination below, which
  *  gets the intent as a new one, or, a standard activity not asked to clear top, is replaced by a
  *  new instance; with none, only `r` finishes. Returns whether the destination was in the task. */
-async function navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, resultData: JObj | null): Promise<boolean> {
-  const component: JObj | null = await vcall(dest, "getComponent", "()Landroid/content/ComponentName;");
+function* navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, resultData: JObj | null): Gen<boolean> {
+  const component: JObj | null = yield vcall(dest, "getComponent", "()Landroid/content/ComponentName;");
   let parent: ActivityRecord | null = null;
-  for (let i = stack.indexOf(r) - 1; i >= 0 && !parent; i--) if (await isComponent(stack[i], component)) parent = stack[i];
+  for (let i = stack.indexOf(r) - 1; i >= 0 && !parent; i--) if (yield* isComponent(stack[i], component)) parent = stack[i];
   const covered = parent ? stack.slice(stack.indexOf(parent) + 1, stack.indexOf(r)) : [];
   const reuse = parent && (getDeclared<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
-    (await vcall(dest, "getFlags", "()I") & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
-  const restarted = parent && !reuse && await startActivityFor(r.app, dest) === START_SUCCESS;
-  void (async () => {
-    for (const c of covered) await finish(c, RESULT_CANCELED, null);
-    if (reuse) await newIntent(parent!, dest);
-    if (restarted) await finish(parent!, resultCode, resultData);
-    await finish(r, resultCode, resultData);
-  })().catch(reportUncaught);
+    ((yield vcall(dest, "getFlags", "()I")) & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
+  const restarted = parent && !reuse && (yield startActivityFor(r.app, dest)) === START_SUCCESS;
+  callUncaught(() => rt.drive(function* () {
+    for (const c of covered) yield* finish(c, RESULT_CANCELED, null);
+    if (reuse) yield* newIntent(parent!, dest);
+    if (restarted) yield* finish(parent!, resultCode, resultData);
+    yield* finish(r, resultCode, resultData);
+  }()));
   return reuse || !!restarted;
 }
 
@@ -409,11 +409,11 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
   "activityResumed(Landroid/os/IBinder;Z)V": () => {},
   "activityTopResumedStateLost()V": () => {},
   // the new top drew: what it covers stops, unless the top is translucent
-  "activityIdle(Landroid/os/IBinder;Landroid/content/res/Configuration;Z)V": async (token: JObj) => {
+  "activityIdle(Landroid/os/IBinder;Landroid/content/res/Configuration;Z)V": driven(function* (token: JObj) {
     const r = byToken(token);
     if (!r || r.translucent) return;
-    for (const below of stack.slice(0, stack.indexOf(r))) await stop(below);
-  },
+    for (const below of stack.slice(0, stack.indexOf(r))) yield* stop(below);
+  }),
   "activityStopped(Landroid/os/IBinder;Landroid/os/Bundle;Landroid/os/PersistableBundle;Ljava/lang/CharSequence;)V": (token: JObj) => {
     const r = byToken(token); if (r) r.state = "stopped";
   },
@@ -424,14 +424,14 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
   "finishActivity(Landroid/os/IBinder;ILandroid/content/Intent;I)Z": (token: JObj, resultCode: number, data: JObj | null) => {
     const r = byToken(token);
     if (!r) return 0;
-    void finish(r, resultCode, data).catch(reportUncaught);
+    callUncaught(() => rt.drive(finish(r, resultCode, data)));
     return 1;
   },
   "navigateUpTo(Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;ILandroid/content/Intent;)Z":
-    async (token: JObj, dest: JObj, _type: string | null, resultCode: number, data: JObj | null) => {
+    driven(function* (token: JObj, dest: JObj, _type: string | null, resultCode: number, data: JObj | null) {
       const r = byToken(token);
-      return r ? +await navigateUpTo(r, dest, resultCode, data) : 0;
-    },
+      return r ? +(yield* navigateUpTo(r, dest, resultCode, data)) : 0;
+    }),
   // the task's affinity is its root activity's
   "shouldUpRecreateTask(Landroid/os/IBinder;Ljava/lang/String;)Z": (token: JObj, affinity: string | null) =>
     +(!!byToken(token) && getDeclared<string | null>(stack[0].info, AI, "taskAffinity") !== affinity),
@@ -441,17 +441,17 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     if (!r) return 0;
     const affinity = getDeclared<string | null>(r.info, AI, "taskAffinity"), doomed: ActivityRecord[] = [];
     for (let i = stack.indexOf(r); i >= 0 && getDeclared<string | null>(stack[i].info, AI, "taskAffinity") === affinity; i--) doomed.push(stack[i]);
-    void (async () => { for (const d of doomed.reverse()) await finish(d, RESULT_CANCELED, null); })().catch(reportUncaught);
+    callUncaught(() => rt.drive(function* () { for (const d of doomed.reverse()) yield* finish(d, RESULT_CANCELED, null); }()));
     return 1;
   },
   // back on a root activity: AOSP moves a launcher-started task back; one task, so it finishes
   "onBackPressed(Landroid/os/IBinder;Landroid/app/IRequestFinishCallback;)V": (_token: JObj, callback: JObj) =>
     vcall(callback, "requestFinish", "()V"),
-  "getCallingActivity(Landroid/os/IBinder;)Landroid/content/ComponentName;": (token: JObj) => callingActivity(token),
-  "getCallingPackage(Landroid/os/IBinder;)Ljava/lang/String;": async (token: JObj) => {
-    const c = await callingActivity(token);
-    return c && vcall(c, "getPackageName", "()Ljava/lang/String;");
-  },
+  "getCallingActivity(Landroid/os/IBinder;)Landroid/content/ComponentName;": driven(callingActivity),
+  "getCallingPackage(Landroid/os/IBinder;)Ljava/lang/String;": driven(function* (token: JObj) {
+    const c = yield* callingActivity(token);
+    return c && (yield vcall(c, "getPackageName", "()Ljava/lang/String;"));
+  }),
   "getTaskForActivity(Landroid/os/IBinder;Z)I": (token: JObj) => byToken(token) ? TASK_ID : -1,
   "isTopOfTask(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "getDisplayId(Landroid/os/IBinder;)I": () => 0,
@@ -460,7 +460,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token);
     if (!r || r.orientation === orientation) return;
     r.orientation = orientation;
-    if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) void configurationChanged().catch(reportUncaught);
+    if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) callUncaught(configurationChanged);
   },
   "willActivityBeVisible(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "convertToTranslucent(Landroid/os/IBinder;Landroid/os/Bundle;)Z": (token: JObj) => setTranslucent(token, true),
@@ -478,7 +478,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
 } });
 
 /** the activity that started this one for a result, here or in another process */
-async function callingActivity(token: JObj): Promise<JObj | null> {
+function* callingActivity(token: JObj): Gen<JObj | null> {
   const r = byToken(token), caller = r?.remote?.caller;
   return r?.resultTo ? component(r.resultTo) : caller ? mkComponentName(caller.pkg, caller.cls) : null;
 }
@@ -486,13 +486,13 @@ async function callingActivity(token: JObj): Promise<JObj | null> {
 const TASK_ID = 1;
 const component = (r: ActivityRecord | undefined) => r ? vcall(r.info, "getComponentName", "()Landroid/content/ComponentName;") : null;
 rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "android/app/IAppTask$Stub", methods: {
-  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": async () => {
-    const info = await newObj("android/app/ActivityManager$RecentTaskInfo", "()V");
+  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": driven(function* () {
+    const info = yield newObj("android/app/ActivityManager$RecentTaskInfo");
     return setDeclared(info, "android/app/ActivityManager$RecentTaskInfo", {
       id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0),
-      baseIntent: stack[0]?.intent ?? null, baseActivity: await component(stack[0]), topActivity: await component(stack.at(-1)) });
-  },
-  "finishAndRemoveTask()V": () => void clearAbove(null).catch(reportUncaught),
+      baseIntent: stack[0]?.intent ?? null, baseActivity: yield component(stack[0]), topActivity: yield component(stack.at(-1)) });
+  }),
+  "finishAndRemoveTask()V": () => callUncaught(() => rt.drive(clearAbove(null))),
   // one task is shown at a time, and there are no recents to exclude it from
   ...noops("moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V", "setExcludeFromRecents(Z)V"),
 } });
@@ -500,7 +500,7 @@ const appTask = once(() => newObj("webdroid/AppTask"));
 
 /** the methods IActivityTaskManager adds for ActivityThread's activities */
 export const activityTaskMethods = {
-  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => newArrayList(stack.length ? [await appTask()] : []),
+  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": () => stack.length ? after(appTask(), (task) => newArrayList([task])) : newArrayList([]),
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
   // nothing captures the screen, so a screen-capture observer is never called
   ...noops("registerScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V",

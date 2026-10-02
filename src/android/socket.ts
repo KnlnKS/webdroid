@@ -62,8 +62,7 @@ function unixPath(fn: string, address: JObj | null): string {
 }
 const inetAddress = (ep: { address: number[]; scope?: number }): JObj | Promise<JObj> =>
   scall("java/net/InetAddress", "getByAddress", "(Ljava/lang/String;[BI)Ljava/net/InetAddress;", null, Int8Array.from(ep.address), ep.scope ?? 0);
-const inetSocketAddress = (ep: Endpoint): Promise<JObj> =>
-  Promise.resolve(inetAddress(ep)).then((a) => newObj(ISA, `(${INET}I)V`, a, ep.port));
+const inetSocketAddress = (ep: Endpoint): JObj | Promise<JObj> => after(inetAddress(ep), (a) => newObj(ISA, `(${INET}I)V`, a, ep.port));
 /** fillInetSocketAddress: a caller's InetSocketAddress takes the sender's address and port */
 function fillSocketAddress(target: JObj | null, ep: Endpoint | null): void | Promise<void> {
   if (target === null || ep === null || !rt.iof(target, ISA)) return;

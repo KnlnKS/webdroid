@@ -554,7 +554,7 @@ ${profileEnd}
    *  counts against inlining the method into its callers. */
   private saveFrame(): string {
     const profiled = jvmProfiler.enabled ? `P.suspension($pn);` : "";
-    return `${profiled}return R.dfr($R,this,$r,pc,$th,$t,$u,$ex,$fu,${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")});`;
+    return `${profiled}${this.resuming ? "if($s)R.su($th);" : ""}return R.dfr($R,this,$r,pc,$th,$t,$u,$ex,$fu,${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")});`;
   }
 
   /** A resumed frame finishing hands the main looper back its thread: its caller re-pins its own

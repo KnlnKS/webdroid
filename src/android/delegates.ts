@@ -13,7 +13,7 @@
 // there because that said so.
 
 import { startMainLooper } from "./mainloop";
-import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, declaredField, type Gen } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles";
 import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
@@ -23,7 +23,7 @@ import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
 import { NativeBitmap, colorLongAt } from "./bitmap";
-import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, after, callOn, mainThread } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { hasProperty, propertyValue as propValue } from "../shell/properties";
 import { lambda } from "../jvm/natives/jlambda";
@@ -677,24 +677,24 @@ delegate("android/os/SystemProperties", {
  *  persist.sys.timezone, java.util.logging reaches logcat with the default HTTP user agent set, the JCA providers are installed and warmed, and the
  *  system font map is loaded; the device's languages are set and the text paint classes, whose
  *  constructors read them, initialized. */
-export async function zygoteInit(): Promise<void> {
+export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
   // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
-  await asZygote(async () => { await rt.initClass(rt.link("java/lang/System")); });
+  yield asZygote(() => rt.initClass(rt.link("java/lang/System")));
   // ZygoteInit.main: DDMS handlers and libcore's MimeMap over framework.jar's mime.types
-  await scall("com/android/internal/os/RuntimeInit", "preForkInit", "()V");
-  await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
+  yield scall("com/android/internal/os/RuntimeInit", "preForkInit", "()V");
+  yield scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
-  await rt.initClass(hooks);
-  await vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", () => propValue("persist.sys.timezone")));
-  await vcall(await scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
-  await newObj("com/android/internal/logging/AndroidConfig", "()V");
-  await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http.agent",
-    await scall("com/android/internal/os/RuntimeInit", "getDefaultUserAgent", "()Ljava/lang/String;"));
+  yield rt.initClass(hooks);
+  yield vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", () => propValue("persist.sys.timezone")));
+  yield vcall(yield scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
+  yield newObj("com/android/internal/logging/AndroidConfig");
+  yield scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http.agent",
+    yield scall("com/android/internal/os/RuntimeInit", "getDefaultUserAgent", "()Ljava/lang/String;"));
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
-  await scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
-  await loadSystemFontMap();
-  await initDeviceLocales();
-  await preloadPaint();
+  yield scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
+  yield loadSystemFontMap();
+  yield initDeviceLocales();
+  yield preloadPaint();
   // ActivityThread.main, once the process is forked
-  await startMainLooper();
-}
+  yield startMainLooper();
+}())))();

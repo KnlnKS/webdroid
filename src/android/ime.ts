@@ -1,7 +1,7 @@
 // The browser keyboard: the page's text control in the role of the input method, serving the
 // editor InputMethodManagerService (server/imm.ts) binds it to. The page's edits reach the editor
 // as InputConnection calls; the editor's reports keep the control's text and selection current.
-import { type JObj, driven, declaredField, type Gen } from "../jvm/runtime";
+import { rt, type JObj, driven, declaredField, type Gen } from "../jvm/runtime";
 import { onMain } from "./mainloop";
 import { csText } from "../jvm/natives/jchars";
 
@@ -54,7 +54,7 @@ const IME_FLAG_NO_ENTER_ACTION = 0x40000000, IME_ACTION_NONE = 1;
 export const imeActive = () => !!served && imeVisible;
 export const imeHasAction = () => !!served && !(served.imeOptions & IME_FLAG_NO_ENTER_ACTION) && (served.imeOptions & 0xff) !== IME_ACTION_NONE;
 export function imeInput(text: string, start = text.length, end = start, composing = false) {
-  return onMain(async () => {
+  return onMain(() => rt.drive(function* (): Gen<void> {
     const session = served;
     if (!session) return;
     const previous = session.text, offset = session.offset;
@@ -63,37 +63,36 @@ export function imeInput(text: string, start = text.length, end = start, composi
       a = Math.min(a, session.compStart); b = Math.max(b, session.compEnd); c = text.length - (previous.length - b);
     }
     const heard = reports;
-    await session.call("beginBatchEdit", "");
+    yield session.call("beginBatchEdit", "");
     editing = true;
     try {
-      await session.call("finishComposingText", "");
+      yield session.call("finishComposingText", "");
       if (b > a && c === a) {
-        await session.call("setSelection", "II", b + offset, b + offset);
-        await session.call("deleteSurroundingText", "II", b - a, 0);
+        yield session.call("setSelection", "II", b + offset, b + offset);
+        yield session.call("deleteSurroundingText", "II", b - a, 0);
       } else if (b > a || c > a) {
-        await session.call("setSelection", "II", a + offset, b + offset);
-        await session.call(composing ? "setComposingText" : "commitText", "Ljava/lang/CharSequence;I", text.slice(a, c), 1);
+        yield session.call("setSelection", "II", a + offset, b + offset);
+        yield session.call(composing ? "setComposingText" : "commitText", "Ljava/lang/CharSequence;I", text.slice(a, c), 1);
       }
-      await session.call("setSelection", "II", start + offset, end + offset);
+      yield session.call("setSelection", "II", start + offset, end + offset);
       session.compStart = composing ? a : -1; session.compEnd = composing ? c : -1;
-    } finally { try { await session.call("endBatchEdit", ""); } finally { editing = false; } }
+    } finally { try { yield session.call("endBatchEdit", ""); } finally { editing = false; } }
     // an editor that reports its changes has done so against the text before the edit
     if (reports === heard) { session.text = text; session.start = start + offset; session.end = end + offset; }
     mirrorInput();
-  });
+  }()));
 }
 export function imeSelection(start: number, end: number) {
-  return onMain(async () => {
+  return onMain(() => rt.drive(function* (): Gen<void> {
     const session = served;
     if (!session || start + session.offset === session.start && end + session.offset === session.end) return;
-    await session.call("setSelection", "II", start + session.offset, end + session.offset);
+    yield session.call("setSelection", "II", start + session.offset, end + session.offset);
     session.start = start + session.offset; session.end = end + session.offset;
-  });
+  }()));
 }
-export const imeFinishComposition = () => onMain(async () => {
-  if (served) { await served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
-});
-export const imeAction = () => onMain(async () => {
-  if (!served) return false;
-  return !!(await served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
-});
+export const imeFinishComposition = () => onMain(() => rt.drive(function* (): Gen<void> {
+  if (served) { yield served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
+}()));
+export const imeAction = () => onMain(() => rt.drive(function* (): Gen<boolean> {
+  return !!served && !!(yield served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
+}()));

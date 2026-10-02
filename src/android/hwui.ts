@@ -3,8 +3,8 @@
 // before the queue (ViewRootImpl arms its BLAST sync there), the commit and complete callbacks
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
-import { rt, JObj } from "../jvm/runtime";
-import { vcall, scall, reportUncaught } from "../jvm/natives/jlang";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { vcall, scall, callOn, callUncaught, JThread } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
 import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
 import { textureLayerNatives } from "./texturelayer";
@@ -27,7 +27,7 @@ interface Proxy {
 }
 const proxy = (h: bigint) => deref<Proxy>(h);
 
-async function drawFrame(p: Proxy): Promise<number> {
+const drawFrame = driven(function* (p: Proxy): Gen<number> {
   if (p.stopped) return SYNC_CONTEXT_IS_STOPPED;
   const buffer = p.surface && surfaceBuffer(p.surface);
   if (!buffer) return SYNC_LOST_SURFACE_REWARD_IF_FOUND;
@@ -43,23 +43,25 @@ async function drawFrame(p: Proxy): Promise<number> {
   // prepareTree's position updates reach their listeners before the frame queues, so a SurfaceView
   // merges its move into this frame's transaction
   for (const [listener, l, t, r, b] of positionUpdates.splice(0)) {
-    await scall("android/graphics/RenderNode$PositionUpdateListener", "callPositionChanged", "(Ljava/lang/ref/WeakReference;JIIII)Z", listener, frame, l, t, r, b);
+    yield scall("android/graphics/RenderNode$PositionUpdateListener", "callPositionChanged", "(Ljava/lang/ref/WeakReference;JIIII)Z", listener, frame, l, t, r, b);
   }
   const draw = p.drawCallback;
   p.drawCallback = null;
-  const commit: JObj | null = draw ? await vcall(draw, "onFrameDraw", "(IJ)Landroid/graphics/HardwareRenderer$FrameCommitCallback;", SYNC_OK, frame) : null;
-  await queueBuffer(p.surface!);
-  for (const callback of [commit, p.commitCallback]) if (callback) await vcall(callback, "onFrameCommit", "(Z)V", 1);
-  if (p.completeCallback) await vcall(p.completeCallback, "onFrameComplete", "()V");
+  const commit: JObj | null = draw ? yield vcall(draw, "onFrameDraw", "(IJ)Landroid/graphics/HardwareRenderer$FrameCommitCallback;", SYNC_OK, frame) : null;
+  yield queueBuffer(p.surface!);
+  for (const callback of [commit, p.commitCallback]) if (callback) yield vcall(callback, "onFrameCommit", "(Z)V", 1);
+  if (p.completeCallback) yield vcall(p.completeCallback, "onFrameComplete", "()V");
   return SYNC_OK;
-}
+});
+/** hwui's RenderThread, which draws the frames its animators run on their own */
+const renderThread = Object.assign(new JThread(), { jname: "RenderThread" });
 /** render-thread animators step at the frame's time, and while any runs the next vsync draws again */
 function animate(p: Proxy): void {
   if (!animateRenderThread(uptimeMillis()) || p.animating) return;
   p.animating = true;
   onNextVsync(() => {
     p.animating = false;
-    drawFrame(p).catch(reportUncaught);
+    callUncaught(() => callOn(renderThread, () => drawFrame(p)));
   });
 }
 
@@ -87,15 +89,15 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
   ...textureLayerNatives,
   // PixelCopy.request on a surface: its latest buffer, or the whole of it for an empty source rect
   "nCopySurfaceInto(Landroid/view/Surface;IIIILandroid/graphics/HardwareRenderer$CopyRequest;)V":
-    async (javaSurface: JObj, l: number, t: number, r: number, b: number, request: JObj) => {
+    driven(function* (javaSurface: JObj, l: number, t: number, r: number, b: number, request: JObj) {
       const s = nativeSurface(javaSurface), src = s?.queue?.canvas;
-      if (!src) return vcall(request, "onCopyFinished", "(I)V", PIXEL_COPY_SOURCE_NO_DATA);
+      if (!src) return yield vcall(request, "onCopyFinished", "(I)V", PIXEL_COPY_SOURCE_NO_DATA);
       if (r <= l || b <= t) { l = t = 0; r = src.width; b = src.height; }
-      const dst = deref<NativeBitmap>(await vcall(request, "getDestinationBitmap", "(II)J", r - l, b - t));
+      const dst = deref<NativeBitmap>(yield vcall(request, "getDestinationBitmap", "(II)J", r - l, b - t));
       dst.ctx.clearRect(0, 0, dst.w, dst.h);
       dst.ctx.drawImage(src, l, t, r - l, b - t, 0, 0, dst.w, dst.h);
-      return vcall(request, "onCopyFinished", "(I)V", PIXEL_COPY_SUCCESS);
-    },
+      return yield vcall(request, "onCopyFinished", "(I)V", PIXEL_COPY_SUCCESS);
+    }),
   "nSyncAndDrawFrame(J[JI)I": (h: bigint) => drawFrame(proxy(h)),
   "nDestroy(JJ)V": (h: bigint) => { proxy(h).surface = null; },
   "nSetOpaque(JZ)V": (h: bigint, opaque: number) => { proxy(h).opaque = !!opaque; },

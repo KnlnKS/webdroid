@@ -129,7 +129,8 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
 
 function suspend(method: ColdMethod, f: ColdFrame, receiver: unknown, pc: number, pending: Promise<unknown>): Promise<unknown> {
   const delivers = f.$w === 1;
-  f.R.su(f.$th); f.$s = 1;
+  if (f.$s) f.R.su(f.$th);
+  f.$s = 1;
   if (method.suspended) { method.suspended(); method.suspended = undefined; }
   if (jvmProfiler.enabled) jvmProfiler.suspension(method.name);
   return suspendWith(pending, (value, threw) => {

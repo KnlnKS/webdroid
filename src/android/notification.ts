@@ -255,7 +255,7 @@ function promptNeeded(pkg: string): boolean {
   return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
     && !permissionGranted(pkg, POST_NOTIFICATIONS) && new Preferences(pkg).ids(CHANNEL_KEY).length > 0;
 }
-function showNotificationPrompt(pkg: string): Promise<void> {
+function showNotificationPrompt(pkg: string): unknown {
   grantPrompted(pkg, POST_NOTIFICATIONS);
   return coverTop();
 }

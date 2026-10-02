@@ -2,33 +2,33 @@ import { type JIntent, newIntent } from "../android/intent";
 import { serviceContext } from "../android/binder";
 import { pfdContents } from "../android/os";
 import { uriText } from "../android/net";
-import type { JObj } from "../jvm/runtime";
+import { driven, type Gen, type JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 
 const S = "Ljava/lang/String;";
-const extraText = async (intent: JIntent, key: string): Promise<string | null> => {
-  const text = await vcall(intent, "getCharSequenceExtra", `(${S})Ljava/lang/CharSequence;`, key);
-  return text == null ? null : csText(text);
-};
-async function sharedFiles(intent: JIntent): Promise<File[]> {
-  const multiple = await vcall(intent, "getAction", `()${S}`) === "android.intent.action.SEND_MULTIPLE";
-  const stream = multiple ? await vcall(intent, "getParcelableArrayListExtra", `(${S})Ljava/util/ArrayList;`, "android.intent.extra.STREAM")
-    : await vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.STREAM");
-  const entries = stream == null ? [] : multiple ? await toJsArray(stream) : [stream];
-  const type: string | null = await vcall(intent, "getType", `()${S}`);
-  const resolver = entries.length ? await vcall(await serviceContext(), "getContentResolver", "()Landroid/content/ContentResolver;") : null;
+function* extraText(intent: JIntent, key: string): Gen<string | null> {
+  const text = yield vcall(intent, "getCharSequenceExtra", `(${S})Ljava/lang/CharSequence;`, key);
+  return text == null ? null : yield csText(text);
+}
+function* sharedFiles(intent: JIntent): Gen<File[]> {
+  const multiple = (yield vcall(intent, "getAction", `()${S}`)) === "android.intent.action.SEND_MULTIPLE";
+  const stream = multiple ? yield vcall(intent, "getParcelableArrayListExtra", `(${S})Ljava/util/ArrayList;`, "android.intent.extra.STREAM")
+    : yield vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.STREAM");
+  const entries: unknown[] = stream == null ? [] : multiple ? yield toJsArray(stream) : [stream];
+  const type: string | null = yield vcall(intent, "getType", `()${S}`);
+  const resolver = entries.length ? yield vcall(yield serviceContext(), "getContentResolver", "()Landroid/content/ContentResolver;") : null;
   const files: File[] = [];
   for (const entry of entries) {
     if (!entry) continue;
-    const parsed = entry as JObj, uri = await uriText(parsed);
-    const mime = await vcall(resolver, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", parsed) as string | null;
-    const descriptor = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", parsed, "r");
+    const parsed = entry as JObj, uri: string = yield uriText(parsed);
+    const mime: string | null = yield vcall(resolver, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", parsed);
+    const descriptor = yield vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", parsed, "r");
     try {
       const name = decodeURIComponent(uri.split(/[?#]/, 1)[0].split("/").pop() || "shared-file");
-      files.push(new File([(await pfdContents(descriptor) ?? new Uint8Array(0)) as BlobPart], name, { type: mime || type || "application/octet-stream" }));
-    } finally { await vcall(descriptor, "close", "()V"); }
+      files.push(new File([((yield pfdContents(descriptor)) ?? new Uint8Array(0)) as BlobPart], name, { type: mime || type || "application/octet-stream" }));
+    } finally { yield vcall(descriptor, "close", "()V"); }
   }
   return files;
 }
@@ -46,24 +46,25 @@ function download(files: File[]) {
   }
 }
 
-export async function shareIntent(intent: JIntent): Promise<JIntent | null> {
-  const target: JIntent | null = await vcall(intent, "getAction", `()${S}`) === "android.intent.action.CHOOSER"
-    ? await vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.INTENT") : intent;
+export const shareIntent = driven(function* (intent: JIntent): Gen<JIntent | null> {
+  const target: JIntent | null = (yield vcall(intent, "getAction", `()${S}`)) === "android.intent.action.CHOOSER"
+    ? yield vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.INTENT") : intent;
   if (!target) throw new Error("Chooser has no target intent");
-  const message = await extraText(target, "android.intent.extra.TEXT") ?? "";
-  const files = await sharedFiles(target);
-  const title = await extraText(target, "android.intent.extra.SUBJECT");
+  const message = (yield* extraText(target, "android.intent.extra.TEXT")) ?? "";
+  const files = yield* sharedFiles(target);
+  const title = yield* extraText(target, "android.intent.extra.SUBJECT");
   const shareData: ShareData = { ...(message ? { text: message } : {}), ...(files.length ? { files } : {}),
     ...(title == null ? {} : { title }) };
   if (!message && !files.length) throw new Error("Share intent has no content");
-  const shared = (run: () => unknown) => async () => { await run(); return newIntent(); };
-  return choose(title ?? "Share", [
+  // the user's choice runs in their click, for the gesture the browser asks of it
+  const shared = (run: () => unknown) => async () => { await run(); return true; };
+  return (yield choose(title ?? "Share", [
     ...typeof navigator.share === "function" && (!files.length || !navigator.canShare || navigator.canShare(shareData))
       ? [{ label: "Share…", run: shared(() => navigator.share(shareData)) }] : [],
     ...files.length ? [{ label: files.length === 1 ? "Download file" : "Download files", run: shared(() => download(files)) }] : [],
     ...message ? [{ label: "Copy text", run: shared(() => navigator.clipboard.writeText(message)) }] : [],
-  ]);
-}
+  ])) ? yield newIntent() : null;
+});
 
 /** The browser as the device's default web handler: a new tab, or when the page may not open one
  *  outside a user gesture, a sheet whose button is that gesture. A store link goes to the web store. */
