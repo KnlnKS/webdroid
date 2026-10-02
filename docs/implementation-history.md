@@ -1520,7 +1520,8 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   EventLog tags (30021-30065) on both sides. Replaying a flow on the reference AVD with
   `logcat -b events` cleared per step, and on webdroid with the page's `[I/EventLog]` lines, then
   comparing each step's (event, activity, reason) sequence for the app's own activities:
-  - FitNotes (39 steps), CalculatorM (8) and Mihon onboarding (5) now match. The one remaining
+  - FitNotes (39 steps), CalculatorM (8) and Mihon onboarding (5) now match (since the review
+    below, launches differ only in the top-resumed reason string). The one remaining
     FitNotes difference is a step boundary: the AVD's start for `28 ex-custom` lands in step 29's
     window. The AVD's mihon-app replay diverged from the flow on its own (it was at the Library by
     step 15 and left the app at 16), so that flow is not evidence either way.
@@ -1571,6 +1572,27 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     on their URIs failed. A shared base in `systemproviders.ts` answers them as
     ContentProvider.Transport does, and MediaStore's provider is hosted on it (`media`, package and
     process `com.google.android.providers.media.module`, as on the reference AVD).
+- 2026-10-04, review of the Stage D/F branch. A strict review of the branch found:
+  - ATM: a launch sent "top-resumed gained" in a second transaction that a finish in onCreate
+    could overtake. It now rides with every resume, so top-resumed is exactly the resumed
+    state; launches therefore report `topWhenResuming` where the AVD reports
+    `topStateChangedWhenResumed`, with the same callback order.
+  - A plain start answered getCallingActivity: a result record is now kept only for a start for
+    a result. A CLEAR_TOP that destroyed a broker-started activity never told the broker.
+  - The notification prompt awaited a pause of the main thread that was usually its caller.
+  - `after()` and HttpURLConnection's accessors ran Java on the event loop's thread after a
+    promise: the Amazon bug class.
+  - Providers: two registries of system providers disagreed, so PMS did not resolve Settings or
+    Media. The three hosted providers each re-implemented ContentProvider.Transport's defaults,
+    and ExternalStorage lacked createCancellationSignal. AMS and IPermissionManager answered uid
+    permission checks differently. These are now one registry, one base and one
+    `checkUidPermission` in `permissions.ts`.
+  - Dead leftovers of the TS stack: drawn-text semantic tracking (a recorded op per drawText),
+    AppHost fields and the boot theme work that filled them, the TS resource reader, the Java
+    side of the preference store, and withheld registrations. Runtime.register now warns when a
+    spec is under a STAGE_D prefix.
+  - MediaPlayer.create, SoundPool.load and MediaStore.canManageMedia read the deleted TS
+    Context's `$host`.
 
 ## Java, storage and framework semantics
 
