@@ -2,53 +2,26 @@
 // resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
 
 import { Arsc } from "./arsc";
-import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
-import { JObj, rt, declaredField } from "../jvm/runtime";
+import { TV, type XmlNode, type XmlAttr } from "./axml";
+import { JObj, declaredField } from "../jvm/runtime";
 import { deref } from "./handles";
 import { JDisplayMetrics } from "./util";
 import { intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
 
 let fwPkg: Arsc | null = null;
-const aidMemo = new Map<string, number>();
-/** framework attr id by name, e.g. AID("textColor") */
-export const AID = (name: string): number => {
-  let v = aidMemo.get(name);
-  if (v === undefined) {
-    v = fwPkg?.findId("attr", name) ?? 0;
-    // a lookup before the framework package loads is not an answer, so it is not remembered
-    if (fwPkg) aidMemo.set(name, v);
-  }
-  return v;
-};
-
-export function setFramework(a: Arsc): void {
-  fwPkg = a;
-  aidMemo.clear();
-}
+export function setFramework(a: Arsc): void { fwPkg = a; }
 
 
 // resolved value: binary Res_value types + an internal STR (0xfd)
 /** r: the resource whose entry a resolved value came from — what getResourceId still reports */
 export interface RV { t: number; d: number; s?: string; r?: number }
-export const T_STR = 0xfd;
+const T_STR = 0xfd;
 const NULL_RV: RV = { t: TV.NULL, d: 0 };
 /** binary Res_value → RV with FLOAT bits decoded to a JS number */
 export function normRV(v: RV): RV {
   if (v.t === TV.FLOAT) return { t: TV.FLOAT, d: intBitsToFloat(v.d), s: v.s };
   return v;
-}
-/** a raw AXML attribute → RV, its string literal as T_STR */
-export function xmlAttrRV(a: XmlAttr): RV {
-  return a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : normRV({ t: a.type, d: a.data });
-}
-
-/** an app XML colour literal (#rgb … #aarrggbb) — the one raw string form still parsed */
-function parseColor(raw: string): number {
-  let h = raw.slice(1);
-  if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
-  if (h.length === 6) h = "ff" + h;
-  return parseInt(h, 16) | 0;
 }
 /**
  * A value as AssetManager2 selects it (its SelectedValue): the Res_value, the package id of the
@@ -65,8 +38,7 @@ const isValidResid = (id: number) => (id & 0x00ff0000) !== 0 && (id & 0xff000000
 /** A bag with its parents merged in, keys ascending, child entries winning (AssetManager2::GetBag):
  *  entry i is (types[i], data[i]) out of style styles[i], whose table its strings index. */
 export class Bag {
-  private rvs: Map<number, RV> | null = null;
-  constructor(readonly res: Resources, readonly parent: number, readonly flags: number, readonly keys: Int32Array,
+  constructor(readonly parent: number, readonly flags: number, readonly keys: Int32Array,
     readonly types: Uint8Array, readonly data: Int32Array, readonly styles: Int32Array) {}
   /** the index of attribute `key`, or -1 */
   find(key: number): number {
@@ -78,13 +50,6 @@ export class Bag {
       if (k < key) lo = mid + 1; else hi = mid - 1;
     }
     return -1;
-  }
-  /** key → value as our own stack reads it, unresolved */
-  get map(): Map<number, RV> {
-    if (this.rvs) return this.rvs;
-    const m = new Map<number, RV>();
-    for (let i = 0; i < this.keys.length; i++) m.set(this.keys[i], this.res.rawRV(this.types[i], this.data[i], this.styles[i] >>> 24));
-    return this.rvs = m;
   }
 }
 /** resource types a reference to stays a reference: the caller loads them by id */
@@ -129,9 +94,7 @@ export class Resources {
   lazyEntries: Map<string, FileSource>;
   dm = new JDisplayMetrics();
   bagCache = new Map<number, Bag | null>();
-  selectorCache = new Map<number, number>();
   private framework: Arsc | null | undefined;
-  jobj: any = null; // android.content.res.Resources instance
   /** an AssetManager's apks in cookie order; null for a package's own tables */
   apks: Apk[] | null = null;
   private cookies: Int8Array | null = null;
@@ -144,7 +107,7 @@ export class Resources {
     if (!scoped) allResources.push(this);
   }
 
-  invalidate(): void { this.bagCache.clear(); this.selectorCache.clear(); configGen++; }
+  invalidate(): void { this.bagCache.clear(); configGen++; }
 
   /** AssetManager2::SetApkAssets: the last package that is not the framework is the app's */
   setApks(apks: Apk[]): void {
@@ -249,18 +212,18 @@ export class Resources {
     }
   }
 
-  /** a table value as our own stack reads it, strings out of the package's pool */
+  /** a table value as RV, strings out of the package's pool */
   rawRV(t: number, d: number, pkg: number): RV {
     if (t === TV.STRING) return { t, d, s: this.tbl(pkg << 24)?.values.get(d) };
     return t === TV.FLOAT ? { t, d: intBitsToFloat(d) } : { t, d };
   }
 
-  /** A selected value as our own stack reads it. The stack loads files, styles and ids by id, so a
-   *  value that came out of one stays a reference to it; an XML attribute's own value is `xa`'s. */
-  toRV(v: SV, xa: XmlAttr | null = null): RV | null {
+  /** A selected value as RV. Files, styles and ids are loaded by id, so a value that came out of
+   *  one stays a reference to it. */
+  toRV(v: SV): RV | null {
     const t = v.t;
     if (t === TV.NULL || t === TV.ATTRIBUTE) return null;
-    if (v.pkg < 0) return xa ? xmlAttrRV(xa) : normRV({ t, d: v.d });
+    if (v.pkg < 0) return normRV({ t, d: v.d });
     if (v.resid) {
       const type = this.idType(v.resid);
       if (LOADED_BY_ID.has(type) || (t === TV.STRING && type === "color")) {
@@ -330,12 +293,7 @@ export class Resources {
       }
       k++;
     }
-    return new Bag(this, parentId, flags | (parent?.flags ?? 0), keys.subarray(0, k), types.subarray(0, k), data.subarray(0, k), styles.subarray(0, k));
-  }
-
-  /** an attribute's raw value in a style or its parents */
-  styleLookup(styleId: number, attrId: number): RV | null {
-    return this.bag(styleId)?.map.get(attrId) ?? null;
+    return new Bag(parentId, flags | (parent?.flags ?? 0), keys.subarray(0, k), types.subarray(0, k), data.subarray(0, k), styles.subarray(0, k));
   }
 }
 const SCRATCH = newSV();
@@ -353,26 +311,19 @@ interface ThemeEntry { t: number; d: number; pkg: number; flags: number }
  *  merged as Theme::ApplyStyle merges them. */
 export class JTheme extends JObj {
   res!: Resources;
-  /** the Resources.Theme this is the native half of, when AOSP's answers */
-  jobj: unknown = null;
   entries = new Map<number, ThemeEntry>();
   /** the styles applied so far, with their force flags, in pairs */
   applied: number[] = [];
   flags = 0;
-  /** resolved values (AOSP caches them too) and our own stack's reading of them, valid for one
-   *  selection generation */
+  /** resolved values (AOSP caches them too), valid for one selection generation; AOSP's ThemeImpl
+   *  rebases the theme when a qualifier changes */
   private resolved = new Map<number, SV | null>();
-  cache = new Map<number, RV | null>();
   private gen = configGen;
-  /** A theme our own stack holds re-applies its styles when a qualifier changes; one AOSP's
-   *  ThemeImpl holds is rebased by it instead. */
-  live = true;
 
   private sync(): void {
     if (this.gen === configGen) return;
     this.gen = configGen;
-    this.forget();
-    if (this.live) this.replay(this.applied);
+    this.resolved.clear();
   }
   private replay(applied: number[]): void {
     this.entries.clear(); this.flags = 0; this.applied = [];
@@ -382,7 +333,7 @@ export class JTheme extends JObj {
   apply(styleId: number, force = true): void {
     this.sync();
     this.applied.push(styleId, force ? 1 : 0);
-    this.forget();
+    this.resolved.clear();
     const bag = this.res.bag(styleId);
     if (!bag) return;
     this.flags |= bag.flags;
@@ -398,18 +349,17 @@ export class JTheme extends JObj {
       } else this.entries.set(key, { t, d, pkg: bag.styles[i] >>> 24, flags: bag.flags });
     }
   }
-  /** Theme::SetTo. Our own stack copies a theme onto another configuration's tables, where the
-   *  same styles select other values, so it re-applies them there. */
+  /** Theme::SetTo. A theme copied onto another AssetManager's tables, where the same styles select
+   *  other values, re-applies them there. */
   setTo(o: JTheme): void {
     o.sync();
-    this.gen = configGen; this.forget();
+    this.gen = configGen; this.resolved.clear();
     if (this.res && this.res !== o.res) { this.replay(o.applied); return; }
     this.res = o.res;
     this.entries = new Map(o.entries); this.flags = o.flags; this.applied = o.applied.slice();
   }
   /** Theme::Rebase: these styles over another AssetManager */
-  rebase(res: Resources, styles: number[]): void { this.res = res; this.gen = configGen; this.forget(); this.replay(styles); }
-  private forget(): void { this.resolved.clear(); this.cache.clear(); }
+  rebase(res: Resources, styles: number[]): void { this.res = res; this.gen = configGen; this.resolved.clear(); this.replay(styles); }
 
   /** Theme::GetAttribute: the value an attribute holds, through ?attr indirections, unresolved */
   getAttribute(resid: number, out: SV): boolean {
@@ -444,31 +394,6 @@ export class JTheme extends JObj {
     if (!t) return;
     v.t = t.t; v.d = t.d; v.pkg = t.pkg; v.flags |= t.flags; v.resid = t.resid; v.density = t.density;
   }
-
-  /** an attribute's resolved value, as our own stack reads it */
-  lookup(attrId: number): RV | null {
-    let v = this.cache.get(attrId);
-    if (v !== undefined && this.gen === configGen) return v;
-    const sv = this.resolvedAttribute(attrId);
-    v = sv && this.res.toRV(sv);
-    this.cache.set(attrId, v);
-    return v;
-  }
-}
-
-// AttributeSet wrapper over parsed AXML node
-export class JAttrSet extends JObj {
-  node: XmlNode | null = null;
-  res!: Resources;
-  theme: JTheme | null = null;
-}
-
-/** our own stack's styled attributes: what AOSP's TypedArray holds, as resolved values */
-class StyledValues {
-  res!: Resources;
-  theme: JTheme | null = null;
-  vals: (RV | null)[] = [];
-  attrIds: Int32Array | number[] = [];
 }
 
 /** AOSP's TypedArray layout: STYLE_NUM_ENTRIES ints per attribute, (type, data, assetCookie,
@@ -480,7 +405,7 @@ const STYLED = newSV();
  * libandroidfw's AttributeResolution in one pass: ApplyStyle with a theme (XML attribute, the
  * XML's style=, the default style, then the theme), ResolveAttrs when `srcValues` stands in for
  * the XML, RetrieveAttributes without a theme (XML attributes only). Each value lands in
- * `outValues`/`outIndices` in TypedArray's layout, or as our own stack's RV in `outRVs`.
+ * `outValues`/`outIndices` in TypedArray's layout.
  */
 function ascending<T>(list: ArrayLike<T>, id: (t: T) => number): boolean {
   for (let i = 1; i < list.length; i++) if (id(list[i]) < id(list[i - 1])) return false;
@@ -497,7 +422,7 @@ function fromBag(bag: Bag, key: number, flags: number, v: SV): number {
 export function resolveAttributes(
   res: Resources, theme: JTheme | null, node: XmlNode | null, sourceResId: number,
   defStyleAttr: number, defStyleRes: number, attrs: ArrayLike<number>, srcValues: ArrayLike<number> | null,
-  outValues: Int32Array | null, outIndices: Int32Array | null, outRVs: (RV | null)[] | null,
+  outValues: Int32Array, outIndices: Int32Array | null,
 ): void {
   const v = STYLED;
   let defStyleFlags = 0, xmlStyleFlags = 0, xmlStyle = 0;
@@ -536,40 +461,22 @@ export function resolveAttributes(
     }
     if (xmlBag && v.t === TV.NULL && v.d !== DATA_NULL_EMPTY) source = fromBag(xmlBag, cur, xmlStyleFlags, v) || source;
     if (defBag && v.t === TV.NULL && v.d !== DATA_NULL_EMPTY) source = fromBag(defBag, cur, defStyleFlags, v) || source;
-    let fromTheme = false;
     if (v.t !== TV.NULL) {
       if (theme) theme.resolveAttributeReference(v); else res.resolveReference(v);
     } else if (v.d !== DATA_NULL_EMPTY && theme) {
       const t = theme.resolvedAttribute(cur);
-      if (t) { v.t = t.t; v.d = t.d; v.pkg = t.pkg; v.flags = t.flags; v.resid = t.resid; v.density = t.density; fromTheme = true; }
+      if (t) { v.t = t.t; v.d = t.d; v.pkg = t.pkg; v.flags = t.flags; v.resid = t.resid; v.density = t.density; }
     }
     // @null turns back into TYPE_NULL, having masked whatever lay beneath it
     if (v.t === TV.REFERENCE && v.d === 0) { v.t = TV.NULL; v.pkg = -1; }
-    const has = v.t !== TV.NULL || v.d === DATA_NULL_EMPTY;
-    if (outValues) {
-      const at = ii * STYLE_NUM_ENTRIES;
-      outValues[at] = v.t; outValues[at + 1] = v.d; outValues[at + 2] = res.cookieOf(v.pkg);
-      outValues[at + 3] = v.resid; outValues[at + 4] = v.flags; outValues[at + 5] = v.density; outValues[at + 6] = source;
-    }
-    if (outIndices && has) outIndices[++found] = ii;
-    if (outRVs) outRVs[ii] = !has ? null : fromTheme ? theme!.lookup(cur) : res.toRV(v, v.pkg < 0 ? xa : null);
+    const at = ii * STYLE_NUM_ENTRIES;
+    outValues[at] = v.t; outValues[at + 1] = v.d; outValues[at + 2] = res.cookieOf(v.pkg);
+    outValues[at + 3] = v.resid; outValues[at + 4] = v.flags; outValues[at + 5] = v.density; outValues[at + 6] = source;
+    if (outIndices && (v.t !== TV.NULL || v.d === DATA_NULL_EMPTY)) outIndices[++found] = ii;
   }
   if (outIndices) outIndices[0] = found;
 }
 
-export function obtainStyled(
-  res: Resources, theme: JTheme | null, set: JAttrSet | null,
-  attrIds: Int32Array | number[], defStyleAttr: number, defStyleRes: number,
-): StyledValues {
-  // an XmlResourceParser used as AttributeSet carries its live JAttrSet in .set
-  set = attrSet(set);
-  const ta = new StyledValues();
-  ta.res = res; ta.theme = theme;
-  ta.attrIds = attrIds;
-  ta.vals = new Array(attrIds.length);
-  resolveAttributes(res, theme, set?.node ?? null, 0, defStyleAttr, defStyleRes, attrIds, null, null, null, ta.vals);
-  return ta;
-}
 
 
 /** the string resource `id` names, "" when it is not one */
@@ -592,62 +499,8 @@ export function rvString(res: Resources, v: RV | null): string | null {
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return String(v.d);
   return v.s ?? null;
 }
-export function rvColor(res: Resources, v: RV | null, dflt = 0, depth = 0): number {
-  if (!v || depth > 12) return dflt;
-  if (v.t >= TV.COLOR_ARGB8 && v.t <= TV.COLOR_RGB4) return v.d;
-  if (v.t >= TV.INT_DEC && v.t <= TV.INT_HEX) return v.d;
-  if (v.t === TV.BOOLEAN) return v.d;
-  if (v.t === TV.REFERENCE) {
-    const r = res.resolveRefs(v);
-    if (r === v || (r.t === TV.REFERENCE && r.d === v.d)) {
-      // reference didn't resolve to a value → likely a color-selector xml; return its default color
-      return colorFromSelector(res, v.d, dflt);
-    }
-    return rvColor(res, r, dflt, depth + 1);
-  }
-  if (v.t === T_STR && v.s?.startsWith("#")) return parseColor(v.s);
-  return dflt;
-}
-function colorFromSelector(res: Resources, resId: number, dflt: number): number {
-  const selCache = res.selectorCache;
-  const c = selCache.get(resId);
-  if (c !== undefined) return c;
-  selCache.set(resId, dflt); // guard against re-entry
-  const e = res.tbl(resId)?.entry(resId);
-  if (e?.value) {
-    if (e.value.type >= TV.COLOR_ARGB8 && e.value.type <= TV.COLOR_RGB4 || e.value.type >= TV.INT_DEC && e.value.type <= TV.INT_HEX) {
-      selCache.set(resId, e.value.data); return e.value.data;
-    }
-    if (e.value.type === TV.STRING) {
-      const f = res.fileOf(resId);
-      const bytes = f?.path.endsWith(".xml") ? f.bytes : null;
-      if (bytes) {
-        try {
-          const root = parseAXML(bytes);
-          // pick the default (stateless) item color, else the first
-          let picked = dflt, first: number | null = null;
-          for (const item of root.children) {
-            if (item.name !== "item") continue;
-            const ca = item.attrs.find((a) => a.name === "color");
-            if (!ca) continue;
-            const col = ca.type >= TV.COLOR_ARGB8 && ca.type <= TV.COLOR_RGB4 ? ca.data
-              : ca.type === TV.STRING && ca.str?.startsWith("#") ? parseColor(ca.str)
-              : ca.type === TV.REFERENCE ? colorFromSelector(res, ca.data, dflt) : dflt;
-            if (first === null) first = col;
-            const stateless = item.attrs.every((a) => a.name === "color" || a.name === "alpha");
-            if (stateless) { picked = col; break; }
-          }
-          const result = picked !== dflt ? picked : (first ?? dflt);
-          selCache.set(resId, result);
-          return result;
-        } catch { /* */ }
-      }
-    }
-  }
-  return dflt;
-}
 /** a Java instance field of `cls`, on a bytecode object or a spec's */
-export function javaField<T>(o: unknown, cls: string, name: string): T {
+function javaField<T>(o: unknown, cls: string, name: string): T {
   return (o as Record<string, T>)[declaredField(cls, name)];
 }
 /** the AssetManager2 behind AOSP's Resources */
@@ -655,27 +508,10 @@ export function nativeRes(jres: unknown): Resources {
   const impl = javaField<object>(jres, "android/content/res/Resources", "mResourcesImpl");
   const res = nativeAssets(javaField(impl, "android/content/res/ResourcesImpl", "mAssets"));
   res.dm = javaField<JDisplayMetrics>(impl, "android/content/res/ResourcesImpl", "mMetrics");
-  res.jobj ??= jres;
   return res;
 }
 /** the AssetManager2 behind AOSP's AssetManager */
 export function nativeAssets(am: unknown): Resources {
   return deref<Resources>(javaField(am, "android/content/res/AssetManager", "mObject"));
-}
-/** the native theme behind a Resources.Theme, ours or AOSP's */
-export function nativeTheme(theme: unknown): JTheme | null {
-  if (!theme) return null;
-  if (theme instanceof JTheme) return theme;
-  if (!rt.iof(theme, "android/content/res/Resources$Theme")) return null;
-  const t = deref<JTheme>(javaField(javaField(theme, "android/content/res/Resources$Theme", "mThemeImpl"), "android/content/res/ResourcesImpl$ThemeImpl", "mTheme"));
-  t.jobj = theme;
-  return t;
-}
-/** the element an AttributeSet stands on: our own, or AOSP's XmlBlock$Parser */
-export function attrSet(set: unknown): JAttrSet | null {
-  if (!set) return null;
-  if (set instanceof JAttrSet) return set;
-  if (!rt.iof(set, "android/content/res/XmlBlock$Parser")) return null;
-  return deref<JAttrSet>(javaField(set, "android/content/res/XmlBlock$Parser", "mParseState"));
 }
 

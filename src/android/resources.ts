@@ -1,14 +1,11 @@
-// AOSP's Resources, Theme and XmlBlock as our own stack meets them. The view stack still reads
-// resources below the Java line (res.ts), so it reaches the native state behind a Java object
-// here; and the shell builds an app's Resources the way LoadedApk has ResourcesManager build it.
+// AOSP's Resources as the shell builds them, the way LoadedApk has ResourcesManager build an app's,
+// and the device configuration they take.
 
 import { rt, driven, type Gen, type JObj } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { type Resources } from "./res";
 import { JDisplayMetrics } from "./util";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration } from "./resnative";
 import { device } from "../shell/config";
-import { registerApk } from "./assetmanager";
 
 /** An installed apk's Resources, as ResourcesManager builds them: its ApkAssets over the system
  *  ones in an AssetManager, under the device's configuration. */
@@ -41,12 +38,6 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
     yield vcall(jres, "updateConfiguration", `(L${C};Landroid/util/DisplayMetrics;)V`, own, null);
   }
   return config;
-});
-/** the android.content.res.Resources over a package's tables, installed at `path` */
-export const javaResources = driven(function* javaResources(res: Resources, path: string): Gen<JObj> {
-  if (res.jobj) return res.jobj;
-  registerApk(path, res);
-  return res.jobj = yield loadResources(path, yield javaConfiguration(deviceConfiguration()));
 });
 
 /** a Configuration of AOSP's carrying our device configuration's values */

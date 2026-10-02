@@ -64,10 +64,11 @@ export async function loadLibcore(): Promise<void> {
 export async function fakeStyles(strings: string[], styles: Record<number, [number, number, number][]>) {
   const { Resources, Bag } = await import("../src/android/res");
   const res = new Resources(null, {});
-  res.arsc = { values: { get: (i: number) => strings[i] }, specFlags: () => 0 } as never;
+  const table = { pkgId: 0x7f, packageIds: () => [0x7f], device: {}, values: { get: (i: number) => strings[i] }, specFlags: () => 0 };
+  res.setApks([{ path: "", table: table as never, zip: {}, lazyEntries: new Map() }]);
   for (const [id, entries] of Object.entries(styles)) {
     const sorted = entries.slice().sort((a, b) => a[0] - b[0]);
-    res.bagCache.set(+id, new Bag(res, 0, 0, Int32Array.from(sorted, (e) => e[0]), Uint8Array.from(sorted, (e) => e[1]),
+    res.bagCache.set(+id, new Bag(0, 0, Int32Array.from(sorted, (e) => e[0]), Uint8Array.from(sorted, (e) => e[1]),
       Int32Array.from(sorted, (e) => e[2]), new Int32Array(sorted.length).fill(+id)));
   }
   return res;
@@ -87,9 +88,12 @@ async function loadPlatform(): Promise<void> {
 
 /** AOSP's Resources over `res`, installed as an app at /data/app/`name`.apk beside framework-res */
 export async function appResources(res: import("../src/android/res").Resources, name: string) {
-  const { javaResources } = await import("../src/android/resources");
+  const { loadResources, javaConfiguration } = await import("../src/android/resources");
+  const { registerApk } = await import("../src/android/assetmanager");
+  const { deviceConfiguration } = await import("../src/android/resnative");
   await loadPlatform();
-  return javaResources(res, `/data/app/${name}.apk`);
+  registerApk(`/data/app/${name}.apk`, res);
+  return loadResources(`/data/app/${name}.apk`, await javaConfiguration(deviceConfiguration()));
 }
 
 let booted: Promise<JObj> | null = null;
