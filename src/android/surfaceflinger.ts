@@ -15,9 +15,9 @@ import type { GlSurface } from "./glsurface";
 import { drawnOn, deviceRect, placeFunctors, type Rect } from "./webfunctor";
 
 // SurfaceControl.Builder's creation flags
-const HIDDEN = 0x4, OPAQUE = 0x400, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
+const HIDDEN = 0x4, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
 // Transaction.setFlags's layer state flags
-const LAYER_HIDDEN = 0x1, LAYER_OPAQUE = 0x2;
+const LAYER_HIDDEN = 0x1;
 
 let nextLayerId = 1;
 export class Layer {
@@ -28,7 +28,7 @@ export class Layer {
   x = 0; y = 0;
   /** dsdx, dtdx, dtdy, dsdy */
   matrix: [number, number, number, number] | null = null;
-  alpha = 1; hidden: boolean; opaque: boolean;
+  alpha = 1; hidden: boolean;
   crop: { l: number; t: number; r: number; b: number } | null = null;
   cornerRadius = 0;
   /** an effect layer's solid color, r g b in 0..1 */
@@ -40,9 +40,8 @@ export class Layer {
   relativeOf: Layer | null = null;
   readonly relatives: Layer[] = [];
   removed = false;
-  constructor(readonly name: string, public width: number, public height: number, flags: number) {
+  constructor(readonly name: string, flags: number) {
     this.hidden = !!(flags & HIDDEN);
-    this.opaque = !!(flags & OPAQUE);
     if ((flags & FX_SURFACE_MASK) === FX_SURFACE_EFFECT) this.color = [0, 0, 0];
   }
   reparent(parent: Layer | null): void {
@@ -179,7 +178,7 @@ export async function javaSurfaceControl(layer: Layer, callsite: string): Promis
 }
 /** a root layer on the display: what a window's surface hangs from */
 export function displayLayer(name: string, z: number): Layer {
-  const layer = new Layer(name, 0, 0, 0);
+  const layer = new Layer(name, 0);
   layer.layerStack = 0; layer.z = z;
   roots.add(layer);
   return layer;
@@ -198,8 +197,8 @@ rt.registerJnis("android/view/SurfaceSession", {
 });
 rt.registerJnis("android/view/SurfaceControl", {
   "nativeCreate(Landroid/view/SurfaceSession;Ljava/lang/String;IIIIJLandroid/os/Parcel;)J":
-    (_session: JObj, name: string, w: number, h: number, _format: number, flags: number, parent: bigint) => {
-      const layer = new Layer(name, w, h, flags);
+    (_session: JObj, name: string, _w: number, _h: number, _format: number, flags: number, parent: bigint) => {
+      const layer = new Layer(name, flags);
       if (parent) layer.reparent(layerOf(parent)); else roots.add(layer);
       return handle({ layer } satisfies Control);
     },
@@ -211,8 +210,9 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeGetLayerId(J)I": (h: bigint) => layerOf(h).id,
   "nativeGetTransformHint(J)I": () => 0,
   "nativeSetTransformHint(JI)V": () => {},
-  "nativeUpdateDefaultBufferSize(JII)V": (h: bigint, w: number, ht: number) => { const l = layerOf(h); l.width = w; l.height = ht; },
-  "nativeMirrorSurface(J)J": (h: bigint) => handle({ layer: new Layer(layerOf(h).name + " mirror", 0, 0, 0) } satisfies Control),
+  // a layer composes at its buffer's size, so its default buffer size is not kept
+  "nativeUpdateDefaultBufferSize(JII)V": () => {},
+  "nativeMirrorSurface(J)J": (h: bigint) => handle({ layer: new Layer(layerOf(h).name + " mirror", 0) } satisfies Control),
   "nativeCreateTransaction()J": () => handle({ ops: [] } satisfies Transaction),
   "nativeApplyTransaction(JZZ)V": (t: bigint) => applyOps(tx(t)),
   "nativeMergeTransaction(JJ)V": (t: bigint, other: bigint) => { tx(t).ops.push(...tx(other).ops.splice(0)); },
@@ -238,10 +238,8 @@ rt.registerJnis("android/view/SurfaceControl", {
     l.dest = right > left && bottom > top ? { l: left, t: top, r: right, b: bottom } : null;
   }),
   "nativeSetCornerRadius(JJF)V": op((l, r: number) => { l.cornerRadius = r; }),
-  "nativeSetFlags(JJII)V": op((l, flags: number, mask: number) => {
-    if (mask & LAYER_HIDDEN) l.hidden = !!(flags & LAYER_HIDDEN);
-    if (mask & LAYER_OPAQUE) l.opaque = !!(flags & LAYER_OPAQUE);
-  }),
+  // an opaque layer composes as any other
+  "nativeSetFlags(JJII)V": op((l, flags: number, mask: number) => { if (mask & LAYER_HIDDEN) l.hidden = !!(flags & LAYER_HIDDEN); }),
   "nativeSetLayerStack(JJI)V": op((l, stack: number) => { l.layerStack = stack; }),
   "nativeReparent(JJJ)V": (t: bigint, sc: bigint, parent: bigint) => {
     const layer = layerOf(sc), to = parent ? layerOf(parent) : null;
@@ -324,7 +322,8 @@ export async function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.ca
 }
 let txField: string | null = null;
 const transactionField = () => txField ??= declaredField("android/view/SurfaceControl$Transaction", "mNativeObject");
-const surfaceField = () => declaredField("android/view/Surface", "mNativeObject");
+let sfField = "";
+const surfaceField = () => sfField ||= declaredField("android/view/Surface", "mNativeObject");
 export const nativeSurface = (javaSurface: JObj | null): Surface | null => {
   const h = javaSurface ? (javaSurface as Record<string, bigint>)[surfaceField()] : 0n;
   return h ? deref<Surface>(h) : null;
