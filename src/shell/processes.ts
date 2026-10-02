@@ -17,7 +17,6 @@ import { vcall } from "../jvm/natives/jlang";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
-import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
 import { broadcastTransport, type BroadcastResult } from "../android/broadcast";
 import { deliverBroadcast as deliverQueued, type Sender } from "../android/server/broadcastqueue";
 import { hostedServices } from "../android/server/activeservices";
@@ -70,7 +69,6 @@ type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
-  provider: (request: ProviderRequest, caller: Caller) => Promise<ProviderReply>;
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
@@ -352,15 +350,6 @@ class ProcessBroker {
     caller!.bindings.delete(key);
     await this.service(null, binding.pkg, binding.process, { kind: "unbind", key });
   }
-  async provider(pid: number, pkg: string, process: string, request: ProviderRequest): Promise<ProviderReply> {
-    const caller = this.entry(pid);
-    const owner = packages.get(pkg), node = [...owner?.components.provider.values() ?? []].find((n) => attrStr(n, "authorities")?.split(";").includes(request.authority));
-    if (!node) throw new Error("Provider not installed");
-    const permission = attrStr(node, request.access === "read" || request.name === "query" || request.name === "getType" ? "readPermission" : "writePermission") ?? attrStr(node, "permission");
-    if (caller.pkg !== pkg && permission && await permissionDenied(permission, caller.pkg))
-      throw new Error("Provider permission denied: " + permission);
-    return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
-  }
   /** getContentProviderImpl for a provider in another process: checkContentProviderPermission,
    *  then the binder its process publishes, starting it. The provider enforces each call's
    *  read or write permission itself. */
@@ -463,7 +452,6 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.last = () => broker.location.last;
   locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
-  connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   providerProcesses.get = async (pkg, process, authority) => importBinder(await remote(broker.contentProvider(PROCESS_PID, pkg, process, authority)));
   broadcastTransport.send = async (intent, permissions, ordered, initial) => broadcastResult(await remote(
     broker.broadcast(PROCESS_PID, await encodeIntent(intent), permissions, ordered, initial && await resultData(initial))));
@@ -509,7 +497,6 @@ export function connectProcess(): ProcessEndpoint {
       }
     },
     transact: receiveTransaction,
-    provider: receiveProvider,
     contentProvider: async (authority) => exportBinder(await publishedProvider(authority)),
     broadcast: async (intent, component, ordered, data, sender) =>
       resultData(await deliverQueued(await decodeIntent(intent), component, ordered, await broadcastResult(data), sender)),

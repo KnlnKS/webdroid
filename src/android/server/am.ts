@@ -13,7 +13,7 @@ import { configurations } from "./wm";
 import { startMainActivity } from "./atm";
 import { uptimeMillis } from "../../guest-clock";
 import { systemProviderHolder } from "../systemproviders";
-import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../contentresolver";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
 import type { JUri } from "../net";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;

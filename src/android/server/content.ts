@@ -19,10 +19,10 @@ function segmentsOf(uri: string): string[] {
   const parts = uriParts(mkUri(uri));
   return [uriDecode(parts.authority) ?? "", ...parts.path.split("/").filter(Boolean).map((s) => uriDecode(s) ?? "")];
 }
-export function observeContent(uri: string, descendants: boolean, key: unknown, deliver: Observer["deliver"]): void {
+function observeContent(uri: string, descendants: boolean, key: unknown, deliver: Observer["deliver"]): void {
   observers.push({ key, segments: segmentsOf(uri), descendants, deliver });
 }
-export function stopObserving(key: unknown): void {
+function stopObserving(key: unknown): void {
   for (let i = observers.length - 1; i >= 0; i--) if (observers[i].key === key) observers.splice(i, 1);
 }
 function notified(o: Observer, changed: string[], flags: number): boolean {

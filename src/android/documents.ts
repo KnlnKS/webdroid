@@ -9,8 +9,7 @@
  * URI algebra needs no special case; the volume is the picked directory's own name.
  */
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { streamOf, heldByteWrites } from "../jvm/natives/jio";
+import { rt, JObj } from "../jvm/runtime";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
 import { mkPfd, pfdBackingBytes } from "./os";
@@ -62,7 +61,7 @@ export function docUriLike(u: JUriLike, id: string): string {
     : `content://${auth}/document/${enc(id)}`;
 }
 /** a `.../children` URI asks for a directory listing rather than the document itself */
-export const isChildrenUri = (u: JUriLike) => uriParts(u)[1].at(-1) === "children";
+const isChildrenUri = (u: JUriLike) => uriParts(u)[1].at(-1) === "children";
 
 const DIR_MIME = "vnd.android.document/directory";
 // Document flags: SUPPORTS_WRITE | SUPPORTS_DELETE | SUPPORTS_RENAME (+ DIR_SUPPORTS_CREATE)
@@ -79,8 +78,8 @@ function mimeOf(name: string): string {
 }
 
 interface DocRow { id: string; name: string; mime: string; size: number; modified: number; flags: number }
-export const DOC_COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "last_modified", "flags"];
-export const docCells = (r: DocRow) => [r.id, r.name, r.mime, r.size, r.modified, r.flags];
+const DOC_COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "last_modified", "flags"];
+const docCells = (r: DocRow) => [r.id, r.name, r.mime, r.size, r.modified, r.flags];
 
 /** Loose files (an OPEN_DOCUMENT / CREATE_DOCUMENT result) have no tree above them, so they get
  *  a volume of their own rather than a path. */
@@ -149,12 +148,12 @@ async function rowOf(id: string, h: FileSystemHandle): Promise<DocRow> {
   return { id, name: h.name, mime: f.type || mimeOf(h.name), size: f.size, modified: f.lastModified, flags: FILE_FLAGS };
 }
 
-export async function docRow(docId: string): Promise<DocRow | null> {
+async function docRow(docId: string): Promise<DocRow | null> {
   const h = await resolveDoc(docId);
   return h ? rowOf(docId, h) : null;
 }
 
-export async function docChildren(docId: string): Promise<DocRow[]> {
+async function docChildren(docId: string): Promise<DocRow[]> {
   const h = await resolveDoc(docId);
   if (h?.kind !== "directory") return [];
   const [vol, segs] = split(docId);
@@ -167,13 +166,13 @@ export async function docChildren(docId: string): Promise<DocRow[]> {
   return out;
 }
 
-export async function docRead(docId: string): Promise<Uint8Array> {
+async function docRead(docId: string): Promise<Uint8Array> {
   const h = await resolveDoc(docId);
   if (h?.kind !== "file") throw rt.mkThrowable("java/io/FileNotFoundException", docId);
   return new Uint8Array(await (await (h as FileSystemFileHandle).getFile()).arrayBuffer());
 }
 
-export async function docWrite(docId: string, bytes: Uint8Array): Promise<void> {
+async function docWrite(docId: string, bytes: Uint8Array): Promise<void> {
   const h = await resolveDoc(docId);
   if (h?.kind !== "file") throw rt.mkThrowable("java/io/FileNotFoundException", docId);
   const w = await (h as FileSystemFileHandle).createWritable();
@@ -255,7 +254,7 @@ export async function pickDocuments(opts: { multiple?: boolean; save?: string; m
 }
 
 /** a document opened in `mode`: a write commits its bytes on close, "t" truncating */
-export async function docPfd(docId: string, mode: string | null) {
+async function docPfd(docId: string, mode: string | null) {
   const write = (mode ?? "r").includes("w");
   const bytes = await pfdBackingBytes(docId) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(docId));
   return mkPfd(bytes, write ? (b) => docWrite(docId, b) : null, docId);
@@ -287,25 +286,3 @@ rt.register({ name: "webdroid/ExternalStorageProvider", ctor: class extends JObj
 let storageProvider: JObj | Promise<JObj> | null = null;
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
   process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, binder: () => storageProvider ??= newStub("webdroid/ExternalStorageProvider") });
-
-// ── the streams ContentResolver hands out for a document
-export function docInputStream(docId: string): Promise<JObj> {
-  return docRead(docId).then(streamOf);
-}
-class JDocOutputStream extends JObj { docId = ""; chunks: number[] = []; }
-rt.register({
-  name: "webdroid/DocOutputStream", ctor: JDocOutputStream, sup: "java/io/OutputStream",
-  methods: {
-    ...heldByteWrites,
-    // A handle's writable truncates on open, so the bytes are buffered here and committed once,
-    // on close. flush() cannot be that commit: a BufferedOutputStream wrapper flushes per block,
-    // which would rewrite the whole file for every buffer's worth of a backup.
-    "flush()V": () => {},
-    "close()V": driven(function* (this: JDocOutputStream): Gen { yield docWrite(this.docId, Uint8Array.from(this.chunks)); }),
-  },
-});
-export function docOutputStream(docId: string, append: boolean): Promise<JDocOutputStream> {
-  const s = new (rt.link("webdroid/DocOutputStream").ctor as typeof JDocOutputStream)();
-  s.docId = docId;
-  return append ? docRead(docId).then((b) => { s.chunks = [...b]; return s; }, () => s) : Promise.resolve(s);
-}

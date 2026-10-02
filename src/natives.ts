@@ -72,7 +72,7 @@ import "./android/sharedprefs";
 import "./android/intent";
 import "./android/clipboard";
 import "./android/statsevent";
-import "./android/contentresolver";
+import "./android/urigrants";
 import "./android/game";
 import "./android/vibrator";
 import "./android/audio";

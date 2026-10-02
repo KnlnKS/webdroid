@@ -418,7 +418,6 @@ export function resolveProvider(authority: string, flags = 0): Component | null 
     if (authoritiesOf(c.node).includes(authority)) return c;
   return null;
 }
-export const javaProviderInfo = (c: Component, flags = GET_META_DATA) => rt.drive(providerInfo$(c, flags, null));
 /** the launcher activity of a package, as getLaunchIntentForPackage finds it */
 export function launcherActivity(pkg: string): Component | null {
   const owner = packages.get(pkg);

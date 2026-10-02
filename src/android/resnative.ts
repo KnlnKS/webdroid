@@ -3,7 +3,7 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { type Resources, setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
+import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
 import { vcall, after, scall, newObj } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues";
@@ -13,12 +13,6 @@ import { parcelCreator } from "./parcelable";
 import { appHost } from "./apphost";
 import { hostStub } from "./binder";
 
-/** a raw resource's bytes; NotFoundException when the table has no file for it */
-export function rawResourceBytes(res: Resources, id: number): Uint8Array {
-  const bytes = res.fileOf(id)?.bytes;
-  if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Resource 0x" + id.toString(16));
-  return bytes;
-}
 /** an AssetFileDescriptor over bytes, the whole of a ParcelFileDescriptor served over them */
 export function mkAssetFd(bytes: Uint8Array, pfd: unknown = null): Promise<unknown> {
   return newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", pfd ?? mkPfd(bytes, null), 0n, BigInt(bytes.length));

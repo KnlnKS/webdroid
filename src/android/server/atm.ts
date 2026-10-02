@@ -14,7 +14,7 @@ import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
 import { activityTransport, intentQuery, systemActivity, SYSTEM_ACTIVITY, type SystemHandler } from "../intent";
 import { field } from "../pm";
-import { grantResultUris } from "../contentresolver";
+import { grantResultUris } from "../urigrants";
 import { thisApp, userLaunched } from "./am";
 
 const CT = "android/app/servertransaction/";
