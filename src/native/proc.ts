@@ -8,7 +8,7 @@ import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, 
 import { E } from "./abi";
 import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
 import { tidOf } from "./pthread";
-import { fail, fillSysinfo, logLine, strncpy, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
+import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
 import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties";
@@ -260,7 +260,7 @@ export function procInit(): void {
     __strncpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); strncpy(d, s, n); return ARG0; },
     __strncpy_chk2: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); a.u(); strncpy(d, s, n); return ARG0; },
     __strcat_chk: (cpu, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s) + 1; chk(dl + n, a.u(), cpu); mem.memmove(d + dl, s, n); return ARG0; },
-    __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = mem.strlen(d); let i = 0; for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i]; u8[d + dl + i] = 0; wrote(d + dl, i + 1); chk(dl + i + 1, a.u(), cpu); return ARG0; },
+    __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(strncat(d, s, n), a.u(), cpu); return ARG0; },
     __strlen_chk: (cpu, a) => { const s = a.p(); const n = mem.strlen(s); chk(n + 1, a.u(), cpu); return n; },
     __vsnprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, vaList(a.p()))); },
     __snprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, a)); },

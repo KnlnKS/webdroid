@@ -397,15 +397,7 @@ export function libcInit(): void {
     strncpy: (_c, a) => { strncpy(a.p(), a.p(), a.u()); return ARG0; },
     stpcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ptr(d + n); },
     strcat: (_c, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s); mem.memmove(d + dl, s, n + 1); return ARG0; },
-    strncat: (_c, a) => {
-      const d = a.p(), s = a.p(), n = a.u();
-      const dl = mem.strlen(d);
-      let i = 0;
-      for (; i < n && mem.u8[s + i]; i++) mem.u8[d + dl + i] = mem.u8[s + i];
-      mem.u8[d + dl + i] = 0;
-      wrote(d + dl, i + 1);
-      return ARG0;
-    },
+    strncat: (_c, a) => { strncat(a.p(), a.p(), a.u()); return ARG0; },
     strcmp: SERVED, strncmp: SERVED,
     strcasecmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, true),
     strncasecmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), true),
@@ -597,6 +589,15 @@ export function strncpy(d: number, s: number, n: number): void {
   for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
   for (; i < n; i++) mem.u8[d + i] = 0;
   wrote(d, n);
+}
+/** at most n bytes of s after d's string, then a NUL; the size of d's string with its NUL */
+export function strncat(d: number, s: number, n: number): number {
+  const dl = mem.strlen(d);
+  let i = 0;
+  for (; i < n && mem.u8[s + i]; i++) mem.u8[d + dl + i] = mem.u8[s + i];
+  mem.u8[d + dl + i] = 0;
+  wrote(d + dl, i + 1);
+  return dl + i + 1;
 }
 export function snprintfInto(d: number, n: number, s: string): number {
   const b = utf8(s);
