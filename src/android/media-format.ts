@@ -6,7 +6,7 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { boxDesc, boxFloat, boxInt, boxLong, unbox } from "../jvm/natives/jbox";
 import { isBuffer, type JBuffer } from "../jvm/natives/jnio";
 
-export type FormatValue = number | bigint | string | JBuffer;
+type FormatValue = number | bigint | string | JBuffer;
 export class NativeFormat {
   values = new Map<string, { type: number; value: FormatValue }>();
   constructor(from?: NativeFormat) { if (from) this.values = new Map(from.values); }

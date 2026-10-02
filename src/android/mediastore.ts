@@ -208,7 +208,7 @@ export async function mediaDelete(uri: JUri, selection: string | null, args: str
   for (const path of table ? await selectedPaths(table, selection, args) : []) if (vfs.delete(path)) count++;
   return count;
 }
-export async function scannedMediaUri(path: string): Promise<JUri | null> {
+async function scannedMediaUri(path: string): Promise<JUri | null> {
   if (!path.startsWith("/sdcard/") || !vfs.stat(path)) return null;
   await index();
   const entry = indexed.get(path);
