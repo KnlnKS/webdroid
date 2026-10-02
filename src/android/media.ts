@@ -2,7 +2,7 @@
 
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { vcall, scall, newObj, staticField, vcallUncaught } from "../jvm/natives/jlang";
+import { after, vcall, scall, newObj, staticField, vcallUncaught } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet } from "../jvm/natives/jcoll";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
@@ -265,29 +265,29 @@ rt.registerJnis("android/media/AudioSystem", {
   "native_get_offload_support(IIIII)I": () => 0,
 });
 rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
-  "native_list_audio_product_strategies(Ljava/util/ArrayList;)I": async (list: unknown) => {
+  "native_list_audio_product_strategies(Ljava/util/ArrayList;)I": driven(function* (list: unknown) {
     for (const [name, id, groups] of PRODUCT_STRATEGIES) {
       const built = [];
       for (const [volumeGroup, stream, attributes] of groups) {
         const all = [];
         for (const [usage, content, flags, tag] of attributes) {
-          const builder = await newObj("android/media/AudioAttributes$Builder");
-          const system = await scall("android/media/AudioAttributes", "isSystemUsage", "(I)Z", usage);
-          await vcall(builder, system ? "setSystemUsage" : "setUsage", "(I)" + AAB, usage);
-          await vcall(builder, "setInternalContentType", "(I)" + AAB, content);
-          await vcall(builder, "replaceFlags", "(I)" + AAB, flags);
-          if (tag) await vcall(builder, "addTag", "(Ljava/lang/String;)" + AAB, tag);
-          all.push(await vcall(builder, "build", "()Landroid/media/AudioAttributes;"));
+          const builder = yield newObj("android/media/AudioAttributes$Builder");
+          const system = yield scall("android/media/AudioAttributes", "isSystemUsage", "(I)Z", usage);
+          yield vcall(builder, system ? "setSystemUsage" : "setUsage", "(I)" + AAB, usage);
+          yield vcall(builder, "setInternalContentType", "(I)" + AAB, content);
+          yield vcall(builder, "replaceFlags", "(I)" + AAB, flags);
+          if (tag) yield vcall(builder, "addTag", "(Ljava/lang/String;)" + AAB, tag);
+          all.push(yield vcall(builder, "build", "()Landroid/media/AudioAttributes;"));
         }
-        built.push(await newObj("android/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup", "(II[Landroid/media/AudioAttributes;)V",
+        built.push(yield newObj("android/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup", "(II[Landroid/media/AudioAttributes;)V",
           volumeGroup, stream, jarray(all, "Landroid/media/AudioAttributes;")));
       }
-      await vcall(list, "add", "(Ljava/lang/Object;)Z", await newObj("android/media/audiopolicy/AudioProductStrategy",
+      yield vcall(list, "add", "(Ljava/lang/Object;)Z", yield newObj("android/media/audiopolicy/AudioProductStrategy",
         "(Ljava/lang/String;I[Landroid/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup;)V", name, id,
         jarray(built, "Landroid/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup;")));
     }
     return 0;
-  },
+  }),
 });
 
 const players = new Set<JMediaPlayer>();
@@ -893,7 +893,7 @@ rt.register({
       (_c: unknown, paths: string[] | null, _m: unknown, l: unknown) => {
         if (!l) return;
         for (const p of paths ?? []) {
-          void onMain(async () => vcall(l, "onScanCompleted", "(Ljava/lang/String;Landroid/net/Uri;)V", p, await scannedMediaUri(p))).catch(reportUncaught);
+          void onMain(() => after(scannedMediaUri(p), (uri) => vcall(l, "onScanCompleted", "(Ljava/lang/String;Landroid/net/Uri;)V", p, uri))).catch(reportUncaught);
         }
       },
   },
