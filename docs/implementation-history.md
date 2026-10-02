@@ -1516,6 +1516,30 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Limits: Clash of Clans and Clash Royale fail their anti-tamper checks in both modes; Resy and
   TikTok fail their live flows in both modes. Reddit's flow is timing-sensitive under D: microG's
   One Tap sheet arrives in its own process during the launch and takes the next taps.
+- 2026-10-04, Stage D lifecycle differential (§5.3). ActivityThread writes `wm_on_*_called`
+  EventLog tags (30021-30065) on both sides. Replaying a flow on the reference AVD with
+  `logcat -b events` cleared per step, and on webdroid with the page's `[I/EventLog]` lines, then
+  comparing each step's (event, activity, reason) sequence for the app's own activities:
+  - FitNotes (39 steps), CalculatorM (8) and Mihon onboarding (5) now match. The one remaining
+    FitNotes difference is a step boundary: the AVD's start for `28 ex-custom` lands in step 29's
+    window. The AVD's mihon-app replay diverged from the flow on its own (it was at the Library by
+    step 15 and left the app at 16), so that flow is not evidence either way.
+  - No TopResumedActivityChangeItem was ever sent, so `onTopResumedActivityChanged` never ran.
+    ATM now sends gained after a launch (the client reports `topStateChangedWhenResumed`) or with
+    a resume (`topWhenResuming`), and lost in the transaction that pauses.
+  - `Activity.recreate` did nothing: `scheduleRelaunchActivityIfPossible` skips an activity whose
+    token is a local `android.os.Binder` (an ActivityGroup child the server does not know), and
+    ATM's tokens were local Binders. A client now holds a BinderProxy for a system-owned binder,
+    as on a device. Mihon's onboarding theme choice relaunches as the AVD does.
+  - A splash screen that starts its successor and finishes raced: the finish saw the activity
+    already pausing and scheduled its destroy before the pause transaction was built. A
+    lifecycle request for a missing record is ignored, so this was silent until the top-resumed
+    callback, an ActivityTransactionItem, threw on it. A second pause now waits on the first.
+  - The recorder read the status inset only as `ITYPE_STATUS_BAR`; the current API 35 image prints
+    `InsetsSource id=… type=statusBars`, so it could not start. It reads both now.
+  - Under SwiftShader, the pixel rule's readbacks dominate a step whose screen keeps changing: in
+    Komikku's `09 manga`, `getImageData` took 5.7 s of a 7 s step. Its settle exceeds 20 s on a
+    loaded host and times out under the parallel gate.
 
 ## Java, storage and framework semantics
 
