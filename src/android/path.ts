@@ -523,10 +523,12 @@ export function inversePath(path: NativePath, l: number, t: number, r: number, b
     inverse.addPath(path.path());
     return [inverse, "evenodd"];
   }
-  const outer = new NativePath(), result = new NativePath();
+  // the bounds less the path under its plain fill; the page's CanvasKit is loaded before anything draws
+  const outer = new NativePath(), plain = new NativePath(), result = new NativePath();
   outer.addRect(l, t, r, b, CW);
-  // the page's CanvasKit is loaded before anything draws
-  if (pathOp(result, outer, path, DIFFERENCE) instanceof Promise) throw new Error("CanvasKit is not loaded");
+  plain.set(path);
+  plain.setFillType(path.fillType() & 1);
+  if (pathOp(result, outer, plain, DIFFERENCE) instanceof Promise) throw new Error("CanvasKit is not loaded");
   return [result.path(), result.fillRule];
 }
 
