@@ -404,7 +404,8 @@ rt.register({
 type Ctx = { egl: EglContext | null };
 type Surf = { surf: GlSurface | null; owned: boolean };
 const DEFAULT = 1n;
-const mHandle = () => declaredField("android/opengl/EGLObjectHandle", "mHandle");
+let handleField = "";
+const mHandle = () => handleField ||= declaredField("android/opengl/EGLObjectHandle", "mHandle");
 const handleOf = (o: JObj | null): bigint => o ? (o as unknown as Record<string, bigint>)[mHandle()] : 0n;
 const eglObject = (cls: string, h: bigint): JObj => setDeclared(rt.make("android/opengl/" + cls), "android/opengl/EGLObjectHandle", { mHandle: h });
 const ctxOf = (o: JObj | null) => deref<Ctx | undefined>(handleOf(o));
