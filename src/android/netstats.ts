@@ -1,14 +1,16 @@
-// INetworkStatsService, under AOSP's NetworkStatsManager and android.app.usage.NetworkStats: no
-// kernel accounting records traffic here (TrafficStats answers UNSUPPORTED), so every session's
-// summary is empty and every history has no buckets.
+// INetworkStatsService, under AOSP's TrafficStats, NetworkStatsManager and android.app.usage.NetworkStats:
+// no kernel accounting records traffic here, so every counter is UNSUPPORTED, every session's summary
+// is empty and every history has no buckets.
 import { JObj, rt, noops } from "../jvm/runtime";
 import { newObj } from "../jvm/natives/jlang";
 import { uptimeMillis } from "../guest-clock";
 import { hostStub, newStub } from "./binder";
+import { strArray } from "../jvm/abi";
 
 const NS = "Landroid/net/NetworkStats;", NSH = "Landroid/net/NetworkStatsHistory;", T = "Landroid/net/NetworkTemplate;";
 /** NetworkStatsService's default history bucket, Settings.Global netstats_uid_bucket_duration (2 h) */
 const BUCKET_MS = 2n * 3600_000n;
+const UNSUPPORTED = -1n;
 const summary = () => newObj("android/net/NetworkStats", "(JI)V", BigInt(Math.floor(uptimeMillis())), 0);
 const history = () => newObj("android/net/NetworkStatsHistory", "(J)V", BUCKET_MS);
 rt.register({ name: "webdroid/NetworkStatsSession", ctor: class extends JObj {}, sup: "android/net/INetworkStatsSession$Stub", methods: {
@@ -27,6 +29,17 @@ const session = () => newStub("webdroid/NetworkStatsSession");
 rt.register({ name: "webdroid/NetworkStatsService", ctor: class extends JObj {}, sup: "android/net/INetworkStatsService$Stub", methods: {
   "openSession()Landroid/net/INetworkStatsSession;": session,
   "openSessionForUsageStats(ILjava/lang/String;)Landroid/net/INetworkStatsSession;": session,
-  ...noops("forceUpdate()V"),
+  "getTotalStats(I)J": () => UNSUPPORTED,
+  "getUidStats(II)J": () => UNSUPPORTED,
+  "getIfaceStats(Ljava/lang/String;I)J": () => UNSUPPORTED,
+  "getMobileIfaces()[Ljava/lang/String;": () => strArray([]),
+  ...noops("forceUpdate()V", "incrementOperationCount(III)V", "clearTrafficStatsRateLimitCaches()V"),
 } });
 hostStub("netstats", "webdroid/NetworkStatsService");
+// TrafficStats' socket tags reach libnetd_client's tagSocket, which with no fwmarkd to send them to
+// reports success as FwmarkClient does when netd is not running; no accounting reads them
+rt.claimNativeLib("framework-connectivity-tiramisu-jni");
+rt.registerJnis("android/net/TrafficStats", {
+  "native_tagSocketFd(Ljava/io/FileDescriptor;II)I": () => 0,
+  "native_untagSocketFd(Ljava/io/FileDescriptor;)I": () => 0,
+});
