@@ -5,6 +5,7 @@ import { handle, deref, FINALIZER } from "./handles";
 import { COMPOSITE, BLEND_MODES, NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics";
 import type { NativeBitmap } from "./bitmap";
 import type { RuntimeShaderBuilder } from "./runtime-shader";
+import type { Ctx2D } from "./recording";
 
 /** the rasters a blur reuses from one run to the next */
 export type BlurCache = { padded: OffscreenCanvas | null; blurred: OffscreenCanvas | null };
@@ -65,7 +66,7 @@ export abstract class NativeRenderEffect {
   /** SkImageFilter::filterImage over `source`, the node's content or an outer chain's input */
   abstract filter(source: Filtered): Filtered;
   /** the node's content `source` filtered and drawn into ctx */
-  draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, source: OffscreenCanvas) {
+  draw(ctx: Ctx2D, source: OffscreenCanvas) {
     const f = this.filter(whole(source));
     ctx.drawImage(f.img, f.x, f.y, f.w, f.h);
   }
@@ -189,7 +190,7 @@ class ShaderEffect extends NativeRenderEffect {
 /** the input image as a shader in node coordinates, what a runtime shader's child samples */
 class ImageShader extends NativeShader {
   constructor(private readonly f: Filtered) { super(null); }
-  override pattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern | null {
+  override pattern(ctx: Ctx2D): CanvasPattern | null {
     const p = ctx.createPattern(this.f.img, "no-repeat");
     p?.setTransform(new DOMMatrix([this.f.w / this.f.img.width, 0, 0, this.f.h / this.f.img.height, this.f.x, this.f.y]));
     return p;

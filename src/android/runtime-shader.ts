@@ -1,7 +1,6 @@
 import { rt } from "../jvm/runtime";
 import { NativeShader, fillWithShader } from "./graphics";
 import type { Affine } from "./matrix";
-
 import type { Ctx2D } from "./recording";
 type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
 type Uniform = { location: WebGLUniformLocation | null; format: UniformType; color: boolean; values: number[] };

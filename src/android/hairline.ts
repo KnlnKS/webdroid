@@ -1,5 +1,6 @@
+import type { Ctx2D } from "./recording";
+
 type Point = [number, number];
-type Context = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 export function devicePoint(matrix: DOMMatrix, x: number, y: number): Point {
   const f = Math.fround;
@@ -53,7 +54,7 @@ function rasterLine(start: Point, end: Point, width: number, height: number, pix
   return count;
 }
 
-export function hairlineRect(ctx: Context, left: number, top: number, right: number, bottom: number,
+export function hairlineRect(ctx: Ctx2D, left: number, top: number, right: number, bottom: number,
   cap: CanvasLineCap): Path2D | null {
   const width = ctx.canvas.width, height = ctx.canvas.height;
   if (!(right > left && bottom > top && width > 0 && height > 0)) return null;
@@ -87,7 +88,7 @@ export function hairlineRect(ctx: Context, left: number, top: number, right: num
   return count ? pixels : null;
 }
 
-export function hairlineLine(ctx: Context, x0: number, y0: number, x1: number, y1: number,
+export function hairlineLine(ctx: Ctx2D, x0: number, y0: number, x1: number, y1: number,
   cap: CanvasLineCap): Path2D | null {
   const width = ctx.canvas.width, height = ctx.canvas.height;
   if (!(width > 0 && height > 0)) return null;
@@ -107,7 +108,7 @@ export function hairlineLine(ctx: Context, x0: number, y0: number, x1: number, y
   return rasterLine(clipped[0], clipped[1], width, height, pixels) ? pixels : null;
 }
 
-function samplingRegion(ctx: Context, left: number, top: number, right: number, bottom: number) {
+function samplingRegion(ctx: Ctx2D, left: number, top: number, right: number, bottom: number) {
   const m = ctx.getTransform(), det = m.a * m.d - m.b * m.c;
   if (!det || !Number.isFinite(det)) return null;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -124,7 +125,7 @@ function samplingRegion(ctx: Context, left: number, top: number, right: number, 
   return { m, det, x0, y0, x1, y1 };
 }
 
-export function sampledFill(ctx: Context, left: number, top: number, right: number, bottom: number,
+export function sampledFill(ctx: Ctx2D, left: number, top: number, right: number, bottom: number,
   contains: (x: number, y: number) => boolean): Path2D | null {
   const region = samplingRegion(ctx, left, top, right, bottom);
   if (!region) return null;
@@ -145,7 +146,7 @@ export function sampledFill(ctx: Context, left: number, top: number, right: numb
   return pixels;
 }
 
-export function sampledCoverage(ctx: Context, left: number, top: number, right: number, bottom: number,
+export function sampledCoverage(ctx: Ctx2D, left: number, top: number, right: number, bottom: number,
   contains: (x: number, y: number) => boolean): Path2D[] | null {
   const region = samplingRegion(ctx, left, top, right, bottom);
   if (!region) return null;
