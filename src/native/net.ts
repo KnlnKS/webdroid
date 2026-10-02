@@ -999,7 +999,6 @@ function gaiStrerror(code: number): number {
   return address;
 }
 
-/** the kernel's socket calls */
 export const NET_SYSCALLS: Record<string, HostFn> = {
   socket: (cpu, args) => {
     const domain = args.i(), type = args.i(), protocol = args.i();

@@ -750,7 +750,6 @@ export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRe
 /** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
 const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
-/** makes a Cpu the host created known to the guest libc before its first guest instruction */
 /** the guest libc's state for a thread the host created: `start` binds it (bindThread) before its
  *  first instruction, `end` tears it down when its Java thread ends */
 let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void> } | null = null;

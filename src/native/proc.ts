@@ -112,7 +112,6 @@ const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fort
 /** what the core leaves to the host of a __memcpy_chk it serves: a failed check */
 export const memcpyChk: HostFn = (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; };
 
-/** the kernel's signals, resource limits, capabilities and scheduling policy */
 export const PROC_SYSCALLS: Record<string, HostFn> = {
   getrlimit: (_cpu, a) => {
     const current = limit(a.i()), out = a.p();

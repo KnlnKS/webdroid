@@ -275,7 +275,6 @@ export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: num
   return cpu.osTid;
 }
 
-/** the kernel's sleeps and yield */
 export const PTHREAD_SYSCALLS: Record<string, HostFn> = {
   clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
   nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); return sleepMs(readTs(req)); },
