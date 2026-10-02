@@ -37,7 +37,7 @@ export function expect(t: Tlv | undefined, tag: number): Tlv {
   return t;
 }
 
-export const SEQUENCE = 0x30, SET = 0x31, INTEGER = 2, BIT_STRING = 3, OCTET_STRING = 4, NULL = 5, OID = 6, BOOLEAN = 1;
+export const SEQUENCE = 0x30, INTEGER = 2, BIT_STRING = 3, OCTET_STRING = 4, NULL = 5, OID = 6, BOOLEAN = 1;
 
 export function oidToString(body: Uint8Array): string {
   const parts: number[] = [];

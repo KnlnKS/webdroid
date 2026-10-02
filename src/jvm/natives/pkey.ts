@@ -6,7 +6,7 @@ import { modInverse, modPow } from "./jmath";
 import { DIGESTS, type Hash } from "./digest";
 import {
   readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, concat, integer, uintOf,
-  bytesToBig, bigToBytes, DerError, SEQUENCE, INTEGER, BIT_STRING, OCTET_STRING, OID,
+  bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
 } from "./der";
 
 export const EVP_PKEY_RSA = 6, EVP_PKEY_EC = 408, EVP_PKEY_X25519 = 948;
@@ -472,4 +472,3 @@ export function marshalPrivateKey(k: PKey): Uint8Array | null {
   }
   return k.priv ? seq(integer(0n), algId(OID_X25519), octets(octets(k.priv))) : null;
 }
-export { INTEGER };

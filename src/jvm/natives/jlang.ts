@@ -30,7 +30,6 @@ const joinIterable = driven(function* (separator: unknown, parts: unknown): Gen<
   return yield* joinCharSequences(separator, values);
 });
 
-
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? lateMethod.find?.(obj, name, desc);
   if (typeof fn !== "function") throw rt.unimplemented(`vcall ${describe(obj)}.${name}${desc}`);
@@ -875,7 +874,6 @@ rt.register({
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
     "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;": driven(joinCharSequences),
     "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": joinIterable,
-
   },
   // String's <clinit> does not run for the spec: its comparator is made on first read
   statics: { get CASE_INSENSITIVE_ORDER() { return rt.make("java/lang/String$CaseInsensitiveComparator"); } },
@@ -1061,7 +1059,6 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
   if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
   return index;
 }
-
 
 function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
   if (src === null || dst === null) rt.npe();
@@ -1375,7 +1372,6 @@ rt.register({
         startThread(this);
       })));
     },
-
     "run()V": driven(function* (this: JThread): Gen {
       if (this.target) yield vcall(this.target, "run", "()V");
     }),
@@ -1415,7 +1411,6 @@ function enumerateThreads(threads: unknown[]): number {
   for (const thread of liveThreads) { if (count === threads.length) break; threads[count++] = thread; }
   return count;
 }
-// java.lang.Enum runs from libcore; TS reads a constant's name and ordinal through these
 const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
 // §4.7: compareTo within one enum class, and valueOf over the constants getSharedConstants shares
 // (AOSP asks getClass and getDeclaringClass of both, and an LRU cache under a lock, per call)
@@ -1432,7 +1427,6 @@ rt.intrinsic("java/lang/Enum", {
     return base(cls, name);
   },
 });
-
 const THREAD_STATES = ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"];
 /** debug: each live thread as Thread.getState reads it, with the object it parked on
  *  (wd.threads; the e2e harness records it when a step's phase hangs) */
