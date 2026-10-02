@@ -202,6 +202,24 @@ export function fillSysinfo(p: number): void {
   mem.st16(p + L * 10, 1);
   mem.st32(p + (L === 8 ? 104 : 52), unit);
 }
+// File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
+// MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
+/** mmap, whose file offset `offOf` reads: an off_t, or mmap64's off64_t */
+const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn => (cpu, a) => {
+  const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offOf(a);
+  if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return mapFailed(cpu, E.INVAL);
+  const reserve = (flags & 0x20) !== 0 && prot === 0;
+  // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
+  // low and made executable later, as V8's is) must not land in a plane above it.
+  const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
+  if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return mapFailed(cpu, E.NOMEM);
+  if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
+  if (fd !== -1 && !(flags & 0x20)) {
+    const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
+    const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
+  }
+  return p;
+};
 /** the kernel's memory mapping, time and identity calls */
 export const LIBC_SYSCALLS: Record<string, HostFn> = {
   getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
@@ -222,23 +240,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
     mem.decommitVa(va, n);
     return 0;
   },
-  // File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
-  // MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
-  mmap: (cpu, a) => {
-    const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
-    if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return mapFailed(cpu, E.INVAL);
-    const reserve = (flags & 0x20) !== 0 && prot === 0;
-    // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
-    // low and made executable later, as V8's is) must not land in a plane above it.
-    const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
-    if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return mapFailed(cpu, E.NOMEM);
-    if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
-    if (fd !== -1 && !(flags & 0x20)) {
-      const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
-      const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
-    }
-    return p;
-  },
+  mmap: mmapWith(offArg),
   munmap: (cpu, a) => {
     const va = a.va(), n = Math.ceil(Number(a.va()) / PAGE_SIZE) * PAGE_SIZE; // whole pages, as the kernel unmaps
     if (va & BigInt(PAGE_SIZE - 1) || !n) return fail(cpu, E.INVAL);
@@ -366,7 +368,7 @@ export function libcInit(): void {
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    mmap64: LIBC_SYSCALLS.mmap,
+    mmap64: mmapWith((a) => Number(a.l())),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     syscall: (cpu, a) => rawSyscall(cpu, a.i(), a),
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
