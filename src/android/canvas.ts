@@ -13,7 +13,7 @@ import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
 import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
-import { type Affine, setAffine, applyMatrix, matrixAt } from "./matrix";
+import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
@@ -93,7 +93,7 @@ export class NativeCanvas {
   private blurLayer: { source: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: NativePaint } | null = null;
   drawMask(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke?: (ctx: Ctx2D) => void) {
     const ctx = this.ctx, w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform();
-    const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+    const scale = deviceScale(m);
     if (!w || !h || !scale) return;
     let layer = this.blurLayer;
     if (!layer || layer.source.w !== w || layer.source.h !== h) {
@@ -159,10 +159,7 @@ export class NativeCanvas {
     const blend = p.compositeOp();
     const prev = blend ? this.ctx.globalCompositeOperation : null;
     const filter = blur ? this.ctx.filter : null;
-    if (blur) {
-      const m = this.ctx.getTransform();
-      this.ctx.filter = `blur(${blur.sigma * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))}px)`;
-    }
+    if (blur) this.ctx.filter = `blur(${blur.sigma * deviceScale(this.ctx.getTransform())}px)`;
     try {
       if (blend) this.ctx.globalCompositeOperation = blend;
       if (p.style === 0 || p.style === 2) {

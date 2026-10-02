@@ -10,6 +10,7 @@ import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import { CAPS, JOINS } from "./paint";
 import { NativePath, PathMeasure } from "./path";
+import { deviceScale } from "./matrix";
 import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser";
 
 type Ctx = OffscreenCanvasRenderingContext2D;
@@ -124,7 +125,7 @@ export class FullPath extends VPath {
       ctx.strokeStyle = this.style(ctx, this.strokeGradient, p[STROKE_COLOR], p[STROKE_ALPHA]);
       // a width of 0 is Skia's hairline: one device pixel whatever the scale
       const width = p[STROKE_WIDTH], m = ctx.getTransform();
-      ctx.lineWidth = width > 0 ? width : 1 / (Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1);
+      ctx.lineWidth = width > 0 ? width : 1 / (deviceScale(m) || 1);
       ctx.lineCap = CAPS[p[CAP]] ?? "butt";
       ctx.lineJoin = JOINS[p[JOIN]] ?? "miter";
       ctx.miterLimit = p[MITER];

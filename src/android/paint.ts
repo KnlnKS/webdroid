@@ -16,6 +16,7 @@ import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
 import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect";
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping";
 import { strokeCommands } from "./skia";
+import { deviceScale } from "./matrix";
 import type { Ctx2D } from "./recording";
 
 const PAINT = "android/graphics/Paint";
@@ -217,7 +218,7 @@ export function beginPaintShadow(ctx: Ctx2D, p: NativePaint): boolean {
   const m = ctx.getTransform();
   ctx.save();
   ctx.shadowColor = cssColor(p.shadowColor);
-  ctx.shadowBlur = p.shadowRadius * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+  ctx.shadowBlur = p.shadowRadius * deviceScale(m);
   ctx.shadowOffsetX = m.a * p.shadowDx + m.c * p.shadowDy;
   ctx.shadowOffsetY = m.b * p.shadowDx + m.d * p.shadowDy;
   return true;

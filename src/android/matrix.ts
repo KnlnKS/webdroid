@@ -90,6 +90,8 @@ export function setAffine(m: Mat, a: number, b: number, c: number, d: number, e:
   m[0] = a; m[1] = c; m[2] = e; m[3] = b; m[4] = d; m[5] = f; m[6] = 0; m[7] = 0; m[8] = 1;
 }
 const affineOf = (m: Mat): [number, number, number, number, number, number] => [m[0], m[3], m[1], m[4], m[2], m[5]];
+/** how a 2D context's transform scales lengths: the square root of its area scale */
+export const deviceScale = (m: DOMMatrixReadOnly): number => Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
 /** concatenate (or with `set`, replace) a 2D context's transform; a perspective row cannot be carried */
 export function applyMatrix(ctx: Ctx2D, m: ArrayLike<number>, set = false): void {
   if (set) ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
