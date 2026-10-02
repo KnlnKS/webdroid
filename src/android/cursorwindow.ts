@@ -4,6 +4,7 @@
 // SQLiteException mapping both share (android_database_SQLiteCommon.cpp).
 
 import { rt, declaredField, type JObj } from "../jvm/runtime";
+import { utf8, utf8Length } from "../jvm/abi";
 import { ownedHandle, deref, release } from "./handles";
 import { readInt, readLong, readDouble, readString, writeInt, writeLong, writeDouble, writeString, writeByteArray, createByteArray, nativeParcel,
   type NativeParcel } from "./parcel";
@@ -133,8 +134,6 @@ function strtod(s: string): number {
   const t = m[1].toLowerCase().replace("infinity", "inf");
   return t.endsWith("inf") ? (t[0] === "-" ? -Infinity : Infinity) : t.endsWith("nan") ? NaN : Number(t);
 }
-const utf8 = new TextEncoder();
-const utf8Length = (s: string) => /[^\0-\x7f]/.test(s) ? utf8.encode(s).length : s.length;
 const SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** an INTEGER field's value as the window holds it */
 const integer = (v: bigint): number | bigint => v >= -SAFE && v <= SAFE ? Number(v) : v;
@@ -171,7 +170,7 @@ rt.registerJnis("android/database/CursorWindow", {
     switch (w.types[i]) {
       case FIELD_BLOB: return (v as Int8Array).slice();
       // a STRING field's bytes are its UTF-8 and the terminating NUL
-      case FIELD_STRING: { const b = utf8.encode(v as string), out = new Int8Array(b.length + 1); out.set(b); return out; }
+      case FIELD_STRING: { const b = utf8.enc.encode(v as string), out = new Int8Array(b.length + 1); out.set(b); return out; }
       case FIELD_INTEGER: throw noHandle("INTEGER data in nativeGetBlob ");
       case FIELD_FLOAT: throw noHandle("FLOAT data in nativeGetBlob ");
       default: return null;
