@@ -107,6 +107,15 @@ rt.register({ name: "webdroid/TextClassificationManagerService", ctor: class ext
     `onCreateTextClassificationSession(${TC}TextClassificationContext;${TC}TextClassificationSessionId;)V`, `onDestroyTextClassificationSession(${TC}TextClassificationSessionId;)V`),
 } });
 hostStub("textclassification", "webdroid/TextClassificationManagerService");
+// ITextServicesManager, under AOSP's TextServicesManager: no spell checker is installed, so none
+// is enabled or current, and a new session is null as AOSP's manager returns then
+rt.register({ name: "webdroid/TextServicesManagerService", ctor: class extends JObj {}, sup: "com/android/internal/textservice/ITextServicesManager$Stub", methods: {
+  "isSpellCheckerEnabled(I)Z": () => 0,
+  "getCurrentSpellChecker(ILjava/lang/String;)Landroid/view/textservice/SpellCheckerInfo;": () => null,
+  "getCurrentSpellCheckerSubtype(IZ)Landroid/view/textservice/SpellCheckerSubtype;": () => null,
+  "getEnabledSpellCheckers(I)[Landroid/view/textservice/SpellCheckerInfo;": () => jarray([], "Landroid/view/textservice/SpellCheckerInfo;"),
+} });
+hostStub("textservices", "webdroid/TextServicesManagerService");
 // SensitiveContentProtectionManagerService only blocks a sensitive window from screen sharing, and
 // nothing projects the screen here
 rt.register({ name: "webdroid/SensitiveContentProtectionManagerService", ctor: class extends JObj {}, sup: "android/view/ISensitiveContentProtectionManager$Stub",

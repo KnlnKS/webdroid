@@ -1,21 +1,9 @@
 // The browser keyboard: the page's text control in the role of the input method, serving the
 // editor InputMethodManagerService (server/imm.ts) binds it to. The page's edits reach the editor
 // as InputConnection calls; the editor's reports keep the control's text and selection current.
-import { rt, JObj, driven, declaredField, type Gen } from "../jvm/runtime";
+import { type JObj, driven, declaredField, type Gen } from "../jvm/runtime";
 import { onMain } from "./mainloop";
-import { jarray } from "../jvm/abi";
 import { csText } from "../jvm/natives/jchars";
-import { hostStub } from "./binder";
-
-// ITextServicesManager, under AOSP's TextServicesManager: no spell checker is installed, so none
-// is enabled or current, and a new session is null as AOSP's manager returns then
-rt.register({ name: "webdroid/TextServicesManagerService", ctor: class extends JObj {}, sup: "com/android/internal/textservice/ITextServicesManager$Stub", methods: {
-  "isSpellCheckerEnabled(I)Z": () => 0,
-  "getCurrentSpellChecker(ILjava/lang/String;)Landroid/view/textservice/SpellCheckerInfo;": () => null,
-  "getCurrentSpellCheckerSubtype(IZ)Landroid/view/textservice/SpellCheckerSubtype;": () => null,
-  "getEnabledSpellCheckers(I)[Landroid/view/textservice/SpellCheckerInfo;": () => jarray([], "Landroid/view/textservice/SpellCheckerInfo;"),
-} });
-hostStub("textservices", "webdroid/TextServicesManagerService");
 
 /** An editor the IME serves, as the IME last heard it: its text from `offset`, the selection in
  *  the editor's coordinates and the composing region in `text`'s. `call` is an

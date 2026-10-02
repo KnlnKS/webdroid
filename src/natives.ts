@@ -99,7 +99,6 @@ import "./android/service";
 import "./android/documents";
 import "./android/mediastore";
 import "./android/provider";
-import "./android/ime";
 import "./android/notification";
 // last of the android modules: the delegates read the classes the ones above define, and
 // they register JNI implementations rather than native classes, so nothing shadows anything
