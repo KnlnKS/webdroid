@@ -4,14 +4,14 @@
 
 import { isRecording, recordOrRun, type Ctx2D } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster";
-import { drawSkiaText, SKIA_TEXT_FACE } from "./skia";
+import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia";
 import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { deref } from "./handles";
 import { NativePath, PathMeasure, inversePath } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels } from "./bitmap";
-import { drawGlyphs, cssFont } from "./shaping";
+import { drawGlyphs, cssFont, shapeTextRun } from "./shaping";
 import { fontNatives } from "./fonts";
 import { paintAdvance } from "./minikin";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
@@ -233,16 +233,21 @@ function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchChunk, l
   }
   ctx.restore();
 }
+/** a plain run into a bitmap in the faces CanvasKit has, drawn as Skia draws minikin's glyphs */
 function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint): boolean {
-  return !!(nc.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
+  if (!(nc.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm && p.textScaleX === 1 && !p.textSkewX &&
     !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.pathEffect && !p.shadowRadius &&
-    !p.colorFilter && !p.blend && !isRecording(nc.ctx) &&
-    skiaFace(p) &&
-    drawSkiaText(nc.ctx, s, x, y, p.textSize,
-      p.color,
-      p.style === 1 ? "hairline" : "fill", p.subpixelText || p.linearText));
+    !p.colorFilter && !p.blend && !isRecording(nc.ctx) && skiaFace(p))) return false;
+  const l = shapeTextRun(s, 0, s.length, 0, s.length, false, p);
+  if (l instanceof Promise) return false;
+  const path = l.fonts[0]?.font.path;
+  if (path !== SKIA_TEXT_FACE && path !== SKIA_EMOJI_FACE || !l.fonts.every((f) => f.font.path === path)) return false;
+  const positions = new Float32Array(l.ids.length * 2);
+  for (let i = 0; i < l.ids.length; i++) { positions[i * 2] = l.x[i]; positions[i * 2 + 1] = l.y[i]; }
+  return drawSkiaText(nc.ctx, path === SKIA_EMOJI_FACE, Uint16Array.from(l.ids), positions, x, y, p.textSize, p.color,
+    p.style === 1 ? "hairline" : "fill", p.subpixelText || p.linearText);
 }
 /** whether the paint draws in the face CanvasKit has: the system Roboto's default instance */
 function skiaFace(p: NativePaint): boolean {

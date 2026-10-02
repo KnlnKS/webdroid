@@ -4,7 +4,6 @@
 import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
-import { shapeLigatures } from "./text-shaping";
 import { pageShared } from "../shell/pageshared";
 import { after } from "../jvm/natives/jlang";
 
@@ -18,8 +17,8 @@ let surface: Surface | null = null;
 let surfaceWidth = 0, surfaceHeight = 0;
 let bitmap: OffscreenCanvasRenderingContext2D | null = null;
 let emojiClips = new Map<number, [number, number]>();
-/** the system face this draws text in */
-export const SKIA_TEXT_FACE = "/system/fonts/Roboto-Regular.ttf";
+/** the system faces this draws text in */
+export const SKIA_TEXT_FACE = "/system/fonts/Roboto-Regular.ttf", SKIA_EMOJI_FACE = "/system/fonts/NotoColorEmoji.ttf";
 /** SkPathFillType by value: CanvasKit's binding names the two plain types, SkPath takes all four */
 let fillTypes: FillType[] = [];
 
@@ -64,15 +63,15 @@ export function strokeCommands(cmds: PathCommands, width: number, miter: number,
   });
 }
 
-function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, x: number, y: number,
+function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, positions: Float32Array, x: number, y: number,
   matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {
-  const bounds = font.getGlyphBounds(glyphs, paint), advances = font.getGlyphWidths(glyphs, paint);
-  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity, pen = x;
+  const bounds = font.getGlyphBounds(glyphs, paint);
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
   for (let i = 0; i < glyphs.length; i++) {
-    const offset = i * 4;
+    const offset = i * 4, gx = x + positions[i * 2], gy = y + positions[i * 2 + 1];
     if (bounds[offset + 2]! > bounds[offset]! && bounds[offset + 3]! > bounds[offset + 1]!) {
-      const x0 = pen + bounds[offset]!, x1 = pen + bounds[offset + 2]!;
-      const y0 = y + bounds[offset + 1]!, y1 = y + bounds[offset + 3]!;
+      const x0 = gx + bounds[offset]!, x1 = gx + bounds[offset + 2]!;
+      const y0 = gy + bounds[offset + 1]!, y1 = gy + bounds[offset + 3]!;
       const ax0 = matrix.a * x0, ax1 = matrix.a * x1, cx0 = matrix.c * y0, cx1 = matrix.c * y1;
       const bx0 = matrix.b * x0, bx1 = matrix.b * x1, dx0 = matrix.d * y0, dx1 = matrix.d * y1;
       left = Math.min(left, Math.min(ax0, ax1) + Math.min(cx0, cx1) + matrix.e);
@@ -80,7 +79,6 @@ function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, x: number, y: 
       top = Math.min(top, Math.min(bx0, bx1) + Math.min(dx0, dx1) + matrix.f);
       bottom = Math.max(bottom, Math.max(bx0, bx1) + Math.max(dx0, dx1) + matrix.f);
     }
-    pen += advances[i]!;
   }
   if (left === Infinity) return null;
   if (![left, top, right, bottom].every(Number.isFinite)) return [0, 0, width, height];
@@ -121,7 +119,7 @@ export function loadSkia(): Promise<void> {
   return loading ??= Promise.all([
     canvasKit(),
     fetch(`/vendor/aosp${SKIA_TEXT_FACE}`).then(response => response.arrayBuffer()),
-    fetch("/vendor/aosp/system/fonts/NotoColorEmoji.ttf").then(response => response.arrayBuffer()),
+    fetch(`/vendor/aosp${SKIA_EMOJI_FACE}`).then(response => response.arrayBuffer()),
   ]).then(([canvasKit, data, emojiData]) => {
     const typeface = canvasKit.Typeface.MakeFreeTypeFaceFromData(data);
     if (!typeface) throw new Error("Roboto unavailable to Skia");
@@ -134,13 +132,13 @@ export function loadSkia(): Promise<void> {
   });
 }
 
-export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size: number, color: number,
+/** SkCanvas::drawGlyphs of one face's laid-out glyphs (minikin's ids, and positions from the run's
+ *  origin) through FreeType's rasterizer into a bitmap's context; false where CanvasKit cannot */
+export function drawSkiaText(ctx: Ctx, emoji: boolean, glyphs: Uint16Array, positions: Float32Array, x: number, y: number, size: number, color: number,
   style: "fill" | "hairline" = "fill", subpixel = false): boolean {
-  if (page.drawSkiaText !== drawSkiaText) return page.drawSkiaText(ctx, text, x, y, size, color, style, subpixel);
-  if (!kit || !face || !text || !Number.isFinite(size) || size <= 0) return false;
-  const shaped = shapeLigatures(text);
-  const hasLigature = shaped !== text;
-  text = shaped;
+  if (page.drawSkiaText !== drawSkiaText) return page.drawSkiaText(ctx, emoji, glyphs, positions, x, y, size, color, style, subpixel);
+  const typeface = emoji ? emojiFace : face;
+  if (!kit || !typeface || !glyphs.length || !Number.isFinite(size) || size <= 0) return false;
   const width = ctx.canvas.width, height = ctx.canvas.height;
   if (!width || !height || width * height > 250_000) return false;
   if (!surface || surfaceWidth !== width || surfaceHeight !== height) {
@@ -157,28 +155,11 @@ export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size:
   const paint = new kit.Paint();
   paint.setColor(kit.Color((color >>> 16) & 255, (color >>> 8) & 255, color & 255, (color >>> 24) / 255));
   if (style === "hairline") { paint.setStyle(kit.PaintStyle.Stroke); paint.setStrokeWidth(0); }
-  let font = new kit.Font(face, size);
-  let emoji = false;
-  let glyphs = font.getGlyphIDs(text);
-  let missing = glyphs.some(id => id === 0);
-  if (missing) {
-    const repaired = text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
-    if (repaired !== text) { text = repaired; glyphs = font.getGlyphIDs(text); missing = glyphs.some(id => id === 0); }
-  }
-  if (missing) {
-    font.delete();
-    if (!emojiFace) { paint.delete(); canvas.restore(); return false; }
-    font = new kit.Font(emojiFace, size);
-    emoji = true;
-    glyphs = font.getGlyphIDs(text);
-    if (glyphs.some(id => id === 0)) {
-      font.delete(); paint.delete(); canvas.restore(); return false;
-    }
-  }
+  const font = new kit.Font(typeface, size);
   font.setEdging(kit.FontEdging.AntiAlias);
   font.setHinting(kit.FontHinting.None);
-  font.setSubpixel(subpixel && !hasLigature);
-  const ink = inkBounds(font, paint, glyphs, x, y, m, width, height);
+  font.setSubpixel(subpixel);
+  const ink = inkBounds(font, paint, glyphs, positions, x, y, m, width, height);
   if (emoji && m.b && m.c && Math.abs(m.a * m.d - m.b * m.c - 1) > 1e-3) {
     let top = -Infinity, bottom = -Infinity;
     for (const glyph of glyphs) {
@@ -196,7 +177,7 @@ export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size:
         y + size * (scale + Math.max(0, shear) * 0.1) * bottom), kit.ClipOp.Intersect, true);
     }
   }
-  canvas.drawText(text, x, y, paint, font);
+  canvas.drawGlyphs(glyphs, positions, x, y, font, paint);
   canvas.restore();
   font.delete(); paint.delete();
   if (!ink) return true;
