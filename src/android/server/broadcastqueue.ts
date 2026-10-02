@@ -2,16 +2,28 @@
 // whose registered receivers hear it through scheduleRegisteredReceiver and whose manifest
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
-import { JObj } from "../../jvm/runtime";
+import { JObj, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall } from "../../jvm/natives/jlang";
-import { hostedService } from "../binder";
+import { hostedService, notConnected } from "../binder";
 import { PROCESS_UID, reportUncaught } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
-import { broadcastTransport, filterMatches, stickyBroadcasts, type BroadcastResult } from "../broadcast";
+import type { JIntent } from "../intent";
 import type { JBundle } from "../os";
 import { scheduleOnApp, compatInfo, thisApp } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
+
+export type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
+/** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */
+export const broadcastTransport: { send: (intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult) => Promise<BroadcastResult> } =
+  { send: notConnected };
+/** broadcasts the system keeps current (BatteryService's BATTERY_CHANGED), by action. As in
+ *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */
+export const stickyBroadcasts = new Map<string, () => JIntent | Promise<JIntent>>();
+/** IntentFilter.match(ContentResolver, Intent, boolean, String), as the broadcast queue matches a registration */
+const filterMatches = driven(function* matches$(filter: JObj, intent: JIntent): Gen<boolean> {
+  return (yield vcall(filter, "match", "(Landroid/content/ContentResolver;Landroid/content/Intent;ZLjava/lang/String;)I", null, intent, 0, "ActivityManager")) >= 0;
+});
 
 export type Sender = { uid: number; pkg: string };
 const SYSTEM_UID = 1000, SYSTEM: Sender = { uid: SYSTEM_UID, pkg: "android" };
@@ -79,7 +91,7 @@ export async function deliverBroadcast(intent: JObj, component: string | null, o
 /** ActivityManagerService.broadcastIntent: through every process, then to the sender's result receiver */
 export async function broadcastIntent(intent: JObj, permissions: string[], ordered: boolean, resultTo: JObj | null = null, initial?: BroadcastResult): Promise<void> {
   const copy = await newObj("android/content/Intent", `(${INTENT})V`, intent);
-  const final = await broadcastTransport.send!(copy, permissions, ordered, initial);
+  const final = await broadcastTransport.send(copy, permissions, ordered, initial);
   if (resultTo) await scheduleOnApp("scheduleRegisteredReceiver", REGISTERED, resultTo, copy, final.code, final.data, final.extras, 0, 0, 1, 0,
     processState(PROCESS_STATE_RECEIVER), PROCESS_UID, appHost!.pkg);
 }

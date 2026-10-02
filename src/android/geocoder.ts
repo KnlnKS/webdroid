@@ -12,7 +12,7 @@ import { parcelCreator } from "./parcelable";
 import { type JBundle, PROCESS_PID, PROCESS_UID } from "./os";
 import { resolveService } from "./pm";
 import { appHost } from "./apphost";
-import { bindAsSystem } from "./runningservices";
+import { bindAsSystem } from "./server/activeservices";
 import type { JIntent, JComponentName } from "./intent";
 
 const FIELDS = ["FeatureName", "AdminArea", "SubAdminArea", "Locality", "SubLocality", "Thoroughfare", "SubThoroughfare",

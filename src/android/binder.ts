@@ -99,6 +99,8 @@ const SELF_TOKEN = -1n;
 const strictModePolicies = new WeakMap<JThread, number>();
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+/** a cross-process transport's call before the broker connects it */
+export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
 /** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
 export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
 export const enforceCallingOrSelfPermission = async (permission: string, message: string | null): Promise<void> =>

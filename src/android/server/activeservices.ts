@@ -5,15 +5,24 @@
 import { rt, JObj, getDeclared } from "../../jvm/runtime";
 import { newObj, vcall, vcallUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
-import { hostedService } from "../binder";
+import { hostedService, notConnected } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "../os";
 import { appHost } from "../apphost";
-import { packages } from "../packages";
+import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
-import { serviceTransport } from "../runningservices";
+import { type JComponentName, type JIntent, componentParts, mkComponentName, newIntent } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
+
+/** the services of another process, through the broker; `flags` are bindService's (BIND_AUTO_CREATE when omitted) */
+export const serviceTransport: {
+  bind: (owner: PackageRecord, process: string, intent: JIntent, key: string, flags?: number) => Promise<unknown>;
+  unbind: (owner: PackageRecord, process: string, key: string) => Promise<void>;
+  start: (owner: PackageRecord, process: string, intent: JIntent, foreground: boolean) => Promise<void>;
+  stop: (owner: PackageRecord, process: string, intent: JIntent) => Promise<void>;
+  peek: (owner: PackageRecord, process: string, intent: JIntent) => Promise<unknown>;
+} = { bind: notConnected, unbind: notConnected, start: notConnected, stop: notConnected, peek: notConnected };
 
 const SI = "android/content/pm/ServiceInfo", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;";
 const CONNECTED = "(Landroid/content/ComponentName;Landroid/os/IBinder;Z)V";
@@ -172,6 +181,20 @@ export const hostedServices = {
     });
   },
 };
+
+/** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
+export async function bindAsSystem(component: JComponentName, key: string, action: string | null = null): Promise<{ binder: JObj; unbind: () => Promise<void> }> {
+  const parts = (await componentParts(component))!;
+  const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
+  const node = owner?.components.service.get(cls);
+  if (!owner || !node || !appHost) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
+  const intent = await newIntent(action);
+  await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(owner.pkg, cls));
+  const process = owner.process(node);
+  if (owner.pkg === appHost.pkg && process === (PROCESS_NAME || owner.pkg))
+    return { binder: (await hostedServices.bind(intent, key))!, unbind: async () => { await hostedServices.unbind(key); } };
+  return { binder: await serviceTransport.bind(owner, process, intent, key) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
+}
 
 /** ActivityManagerService.startService: the component, or "!" with the refusal ContextImpl throws */
 export async function startService(intent: JObj, resolvedType: string | null, foreground: boolean, callingPackage: string): Promise<JObj | null> {

@@ -8,7 +8,7 @@ import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
-import { broadcastTransport } from "./broadcast";
+import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
 import { reportUncaught } from "./os";
 import { newStub } from "./binder";
@@ -53,7 +53,7 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
   if (installed !== null) {
     const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
     const added: JIntent = yield construct("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
-    void broadcastTransport.send?.(added, [], false).catch(reportUncaught);
+    void broadcastIntent(added, [], false).catch(reportUncaught);
     yield extra("android.content.pm.extra.PACKAGE_NAME", installed, S);
     yield extra("android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
   } else {

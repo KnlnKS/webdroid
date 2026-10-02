@@ -18,7 +18,7 @@ import { deviceConfiguration } from "./resnative";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
-import { stickyBroadcasts } from "./broadcast";
+import { stickyBroadcasts } from "./server/broadcastqueue";
 import { activityManagerMethods } from "./server/am";
 import { activityTaskMethods, foreground } from "./server/atm";
 import { activeServiceMethods } from "./server/activeservices";

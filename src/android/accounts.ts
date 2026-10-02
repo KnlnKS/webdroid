@@ -16,7 +16,7 @@ import { attr, attrStr, parseAXML } from "./axml";
 import { servicesMatching } from "./pm";
 import { resString } from "./res";
 import { asSystem, hostStub } from "./binder";
-import { bindAsSystem } from "./runningservices";
+import { bindAsSystem } from "./server/activeservices";
 import { mkComponentName } from "./intent";
 import { deliverBroadcast } from "./server/broadcastqueue";
 
