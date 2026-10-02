@@ -2,12 +2,11 @@
 //
 // This is the other side of provenance (src/jvm/provenance.ts). A class served by AOSP
 // bytecode keeps its Java half and loses its native half, and these are the native halves:
-// `Paint.nSetColor(J I)V`, `Matrix.nPreScale(J F F)V` — the exact descriptors the framework's
-// own bytecode calls, registered through rt.registerJni.
+// `Color.nativeRGBToHSV(III[F)V`, `Path.nAddRect(JFFFFI)V` — the exact descriptors the
+// framework's own bytecode calls, registered through rt.registerJnis.
 //
-// The `long` a framework class holds in mNativePtr is an index into `objs` here, which is
-// layoutlib's DelegateManager: framework Java owns a handle, we own the object. Handle 0 is
-// null, so a field that was never initialised dereferences to nothing rather than to slot 0.
+// The `long` a framework class holds in mNativePtr is a handle (handles.ts): framework Java owns
+// the handle, we own the object.
 //
 // Nothing in this file is written from a list. `bun run fwtest` runs the real bytecode with
 // our specs withheld and reports what it reached and could not find; every delegate below is
@@ -28,7 +27,7 @@ import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { hasProperty, propertyValue as propValue } from "../shell/properties";
 import { lambda } from "../jvm/natives/jlambda";
-import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
+import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
 import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
@@ -40,7 +39,6 @@ import {
 import { sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } from "./sfnt";
 
 const delegate = rt.registerJnis.bind(rt);
-
 
 // ── the libcore plumbing framework bytecode stands on ──────────────────────────────────
 // Not native methods but classes, and only reachable when AOSP bytecode runs: every graphics
@@ -290,8 +288,7 @@ delegate("android/graphics/fonts/FontFileUtil", {
 
 // ── android.graphics.Path, PathMeasure and PathIterator ────────────────────────────────
 // The geometry and Skia's rules for it live in path.ts, beside the bridge TS reaches it through.
-const path = (h: bigint) => deref<NativePath>(h);
-
+const path = pathAt;
 delegate("android/graphics/Path", {
   "nInit()J": () => handle(new NativePath()),
   // a null source is an empty path
@@ -463,16 +460,14 @@ delegate("android/graphics/RegionIterator", {
   },
 });
 
-
 // ── android.graphics.Camera: Sk3DView ──────────────────────────────────────────────────
+// a Java Camera keeps its Sk3DView in native_instance, which its natives set and read themselves
 let nativeInstance = "";
-/** where a Java Camera keeps its Sk3DView, which its natives set and read themselves */
-const cameraSlot = (c: object) => c as Record<string, bigint>;
 const instanceField = () => nativeInstance ||= declaredField("android/graphics/Camera", "native_instance");
-const camera = (c: object) => deref<Camera3D>(cameraSlot(c)[instanceField()]);
+const camera = (c: object) => deref<Camera3D>((c as Record<string, bigint>)[instanceField()]);
 delegate("android/graphics/Camera", {
-  "nativeConstructor()V": function (this: object) { cameraSlot(this)[instanceField()] = ownedHandle(new Camera3D()); },
-  "nativeDestructor()V": function (this: object) { release(cameraSlot(this)[instanceField()]); },
+  "nativeConstructor()V": function (this: Record<string, bigint>) { this[instanceField()] = ownedHandle(new Camera3D()); },
+  "nativeDestructor()V": function (this: Record<string, bigint>) { release(this[instanceField()]); },
   "save()V": function (this: object) { const c = camera(this); c.stack.push(c.top.slice()); },
   "restore()V": function (this: object) { const c = camera(this); if (c.stack.length > 1) c.stack.pop(); },
   // SkM44::preTranslate
