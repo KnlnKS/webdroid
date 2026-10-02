@@ -7,7 +7,7 @@
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
 import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, type Ctx2D, type DisplayList } from "./recording";
-import { rt, JObj, declaredField } from "../jvm/runtime";
+import { rt } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
 import { perf } from "../perf";
@@ -396,27 +396,6 @@ rt.registerJnis("android/graphics/RenderNode", {
   "nSetSpotShadowColor(JI)Z": set("spotColor"), "nGetSpotShadowColor(J)I": get("spotColor"),
 });
 const IDENTITY = identity();
-
-// ── The window's root node and its AnimationHost: attached while the window draws. The TS view
-// stack has no RenderNodes, so a window's RecordingCanvas stands on this one node: what AOSP's
-// animators target and check is attached.
-const HOST = "android/graphics/RenderNode$AnimationHost";
-rt.register({ name: "webdroid/WindowAnimationHost", ctor: class extends JObj {}, ifaces: [HOST], methods: {
-  "isAttached()Z": () => 1,
-  // these animators run from the frame loop once started, wherever they were registered
-  "registerAnimatingRenderNode(Landroid/graphics/RenderNode;Landroid/animation/Animator;)V": () => {},
-  "registerVectorDrawableAnimator(Landroid/view/NativeVectorDrawableAnimator;)V": () => {},
-} });
-let root: JObj | null = null;
-/** the RenderNode a window's RecordingCanvas records for, made as RenderNode.create(name, host)
- *  would make it but without a constructor, so it never suspends */
-export function windowRoot(): JObj {
-  if (root) return root;
-  const n = root = rt.make("android/graphics/RenderNode") as JObj & Record<string, unknown>;
-  n[declaredField("android/graphics/RenderNode", "mNativeRenderNode")] = handle(new NativeRenderNode("window"));
-  n[declaredField("android/graphics/RenderNode", "mAnimationHost")] = rt.make("webdroid/WindowAnimationHost");
-  return n;
-}
 
 // ── RecordingCanvas: SkiaRecordingCanvas records into a display list its node takes when done ──
 /** a new recording over a fresh canvas state; the list goes to its node when the recording finishes */

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { rt, declaredField } from "../../src/jvm/runtime";
+import { rt, declaredField, JObj } from "../../src/jvm/runtime";
 import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
 import { Arsc } from "../../src/android/arsc";
 import { Resources } from "../../src/android/res";
@@ -8,9 +8,26 @@ import { PackageRecord, packages } from "../../src/android/packages";
 import { parseAXML } from "../../src/android/axml";
 import { installFramework } from "../../src/android/framework";
 import { animateRenderThread } from "../../src/android/rtanimator";
-import { windowRoot } from "../../src/android/rendernode";
+import { NativeRenderNode } from "../../src/android/rendernode";
+import { handle } from "../../src/android/handles";
 import { openInstall } from "../../src/shell/install";
 import { exercise, same, vectorProbeLines } from "./harness";
+
+// An attached window's root RenderNode and its AnimationHost, made as RenderNode.create(name, host)
+// would make them but without a constructor: what AOSP's animators target and check is attached.
+const HOST = "android/graphics/RenderNode$AnimationHost";
+rt.register({ name: "webdroid/WindowAnimationHost", ctor: class extends JObj {}, ifaces: [HOST], methods: {
+  "isAttached()Z": () => 1,
+  // these animators run from the frame loop once started, wherever they were registered
+  "registerAnimatingRenderNode(Landroid/graphics/RenderNode;Landroid/animation/Animator;)V": () => {},
+  "registerVectorDrawableAnimator(Landroid/view/NativeVectorDrawableAnimator;)V": () => {},
+} });
+function windowRoot(): JObj {
+  const n = rt.make("android/graphics/RenderNode") as JObj & Record<string, unknown>;
+  n[declaredField("android/graphics/RenderNode", "mNativeRenderNode")] = handle(new NativeRenderNode("window"));
+  n[declaredField("android/graphics/RenderNode", "mAnimationHost")] = rt.make("webdroid/WindowAnimationHost");
+  return n;
+}
 
 // The resource natives, under AOSP's own Resources: the framework and an app installed as the
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read
