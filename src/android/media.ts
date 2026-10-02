@@ -1,13 +1,14 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
-import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { after, vcall, scall, newObj, staticField, vcallUncaught } from "../jvm/natives/jlang";
+import { after, vcall, scall, newObj, vcallUncaught } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaFdSource } from "../native/fs";
 import { readFully } from "../shell/lazyfile";
-import { type JBuffer, limit, position, remainingBytes, setPosition } from "../jvm/natives/jnio";
+import { type JBuffer, bufferBytes } from "../jvm/natives/jnio";
+import { uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
 import { uriParts, type JUri } from "./net";
@@ -96,11 +97,10 @@ rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
 });
 
 const players = new Set<JMediaPlayer>();
-const pools = new Set<JSoundPool>();
 /** AudioManager.isMusicActive: a MediaPlayer or a SoundPool stream is sounding right now. */
 export function isMusicActive(): number {
   for (const p of players) if (p.media && !p.media.paused) return 1;
-  for (const p of pools) for (const s of p.streams.values()) if (s.src.playbackRate.value) return 1;
+  for (const p of pools.values()) for (const s of p.streams.values()) if (s.src.playbackRate.value) return 1;
   return 0;
 }
 
@@ -286,129 +286,106 @@ rt.register({
     "seekTo(I)V": function (this: JMediaPlayer, ms: number) { if (this.media) this.media.currentTime = ms / 1000; },
   },
 });
-// ── SoundPool: one shared AudioContext (never closed), a decoded AudioBuffer per sound id
-// (null while decoding), and a one-shot source + gain node per stream id.
+// ── SoundPool's native half: one shared AudioContext (never closed), a decoded AudioBuffer per
+// sample id (null while decoding), and a one-shot source + gain node per stream id.
 let actx: AudioContext | null = null;
-type Stream = { src: AudioBufferSourceNode; gain: GainNode; prio: number; rate: number };
-class JSoundPool extends JObj {
-  maxStreams = 1;
-  audioAttributes: unknown = null;
+type Stream = { src: AudioBufferSourceNode; gain: GainNode; prio: number; rate: number; volume: number };
+class Pool {
+  constructor(readonly owner: JObj, readonly maxStreams: number) {}
   sounds = new Map<number, AudioBuffer | null>();
   streams = new Map<number, Stream>();
   nextId = 1;
   nextStream = 1;
-  loadL: unknown = null;
+  muted = false;
   load(bytes: Uint8Array | null): number {
     if (!bytes) return 0;
     const id = this.nextId++;
     this.sounds.set(id, null);
-    // decodeAudioData detaches the buffer it is given, so the apk's bytes are copied first.
+    // decodeAudioData detaches the buffer it is given, so the bytes are copied first
     (actx ??= new AudioContext()).decodeAudioData(bytes.slice().buffer as ArrayBuffer)
       .then((buf) => this.decoded(id, buf, 0), () => this.decoded(id, null, 1));
     return id;
   }
+  /** SoundPool::Sound's SAMPLE_LOADED event, through the Java pool's event handler */
   decoded(id: number, buf: AudioBuffer | null, status: number) {
     if (!this.sounds.has(id)) return; // unloaded or released before the decode finished
     if (buf) this.sounds.set(id, buf);
-    if (this.loadL) void onMain(() => vcall(this.loadL, "onLoadComplete", "(Landroid/media/SoundPool;II)V", this, id, status)).catch(reportUncaught);
+    void onMain(() => vcall(this.owner, "postEventFromNative", "(IIILjava/lang/Object;)V", 1, id, status, null)).catch(reportUncaught);
   }
   stop(sid: number) {
     const s = this.streams.get(sid);
     if (s) { s.src.stop(); this.streams.delete(sid); }
   }
+  each(sid: number, f: (s: Stream) => void) { const s = this.streams.get(sid); if (s) f(s); }
+  release() { for (const s of this.streams.values()) s.src.stop(); this.streams.clear(); this.sounds.clear(); }
 }
-rt.register({
-  name: "android/media/SoundPool", ctor: JSoundPool,
-  methods: {
-    "<init>(III)V": function (this: JSoundPool, max: number) { this.maxStreams = max; pools.add(this); },
-    "load(Landroid/content/res/AssetFileDescriptor;I)I": driven(function* (this: JSoundPool, afd: unknown): Gen { return this.load(yield afdRange(afd)); }),
-    "load(Ljava/io/FileDescriptor;JJI)I": async function (this: JSoundPool, fd: JObj | null, offset: bigint, length: bigint) { return this.load(await fdRange(fd, offset, length)); },
-    "load(Landroid/content/Context;II)I": driven(function* (this: JSoundPool, context: unknown, resId: number): Gen {
-      return this.load(yield rawResourceBytes(context, resId));
-    }),
-    "load(Ljava/lang/String;I)I": driven(function* (this: JSoundPool, path: string): Gen { return this.load(yield vfs.readFile(path)); }),
-    "play(IFFIIF)I": function (this: JSoundPool, id: number, l: number, r: number, prio: number, loop: number, rate: number) {
-      const buf = this.sounds.get(id);
-      if (!buf || !actx) return 0;
-      // Reached from a pointer-driven main-looper job, i.e. inside the user-activation window.
-      if (actx.state === "suspended") void actx.resume();
-      if (this.streams.size >= this.maxStreams) {
-        // AOSP: the lowest-priority stream at or below the newcomer's yields, else the newcomer is refused.
-        let v: [number, Stream] | undefined;
-        for (const e of this.streams) if (e[1].prio <= prio && (!v || e[1].prio < v[1].prio)) v = e;
-        if (!v) return 0;
-        this.stop(v[0]);
-      }
-      const src = actx.createBufferSource();
-      src.buffer = buf; src.loop = loop !== 0; src.playbackRate.value = rate;
-      const gain = actx.createGain();
-      gain.gain.value = Math.max(l, r);
-      src.connect(gain).connect(actx.destination);
-      const sid = this.nextStream++;
-      src.onended = () => this.streams.delete(sid);
-      src.start();
-      // loop = n > 0 means n + 1 plays: keep looping and schedule the end (at the starting rate).
-      if (loop > 0) src.stop(actx.currentTime + (buf.duration * (loop + 1)) / rate);
-      this.streams.set(sid, { src, gain, prio, rate });
-      return sid;
-    },
-    "stop(I)V": function (this: JSoundPool, sid: number) { this.stop(sid); },
-    // Web Audio sources cannot pause; a zero playback rate holds the position instead.
-    "pause(I)V": function (this: JSoundPool, sid: number) { const s = this.streams.get(sid); if (s) s.src.playbackRate.value = 0; },
-    "resume(I)V": function (this: JSoundPool, sid: number) { const s = this.streams.get(sid); if (s) s.src.playbackRate.value = s.rate; },
-    "autoPause()V": function (this: JSoundPool) { for (const s of this.streams.values()) s.src.playbackRate.value = 0; },
-    "autoResume()V": function (this: JSoundPool) { for (const s of this.streams.values()) s.src.playbackRate.value = s.rate; },
-    "setVolume(IFF)V": function (this: JSoundPool, sid: number, l: number, r: number) {
-      const s = this.streams.get(sid); if (s) s.gain.gain.value = Math.max(l, r);
-    },
-    "setLoop(II)V": function (this: JSoundPool, sid: number, loop: number) { const s = this.streams.get(sid); if (s) s.src.loop = loop !== 0; },
-    "setRate(IF)V": function (this: JSoundPool, sid: number, rate: number) {
-      const s = this.streams.get(sid);
-      if (s) { if (s.src.playbackRate.value) s.src.playbackRate.value = rate; s.rate = rate; }
-    },
-    "setPriority(II)V": function (this: JSoundPool, sid: number, prio: number) { const s = this.streams.get(sid); if (s) s.prio = prio; },
-    "unload(I)Z": function (this: JSoundPool, id: number) { return this.sounds.delete(id) ? 1 : 0; },
-    "release()V": function (this: JSoundPool) {
-      for (const s of this.streams.values()) s.src.stop();
-      this.streams.clear(); this.sounds.clear(); pools.delete(this);
-    },
-    "setOnLoadCompleteListener(Landroid/media/SoundPool$OnLoadCompleteListener;)V": function (this: JSoundPool, l: unknown) { this.loadL = l; },
+const pools = new Map<JObj, Pool>();
+const pool = (p: JObj): Pool => {
+  const found = pools.get(p);
+  if (!found) throw rt.mkThrowable("java/lang/IllegalStateException", "SoundPool released");
+  return found;
+};
+const P = (f: (p: Pool, ...a: any[]) => unknown) => function (this: JObj, ...a: unknown[]) { return f(pool(this), ...a); };
+rt.claimNativeLib("soundpool");
+rt.registerJnis("android/media/SoundPool", {
+  "native_setup(ILjava/lang/Object;Ljava/lang/String;)I": function (this: JObj, maxStreams: number) { pools.set(this, new Pool(this, maxStreams)); return 0; },
+  "native_release()V": function (this: JObj) { pools.get(this)?.release(); pools.delete(this); },
+  "_load(Ljava/io/FileDescriptor;JJI)I": function (this: JObj, fd: JObj | null, offset: bigint, length: bigint) {
+    return after(fdRange(fd, offset, length), (bytes) => pool(this).load(bytes));
   },
-});
-class JSoundPoolBuilder extends JObj { max = 1; attrs: unknown = null; }
-rt.register({
-  name: "android/media/SoundPool$Builder", ctor: JSoundPoolBuilder,
-  methods: {
-    "<init>()V": function () {},
-    "setMaxStreams(I)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, n: number) { this.max = n; return this; },
-    "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, attrs: unknown) {
-      if (!attrs) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid null AudioAttributes");
-      this.attrs = attrs; return this;
-    },
-    "build()Landroid/media/SoundPool;": function (this: JSoundPoolBuilder) {
-      const p = new JSoundPool(); p.maxStreams = this.max;
-      p.audioAttributes = this.attrs;
-      pools.add(p); return p;
-    },
-  },
+  "_play(IFFIIFI)I": P((p, id: number, l: number, r: number, prio: number, loop: number, rate: number) => {
+    const buf = p.sounds.get(id);
+    if (!buf || !actx) return 0;
+    // reached from a pointer-driven main-looper job, i.e. inside the user-activation window
+    if (actx.state === "suspended") void actx.resume();
+    if (p.streams.size >= p.maxStreams) {
+      // the lowest-priority stream at or below the newcomer's yields, else the newcomer is refused
+      let v: [number, Stream] | undefined;
+      for (const e of p.streams) if (e[1].prio <= prio && (!v || e[1].prio < v[1].prio)) v = e;
+      if (!v) return 0;
+      p.stop(v[0]);
+    }
+    const src = actx.createBufferSource();
+    src.buffer = buf; src.loop = loop !== 0; src.playbackRate.value = rate;
+    const gain = actx.createGain(), volume = Math.max(l, r);
+    gain.gain.value = p.muted ? 0 : volume;
+    src.connect(gain).connect(actx.destination);
+    const sid = p.nextStream++;
+    src.onended = () => p.streams.delete(sid);
+    src.start();
+    // loop = n > 0 means n + 1 plays: keep looping and schedule the end (at the starting rate)
+    if (loop > 0) src.stop(actx.currentTime + (buf.duration * (loop + 1)) / rate);
+    p.streams.set(sid, { src, gain, prio, rate, volume });
+    return sid;
+  }),
+  "stop(I)V": P((p, sid: number) => p.stop(sid)),
+  // Web Audio sources cannot pause; a zero playback rate holds the position instead
+  "pause(I)V": P((p, sid: number) => p.each(sid, (s) => { s.src.playbackRate.value = 0; })),
+  "resume(I)V": P((p, sid: number) => p.each(sid, (s) => { s.src.playbackRate.value = s.rate; })),
+  "autoPause()V": P((p) => { for (const s of p.streams.values()) s.src.playbackRate.value = 0; }),
+  "autoResume()V": P((p) => { for (const s of p.streams.values()) s.src.playbackRate.value = s.rate; }),
+  "_setVolume(IFF)V": P((p, sid: number, l: number, r: number) => p.each(sid, (s) => { s.volume = Math.max(l, r); if (!p.muted) s.gain.gain.value = s.volume; })),
+  "_mute(Z)V": P((p, muted: number) => { p.muted = !!muted; for (const s of p.streams.values()) s.gain.gain.value = p.muted ? 0 : s.volume; }),
+  "setLoop(II)V": P((p, sid: number, loop: number) => p.each(sid, (s) => { s.src.loop = loop !== 0; })),
+  "setRate(IF)V": P((p, sid: number, rate: number) => p.each(sid, (s) => { if (s.src.playbackRate.value) s.src.playbackRate.value = rate; s.rate = rate; })),
+  "setPriority(II)V": P((p, sid: number, prio: number) => p.each(sid, (s) => { s.prio = prio; })),
+  "unload(I)Z": P((p, id: number) => +p.sounds.delete(id)),
 });
 
-// ── AudioTrack (MODE_STREAM): PCM written from Java is scheduled back-to-back on the shared
-// AudioContext; the periodic position listener is what streaming mixers (a native engine's
+// ── AudioTrack's native half (MODE_STREAM): PCM written from Java is scheduled back-to-back on the
+// shared AudioContext. The periodic position event is what streaming mixers (a native engine's
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
-const D_periodic = "(Landroid/media/AudioTrack;)V";
-/** the channel count of a legacy CHANNEL_OUT_STEREO (12) / CHANNEL_CONFIGURATION_STEREO (3) or mono config */
-const legacyChannels = (config: number) => config === 12 || config === 3 ? 2 : 1;
 const bitCount = (mask: number) => { let n = 0; for (; mask; mask &= mask - 1) n++; return n; };
-export class JAudioTrack extends JObj {
+/** bytes per sample of ENCODING_PCM_16BIT, _8BIT and _FLOAT, the encodings Web Audio can play */
+const PCM_BYTES: Record<number, number> = { 2: 2, 3: 1, 4: 4 };
+/** the frames AudioFlinger's minimum buffer holds, about 100 ms of output */
+const minFrames = (rate: number) => Math.max(1024, Math.ceil(rate / 10));
+/** PCM scheduled on the AudioContext, for a Java AudioTrack or an AAudio stream */
+export class PcmOutput {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
-  sessionId = 0; attributes: unknown = null;
-  logSessionId: JObj | null = null;
-
-  state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
-  nextTime = 0; written = 0; played = 0; headOrigin = 0; resetHead = false; underruns = 0;
+  sessionId = 0;
+  playing = false; nextTime = 0; written = 0; played = 0; underruns = 0;
   queue: { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null; consumed?: () => void }[] = [];
-  period = 0; listener: unknown = null; timer: ReturnType<typeof setInterval> | null = null;
   gain: GainNode | null = null;
   vol = 1;
   ctx(): AudioContext { return (actx ??= new AudioContext()); }
@@ -419,6 +396,7 @@ export class JAudioTrack extends JObj {
       entry.offset + (entry.source ? Math.max(0, now - entry.start) * this.rate : 0)), 0);
   }
   queuedSec(): number { return Math.max(0, this.written - this.head()) / this.rate; }
+  setVolume(v: number): void { this.vol = v; if (this.gain) this.gain.gain.value = v; }
   schedule(): void {
     const ctx = this.ctx();
     if (!this.gain) { this.gain = ctx.createGain(); this.gain.gain.value = this.vol; this.gain.connect(ctx.destination); }
@@ -431,14 +409,17 @@ export class JAudioTrack extends JObj {
         const index = this.queue.indexOf(entry);
         if (index < 0) return;
         this.queue.splice(index, 1); this.played += entry.buffer.length; source.disconnect();
-        if (!this.queue.length && this.playState === 1) this.played = this.written = this.headOrigin = 0;
+        this.drained();
         entry.consumed?.();
       };
       source.start(entry.start, entry.offset / this.rate);
       this.nextTime = entry.start + (entry.buffer.length - entry.offset) / this.rate;
     }
   }
+  drained(): void {}
+  play(): void { this.playing = true; void this.ctx().resume(); this.schedule(); }
   pauseQueue(): void {
+    this.playing = false;
     const now = this.queue.length ? this.ctx().currentTime : 0;
     for (const entry of this.queue) {
       if (!entry.source) continue;
@@ -447,238 +428,145 @@ export class JAudioTrack extends JObj {
     }
     this.nextTime = 0;
   }
-  clearQueue(): void { this.pauseQueue(); this.queue = []; this.written = this.played = this.headOrigin = 0; }
-  /** a streaming write blocks while the track's buffer is full, which is what paces a writer
-   *  loop; the wait is the excess over one buffer's worth of queued audio */
-  wrote(n: number): number | Promise<number> {
-    const bufSec = this.bufBytes / (this.rate * this.frameBytes()), excess = this.queuedSec() - bufSec;
-    return excess > 0.005 ? new Promise((r) => setTimeout(() => r(n), excess * 1000)) : n;
-  }
-  /** interleaved 16-bit (or 8-bit unsigned) PCM → one scheduled buffer */
+  clearQueue(): void { this.pauseQueue(); this.queue = []; this.written = this.played = 0; }
+  release(): void { this.clearQueue(); this.gain?.disconnect(); this.gain = null; }
+  /** interleaved 16-bit, 8-bit unsigned or float PCM → one scheduled buffer */
   push(samples: Int16Array | Int8Array | Float32Array, frames: number, consumed?: () => void): void {
     if (frames <= 0) return;
-    const ctx = this.ctx();
-    const buf = ctx.createBuffer(this.channels, frames, this.rate);
+    const buf = this.ctx().createBuffer(this.channels, frames, this.rate);
     for (let c = 0; c < this.channels; c++) {
       const ch = buf.getChannelData(c);
       if (samples instanceof Float32Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c];
       else if (samples instanceof Int16Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c] / 32768;
       else for (let i = 0; i < frames; i++) ch[i] = ((samples[i * this.channels + c] & 0xff) - 128) / 128;
     }
-    if (this.playState === 3 && this.written && this.queuedSec() === 0) this.underruns++;
+    if (this.playing && this.written && this.queuedSec() === 0) this.underruns++;
     this.queue.push({ buffer: buf, offset: 0, start: 0, source: null, consumed });
     this.written += frames;
-    if (this.playState === 3) this.schedule();
+    if (this.playing) this.schedule();
   }
-  /** a byte[] write: 16-bit samples are copied out, 8-bit ones read in place */
-  pushBytes(data: Int8Array, off: number, n: number): void {
-    if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
-    else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+}
+
+const AT = "android/media/AudioTrack";
+/** a Java AudioTrack's native track, which posts position events back through its WeakReference */
+class Track extends PcmOutput {
+  constructor(readonly ref: JObj) { super(); }
+  stopped = true; origin = 0; period = 0; marker = 0; markerSent = false;
+  timer: ReturnType<typeof setInterval> | null = null;
+  override drained(): void { if (!this.queue.length && this.stopped) this.played = this.written = this.origin = 0; }
+  post(what: number): void {
+    void onMain(() => scall(AT, "postEventFromNative", "(Ljava/lang/Object;IIILjava/lang/Object;)V", this.ref, what, 0, 0, null)).catch(reportUncaught);
   }
-  writeBuffer(buffer: JBuffer, n: number, mode: number): number | Promise<number> {
-    if (this.state !== 1) return -3;
-    if (!buffer || n < 0 || n > limit(buffer) - position(buffer) || (mode !== 0 && mode !== 1)) return -2;
-    const requested = Math.floor(n / this.frameBytes()) * this.frameBytes();
-    const available = Math.max(0, this.bufBytes - Math.ceil(this.queuedSec() * this.rate) * this.frameBytes());
-    n = Math.floor(Math.min(requested, available) / this.frameBytes()) * this.frameBytes();
-    if (!n) return mode === 0 && requested ? this.finishWrite(buffer, requested, 0) : 0;
-    const bytes = remainingBytes(buffer), data = new DataView(bytes.buffer, bytes.byteOffset, n);
-    const count = n / this.bytesPerSample;
-    // AudioTrack consumes native-order PCM, independently of ByteBuffer.order().
-    const SampleArray = this.bytesPerSample === 4 ? Float32Array : this.bytesPerSample === 2 ? Int16Array : Int8Array;
-    const aligned = data.byteOffset % this.bytesPerSample === 0;
-    const samples = aligned ? new SampleArray(data.buffer, data.byteOffset, count) : new SampleArray(count);
-    if (!aligned) for (let i = 0; i < count; i++) samples[i] = this.bytesPerSample === 4 ? data.getFloat32(i * 4, true) : data.getInt16(i * 2, true);
-    this.push(samples, n / this.frameBytes());
-    setPosition(buffer, position(buffer) + n);
-    return mode === 0 && n < requested ? this.finishWrite(buffer, requested, n) : n;
-  }
-  async finishWrite(buffer: JBuffer, requested: number, written: number): Promise<number> {
-    const thread = rt.th();
-    while (written < requested && this.state === 1) {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      rt.st(thread);
-      const n = this.writeBuffer(buffer, requested - written, 1) as number;
-      if (n < 0) return written || n;
-      written += n;
-    }
-    return written || (this.state === 1 ? 0 : -3);
+  position(): number { return this.stopped && !this.queue.length ? 0 : Math.floor(this.head() - this.origin); }
+  /** refill until ~3 periods are queued: each NATIVE_EVENT_NEW_POS is one write of one period */
+  tick(): void {
+    if (!this.playing) return;
+    if (this.marker > 0 && !this.markerSent && this.position() >= this.marker) { this.markerSent = true; this.post(3); }
+    if (this.period && this.queuedSec() < 3 * this.period / this.rate) this.post(4);
   }
   startTimer(): void {
-    if (this.timer || !this.listener || !this.period) return;
-    const periodMs = Math.max(5, this.period / this.rate * 1000);
-    this.timer = setInterval(() => {
-      const listener = this.listener;
-      if (this.playState !== 3 || !listener) return;
-      // refill until ~3 periods are queued; each callback is one write of one period
-      if (this.queuedSec() < 3 * this.period / this.rate) void onMain(() => vcall(listener, "onPeriodicNotification", D_periodic, this)).catch(reportUncaught);
-    }, periodMs / 2);
+    if (this.timer || (!this.period && !this.marker)) return;
+    this.timer = setInterval(() => this.tick(), Math.max(5, (this.period || 1024) / this.rate * 500));
   }
   stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
+  /** a blocking write waits while the buffer is full, which is what paces a writer loop; a
+   *  non-blocking one takes what fits */
+  write(blocking: boolean, frames: number, take: (frames: number) => void): number | Promise<number> {
+    const room = () => Math.max(0, Math.floor(this.bufBytes / this.frameBytes() - this.queuedSec() * this.rate));
+    if (!blocking) { const n = Math.min(frames, room()); take(n); return n; }
+    take(frames);
+    const excess = this.queuedSec() - this.bufBytes / this.frameBytes() / this.rate;
+    return excess > 0.005 ? new Promise((r) => setTimeout(() => r(frames), excess * 1000)) : frames;
+  }
 }
-const setPositionListener = function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); };
-const bufferFrames = function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); };
-const writeByteBuffer = function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); };
-// AudioTrack::latency(): the output's latency plus the track's own buffer, in ms
-rt.registerJni("android/media/AudioTrack", "native_get_latency()I", function (this: JAudioTrack) {
-  const ctx = this.ctx();
-  return Math.round(((ctx.outputLatency || ctx.baseLatency) + this.bufBytes / this.frameBytes() / this.rate) * 1000);
-});
-rt.register({
-  name: "android/media/AudioTrack", ctor: JAudioTrack,
-  statics: { MODE_STATIC: 0, MODE_STREAM: 1, PLAYSTATE_STOPPED: 1, PLAYSTATE_PAUSED: 2, PLAYSTATE_PLAYING: 3, STATE_UNINITIALIZED: 0, STATE_INITIALIZED: 1, STATE_NO_STATIC_DATA: 2,
-    SUCCESS: 0, ERROR: -1, ERROR_BAD_VALUE: -2, ERROR_INVALID_OPERATION: -3, WRITE_BLOCKING: 0, WRITE_NON_BLOCKING: 1 },
-  methods: {
-    "<init>(IIIIII)V": function (this: JAudioTrack, _stream: number, rate: number, chanCfg: number, fmt: number, bufBytes: number) {
-      this.rate = rate; this.channels = legacyChannels(chanCfg); this.bytesPerSample = fmt === 3 ? 1 : 2; this.bufBytes = bufBytes;
-      this.sessionId = newAudioSessionId();
-    },
-    "static getMinBufferSize(III)I": (rate: number, chanCfg: number, fmt: number) => {
-      // ~100 ms of frames, as AudioFlinger answers for a typical output
-      const frames = Math.max(1024, Math.ceil(rate / 10));
-      return frames * legacyChannels(chanCfg) * (fmt === 3 ? 1 : 2);
-    },
-    "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
-    "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
-    "getLogSessionId()Landroid/media/metrics/LogSessionId;": function (this: JAudioTrack) {
-      return this.logSessionId ?? staticField("android/media/metrics/LogSessionId", "LOG_SESSION_ID_NONE");
-    },
-    "setLogSessionId(Landroid/media/metrics/LogSessionId;)V": function (this: JAudioTrack, id: JObj) {
-      if (!id) return rt.npe();
-      if (this.state !== 1) throw rt.mkThrowable("java/lang/IllegalStateException", "AudioTrack not initialized");
-      this.logSessionId = id;
-    },
-    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
-    "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
-    "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
-    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": setPositionListener,
-    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;Landroid/os/Handler;)V": setPositionListener,
-    "setPositionNotificationPeriod(I)I": function (this: JAudioTrack, p: number) { this.period = p; return 0; },
-    "play()V": function (this: JAudioTrack) { if (this.resetHead) { this.headOrigin = this.head(); this.resetHead = false; } this.playState = 3; void this.ctx().resume(); this.schedule(); this.startTimer(); },
-    "pause()V": function (this: JAudioTrack) { this.playState = 2; this.pauseQueue(); this.stopTimer(); },
-    "stop()V": function (this: JAudioTrack) { if (this.playState !== 3 || !this.queue.length) this.clearQueue(); this.playState = 1; this.resetHead = true; this.stopTimer(); },
-    "flush()V": function (this: JAudioTrack) { if (this.playState !== 3) this.clearQueue(); },
-    "release()V": function (this: JAudioTrack) { this.stopTimer(); this.clearQueue(); this.gain?.disconnect(); this.gain = null; this.state = 0; this.playState = 1; this.listener = null; },
-    "write([SII)I": function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
-      if (this.state !== 1) return -3;
-      this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
-      return this.wrote(n);
-    },
-    "write([BIII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number, mode: number) {
-      if (this.state !== 1) return -3;
-      this.pushBytes(data, off, n);
-      return mode === 1 ? n : this.wrote(n);   // WRITE_NON_BLOCKING
-    },
-    "write([BII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number) {
-      if (this.state !== 1) return -3;
-      this.pushBytes(data, off, n);
-      return this.wrote(n);
-    },
-    "getBufferSizeInFrames()I": bufferFrames,
-    "getBufferCapacityInFrames()I": bufferFrames,
-    ...fieldGetters({ "getState()I": "state", "getPlayState()I": "playState", "getSampleRate()I": "rate",
-      "getChannelCount()I": "channels", "getAudioSessionId()I": "sessionId",
-      "getAudioAttributes()Landroid/media/AudioAttributes;": "attributes", "getUnderrunCount()I": "underruns" }),
-    ...stubs(0, "static isDirectPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z",
-      "setPlaybackRate(I)I", "setNotificationMarkerPosition(I)I", "isOffloadedPlayback()Z",
-      "getTimestamp(Landroid/media/AudioTimestamp;)Z", "setPreferredDevice(Landroid/media/AudioDeviceInfo;)Z"),
-    ...stubs(null, "getRoutedDevice()Landroid/media/AudioDeviceInfo;"),
-    ...noops("addOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;Landroid/os/Handler;)V",
-      "removeOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;)V"),
-    "write(Ljava/nio/ByteBuffer;II)I": writeByteBuffer,
-    "write(Ljava/nio/ByteBuffer;IIJ)I": writeByteBuffer,
-  },
-});
-class JAudioTrackBuilder extends JObj {
-  format: JAudioFormat | null = null;
-  attributes: unknown = null;
-  mode = 1; bufferSize = 0; sessionId = 0; offload = false;
+const tracks = new WeakMap<JObj, Track>();
+function track(t: JObj): Track {
+  const tr = tracks.get(t);
+  if (!tr) throw rt.mkThrowable("java/lang/IllegalStateException", "Unable to retrieve AudioTrack pointer");
+  return tr;
 }
-rt.register({
-  name: "android/media/AudioTrack$Builder", ctor: JAudioTrackBuilder,
-  methods: {
-    "<init>()V": () => {},
-    "setAudioFormat(Landroid/media/AudioFormat;)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, format: JAudioFormat) {
-      if (!format) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      this.format = format; return this;
-    },
-    "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, attributes: unknown) {
-      if (!attributes) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      this.attributes = attributes; return this;
-    },
-    "setTransferMode(I)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, mode: number) {
-      if (mode !== 0 && mode !== 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid transfer mode");
-      this.mode = mode; return this;
-    },
-    "setBufferSizeInBytes(I)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, size: number) {
-      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid buffer size");
-      this.bufferSize = size; return this;
-    },
-    "setSessionId(I)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, id: number) {
-      if (id < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid session ID");
-      this.sessionId = id; return this;
-    },
-    "setOffloadedPlayback(Z)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, offload: number) { this.offload = !!offload; return this; },
-    "setContext(Landroid/content/Context;)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder) { return this; },
-    "build()Landroid/media/AudioTrack;": function (this: JAudioTrackBuilder) {
-      if (this.offload || this.mode !== 1) rt.unimplemented("AudioTrack non-streaming output");
-      const format = this.format, encoding = format?.encoding || 2;
-      if (encoding !== 2 && encoding !== 3 && encoding !== 4) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported PCM encoding");
-      const track = rt.make("android/media/AudioTrack") as JAudioTrack;
-      track.rate = format?.sampleRate || outputSampleRate();
-      if (track.rate < 3000 || track.rate > 384000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid sample rate");
-      track.channels = bitCount(format?.channelIndexMask || format?.channelMask || 12);
-      track.bytesPerSample = encoding === 4 ? 4 : encoding === 3 ? 1 : 2;
-      track.bufBytes = this.bufferSize || Math.max(1024, Math.ceil(track.rate / 10)) * track.frameBytes();
-      if (track.bufBytes % track.frameBytes()) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size must contain whole frames");
-      track.attributes = this.attributes;
-      track.sessionId = this.sessionId || newAudioSessionId();
-      return track;
-    },
+/** a write of `count` samples starting at `off`, answered in samples (bytes for byte[]) as the JNI does */
+function writeSamples(t: JObj, data: Int16Array | Int8Array | Float32Array, off: number, count: number, format: number, blocking: number) {
+  const tr = tracks.get(t);
+  if (!tr) return -3;
+  if (PCM_BYTES[format] !== tr.bytesPerSample) return -2;
+  const unit = data instanceof Int8Array ? tr.bytesPerSample : 1;
+  const frames = Math.floor(count / unit / tr.channels);
+  return after(tr.write(!!blocking, frames, (n) => {
+    const n0 = n * tr.channels * unit;
+    // byte[] PCM wider than 8 bits is copied out to an aligned buffer
+    tr.push(data instanceof Int8Array && tr.bytesPerSample !== 1
+      ? new (tr.bytesPerSample === 2 ? Int16Array : Float32Array)(new Uint8Array(data.buffer, data.byteOffset + off, n0).slice().buffer)
+      : data.subarray(off, off + n0), n);
+  }), (n) => n * tr.channels * unit);
+}
+rt.registerJnis(AT, {
+  "native_setup(Ljava/lang/Object;Ljava/lang/Object;[IIIIII[ILandroid/os/Parcel;JZILjava/lang/Object;Ljava/lang/String;)I": function (this: JObj,
+    ref: JObj, _attributes: unknown, rate: Int32Array, channelMask: number, indexMask: number, format: number, bufBytes: number, mode: number, session: Int32Array) {
+    // MODE_STATIC's shared-memory buffer is not modelled: AUDIOTRACK_ERROR_SETUP_NATIVEINITFAILED
+    if (mode !== 1 || !PCM_BYTES[format]) return -20;
+    const tr = new Track(ref);
+    tr.rate = rate[0] || outputSampleRate(); tr.channels = bitCount(indexMask || channelMask); tr.bytesPerSample = PCM_BYTES[format];
+    tr.bufBytes = Math.max(bufBytes, minFrames(tr.rate) * tr.frameBytes());
+    tr.sessionId = session[0] ||= newAudioSessionId();
+    rate[0] = tr.rate;
+    tracks.set(this, tr);
+    return 0;
   },
-});
-rt.register({ name: "android/media/AudioTimestamp", ctor: class extends JObj { framePosition = 0n; nanoTime = 0n; }, fields: { framePosition: "framePosition", nanoTime: "nanoTime" }, methods: { "<init>()V": () => {} } });
-
-class JAudioRecord extends JObj { state = 0; recordingState = 1; }
-rt.register({
-  name: "android/media/AudioRecord", ctor: JAudioRecord,
-  statics: { STATE_UNINITIALIZED: 0, STATE_INITIALIZED: 1, RECORDSTATE_STOPPED: 1, RECORDSTATE_RECORDING: 3, ERROR: -1, ERROR_BAD_VALUE: -2, ERROR_INVALID_OPERATION: -3 },
-  methods: {
-    "<init>(IIIII)V": () => {},
-    "static getMinBufferSize(III)I": (rate: number, channels: number, encoding: number) => {
-      const count = channels === 16 ? 1 : channels === 12 ? 2 : 0;
-      const bytes = encoding === 3 ? 1 : encoding === 2 ? 2 : encoding === 4 ? 4 : 0;
-      return rate >= 4000 && rate <= 192000 && count && bytes ? Math.max(256, Math.ceil(rate / 10) * count * bytes) : -2;
-    },
-    ...fieldGetters({ "getState()I": "state", "getRecordingState()I": "recordingState" }),
-    "release()V": function (this: JAudioRecord) { this.state = 0; this.recordingState = 1; },
+  "native_start()V": function (this: JObj) { const tr = track(this); if (tr.stopped) { tr.origin = tr.head(); tr.markerSent = false; } tr.stopped = false; tr.play(); tr.startTimer(); },
+  "native_pause()V": function (this: JObj) { const tr = track(this); tr.pauseQueue(); tr.stopTimer(); },
+  // a stopped stream plays out what it was given
+  "native_stop()V": function (this: JObj) { const tr = track(this); tr.stopped = true; if (!tr.playing || !tr.queue.length) tr.clearQueue(); tr.stopTimer(); },
+  "native_flush()V": function (this: JObj) { const tr = track(this); if (!tr.playing) { tr.clearQueue(); tr.origin = 0; } },
+  "native_release()V": function (this: JObj) { const tr = tracks.get(this); if (tr) { tr.stopTimer(); tr.release(); tracks.delete(this); } },
+  "native_finalize()V": function (this: JObj) { tracks.get(this)?.release(); tracks.delete(this); },
+  "native_write_byte([BIIIZ)I": function (this: JObj, d: Int8Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
+  "native_write_short([SIIIZ)I": function (this: JObj, d: Int16Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
+  "native_write_float([FIIIZ)I": function (this: JObj, d: Float32Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
+  "native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I": function (this: JObj, buffer: JBuffer, pos: number, n: number, f: number, b: number) {
+    const bytes = bufferBytes(buffer);
+    return writeSamples(this, new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), pos, n, f, b);
   },
-});
-
-class JAudioFormat extends JObj { encoding = 0; sampleRate = 0; channelMask = 0; channelIndexMask = 0; }
-rt.register({
-  name: "android/media/AudioFormat", ctor: JAudioFormat,
-  statics: { CHANNEL_CONFIGURATION_MONO: 2, CHANNEL_CONFIGURATION_STEREO: 3, CHANNEL_OUT_MONO: 4, CHANNEL_OUT_STEREO: 12, CHANNEL_IN_MONO: 16, CHANNEL_IN_STEREO: 12,
-    ENCODING_PCM_16BIT: 2, ENCODING_PCM_8BIT: 3, ENCODING_PCM_FLOAT: 4, ENCODING_DEFAULT: 1, ENCODING_INVALID: 0 },
-  methods: {
-    ...fieldGetters({ "getEncoding()I": "encoding", "getSampleRate()I": "sampleRate",
-      "getChannelMask()I": "channelMask", "getChannelIndexMask()I": "channelIndexMask" }),
-    "getChannelCount()I": function (this: JAudioFormat) { return bitCount(this.channelMask || this.channelIndexMask); },
+  "native_get_position()I": function (this: JObj) { return track(this).position() | 0; },
+  "native_get_timestamp([J)I": function (this: JObj, out: BigInt64Array) {
+    const tr = track(this);
+    if (!tr.playing || !tr.written) return -7;   // ERROR_WOULD_BLOCK until frames are presented
+    out[0] = BigInt(tr.position()); out[1] = BigInt(Math.floor(uptimeMillis() * 1e6));
+    return 0;
   },
-});
-class JAudioFormatBuilder extends JObj { format = new JAudioFormat(); }
-rt.register({
-  name: "android/media/AudioFormat$Builder", ctor: JAudioFormatBuilder,
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Landroid/media/AudioFormat;)V": function (this: JAudioFormatBuilder, format: JAudioFormat) { Object.assign(this.format, format); },
-    "setEncoding(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, encoding: number) { this.format.encoding = encoding === 1 ? 2 : encoding; return this; },
-    "setSampleRate(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, rate: number) { this.format.sampleRate = rate; return this; },
-    "setChannelMask(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, mask: number) { this.format.channelMask = mask; return this; },
-    "setChannelIndexMask(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, mask: number) { this.format.channelIndexMask = mask; return this; },
-    "build()Landroid/media/AudioFormat;": function (this: JAudioFormatBuilder) { return Object.assign(new JAudioFormat(), this.format); },
+  // AudioTrack::latency(): the output's latency plus the track's own buffer, in ms
+  "native_get_latency()I": function (this: JObj) {
+    const tr = track(this), ctx = tr.ctx();
+    return Math.round(((ctx.outputLatency || ctx.baseLatency) + tr.bufBytes / tr.frameBytes() / tr.rate) * 1000);
   },
+  "native_setVolume(FF)V": function (this: JObj, l: number, r: number) { track(this).setVolume(Math.max(l, r)); },
+  "native_set_pos_update_period(I)I": function (this: JObj, period: number) { const tr = track(this); tr.period = period; if (tr.playing) tr.startTimer(); return 0; },
+  "native_get_pos_update_period()I": function (this: JObj) { return track(this).period; },
+  "native_set_marker_pos(I)I": function (this: JObj, marker: number) { const tr = track(this); tr.marker = marker; tr.markerSent = false; if (tr.playing) tr.startTimer(); return 0; },
+  "native_get_marker_pos()I": function (this: JObj) { return track(this).marker; },
+  "native_get_buffer_size_frames()I": function (this: JObj) { const tr = track(this); return tr.bufBytes / tr.frameBytes(); },
+  "native_get_buffer_capacity_frames()I": function (this: JObj) { const tr = track(this); return tr.bufBytes / tr.frameBytes(); },
+  "native_get_underrun_count()I": function (this: JObj) { return track(this).underruns; },
+  "native_get_playback_rate()I": function (this: JObj) { return track(this).rate; },
+  "native_get_flags()I": () => 0,
+  "native_getRoutedDeviceId()I": () => 0,
+  "native_getPortId()I": () => 0,
+  // the output never changes route, so no routing event is ever posted; no AudioFlinger reads the ids
+  "native_enableDeviceCallback()V": () => {}, "native_disableDeviceCallback()V": () => {},
+  "native_setPlayerIId(I)V": () => {}, "native_setLogSessionId(Ljava/lang/String;)V": () => {},
+  "native_get_min_buff_size(III)I": (rate: number, channels: number, format: number) =>
+    PCM_BYTES[format] ? minFrames(rate) * channels * PCM_BYTES[format] : -1,
+  "native_get_output_sample_rate(I)I": outputSampleRate,
+  "native_is_direct_output_supported(IIIIIII)Z": () => 0,
 });
+// No capture device is modelled: AudioRecord's setup fails as AUDIORECORD_ERROR_SETUP_NATIVEINITFAILED.
+rt.registerJnis("android/media/AudioRecord", {
+  "native_setup(Ljava/lang/Object;Ljava/lang/Object;[IIIII[ILandroid/os/Parcel;JII)I": () => -20,
+  "native_get_min_buff_size(III)I": (rate: number, channels: number, format: number) =>
+    rate >= 4000 && rate <= 192000 && PCM_BYTES[format] ? Math.max(256, Math.ceil(rate / 10) * channels * PCM_BYTES[format]) : 0,
+  "native_release()V": () => {}, "native_finalize()V": () => {},
+});
+rt.registerJni("android/media/MediaRecorder", "native_init()V", () => {});
 
 /** MediaScannerConnection publishes a file before delivering its callback on the main queue. */
 rt.register({

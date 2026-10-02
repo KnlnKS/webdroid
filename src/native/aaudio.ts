@@ -1,4 +1,4 @@
-import { JAudioTrack, outputSampleRate, newAudioSessionId } from "../android/media";
+import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/media";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
 import { Cpu, bindCpu, hasProcessExited } from "./cpu";
 import { hostLib, stp, type HostFn } from "./host";
@@ -13,7 +13,7 @@ class Builder {
   callback = 0; context = 0;
 }
 class Stream {
-  readonly track = new JAudioTrack();
+  readonly track = new PcmOutput();
   readonly cpu: Cpu;
   readonly buffer: number;
   readonly frames: number;
@@ -57,15 +57,15 @@ class Stream {
   }
   start(): number {
     if (this.state === 12 || this.state === 9) return INVALID_STATE;
-    this.track.playState = 3; void this.track.ctx().resume(); this.track.schedule(); this.change(4); this.pump(); return 0;
+    this.track.play(); this.change(4); this.pump(); return 0;
   }
   stop(): number {
-    if (this.track.playState !== 3) this.track.clearQueue();
+    if (!this.track.playing) this.track.clearQueue();
     this.change(this.track.queue.length ? 9 : 10);
     return 0;
   }
   async close(): Promise<number> {
-    this.change(12); this.track.clearQueue(); this.track.gain?.disconnect();
+    this.change(12); this.track.release();
     await this.pumping;
     this.cpu.jthread.alive = 0; this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
     streams.delete(this.handle); return 0;
@@ -99,7 +99,7 @@ export function aaudioInit(): void {
     AAudioStream_close: (_cpu, a) => streams.get(a.p())?.close() ?? INVALID_HANDLE,
     AAudioStream_requestStart: (_cpu, a) => streams.get(a.p())?.start() ?? INVALID_HANDLE,
     AAudioStream_requestStop: (_cpu, a) => streams.get(a.p())?.stop() ?? INVALID_HANDLE,
-    AAudioStream_requestPause: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; s.track.playState = 2; s.track.pauseQueue(); s.change(6); return 0; },
+    AAudioStream_requestPause: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; s.track.pauseQueue(); s.change(6); return 0; },
     AAudioStream_requestFlush: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; if (s.state === 4) return INVALID_STATE; s.track.clearQueue(); s.change(8); return 0; },
     AAudioStream_waitForStateChange: (_cpu, a) => { const s = streams.get(a.p()), input = a.i(), out = a.p(), timeout = a.l(); return s?.wait(input, out, timeout) ?? INVALID_HANDLE; },
     AAudioStream_setBufferSizeInFrames: (_cpu, a) => { const s = streams.get(a.p()), size = a.i(); if (!s) return INVALID_HANDLE; if (size < 0) return -882; s.size = Math.max(s.frames, Math.min(size, s.capacity)); s.pump(); return s.size; },
