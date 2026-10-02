@@ -378,6 +378,13 @@ const afdRange = driven(function* afdRange(asset: unknown): Gen {
   const fd = yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
   return fdRange(fd, yield vcall(asset, "getStartOffset", "()J"), yield vcall(asset, "getLength", "()J"));
 });
+/** AOSP's context.getResources().openRawResourceFd(resId), read and closed; null without a descriptor */
+const rawResourceBytes = driven(function* rawResourceBytes(context: unknown, resId: number): Gen {
+  const res = yield vcall(context, "getResources", "()Landroid/content/res/Resources;");
+  const asset = yield vcall(res, "openRawResourceFd", "(I)Landroid/content/res/AssetFileDescriptor;", resId);
+  if (asset === null) return null;
+  try { return yield afdRange(asset); } finally { yield vcall(asset, "close", "()V"); }
+});
 function mpLoadBytes(mp: JMediaPlayer, bytes: Uint8Array | null) {
   if (!bytes) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media file descriptor or range");
   mpLoad(mp, bytes);
@@ -418,15 +425,13 @@ async function mpLoadPath(mp: JMediaPlayer, path: string) {
 rt.register({
   name: "android/media/MediaPlayer", ctor: JMediaPlayer,
   methods: {
-    "static create(Landroid/content/Context;I)Landroid/media/MediaPlayer;": (c: any, resId: number) => {
+    "static create(Landroid/content/Context;I)Landroid/media/MediaPlayer;": driven(function* (context: unknown, resId: number): Gen {
+      const bytes = yield rawResourceBytes(context, resId);
+      if (!bytes) return null;
       const mp = new JMediaPlayer();
-      const host = c?.$host;
-      if (host) {
-        const f = host.res.fileOf(resId);
-        if (f) mpLoad(mp, f.bytes);
-      }
+      mpLoad(mp, bytes);
       return mp;
-    },
+    }),
     "prepare()V": function (this: JMediaPlayer) { mpPrepare(this); },
     "prepareAsync()V": function (this: JMediaPlayer) { mpPrepare(this); },
     "start()V": function (this: JMediaPlayer) { mpStart(this); },
@@ -520,10 +525,9 @@ rt.register({
     "<init>(III)V": function (this: JSoundPool, max: number) { this.maxStreams = max; pools.add(this); },
     "load(Landroid/content/res/AssetFileDescriptor;I)I": driven(function* (this: JSoundPool, afd: unknown): Gen { return this.load(yield afdRange(afd)); }),
     "load(Ljava/io/FileDescriptor;JJI)I": async function (this: JSoundPool, fd: JObj | null, offset: bigint, length: bigint) { return this.load(await fdRange(fd, offset, length)); },
-    "load(Landroid/content/Context;II)I": function (this: JSoundPool, c: any, resId: number) {
-      const host = c?.$host;
-      return this.load(host?.res.fileOf(resId)?.bytes ?? null);
-    },
+    "load(Landroid/content/Context;II)I": driven(function* (this: JSoundPool, context: unknown, resId: number): Gen {
+      return this.load(yield rawResourceBytes(context, resId));
+    }),
     "load(Ljava/lang/String;I)I": driven(function* (this: JSoundPool, path: string): Gen { return this.load(yield vfs.readFile(path)); }),
     "play(IFFIIF)I": function (this: JSoundPool, id: number, l: number, r: number, prio: number, loop: number, rate: number) {
       const buf = this.sounds.get(id);
