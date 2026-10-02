@@ -5,14 +5,14 @@ import { rt, type JObj } from "../jvm/runtime";
 import { newObj } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import { u8 } from "../jvm/abi";
-import { ERRSTR } from "../native/abi";
+import { strerror } from "../native/abi";
 import { javaReadFd, javaWriteFd, unixBind } from "../native/fs";
 import { unixConnectPath } from "../native/unix";
 import { PROCESS_PID, PROCESS_UID } from "./os";
 
 const pathOf = (name: string, namespace: number) => namespace === 0 ? "\0" + name : namespace === 1 ? "/dev/socket/" + name : name;
 /** jniThrowIOException: the errno's text */
-const ioResult = (r: number): number => { if (r < 0) throw rt.mkThrowable("java/io/IOException", ERRSTR[-r] ?? "Unknown error " + -r); return r; };
+const ioResult = (r: number): number => { if (r < 0) throw rt.mkThrowable("java/io/IOException", strerror(-r)); return r; };
 const read = (fd: JObj | null, target: Uint8Array, done: (n: number) => number): number | Promise<number> => {
   const r = javaReadFd(fdInt(fd), target);
   return r instanceof Promise ? r.then((n) => done(ioResult(n))) : done(ioResult(r));

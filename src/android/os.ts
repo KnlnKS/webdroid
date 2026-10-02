@@ -11,7 +11,7 @@ import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
 import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize, construct } from "../jvm/natives/jlang";
-import { E, ERRSTR } from "../native/abi";
+import { E, ERRSTR, strerror } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
 export { reportUncaught };
@@ -416,7 +416,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "uname()Landroid/system/StructUtsname;": () => setDeclared(rt.make("android/system/StructUtsname"), "android/system/StructUtsname",
       { sysname: "Linux", nodename: "localhost", release: "5.10.0-webdroid", version: "#1 SMP PREEMPT", machine: is64BitProcess() ? "aarch64" : "armv7l" }),
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
-    "strerror(I)Ljava/lang/String;": (e: number) => ERRSTR[e] ?? `Unknown error ${e}`,
+    "strerror(I)Ljava/lang/String;": strerror,
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = existing("stat", path);
       return statOf(path, st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
@@ -611,7 +611,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   // and fdopendir. UnixException is initialized first, since the natives throw it synchronously.
   "init()I": () => after(rt.initClass(rt.link("sun/nio/fs/UnixException")), () => 6),
   "getcwd()[B": () => bytesOf("/"),
-  "strerror(I)[B": (e: number) => bytesOf(ERRSTR[e] ?? `Unknown error ${e}`),
+  "strerror(I)[B": (e: number) => bytesOf(strerror(e)),
   "dup(I)I": (fd: number) => unixSys(javaDupFd(fd)),
   "open0(JII)I": (path: bigint, flags: number) => unixSys(javaOpenFd(cpath(path), flags)),
   "openat0(IJII)I": (dfd: number, path: bigint, flags: number) => unixSys(javaOpenFd(atPath(dfd, path), flags)),

@@ -85,6 +85,18 @@ export function parseMethodDesc(desc: string): { params: string[]; ret: string }
 export const dotName = (internal: string) => internal.replace(/\//g, ".");
 export const slashName = (binary: string) => binary.replace(/\./g, "/");
 export const utf8 = { enc: new TextEncoder(), dec: new TextDecoder() };
+/** the bytes TextEncoder makes of `s`: a surrogate pair is four, a lone surrogate U+FFFD's three */
+export function utf8Length(s: string): number {
+  let n = s.length;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) continue;
+    if (c < 0x800) n += 1;
+    else if ((c & 0xfc00) === 0xd800 && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { n += 2; i++; }
+    else n += 2;
+  }
+  return n;
+}
 
 export function isWide(desc: string): boolean { return desc === "J" || desc === "D"; }
 

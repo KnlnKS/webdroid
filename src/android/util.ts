@@ -2,6 +2,7 @@
 
 import { rt } from "../jvm/runtime";
 import { unbox as boxedValue } from "../jvm/natives/jbox";
+import { utf8Length } from "../jvm/abi";
 
 const PRIORITY = ["", "", "V", "D", "I", "W", "E", "A"];
 const logFn = (lvl: string, tag: string | null, msg: string, tr?: unknown) => {
@@ -9,11 +10,7 @@ const logFn = (lvl: string, tag: string | null, msg: string, tr?: unknown) => {
   console.log(`[${lvl}/${tag}]`, msg, tr ? `(${t?.msg ?? tr})` : "", t?.jsStack ?? t?.stack ?? "");
 };
 /** the bytes liblog's writer reports for a record: priority, then tag and message as C strings */
-function recordSize(tag: string, msg: string): number {
-  let n = 3;
-  for (const s of [tag, msg]) for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); n += c < 0x80 ? 1 : c < 0x800 || (c & 0xfc00) === 0xdc00 ? 2 : 3; }
-  return n;
-}
+const recordSize = (tag: string, msg: string) => 3 + utf8Length(tag) + utf8Length(msg);
 // libcore's System.logI/W/E: tag "System", priority from the type char, as its native logs them
 rt.registerJnis("java/lang/System", {
   "log(CLjava/lang/String;Ljava/lang/Throwable;)V": (type: number, msg: string, tr: unknown) =>

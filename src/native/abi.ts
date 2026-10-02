@@ -65,3 +65,5 @@ export const ERRSTR: Record<number, string> = {
   107: "Transport endpoint is not connected", 111: "Connection refused", 113: "No route to host", 114: "Operation already in progress",
   115: "Operation now in progress",
 };
+/** strerror(3): bionic's text for errno `e` */
+export const strerror = (e: number): string => ERRSTR[e] ?? `Unknown error ${e}`;

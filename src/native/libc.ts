@@ -5,7 +5,7 @@
 
 import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
-import { E, ERRSTR, PAGE_SIZE } from "./abi";
+import { E, strerror, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
@@ -430,8 +430,8 @@ export function libcInit(): void {
       if (mem.u8[p]) { mem.st8(p, 0); stp(sp, p + 1); } else stp(sp, 0);
       return ptr(s);
     },
-    strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
-    strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, ERRSTR[e] ?? `Unknown error ${e}`, n); return 0; },
+    strerror: (_c, a) => { mem.putCstr(strerrorBuf, strerror(a.i()), 64); return strerrorBuf; },
+    strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, strerror(e), n); return 0; },
     strtol: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, false)),
     strtoul: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, true)) | 0,
     strtoll: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, false),
