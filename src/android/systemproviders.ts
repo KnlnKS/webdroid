@@ -15,15 +15,15 @@ const OPEN_FILE = `(${AS}${URI}${S}${SIGNAL})${PFD}`, OPEN_ASSET = `(${AS}${URI}
 /** ContentProvider.Transport's *Async calls, which ContentResolver.getType and canonicalize make: the
  *  synchronous call's answer, or its exception, as ContentResolver.REMOTE_CALLBACK_RESULT/_ERROR */
 const viaCallback = (name: string, desc: string, put: string, putDesc: string) =>
-  async function (this: JObj, source: JObj, uri: JObj, callback: JObj): Promise<void> {
-    const result = await newObj("android/os/Bundle", "()V");
-    try { await vcall(result, put, putDesc, "result", await vcall(this, name, desc, source, uri)); }
+  driven(function* (this: JObj, source: JObj, uri: JObj, callback: JObj): Gen<void> {
+    const result = yield newObj("android/os/Bundle", "()V");
+    try { yield vcall(result, put, putDesc, "result", yield vcall(this, name, desc, source, uri)); }
     catch (e) {
       if (!rt.iof(e, "java/lang/Throwable")) throw e;
-      await vcall(result, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "error", await newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", e));
+      yield vcall(result, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "error", yield newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", e));
     }
-    await vcall(callback, "sendResult", "(Landroid/os/Bundle;)V", result);
-  };
+    yield vcall(callback, "sendResult", "(Landroid/os/Bundle;)V", result);
+  });
 /** the hosted providers' base, with ContentProvider's defaults over the calls each provider answers
  *  (openFile, getType, insert), as ContentProvider.Transport reaches them */
 class JSystemContentProvider extends JObj {}
