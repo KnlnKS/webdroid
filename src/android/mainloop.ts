@@ -100,6 +100,9 @@ export function startMainLooper(): Promise<void> {
     const thread = curThread;
     setCurThread(mainThread);
     try {
+      // as after the zygote: System is initialized before the loop's first SystemClock read
+      // initializes it, which would otherwise suspend inside the loop sharing this thread
+      await rt.initClass(rt.link("java/lang/System"));
       await scall("android/os/Looper", "prepareMainLooper", "()V");
       mainLooper = mainThread.looper as NativeLooper;
       const looper = await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");

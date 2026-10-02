@@ -6,6 +6,7 @@
 import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField } from "../jvm/natives/jlang";
+import { uptimeMillis, wallMillis } from "../guest-clock";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { appHost } from "./apphost";
@@ -39,8 +40,15 @@ const activityManager: NativeSpec["methods"] = {
   "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: { totalMem: bigint; availMem: bigint; lowMemory: number; threshold: bigint }) => {
     mi.totalMem = 4n << 30n; mi.availMem = 2n << 30n; mi.lowMemory = 0; mi.threshold = 128n << 20n;
   },
-  "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) =>
-    jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
+  "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": driven(function* (pids: Int32Array): Gen {
+    const infos: JObj[] = [];
+    for (const pid of pids) {
+      const info: JObj = yield newObj("android/os/Debug$MemoryInfo");
+      yield scall("android/os/Debug", "getMemoryInfo", "(ILandroid/os/Debug$MemoryInfo;)Z", pid, info);
+      infos.push(info);
+    }
+    return jarray(infos, "Landroid/os/Debug$MemoryInfo;");
+  }),
   // ActiveServices does not report its records as RunningServiceInfo
   "getServices(II)Ljava/util/List;": () => newArrayList(),
   // no exits or starts are recorded, and nothing restricts this app or drives it as a monkey
@@ -132,6 +140,12 @@ rt.register({ name: "webdroid/MediaProjectionManagerService", ctor: class extend
   ...noops("removeCallback(Landroid/media/projection/IMediaProjectionWatcherCallback;)V"),
 } });
 hostStub("media_projection", "webdroid/MediaProjectionManagerService");
+// ITimeDetectorService: the host's wall clock is network-synchronized, so it is the latest network time
+rt.register({ name: "webdroid/TimeDetectorService", ctor: class extends JObj {}, sup: "android/app/timedetector/ITimeDetectorService$Stub", methods: {
+  "latestNetworkTime()Landroid/app/time/UnixEpochTime;": () =>
+    newObj("android/app/time/UnixEpochTime", "(JJ)V", BigInt(Math.floor(uptimeMillis())), BigInt(Math.floor(wallMillis()))),
+} });
+hostStub("time_detector", "webdroid/TimeDetectorService");
 // StatusBarManagerService: quick settings never bind a tile, so a tile's listening request has no panel to reach
 rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj {}, sup: "com/android/internal/statusbar/IStatusBarService$Stub",
   methods: noops("requestTileServiceListeningState(Landroid/content/ComponentName;I)V") });

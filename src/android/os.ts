@@ -5,13 +5,13 @@ import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs"
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
-import { rt, JObj, stubs, noops, driven, declaredField, type Gen } from "../jvm/runtime";
+import { rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { i8, jarray, utf8 } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, defineException, after, checkFromIndexSize, scall } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize, scall, construct } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
@@ -21,7 +21,7 @@ import { vfs } from "../shell/vfs";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
-import { guestSleep, uptimeMillis } from "../guest-clock";
+import { uptimeMillis, wallMillis } from "../guest-clock";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
 // support, a 1 ms preferred rate). A hint only advises the scheduler, so a session keeps its
@@ -39,28 +39,18 @@ rt.registerJnis("android/os/PerformanceHintManager", {
     "nativeSendHint(JI)V", "nativeSetPreferPowerEfficiency(JZ)V"),
 });
 
-defineException("android/os/RemoteException", "java/lang/Exception");
-defineException("android/os/DeadObjectException", "android/os/RemoteException");
-defineException("android/os/OperationCanceledException", "java/lang/RuntimeException");
 
 const RUNTIME_STATS = ["art.gc.gc-count", "art.gc.gc-time", "art.gc.bytes-allocated", "art.gc.bytes-freed", "art.gc.blocking-gc-count", "art.gc.blocking-gc-time", "art.gc.gc-count-rate-histogram", "art.gc.blocking-gc-count-rate-histogram"];
 // ── SystemClock / Build / Process / Trace / Debug
-class JSystemClock extends JObj {}
-rt.register({
-  name: "android/os/SystemClock", ctor: JSystemClock,
-  methods: {
-    "static uptimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
-    "static elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
-    "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
-    "static uptimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
-    "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
-    // the host's wall clock is network-synchronized
-    "static currentNetworkTimeClock()Ljava/time/Clock;": () => {
-      const clock = rt.link("java/time/Clock");
-      return after(rt.initClass(clock), () => vcall(clock.ctor, "systemUTC", "()Ljava/time/Clock;"));
-    },
-    "static sleep(J)V": (ms: bigint) => guestSleep(Number(ms)),
-  },
+const nanos = (ms: number) => BigInt(Math.floor(ms * 1e6));
+rt.registerJnis("android/os/SystemClock", {
+  "uptimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
+  "elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
+  "elapsedRealtimeNanos()J": () => nanos(uptimeMillis()),
+  "uptimeNanos()J": () => nanos(uptimeMillis()),
+  "currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
+  "currentThreadTimeMicro()J": () => BigInt(Math.floor(performance.now() * 1e3)),
+  "currentTimeMicro()J": () => BigInt(Math.floor(wallMillis() * 1e3)),
 });
 class JBuild extends JObj {}
 const abi32 = jarray(["armeabi-v7a"], "Ljava/lang/String;"), abi64 = jarray(["arm64-v8a"], "Ljava/lang/String;");
@@ -111,14 +101,6 @@ export async function asZygote(init: () => Promise<void>): Promise<void> {
   try { await init(); } finally { zygoteRunning = false; }
 }
 export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; procIdentity.uid = uid; }
-export class JUserHandle extends JObj { constructor(readonly id = 0) { super(); } }
-const userHandles = new Map<number, JUserHandle>();
-export function userHandleForUid(uid: number): JUserHandle {
-  const userId = Math.trunc(uid / 100000);
-  let handle = userHandles.get(userId);
-  if (!handle) { handle = new JUserHandle(userId); userHandles.set(userId, handle); }
-  return handle;
-}
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
 function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
@@ -165,84 +147,37 @@ rt.registerJnis("android/os/Trace", {
     "nativeSetAppTracingAllowed(Z)V", "nativeSetTracingEnabled(Z)V", "nativeTraceBegin(JLjava/lang/String;)V",
     "nativeTraceCounter(JLjava/lang/String;J)V", "nativeTraceEnd(J)V"].map((sig) => [sig, () => {}])),
 });
-class JMemoryInfo extends JObj {
-  dalvikSharedClean = 0; nativeSharedClean = 0; otherSharedClean = 0;
-  dalvikPrivateClean = 0; nativePrivateClean = 0; otherPrivateClean = 0;
-  dalvikPss = 0; nativePss = 0; otherPss = 0;
-  dalvikSwappablePss = 0; nativeSwappablePss = 0; otherSwappablePss = 0;
-  dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
-  get totalPss() { return this.dalvikPss + this.nativePss + this.otherPss; }
-  get privateDirty() { return this.dalvikPrivateDirty + this.nativePrivateDirty + this.otherPrivateDirty; }
-  stats(): Record<string, number> {
-    return {
-      "summary.java-heap": this.dalvikPrivateDirty, "summary.native-heap": this.nativePrivateDirty,
-      "summary.code": 0, "summary.stack": 0, "summary.graphics": 0,
-      "summary.private-other": this.otherPrivateDirty, "summary.system": this.totalPss - this.privateDirty,
-      "summary.total-pss": this.totalPss, "summary.total-swap": 0,
-    };
-  }
-}
-rt.register({
-  name: "android/os/Debug$MemoryInfo", ctor: JMemoryInfo,
-  fields: ["dalvikPss", "nativePss", "otherPss", "dalvikSharedDirty", "dalvikPrivateDirty",
-    "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty",
-    "dalvikSwappablePss", "nativeSwappablePss", "otherSwappablePss",
-    "dalvikSharedClean", "nativeSharedClean", "otherSharedClean", "dalvikPrivateClean", "nativePrivateClean", "otherPrivateClean"],
-  methods: {
-    "getTotalPss()I": function (this: JMemoryInfo) { return this.totalPss; },
-    "getTotalSwappablePss()I": function (this: JMemoryInfo) { return this.dalvikSwappablePss + this.nativeSwappablePss + this.otherSwappablePss; },
-    ...noops("<init>()V"),
-    "getTotalPrivateDirty()I": function (this: JMemoryInfo) { return this.privateDirty; },
-    "getTotalSharedDirty()I": function (this: JMemoryInfo) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },
-    "getTotalSharedClean()I": function (this: JMemoryInfo) { return this.dalvikSharedClean + this.nativeSharedClean + this.otherSharedClean; },
-    "getTotalPrivateClean()I": function (this: JMemoryInfo) { return this.dalvikPrivateClean + this.nativePrivateClean + this.otherPrivateClean; },
-    "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": function (this: JMemoryInfo, key: string) {
-      const stats = this.stats(); return Object.hasOwn(stats, key) ? String(stats[key]) : null;
-    },
-    "getMemoryStats()Ljava/util/Map;": driven(function* (this: JMemoryInfo): Gen {
-      const map = yield newObj("java/util/HashMap");
-      for (const [key, value] of Object.entries(this.stats())) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, String(value));
-      return map;
-    }),
-  },
-});
 /** the JS heap in KiB, the nearest thing to this process's dalvik footprint */
 const jsHeapKb = () => (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;
-rt.register({
-  name: "android/os/Debug", ctor: class extends JObj {},
-  methods: {
-    // the native heap is the guest allocator's: bytes in use, the extent it has reached, and the gap
-    "static getNativeHeapAllocatedSize()J": () => BigInt(Math.round(mem.stats().used)),
-    "static getNativeHeapSize()J": () => BigInt(Math.round(mem.stats().peak)),
-    "static getNativeHeapFreeSize()J": () => BigInt(Math.max(0, Math.round(mem.stats().peak - mem.stats().used))),
-    ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
-    "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
-    "static getThreadAllocCount()I": () => 0,
-    "static getThreadAllocSize()I": () => 0,
-    "static getPss()J": () => BigInt(jsHeapKb()),
-    // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
-    "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,
-    "static getRuntimeStats()Ljava/util/Map;": driven(function* (): Gen {
-      const m = yield newObj("java/util/HashMap");
-      for (const k of RUNTIME_STATS) yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, "0");
-      return m;
-    }),
-    // nothing here is shared
-    "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number; nativePss: number; nativePrivateDirty: number } | null) => {
-      if (!info) throw rt.mkThrowable("java/lang/NullPointerException", "memoryInfo");
-      const kb = jsHeapKb();
-      info.dalvikPss = kb; info.dalvikPrivateDirty = kb;
-      const native = Math.round(mem.stats().used / 1024);
-      info.nativePss = native; info.nativePrivateDirty = native;
-    },
-  },
+const MI = "android/os/Debug$MemoryInfo";
+/** this process's memory, as debuggerd reads it from smaps: nothing here is shared */
+function memoryInfo(info: JObj | null): void {
+  const kb = jsHeapKb(), native = Math.round(mem.stats().used / 1024);
+  setDeclared(info ?? rt.npe(), MI, { dalvikPss: kb, dalvikPrivateDirty: kb, nativePss: native, nativePrivateDirty: native });
+}
+rt.registerJnis("android/os/Debug", {
+  // the native heap is the guest allocator's: bytes in use, the extent it has reached, and the gap
+  "getNativeHeapAllocatedSize()J": () => BigInt(Math.round(mem.stats().used)),
+  "getNativeHeapSize()J": () => BigInt(Math.round(mem.stats().peak)),
+  "getNativeHeapFreeSize()J": () => BigInt(Math.max(0, Math.round(mem.stats().peak - mem.stats().used))),
+  "getPss()J": () => BigInt(jsHeapKb()),
+  "getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": memoryInfo,
+  // another process's smaps are not this page's to read
+  "getMemoryInfo(ILandroid/os/Debug$MemoryInfo;)Z": (pid: number, info: JObj | null) => pid === PROCESS_PID ? (memoryInfo(info), 1) : 0,
+});
+// ART's debugger and runtime counters: no debugger attaches, and nothing here collects, blocks or
+// compacts, so every runtime stat is zero
+rt.registerJnis("dalvik/system/VMDebug", {
+  "isDebuggerConnected()Z": () => 0,
+  "isDebuggingEnabled()Z": () => 0,
+  "lastDebuggerActivity()J": () => -1n,
+  "threadCpuTimeNanos()J": () => nanos(performance.now()),
+  "getAllocCount(I)I": () => 0,
+  "getRuntimeStatInternal(I)Ljava/lang/String;": () => "0",
+  "getRuntimeStatsInternal()[Ljava/lang/String;": () => jarray(RUNTIME_STATS.map(() => "0"), "Ljava/lang/String;"),
 });
 /** the Java Bundle and PersistableBundle run from AOSP bytecode */
 export type JBundle = JObj;
-export const PARCELABLE = {
-  "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
-} as const;
 const sharedMappings = new WeakSet<JBuffer>();
 /** the ashmem region: guest memory, which each mapping's direct buffer addresses */
 class JSharedMemory extends JObj {
@@ -293,31 +228,6 @@ rt.register({
       if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
       yield vcall(parcel, "writeInt", "(I)V", this.protection);
       yield vcall(parcel, "writeByteArray", "([B)V", this.bytes.slice());
-    }),
-  },
-});
-class JCancellationSignal extends JObj {
-  cancelled = 0;
-  listener: unknown = null;
-}
-rt.markers("android/os/CancellationSignal$OnCancelListener");
-rt.register({
-  name: "android/os/CancellationSignal", ctor: JCancellationSignal,
-  methods: {
-    "<init>()V": function () {},
-    "isCanceled()Z": function (this: JCancellationSignal) { return this.cancelled; },
-    "cancel()V": driven(function* (this: JCancellationSignal): Gen {
-      if (this.cancelled) return;
-      this.cancelled = 1;
-      if (this.listener) yield vcall(this.listener, "onCancel", "()V");
-    }),
-    "throwIfCanceled()V": function (this: JCancellationSignal) {
-      if (this.cancelled) throw rt.mkThrowable("android/os/OperationCanceledException", null);
-    },
-    "setOnCancelListener(Landroid/os/CancellationSignal$OnCancelListener;)V": driven(function* (this: JCancellationSignal, listener: unknown): Gen {
-      if (this.listener === listener) return;
-      this.listener = listener;
-      if (this.cancelled && listener) yield vcall(listener, "onCancel", "()V");
     }),
   },
 });
@@ -528,16 +438,6 @@ rt.register({
 // statvfs answers the browser's storage estimate for whichever path is asked about (one
 // filesystem backs everything here), in 4K blocks.
 const BLK = 4096n;
-const statVfsFields = ["f_bsize", "f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree", "f_favail", "f_fsid", "f_flag", "f_namemax"] as const;
-class JStructStatVfs extends JObj {
-  f_bsize = 0n; f_frsize = 0n; f_blocks = 0n; f_bfree = 0n; f_bavail = 0n;
-  f_files = 0n; f_ffree = 0n; f_favail = 0n; f_fsid = 0n; f_flag = 0n; f_namemax = 0n;
-}
-rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields: [...statVfsFields], methods: {
-  "<init>(JJJJJJJJJJJ)V": function (this: JStructStatVfs, ...values: bigint[]) {
-    for (let i = 0; i < statVfsFields.length; i++) Reflect.set(this, statVfsFields[i], values[i]);
-  },
-} });
 // the internal storage volume, identified by the platform's default UUID (StorageManager.UUID_DEFAULT)
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
@@ -548,29 +448,7 @@ export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: 
   } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
 });
 // android.system.Os: the libcore syscall surface over the same descriptor table native code uses
-class JErrnoException extends JThrowable { errno = 0; functionName = ""; }
-function errnoMessage(this: JErrnoException): string {
-  const name = Object.entries(E).find(([, value]) => value === this.errno)?.[0];
-  return `${this.functionName} failed: ${name ? "E" + name : "errno " + this.errno} (${ERRSTR[this.errno] ?? "Unknown error " + this.errno})`;
-}
-function initErrno(this: JErrnoException, fn: string, value: number, cause: JThrowable | null = null) {
-  this.functionName = fn; this.errno = value; this.cause = cause;
-}
-const rethrowAs = (cls: string) => function (this: JErrnoException) {
-  const error = rt.mkThrowable(cls, errnoMessage.call(this)); error.cause = this; throw error;
-};
-rt.register({
-  name: "android/system/ErrnoException", ctor: JErrnoException, sup: "java/lang/Exception",
-  fields: ["errno", "functionName"],
-  methods: {
-    "<init>(Ljava/lang/String;I)V": initErrno,
-    "<init>(Ljava/lang/String;ILjava/lang/Throwable;)V": initErrno,
-    "getMessage()Ljava/lang/String;": errnoMessage,
-    "rethrowAsIOException()Ljava/io/IOException;": rethrowAs("java/io/IOException"),
-    "rethrowAsSocketException()Ljava/net/SocketException;": rethrowAs("java/net/SocketException"),
-  },
-});
-export const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
+export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThrowable("android/system/ErrnoException", null), "android/system/ErrnoException", { functionName: fn, errno: e });
 /** a path's file stat, null for a directory; ENOENT for neither */
 const existing = (fn: string, path: string) => { const st = vfs.stat(path); if (!st && !vfs.isDir(path)) throw errno(fn, 2); return st; };
 class JStructStat extends JObj {
@@ -589,23 +467,6 @@ function timespec(ms: number): JObj {
   t[declaredField("android/system/StructTimespec", "tv_nsec")] = BigInt(Math.round((ms % 1000) * 1e6));
   return t as unknown as JObj;
 }
-class JStructUtsname extends JObj {
-  sysname = "Linux";
-  nodename = "localhost";
-  release = "5.10.0-webdroid";
-  version = "#1 SMP PREEMPT";
-  machine = "aarch64";
-}
-rt.register({
-  name: "android/system/StructUtsname", ctor: JStructUtsname,
-  fields: ["sysname", "nodename", "release", "version", "machine"],
-  methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
-      function (this: JStructUtsname, sysname: string, nodename: string, release: string, version: string, machine: string) {
-        this.sysname = sysname; this.nodename = nodename; this.release = release; this.version = version; this.machine = machine;
-      },
-  },
-});
 export const FD = "Ljava/io/FileDescriptor;";
 function statOf(path: string | null, size: number, mode: number, mtimeMs: number): JStructStat {
   const s = new JStructStat();
@@ -617,14 +478,15 @@ function statOf(path: string | null, size: number, mode: number, mtimeMs: number
   s.st_blocks = (s.st_size + 511n) / 512n;
   return s;
 }
-const storageStatVfs = driven(function* storageStatVfs(): Gen<JStructStatVfs> {
-  const { total, free } = yield storageEstimate();
-  const s = new JStructStatVfs();
-  s.f_bsize = s.f_frsize = BLK;
-  s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
-  s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
-  s.f_namemax = 255n;
-  return s;
+type StatVfs = { f_frsize: bigint; f_blocks: bigint; f_bfree: bigint; f_bavail: bigint };
+const storageStatVfs = driven(function* storageStatVfs(): Gen<StatVfs> {
+  const { total, free } = yield storageEstimate(), f_bfree = BigInt(Math.floor(free / Number(BLK)));
+  return { f_frsize: BLK, f_blocks: BigInt(Math.floor(total / Number(BLK))), f_bfree, f_bavail: f_bfree };
+});
+/** a StructStatVfs as statvfs(2) fills it: 4K blocks, no inode counts, 255-byte names */
+const structStatVfs = driven(function* structStatVfs(): Gen<JObj> {
+  const s: StatVfs = yield storageStatVfs();
+  return construct("android/system/StructStatVfs", "(JJJJJJJJJJJ)V", BLK, s.f_frsize, s.f_blocks, s.f_bfree, s.f_bavail, 0n, 0n, 0n, 0n, 0n, 255n);
 });
 // libcore.io.Linux: the syscalls behind android.system.Os and Libcore.os, over the descriptor
 // table native code shares
@@ -745,12 +607,10 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     // bionic's passwd entry: every id has one, named as appUserName names it
     "getpwuid(I)Landroid/system/StructPasswd;": (uid: number) =>
       newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh"),
-    "uname()Landroid/system/StructUtsname;": () => {
-      const info = new JStructUtsname();
-      info.machine = is64BitProcess() ? "aarch64" : "armv7l";
-      return info;
-    },
+    "uname()Landroid/system/StructUtsname;": () => setDeclared(rt.make("android/system/StructUtsname"), "android/system/StructUtsname",
+      { sysname: "Linux", nodename: "localhost", release: "5.10.0-webdroid", version: "#1 SMP PREEMPT", machine: is64BitProcess() ? "aarch64" : "armv7l" }),
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
+    "strerror(I)Ljava/lang/String;": (e: number) => ERRSTR[e] ?? `Unknown error ${e}`,
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = existing("stat", path);
       return statOf(path, st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
@@ -773,11 +633,11 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     },
     "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
       existing("statvfs", path);
-      return storageStatVfs();
+      return structStatVfs();
     },
     [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JObj | null) => {
       if (fdInt(d) < 0) throw errno("fstatvfs", E.BADF);
-      return storageStatVfs();
+      return structStatVfs();
     },
     "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
     "access(Ljava/lang/String;I)Z": (path: string, mode: number) => { if (path === null) rt.npe(); sys("access", accessPath(null, path, mode)); return 1; },
@@ -855,8 +715,8 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => +vfs.exists(pathOf(file)),
   // FileSystem.SPACE_TOTAL, SPACE_FREE, SPACE_USABLE
   "getSpace0(Ljava/io/File;I)J": driven(function* (_file: JObj, kind: number): Gen {
-    const s: JStructStatVfs = yield storageStatVfs();
-    return kind === 0 ? s.f_blocks * s.f_frsize : kind === 1 ? s.f_bfree * s.f_frsize : s.f_bavail * s.f_bsize;
+    const s: StatVfs = yield storageStatVfs();
+    return kind === 0 ? s.f_blocks * s.f_frsize : kind === 1 ? s.f_bfree * s.f_frsize : s.f_bavail * s.f_frsize;
   }),
   "getNameMax0(Ljava/lang/String;)J": () => 255n,
 };
@@ -996,7 +856,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "getgrgid(I)[B": passwdName,
   "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V": driven(function* (path: bigint, attrs: JObj): Gen {
     statPath(cpath(path), null);
-    const s: JStructStatVfs = yield storageStatVfs(), a = attrs as unknown as Record<string, bigint>;
+    const s: StatVfs = yield storageStatVfs(), a = attrs as unknown as Record<string, bigint>;
     const f = (name: string) => declaredField("sun/nio/fs/UnixFileStoreAttributes", name);
     a[f("f_frsize")] = s.f_frsize; a[f("f_blocks")] = s.f_blocks; a[f("f_bfree")] = s.f_bfree; a[f("f_bavail")] = s.f_bavail;
   }),
@@ -1047,4 +907,3 @@ rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
     if (prop) info.ctor[prop] = value;
   }
 });
-rt.register({ name: "android/os/ext/SdkExtensions", ctor: class extends JObj {}, methods: { "static getExtensionVersion(I)I": () => 0 } });

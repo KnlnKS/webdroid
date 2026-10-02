@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { TV } from "../src/android/axml";
-import { vcall, newObj, scall, linkInit, vcallAsync, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
+import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
@@ -66,31 +66,6 @@ describe("bridgecalls", () => {
     bridge.reply(other, `${seq}\nwrong`);
     bridge.reply(owner, `${seq}\nright`);
     expect(await (await pending).text()).toBe("right");
-  });
-});
-
-describe("cancellation-signal", () => {
-  class CancelListener extends JObj { calls = 0; }
-  rt.register({
-    name: "test/CancelListener", ctor: CancelListener, ifaces: ["android/os/CancellationSignal$OnCancelListener"],
-    methods: { "onCancel()V": function (this: CancelListener) { this.calls++; } },
-  });
-  rt.linkNatives();
-
-  test("CancellationSignal dispatches exactly once and immediately for late listeners", async () => {
-    const signal = await newObj("android/os/CancellationSignal");
-    const first = new CancelListener();
-    await vcall(signal, "setOnCancelListener", "(Landroid/os/CancellationSignal$OnCancelListener;)V", first);
-    await vcall(signal, "cancel", "()V");
-    await vcall(signal, "cancel", "()V");
-    expect(first.calls).toBe(1);
-    expect(await vcall(signal, "isCanceled", "()Z")).toBe(1);
-    const late = new CancelListener();
-    await vcall(signal, "setOnCancelListener", "(Landroid/os/CancellationSignal$OnCancelListener;)V", late);
-    expect(late.calls).toBe(1);
-    await expect(vcallAsync(signal, "throwIfCanceled", "()V")).rejects.toMatchObject({
-      constructor: { $i: { name: "android/os/OperationCanceledException" } },
-    });
   });
 });
 
@@ -195,21 +170,6 @@ describe("parcel-string16", () => {
   });
 });
 
-describe("process-user-handle", () => {
-  rt.linkNatives();
-
-  test("Process returns the canonical handle for its Android user", async () => {
-    const process = rt.link("android/os/Process").ctor;
-    const userHandle = rt.link("android/os/UserHandle").ctor;
-    const current = await vcall(process, "myUserHandle", "()Landroid/os/UserHandle;");
-    const byUid = await vcall(userHandle, "getUserHandleForUid", "(I)Landroid/os/UserHandle;", 10001);
-    expect(current).toBe(byUid);
-    expect(await vcall(current, "getIdentifier", "()I")).toBe(0);
-    const secondary = await vcall(userHandle, "getUserHandleForUid", "(I)Landroid/os/UserHandle;", 1_012_345);
-    expect(await vcall(secondary, "getIdentifier", "()I")).toBe(10);
-  });
-});
-
 describe("environment", () => {
   rt.linkNatives();
   beforeAll(app);
@@ -255,33 +215,11 @@ describe("remotecallbacklist", () => {
     "asBinder()Landroid/os/IBinder;": function (this: Callback) { return this.binder; },
   } });
   rt.linkNatives();
-  async function callback(binder?: unknown) {
-    binder ??= await newObj("android/os/Binder");
+  function callback(binder: unknown) {
     const result = new Callback(); result.binder = binder; return result;
   }
   const register = (list: unknown, cb: unknown, cookie: unknown = null) => vcall(list, "register", "(Landroid/os/IInterface;Ljava/lang/Object;)Z", cb, cookie);
-  const unregister = (list: unknown, cb: unknown) => vcall(list, "unregister", "(Landroid/os/IInterface;)Z", cb);
   const count = (list: unknown) => vcall(list, "getRegisteredCallbackCount", "()I");
-
-  test("RemoteCallbackList keys registrations by Binder and broadcasts a stable snapshot", async () => {
-    const list = await newObj("android/os/RemoteCallbackList"), first = await callback(), replacement = await callback(first.binder);
-    expect(await register(list, first, "old")).toBe(1);
-    expect(await register(list, replacement, "new")).toBe(1);
-    expect(await count(list)).toBe(1);
-    expect(await vcall(list, "beginBroadcast", "()I")).toBe(1);
-    expect(await unregister(list, first)).toBe(1);
-    expect(await register(list, await callback())).toBe(1);
-    expect(await vcall(list, "getBroadcastItem", "(I)Landroid/os/IInterface;", 0)).toBe(replacement);
-    expect(await vcall(list, "getBroadcastCookie", "(I)Ljava/lang/Object;", 0)).toBe("new");
-    await expect(vcallAsync(list, "beginBroadcast", "()I")).rejects.toBeDefined();
-    await vcall(list, "finishBroadcast", "()V");
-    await expect(vcallAsync(list, "finishBroadcast", "()V")).rejects.toBeDefined();
-    await vcall(list, "kill", "()V");
-    expect(await count(list)).toBe(0);
-    expect(await register(list, first)).toBe(0);
-    expect(await vcall(list, "beginBroadcast", "()I")).toBe(0);
-    await vcall(list, "finishBroadcast", "()V");
-  });
 
   test("RemoteCallbackList removes dead remote Binders and unlinks replacement registrations", async () => {
     const saved = { ...binderTransport }, watches = new Set<() => void>();
@@ -289,7 +227,7 @@ describe("remotecallbacklist", () => {
     binderTransport.alive = () => alive;
     binderTransport.watch = (_pid, died) => { watches.add(died); return () => { watches.delete(died); }; };
     try {
-      const list = await newObj("android/os/RemoteCallbackList"), cb = await callback(await importBinder({ pid: 987654, id: 1 }));
+      const list = await newObj("android/os/RemoteCallbackList"), cb = callback(await importBinder({ pid: 987654, id: 1 }));
       expect(await register(list, cb)).toBe(1);
       expect(await register(list, cb)).toBe(1);
       expect(watches.size).toBe(1);

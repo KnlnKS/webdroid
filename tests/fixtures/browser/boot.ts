@@ -11,8 +11,8 @@ import { startMainLooper } from "../../../src/android/mainloop";
 export async function bootWithFonts(): Promise<void> {
   await loadPlatformDex();
   rt.linkNatives();
-  await startMainLooper();
   mountPlatformData();
+  await startMainLooper();
   await loadSystemFontMap();
   await initDeviceLocales();
   await preloadPaint();

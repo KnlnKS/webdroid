@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { vcall, newObj } from "../src/jvm/natives/jlang";
 import { canvasOver, canvasOf } from "../src/android/canvas";
 import type { WebViewChromium } from "../src/android/webkit";
@@ -15,11 +15,10 @@ describe("android-surface-state", () => {
   test("uname reports the emulated Linux ABI", async () => {
     await loadLibcore();
     const uts = await scall("android/system/Os", "uname", "()Landroid/system/StructUtsname;");
-    if (typeof uts !== "object" || uts === null || !("sysname" in uts) || !("release" in uts) || !("machine" in uts))
-      throw new Error("uname returned an invalid StructUtsname");
-    expect(uts.sysname).toBe("Linux");
-    expect(String(uts.release)).toContain("webdroid");
-    expect(["aarch64", "armv7l"]).toContain(String(uts.machine));
+    const field = (name: string) => getDeclared<string>(uts, "android/system/StructUtsname", name);
+    expect(field("sysname")).toBe("Linux");
+    expect(field("release")).toContain("webdroid");
+    expect(["aarch64", "armv7l"]).toContain(field("machine"));
   });
 });
 

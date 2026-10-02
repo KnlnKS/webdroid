@@ -1,28 +1,9 @@
-// System services and binder-ish plumbing: UserHandle, FileObserver,
-// and the callback/marker interfaces apps implement (ServiceConnection, IInterface).
+// System services and binder-ish plumbing, and FileObserver's inotify.
 
 import { rt, JObj, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { hostStub, newStub } from "./binder";
-import { JUserHandle, PARCELABLE, userHandleForUid } from "./os";
-
-// ── UserHandle: handles are canonical per Android user id.
-rt.register({
-  name: "android/os/UserHandle", ctor: JUserHandle, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "<init>(I)V": function (this: JUserHandle, id: number) { (this as { id: number }).id = id; },
-    "getIdentifier()I": function (this: JUserHandle) { return this.id; },
-    "hashCode()I": function (this: JUserHandle) { return this.id; },
-    "equals(Ljava/lang/Object;)Z": function (this: JUserHandle, o: unknown) {
-      return o instanceof JUserHandle && o.id === this.id ? 1 : 0;
-    },
-    "toString()Ljava/lang/String;": function (this: JUserHandle) { return "UserHandle{" + this.id + "}"; },
-    ...PARCELABLE,
-    "static getUserHandleForUid(I)Landroid/os/UserHandle;": userHandleForUid,
-    "static of(I)Landroid/os/UserHandle;": (userId: number) => userHandleForUid(userId * 100000),
-  },
-});
 
 // IRestrictionsManager, under AOSP's RestrictionsManager: no device or profile owner manages this
 // device, so there are no restrictions and no provider to ask
@@ -70,26 +51,11 @@ rt.register({ name: "webdroid/DropBoxManagerService", ctor: class extends JObj {
 } });
 hostStub("dropbox", "webdroid/DropBoxManagerService");
 
-// ── FileObserver: real shape, no eventing (there is no filesystem to watch here).
-class JFileObserver extends JObj { paths: unknown = null; mask = 0xfff; }
-const fileObserverInit = function (this: JFileObserver, paths: unknown, mask?: number) {
-  this.paths = paths;
-  if (mask !== undefined) this.mask = mask;
-};
-rt.register({
-  name: "android/os/FileObserver", ctor: JFileObserver,
-  statics: {
-    ACCESS: 0x001, MODIFY: 0x002, ATTRIB: 0x004, CLOSE_WRITE: 0x008, CLOSE_NOWRITE: 0x010,
-    OPEN: 0x020, MOVED_FROM: 0x040, MOVED_TO: 0x080, CREATE: 0x100, DELETE: 0x200,
-    DELETE_SELF: 0x400, MOVE_SELF: 0x800, ALL_EVENTS: 0xfff,
-  },
-  methods: {
-    "<init>(Ljava/lang/String;)V": fileObserverInit,
-    "<init>(Ljava/lang/String;I)V": fileObserverInit,
-    "<init>(Ljava/io/File;)V": fileObserverInit,
-    "<init>(Ljava/io/File;I)V": fileObserverInit,
-    "<init>(Ljava/util/List;)V": fileObserverInit,
-    "<init>(Ljava/util/List;I)V": fileObserverInit,
-    ...noops("startWatching()V", "stopWatching()V", "onEvent(ILjava/lang/String;)V"),
-  },
+// FileObserver's inotify instance: the VFS reports no changes, so inotify_init1 fails as on a
+// kernel without inotify, and AOSP's observer thread ends with nothing to watch
+rt.registerJnis("android/os/FileObserver$ObserverThread", {
+  "init()I": () => -1,
+  "observe(I)V": () => {},
+  "startWatching(I[Ljava/lang/String;I[I)V": (_fd: number, _paths: unknown, _mask: number, wfds: Int32Array) => { wfds.fill(-1); },
+  "stopWatching(I[I)V": () => {},
 });
