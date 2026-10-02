@@ -124,7 +124,6 @@ export class NativeRenderNode {
 }
 const nodeAt = (h: bigint) => deref<NativeRenderNode>(h);
 
-/** RenderNodeDrawable: the node's display list replayed into ctx under its properties */
 /** a frame's position changes for RenderNode.PositionUpdateListeners: listener, then the node's
  *  bounds in the surface, which the renderer delivers before it queues the frame */
 export const positionUpdates: [object, number, number, number, number][] = [];
@@ -151,6 +150,7 @@ function notePosition(ctx: Ctx2D, n: NativeRenderNode): void {
   n.position = key;
   positionUpdates.push([n.positionListener!, b[0], b[1], b[2], b[3]]);
 }
+/** RenderNodeDrawable: the node's display list replayed into ctx under its properties */
 export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
   const ops = n.ops, w = n.width, h = n.height;
   if (n.positionListener && !n.drawing) notePosition(ctx, n);
@@ -221,12 +221,7 @@ const set = <K extends keyof NativeRenderNode>(key: K) => (h: bigint, v: NativeR
 };
 const get = <K extends keyof NativeRenderNode>(key: K) => (h: bigint) => nodeAt(h)[key];
 const bool = <K extends keyof NativeRenderNode>(key: K) => (h: bigint) => +!!nodeAt(h)[key];
-const setBool = (key: "overlapping" | "forceDark" | "projectBackwards" | "projectionReceiver") => (h: bigint, v: number) => {
-  const n = nodeAt(h);
-  if (n[key] === !!v) return 0;
-  n[key] = !!v;
-  return 1;
-};
+const setBool = (key: "overlapping" | "forceDark" | "projectBackwards" | "projectionReceiver") => (h: bigint, v: number) => set(key)(h, !!v);
 const transformSetter = (key: "tx" | "ty" | "rotation" | "rotationX" | "rotationY" | "scaleX" | "scaleY") => (h: bigint, v: number) => nodeAt(h).setTransform(key, v);
 const sideSetter = (key: "left" | "top" | "right" | "bottom") => (h: bigint, v: number) => nodeAt(h).setSide(key, v);
 
