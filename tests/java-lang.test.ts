@@ -518,6 +518,18 @@ describe("string-case", () => {
     expect(await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "b", "A")).toBe(1);
   });
 
+  test("case mapping follows the locale, and the default locale for the no-argument forms", async () => {
+    const tr = await scall("java/util/Locale", "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", "tr");
+    const original = await scall("java/util/Locale", "getDefault", "()Ljava/util/Locale;");
+    expect(await vcall("TITLE", "toLowerCase", "(Ljava/util/Locale;)Ljava/lang/String;", tr)).toBe("tıtle");
+    expect(await vcall("title", "toUpperCase", "(Ljava/util/Locale;)Ljava/lang/String;", tr)).toBe("TİTLE");
+    expect(await vcall("TITLE", "toLowerCase", "()Ljava/lang/String;")).toBe("title");
+    await scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", tr);
+    try { expect(await vcall("TITLE", "toLowerCase", "()Ljava/lang/String;")).toBe("tıtle"); }
+    finally { await scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", original); }
+    expect(await vcall("TITLE", "toLowerCase", "()Ljava/lang/String;")).toBe("title");
+  });
+
   test("compareTo keeps its value where it is returned and orders by UTF-16 units where only its sign is read", async () => {
     const natural = await scall("java/util/Comparator", "naturalOrder", "()Ljava/util/Comparator;");
     expect(await vcall(natural, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "apple", "apricot")).toBe(-2);

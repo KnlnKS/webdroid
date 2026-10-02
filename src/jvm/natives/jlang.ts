@@ -771,10 +771,35 @@ const JAVA_WHITESPACE = /^[\t-\r\x1c-\x1f \u1680\u2000-\u2006\u2008-\u200a\u2028
 sm("trim()Ljava/lang/String;", function () { return javaTrim(this); });
 sm("strip()Ljava/lang/String;", function () { return this.replace(JAVA_WHITESPACE, ""); });
 sm("doRepeat(I)Ljava/lang/String;", function (n: number) { return this.repeat(n); });
-sm("toLowerCase()Ljava/lang/String;", function () { return this.toLowerCase(); });
-sm("toUpperCase()Ljava/lang/String;", function () { return this.toUpperCase(); });
-sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function () { return this.toLowerCase(); });
-sm("toUpperCase(Ljava/util/Locale;)Ljava/lang/String;", function () { return this.toUpperCase(); });
+// CaseMapper: only Turkish, Azeri and Lithuanian case differently, and only these letters; the
+// no-argument forms case for Locale.getDefault()
+const LOCALE_CASED = /[IiJj\u00cc\u00cd\u0128\u012e\u0130\u0131\u0307]/, CASE_LOCALES = new Set(["tr", "az", "lt"]);
+function caseIn(s: string, locale: unknown, upper: boolean): unknown {
+  if (locale === null) rt.npe();
+  if (!LOCALE_CASED.test(s)) return upper ? s.toUpperCase() : s.toLowerCase();
+  return after(vcall(locale, "getLanguage", "()Ljava/lang/String;"), (lang: string) => !CASE_LOCALES.has(lang)
+    ? upper ? s.toUpperCase() : s.toLowerCase() : upper ? s.toLocaleUpperCase(lang) : s.toLocaleLowerCase(lang));
+}
+/** the default locale's language while it is one CaseMapper treats apart, else ""; null once
+ *  Locale.setDefault may have changed it */
+let defaultCaseLang: string | null = null;
+const caseInDefault = (s: string, upper: boolean): unknown => {
+  if (defaultCaseLang === "" || !LOCALE_CASED.test(s)) return upper ? s.toUpperCase() : s.toLowerCase();
+  if (defaultCaseLang !== null) return upper ? s.toLocaleUpperCase(defaultCaseLang) : s.toLocaleLowerCase(defaultCaseLang);
+  return after(scall("java/util/Locale", "getDefault", "()Ljava/util/Locale;"), (locale) =>
+    after(vcall(locale, "getLanguage", "()Ljava/lang/String;"), (lang: string) => {
+      defaultCaseLang = CASE_LOCALES.has(lang) ? lang : "";
+      return caseInDefault(s, upper);
+    }));
+};
+rt.intrinsic("java/util/Locale", {
+  "static setDefault(Ljava/util/Locale;)V": (base) => (locale: unknown) => { defaultCaseLang = null; return base(locale); },
+  "static setDefault(Ljava/util/Locale$Category;Ljava/util/Locale;)V": (base) => (category: unknown, locale: unknown) => { defaultCaseLang = null; return base(category, locale); },
+});
+sm("toLowerCase()Ljava/lang/String;", function () { return caseInDefault(this, false); });
+sm("toUpperCase()Ljava/lang/String;", function () { return caseInDefault(this, true); });
+sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: unknown) { return caseIn(this, locale, false); });
+sm("toUpperCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: unknown) { return caseIn(this, locale, true); });
 sm("toString()Ljava/lang/String;", function () { return this as string; });
 sm("toCharArray()[C", function () {
   const a = new Uint16Array(this.length);
