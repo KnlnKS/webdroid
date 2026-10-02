@@ -2,7 +2,7 @@
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { callOn, curThread, JThread, construct, scall, vcall, after } from "../jvm/natives/jlang";
-import { PROCESS_PID, PROCESS_UID, reportUncaught, fdOverBytes, fdContents } from "./os";
+import { PROCESS_PID, PROCESS_UID, reportUncaught, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
 import { type JParcel, NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, parcelBytes, setParcelBytes, readInt, readString, writeInt, writeString } from "./parcel";
 import { jarray, mangleMethod, i8, u8 } from "../jvm/abi";
@@ -13,9 +13,10 @@ const F_GETFL = 3, O_RDONLY = 0;
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
 const emptyParcel = (): ParcelData => ({ bytes: new Uint8Array(), objects: [] });
 export type BinderHandle = { pid: number; id: number };
-/** a descriptor crossing processes, since binder IPC here moves no descriptors: its file's bytes
- *  and, for a writable one, the binder that writes them back to the descriptor it came from */
-export type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null };
+/** a descriptor crossing processes, since binder IPC here moves no descriptors: its file's bytes,
+ *  for a writable one the binder that writes them back to the descriptor it came from, and for an
+ *  ashmem region its protection */
+export type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | null][] };
 /** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
@@ -75,18 +76,23 @@ async function exportObject(o: unknown): Promise<BinderHandle | FileHandle | nul
   if (!(o instanceof OwnedFd)) return exportBinder(o);
   const bytes = await fdContents(o.fd);
   if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
-  if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null };
+  const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
+  if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
   rt.link("webdroid/FileWriter");
   const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
-  return { bytes, writer: exportBinder(writer) };
+  return { bytes, writer: exportBinder(writer), ...region };
 }
 function importObject(o: BinderHandle | FileHandle | null): unknown {
   if (!o || !("bytes" in o)) return importBinder(o);
-  return after(o.writer && importBinder(o.writer), (writer) => new OwnedFd(fdOverBytes(new Uint8Array(o.bytes), writer && driven(function* (bytes: Uint8Array): Gen<void> {
-    const data = yield newParcel();
-    yield vcall(data, "writeByteArray", "([B)V", i8(bytes));
-    yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
-  }))));
+  return after(o.writer && importBinder(o.writer), (writer) => {
+    const sink = writer && driven(function* (bytes: Uint8Array): Gen<void> {
+      const data = yield newParcel();
+      yield vcall(data, "writeByteArray", "([B)V", i8(bytes));
+      yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
+    });
+    const bytes = new Uint8Array(o.bytes);
+    return new OwnedFd(o.prot === undefined ? fdOverBytes(bytes, sink) : ashmemFd(bytes, o.prot, sink));
+  });
 }
 export async function exportParcel(parcel: JParcel): Promise<ParcelData> {
   const { bytes, objects } = parcelBytes(nativeParcel(parcel));

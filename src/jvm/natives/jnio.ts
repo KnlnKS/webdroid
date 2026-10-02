@@ -4,7 +4,7 @@
 // read-only mapping, jmemory.ts), else a heap buffer's array from its offset.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
-import { after, scall, construct, vcallOn, curThread } from "./jlang";
+import { after, scall, construct } from "./jlang";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
@@ -105,13 +105,6 @@ export function allocateDirectNow(n: number): JBuffer {
 /** JNI's NewDirectByteBuffer: a buffer over memory it does not own */
 export const newDirectBuffer = (address: number | bigint, cap: number): JBuffer | Promise<JBuffer> =>
   construct("java/nio/DirectByteBuffer", "(JI)V", BigInt(address), cap);
-/** a direct buffer over [offset, offset + length) of guest bytes from `nonMovableBytes`, which it keeps alive */
-export function directView(bytes: Int8Array, offset: number, length: number, readOnly: boolean): JBuffer | Promise<JBuffer> {
-  return after(newDirectBuffer(mem.va(bytes.byteOffset + offset), length), (b) => {
-    Object.defineProperty((b as Fields)[declaredField("java/nio/DirectByteBuffer", "memoryRef")], "$bytes", { value: bytes });
-    return readOnly ? vcallOn(curThread, b, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;") as JBuffer | Promise<JBuffer> : b;
-  });
-}
 const unmappers = new FinalizationRegistry<() => void>((unmap) => unmap());
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
 function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void): JBuffer | Promise<JBuffer> {

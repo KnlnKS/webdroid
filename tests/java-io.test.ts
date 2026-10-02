@@ -463,11 +463,10 @@ describe("sequence-input", () => {
 
 describe("shared-memory", () => {
   test("shared memory maps and parcels its protected bytes", async () => {
-    const type = rt.link("android/os/SharedMemory").ctor;
-    const shared = await vcall(type, "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "sample", 3);
+    const shared = await scall("android/os/SharedMemory", "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "sample", 3);
     const writable = await vcall(shared, "mapReadWrite", "()Ljava/nio/ByteBuffer;");
     await vcall(writable, "put", "([B)Ljava/nio/ByteBuffer;", Int8Array.of(3, 5, 7));
-    await vcall(type, "unmap", "(Ljava/nio/ByteBuffer;)V", writable);
+    await scall("android/os/SharedMemory", "unmap", "(Ljava/nio/ByteBuffer;)V", writable);
     expect(await vcall(shared, "setProtect", "(I)Z", 1)).toBe(1);
     expect(await vcall(shared, "setProtect", "(I)Z", 3)).toBe(0);
     const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
@@ -479,7 +478,7 @@ describe("shared-memory", () => {
     await vcall(readOnly, "get", "([B)Ljava/nio/ByteBuffer;", result);
     expect([...result]).toEqual([3, 5, 7]);
     expect(await vcall(readOnly, "isReadOnly", "()Z")).toBe(1);
-    await vcall(type, "unmap", "(Ljava/nio/ByteBuffer;)V", readOnly);
+    await scall("android/os/SharedMemory", "unmap", "(Ljava/nio/ByteBuffer;)V", readOnly);
   });
 });
 

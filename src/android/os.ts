@@ -2,7 +2,6 @@
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
-import { parcelCreator, type JParcel } from "./parcel";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
@@ -11,7 +10,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize, scall, construct } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize, construct } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
@@ -20,7 +19,7 @@ import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { javaOnLastClose, javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { type JBuffer, bufferBytes, directView, isBuffer, nonMovableBytes, resident } from "../jvm/natives/jnio";
+import { type JBuffer, bufferBytes, isBuffer, resident } from "../jvm/natives/jnio";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
@@ -177,60 +176,6 @@ rt.registerJnis("dalvik/system/VMDebug", {
 });
 /** the Java Bundle and PersistableBundle run from AOSP bytecode */
 export type JBundle = JObj;
-const sharedMappings = new WeakSet<JBuffer>();
-/** the ashmem region: guest memory, which each mapping's direct buffer addresses */
-class JSharedMemory extends JObj {
-  bytes: Int8Array = new Int8Array(0);
-  protection = 7;
-  closed = false;
-  map(prot: number, offset: number, length: number): JBuffer | Promise<JBuffer> {
-    if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
-    if (offset < 0 || length <= 0 || offset > this.bytes.length - length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid shared memory range");
-    if (prot < 0 || prot & ~7 || (prot & this.protection) !== prot) throw errno("mmap", E.ACCES);
-    return after(directView(this.bytes, offset, length, !(prot & 2)), (buffer) => { sharedMappings.add(buffer); return buffer; });
-  }
-}
-rt.register({
-  name: "android/os/SharedMemory", ctor: JSharedMemory, ifaces: ["android/os/Parcelable", "java/io/Closeable"],
-  statics: { get CREATOR() { return parcelCreator("android/os/SharedMemory", async (p) => {
-    const protection = await vcall(p, "readInt", "()I") as number;
-    const bytes = await vcall(p, "createByteArray", "()[B") as Int8Array;
-    const shared = new JSharedMemory(); shared.protection = protection; shared.bytes = nonMovableBytes(bytes.length); shared.bytes.set(bytes);
-    return shared;
-  }); } },
-  methods: {
-    "static create(Ljava/lang/String;I)Landroid/os/SharedMemory;": (_name: string | null, size: number) => {
-      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Size must be positive");
-      const shared = new JSharedMemory(); shared.bytes = nonMovableBytes(size); return shared;
-    },
-    "getSize()I": function (this: JSharedMemory) {
-      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
-      return this.bytes.length;
-    },
-    "map(III)Ljava/nio/ByteBuffer;": function (this: JSharedMemory, prot: number, offset: number, length: number) { return this.map(prot, offset, length); },
-    "mapReadOnly()Ljava/nio/ByteBuffer;": function (this: JSharedMemory) { return this.map(1, 0, this.bytes.length); },
-    "mapReadWrite()Ljava/nio/ByteBuffer;": function (this: JSharedMemory) { return this.map(3, 0, this.bytes.length); },
-    "setProtect(I)Z": function (this: JSharedMemory, prot: number) {
-      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
-      if (prot < 0 || prot & ~7) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid protection");
-      if ((prot & this.protection) !== prot) return 0;
-      this.protection = prot; return 1;
-    },
-    "static unmap(Ljava/nio/ByteBuffer;)V": (buffer: JBuffer | null) => {
-      if (!buffer) return rt.npe();
-      if (!sharedMappings.delete(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer is not mapped shared memory");
-      return scall("java/nio/NioUtils", "freeDirectBuffer", "(Ljava/nio/ByteBuffer;)V", buffer);
-    },
-    "close()V": function (this: JSharedMemory) { this.closed = true; },
-    "describeContents()I": () => 1,
-    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JSharedMemory, parcel: JParcel): Gen {
-      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
-      yield vcall(parcel, "writeInt", "(I)V", this.protection);
-      yield vcall(parcel, "writeByteArray", "([B)V", this.bytes.slice());
-    }),
-  },
-});
-
 // ParcelFileDescriptor runs from AOSP bytecode over libcore's descriptors. Bytes with no file of
 // this process behind them (an asset, a picked document, another process's descriptor) get one here.
 type PfdBacking = { path: string; refs: number; closing: Promise<void> | null };
@@ -268,6 +213,30 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
   });
   return fd;
 }
+// SharedMemory's ashmem regions: volatile files here, by path, with the protection a region keeps,
+// which only narrows (ashmem_set_prot_region); one crossing processes arrives as a region too
+const ashmem = new Map<string, number>();
+const regionOf = (fd: number): string | undefined => { const path = javaFdStat(fd)?.path; return path && ashmem.has(path) ? path : undefined; };
+/** an ashmem region's protection, undefined for a descriptor on anything else */
+export const ashmemProt = (fd: number): number | undefined => ashmem.get(regionOf(fd) ?? "");
+/** a descriptor on a new region holding `bytes`, which hands them to `sink` once the last descriptor closes */
+export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => unknown) | null = null): number {
+  let path = "";
+  const fd = fdOverBytes(bytes, (b) => { ashmem.delete(path); return sink?.(b); });
+  ashmem.set(path = javaFdStat(fd)!.path!, prot);
+  return fd;
+}
+rt.registerJnis("android/os/SharedMemory", {
+  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => mkFd(ashmemFd(new Uint8Array(size))),
+  "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => { const fd = fdInt(d); return regionOf(fd) ? javaFdStat(fd)!.size : -1; },
+  "nSetProt(Ljava/io/FileDescriptor;I)I": (d: JObj | null, prot: number) => {
+    const path = regionOf(fdInt(d));
+    if (!path) return E.NOTTY;
+    if (prot & ~ashmem.get(path)!) return E.INVAL;
+    ashmem.set(path, prot);
+    return 0;
+  },
+});
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
 export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
   after(mkFd(fdOverBytes(bytes, sink, key)), (fd) => construct("android/os/ParcelFileDescriptor", `(${FD})V`, fd));
@@ -414,6 +383,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       const source = anonymous ? null : javaFdSource(fd);
       if (!anonymous && !source) throw errno("mmap", E.BADF);
       if (source && prot === 0) throw errno("mmap", E.NOTSUP);
+      // ashmem refuses a mapping beyond its region's protection
+      if (prot & ~(ashmemProt(fd) ?? 7)) throw errno("mmap", E.PERM);
       const file = flags & 1 ? fdFile(fd) : null;
       if (flags & 1 && prot & 2 && !file) throw errno("mmap", E.NOTSUP);
       const address = mem.mapVa(size, prot === 0);
