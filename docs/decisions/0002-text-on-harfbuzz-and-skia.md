@@ -16,6 +16,8 @@ implementation history's "Stage E2" entry.
   they agree with the device, which a wasm build of minikin and ICU4C could not improve on.
 - **Canvas2D draws text with `fillText`,** each font registered as its own CSS face (an instance
   pinning what a canvas cannot set, such as `ital`), in the faces minikin itemized the string into.
+  Text into a bitmap in Roboto or the emoji face is CanvasKit's drawGlyphs of minikin's glyphs and
+  positions, rasterized by FreeType as on the device.
 - **Path.op is SkPathOps and Paint.getFillPath SkStroke,** through the tab's CanvasKit, loaded
   lazily wherever it is first asked.
 
@@ -32,6 +34,8 @@ implementation history's "Stage E2" entry.
   the previous tree.
 - Path.op matches the device's verbs and fill type exactly (the TS clipper returned a polygon
   starting elsewhere, dropped conics and ignored inverse fill types), with 200 lines fewer.
+- Graphics fuzz (seed 20261001, 100 cases) against the reference AVD finds the same 8 differences
+  as the tree before E2, after fixing the one it added (an inverse fill drawn through Path.op).
 
 ## Rejected
 

@@ -1933,7 +1933,12 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     layout threw. It now waits for the application.
   - Path.op's TS clipper flattened curves (conics not even sampled), ignored inverse fill types and
     returned a polygon starting elsewhere; SkPathOps through CanvasKit gives the device's verbs.
-    CanvasKit's binding names two of SkPath's four fill types; the other two pass by value.
+    CanvasKit's binding names two of SkPath's four fill types; the other two pass by value. Once
+    inverse operands counted, drawing an inverse path as "bounds less the path" had to subtract
+    the path's plain fill (graphics fuzz seed 20261001, case 36).
+  - Text into bitmaps went through CanvasKit's unshaped drawText (no kerning, ligatures faked with
+    Unicode presentation forms); it draws minikin's glyph runs with drawGlyphs.
+  - The corpus's one native requirement was `sched_getattr` (Nulls Royale), then `sched_setattr`.
 
 ## App investigations and remaining limits
 
