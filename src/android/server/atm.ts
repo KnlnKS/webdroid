@@ -12,7 +12,7 @@ import { notifyDisplayChanged } from "../display";
 import { hostedService, systemToken } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
-import { activityTransport, intentQuery, systemActivity, SYSTEM_ACTIVITY, type SystemHandler } from "../intent";
+import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler } from "../intent";
 import { field } from "../pm";
 import { grantResultUris } from "../urigrants";
 import { thisApp, userLaunched } from "./am";
@@ -21,17 +21,31 @@ const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
 const GET_META_DATA = 0x80n, MATCH_DEFAULT_ONLY = 0x10000n;
 
+/** a start in another process, and the result target there when it asked for one */
+export type ResultDelivery = { code: number; caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
+/** the broker's half of ActivityTaskManager: starts in other processes and their results */
+export const activityTransport: {
+  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
+  presentation?: (translucent: boolean) => void;
+  /** an activity the broker started here (its record id) finished with a result */
+  finished?: (remoteId: number, code: number, data: JIntent | null) => void;
+} = {};
+
+/** a resumed activity is also the top resumed one: it hears that with its resume, and loses it
+ *  in the transaction that pauses it */
 type State = "launching" | "resumed" | "pausing" | "paused" | "stopping" | "stopped" | "destroying";
 interface ActivityRecord {
   token: JObj; intent: JObj; info: JObj; app: JObj; state: State;
+  /** the activity here that started this one for a result (ActivityStarter's resultRecord) */
   resultTo: ActivityRecord | null; resultWho: string | null; requestCode: number;
   results: JObj[]; finishing: boolean; translucent: boolean;
-  paused: (() => void) | null;
-  /** the pause under way: a finish racing a start's pause must not schedule its destroy first */
-  pausing: Promise<void> | null;
-  /** the broker's record of an activity another process started here, or 0, and the activity
-   *  there that asked for its result */
-  remoteId: number; remoteCaller: { pkg: string; cls: string } | null;
+  /** the pause under way, settled by the client's report (or its destroy): a second pause, such
+   *  as a finish racing a start's, waits on the same one */
+  pausing: { done: Promise<void>; settle: () => void } | null;
+  /** the result it finishes with, owed to `resultTo` or the remote caller */
+  owed: { code: number; data: JObj | null } | null;
+  /** the broker's record of a start from another process, and the activity there awaiting a result */
+  remote: { id: number; caller: ComponentRef | null } | null;
   /** the global configuration it last had, and the orientation it asks for */
   config: JObj; orientation: number;
 }
@@ -55,40 +69,37 @@ async function schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lif
 }
 const item = (cls: string, desc: string, ...args: unknown[]) => scall(CT + cls, "obtain", `(${desc})L${CT}${cls};`, ...args);
 
-/** the activity told it is the top resumed one (onTopResumedActivityChanged), told it lost that
- *  before it pauses */
-let topResumed: ActivityRecord | null = null;
-const topResumedItem = (r: ActivityRecord, onTop: boolean) => {
-  topResumed = onTop ? r : null;
-  return item("TopResumedActivityChangeItem", "Landroid/os/IBinder;Z", r.token, +onTop);
-};
+const topResumedItem = (r: ActivityRecord, onTop: boolean) => item("TopResumedActivityChangeItem", "Landroid/os/IBinder;Z", r.token, +onTop);
 /** pause the resumed activity and wait for the client to report it */
-function pause(r: ActivityRecord): Promise<void> | undefined {
-  if (r.state === "pausing") return r.pausing!;
-  if (r.state !== "resumed") return;
+function pause(r: ActivityRecord): Promise<void> {
+  if (r.pausing) return r.pausing.done;
+  if (r.state !== "resumed") return Promise.resolve();
   r.state = "pausing";
-  return r.pausing = (async () => {
-    const paused = new Promise<void>((resolve) => { r.paused = resolve; });
-    await schedule(r.app, topResumed === r ? await topResumedItem(r, false) : null,
-      await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
-    return paused;
+  const reported = Promise.withResolvers<void>();
+  const done = (async () => {
+    await schedule(r.app, await topResumedItem(r, false), await item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
+    await reported.promise;
   })();
+  r.pausing = { done, settle: reported.resolve };
+  return done;
 }
+const settlePause = (r: ActivityRecord) => { r.pausing?.settle(); r.pausing = null; };
 const resumeItem = (r: ActivityRecord) => item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", r.token, 1, 0);
 async function resume(r: ActivityRecord): Promise<void> {
   const results = r.results.splice(0);
   r.state = "resumed";
   if (displayHooks.requestOrientation?.(r.orientation)) await configurationChanged();
-  if (await ensureConfiguration(r, results, await resumeItem(r))) return schedule(r.app, await topResumedItem(r, true), null);
+  const top = await topResumedItem(r, true);
+  if (await ensureConfiguration(r, results, await resumeItem(r), top)) return;
   const delivery = results.length ? await item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
-  await schedule(r.app, [delivery, await topResumedItem(r, true)], await resumeItem(r));
+  await schedule(r.app, [delivery, top], await resumeItem(r));
 }
 
 const CFG = "Landroid/content/res/Configuration;";
 /** ActivityRecord.ensureActivityConfiguration: an activity that declared every changed bit in its
  *  configChanges hears the change; any other relaunches, ending at `lifecycle` with `results`
- *  delivered. Returns whether it relaunched. */
-async function ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj): Promise<boolean> {
+ *  delivered and `after` run. Returns whether it relaunched. */
+async function ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj, after: JObj | null = null): Promise<boolean> {
   const { global, override } = await configurations();
   const changes: number = await vcall(r.config, "diff", `(${CFG})I`, global);
   if (!changes) return false;
@@ -99,8 +110,8 @@ async function ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle
     return false;
   }
   const merged = await newObj("android/util/MergedConfiguration", `(${CFG}${CFG})V`, global, override);
-  await schedule(r.app, await item("ActivityRelaunchItem", "Landroid/os/IBinder;Ljava/util/List;Ljava/util/List;ILandroid/util/MergedConfiguration;ZLandroid/window/ActivityWindowInfo;",
-    r.token, results.length ? newArrayList(results) : null, null, changes, merged, 1, windowInfo), lifecycle);
+  await schedule(r.app, [await item("ActivityRelaunchItem", "Landroid/os/IBinder;Ljava/util/List;Ljava/util/List;ILandroid/util/MergedConfiguration;ZLandroid/window/ActivityWindowInfo;",
+    r.token, results.length ? newArrayList(results) : null, null, changes, merged, 1, windowInfo), after], lifecycle);
   return true;
 }
 /** the shell's display: turns it for an orientation request, answering whether it turned */
@@ -124,13 +135,16 @@ async function stop(r: ActivityRecord): Promise<void> {
   r.state = "stopping";
   await schedule(r.app, null, await item("StopActivityItem", "Landroid/os/IBinder;", r.token));
 }
+/** take it off the stack, once, telling the broker what a remote caller is owed */
 async function destroy(r: ActivityRecord): Promise<void> {
+  const i = stack.indexOf(r);
+  if (i < 0) return;
+  stack.splice(i, 1);
   r.state = "destroying";
-  stack.splice(stack.indexOf(r), 1);
-  if (topResumed === r) topResumed = null;
   reportPresentation();
   // a start waiting on its pause goes on: the report would find no record
-  const paused = r.paused; r.paused = null; paused?.();
+  settlePause(r);
+  if (r.remote) activityTransport.finished?.(r.remote.id, r.owed?.code ?? RESULT_CANCELED, r.owed?.data ?? null);
   await schedule(r.app, null, await item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
 }
 
@@ -179,6 +193,7 @@ async function reuseActivity(intent: JObj, info: JObj): Promise<boolean> {
 async function clearAbove(target: ActivityRecord | null): Promise<void> {
   const above = stack.slice(target ? stack.indexOf(target) + 1 : 0);
   for (const r of above.slice(0, -1)) {
+    if (r.finishing) continue;
     r.finishing = true;
     await owedResult(r, RESULT_CANCELED, null);
     await destroy(r);
@@ -194,7 +209,7 @@ async function newIntent(r: ActivityRecord, intent: JObj): Promise<void> {
 
 /** ActivityStarter: a resolved activity on top of this process's task, or the instance already there that takes the intent */
 export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number,
-  remoteId = 0, remoteCaller: { pkg: string; cls: string } | null = null): Promise<void> {
+  remote: ActivityRecord["remote"] = null): Promise<void> {
   transitions++;
   try {
     if (await reuseActivity(intent, info)) return;
@@ -206,7 +221,7 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
     if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
     const { global, override } = await configurations();
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent: await translucentTheme(info), paused: null, pausing: null, remoteId, remoteCaller, config: global, orientation };
+      translucent: await translucentTheme(info), pausing: null, owed: null, remote, config: global, orientation };
     stack.push(r);
     reportPresentation();
     const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
@@ -219,8 +234,7 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
       await newObj("android/os/Binder", "()V"), await activityClientController(), await newObj("android/os/Binder", "()V"), 0, null,
       await newObj("android/os/Binder", "()V"), windowInfo);
     r.state = "resumed";
-    await schedule(app, launch, await resumeItem(r));
-    await schedule(app, await topResumedItem(r, true), null);
+    await schedule(app, [launch, await topResumedItem(r, true)], await resumeItem(r));
   } finally { transitions--; }
 }
 
@@ -269,21 +283,22 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
     const resolved = await vcall(await pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
       intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
     const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
+    // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
+    const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = await intentQuery(intent), system = systemActivity(q, false) ??
       (info && field<string>(info, AI, "packageName") === "android" && field<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
-    if (system) { void runSystemActivity(system, intent, byToken(resultTo), resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
+    if (system) { void runSystemActivity(system, intent, resultRecord, resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
     const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
     await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
     const pkg = field<string>(info, AI, "packageName"), process = field<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
-    if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, byToken(resultTo), resultWho, requestCode).catch(reportUncaught);
+    if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, resultRecord, resultWho, requestCode).catch(reportUncaught);
     else if (activityTransport.launch) {
-      const caller = byToken(resultTo);
-      await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy, caller && requestCode >= 0 ? {
-        code: requestCode, caller: { pkg: appHost!.pkg, cls: field<string>(caller.info, AI, "name") },
-        deliver: (resultCode, data) => void deliverResult(caller, resultWho, requestCode, resultCode, data).catch(reportUncaught),
+      await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
+        code: requestCode, caller: { pkg: appHost!.pkg, cls: field<string>(resultRecord.info, AI, "name") },
+        deliver: (resultCode, data) => void deliverResult(resultRecord, resultWho, requestCode, resultCode, data).catch(reportUncaught),
       } : undefined);
     }
     else return START_INTENT_NOT_RESOLVED;
@@ -312,12 +327,12 @@ export async function coverTop(): Promise<void> {
   if (top?.state === "resumed") { await pause(top); await resume(top); }
 }
 /** the broker's launch of one of this process's activities for another process */
-export async function startActivityInProcess(component: string, intent: JObj, remoteId: number, caller: { pkg: string; cls: string } | null): Promise<void> {
-  const name = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", appHost!.pkg, component.replaceAll("/", "."));
+export async function startActivityInProcess(component: string, intent: JObj, remoteId: number, caller: ComponentRef | null): Promise<void> {
+  const name = await mkComponentName(appHost!.pkg, component.replaceAll("/", "."));
   const info = await vcall(await pms(), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
   if (!info) throw new Error("Activity not installed: " + component);
   await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
-  await startActivity(thisApp(), intent, info, null, null, -1, remoteId, caller);
+  await startActivity(thisApp(), intent, info, null, null, -1, { id: remoteId, caller });
 }
 /** the broker showing or hiding this process: its top activity pauses, what is paused stops, and
  *  the top resumes (the launcher activity starts again in an emptied app process, as its icon
@@ -337,7 +352,8 @@ export async function taskVisibility(phase: "pause" | "stop" | "resume" | "visib
 
 /** the result a finishing activity owes the one that started it for one */
 async function owedResult(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<void> {
-  if (r.resultTo && r.requestCode >= 0)
+  r.owed = { code: resultCode, data };
+  if (r.resultTo)
     r.resultTo.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", r.resultWho, r.requestCode, resultCode, data));
 }
 async function finish(r: ActivityRecord, resultCode: number, data: JObj | null): Promise<boolean> {
@@ -351,7 +367,6 @@ async function finish(r: ActivityRecord, resultCode: number, data: JObj | null):
     const below = stack[stack.indexOf(r) - 1];
     if (wasTop && below) await resume(below);
     await destroy(r);
-    if (r.remoteId) activityTransport.finished?.(r.remoteId, resultCode, data);
     return true;
   } finally { transitions--; }
 }
@@ -389,7 +404,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token);
     if (!r) return;
     r.state = "paused";
-    const done = r.paused; r.paused = null; done?.();
+    settlePause(r);
   },
   "activityResumed(Landroid/os/IBinder;Z)V": () => {},
   "activityTopResumedStateLost()V": () => {},
@@ -464,9 +479,8 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
 
 /** the activity that started this one for a result, here or in another process */
 async function callingActivity(token: JObj): Promise<JObj | null> {
-  const r = byToken(token);
-  if (r?.resultTo) return component(r.resultTo);
-  return r?.remoteCaller ? newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", r.remoteCaller.pkg, r.remoteCaller.cls) : null;
+  const r = byToken(token), caller = r?.remote?.caller;
+  return r?.resultTo ? component(r.resultTo) : caller ? mkComponentName(caller.pkg, caller.cls) : null;
 }
 // IAppTask: this process's one task
 const TASK_ID = 1;
@@ -478,7 +492,7 @@ rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "andro
       id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0),
       baseIntent: stack[0]?.intent ?? null, baseActivity: await component(stack[0]), topActivity: await component(stack.at(-1)) });
   },
-  "finishAndRemoveTask()V": () => void (async () => { for (const r of [...stack].reverse()) await finish(r, RESULT_CANCELED, null); })().catch(reportUncaught),
+  "finishAndRemoveTask()V": () => void clearAbove(null).catch(reportUncaught),
   // one task is shown at a time, and there are no recents to exclude it from
   ...noops("moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V", "setExcludeFromRecents(Z)V"),
 } });

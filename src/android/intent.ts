@@ -1,6 +1,6 @@
 // android.content.Intent and ComponentName are AOSP's own classes; the shell reads and builds them
-// through their Java API, with the helpers here, beside the platform's own activities and the
-// broker's transport for starts in other processes.
+// through their Java API with the helpers here. The activities the platform answers through the
+// browser (pickers, share, VIEW) register here too.
 import { JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
@@ -16,8 +16,10 @@ const S = "Ljava/lang/String;", I = "Landroid/content/Intent;";
 export const newIntent = (action: string | null = null): Promise<JIntent> => newObj("android/content/Intent", `(${S})V`, action);
 export const mkComponentName = (pkg: string, cls: string): Promise<JComponentName> =>
   newObj("android/content/ComponentName", `(${S}${S})V`, pkg, cls);
+/** a component by its package and class name */
+export type ComponentRef = { pkg: string; cls: string };
 /** a ComponentName's package and class */
-export function* componentParts$(component: JComponentName | null): Gen<{ pkg: string; cls: string } | null> {
+export function* componentParts$(component: JComponentName | null): Gen<ComponentRef | null> {
   if (!component) return null;
   return { pkg: yield vcall(component, "getPackageName", `()${S}`), cls: yield vcall(component, "getClassName", `()${S}`) };
 }
@@ -47,16 +49,6 @@ export const intentQuery = driven(intentQuery$);
 /** Intent.putExtra for a value of descriptor `desc` */
 export const putExtra = (intent: JIntent, key: string, value: unknown, desc: string): unknown =>
   vcall(intent, "putExtra", `(${S}${desc})${I}`, key, value);
-
-/** a result target in the calling process: the calling component, and the delivery to its activity record */
-export type ResultDelivery = { code: number; caller: { pkg: string; cls: string }; deliver: (resultCode: number, data: JIntent | null) => void };
-/** the broker's half of ActivityTaskManager: starts in other processes and their results */
-export const activityTransport: {
-  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
-  presentation?: (translucent: boolean) => void;
-  /** an activity the broker started here (its record id) finished with a result */
-  finished?: (remoteId: number, code: number, data: JIntent | null) => void;
-} = {};
 
 /**
  * The activities the *system* provides, keyed by the action an app sends. On a device these are

@@ -9,7 +9,7 @@ import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { JParcel } from "../android/parcel";
-import { type JIntent, activityTransport, newIntent, type ResultDelivery } from "../android/intent";
+import { type JIntent, newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID, reportUncaught } from "../android/os";
 import { uptimeMillis } from "../guest-clock";
 import { serviceTransport } from "../android/runningservices";
@@ -20,7 +20,7 @@ import { device, formatScreen } from "./config";
 import { broadcastTransport, type BroadcastResult } from "../android/broadcast";
 import { deliverBroadcast as deliverQueued, type Sender } from "../android/server/broadcastqueue";
 import { hostedServices } from "../android/server/activeservices";
-import { startActivityInProcess, taskVisibility } from "../android/server/atm";
+import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
 import { checkPermission, queryReceivers, exported, componentPermission, componentProcess, resolveProvider, PermissionStore, usePermissionStore } from "../android/pm";
 import { attrStr } from "../android/axml";
@@ -57,7 +57,7 @@ type ServiceRequest = { kind: "bind"; intent: IntentData; key: string; flags?: n
   | { kind: "start"; intent: IntentData; foreground: boolean }
   | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
-type ActivityRequest = { kind: "launch"; id: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
+type ActivityRequest = { kind: "launch"; id: number; component: string; intent: IntentData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
   | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
@@ -432,8 +432,8 @@ export function connectProcess(): ProcessEndpoint {
   activityTransport.presentation = translucent => broker.presentation(PROCESS_PID, translucent);
   activityTransport.launch = async (pkg, process, component, intent, result) => {
     const request = nextRequest++;
-    if (result && result.code >= 0) requests.set(request, result.deliver);
-    void broker.launchActivity(PROCESS_PID, pkg, process, component, await encodeIntent(intent), request, result && result.code >= 0 ? result.caller.cls : null);
+    if (result) requests.set(request, result.deliver);
+    void broker.launchActivity(PROCESS_PID, pkg, process, component, await encodeIntent(intent), request, result?.caller.cls ?? null);
   };
   activityTransport.finished = (id, code, data) => {
     setVisible(false);
