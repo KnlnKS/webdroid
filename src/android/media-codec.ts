@@ -1,15 +1,20 @@
-import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
+// MediaCodec's and MediaCodecList's natives over WebCodecs: the codec list is the definitions
+// below that the browser's decoders accept, and a codec is a VideoDecoder or AudioDecoder behind
+// MediaCodec's buffer-index protocol, which libmediandk's AMediaCodec shares.
+import { JObj, rt, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { after, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
-import { boxDouble, boxInt } from "../jvm/natives/jbox";
-import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, isBuffer, nativeOrder, remainingBytes, setLimit, setPosition } from "../jvm/natives/jnio";
-import { JMediaFormat } from "./media-format";
-import { JBufferInfo } from "./media";
+import { after, newObj, vcall } from "../jvm/natives/jlang";
+import { boxLong } from "../jvm/natives/jbox";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, nativeOrder, remainingBytes, setLimit, setPosition } from "../jvm/natives/jnio";
+import { NativeFormat, formatFromJava, formatToJava } from "./media-format";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";
-import { mainHandler, postTo } from "./mainloop";
+import { onMain } from "./mainloop";
+import { reportUncaught } from "./os";
+import { handle, release } from "./handles";
 
 type VideoLimits = { maxDimension: number; maxBitrate: number; blockSize: number; maxBlocks: number; blocksPerSecond: number };
-type Definition = ({ kind: "video"; mime: string; codec: string; profiles: [number, number][] } & VideoLimits) | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
+type Definition = ({ kind: "video"; mime: string; codec: string; profiles: [number, number][] } & VideoLimits)
+  | { kind: "audio"; mime: string; codec: string; profiles: [number, number][]; rates: string };
 const avc42 = { maxDimension: 4096, maxBitrate: 50000000, blockSize: 16, maxBlocks: 8704, blocksPerSecond: 522240 };
 const definitions: Definition[] = [
   { kind: "video", mime: "video/avc", codec: "avc1.42002A", ...avc42, profiles: [[1, 8192]] },
@@ -18,19 +23,12 @@ const definitions: Definition[] = [
   { kind: "video", mime: "video/hevc", codec: "hvc1.1.6.L123.B0", ...avc42, profiles: [[1, 4096]] },
   { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, blockSize: 16, maxBlocks: 0x7fffffff, blocksPerSecond: 0x7fffffff, profiles: [[1, 8]] },
   { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 4160, maxBitrate: 30000000, blockSize: 8, maxBlocks: 34816, blocksPerSecond: 2506752, profiles: [[1, 128]] },
-  { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]] },
-  { kind: "audio", mime: "audio/mpeg", codec: "mp3", profiles: [] },
-  { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [] },
+  { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]], rates: "7350-96000" },
+  { kind: "audio", mime: "audio/mpeg", codec: "mp3", profiles: [], rates: "8000-48000" },
+  { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [], rates: "8000-48000" },
 ];
-const numberValue = (format: JMediaFormat, key: string, fallback: number): number => {
-  const value = format.values.get(key)?.value; return typeof value === "number" ? value : fallback;
-};
-const stringValue = (format: JMediaFormat, key: string): string => {
-  const value = format.values.get(key)?.value; return typeof value === "string" ? value : "";
-};
-function codecData(format: JMediaFormat, key: string): Uint8Array | undefined {
-  const value = format.values.get(key)?.value; return isBuffer(value) ? remainingBytes(value) : undefined;
-}
+type CodecDef = Definition;
+const codecName = (def: Definition) => "webcodecs." + def.codec;
 function videoKeyFrame(mime: string, data: Uint8Array): boolean {
   if (mime === "video/x-vnd.on2.vp8") return data.length > 0 && !(data[0] & 1);
   if (mime === "video/x-vnd.on2.vp9") {
@@ -49,135 +47,93 @@ function videoKeyFrame(mime: string, data: Uint8Array): boolean {
   }
   return false;
 }
-function videoConfig(def: Definition, format: JMediaFormat): VideoDecoderConfig {
-  const specified = stringValue(format, "codecs-string");
+const csd = (format: NativeFormat, key: string): Uint8Array | undefined => { const b = format.buffer(key); return b && remainingBytes(b); };
+function videoConfig(def: Definition, format: NativeFormat): VideoDecoderConfig {
+  const specified = format.string("codecs-string");
   let codec = def.mime === "video/hevc" && /^(hvc1|hev1)\./.test(specified) ? specified : def.codec;
-  const data = codecData(format, "csd-0");
+  const data = csd(format, "csd-0");
   if (def.mime === "video/avc" && data) {
     for (let i = 0; i + 7 < data.length; i++) if (data[i] === 0 && data[i + 1] === 0 && (data[i + 2] === 1 || data[i + 2] === 0 && data[i + 3] === 1)) {
       const start = i + (data[i + 2] === 1 ? 3 : 4);
       if ((data[start] & 31) === 7) { codec = "avc1." + [...data.subarray(start + 1, start + 4)].map(b => b.toString(16).padStart(2, "0")).join(""); break; }
     }
   }
-  return { codec, codedWidth: numberValue(format, "width", 640), codedHeight: numberValue(format, "height", 360), optimizeForLatency: true };
+  return { codec, codedWidth: format.number("width", 640), codedHeight: format.number("height", 360), optimizeForLatency: true };
 }
-function audioConfig(def: Definition, format: JMediaFormat): AudioDecoderConfig {
-  return { codec: def.codec, sampleRate: numberValue(format, "sample-rate", 48000), numberOfChannels: numberValue(format, "channel-count", 2), description: codecData(format, "csd-0") };
+function audioConfig(def: Definition, format: NativeFormat): AudioDecoderConfig {
+  return { codec: def.codec, sampleRate: format.number("sample-rate", 48000), numberOfChannels: format.number("channel-count", 2), description: csd(format, "csd-0") };
 }
-function frameRates(def: VideoLimits, width: number, height: number): [number, number] | null {
-  const blocks = Math.ceil(width / def.blockSize) * Math.ceil(height / def.blockSize);
-  if (width <= 0 || height <= 0 || width > def.maxDimension || height > def.maxDimension || blocks > def.maxBlocks) return null;
-  return [1 / blocks, Math.min(960, def.blocksPerSecond / blocks)];
-}
-async function supports(def: Definition, format = new JMediaFormat()): Promise<boolean> {
-  const mime = stringValue(format, "mime");
-  if (mime && mime !== def.mime) return false;
-  if (def.kind === "video") {
-    const range = frameRates(def, numberValue(format, "width", 640), numberValue(format, "height", 360));
-    const rate = numberValue(format, "frame-rate", 0);
-    if (!range || numberValue(format, "bitrate", 0) > def.maxBitrate || rate && (rate < range[0] || rate > range[1])) return false;
-  }
+async function supported(def: Definition): Promise<boolean> {
+  const format = new NativeFormat();
   try {
     return def.kind === "video" ? typeof VideoDecoder !== "undefined" && (await VideoDecoder.isConfigSupported(videoConfig(def, format))).supported === true
       : typeof AudioDecoder !== "undefined" && (await AudioDecoder.isConfigSupported(audioConfig(def, format))).supported === true;
   } catch { return false; }
 }
-class JProfileLevel extends JObj { profile = 0; level = 0; }
-class JCodecInfo extends JObj {
-  constructor(readonly definition: Definition) { super(); }
-  get name(): string { return "webcodecs." + this.definition.codec; }
-}
-let codecInfos: Promise<JCodecInfo[]> | null = null;
-function codecs(): Promise<JCodecInfo[]> {
-  rt.link("android/media/MediaCodecInfo");
-  return codecInfos ??= Promise.all(definitions.map(async d => await supports(d) ? new JCodecInfo(d) : null)).then(a => a.filter(v => v !== null));
-}
-class JCapabilities extends JObj {
-  profileLevels: JProfileLevel[];
-  constructor(readonly info: JCodecInfo) { super(); this.profileLevels = jarray(info.definition.profiles.map(([profile, level]) => Object.assign(new JProfileLevel(), { profile, level })), "Landroid/media/MediaCodecInfo$CodecProfileLevel;"); }
-}
-class JVideoCapabilities extends JObj { constructor(readonly info: JCodecInfo) { super(); } }
-class JAudioCapabilities extends JObj { constructor(readonly info: JCodecInfo) { super(); } }
-rt.register({ name: "android/media/MediaCodecInfo$CodecProfileLevel", ctor: JProfileLevel, fields: { profile: "profile", level: "level" }, methods: { "<init>()V": function () {} } });
-rt.register({ name: "android/media/MediaCodecInfo", ctor: JCodecInfo, methods: {
-  "getName()Ljava/lang/String;": function (this: JCodecInfo) { return this.name; },
-  "getCanonicalName()Ljava/lang/String;": function (this: JCodecInfo) { return this.name; },
-  "getSupportedTypes()[Ljava/lang/String;": function (this: JCodecInfo) { return jarray([this.definition.mime], "Ljava/lang/String;"); },
-  "isAlias()Z": () => 0, "isEncoder()Z": () => 0, "isHardwareAccelerated()Z": () => 0, "isSoftwareOnly()Z": () => 0, "isVendor()Z": () => 0,
-  "getCapabilitiesForType(Ljava/lang/String;)Landroid/media/MediaCodecInfo$CodecCapabilities;": function (this: JCodecInfo, mime: string) {
-    if (mime !== this.definition.mime) throw rt.mkThrowable("java/lang/IllegalArgumentException", mime);
-    rt.link("android/media/MediaCodecInfo$CodecCapabilities"); rt.link("android/media/MediaCodecInfo$CodecProfileLevel"); return new JCapabilities(this);
-  },
-} });
-rt.register({ name: "android/media/MediaCodecInfo$CodecCapabilities", ctor: JCapabilities, fields: { profileLevels: "profileLevels" }, statics: { COLOR_FormatYUV420Planar: 19 }, methods: {
-  "isFeatureSupported(Ljava/lang/String;)Z": () => 0, "isFeatureRequired(Ljava/lang/String;)Z": () => 0,
-  "getMaxSupportedInstances()I": () => 1,
-  "isFormatSupported(Landroid/media/MediaFormat;)Z": driven(function* (this: JCapabilities, format: JMediaFormat): Gen { return +(yield supports(this.info.definition, format)); }),
-  "getVideoCapabilities()Landroid/media/MediaCodecInfo$VideoCapabilities;": function (this: JCapabilities) { rt.link("android/media/MediaCodecInfo$VideoCapabilities"); return this.info.definition.kind === "video" ? new JVideoCapabilities(this.info) : null; },
-  "getAudioCapabilities()Landroid/media/MediaCodecInfo$AudioCapabilities;": function (this: JCapabilities) { rt.link("android/media/MediaCodecInfo$AudioCapabilities"); return this.info.definition.kind === "audio" ? new JAudioCapabilities(this.info) : null; },
-} });
-const supportsSize = async function (this: JVideoCapabilities, width: number, height: number) {
-  const format = new JMediaFormat(); format.values.set("width", { type: 1, value: width }); format.values.set("height", { type: 1, value: height });
-  return +await supports(this.info.definition, format);
-};
-/** Range<Integer>(1, limit) for one of a video codec's limits */
-function videoLimitRange(caps: JVideoCapabilities, limit: "maxBitrate" | "maxDimension") {
-  const definition = caps.info.definition;
-  if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
-  return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition[limit]));
-}
-rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
-  "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
-  "getSupportedFrameRates()Landroid/util/Range;": () => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(0), boxInt(960)),
-  "getSupportedFrameRatesFor(II)Landroid/util/Range;": driven(function* (this: JVideoCapabilities, width: number, height: number): Gen {
-    const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
-    if (!range || !(yield supportsSize.call(this, width, height))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "unsupported size");
-    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxDouble(range[0]), boxDouble(range[1]));
-  }),
-  "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxBitrate"); },
-  "getSupportedHeights()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxDimension"); },
-  "getSupportedWidths()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxDimension"); },
-  "isSizeSupported(II)Z": supportsSize,
-  "areSizeAndRateSupported(IID)Z": driven(function* (this: JVideoCapabilities, width: number, height: number, rate: number): Gen {
-    const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
-    return +(!!range && rate >= range[0] && rate <= range[1] && !!(yield supportsSize.call(this, width, height)));
-  }),
-  "getSupportedPerformancePoints()Ljava/util/List;": () => null,
-  "getAchievableFrameRatesFor(II)Landroid/util/Range;": () => null,
-} });
-rt.register({ name: "android/media/MediaCodecInfo$AudioCapabilities", ctor: JAudioCapabilities, methods: {
-  "getMaxInputChannelCount()I": () => 2,
-  "isSampleRateSupported(I)Z": driven(function* (this: JAudioCapabilities, rate: number): Gen { const format = new JMediaFormat(); format.values.set("sample-rate", { type: 1, value: rate }); return +(yield supports(this.info.definition, format)); }),
-} });
-rt.register({ name: "android/media/MediaCodecList", ctor: class extends JObj {}, statics: { REGULAR_CODECS: 0, ALL_CODECS: 1 }, methods: {
-  "<init>(I)V": function () {},
-  "getCodecInfos()[Landroid/media/MediaCodecInfo;": driven(function* (): Gen { return jarray(yield codecs(), "Landroid/media/MediaCodecInfo;"); }),
-  "static getCodecCount()I": driven(function* (): Gen { return (yield codecs()).length; }),
-  "static getCodecInfoAt(I)Landroid/media/MediaCodecInfo;": driven(function* (index: number): Gen {
-    const info = (yield codecs())[index]; if (!info) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(index)); return info;
-  }),
-  "findDecoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": driven(function* (format: JMediaFormat): Gen {
-    for (const info of yield codecs()) if (info.definition.mime === stringValue(format, "mime") && (yield supports(info.definition, format))) return info.name;
-    return null;
-  }),
-  "findEncoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": () => null,
-} });
+let probed: Promise<CodecDef[]> | null = null;
+/** the codec list: each definition a browser decoder accepts */
+const codecs = (): Promise<CodecDef[]> =>
+  probed ??= Promise.all(definitions.map(async d => await supported(d) ? d : null)).then(a => a.filter(v => v !== null));
 
-class JCodecException extends JThrowable {}
-rt.register({ name: "android/media/MediaCodec$CodecException", ctor: JCodecException, sup: "java/lang/IllegalStateException", methods: {
-  "isRecoverable()Z": () => 0, "isTransient()Z": () => 0, "getErrorCode()I": () => -1,
-  "getDiagnosticInfo()Ljava/lang/String;": function (this: JCodecException) { return this.msg ?? "WebCodecs decoding failed"; },
-} });
-type Output = { kind: "video"; frame: VideoFrame; info: JBufferInfo } | { kind: "video-buffer" | "audio"; buffer: JBuffer; info: JBufferInfo } | { kind: "end"; info: JBufferInfo };
-export class JMediaCodec extends JObj {
-  constructor(readonly info: JCodecInfo) { super(); }
-  format = new JMediaFormat();
+// ── MediaCodecList: MediaCodecInfo and its capabilities are AOSP's Java over these answers.
+// The capability map is what media_codecs.xml gives a codec, which CodecCapabilities parses.
+const CPL = "android/media/MediaCodecInfo$CodecProfileLevel";
+function capabilityMap(def: Definition): Record<string, string> {
+  if (def.kind === "audio") return { "sample-rate-ranges": def.rates, "max-channel-count": "2", "bitrate-range": "8000-510000" };
+  const b = def.blockSize;
+  return { "size-range": `${b}x${b}-${def.maxDimension}x${def.maxDimension}`, "alignment": "2x2", "block-size": `${b}x${b}`,
+    "block-count-range": `1-${def.maxBlocks}`, "blocks-per-second-range": `1-${def.blocksPerSecond}`, "bitrate-range": `1-${def.maxBitrate}`,
+    "frame-rate-range": "0-960" };
+}
+const stringMap = driven(function* stringMap$(entries: Record<string, string>): Gen<JObj> {
+  const map: JObj = yield newObj("java/util/HashMap");
+  for (const [k, v] of Object.entries(entries)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
+  return map;
+});
+const capabilities = driven(function* capabilities$(def: Definition): Gen<JObj> {
+  const levels: JObj[] = [];
+  for (const [profile, level] of def.profiles) levels.push(setDeclared(yield newObj(CPL), CPL, { profile, level }));
+  // COLOR_FormatYUV420Flexible, and the planar and semi-planar layouts a VideoFrame copies out as
+  const colors = def.kind === "video" ? Int32Array.of(0x7f420888, 19, 21) : new Int32Array(0);
+  return newObj("android/media/MediaCodecInfo$CodecCapabilities", `([L${CPL};[IZLjava/util/Map;Ljava/util/Map;)V`,
+    jarray(levels, `L${CPL};`), colors, 0, yield stringMap({ mime: def.mime }), yield stringMap(capabilityMap(def)));
+});
+const at = (index: number) => after(codecs(), (list) => {
+  const def = list[index];
+  if (!def) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+  return def;
+});
+/** no MediaCodecInfo flag: not an encoder, and a browser decoder may or may not use hardware */
+const ATTRIBUTES = 0;
+rt.registerJnis("android/media/MediaCodecList", {
+  "native_init()V": () => {},
+  "native_getCodecCount()I": () => after(codecs(), (list) => list.length),
+  "getCodecName(I)Ljava/lang/String;": (i: number) => after(at(i), codecName),
+  "getCanonicalName(I)Ljava/lang/String;": (i: number) => after(at(i), codecName),
+  "getAttributes(I)I": (i: number) => after(at(i), () => ATTRIBUTES),
+  "getSupportedTypes(I)[Ljava/lang/String;": (i: number) => after(at(i), (def) => jarray([def.mime], "Ljava/lang/String;")),
+  "getCodecCapabilities(ILjava/lang/String;)Landroid/media/MediaCodecInfo$CodecCapabilities;": (i: number, type: string) => after(at(i), (def) => {
+    if (type !== def.mime) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    return capabilities(def);
+  }),
+  "findCodecByName(Ljava/lang/String;)I": (name: string) => after(codecs(), (list) => list.findIndex((d) => codecName(d) === name)),
+  "native_getGlobalSettings()Ljava/util/Map;": () => newObj("java/util/HashMap"),
+});
+
+// ── a codec
+export type Info = { offset: number; size: number; time: bigint; flags: number };
+type Output = { kind: "video"; frame: VideoFrame; info: Info } | { kind: "video-buffer" | "audio"; buffer: JBuffer; info: Info } | { kind: "end"; info: Info };
+const CB_INPUT_AVAILABLE = 1, CB_OUTPUT_AVAILABLE = 2, CB_ERROR = 3, CB_OUTPUT_FORMAT_CHANGE = 4;
+const EVENT_CALLBACK = 1, EVENT_FRAME_RENDERED = 3;
+const info = (time: bigint, size = 0, flags = 0): Info => ({ offset: 0, size, time, flags });
+export class Codec {
+  /** owner: the Java MediaCodec events go to, absent for an AMediaCodec */
+  constructor(readonly def: CodecDef, readonly owner: JObj | null = null) {}
+  format = new NativeFormat();
   /** a Java Surface, or a native ANativeWindow's GlSurface */
   surface: JObj | GlSurface | null = null;
-  callback: unknown = null;
-  handler: ReturnType<typeof mainHandler> | null = null;
-  frameListener: unknown = null;
-  frameHandler: ReturnType<typeof mainHandler> | null = null;
+  async = false;
+  frameEvents = false;
   decoder: VideoDecoder | AudioDecoder | null = null;
   inputs: JBuffer[] = [];
   available = new Set<number>();
@@ -192,40 +148,55 @@ export class JMediaCodec extends JObj {
   ending = false;
   released = false;
   formatChanged = false;
-  outputFormat = new JMediaFormat();
+  outputFormat = new NativeFormat();
   prepend = true;
-  error: JThrowable | null = null;
+  error: string | null = null;
   waiters = new Set<() => void>();
   scheduled = new Map<ReturnType<typeof setTimeout>, VideoFrame>();
-  send(name: string, desc: string, ...args: unknown[]): void {
-    if (!this.callback) return;
-    const epoch = this.epoch, callback = this.callback;
-    postTo(this.handler ?? mainHandler(), () => epoch === this.epoch ? vcall(callback, name, desc, this, ...args) : undefined);
+  /** an event to the Java codec's EventHandler, dropped once the codec is reset */
+  post(what: number, arg1: number, arg2: number, obj: () => unknown = () => null): void {
+    const owner = this.owner, epoch = this.epoch;
+    if (!owner) return;
+    void onMain(async () => {
+      if (epoch === this.epoch) await vcall(owner, "postEventFromNative", "(IIILjava/lang/Object;)V", what, arg1, arg2, await obj());
+    }).catch(reportUncaught);
   }
   wake(): void { for (const resolve of this.waiters) resolve(); this.waiters.clear(); }
-  check(): void { if (this.error) throw this.error; if (this.released) throw rt.mkThrowable("java/lang/IllegalStateException", "codec released"); }
+  check(): void {
+    if (this.released) throw rt.mkThrowable("java/lang/IllegalStateException", "codec released");
+    if (this.error) throw rt.mkThrowable("java/lang/IllegalStateException", this.error);
+  }
   fail(error: unknown): void {
     if (this.error) return;
     console.warn("[media codec]", error);
-    this.error = rt.mkThrowable("android/media/MediaCodec$CodecException", error instanceof Error ? error.message : String(error));
-    this.send("onError", "(Landroid/media/MediaCodec;Landroid/media/MediaCodec$CodecException;)V", this.error); this.wake();
+    const message = this.error = error instanceof Error ? error.message : String(error);
+    // ERROR_UNKNOWN (0), neither transient nor recoverable
+    if (this.async) this.post(EVENT_CALLBACK, CB_ERROR, 0, () => newObj("android/media/MediaCodec$CodecException", "(IILjava/lang/String;)V", 0, 0, message));
+    this.wake();
   }
+  busy(): boolean { return this.inFlight + this.outputs.size + this.scheduled.size >= 8; }
   pump(): void {
-    if (!this.started || this.ending || this.error || this.inFlight + this.outputs.size + this.scheduled.size >= 8) return;
-    if (this.callback) for (const index of this.available) if (!this.announced.has(index)) {
-      this.announced.add(index); this.send("onInputBufferAvailable", "(Landroid/media/MediaCodec;I)V", index);
+    if (!this.started || this.ending || this.error || this.busy()) return;
+    if (this.async) for (const index of this.available) if (!this.announced.has(index)) {
+      this.announced.add(index); this.post(EVENT_CALLBACK, CB_INPUT_AVAILABLE, index);
     }
     this.wake();
   }
-  changed(format: JMediaFormat): void {
-    this.outputFormat = format; this.formatChanged = true;
-    this.send("onOutputFormatChanged", "(Landroid/media/MediaCodec;Landroid/media/MediaFormat;)V", format);
+  changed(format: NativeFormat): void {
+    this.outputFormat = format;
+    if (this.async) this.post(EVENT_CALLBACK, CB_OUTPUT_FORMAT_CHANGE, 0, () => formatToJava(format));
+    else this.formatChanged = true;
   }
   output(output: Output): void {
     this.inFlight = Math.max(0, this.inFlight - 1);
     const index = this.freeOutputs.pop() ?? this.nextOutput++;
     this.outputs.set(index, output);
-    if (this.callback) this.send("onOutputBufferAvailable", "(Landroid/media/MediaCodec;ILandroid/media/MediaCodec$BufferInfo;)V", index, output.info);
+    const { offset, size, time, flags } = output.info;
+    if (this.async) this.post(EVENT_CALLBACK, CB_OUTPUT_AVAILABLE, index, async () => {
+      const bufferInfo = await newObj("android/media/MediaCodec$BufferInfo");
+      await vcall(bufferInfo, "set", "(IIJI)V", offset, size, time, flags);
+      return bufferInfo;
+    });
     else this.outputQueue.push(index);
     this.pump(); this.wake();
   }
@@ -233,25 +204,26 @@ export class JMediaCodec extends JObj {
     this.epoch++; this.started = false; if (this.decoder?.state !== "closed") this.decoder?.close(); this.decoder = null;
     for (const output of this.outputs.values()) if (output.kind === "video") output.frame.close();
     for (const [timer, frame] of this.scheduled) { clearTimeout(timer); frame.close(); }
-    this.scheduled.clear(); this.ending = false;
+    this.scheduled.clear(); this.ending = false; this.formatChanged = false;
     this.outputs.clear(); this.outputQueue = []; this.nextOutput = 0; this.freeOutputs = []; this.available.clear(); this.announced.clear(); this.inFlight = 0; this.prepend = true; this.error = null; this.wake();
   }
-  configure(format: JMediaFormat, surface: JObj | GlSurface | null, crypto: unknown, flags: number): void {
-    this.check(); if (crypto || flags) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "encoding and protected media are unavailable");
-    this.format = new JMediaFormat(); this.format.values = new Map(format.values); this.surface = surface;
+  release(): void { this.reset(); this.inputs = []; this.released = true; }
+  configure(format: NativeFormat, surface: JObj | GlSurface | null): void {
+    this.check();
+    this.format = new NativeFormat(format); this.surface = surface;
   }
   start(): void {
     this.check();
     if (this.started) return;
     this.started = true;
-    const epoch = this.epoch;
-    const outputFormat = new JMediaFormat(); outputFormat.values = new Map(this.format.values);
-    if (this.info.definition.kind === "video") {
-      outputFormat.values.set("mime", { type: 4, value: "video/raw" });
+    const epoch = this.epoch, def = this.def;
+    const outputFormat = new NativeFormat(this.format);
+    if (def.kind === "video") {
+      outputFormat.set("mime", 4, "video/raw");
       const decoder = new VideoDecoder({ error: e => { if (epoch === this.epoch) this.fail(e); }, output: frame => {
         if (epoch !== this.epoch) { frame.close(); return; }
-        const info = new JBufferInfo(); info.presentationTimeUs = BigInt(frame.timestamp);
-        if (this.surface) { info.size = 1; this.output({ kind: "video", frame, info }); return; }
+        const out = info(BigInt(frame.timestamp));
+        if (this.surface) { out.size = 1; this.output({ kind: "video", frame, info: out }); return; }
         try {
           const color = frame.format === "I420" ? 19 : frame.format === "NV12" ? 21 : 0;
           if (!color) throw new Error(`unsupported raw video format: ${frame.format}`);
@@ -261,21 +233,16 @@ export class JMediaCodec extends JObj {
             frame.close(); if (epoch !== this.epoch) return;
             const buffer = nativeOrder(allocateDirectNow(pixels.length));
             bufferBytes(buffer).set(pixels);
-            const stride = layout[0].stride;
-            if (numberValue(this.outputFormat, "color-format", 0) !== color || numberValue(this.outputFormat, "stride", 0) !== stride || numberValue(this.outputFormat, "slice-height", 0) !== height) {
-              const format = new JMediaFormat(); format.values = new Map(this.outputFormat.values);
-              format.values.set("color-format", { type: 1, value: color });
-              format.values.set("stride", { type: 1, value: stride });
-              format.values.set("slice-height", { type: 1, value: height });
-              this.changed(format);
-            }
-            info.size = pixels.length; this.output({ kind: "video-buffer", buffer, info });
+            const stride = layout[0].stride, current = this.outputFormat;
+            if (current.number("color-format", 0) !== color || current.number("stride", 0) !== stride || current.number("slice-height", 0) !== height)
+              this.changed(new NativeFormat(current).set("color-format", 1, color).set("stride", 1, stride).set("slice-height", 1, height));
+            out.size = pixels.length; this.output({ kind: "video-buffer", buffer, info: out });
           }).catch(e => { frame.close(); if (epoch === this.epoch) this.fail(e); });
         } catch (e) { frame.close(); this.fail(e); }
       } });
-      this.decoder = decoder; decoder.configure(videoConfig(this.info.definition, this.format));
+      this.decoder = decoder; decoder.configure(videoConfig(def, this.format));
     } else {
-      outputFormat.values.set("mime", { type: 4, value: "audio/raw" }); outputFormat.values.set("pcm-encoding", { type: 1, value: 2 });
+      outputFormat.set("mime", 4, "audio/raw").set("pcm-encoding", 1, 2);
       this.decoder = new AudioDecoder({ error: e => { if (epoch === this.epoch) this.fail(e); }, output: audio => {
         if (epoch !== this.epoch) { audio.close(); return; }
         const size = audio.numberOfFrames * audio.numberOfChannels * 2, buffer = nativeOrder(allocateDirectNow(size)), bytes = bufferBytes(buffer);
@@ -284,13 +251,12 @@ export class JMediaCodec extends JObj {
           audio.copyTo(plane, { planeIndex: channel, format: "f32-planar" });
           for (let i = 0; i < plane.length; i++) pcm[i * audio.numberOfChannels + channel] = Math.max(-32768, Math.min(32767, Math.round(plane[i] * 32768)));
         }
-        const info = new JBufferInfo(); info.presentationTimeUs = BigInt(audio.timestamp); info.size = size;
-        audio.close(); this.output({ kind: "audio", buffer, info });
+        const out = info(BigInt(audio.timestamp), size);
+        audio.close(); this.output({ kind: "audio", buffer, info: out });
       } });
-      this.decoder.configure(audioConfig(this.info.definition, this.format));
+      this.decoder.configure(audioConfig(def, this.format));
     }
-    const capacity = numberValue(this.format, "max-input-size", this.info.definition.kind === "video" ? Math.ceil(numberValue(this.format, "width", 640) * numberValue(this.format, "height", 360) * 1.5) : 65536);
-    rt.link("android/media/MediaCodec$BufferInfo"); rt.link("android/media/MediaFormat");
+    const capacity = this.format.number("max-input-size", def.kind === "video" ? Math.ceil(this.format.number("width", 640) * this.format.number("height", 360) * 1.5) : 65536);
     if (this.inputs.length !== 4 || bufferCapacity(this.inputs[0]) !== capacity) this.inputs = Array.from({ length: 4 }, () => nativeOrder(allocateDirectNow(capacity)));
     this.available = new Set([0, 1, 2, 3]); this.changed(outputFormat); this.pump();
   }
@@ -303,21 +269,19 @@ export class JMediaCodec extends JObj {
     if (!(flags & 2) && size) {
       this.inFlight++;
       if (decoder instanceof VideoDecoder) {
-        if (this.prepend && (this.info.definition.mime === "video/avc" || this.info.definition.mime === "video/hevc")) {
-          const a = codecData(this.format, "csd-0"), b = codecData(this.format, "csd-1");
+        if (this.prepend && (this.def.mime === "video/avc" || this.def.mime === "video/hevc")) {
+          const a = csd(this.format, "csd-0"), b = csd(this.format, "csd-1");
           if (a) { const joined = new Uint8Array(a.length + (b?.length ?? 0) + data.length); joined.set(a); if (b) joined.set(b, a.length); joined.set(data, a.length + (b?.length ?? 0)); data = joined; }
         }
-        this.prepend = false; decoder.decode(new EncodedVideoChunk({ type: flags & 1 || videoKeyFrame(this.info.definition.mime, data) ? "key" : "delta", timestamp: Number(timestamp), data }));
+        this.prepend = false; decoder.decode(new EncodedVideoChunk({ type: flags & 1 || videoKeyFrame(this.def.mime, data) ? "key" : "delta", timestamp: Number(timestamp), data }));
       } else decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: Number(timestamp), data }));
     }
     this.available.add(index);
     if (flags & 4) {
       this.ending = true;
       const epoch = this.epoch;
-      void decoder.flush().then(() => {
-        if (epoch !== this.epoch) return;
-        const info = new JBufferInfo(); info.flags = 4; info.presentationTimeUs = timestamp; this.output({ kind: "end", info });
-      }).catch(e => { if (epoch === this.epoch) this.fail(e); });
+      void decoder.flush().then(() => { if (epoch === this.epoch) this.output({ kind: "end", info: info(timestamp, 0, 4) }); })
+        .catch(e => { if (epoch === this.epoch) this.fail(e); });
     } else this.pump();
   }
   releaseOutput(index: number, render: boolean, timeNs?: bigint): void {
@@ -331,8 +295,14 @@ export class JMediaCodec extends JObj {
         const surface = this.surface instanceof JObj ? surfaceTarget(this.surface) : this.surface;
         if (render && epoch === this.epoch && surface) {
           presentSurface(surface, output.frame);
-          const listener = this.frameListener;
-          if (listener) postTo(this.frameHandler ?? mainHandler(), () => epoch === this.epoch ? vcall(listener, "onFrameRendered", "(Landroid/media/MediaCodec;JJ)V", this, output.info.presentationTimeUs, BigInt(Math.floor(performance.now() * 1e6))) : undefined);
+          if (this.frameEvents) {
+            const media = output.info.time, nano = BigInt(Math.floor(performance.now() * 1e6));
+            this.post(EVENT_FRAME_RENDERED, 0, 0, async () => {
+              const map = await newObj("java/util/HashMap"), put = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+              await vcall(map, "put", put, "0-media-time-us", boxLong(media)); await vcall(map, "put", put, "0-system-nano", boxLong(nano));
+              return map;
+            });
+          }
         } else output.frame.close();
       };
       const delay = timeNs === undefined ? 0 : Number(timeNs) / 1e6 - performance.now();
@@ -341,61 +311,98 @@ export class JMediaCodec extends JObj {
     this.pump();
   }
   dequeueInput(timeout: bigint): number | Promise<number> {
-    this.check(); if (timeout > 0n && !this.ending && (!this.available.size || this.inFlight + this.outputs.size + this.scheduled.size >= 8)) return this.wait(timeout).then(() => this.dequeueInput(0n));
-    if (this.ending || !this.available.size || this.inFlight + this.outputs.size + this.scheduled.size >= 8) return -1;
+    this.check(); if (timeout > 0n && !this.ending && (!this.available.size || this.busy())) return this.wait(timeout).then(() => this.dequeueInput(0n));
+    if (this.ending || !this.available.size || this.busy()) return -1;
     const index = this.available.values().next().value;
     if (index === undefined) return -1; this.available.delete(index); this.announced.add(index); return index;
   }
-  dequeueOutput(info: JBufferInfo, timeout: bigint): number | Promise<number> {
-    this.check(); if (timeout > 0n && !this.formatChanged && !this.outputQueue.length) return this.wait(timeout).then(() => this.dequeueOutput(info, 0n));
-    if (this.formatChanged) { this.formatChanged = false; return -2; }
-    const index = this.outputQueue.shift(); if (index === undefined) return -1;
-    Object.assign(info, this.outputs.get(index)?.info); return index;
+  /** an output index and its info, or INFO_TRY_AGAIN_LATER (-1) or INFO_OUTPUT_FORMAT_CHANGED (-2) */
+  dequeueOutput(timeout: bigint): [number, Info | null] | Promise<[number, Info | null]> {
+    this.check(); if (timeout > 0n && !this.formatChanged && !this.outputQueue.length) return this.wait(timeout).then(() => this.dequeueOutput(0n));
+    if (this.formatChanged) { this.formatChanged = false; return [-2, null]; }
+    const index = this.outputQueue.shift(); if (index === undefined) return [-1, null];
+    return [index, this.outputs.get(index)!.info];
   }
   async wait(timeout: bigint): Promise<void> {
     if (timeout <= 0n) return;
     await new Promise<void>(resolve => { const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(); }; const timer = setTimeout(done, Number(timeout) / 1000); this.waiters.add(done); });
     this.check();
   }
+  outputBuffer(index: number): JBuffer | null {
+    const o = this.outputs.get(index);
+    return o?.kind === "audio" || o?.kind === "video-buffer" ? o.buffer : null;
+  }
 }
-export async function createCodec(name: string, mime: boolean): Promise<JMediaCodec> {
-  const info = (await codecs()).find(info => mime ? info.definition.mime === name : info.name === name);
-  if (!info) throw rt.mkThrowable("java/io/IOException", "decoder unavailable: " + name);
-  rt.link("android/media/MediaCodec"); return new JMediaCodec(info);
+/** the codec for a type or component name, or null when the list has none */
+export const createCodec = (name: string, nameIsType: boolean, owner: JObj | null = null): Promise<Codec | null> =>
+  codecs().then((list) => { const def = list.find((d) => nameIsType ? d.mime === name : codecName(d) === name); return def ? new Codec(def, owner) : null; });
+
+// ── MediaCodec's natives
+const MC = "android/media/MediaCodec";
+const peers = new WeakMap<JObj, Codec>();
+function codec(mc: JObj): Codec {
+  const c = peers.get(mc);
+  if (!c || c.released) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+  return c;
 }
-rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
-  "static createByCodecName(Ljava/lang/String;)Landroid/media/MediaCodec;": function (name: string) { return createCodec(name, false); },
-  "static createDecoderByType(Ljava/lang/String;)Landroid/media/MediaCodec;": function (mime: string) { return createCodec(mime, true); },
-  "getName()Ljava/lang/String;": function (this: JMediaCodec) { return this.info.name; },
-  "getCodecInfo()Landroid/media/MediaCodecInfo;": function (this: JMediaCodec) { return this.info; },
-  "setCallback(Landroid/media/MediaCodec$Callback;Landroid/os/Handler;)V": function (this: JMediaCodec, callback: unknown, handler: ReturnType<typeof mainHandler> | null) { this.callback = callback; this.handler = handler; },
-  "setCallback(Landroid/media/MediaCodec$Callback;)V": function (this: JMediaCodec, callback: unknown) { this.callback = callback; },
-  "setOnFrameRenderedListener(Landroid/media/MediaCodec$OnFrameRenderedListener;Landroid/os/Handler;)V": function (this: JMediaCodec, listener: unknown, handler: ReturnType<typeof mainHandler> | null) { this.frameListener = listener; this.frameHandler = handler; },
-  "configure(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V": function (this: JMediaCodec, format: JMediaFormat, surface: JObj | null, crypto: unknown, flags: number) {
-    this.configure(format, surface, crypto, flags);
+const C = (f: (c: Codec, ...a: any[]) => unknown) => function (this: JObj, ...a: unknown[]) { return f(codec(this), ...a); };
+function releaseCodec(this: JObj) {
+  const c = peers.get(this);
+  if (!c) return;
+  c.release(); peers.delete(this); release(handle(c));
+  setDeclared(this, MC, { mNativeContext: 0n });
+}
+rt.registerJnis(MC, {
+  "native_init()V": () => {},
+  "native_setup(Ljava/lang/String;ZZII)V": function (this: JObj, name: string, nameIsType: number, encoder: number) {
+    // no encoder component exists, so MediaCodec::CreateByType/ByComponentName finds none (NAME_NOT_FOUND)
+    return after(encoder ? null : createCodec(name, !!nameIsType, this), (c) => {
+      if (!c) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Failed to initialize ${name}, error 0xfffffffe (NAME_NOT_FOUND)`);
+      peers.set(this, c);
+      setDeclared(this, MC, { mNativeContext: handle(c) });
+    });
   },
-  "start()V": function (this: JMediaCodec) { return after(directReady(), () => this.start()); },
-  "stop()V": function (this: JMediaCodec) { this.reset(); },
-  "flush()V": function (this: JMediaCodec) { const restart = this.started && !this.callback; this.reset(); if (restart) this.start(); },
-  "release()V": function (this: JMediaCodec) { this.reset(); this.inputs = []; this.released = true; },
-  "getInputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const b = this.inputs[index]; if (!b) return null; setLimit(b, bufferCapacity(b)); setPosition(b, 0); return b; },
-  "getOutputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const o = this.outputs.get(index); return o?.kind === "audio" || o?.kind === "video-buffer" ? o.buffer : null; },
-  "getInputBuffers()[Ljava/nio/ByteBuffer;": function (this: JMediaCodec) { return jarray(this.inputs.slice(), "Ljava/nio/ByteBuffer;"); },
-  // a copy of what configure() was given, as getFormatNative(true) reports it
-  "getInputFormat()Landroid/media/MediaFormat;": function (this: JMediaCodec) {
-    this.check();
-    const format = new JMediaFormat(); format.values = new Map(this.format.values);
-    return format;
-  },
-  "getOutputFormat()Landroid/media/MediaFormat;": function (this: JMediaCodec) { return this.outputFormat; },
-  "getOutputFormat(I)Landroid/media/MediaFormat;": function (this: JMediaCodec) { return this.outputFormat; },
-  "queueInputBuffer(IIIJI)V": function (this: JMediaCodec, index: number, offset: number, size: number, timestamp: bigint, flags: number) { this.queue(index, offset, size, timestamp, flags); },
-  "dequeueInputBuffer(J)I": function (this: JMediaCodec, timeout: bigint) { return this.dequeueInput(timeout); },
-  "dequeueOutputBuffer(Landroid/media/MediaCodec$BufferInfo;J)I": function (this: JMediaCodec, info: JBufferInfo, timeout: bigint) { return this.dequeueOutput(info, timeout); },
-  "releaseOutputBuffer(IZ)V": function (this: JMediaCodec, index: number, render: number) { this.releaseOutput(index, !!render); },
-  "releaseOutputBuffer(IJ)V": function (this: JMediaCodec, index: number, time: bigint) { this.releaseOutput(index, true, time); },
-  "setOutputSurface(Landroid/view/Surface;)V": function (this: JMediaCodec, surface: JObj) { this.surface = surface; },
-  "detachOutputSurface()V": function (this: JMediaCodec) { this.surface = null; },
-  ...noops("setVideoScalingMode(I)V", "setParameters(Landroid/os/Bundle;)V",
-    "subscribeToVendorParameters(Ljava/util/List;)V", "unsubscribeFromVendorParameters(Ljava/util/List;)V"),
-} });
+  "native_release()V": releaseCodec,
+  "native_finalize()V": releaseCodec,
+  "native_configure([Ljava/lang/String;[Ljava/lang/Object;Landroid/view/Surface;Landroid/media/MediaCrypto;Landroid/os/IHwBinder;I)V": C((c,
+    keys: string[] | null, values: unknown[] | null, surface: JObj | null, crypto: unknown, descrambler: unknown, flags: number) => {
+    // a decoder cannot encode (CONFIGURE_FLAG_ENCODE), and no crypto plugin exists to decrypt
+    if (flags & 1 || crypto || descrambler) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    c.configure(formatFromJava(keys, values), surface);
+  }),
+  "native_setCallback(Landroid/media/MediaCodec$Callback;)V": C((c, cb: JObj | null) => { c.async = !!cb; }),
+  "native_enableOnFrameRenderedListener(Z)V": C((c, enable: number) => { c.frameEvents = !!enable; }),
+  "native_start()V": C((c) => after(directReady(), () => c.start())),
+  "native_stop()V": C((c) => c.reset()),
+  "native_reset()V": C((c) => { c.reset(); c.async = false; }),
+  // a synchronous codec resumes at once; an asynchronous one waits for start(), as MediaCodec::flush leaves it
+  "native_flush()V": C((c) => { const restart = c.started && !c.async; c.reset(); if (restart) c.start(); }),
+  "native_dequeueInputBuffer(J)I": C((c, timeout: bigint) => c.dequeueInput(timeout)),
+  "native_queueInputBuffer(IIIJI)V": C((c, index: number, offset: number, size: number, time: bigint, flags: number) => c.queue(index, offset, size, time, flags)),
+  "native_dequeueOutputBuffer(Landroid/media/MediaCodec$BufferInfo;J)I": C((c, out: JObj, timeout: bigint) => after(c.dequeueOutput(timeout), ([index, i]) =>
+    i ? after(vcall(out, "set", "(IIJI)V", i.offset, i.size, i.time, i.flags), () => index) : index)),
+  "releaseOutputBuffer(IZZJ)V": C((c, index: number, render: number, updatePts: number, timeNs: bigint) => c.releaseOutput(index, !!render, updatePts ? timeNs : undefined)),
+  "getBuffers(Z)[Ljava/nio/ByteBuffer;": C((c, input: number) => {
+    // output buffers are allocated per frame, so only input buffers form a fixed array
+    if (!input || c.async) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+    return jarray(c.inputs.slice(), "Ljava/nio/ByteBuffer;");
+  }),
+  "getBuffer(ZI)Ljava/nio/ByteBuffer;": C((c, input: number, index: number) => {
+    if (input) { const b = c.inputs[index]; if (b) { setLimit(b, bufferCapacity(b)); setPosition(b, 0); } return b ?? null; }
+    const b = c.outputBuffer(index), i = c.outputs.get(index)?.info;
+    if (b && i) { setLimit(b, i.offset + i.size); setPosition(b, i.offset); }
+    return b;
+  }),
+  "getImage(ZI)Landroid/media/Image;": () => null,
+  "getFormatNative(Z)Ljava/util/Map;": C((c, input: number) => formatToJava(input ? c.format : c.outputFormat)),
+  "getOutputFormatNative(I)Ljava/util/Map;": C((c) => formatToJava(c.outputFormat)),
+  "getCanonicalName()Ljava/lang/String;": C((c) => codecName(c.def)),
+  "getOwnCodecInfo()Landroid/media/MediaCodecInfo;": C((c) => after(capabilities(c.def), (caps) => newObj("android/media/MediaCodecInfo",
+    "(Ljava/lang/String;Ljava/lang/String;I[Landroid/media/MediaCodecInfo$CodecCapabilities;)V",
+    codecName(c.def), codecName(c.def), ATTRIBUTES, jarray([caps], "Landroid/media/MediaCodecInfo$CodecCapabilities;")))),
+  "native_setSurface(Landroid/view/Surface;)V": C((c, surface: JObj) => { c.surface = surface; }),
+  "native_detachOutputSurface()V": C((c) => { c.surface = null; }),
+  // the decoders take no parameters while running, and scale only to fit
+  "setParameters([Ljava/lang/String;[Ljava/lang/Object;)V": C(() => {}),
+  "setVideoScalingMode(I)V": C(() => {}),
+});

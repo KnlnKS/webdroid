@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { loadFrameworkJar, bootApp, packageRecord } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, scall, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
@@ -102,6 +102,7 @@ describe("media-retriever", () => {
   rt.linkNatives();
 
   test("MediaMetadataRetriever reads video metadata and rejects nonmedia input", async () => {
+    await bootApp(await packageRecord("org.webdroid.test.retriever"));
     const retriever = await newObj("android/media/MediaMetadataRetriever", "()V");
     vfs.write("/sdcard/media-probe.mp4", new Uint8Array(await Bun.file("tests/fixtures/media.mp4").arrayBuffer()));
     await vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.mp4");
@@ -110,7 +111,8 @@ describe("media-retriever", () => {
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 19)).toBe("32");
     await vcall(retriever, "release", "()V");
     vfs.write("/sdcard/media-probe.txt", new Uint8Array(0));
-    await expect(vcallAsync(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.txt")).rejects.toMatchObject({ msg: "Invalid media source" });
+    const failed = await vcallAsync(await newObj("android/media/MediaMetadataRetriever", "()V"), "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.txt").then(() => null, (e: unknown) => e);
+    expect(rt.iof(failed, "java/lang/RuntimeException")).toBe(1);
   });
 
   test("MediaMetadataRetriever reads MP3 metadata", async () => {
@@ -132,9 +134,7 @@ describe("mediadrm", () => {
       constructor: rt.link("android/media/UnsupportedSchemeException").ctor,
     });
     expect(rt.iof(rt.make("android/media/UnsupportedSchemeException"), "android/media/MediaDrmException")).toBe(1);
-    const supported = rt.link("android/media/MediaDrm").ctor[mangleMethod("isCryptoSchemeSupported", "(Ljava/util/UUID;)Z")];
-    expect(supported(uuid)).toBe(0);
-    await vcall(rt.make("android/media/MediaDrm"), "close", "()V");
+    expect(await scall("android/media/MediaDrm", "isCryptoSchemeSupported", "(Ljava/util/UUID;)Z", uuid)).toBe(0);
   });
 });
 

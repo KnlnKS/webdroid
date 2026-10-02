@@ -1,8 +1,7 @@
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { rt, type JObj } from "../jvm/runtime";
 import { concat } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { after, vcall } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
-import { vfs } from "../shell/vfs";
 import { isBuffer, remainingBytes } from "../jvm/natives/jnio";
 import { javaFdSource } from "../native/fs";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
@@ -16,7 +15,7 @@ const codecBytes = (format: MediaExtractor["tracks"][number]["format"], key: str
   return isBuffer(buffer) ? remainingBytes(buffer) : new Uint8Array(0);
 };
 
-class JMediaMetadataRetriever extends JObj {
+class Retriever {
   extractor: MediaExtractor | null = null;
   source: FileSource | null = null;
   metadata = new Map<number, string>();
@@ -39,8 +38,7 @@ class JMediaMetadataRetriever extends JObj {
       return;
     }
     const extractor = new MediaExtractor();
-    try { await extractor.open(source); }
-    catch { throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media source"); }
+    await extractor.open(source);
     this.extractor = extractor;
     this.source = source;
     const tracks = extractor.tracks;
@@ -62,19 +60,16 @@ class JMediaMetadataRetriever extends JObj {
     }
   }
   async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<object | null> {
-    if (option < 0 || option > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid frame option");
+    // no source, no video track or no decoder for it: the retriever has no frame to give
     const extractor = this.extractor, source = this.source;
-    if (!source) throw rt.mkThrowable("java/lang/IllegalStateException", "No media source");
-    if (!extractor) return null;
+    if (!source || !extractor || typeof VideoDecoder === "undefined") return null;
     const track = extractor.tracks.find(item => String(value(item.format, "mime")).startsWith("video/"));
     if (!track?.samples.length) return null;
-    if (typeof VideoDecoder === "undefined") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Video decoding is unavailable");
     const codec = value(track.format, "codecs-string");
     const width = Number(value(track.format, "width") ?? 0), height = Number(value(track.format, "height") ?? 0);
-    if (typeof codec !== "string" || !width || !height) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported video track");
+    if (typeof codec !== "string" || !width || !height) return null;
     const config = { codec, codedWidth: width, codedHeight: height };
-    if (!(await VideoDecoder.isConfigSupported(config)).supported)
-      throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Video codec is unavailable");
+    if (!(await VideoDecoder.isConfigSupported(config)).supported) return null;
     const requested = timeUs < 0n ? 0 : Number(timeUs);
     const mode = option === 1 ? 1 : option === 2 || option === 3 ? 2 : 0;
     track.selected = true;
@@ -107,48 +102,42 @@ class JMediaMetadataRetriever extends JObj {
   }
 }
 
-async function openFd(this: JMediaMetadataRetriever, fd: JObj | null, offset = 0n, length = 0x7fffffffffffffffn) {
-  const source = javaFdSource(fdInt(fd));
-  if (!source || offset < 0n || length <= 0n || offset > BigInt(source.size))
-    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid file descriptor or range");
-  const start = Number(offset);
-  await this.open(new SliceFile(source, start, Math.min(Number(length), source.size - start)));
+// MediaMetadataRetriever's natives: a failed open is a RuntimeException, as the JNI's
+// process_media_retriever_call reports any status but OK.
+const retrievers = new WeakMap<JObj, Retriever>();
+function retriever(r: JObj): Retriever {
+  const found = retrievers.get(r);
+  if (!found) throw rt.mkThrowable("java/lang/IllegalStateException", "No retriever available");
+  return found;
 }
-
-rt.register({ name: "android/media/MediaMetadataRetriever", ctor: JMediaMetadataRetriever, ifaces: ["java/lang/AutoCloseable"],
-  statics: { OPTION_PREVIOUS_SYNC: 0, OPTION_NEXT_SYNC: 1, OPTION_CLOSEST_SYNC: 2, OPTION_CLOSEST: 3,
-    METADATA_KEY_DURATION: 9, METADATA_KEY_NUM_TRACKS: 10, METADATA_KEY_MIMETYPE: 12,
-    METADATA_KEY_HAS_AUDIO: 16, METADATA_KEY_HAS_VIDEO: 17, METADATA_KEY_VIDEO_WIDTH: 18,
-    METADATA_KEY_VIDEO_HEIGHT: 19, METADATA_KEY_BITRATE: 20, METADATA_KEY_VIDEO_ROTATION: 24,
-    METADATA_KEY_VIDEO_FRAME_COUNT: 32 },
-  methods: {
-    "<init>()V": () => {},
-    "setDataSource(Ljava/io/FileDescriptor;)V": openFd,
-    "setDataSource(Ljava/io/FileDescriptor;JJ)V": openFd,
-    "setDataSource(Ljava/lang/String;)V": function (this: JMediaMetadataRetriever, path: string) {
-      const source = vfs.source(path.startsWith("file://") ? decodeURI(path.slice(7)) : path);
-      if (!source) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media path");
-      return this.open(source);
-    },
-    "setDataSource(Landroid/media/MediaDataSource;)V": driven(function* (this: JMediaMetadataRetriever, data: unknown): Gen {
-      const size = Number(yield vcall(data, "getSize", "()J"));
-      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media source");
-      yield this.open({ size, read: async (offset, length) => {
-        const out = new Int8Array(length);
-        const count = await vcall(data, "readAt", "(J[BII)I", BigInt(offset), out, 0, length) as number;
-        return count <= 0 ? new Uint8Array(0) : new Uint8Array(out.buffer, 0, Math.min(count, length));
-      } });
-    }),
-    "extractMetadata(I)Ljava/lang/String;": function (this: JMediaMetadataRetriever, key: number) { return this.metadata.get(key) ?? null; },
-    "getFrameAtTime(JI)Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever, time: bigint, option: number) { return this.frame(time, option); },
-    "getFrameAtTime(J)Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever, time: bigint) { return this.frame(time, 2); },
-    "getFrameAtTime()Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever) { return this.frame(-1n, 2); },
-    "getScaledFrameAtTime(JIII)Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever, time: bigint, option: number, width: number, height: number) {
-      if (width <= 0 || height <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid frame size");
-      return this.frame(time, option, width, height);
-    },
-    "getEmbeddedPicture()[B": function (this: JMediaMetadataRetriever) { return this.picture; },
-    "release()V": function (this: JMediaMetadataRetriever) { this.reset(); },
-    "close()V": function (this: JMediaMetadataRetriever) { this.reset(); },
+const opened = (r: Retriever, source: FileSource) => r.open(source).catch(() => {
+  throw rt.mkThrowable("java/lang/RuntimeException", "setDataSource failed: status = 0x80000000");
+});
+const MMR = "android/media/MediaMetadataRetriever";
+rt.registerJnis(MMR, {
+  "native_init()V": () => {},
+  "native_setup()V": function (this: JObj) { retrievers.set(this, new Retriever()); },
+  "release()V": function (this: JObj) { retrievers.get(this)?.reset(); retrievers.delete(this); },
+  "native_finalize()V": function (this: JObj) { retrievers.delete(this); },
+  "_setDataSource(Ljava/io/FileDescriptor;JJ)V": function (this: JObj, fd: JObj | null, offset: bigint, length: bigint) {
+    const r = retriever(this), source = fd && javaFdSource(fdInt(fd));
+    if (!source || offset < 0n || length < 0n || offset > BigInt(source.size)) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    const start = Number(offset);
+    return opened(r, new SliceFile(source, start, Math.min(Number(length), source.size - start)));
   },
+  "_setDataSource(Landroid/media/MediaDataSource;)V": function (this: JObj, data: JObj) {
+    const r = retriever(this);
+    return after(vcall(data, "getSize", "()J"), (size: bigint) => opened(r, { size: Math.max(0, Number(size)), read: async (offset, length) => {
+      const out = new Int8Array(length);
+      const count = await vcall(data, "readAt", "(J[BII)I", BigInt(offset), out, 0, length) as number;
+      return count <= 0 ? new Uint8Array(0) : new Uint8Array(out.buffer, 0, Math.min(count, length));
+    } }));
+  },
+  "nativeExtractMetadata(I)Ljava/lang/String;": function (this: JObj, key: number) { return retriever(this).metadata.get(key) ?? null; },
+  "_getFrameAtTime(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;": function (this: JObj,
+    time: bigint, option: number, width: number, height: number) {
+    return retriever(this).frame(time, option, width > 0 ? width : undefined, height > 0 ? height : undefined);
+  },
+  // only an MP3's APIC frame is read, whatever picture type is asked for
+  "getEmbeddedPicture(I)[B": function (this: JObj) { return retriever(this).picture; },
 });

@@ -593,12 +593,3 @@ rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, 
 } });
 hostStub("media_router", "webdroid/MediaRouterService");
 
-export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
-rt.register({
-  name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,
-  fields: ["offset", "size", "presentationTimeUs", "flags"],
-  methods: {
-    "<init>()V": function () {},
-    "set(IIJI)V": function (this: JBufferInfo, o: number, s: number, t: bigint, f: number) { this.offset = o; this.size = s; this.presentationTimeUs = t; this.flags = f; },
-  },
-});

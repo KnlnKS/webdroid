@@ -1,48 +1,38 @@
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
-import type { JBuffer } from "../jvm/natives/jnio";
+// A format as the media natives keep one (stagefright's AMessage), and its crossing to and from
+// the Map<String, Object> Java's MediaFormat wraps: values tagged MediaFormat.TYPE_INTEGER (1),
+// _LONG (2), _FLOAT (3), _STRING (4) and _BYTE_BUFFER (5).
+import { driven, type Gen, type JObj } from "../jvm/runtime";
+import { newObj, vcall } from "../jvm/natives/jlang";
+import { boxDesc, boxFloat, boxInt, boxLong, unbox } from "../jvm/natives/jbox";
+import { isBuffer, type JBuffer } from "../jvm/natives/jnio";
 
-type Value = number | bigint | string | JBuffer | null;
-export class JMediaFormat extends JObj {
-  values = new Map<string, { type: number; value: Value }>();
-  get(name: string, type: number, fallback?: Value): Value {
-    const entry = this.values.get(name);
-    if (!entry || entry.value === null) {
-      if (fallback !== undefined) return fallback;
-      if (type >= 4) return null;
-      return rt.npe();
-    }
-    if (entry.type !== type) throw rt.mkThrowable("java/lang/ClassCastException", name);
-    return entry.value;
+export type FormatValue = number | bigint | string | JBuffer;
+export class NativeFormat {
+  values = new Map<string, { type: number; value: FormatValue }>();
+  constructor(from?: NativeFormat) { if (from) this.values = new Map(from.values); }
+  set(key: string, type: number, value: FormatValue): this { this.values.set(key, { type, value }); return this; }
+  number(key: string, fallback: number): number { const v = this.values.get(key)?.value; return typeof v === "number" ? v : fallback; }
+  string(key: string): string { const v = this.values.get(key)?.value; return typeof v === "string" ? v : ""; }
+  buffer(key: string): JBuffer | undefined { const v = this.values.get(key)?.value; return isBuffer(v) ? v as JBuffer : undefined; }
+}
+const TYPE_OF_BOX: Record<string, number> = { I: 1, J: 2, F: 3 };
+/** the keys and values MediaCodec.configure passes down; others are dropped, as the JNI's ConvertKeyValueArraysToMessage does */
+export function formatFromJava(keys: string[] | null, values: unknown[] | null): NativeFormat {
+  const format = new NativeFormat();
+  for (let i = 0; i < (keys?.length ?? 0); i++) {
+    const v = values![i], box = boxDesc(v);
+    if (typeof v === "string") format.set(keys![i], 4, v);
+    else if (box && TYPE_OF_BOX[box]) format.set(keys![i], TYPE_OF_BOX[box], unbox(v)!);
+    else if (isBuffer(v)) format.set(keys![i], 5, v as JBuffer);
   }
+  return format;
 }
-function format(mime: string, entries: [string, number, Value][]): JMediaFormat {
-  const result = new JMediaFormat();
-  result.values.set("mime", { type: 4, value: mime });
-  for (const [key, type, value] of entries) result.values.set(key, { type, value });
-  return result;
-}
-const methods: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
-  "<init>(Landroid/media/MediaFormat;)V": function (this: JMediaFormat, source: JMediaFormat) { this.values = new Map(source.values); },
-  "containsKey(Ljava/lang/String;)Z": function (this: JMediaFormat, key: string) { return +this.values.has(key); },
-  "removeKey(Ljava/lang/String;)V": function (this: JMediaFormat, key: string) { if (!key.startsWith("feature-")) this.values.delete(key); },
-  "removeFeature(Ljava/lang/String;)V": function (this: JMediaFormat, key: string) { this.values.delete("feature-" + key); },
-  "getValueTypeForKey(Ljava/lang/String;)I": function (this: JMediaFormat, key: string) {
-    const entry = this.values.get(key); return entry?.value == null ? 0 : entry.type;
-  },
-  "setFeatureEnabled(Ljava/lang/String;Z)V": function (this: JMediaFormat, key: string, enabled: number) { this.values.set("feature-" + key, { type: 1, value: +!!enabled }); },
-  "containsFeature(Ljava/lang/String;)Z": function (this: JMediaFormat, key: string) { return +this.values.has("feature-" + key); },
-  "getFeatureEnabled(Ljava/lang/String;)Z": function (this: JMediaFormat, key: string) {
-    if (this.values.get("feature-" + key)?.value == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "feature is not specified");
-    return +!!this.get("feature-" + key, 1);
-  },
-  "static createVideoFormat(Ljava/lang/String;II)Landroid/media/MediaFormat;": (mime: string, width: number, height: number) => format(mime, [["width", 1, width], ["height", 1, height]]),
-  "static createAudioFormat(Ljava/lang/String;II)Landroid/media/MediaFormat;": (mime: string, rate: number, channels: number) => format(mime, [["sample-rate", 1, rate], ["channel-count", 1, channels]]),
-  "static createSubtitleFormat(Ljava/lang/String;Ljava/lang/String;)Landroid/media/MediaFormat;": (mime: string, language: string | null) => format(mime, [["language", 4, language]]),
-};
-for (const [name, desc, type] of [["Integer", "I", 1], ["Long", "J", 2], ["Float", "F", 3], ["String", "Ljava/lang/String;", 4], ["ByteBuffer", "Ljava/nio/ByteBuffer;", 5]] as const) {
-  methods[`set${name}(Ljava/lang/String;${desc})V`] = function (this: JMediaFormat, key: string, value: Value) { this.values.set(key, { type, value }); };
-  methods[`get${name}(Ljava/lang/String;)${desc}`] = function (this: JMediaFormat, key: string) { return this.get(key, type); };
-  methods[`get${name}(Ljava/lang/String;${desc})${desc}`] = function (this: JMediaFormat, key: string, fallback: Value) { return this.get(key, type, fallback); };
-}
-rt.register({ name: "android/media/MediaFormat", ctor: JMediaFormat, methods });
+/** a HashMap<String, Object>, as the JNI's ConvertMessageToMap makes one */
+export const formatToJava = driven(function* formatToJava$(format: NativeFormat): Gen<JObj> {
+  const map: JObj = yield newObj("java/util/HashMap");
+  for (const [key, { type, value }] of format.values) {
+    const boxed = type === 1 ? boxInt(value as number) : type === 2 ? boxLong(value as bigint) : type === 3 ? boxFloat(value as number) : value;
+    yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, boxed);
+  }
+  return map;
+});

@@ -1,7 +1,6 @@
-import { JMediaFormat } from "../android/media-format";
+import { NativeFormat } from "../android/media-format";
 import { MediaExtractor } from "../android/media-extractor";
-import { createCodec, type JMediaCodec } from "../android/media-codec";
-import { JBufferInfo } from "../android/media";
+import { createCodec, type Codec, type Info } from "../android/media-codec";
 import { capacity, directAddress, directCopy, directReady, isBuffer } from "../jvm/natives/jnio";
 import { after } from "../jvm/natives/jlang";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
@@ -13,8 +12,8 @@ import type { Cpu } from "./cpu";
 
 const INVALID = -10004, BAD_OBJECT = -10003, UNSUPPORTED = -10002, IO = -10007;
 let nextHandle = 1;
-const formats = new Map<number, { value: JMediaFormat; strings: Map<string, number> }>();
-const codecs = new Map<number, JMediaCodec>();
+const formats = new Map<number, { value: NativeFormat; strings: Map<string, number> }>();
+const codecs = new Map<number, Codec>();
 const extractors = new Map<number, { value: MediaExtractor; source: ((cpu: Cpu) => FileSource) | null; close: ((cpu: Cpu) => void | Promise<void>) | null }>();
 class DataSource {
   userdata = 0; readAt = 0; getSize = 0; closeAt = 0; closed = false;
@@ -36,12 +35,12 @@ class DataSource {
   }
 }
 const sources = new Map<number, DataSource>();
-function addFormat(value: JMediaFormat): number {
-  const handle = nextHandle++, copy = new JMediaFormat(); copy.values = new Map(value.values);
-  formats.set(handle, { value: copy, strings: new Map() }); return handle;
+function addFormat(value: NativeFormat): number {
+  const handle = nextHandle++;
+  formats.set(handle, { value: new NativeFormat(value), strings: new Map() }); return handle;
 }
 function sizeOut(address: number, size: number): void { if (address) stLong(address, size); }
-function codecStatus(action: (codec: JMediaCodec) => void): HostFn {
+function codecStatus(action: (codec: Codec) => void): HostFn {
   return (_cpu, args) => { const codec = codecs.get(args.p()); if (!codec) return BAD_OBJECT; try { action(codec); return 0; } catch { return INVALID; } };
 }
 async function openExtractor(cpu: Cpu, handle: number, source: (cpu: Cpu) => FileSource, close: (cpu: Cpu) => void | Promise<void>): Promise<number> {
@@ -60,7 +59,7 @@ function openFd(cpu: Cpu, handle: number, fd: number, offset: number, length: nu
 }
 export function mediaInit(): void {
   const api: Record<string, HostFn> = {
-    AMediaFormat_new: () => addFormat(new JMediaFormat()),
+    AMediaFormat_new: () => addFormat(new NativeFormat()),
     AMediaFormat_delete: (_cpu, a) => { const handle = a.p(), format = formats.get(handle); if (!format) return BAD_OBJECT; for (const p of format.strings.values()) mem.free(p); formats.delete(handle); return 0; },
     AMediaFormat_getString: (_cpu, a) => {
       const format = formats.get(a.p()), key = a.str(), out = a.p(), value = format?.value.values.get(key)?.value;
@@ -111,25 +110,24 @@ export function mediaInit(): void {
     },
     AMediaDataSource_new: () => { const handle = nextHandle++; sources.set(handle, new DataSource()); return handle; },
     AMediaDataSource_delete: async (cpu, a) => { const handle = a.p(), source = sources.get(handle); sources.delete(handle); await source?.close(cpu); },
-    AMediaCodec_createDecoderByType: async (_cpu, a) => { const mime = a.str(); try { const codec = await createCodec(mime, true), handle = nextHandle++; codecs.set(handle, codec); return handle; } catch { return 0; } },
-    AMediaCodec_delete: (_cpu, a) => { const handle = a.p(), codec = codecs.get(handle); if (!codec) return BAD_OBJECT; codec.reset(); codec.inputs = []; codec.released = true; codecs.delete(handle); return 0; },
+    AMediaCodec_createDecoderByType: async (_cpu, a) => { const codec = await createCodec(a.str(), true); if (!codec) return 0; const handle = nextHandle++; codecs.set(handle, codec); return handle; },
+    AMediaCodec_delete: (_cpu, a) => { const handle = a.p(), codec = codecs.get(handle); if (!codec) return BAD_OBJECT; codec.release(); codecs.delete(handle); return 0; },
     AMediaCodec_configure: (_cpu, a) => {
       const codec = codecs.get(a.p()), format = formats.get(a.p()), window = a.p(), crypto = a.p(), flags = a.u();
       if (!codec || !format) return BAD_OBJECT; if (crypto || flags) return UNSUPPORTED;
       const surface = windowOf(window); if (window && !surface) return INVALID;
-      try { codec.configure(format.value, surface, crypto, flags); return 0; } catch { return INVALID; }
+      try { codec.configure(format.value, surface); return 0; } catch { return INVALID; }
     },
     AMediaCodec_start: (cpu, a) => after(directReady(), () => codecStatus(codec => codec.start())(cpu, a)),
     AMediaCodec_stop: codecStatus(codec => codec.reset()),
     AMediaCodec_flush: codecStatus(codec => { const restart = codec.started; codec.reset(); if (restart) codec.start(); }),
     AMediaCodec_getInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), index = a.u(), size = a.p(), buffer = codec?.inputs[index]; sizeOut(size, buffer ? capacity(buffer) : 0); return buffer ? directAddress(buffer) : 0; },
-    AMediaCodec_getOutputBuffer: (_cpu, a) => { const output = codecs.get(a.p())?.outputs.get(a.u()), size = a.p(), buffer = output?.kind === "audio" || output?.kind === "video-buffer" ? output.buffer : null; sizeOut(size, buffer ? capacity(buffer) : 0); return buffer ? directAddress(buffer) : 0; },
+    AMediaCodec_getOutputBuffer: (_cpu, a) => { const buffer = codecs.get(a.p())?.outputBuffer(a.u()) ?? null, size = a.p(); sizeOut(size, buffer ? capacity(buffer) : 0); return buffer ? directAddress(buffer) : 0; },
     AMediaCodec_dequeueInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), timeout = a.l(); if (!codec) return BAD_OBJECT; try { const result = codec.dequeueInput(timeout); return result instanceof Promise ? result.catch(() => INVALID) : result; } catch { return INVALID; } },
     AMediaCodec_dequeueOutputBuffer: (_cpu, a) => {
       const codec = codecs.get(a.p()), out = a.p(), timeout = a.l(); if (!codec || !out) return INVALID;
-      const info = new JBufferInfo();
-      const done = (index: number) => { if (index >= 0) { mem.st32(out, info.offset); mem.st32(out + 4, info.size); mem.st64(out + 8, info.presentationTimeUs); mem.st32(out + 16, info.flags); } return index; };
-      try { const result = codec.dequeueOutput(info, timeout); return result instanceof Promise ? result.then(done, () => INVALID) : done(result); } catch { return INVALID; }
+      const done = ([index, info]: [number, Info | null]) => { if (info) { mem.st32(out, info.offset); mem.st32(out + 4, info.size); mem.st64(out + 8, info.time); mem.st32(out + 16, info.flags); } return index; };
+      try { const result = codec.dequeueOutput(timeout); return result instanceof Promise ? result.then(done, () => INVALID) : done(result); } catch { return INVALID; }
     },
     AMediaCodec_queueInputBuffer: (_cpu, a) => {
       const codec = codecs.get(a.p()), index = a.u(), offset = a.u(), size = a.u(), time = a.l(), flags = a.u(); if (!codec) return BAD_OBJECT;

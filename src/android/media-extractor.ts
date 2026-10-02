@@ -1,7 +1,11 @@
 import type { Sample } from "mp4box";
-import { JMediaFormat } from "./media-format";
-import { allocateDirectNow, bufferBytes, directReady } from "../jvm/natives/jnio";
-import { readFully, type FileSource } from "../shell/lazyfile";
+import { rt, type JObj } from "../jvm/runtime";
+import { NativeFormat, formatToJava } from "./media-format";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition } from "../jvm/natives/jnio";
+import { fdInt } from "../jvm/natives/jio";
+import { javaFdSource } from "../native/fs";
+import { vfs } from "../shell/vfs";
+import { readFully, SliceFile, type FileSource } from "../shell/lazyfile";
 
 function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   const result = new Uint8Array(units.reduce((n, unit) => n + 4 + unit.data.length, 0));
@@ -9,11 +13,11 @@ function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   for (const unit of units) { result.set([0, 0, 0, 1], offset); result.set(unit.data, offset + 4); offset += unit.data.length + 4; }
   return result;
 }
-function csd(format: JMediaFormat, key: string, data: Uint8Array): void {
+function csd(format: NativeFormat, key: string, data: Uint8Array): void {
   const buffer = allocateDirectNow(data.length); bufferBytes(buffer).set(data);
   format.values.set(key, { type: 5, value: buffer });
 }
-type Track = { format: JMediaFormat; samples: Sample[]; nalLength: number; timeOffset: number; index: number; selected: boolean };
+type Track = { format: NativeFormat; samples: Sample[]; nalLength: number; timeOffset: number; index: number; selected: boolean };
 export class MediaExtractor {
   tracks: Track[] = [];
   async open(source: FileSource): Promise<void> {
@@ -33,7 +37,7 @@ export class MediaExtractor {
     await directReady();
     this.tracks = movie.tracks.map(track => {
       const samples = file.getTrackSamplesInfo(track.id), entry = samples[0]?.description;
-      const format = new JMediaFormat();
+      const format = new NativeFormat();
       let nalLength = 0;
       const avc = entry && "avcC" in entry && entry.avcC instanceof BoxParser.box.avcC ? entry.avcC : null;
       const hevc = entry && "hvcC" in entry && entry.hvcC instanceof BoxParser.box.hvcC ? entry.hvcC : null;
@@ -118,3 +122,66 @@ export class MediaExtractor {
     }
   }
 }
+
+// ── MediaExtractor's natives over the extractor above. A source no extractor recognizes fails
+// as NuMediaExtractor's does: IOException "Failed to instantiate extractor."
+type Peer = { extractor: MediaExtractor; source: FileSource | null };
+const peers = new WeakMap<JObj, Peer>();
+function peer(e: JObj): Peer {
+  const p = peers.get(e);
+  if (!p) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+  return p;
+}
+const opened = (p: Peer, source: FileSource) => p.extractor.open(source).then(() => { p.source = source; }, () => {
+  throw rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
+});
+const E = (f: (p: Peer, ...a: any[]) => unknown) => function (this: JObj, ...a: unknown[]) { return f(peer(this), ...a); };
+rt.registerJnis("android/media/MediaExtractor", {
+  "native_init()V": () => {},
+  "native_setup()V": function (this: JObj) { peers.set(this, { extractor: new MediaExtractor(), source: null }); },
+  "native_finalize()V": function (this: JObj) { peers.delete(this); },
+  "release()V": function (this: JObj) { peers.delete(this); },
+  "setDataSource(Ljava/io/FileDescriptor;JJ)V": E((p, fd: JObj | null, offset: bigint, length: bigint) => {
+    if (!fd) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    const file = javaFdSource(fdInt(fd));
+    if (!file || offset < 0n || offset > BigInt(file.size)) throw rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
+    const start = Number(offset);
+    return opened(p, new SliceFile(file, start, Math.min(Number(length), file.size - start)));
+  }),
+  // a path or a URL; only the file system is read
+  "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": E((p, _http: unknown, path: string) => {
+    const file = vfs.source(path.startsWith("file://") ? decodeURI(path.slice(7)) : path);
+    if (!file) throw rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
+    return opened(p, file);
+  }),
+  "getTrackCount()I": E((p) => p.extractor.tracks.length),
+  "getTrackFormatNative(I)Ljava/util/Map;": E((p, i: number) => {
+    const track = p.extractor.tracks[i];
+    if (!track) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    return formatToJava(track.format);
+  }),
+  "getFileFormatNative()Ljava/util/Map;": E((p) => formatToJava(new NativeFormat().set("mime", 4, p.extractor.tracks.some((t) => t.format.string("mime").startsWith("video/")) ? "video/mp4" : "audio/mp4"))),
+  "selectTrack(I)V": E((p, i: number) => { const t = p.extractor.tracks[i]; if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", null); t.selected = true; }),
+  "unselectTrack(I)V": E((p, i: number) => { const t = p.extractor.tracks[i]; if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", null); t.selected = false; }),
+  "seekTo(JI)V": E((p, time: bigint, mode: number) => p.extractor.seek(Number(time), mode)),
+  "advance()Z": E((p) => +p.extractor.advance()),
+  "readSampleData(Ljava/nio/ByteBuffer;I)I": E((p, buffer: JBuffer, offset: number) => {
+    if (!p.source || !p.extractor.current()) return -1;
+    return p.extractor.read(p.source).then((data) => {
+      if (!data) return -1;
+      if (offset < 0 || offset + data.length > capacity(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      bufferBytes(buffer).set(data, offset);
+      setLimit(buffer, offset + data.length); setPosition(buffer, offset);
+      return data.length;
+    });
+  }),
+  "getSampleTrackIndex()I": E((p) => p.extractor.current()?.index ?? -1),
+  "getSampleTime()J": E((p) => BigInt(p.extractor.current()?.time ?? -1)),
+  // SAMPLE_FLAG_SYNC
+  "getSampleFlags()I": E((p) => { const c = p.extractor.current(); return c ? +c.sample.is_sync : -1; }),
+  "getSampleSize()J": E((p) => BigInt(p.extractor.current()?.sample.size ?? -1)),
+  "getSampleCryptoInfo(Landroid/media/MediaCodec$CryptoInfo;)Z": () => 0,
+  // the whole source is local, so nothing is cached ahead
+  "getCachedDuration()J": () => -1n,
+  "hasCacheReachedEndOfStream()Z": () => 1,
+});
