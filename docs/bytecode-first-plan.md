@@ -600,6 +600,18 @@ is its own 5 s splash, as on the reference AVD. Remaining launch costs are diffu
 lazy-method installation and mangling (~120 ms of a warm FitNotes launch), clinit (~130 ms).
 `knlnks/q-async` waited on the platform image; re-measure its Mihon race on this tip instead.
 
+**Post-flip matrix (2026-10-02).** `--full --jobs 1` without Genshin: the seven local flows render
+every step (FitNotes 39/39 at 7.4% content); live flows run one at a time render Harmonic 14/14,
+Lichess 15/15, Reddit 6/6, Resy 15/15, TikTok 13/13, ChatGPT 24/24 and YouTube 16/16. Harmonic,
+Reddit, TikTok, ChatGPT and YouTube had wedged (also at 9b1b5a0b) until the connectivity service's
+memoised suspensions were fixed (history, 2026-10-02); `bun run async-natives` now rejects that
+shape. A wedged flow still holds `run-full` indefinitely: cap each live flow externally. Cleanup:
+four area passes removed dead code and duplicate helpers (`src` −171 lines net); hand-written TS in
+`src/android` + `src/jvm/natives` is 41,455 lines. Open from those passes: ColorLongs outside sRGB
+in gradients and `drawColor`, `String.toLowerCase(Locale)` ignoring the locale, nine stale
+`fwtest` checks that read Rect fields by unmangled names, and a serial `bun test` of the java-io,
+net, java-lang, serialization and data files that hangs (also at 602d87cf; the parallel run passes).
+
 ### Stage F handoff (2026-10-05): superseded TS removed
 
 Every platform class's TS spec now implements natives only, except the VM built-ins, boundaries

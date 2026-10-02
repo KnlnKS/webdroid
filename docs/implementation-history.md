@@ -1687,6 +1687,17 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     to set `ready`, for at most 5 s, and the onboarding a fresh install shows sets none. The
     reference AVD's `am start -W` reports 5,428 ms for the same fresh launch; webdroid adds ~2 s of
     boot. FitNotes and Calculator M report 117 and 199 ms there.
+  - Harmonic's overflow tap wedged the main loop (also at 9b1b5a0b), and Reddit, TikTok, ChatGPT and
+    YouTube wedged their full-lane runs. The connectivity service memoised `theNetwork`,
+    `capabilities` and `linkProperties` with `??=` over newObj/rt.drive. While pending, that value is
+    a suspension, and every frame that awaits it joins its continuation list (suspend.ts), so the
+    main thread's getNetworkCapabilities resumed inside a coroutine worker's stack and never got
+    its answer. Wrapping the value in a fresh promise hid the wedge, which is how it was found.
+    `once` shares the computation; keystore's security level and IMM's session stub had the same
+    shape, and `bun run async-natives` now reports any `??=` of a Java entry or rt.drive.
+  - MediaPlayer.setPlaybackParams/getPlaybackParams follow MediaPlayer::setPlaybackSettings over
+    the element's playbackRate (pitch is kept only at 1); YouTube's minimum frame rate went 0 → 10/s.
+    ARM32 mmap64 read its off64_t from the padding slot; it now reads the aligned pair.
 
 ## Java, storage and framework semantics
 
