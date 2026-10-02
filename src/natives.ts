@@ -68,7 +68,6 @@ import "./android/telephony";
 import "./android/wifi";
 import "./android/appwidget";
 import "./android/localsocket";
-import "./android/sharedprefs";
 import "./android/clipboard";
 import "./android/statsevent";
 import "./android/urigrants";

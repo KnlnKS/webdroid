@@ -1,11 +1,8 @@
-import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
-import { mainThread, vcallOn, vcall, newObj } from "../jvm/natives/jlang";
-import { boxFloat, boxObject } from "../jvm/natives/jbox";
-import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
-import { onMain } from "./mainloop";
+// The preference store behind AOSP's SharedPreferencesImpl files and the platform's own settings.
+
 import { vfs } from "../shell/vfs";
 
-type PreferenceValue = string | number | bigint | boolean | null | readonly string[];
+type PreferenceValue =string | number | bigint | boolean | null | readonly string[];
 class PreferenceStore {
   private files = new Map<string, Map<string, PreferenceValue>>();
   open(name: string): Map<string, PreferenceValue> {
@@ -37,22 +34,6 @@ class PreferenceStore {
       return true;
     } catch { return false; }
   }
-  delete(name: string): boolean {
-    try { globalThis.localStorage?.removeItem("wd:prefs:" + name); }
-    catch { return false; }
-    this.files.delete(name); return true;
-  }
-  move(source: string, target: string): boolean {
-    if (source === target) return true;
-    const persisted = globalThis.localStorage?.getItem("wd:prefs:" + source);
-    if (!this.files.has(source) && persisted == null) return true;
-    const values = new Map(this.open(source));
-    if (!this.persist(target, values)) return false;
-    try { globalThis.localStorage?.removeItem("wd:prefs:" + source); }
-    catch { return false; }
-    this.files.delete(source);
-    return true;
-  }
 }
 export let preferenceStore = new PreferenceStore();
 export function usePreferenceStore(store: PreferenceStore): void {
@@ -60,8 +41,8 @@ export function usePreferenceStore(store: PreferenceStore): void {
   for (const prefs of prefsCache.values()) prefs.load();
 }
 const escapeXml = (s: string) => s.replace(/[&<>"]/g, (c) => `&${({ "&": "amp", "<": "lt", ">": "gt", '"': "quot" } as Record<string, string>)[c]};`);
-/** Stage D's SharedPreferencesImpl reads shared_prefs XML: a package's preferences this store holds
- *  (an earlier TS-mode run, a harness seed) become the files it has not written yet, in
+/** AOSP's SharedPreferencesImpl reads shared_prefs XML: a package's preferences this store holds
+ *  (an earlier run, a harness seed) become the files it has not written yet, in
  *  XmlUtils.writeMapXml's form. A whole number becomes an int: the store does not keep the type. */
 export function writePrefsFiles(pkg: string): void {
   const prefix = `wd:prefs:${pkg}:`, storage = globalThis.localStorage;
@@ -81,133 +62,17 @@ export function writePrefsFiles(pkg: string): void {
     vfs.write(path, new TextEncoder().encode(`<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n${entries.join("\n")}\n</map>\n`));
   }
 }
-class JSharedPrefs extends JObj {
-  name = "";
-  map = new Map<string, PreferenceValue>();
-  listeners: unknown[] = [];
+/** a preference file the platform keeps for itself, outside the app's shared_prefs */
+class Prefs {
+  map!: Map<string, PreferenceValue>;
+  constructor(readonly name: string) { this.load(); }
   persist(): boolean { return preferenceStore.persist(this.name, this.map); }
   load(): void { this.map = preferenceStore.open(this.name); }
 }
-const prefsCache = new Map<string, JSharedPrefs>();
-export function getPrefs(pkg: string, name: string): JSharedPrefs {
+const prefsCache = new Map<string, Prefs>();
+export function getPrefs(pkg: string, name: string): Prefs {
   const key = pkg + ":" + name;
   let p = prefsCache.get(key);
-  if (!p) {
-    p = new JSharedPrefs();
-    p.name = key;
-    p.load();
-    prefsCache.set(key, p);
-  }
+  if (!p) prefsCache.set(key, p = new Prefs(key));
   return p;
 }
-export function movePrefs(sourcePkg: string, targetPkg: string, name: string): boolean {
-  const source = sourcePkg + ":" + name;
-  const target = targetPkg + ":" + name;
-  const moved = preferenceStore.move(source, target);
-  if (moved && source !== target) {
-    prefsCache.delete(source);
-    prefsCache.delete(target);
-  }
-  return moved;
-}
-export function deletePrefs(pkg: string, name: string): boolean {
-  const key = pkg + ":" + name;
-  if (!preferenceStore.delete(key)) return false;
-  prefsCache.delete(key); return true;
-}
-class JPrefsEditor extends JObj {
-  prefs!: JSharedPrefs;
-  changes = new Map<string, PreferenceValue | undefined>();
-  cleared = false;
-}
-rt.register({
-  name: "webdroid/PrefsEditor", ctor: JPrefsEditor, ifaces: ["android/content/SharedPreferences$Editor"],
-  methods: (() => {
-    const m: NativeSpec["methods"] = {
-      "remove(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;": function (this: JPrefsEditor, k: string) {
-        this.changes.set(k, undefined);
-        return this;
-      },
-      "clear()Landroid/content/SharedPreferences$Editor;": function (this: JPrefsEditor) { this.cleared = true; return this; },
-      "apply()V": function (this: JPrefsEditor) { commitEditor(this); },
-      "commit()Z": function (this: JPrefsEditor) { return commitEditor(this) ? 1 : 0; },
-      "putStringSet(Ljava/lang/String;Ljava/util/Set;)Landroid/content/SharedPreferences$Editor;": driven(function* (this: JPrefsEditor, k: string, value: unknown): Gen {
-        const values: unknown[] = value == null ? [] : yield toJsArray(value);
-        if (!values.every((v): v is string => typeof v === "string")) throw rt.mkThrowable("java/lang/ClassCastException", "StringSet contains a non-string");
-        this.changes.set(k, value == null ? undefined : values);
-        return this;
-      }),
-    };
-    for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Boolean", "Z"]]) {
-      m[`put${t}(Ljava/lang/String;${d})Landroid/content/SharedPreferences$Editor;`] = function (this: JPrefsEditor, k: string, v: string | number | bigint | null) {
-        this.changes.set(k, v ?? undefined);
-        return this;
-      };
-    }
-    return m;
-  })(),
-});
-function commitEditor(e: JPrefsEditor): boolean {
-  if (e.cleared) e.prefs.map.clear();
-  const changed: string[] = [];
-  for (const [k, v] of e.changes) {
-    if (v === undefined) e.prefs.map.delete(k);
-    else e.prefs.map.set(k, v);
-    changed.push(k);
-  }
-  e.changes.clear();
-  e.cleared = false;
-  const persisted = e.prefs.persist();
-  if (e.prefs.listeners.length) void onMain(async () => {
-    for (const l of e.prefs.listeners) {
-      for (const k of changed) {
-        try {
-          await vcallOn(mainThread, l, "onSharedPreferenceChanged", "(Landroid/content/SharedPreferences;Ljava/lang/String;)V", e.prefs, k);
-        } catch (err) { console.error("[prefs listener]", err); }
-      }
-    }
-  });
-  return persisted;
-}
-rt.register({
-  name: "webdroid/SharedPrefs", ctor: JSharedPrefs, ifaces: ["android/content/SharedPreferences"],
-  methods: (() => {
-    const m: NativeSpec["methods"] = {
-      "edit()Landroid/content/SharedPreferences$Editor;": function (this: JSharedPrefs) {
-        const e = new JPrefsEditor();
-        e.prefs = this;
-        return e;
-      },
-      "contains(Ljava/lang/String;)Z": function (this: JSharedPrefs, k: string) { return this.map.has(k) ? 1 : 0; },
-      "getAll()Ljava/util/Map;": driven(function* (this: JSharedPrefs): Gen {
-        const map = yield newObj("java/util/HashMap");
-        for (const [k, v] of this.map) {
-          const value = Array.isArray(v) ? yield newStringSet(v) : typeof v === "number" && !Number.isInteger(v) ? boxFloat(v) : boxObject(v);
-          yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
-        }
-        return map;
-      }),
-      "registerOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
-        function (this: JSharedPrefs, l: unknown) { this.listeners.push(l); },
-      "unregisterOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
-        function (this: JSharedPrefs, l: unknown) { const i = this.listeners.indexOf(l); if (i >= 0) this.listeners.splice(i, 1); },
-    };
-    for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Boolean", "Z"], ["StringSet", "Ljava/util/Set;"]] as const) {
-      m[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JSharedPrefs, k: string, dv: unknown) {
-        const v = this.map.get(k);
-        if (v == null) return dv;
-        if (t === "StringSet") {
-          if (!Array.isArray(v)) throw rt.mkThrowable("java/lang/ClassCastException", "Preference is not a string set");
-          return newStringSet(v);
-        }
-        if (t === "String" && typeof v !== "string") throw rt.mkThrowable("java/lang/ClassCastException", "Preference is not a string");
-        if (t === "Boolean") return v ? 1 : 0;
-        if (t === "Long" && typeof v !== "bigint") return BigInt(Math.trunc(v as number));
-        return v;
-      };
-    }
-    return m;
-  })(),
-});
-rt.markers("android/content/SharedPreferences", "android/content/SharedPreferences$Editor",
-  "android/content/SharedPreferences$OnSharedPreferenceChangeListener");
