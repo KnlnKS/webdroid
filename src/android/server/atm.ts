@@ -6,6 +6,7 @@
 import { rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared } from "../../jvm/runtime";
 import { newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
+import { once } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
@@ -495,11 +496,11 @@ rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "andro
   // one task is shown at a time, and there are no recents to exclude it from
   ...noops("moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V", "setExcludeFromRecents(Z)V"),
 } });
-let appTask: Promise<JObj> | null = null;
+const appTask = once(() => newObj("webdroid/AppTask"));
 
 /** the methods IActivityTaskManager adds for ActivityThread's activities */
 export const activityTaskMethods = {
-  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => newArrayList(stack.length ? [await (appTask ??= newObj("webdroid/AppTask"))] : []),
+  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => newArrayList(stack.length ? [await appTask()] : []),
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
   // nothing captures the screen, so a screen-capture observer is never called
   ...noops("registerScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V",

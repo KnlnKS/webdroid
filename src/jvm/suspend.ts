@@ -35,14 +35,25 @@ function unwind(list: Continuation[], from: number, value: unknown, threw: boole
   return value;
 }
 
-/** a value computed by its first asker and kept. A suspended computation's promise carries that
- *  asker's frames (suspendWith), so it is never handed to another: one asking meanwhile computes too. */
+/** a value computed by its first asker and kept. Askers meanwhile wait on a promise of their own
+ *  (the first asker's carries its frames, suspendWith); a failure is not kept, so the next asker
+ *  computes again. */
 export function once<T>(make: () => T | Promise<T>): () => T | Promise<T> {
-  let value: { v: T } | null = null;
+  let value: { v: T } | null = null, pending: Promise<T> | null = null;
   return () => {
     if (value) return value.v;
+    if (pending) return pending;
     const v = make();
     if (!(v instanceof Promise)) { value = { v }; return v; }
-    return suspendWith(v, (done, threw) => { if (threw) throw done; value = { v: done as T }; return done; }) as Promise<T>;
+    const shared = Promise.withResolvers<T>();
+    shared.promise.catch(() => {});
+    pending = shared.promise;
+    return suspendWith(v, (done, threw) => {
+      pending = null;
+      if (threw) { shared.reject(done); throw done; }
+      value = { v: done as T };
+      shared.resolve(value.v);
+      return done;
+    }) as Promise<T>;
   };
 }

@@ -6,7 +6,8 @@
 // grant is not fudged here) and a caller without either sees no providers.
 import { JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { after, newObj, scall, vcall, reportUncaught } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall, reportUncaught, callUncaught } from "../jvm/natives/jlang";
+import { once } from "../jvm/suspend";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { hostStub } from "./binder";
@@ -29,11 +30,8 @@ const PROPERTIES: Record<string, [number, number, number, number, number, number
 };
 const providers = () => locationTransport.available() ? Object.keys(PROPERTIES) : [];
 const exists = (provider: string | null) => provider !== null && providers().includes(provider);
-const properties = new Map<string, Promise<JObj>>();
-function providerProperties(provider: string): Promise<JObj> {
-  let made = properties.get(provider);
-  if (!made) properties.set(provider, made = Promise.resolve(rt.drive(function* (): Gen<JObj> {
-    const [network, satellite, altitude, speed, bearing, power, accuracy] = PROPERTIES[provider];
+const properties = Object.fromEntries(Object.entries(PROPERTIES).map(([provider, [network, satellite, altitude, speed, bearing, power, accuracy]]) =>
+  [provider, once(driven(function* (): Gen<JObj> {
     const B = "Landroid/location/provider/ProviderProperties$Builder;", builder = yield newObj("android/location/provider/ProviderProperties$Builder");
     for (const [setter, value] of [["setHasNetworkRequirement", network], ["setHasSatelliteRequirement", satellite],
       ["setHasAltitudeSupport", altitude], ["setHasSpeedSupport", speed], ["setHasBearingSupport", bearing]] as const) {
@@ -42,9 +40,8 @@ function providerProperties(provider: string): Promise<JObj> {
     yield vcall(builder, "setPowerUsage", `(I)${B}`, power);
     yield vcall(builder, "setAccuracy", `(I)${B}`, accuracy);
     return yield vcall(builder, "build", "()Landroid/location/provider/ProviderProperties;");
-  }())));
-  return made;
-}
+  }))]));
+const providerProperties = (provider: string) => properties[provider]();
 const permitted = (pkg: string | null) => pkg !== null
   && (permissionGranted(pkg, "android.permission.ACCESS_FINE_LOCATION") || permissionGranted(pkg, "android.permission.ACCESS_COARSE_LOCATION"));
 function enforce(pkg: string | null): void {
@@ -103,7 +100,7 @@ function subscribe(key: unknown, provider: string, request: Request, on: {
   unsubscribe(key);
   const subscription: Subscription = { id: nextId++, active: true, timer: null };
   subscriptions.set(key, subscription);
-  const deliver = (job: () => unknown) => { void onMain(job).catch(reportUncaught); };
+  const deliver = (job: () => unknown) => callUncaught(() => onMain(job));
   const end = () => { if (subscription.active) { unsubscribe(key); if (on.expired) deliver(on.expired); } };
   if (request.duration < 0x7fffffffn) subscription.timer = setTimeout(end, Number(request.duration));
   const start = uptimeMillis();
@@ -178,7 +175,7 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
     }),
   [`unregisterLocationListener(${LISTENER})V`]: unsubscribe,
   [`requestListenerFlush(Ljava/lang/String;${LISTENER}I)V`]: (_provider: string, listener: JObj, code: number) =>
-    void onMain(() => vcall(listener, "onFlushComplete", "(I)V", code)).catch(reportUncaught),
+    callUncaught(() => onMain(() => vcall(listener, "onFlushComplete", "(I)V", code))),
   // one location within the request's duration, or null once it passes
   "getCurrentLocation(Ljava/lang/String;Landroid/location/LocationRequest;Landroid/location/ILocationCallback;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/os/ICancellationSignal;":
     driven(function* (provider: string | null, request: JObj, callback: JObj, pkg: string | null) {
