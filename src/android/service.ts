@@ -1,7 +1,9 @@
 // System services and binder-ish plumbing, and FileObserver's inotify.
 
-import { rt, JObj, noops } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
+import { utf8 } from "../jvm/abi";
+import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch, javaReadFd } from "../native/fs";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { hostStub, newStub } from "./binder";
 
@@ -51,11 +53,24 @@ rt.register({ name: "webdroid/DropBoxManagerService", ctor: class extends JObj {
 } });
 hostStub("dropbox", "webdroid/DropBoxManagerService");
 
-// FileObserver's inotify instance: the VFS reports no changes, so inotify_init1 fails as on a
-// kernel without inotify, and AOSP's observer thread ends with nothing to watch
+// FileObserver's inotify instance, over the descriptor table's, which the VFS reports its changes to
 rt.registerJnis("android/os/FileObserver$ObserverThread", {
-  "init()I": () => -1,
-  "observe(I)V": () => {},
-  "startWatching(I[Ljava/lang/String;I[I)V": (_fd: number, _paths: unknown, _mask: number, wfds: Int32Array) => { wfds.fill(-1); },
-  "stopWatching(I[I)V": () => {},
+  "init()I": () => javaInotifyInit(),
+  // android_os_FileObserver.cpp's loop: each event to onEvent(wd, mask, name) until a read fails
+  "observe(I)V": driven(function* (this: JObj, fd: number): Gen {
+    const buf = new Uint8Array(512), view = new DataView(buf.buffer);
+    for (let n: number; (n = yield javaReadFd(fd, buf)) >= 16;) {
+      for (let at = 0; at + 16 <= n;) {
+        const len = view.getUint32(at + 12, true), name = buf.subarray(at + 16, at + 16 + len);
+        const path = len ? utf8.dec.decode(name.subarray(0, name.indexOf(0) < 0 ? len : name.indexOf(0))) : null;
+        try { yield vcall(this, "onEvent", "(IILjava/lang/String;)V", view.getInt32(at, true), view.getInt32(at + 4, true), path); }
+        catch (error) { reportUncaught(error); }
+        at += 16 + len;
+      }
+    }
+  }),
+  "startWatching(I[Ljava/lang/String;I[I)V": (fd: number, paths: string[], mask: number, wfds: Int32Array) => {
+    paths.forEach((path, i) => { wfds[i] = fd < 0 ? -1 : Math.max(-1, javaInotifyAddWatch(fd, path, mask)); });
+  },
+  "stopWatching(I[I)V": (fd: number, wfds: Int32Array) => { for (const wd of wfds) if (wd >= 0) javaInotifyRmWatch(fd, wd); },
 });

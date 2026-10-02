@@ -77,6 +77,12 @@ function inotifyVfsChange(path: string, change: "modify" | "write" | "create" | 
   else notifyInotify(path, IN_MODIFY);
 }
 let inotifyHooked = false;
+function hookInotify(): void {
+  if (inotifyHooked) return;
+  const priorOnWrite = vfs.onWrite;
+  vfs.onWrite = (path, change = "modify") => { priorOnWrite(path, change); inotifyVfsChange(path, change); };
+  inotifyHooked = true;
+}
 const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
@@ -637,12 +643,39 @@ export function makePipe(out: number, flags: number): number {
   mem.st32(out, read); mem.st32(out + 4, write);
   return 0;
 }
-function makeInotify(cpu: Cpu, flags: number): number {
+function makeInotify(cpu: Cpu | null, flags: number): number {
   if (flags & ~(IN_NONBLOCK | IN_CLOEXEC)) return fail(cpu, E.INVAL);
   const pipe = newPipe(0), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
   inotifies.add(state);
   return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, nonblock: !!(flags & IN_NONBLOCK), statusFlags: flags & IN_NONBLOCK }, !!(flags & O_CLOEXEC));
 }
+function inotifyAddWatch(cpu: Cpu | null, fd: number, name: string, mask: number): number {
+  const path = vfs.norm(name), state = fds.get(fd)?.inotify;
+  if (!state) return fail(cpu, E.BADF);
+  if (!vfs.exists(path)) return fail(cpu, E.NOENT);
+  const dir = vfs.isDir(path);
+  if (mask & IN_ONLYDIR && !dir) return fail(cpu, E.NOTDIR);
+  const events = mask & ~(IN_MASK_ADD | IN_ONLYDIR);
+  for (const [wd, watch] of state.watches) if (watch.path === path) {
+    watch.mask = mask & IN_MASK_ADD ? watch.mask | events : events;
+    return wd;
+  }
+  const wd = state.nextWd++;
+  state.watches.set(wd, { path, mask: events, dir });
+  return wd;
+}
+function inotifyRmWatch(cpu: Cpu | null, fd: number, wd: number): number {
+  const state = fds.get(fd)?.inotify;
+  if (!state) return fail(cpu, E.BADF);
+  if (!state.watches.delete(wd)) return fail(cpu, E.INVAL);
+  inotifyEvent(state, wd, IN_IGNORED);
+  return 0;
+}
+/** inotify for libcore's callers (FileObserver), each answering -errno on failure; the VFS reports
+ *  its changes to them as fsInit hooks it for native code */
+export function javaInotifyInit(): number { hookInotify(); return makeInotify(null, IN_CLOEXEC); }
+export const javaInotifyAddWatch = (fd: number, path: string, mask: number): number => inotifyAddWatch(null, fd, path, mask);
+export const javaInotifyRmWatch = (fd: number, wd: number): number => inotifyRmWatch(null, fd, wd);
 export const epollCreate = (cloexec: boolean): number => put({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }, cloexec);
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: nativePollEvents(fd, events), disabled: false, cancel: () => {} };
@@ -810,11 +843,7 @@ export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): num
 /** the descriptors a process starts with (stdin, and stdout/stderr into the log) and the hooks
  *  the file system keeps */
 export function fsInit(): void {
-  if (!inotifyHooked) {
-    const priorOnWrite = vfs.onWrite;
-    vfs.onWrite = (path, change = "modify") => { priorOnWrite(path, change); inotifyVfsChange(path, change); };
-    inotifyHooked = true;
-  }
+  hookInotify();
   procMemory.resident = () => mem.u8.byteLength;
   for (let fd = 0; fd < 3; fd++) reserveFd(fd);
   fds.set(0, fdBase("/dev/stdin"));
@@ -884,28 +913,8 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   pipe2: (_c, a) => makePipe(a.p(), a.i()),
   inotify_init: (cpu) => makeInotify(cpu, 0),
   inotify_init1: (cpu, a) => makeInotify(cpu, a.i()),
-  inotify_add_watch: (cpu, a) => {
-    const fd = a.i(), path = vfs.norm(a.str()), mask = a.u(), state = fds.get(fd)?.inotify;
-    if (!state) return fail(cpu, E.BADF);
-    if (!vfs.exists(path)) return fail(cpu, E.NOENT);
-    const dir = vfs.isDir(path);
-    if (mask & IN_ONLYDIR && !dir) return fail(cpu, E.NOTDIR);
-    const events = mask & ~(IN_MASK_ADD | IN_ONLYDIR);
-    for (const [wd, watch] of state.watches) if (watch.path === path) {
-      watch.mask = mask & IN_MASK_ADD ? watch.mask | events : events;
-      return wd;
-    }
-    const wd = state.nextWd++;
-    state.watches.set(wd, { path, mask: events, dir });
-    return wd;
-  },
-  inotify_rm_watch: (cpu, a) => {
-    const state = fds.get(a.i())?.inotify, wd = a.i();
-    if (!state) return fail(cpu, E.BADF);
-    if (!state.watches.delete(wd)) return fail(cpu, E.INVAL);
-    inotifyEvent(state, wd, IN_IGNORED);
-    return 0;
-  },
+  inotify_add_watch: (cpu, a) => inotifyAddWatch(cpu, a.i(), a.str(), a.u()),
+  inotify_rm_watch: (cpu, a) => inotifyRmWatch(cpu, a.i(), a.i()),
   socketpair: (_c, a) => {
     a.i(); const type = a.i(); a.i(); const sv = a.p();
     const [first, second] = javaSocketPair(type);
