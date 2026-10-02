@@ -1,7 +1,7 @@
 // IShortcutService, under AOSP's ShortcutManager: ShortcutInfo and its Builder run from bytecode.
 // A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
-import { rt, JObj, noops } from "../jvm/runtime";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
@@ -19,93 +19,99 @@ const dynamicOf = (pkg: string) => {
   return shortcuts;
 };
 const idOf = (si: JObj): Promise<string> => vcall(si, "getId", "()Ljava/lang/String;");
-async function mainActivity(pkg: string): Promise<JObj> {
+function mainActivity(pkg: string): JObj | Promise<JObj> {
   const launcher = launcherActivity(pkg);
   if (!launcher) throw rt.mkThrowable("java/lang/IllegalStateException", "Launcher activity not found for package " + pkg);
   return newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, launcher.name);
 }
 /** ShortcutService.fixUpIncomingShortcutInfo: the publisher's own, complete, on an activity, as a copy it no longer holds */
-async function incoming(pkg: string, si: JObj | null, forUpdate = false): Promise<JObj> {
+function* incoming(pkg: string, si: JObj | null, forUpdate = false): Gen<JObj> {
   if (!si) throw rt.mkThrowable("java/lang/NullPointerException", "Null shortcut detected");
-  if (await vcall(si, "getPackage", "()Ljava/lang/String;") !== pkg) throw rt.mkThrowable("java/lang/SecurityException", "Shortcut package name mismatch");
-  const copy: JObj = await vcall(si, "clone", `(I)${SI}`, 0);
+  if ((yield vcall(si, "getPackage", "()Ljava/lang/String;")) !== pkg) throw rt.mkThrowable("java/lang/SecurityException", "Shortcut package name mismatch");
+  const copy: JObj = yield vcall(si, "clone", `(I)${SI}`, 0);
   if (!forUpdate) {
-    if (!await vcall(copy, "getActivity", `()${CN}`)) await vcall(copy, "setActivity", `(${CN})V`, await mainActivity(pkg));
-    await vcall(copy, "enforceMandatoryFields", "(Z)V", 0);
+    if (!(yield vcall(copy, "getActivity", `()${CN}`))) yield vcall(copy, "setActivity", `(${CN})V`, yield mainActivity(pkg));
+    yield vcall(copy, "enforceMandatoryFields", "(Z)V", 0);
   }
-  await vcall(copy, "setTimestamp", "(J)V", BigInt(Date.now()));
+  yield vcall(copy, "setTimestamp", "(J)V", BigInt(Date.now()));
   return copy;
 }
-const incomingList = async (pkg: string, slice: JObj) =>
-  Promise.all((await toJsArray(await vcall(slice, "getList", "()Ljava/util/List;")) as JObj[]).map((si) => incoming(pkg, si)));
+function* incomingList(pkg: string, slice: JObj): Gen<JObj[]> {
+  const out: JObj[] = [];
+  for (const si of (yield toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;"))) as JObj[]) out.push(yield* incoming(pkg, si));
+  return out;
+}
 /** a package's shortcuts after a change: at most MAX_PER_ACTIVITY on an activity, each dynamic,
  *  ranked 0..n-1 per activity by requested rank then publishing order */
-async function commit(pkg: string, shortcuts: JObj[]): Promise<void> {
+function* commit(pkg: string, shortcuts: JObj[]): Gen<void> {
   const byActivity = new Map<string, { si: JObj; rank: number; order: number }[]>();
   for (const [order, si] of shortcuts.entries()) {
-    const activity = String(await vcall(await vcall(si, "getActivity", `()${CN}`), "flattenToString", "()Ljava/lang/String;"));
+    const activity = String(yield vcall(yield vcall(si, "getActivity", `()${CN}`), "flattenToString", "()Ljava/lang/String;"));
     let group = byActivity.get(activity);
     if (!group) byActivity.set(activity, group = []);
-    group.push({ si, rank: await vcall(si, "getRank", "()I"), order });
+    group.push({ si, rank: yield vcall(si, "getRank", "()I"), order });
   }
   for (const group of byActivity.values()) {
     if (group.length > MAX_PER_ACTIVITY) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Max number of dynamic shortcuts exceeded");
     group.sort((a, b) => a.rank - b.rank || a.order - b.order);
     for (const [rank, { si }] of group.entries()) {
-      await vcall(si, "setRank", "(I)V", rank);
-      await vcall(si, "addFlags", "(I)V", FLAG_DYNAMIC);
+      yield vcall(si, "setRank", "(I)V", rank);
+      yield vcall(si, "addFlags", "(I)V", FLAG_DYNAMIC);
     }
   }
   const next = new Map<string, JObj>();
-  for (const si of shortcuts) next.set(await idOf(si), si);
+  for (const si of shortcuts) next.set(yield idOf(si), si);
   packages.set(pkg, next);
 }
 async function remove(pkg: string, ids: JObj | null): Promise<void> {
   const shortcuts = dynamicOf(pkg);
-  for (const id of await toJsArray(ids) as string[]) shortcuts.delete(id);
+  for (const id of (await toJsArray(ids)) as string[]) shortcuts.delete(id);
 }
 const listSlice = async (list: JObj[]) => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(list));
 const complete = (future: JObj, value: unknown) => vcall(future, "complete", "(Ljava/lang/Object;)Z", value);
 
 const SLICE = "Landroid/content/pm/ParceledListSlice;", LIST = "Ljava/util/List;", S = "Ljava/lang/String;", FUTURE = "Lcom/android/internal/infra/AndroidFuture;";
 rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup: "android/content/pm/IShortcutService$Stub", methods: {
-  [`setDynamicShortcuts(${S}${SLICE}I)Z`]: async (pkg: string, slice: JObj) => { await commit(pkg, await incomingList(pkg, slice)); return 1; },
-  [`addDynamicShortcuts(${S}${SLICE}I)Z`]: async (pkg: string, slice: JObj) => {
+  [`setDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) { yield* commit(pkg, yield* incomingList(pkg, slice)); return 1; }),
+  [`addDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
     const shortcuts = new Map(dynamicOf(pkg));
-    for (const si of await incomingList(pkg, slice)) shortcuts.set(await idOf(si), si);
-    await commit(pkg, [...shortcuts.values()]);
+    for (const si of yield* incomingList(pkg, slice)) shortcuts.set(yield idOf(si), si);
+    yield* commit(pkg, [...shortcuts.values()]);
     return 1;
-  },
+  }),
   // a full activity drops its lowest-ranked shortcut to make room
-  [`pushDynamicShortcut(${S}${SI}I)V`]: async (pkg: string, si: JObj) => {
-    const pushed = await incoming(pkg, si), id = await idOf(pushed), shortcuts = new Map(dynamicOf(pkg));
+  [`pushDynamicShortcut(${S}${SI}I)V`]: driven(function* (pkg: string, si: JObj) {
+    const pushed = yield* incoming(pkg, si), id = yield idOf(pushed), shortcuts = new Map(dynamicOf(pkg));
     shortcuts.delete(id);
-    const activity = await vcall(pushed, "getActivity", `()${CN}`), same: JObj[] = [];
-    for (const other of shortcuts.values()) if (await vcall(activity, "equals", "(Ljava/lang/Object;)Z", await vcall(other, "getActivity", `()${CN}`))) same.push(other);
+    const activity = yield vcall(pushed, "getActivity", `()${CN}`), same: JObj[] = [];
+    for (const other of shortcuts.values()) if (yield vcall(activity, "equals", "(Ljava/lang/Object;)Z", yield vcall(other, "getActivity", `()${CN}`))) same.push(other);
     if (same.length >= MAX_PER_ACTIVITY) {
       let last = same[0];
-      for (const other of same) if (await vcall(other, "getRank", "()I") >= await vcall(last, "getRank", "()I")) last = other;
-      shortcuts.delete(await idOf(last));
+      for (const other of same) if ((yield vcall(other, "getRank", "()I")) >= (yield vcall(last, "getRank", "()I"))) last = other;
+      shortcuts.delete(yield idOf(last));
     }
-    await commit(pkg, [pushed, ...shortcuts.values()]);
-  },
+    yield* commit(pkg, [pushed, ...shortcuts.values()]);
+  }),
   // an update changes only shortcuts that exist, and only the fields it sets
-  [`updateShortcuts(${S}${SLICE}I)Z`]: async (pkg: string, slice: JObj) => {
+  [`updateShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
     const shortcuts = dynamicOf(pkg);
-    for (const si of await toJsArray(await vcall(slice, "getList", `()${LIST}`)) as JObj[]) {
-      const update = await incoming(pkg, si, true), target = shortcuts.get(await idOf(update));
-      if (target) await vcall(target, "copyNonNullFieldsFrom", `(${SI})V`, update);
+    for (const si of (yield toJsArray(yield vcall(slice, "getList", `()${LIST}`))) as JObj[]) {
+      const update = yield* incoming(pkg, si, true), target = shortcuts.get(yield idOf(update));
+      if (target) yield vcall(target, "copyNonNullFieldsFrom", `(${SI})V`, update);
     }
-    await commit(pkg, [...shortcuts.values()]);
+    yield* commit(pkg, [...shortcuts.values()]);
     return 1;
-  },
+  }),
   [`removeDynamicShortcuts(${S}${LIST}I)V`]: remove,
   [`removeLongLivedShortcuts(${S}${LIST}I)V`]: remove,
   // disabling removes a dynamic shortcut; only a pinned one would stay, disabled
   [`disableShortcuts(${S}${LIST}Ljava/lang/CharSequence;II)V`]: remove,
   [`removeAllDynamicShortcuts(${S}I)V`]: (pkg: string) => { dynamicOf(pkg).clear(); },
-  [`getShortcuts(${S}II)${SLICE}`]: async (pkg: string, flags: number) =>
-    listSlice(flags & MATCH_DYNAMIC ? await Promise.all([...dynamicOf(pkg).values()].map((si) => vcall(si, "clone", `(I)${SI}`, CLONE_REMOVE_FOR_CREATOR))) : []),
+  [`getShortcuts(${S}II)${SLICE}`]: driven(function* (pkg: string, flags: number) {
+    const clones: JObj[] = [];
+    if (flags & MATCH_DYNAMIC) for (const si of dynamicOf(pkg).values()) clones.push(yield vcall(si, "clone", `(I)${SI}`, CLONE_REMOVE_FOR_CREATOR));
+    return yield listSlice(clones);
+  }),
   [`getShareTargets(${S}Landroid/content/IntentFilter;I)${SLICE}`]: () => listSlice([]),
   [`hasShareTargets(${S}${S}I)Z`]: () => 0,
   [`getMaxShortcutCountPerActivity(${S}I)I`]: () => MAX_PER_ACTIVITY,
