@@ -1,10 +1,12 @@
-import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/media";
+import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
 import { Cpu, bindCpu, hasProcessExited } from "./cpu";
 import { hostLib, stp, type HostFn } from "./host";
 import { mem } from "./mem";
 
 const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
+const AAUDIO_STREAM_STATE_OPEN = 2, AAUDIO_STREAM_STATE_STARTED = 4, AAUDIO_STREAM_STATE_PAUSED = 6, AAUDIO_STREAM_STATE_FLUSHED = 8,
+  AAUDIO_STREAM_STATE_STOPPING = 9, AAUDIO_STREAM_STATE_STOPPED = 10, AAUDIO_STREAM_STATE_CLOSED = 12;
 const builders = new Map<number, Builder>(), streams = new Map<number, Stream>();
 class Builder {
   SampleRate = 0; ChannelCount = 0; Format = 0; Direction = 0; SharingMode = 1;
@@ -13,20 +15,18 @@ class Builder {
   callback = 0; context = 0;
 }
 class Stream {
-  readonly track = new PcmOutput();
+  readonly track: PcmOutput;
   readonly cpu: Cpu;
   readonly buffer: number;
   readonly frames: number;
   readonly capacity: number;
   size: number;
-  state = 2;
+  state = AAUDIO_STREAM_STATE_OPEN;
   pumping: Promise<void> | null = null;
   readonly waiters = new Set<() => void>();
   constructor(readonly handle: number, readonly config: Builder, parent: Cpu) {
-    const track = this.track;
-    track.rate = config.SampleRate || outputSampleRate(); track.channels = config.ChannelCount || 2;
-    track.bytesPerSample = config.Format === 1 ? 2 : 4;
-    track.sessionId = config.SessionId === 0 ? newAudioSessionId() : config.SessionId;
+    const track = this.track = new PcmOutput({ rate: config.SampleRate || outputSampleRate(), channels: config.ChannelCount || 2,
+      bytesPerSample: config.Format === 1 ? 2 : 4, sessionId: config.SessionId === 0 ? newAudioSessionId() : config.SessionId });
     this.frames = config.FramesPerDataCallback || Math.ceil(track.rate / 100);
     this.capacity = Math.max(config.BufferCapacityInFrames, this.frames * 4);
     this.size = this.capacity;
@@ -38,34 +38,33 @@ class Stream {
   }
   change(state: number): void { this.state = state; for (const wake of this.waiters) wake(); }
   pump(): void {
-    if (this.pumping || !this.config.callback || this.state !== 4) return;
+    if (this.pumping || !this.config.callback || this.state !== AAUDIO_STREAM_STATE_STARTED) return;
     this.pumping = this.fill().catch(reportUncaught).finally(() => { this.pumping = null; });
   }
   async fill(): Promise<void> {
     const track = this.track;
-    while (this.state === 4 && !hasProcessExited() && track.queuedSec() * track.rate + this.frames <= this.size) {
+    while (this.state === AAUDIO_STREAM_STATE_STARTED && !hasProcessExited() && track.queuedSec() * track.rate + this.frames <= this.size) {
       const result = await this.cpu.call(this.config.callback, [this.handle, this.config.context, this.buffer, this.frames], "AAudio data callback");
-      if (this.state !== 4) break;
+      if (this.state !== AAUDIO_STREAM_STATE_STARTED) break;
       if (result !== 0) { this.stop(); break; }
       const bytes = mem.bytes(this.buffer, this.frames * track.frameBytes());
       const samples = track.bytesPerSample === 2 ? new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2) : new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
       track.push(samples, this.frames, () => {
-        if (this.state === 9 && !track.queue.length) this.change(10);
+        if (this.state === AAUDIO_STREAM_STATE_STOPPING && track.idle) this.change(AAUDIO_STREAM_STATE_STOPPED);
         else this.pump();
       });
     }
   }
   start(): number {
-    if (this.state === 12 || this.state === 9) return INVALID_STATE;
-    this.track.play(); this.change(4); this.pump(); return 0;
+    if (this.state === AAUDIO_STREAM_STATE_CLOSED || this.state === AAUDIO_STREAM_STATE_STOPPING) return INVALID_STATE;
+    this.track.play(); this.change(AAUDIO_STREAM_STATE_STARTED); this.pump(); return 0;
   }
   stop(): number {
-    if (!this.track.playing) this.track.clearQueue();
-    this.change(this.track.queue.length ? 9 : 10);
+    this.change(this.track.stop() ? AAUDIO_STREAM_STATE_STOPPING : AAUDIO_STREAM_STATE_STOPPED);
     return 0;
   }
   async close(): Promise<number> {
-    this.change(12); this.track.release();
+    this.change(AAUDIO_STREAM_STATE_CLOSED); this.track.release();
     await this.pumping;
     this.cpu.jthread.alive = 0; this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
     streams.delete(this.handle); return 0;
@@ -99,8 +98,8 @@ export function aaudioInit(): void {
     AAudioStream_close: (_cpu, a) => streams.get(a.p())?.close() ?? INVALID_HANDLE,
     AAudioStream_requestStart: (_cpu, a) => streams.get(a.p())?.start() ?? INVALID_HANDLE,
     AAudioStream_requestStop: (_cpu, a) => streams.get(a.p())?.stop() ?? INVALID_HANDLE,
-    AAudioStream_requestPause: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; s.track.pauseQueue(); s.change(6); return 0; },
-    AAudioStream_requestFlush: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; if (s.state === 4) return INVALID_STATE; s.track.clearQueue(); s.change(8); return 0; },
+    AAudioStream_requestPause: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; s.track.pause(); s.change(AAUDIO_STREAM_STATE_PAUSED); return 0; },
+    AAudioStream_requestFlush: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; if (s.state === AAUDIO_STREAM_STATE_STARTED) return INVALID_STATE; s.track.flush(); s.change(AAUDIO_STREAM_STATE_FLUSHED); return 0; },
     AAudioStream_waitForStateChange: (_cpu, a) => { const s = streams.get(a.p()), input = a.i(), out = a.p(), timeout = a.l(); return s?.wait(input, out, timeout) ?? INVALID_HANDLE; },
     AAudioStream_setBufferSizeInFrames: (_cpu, a) => { const s = streams.get(a.p()), size = a.i(); if (!s) return INVALID_HANDLE; if (size < 0) return -882; s.size = Math.max(s.frames, Math.min(size, s.capacity)); s.pump(); return s.size; },
   };

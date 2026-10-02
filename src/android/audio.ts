@@ -1,13 +1,15 @@
-// IAudioService, under AOSP's AudioManager and Spatializer: the reference AVD's stream volumes
-// (dumpsys audio; aliased streams follow their alias, rescaled as AudioService.rescaleIndex does),
-// a normal ringer and mode, MediaFocusControl's focus stack, and no spatializer. Output devices are
-// not modelled (AudioSystem lists no ports), so no attributes route to one. A codec's loudness
-// parameters are the reference AVD's for its output (the speaker).
+// The audio policy: AudioSystem's limits and product strategies, and IAudioService under AOSP's
+// AudioManager and Spatializer: the reference AVD's stream volumes (dumpsys audio; aliased streams
+// follow their alias, rescaled as AudioService.rescaleIndex does), a normal ringer and mode,
+// MediaFocusControl's focus stack, and no spatializer. Output devices are not modelled (AudioSystem
+// lists no ports), so no attributes route to one. A codec's loudness parameters are the reference
+// AVD's for its output (the speaker).
 import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime";
+import { jarray } from "../jvm/abi";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { hostStub, oneway } from "./binder";
-import { isMusicActive } from "./media";
+import { isMusicActive, newAudioSessionId, outputSampleRate } from "./audio-output";
 
 /** [min, max, index] by stream type, STREAM_VOICE_CALL..STREAM_ASSISTANT */
 const VOLUMES: [number, number, number][] = [[1, 5, 3], [0, 7, 5], [0, 7, 5], [0, 15, 5], [1, 7, 6], [0, 7, 5], [0, 15, 7],
@@ -119,3 +121,91 @@ hostStub("audio", "webdroid/AudioService");
 
 // AudioPortEventHandler's native half: the port and patch lists never change, so no event is posted
 rt.registerJnis("android/media/AudioPortEventHandler", { "native_setup(Ljava/lang/Object;)V": () => {}, "native_finalize()V": () => {} });
+
+// No camera is attached (Camera.getNumberOfCameras is 0), so MediaProfiles holds no camcorder
+// profile: get() fails as the native lookup does for a missing profile and getAll() finds none.
+rt.claimNativeLib("media_jni");
+rt.registerJnis("android/media/CamcorderProfile", {
+  "native_init()V": () => {},
+  "native_has_camcorder_profile(II)Z": () => 0,
+  "native_get_camcorder_profile(II)Landroid/media/CamcorderProfile;": () => {
+    throw rt.mkThrowable("java/lang/RuntimeException", "Error retrieving camcorder profile params");
+  },
+  "native_get_camcorder_profiles(IIZ)Landroid/media/EncoderProfiles;": () => null,
+});
+
+// The audio policy's product strategies, as the reference AVD's engine configuration lists them:
+// [name, id, [volume group, legacy stream, [usage, content type, flags, tag][]][]]. AudioAttributes
+// maps legacy stream types and volume streams through them.
+const PRODUCT_STRATEGIES: [string, number, [number, number, [number, number, number, string?][]][]][] = [
+  ["STRATEGY_PHONE", 15, [[14, 0, [[2, 0, 0]]], [4, 6, [[0, 0, 4]]]]],
+  ["STRATEGY_SONIFICATION", 16, [[11, 2, [[6, 0, 0]]], [2, 4, [[4, 0, 0]]]]],
+  ["STRATEGY_ENFORCED_AUDIBLE", 17, [[6, 7, [[0, 0, 1]]]]],
+  ["STRATEGY_ACCESSIBILITY", 18, [[1, 10, [[11, 0, 0]]]]],
+  ["STRATEGY_SONIFICATION_RESPECTFUL", 19, [[8, 5, [[5, 0, 0], [10, 0, 0]]]]],
+  ["STRATEGY_MEDIA", 20, [[3, 11, [[16, 1, 0]]], [7, 3, [[1, 0, 0], [14, 0, 0], [16, 0, 0], [12, 0, 0], [0, 0, 0]]], [12, 1, [[13, 0, 0]]]]],
+  ["STRATEGY_DTMF", 21, [[5, 8, [[3, 0, 0]]]]],
+  ["STRATEGY_CALL_ASSISTANT", 22, [[23, 14, [[17, 0, 0]]]]],
+  ["STRATEGY_TRANSMITTED_THROUGH_SPEAKER", 24, [[13, 9, [[0, 0, 8], [0, 1997, 0]]]]],
+  ["STRATEGY_REROUTING", 25, [[10, 12, [[15, 0, 0, "reserved_internal_strategy"]]]]],
+  ["STRATEGY_PATCH", 26, [[9, 13, [[0, 0, 0, "reserved_internal_strategy"]]]]],
+];
+const AAB = "Landroid/media/AudioAttributes$Builder;";
+// AudioSystem: the audio framework's channel and sample rate limits, as the reference AVD reports
+// them, and the Web Audio output. Its buffer is not a fixed number of frames, so the primary output
+// reports no frame count. No device ports or patches are modelled, nothing is connected (no wired
+// headset or A2DP), and nothing plays direct or offloaded.
+const listNone = (_list: unknown, generation: Int32Array) => { generation[0] = 1; return 0; };
+rt.registerJnis("android/media/AudioSystem", {
+  "native_getMaxChannelCount()I": () => 12,
+  "native_getMaxSampleRate()I": () => 192000,
+  "native_getMinSampleRate()I": () => 4000,
+  "newAudioSessionId()I": newAudioSessionId,
+  "getPrimaryOutputSamplingRate()I": outputSampleRate,
+  "getPrimaryOutputFrameCount()I": () => 0,
+  "listAudioPorts(Ljava/util/ArrayList;[I)I": listNone,
+  "listAudioPatches(Ljava/util/ArrayList;[I)I": listNone,
+  "getDeviceConnectionState(ILjava/lang/String;)I": () => 0,
+  "getParameters(Ljava/lang/String;)Ljava/lang/String;": () => "",
+  "getDirectProfilesForAttributes(Landroid/media/AudioAttributes;Ljava/util/ArrayList;)I": () => 0,
+  "getDirectPlaybackSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I": () => 0,
+  "native_get_offload_support(IIIII)I": () => 0,
+});
+rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
+  "native_list_audio_product_strategies(Ljava/util/ArrayList;)I": driven(function* (list: unknown) {
+    for (const [name, id, groups] of PRODUCT_STRATEGIES) {
+      const built = [];
+      for (const [volumeGroup, stream, attributes] of groups) {
+        const all = [];
+        for (const [usage, content, flags, tag] of attributes) {
+          const builder = yield newObj("android/media/AudioAttributes$Builder");
+          const system = yield scall("android/media/AudioAttributes", "isSystemUsage", "(I)Z", usage);
+          yield vcall(builder, system ? "setSystemUsage" : "setUsage", "(I)" + AAB, usage);
+          yield vcall(builder, "setInternalContentType", "(I)" + AAB, content);
+          yield vcall(builder, "replaceFlags", "(I)" + AAB, flags);
+          if (tag) yield vcall(builder, "addTag", "(Ljava/lang/String;)" + AAB, tag);
+          all.push(yield vcall(builder, "build", "()Landroid/media/AudioAttributes;"));
+        }
+        built.push(yield newObj("android/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup", "(II[Landroid/media/AudioAttributes;)V",
+          volumeGroup, stream, jarray(all, "Landroid/media/AudioAttributes;")));
+      }
+      yield vcall(list, "add", "(Ljava/lang/Object;)Z", yield newObj("android/media/audiopolicy/AudioProductStrategy",
+        "(Ljava/lang/String;I[Landroid/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup;)V", name, id,
+        jarray(built, "Landroid/media/audiopolicy/AudioProductStrategy$AudioAttributesGroup;")));
+    }
+    return 0;
+  }),
+});
+
+// IMediaRouterService, under AOSP's MediaRouter: no remote display provider is installed, so the
+// global state holds no routes (dumpsys media_router on the reference AVD: routes=[]) and an app
+// has only the default audio and video route MediaRouter makes itself
+const MRC = "Landroid/media/IMediaRouterClient;";
+rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, sup: "android/media/IMediaRouterService$Stub", methods: {
+  [`getState(${MRC})Landroid/media/MediaRouterClientState;`]: () => newObj("android/media/MediaRouterClientState"),
+  // AudioPlayerStateMonitor's view of the client's uid: its own players
+  [`isPlaybackActive(${MRC})Z`]: isMusicActive,
+  ...noops(`registerClientAsUser(${MRC}Ljava/lang/String;I)V`, `unregisterClient(${MRC})V`, `setDiscoveryRequest(${MRC}IZ)V`,
+    `setSelectedRoute(${MRC}Ljava/lang/String;Z)V`),
+} });
+hostStub("media_router", "webdroid/MediaRouterService");

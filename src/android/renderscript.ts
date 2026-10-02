@@ -12,7 +12,6 @@ type Allocation = { kind: "allocation"; type: bigint; w: number; h: number; rast
 type Blur = { kind: "blur"; radius: number; input: Allocation | null } & BlurCache;
 /** RenderScript's context waits in nContextPeekMessage for a message no script sends, until teardown */
 type Context = { kind: "context"; teardown: (() => void) | null };
-const id = (o: object) => handle(o);
 const obj = <T>(h: bigint): T => {
   const o = deref<T>(h);
   if (!o) throw rt.mkThrowable("android/renderscript/RSIllegalArgumentException", "Invalid object id");
@@ -22,7 +21,7 @@ function allocation(type: bigint, bitmap: object | null): bigint {
   const t = obj<Type>(type), raster = new OffscreenCanvas(Math.max(1, t.x), Math.max(1, t.y || 1));
   const a: Allocation = { kind: "allocation", type, w: t.x, h: t.y || 1, raster, bitmap };
   if (bitmap) copyFrom(a, bitmap);
-  return id(a);
+  return handle(a);
 }
 function copyFrom(a: Allocation, bitmap: object) {
   const g = a.raster.getContext("2d")!;
@@ -37,10 +36,10 @@ rt.claimNativeLib("rs_jni");
 rt.registerJnis(RS, {
   "_nInit()V": () => {},
   "rsnSystemGetPointerSize()I": () => 8,
-  "nDeviceCreate()J": () => id({ kind: "device" }),
+  "nDeviceCreate()J": () => handle({ kind: "device" }),
   "nDeviceDestroy(J)V": (dev: bigint) => release(dev),
   "nDeviceSetConfig(JII)V": () => {},
-  "rsnContextCreate(JIII)J": () => id({ kind: "context", teardown: null } satisfies Context),
+  "rsnContextCreate(JIII)J": () => handle({ kind: "context", teardown: null } satisfies Context),
   "rsnContextDestroy(J)V": (con: bigint) => release(con),
   "rsnContextSetCacheDir(JLjava/lang/String;)V": () => {},
   "rsnContextSetPriority(JI)V": () => {},
@@ -51,10 +50,10 @@ rt.registerJnis(RS, {
   // RS_MESSAGE_TO_CLIENT_NONE once the context is torn down
   "nContextPeekMessage(J[I)I": (con: bigint) => new Promise<number>((resolve) => { obj<Context>(con).teardown = () => resolve(0); }),
   "rsnObjDestroy(JJ)V": (_con: bigint, o: bigint) => release(o),
-  "rsnElementCreate(JJIZI)J": () => id({ kind: "element" } satisfies Element),
+  "rsnElementCreate(JJIZI)J": () => handle({ kind: "element" } satisfies Element),
   "rsnTypeCreate(JJIIIZZI)J": (_con: bigint, element: bigint, x: number, y: number, z: number, mips: number, faces: number, yuv: number) => {
     if (z > 1 || mips || faces || yuv) throw rt.mkThrowable("android/renderscript/RSRuntimeException", "Only 2D types are supported");
-    return id({ kind: "type", element, x, y } satisfies Type);
+    return handle({ kind: "type", element, x, y } satisfies Type);
   },
   "rsnTypeGetNativeData(JJ[J)V": (_con: bigint, type: bigint, out: BigInt64Array) => {
     const t = obj<Type>(type);
@@ -71,7 +70,7 @@ rt.registerJnis(RS, {
   // RS_SCRIPT_INTRINSIC_ID_BLUR (5)
   "rsnScriptIntrinsicCreate(JIJ)J": (_con: bigint, intrinsic: number) => {
     if (intrinsic !== 5) throw rt.mkThrowable("android/renderscript/RSRuntimeException", `Intrinsic ${intrinsic} is not supported`);
-    return id({ kind: "blur", radius: 5, input: null, padded: null, blurred: null } satisfies Blur);
+    return handle({ kind: "blur", radius: 5, input: null, padded: null, blurred: null } satisfies Blur);
   },
   // slot 0 is the radius
   "rsnScriptSetVarF(JJIF)V": (_con: bigint, s: bigint, slot: number, value: number) => { if (slot === 0) obj<Blur>(s).radius = value; },

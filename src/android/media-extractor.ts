@@ -1,11 +1,11 @@
 import type { Sample } from "mp4box";
 import { rt, type JObj } from "../jvm/runtime";
-import { NativeFormat, formatToJava } from "./media-format";
+import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition } from "../jvm/natives/jnio";
 import { fdInt } from "../jvm/natives/jio";
-import { javaFdSource } from "../native/fs";
 import { vfs } from "../shell/vfs";
-import { readFully, SliceFile, type FileSource } from "../shell/lazyfile";
+import { readFully, type FileSource } from "../shell/lazyfile";
+import { fdSlice, nativePeer } from "./media-native";
 
 function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   const result = new Uint8Array(units.reduce((n, unit) => n + 4 + unit.data.length, 0));
@@ -15,7 +15,7 @@ function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
 }
 function csd(format: NativeFormat, key: string, data: Uint8Array): void {
   const buffer = allocateDirectNow(data.length); bufferBytes(buffer).set(data);
-  format.values.set(key, { type: 5, value: buffer });
+  format.set(key, TYPE_BYTE_BUFFER, buffer);
 }
 type Track = { format: NativeFormat; samples: Sample[]; nalLength: number; timeOffset: number; index: number; selected: boolean };
 export class MediaExtractor {
@@ -42,11 +42,10 @@ export class MediaExtractor {
       const avc = entry && "avcC" in entry && entry.avcC instanceof BoxParser.box.avcC ? entry.avcC : null;
       const hevc = entry && "hvcC" in entry && entry.hvcC instanceof BoxParser.box.hvcC ? entry.hvcC : null;
       const mime = avc ? "video/avc" : hevc ? "video/hevc" : track.codec.startsWith("mp4a.40.") ? "audio/mp4a-latm" : "application/octet-stream";
-      format.values.set("mime", { type: 4, value: mime });
-      if (avc || hevc) format.values.set("codecs-string", { type: 4, value: track.codec });
-      format.values.set("durationUs", { type: 2, value: BigInt(Math.round(track.duration / track.timescale * 1e6)) });
-      format.values.set("bitrate", { type: 1, value: Math.round(track.bitrate) });
-      format.values.set("language", { type: 4, value: track.language });
+      format.set("mime", TYPE_STRING, mime);
+      if (avc || hevc) format.set("codecs-string", TYPE_STRING, track.codec);
+      format.set("durationUs", TYPE_LONG, BigInt(Math.round(track.duration / track.timescale * 1e6)))
+        .set("bitrate", TYPE_INTEGER, Math.round(track.bitrate)).set("language", TYPE_STRING, track.language);
       let maxSize = 0;
       for (const sample of samples) maxSize = Math.max(maxSize, sample.size);
       if (avc) {
@@ -58,13 +57,11 @@ export class MediaExtractor {
         csd(format, "csd-0", annexB(hevc.nalu_arrays.flat()));
         maxSize *= Math.ceil(4 / nalLength);
       }
-      format.values.set("max-input-size", { type: 1, value: maxSize });
-      if (track.video) {
-        format.values.set("width", { type: 1, value: track.video.width }); format.values.set("height", { type: 1, value: track.video.height });
-        format.values.set("frame-rate", { type: 1, value: Math.round(samples.length * track.timescale / track.duration) });
-      }
+      format.set("max-input-size", TYPE_INTEGER, maxSize);
+      if (track.video) format.set("width", TYPE_INTEGER, track.video.width).set("height", TYPE_INTEGER, track.video.height)
+        .set("frame-rate", TYPE_INTEGER, Math.round(samples.length * track.timescale / track.duration));
       if (track.audio) {
-        format.values.set("sample-rate", { type: 1, value: track.audio.sample_rate }); format.values.set("channel-count", { type: 1, value: track.audio.channel_count });
+        format.set("sample-rate", TYPE_INTEGER, track.audio.sample_rate).set("channel-count", TYPE_INTEGER, track.audio.channel_count);
         if (entry && "esds" in entry && entry.esds instanceof BoxParser.box.esds) {
           const config: unknown = entry.esds.esd.findDescriptor(4);
           const data: unknown = config instanceof Descriptor ? config.findDescriptor(5) : null;
@@ -126,41 +123,32 @@ export class MediaExtractor {
 // ── MediaExtractor's natives over the extractor above. A source no extractor recognizes fails
 // as NuMediaExtractor's does: IOException "Failed to instantiate extractor."
 type Peer = { extractor: MediaExtractor; source: FileSource | null };
-const peers = new WeakMap<JObj, Peer>();
-function peer(e: JObj): Peer {
-  const p = peers.get(e);
-  if (!p) throw rt.mkThrowable("java/lang/IllegalStateException", null);
-  return p;
-}
-const opened = (p: Peer, source: FileSource) => p.extractor.open(source).then(() => { p.source = source; }, () => {
-  throw rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
-});
-const E = (f: (p: Peer, ...a: any[]) => unknown) => function (this: JObj, ...a: unknown[]) { return f(peer(this), ...a); };
+const peers = nativePeer<Peer>(null, null);
+const failed = () => rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
+const opened = (p: Peer, source: FileSource | null) => {
+  if (!source) throw failed();
+  return p.extractor.open(source).then(() => { p.source = source; }, () => { throw failed(); });
+};
+const E = peers.on;
 rt.registerJnis("android/media/MediaExtractor", {
   "native_init()V": () => {},
-  "native_setup()V": function (this: JObj) { peers.set(this, { extractor: new MediaExtractor(), source: null }); },
-  "native_finalize()V": function (this: JObj) { peers.delete(this); },
-  "release()V": function (this: JObj) { peers.delete(this); },
+  "native_setup()V": function (this: JObj) { peers.attach(this, { extractor: new MediaExtractor(), source: null }); },
+  "native_finalize()V": peers.detach,
+  "release()V": peers.detach,
   "setDataSource(Ljava/io/FileDescriptor;JJ)V": E((p, fd: JObj | null, offset: bigint, length: bigint) => {
     if (!fd) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-    const file = javaFdSource(fdInt(fd));
-    if (!file || offset < 0n || offset > BigInt(file.size)) throw rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
-    const start = Number(offset);
-    return opened(p, new SliceFile(file, start, Math.min(Number(length), file.size - start)));
+    return opened(p, fdSlice(fdInt(fd), offset, length));
   }),
   // a path or a URL; only the file system is read
-  "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": E((p, _http: unknown, path: string) => {
-    const file = vfs.source(path.startsWith("file://") ? decodeURI(path.slice(7)) : path);
-    if (!file) throw rt.mkThrowable("java/io/IOException", "Failed to instantiate extractor.");
-    return opened(p, file);
-  }),
+  "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": E((p, _http: unknown, path: string) =>
+    opened(p, vfs.source(path.startsWith("file://") ? decodeURI(path.slice(7)) : path))),
   "getTrackCount()I": E((p) => p.extractor.tracks.length),
   "getTrackFormatNative(I)Ljava/util/Map;": E((p, i: number) => {
     const track = p.extractor.tracks[i];
     if (!track) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
     return formatToJava(track.format);
   }),
-  "getFileFormatNative()Ljava/util/Map;": E((p) => formatToJava(new NativeFormat().set("mime", 4, p.extractor.tracks.some((t) => t.format.string("mime").startsWith("video/")) ? "video/mp4" : "audio/mp4"))),
+  "getFileFormatNative()Ljava/util/Map;": E((p) => formatToJava(new NativeFormat().set("mime", TYPE_STRING, p.extractor.tracks.some((t) => t.format.string("mime").startsWith("video/")) ? "video/mp4" : "audio/mp4"))),
   "selectTrack(I)V": E((p, i: number) => { const t = p.extractor.tracks[i]; if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", null); t.selected = true; }),
   "unselectTrack(I)V": E((p, i: number) => { const t = p.extractor.tracks[i]; if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", null); t.selected = false; }),
   "seekTo(JI)V": E((p, time: bigint, mode: number) => p.extractor.seek(Number(time), mode)),
