@@ -36,6 +36,9 @@ export const BYTECODE: string[] = [...STAGE_D, ...(fromUrl ?? "").split(",").map
   .filter((p) => p && p !== "stage-d")];
 
 
+/** under Stage D's static cut, which withholds a TS spec in every load */
+export const isStageD = (name: string): boolean => STAGE_D.some((p) => name.startsWith(p));
+
 export function isBytecode(name: string): boolean {
   for (const p of BYTECODE) if (name.startsWith(p) || p.endsWith("$") && name === p.slice(0, -1)) return true;
   return false;

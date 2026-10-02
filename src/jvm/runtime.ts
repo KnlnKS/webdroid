@@ -13,7 +13,7 @@ import { mangleField, mangleMethod, directName, mangleStaticField, descToName, d
 import { compileClass, compileLazyMethod, installLazy, methodKey, addCell, type Cells, type CompiledCtor, type ResumeBody, type LazyMethod } from "./compiler";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
-import { isBytecode } from "./provenance";
+import { isBytecode, isStageD } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
 import { Monitors, type Monitor } from "./monitor";
@@ -329,7 +329,10 @@ export class Runtime {
   }
 
   register(spec: NativeSpec) {
-    if (isBytecode(spec.name)) return;   // provenance says AOSP's own bytecode answers for this
+    if (isBytecode(spec.name)) {   // provenance says AOSP's own bytecode answers for this
+      if (isStageD(spec.name)) console.warn("[webdroid] native spec Stage D always withholds:", spec.name);
+      return;
+    }
     if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
     this.ifaceNames = null;

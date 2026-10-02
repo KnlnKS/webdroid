@@ -2,7 +2,7 @@
 // android_view_MotionEvent.cpp's natives. MotionEvent, PointerCoords and PointerProperties run
 // from AOSP bytecode; TS reaches an event's native state through motionOf.
 
-import { rt, JObj, declaredField } from "../jvm/runtime";
+import { rt, declaredField } from "../jvm/runtime";
 import { ownedHandle, deref } from "./handles";
 import { matrixOf } from "./matrix";
 import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type JParcel } from "./parcel";
@@ -530,30 +530,5 @@ rt.registerJnis(ME, {
   "nativeGetSurfaceRotation(J)I": (ptr: bigint) => {
     const o = orientation(at(ptr).xform);
     return o === 0 ? 0 : o === ROT_90 ? 3 : o === 3 ? 2 : o === 7 ? 1 : -1;
-  },
-});
-
-// DragEvent: no drag-and-drop gesture pipeline exists (nothing ever starts a drag), but the
-// class must exist for View$OnDragListener.onDrag(View, DragEvent) and app code that reads
-// DragEvent.ACTION_* constants to link.
-class JDragEvent extends JObj {
-  action = 0; x = 0; y = 0; resultV = false;
-  clipData: unknown = null; clipDescription: unknown = null; localState: unknown = null;
-}
-rt.register({
-  name: "android/view/DragEvent", ctor: JDragEvent, ifaces: ["android/os/Parcelable"],
-  statics: {
-    ACTION_DRAG_STARTED: 1, ACTION_DRAG_LOCATION: 2, ACTION_DROP: 3,
-    ACTION_DRAG_ENDED: 4, ACTION_DRAG_ENTERED: 5, ACTION_DRAG_EXITED: 6,
-  },
-  methods: {
-    "getAction()I": function (this: JDragEvent) { return this.action; },
-    "getX()F": function (this: JDragEvent) { return this.x; },
-    "getY()F": function (this: JDragEvent) { return this.y; },
-    "getResult()Z": function (this: JDragEvent) { return this.resultV ? 1 : 0; },
-    "getClipData()Landroid/content/ClipData;": function (this: JDragEvent) { return this.clipData; },
-    "getClipDescription()Landroid/content/ClipDescription;": function (this: JDragEvent) { return this.clipDescription; },
-    "getLocalState()Ljava/lang/Object;": function (this: JDragEvent) { return this.localState; },
-    "toString()Ljava/lang/String;": () => "DragEvent",
   },
 });
