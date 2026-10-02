@@ -18,7 +18,6 @@ import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
-import { EXT_MIME, MIME_EXT, mimeOf } from "../mime";
 import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
@@ -31,18 +30,6 @@ async function staticOf(cls: string, field: string): Promise<unknown> {
   const info = await linkInit(cls);
   return (info.ctor as unknown as Record<string, unknown>)[info.staticFieldTable.get(field)!];
 }
-
-rt.register({
-  name: "android/webkit/MimeTypeMap", ctor: class extends JObj {},
-  methods: {
-    "static getSingleton()Landroid/webkit/MimeTypeMap;": () => inst("android/webkit/MimeTypeMap"),
-    "static getFileExtensionFromUrl(Ljava/lang/String;)Ljava/lang/String;": (u: string) => /\.([A-Za-z0-9]+)(?:[?#]|$)/.exec(u ?? "")?.[1] ?? "",
-    "getMimeTypeFromExtension(Ljava/lang/String;)Ljava/lang/String;": (ext: string) => EXT_MIME[ext?.toLowerCase()] ?? null,
-    "getExtensionFromMimeType(Ljava/lang/String;)Ljava/lang/String;": (mime: string) => MIME_EXT[mime?.toLowerCase()] ?? null,
-    "hasExtension(Ljava/lang/String;)Z": (ext: string) => ext?.toLowerCase() in EXT_MIME ? 1 : 0,
-    "hasMimeType(Ljava/lang/String;)Z": (mime: string) => mime?.toLowerCase() in MIME_EXT ? 1 : 0,
-  },
-});
 
 // ── WebViewFactory: the provider package is this one, versioned as the Chromium the UA names
 const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
@@ -884,46 +871,5 @@ rt.register({
   methods: {
     "getErrorCode()I": function (this: JWebErr) { return this.code; },
     "getDescription()Ljava/lang/CharSequence;": function (this: JWebErr) { return this.desc; },
-  },
-});
-
-// ── URLUtil (AOSP's string rules)
-function guessUrl(u: string): string {
-  if (!u || /^(about|data|file|javascript):/.test(u)) return u;
-  const m = /^(?:(https?|file):\/\/)?(?:([^@/?#]+)@)?([^/:?#]*)(?::(\d+))?(.*)$/.exec(u.endsWith(".") ? u.slice(0, -1) : u);
-  if (!m || !m[3]) return u;
-  const host = m[3].includes(".") ? m[3] : "www." + m[3] + ".com", path = m[5] || "/";
-  return (m[1] ?? "http") + "://" + (m[2] ? m[2] + "@" : "") + host + (m[4] ? ":" + m[4] : "") + (path[0] === "/" ? path : "/" + path);
-}
-function guessFileName(url: string, disposition: string | null, mime: string | null): string {
-  let name = /attachment;\s*filename\s*=\s*("?)([^"]*)\1\s*$/i.exec(disposition ?? "")?.[2].split("/").pop() || null;
-  if (!name && url) {
-    const u = decodeURIComponent(url).split("?")[0];
-    if (!u.endsWith("/")) name = u.slice(u.lastIndexOf("/") + 1) || null;
-  }
-  name ||= "downloadfile";
-  const dot = name.indexOf("."), lmime = mime?.toLowerCase();
-  let ext: string | null = null;
-  if (dot < 0) {
-    if (lmime) ext = MIME_EXT[lmime] ? "." + MIME_EXT[lmime] : lmime === "text/html" ? ".html" : lmime.startsWith("text/") ? ".txt" : null;
-    return name + (ext ?? ".bin");
-  }
-  // an extension that contradicts the declared type is replaced, not appended to
-  const fromExt = mimeOf(name);
-  if (lmime && fromExt && fromExt !== lmime && MIME_EXT[lmime]) ext = "." + MIME_EXT[lmime];
-  return name.slice(0, dot) + (ext ?? name.slice(dot));
-}
-const urlIs: Record<string, RegExp> = {
-  isHttpUrl: /^http:\/\//i, isHttpsUrl: /^https:\/\//i, isNetworkUrl: /^https?:\/\//i, isAssetUrl: /^file:\/\/\/android_asset\//,
-  isResourceUrl: /^file:\/\/\/android_res\//, isFileUrl: /^file:\/\/(?!\/android_(asset|res)\/)/, isContentUrl: /^content:/,
-  isDataUrl: /^data:/i, isJavaScriptUrl: /^javascript:/i, isAboutUrl: /^about:/, isValidUrl: /^(file:\/\/|about:|https?:\/\/|javascript:|content:)/i,
-};
-rt.register({
-  name: "android/webkit/URLUtil", ctor: class extends JObj {},
-  methods: {
-    "static guessUrl(Ljava/lang/String;)Ljava/lang/String;": guessUrl,
-    "static guessFileName(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": guessFileName,
-    "static stripAnchor(Ljava/lang/String;)Ljava/lang/String;": (u: string) => { const i = u.indexOf("#"); return i < 0 ? u : u.slice(0, i); },
-    ...Object.fromEntries(Object.entries(urlIs).map(([n, re]) => [`static ${n}(Ljava/lang/String;)Z`, (u: string | null) => u && re.test(u) ? 1 : 0])),
   },
 });

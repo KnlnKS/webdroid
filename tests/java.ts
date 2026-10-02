@@ -11,11 +11,12 @@ export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppH
 
 /** framework.jar on the platform class path and the main looper running, as a booted page has them */
 export async function loadFrameworkJar(): Promise<void> {
-  const { jarDexes } = await import("../src/android/framework");
+  const { loadPlatformJar } = await import("../src/android/framework");
+  const { PLATFORM_JARS } = await import("../src/jvm/provenance");
   if (!rt.dexIndex.has("android/app/Activity")) {
     await loadLibcore();
     const jar = new Uint8Array(await Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url)).arrayBuffer());
-    for (const dex of jarDexes(jar, "framework.jar")) rt.loadDex(dex, true);
+    loadPlatformJar(jar, PLATFORM_JARS.indexOf("framework.jar"));
     rt.linkNatives();
   }
   await (await import("../src/android/mainloop")).startMainLooper();

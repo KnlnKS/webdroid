@@ -669,14 +669,16 @@ delegate("android/os/SystemProperties", {
   "native_report_sysprop_change()V": () => vcall(rt.link("android/os/SystemProperties").ctor, "callChangeCallbacks", "()V"),
 });
 
-/** What the zygote sets up in a forked process before app code runs: System.out and System.err
- *  reach logcat, the default time zone follows persist.sys.timezone, java.util.logging reaches
- *  logcat with the default HTTP user agent set, the JCA providers are installed and warmed, and the
+/** What the zygote sets up in a forked process before app code runs: libcore's MIME table is
+ *  framework.jar's, System.out and System.err reach logcat, the default time zone follows
+ *  persist.sys.timezone, java.util.logging reaches logcat with the default HTTP user agent set, the JCA providers are installed and warmed, and the
  *  system font map is loaded; the device's languages are set and the text paint classes, whose
  *  constructors read them, initialized. */
 export async function zygoteInit(): Promise<void> {
   // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
   await asZygote(async () => { await rt.initClass(rt.link("java/lang/System")); });
+  // ZygoteInit.main: DDMS handlers and libcore's MimeMap over framework.jar's mime.types
+  await scall("com/android/internal/os/RuntimeInit", "preForkInit", "()V");
   await scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
   const hooks = rt.link("dalvik/system/RuntimeHooks");
   await rt.initClass(hooks);
