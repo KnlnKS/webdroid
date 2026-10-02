@@ -18,11 +18,10 @@ import { deviceConfiguration } from "./resnative";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
-import { stickyBroadcasts } from "./server/broadcastqueue";
+import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue";
 import { activityManagerMethods } from "./server/am";
 import { activityTaskMethods, foreground } from "./server/atm";
 import { activeServiceMethods } from "./server/activeservices";
-import { broadcastQueueMethods } from "./server/broadcastqueue";
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;

@@ -5,11 +5,10 @@
 import { JObj, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall } from "../../jvm/natives/jlang";
 import { hostedService, notConnected } from "../binder";
-import { PROCESS_UID, reportUncaught } from "../os";
+import { PROCESS_UID, reportUncaught, type JBundle } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
 import type { JIntent } from "../intent";
-import type { JBundle } from "../os";
 import { scheduleOnApp, compatInfo, thisApp } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 

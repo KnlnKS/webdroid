@@ -11,15 +11,13 @@ import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, impor
 import { JParcel } from "../android/parcel";
 import { type JIntent, newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID, reportUncaught } from "../android/os";
-import { uptimeMillis } from "../guest-clock";
-import { serviceTransport } from "../android/server/activeservices";
+import { guestSleep, uptimeMillis } from "../guest-clock";
+import { hostedServices, serviceTransport } from "../android/server/activeservices";
 import { vcall } from "../jvm/natives/jlang";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
-import { broadcastTransport, type BroadcastResult } from "../android/server/broadcastqueue";
-import { deliverBroadcast as deliverQueued, type Sender } from "../android/server/broadcastqueue";
-import { hostedServices } from "../android/server/activeservices";
+import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult, type Sender } from "../android/server/broadcastqueue";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider } from "../android/pm";
@@ -37,7 +35,6 @@ import { BrowserLocation } from "./geolocation";
 import { locationTransport } from "../android/locationmanager";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
-import { guestSleep } from "../guest-clock";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
