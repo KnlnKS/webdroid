@@ -250,9 +250,8 @@ export const typefaceOf = (t: object | null): NativeTypeface =>
 /** the zygote's preload of the system font map (Typeface.DEFAULT and the named families) over the
  *  platform font index, with HarfBuzz and the default family's font loaded to measure text */
 export async function loadSystemFontMap(): Promise<void> {
-  const T = "android/graphics/Typeface";
   [fontIndex] = await Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]);
-  await scall(T, "loadPreinstalledSystemFontMap", "()V");
+  await scall("android/graphics/Typeface", "loadPreinstalledSystemFontMap", "()V");
 }
 
 const fontSet = new Set<NativeFont>();
