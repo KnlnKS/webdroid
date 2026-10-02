@@ -172,20 +172,21 @@ rt.register({
 // ── the client side
 const PROVIDER_ACTION = "com.android.location.service.GeocodeProvider";
 let providerBinder: Promise<JObj> | null = null;
-async function providerComponent(): Promise<JComponentName | null> {
-  const intent: JIntent = await newObj("android/content/Intent", "(Ljava/lang/String;)V", PROVIDER_ACTION);
-  const first = await resolveService(intent);
-  return first ? await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", first.owner.pkg, first.name) : null;
+function* providerComponent(): Gen<JComponentName | null> {
+  const intent: JIntent = yield newObj("android/content/Intent", "(Ljava/lang/String;)V", PROVIDER_ACTION);
+  const first = yield resolveService(intent);
+  return first ? yield newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", first.owner.pkg, first.name) : null;
 }
 /** the provider's binder, bound once for the process as the platform keeps it bound */
 function provider(): Promise<JObj> {
-  return providerBinder ??= providerComponent().then((component) => {
+  return providerBinder ??= Promise.resolve(rt.drive(function* (): Gen<JObj> {
+    const component = yield* providerComponent();
     if (!component) throw rt.mkThrowable("java/io/IOException", "Service not Available");
-    return bindAsSystem(component, "geocoder:" + PROCESS_PID).then((b) => b.binder);
-  }).catch((e) => { providerBinder = null; throw e; });
+    return (yield bindAsSystem(component, "geocoder:" + PROCESS_PID)).binder;
+  }())).catch((e) => { providerBinder = null; throw e; });
 }
 class JGeocoder extends JObj { params: JGeocoderParams | null = null; }
-async function geocode(g: JGeocoder, name: string | null, coords: number[], code: number, max: number): Promise<unknown> {
+const geocode = driven(function* (g: JGeocoder, name: string | null, coords: number[], code: number, max: number): Gen<unknown> {
   if (max < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxResults must be positive: " + max);
   rt.link("android/os/Parcel");
   const data = new JParcel(), reply = new JParcel();
@@ -193,14 +194,14 @@ async function geocode(g: JGeocoder, name: string | null, coords: number[], code
   if (code === BY_NAME) writeString(data, name);
   for (const v of coords) writeDouble(data, v);
   writeInt(data, max);
-  await vcall(g.params, "writeToParcel", "(Landroid/os/Parcel;I)V", data, 0);
-  await vcall(await provider(), "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", code, data, reply, 0);
+  yield vcall(g.params, "writeToParcel", "(Landroid/os/Parcel;I)V", data, 0);
+  yield vcall(yield provider(), "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", code, data, reply, 0);
   const error = readString(reply);
   if (error !== null) throw rt.mkThrowable("java/io/IOException", error);
   const results: JAddress[] = [];
-  for (let n = readInt(reply); n > 0; n--) results.push(await readAddress(reply));
+  for (let n = readInt(reply); n > 0; n--) results.push(yield readAddress(reply));
   return newArrayList(results.slice(0, max));
-}
+});
 const coordinate = (value: number, limit: number) => {
   if (!Number.isFinite(value) || Math.abs(value) > limit) throw rt.mkThrowable("java/lang/IllegalArgumentException", `invalid coordinate: ${value}`);
 };
@@ -214,9 +215,9 @@ const byName = (g: JGeocoder, name: string | null, max: number, bounds = [0, 0, 
   return geocode(g, name, bounds, BY_NAME, max);
 };
 /** the listener forms: results, or onError with the failure's message */
-function deliver(listener: unknown, lookup: Promise<unknown>): void {
+function deliver(listener: unknown, lookup: unknown): void {
   if (listener === null) rt.npe();
-  lookup.then((list) => vcallUncaught(listener, "onGeocode", "(Ljava/util/List;)V", list),
+  Promise.resolve(lookup).then((list) => vcallUncaught(listener, "onGeocode", "(Ljava/util/List;)V", list),
     (e) => vcallUncaught(listener, "onError", "(Ljava/lang/String;)V", (e as { msg?: string }).msg ?? null));
 }
 function initGeocoder(this: JGeocoder, context: JObj | null, l: JLocale | null) {
@@ -231,7 +232,7 @@ rt.register({
       return after(defaultLocale(), (locale) => initGeocoder.call(this, context, locale));
     },
     "<init>(Landroid/content/Context;Ljava/util/Locale;)V": initGeocoder,
-    "static isPresent()Z": async () => +!!(await providerComponent()),
+    "static isPresent()Z": driven(function* () { return +!!(yield* providerComponent()); }),
     "getFromLocation(DDI)Ljava/util/List;": function (this: JGeocoder, lat: number, lon: number, max: number) { return byLocation(this, lat, lon, max); },
     "getFromLocation(DDILandroid/location/Geocoder$GeocodeListener;)V": function (this: JGeocoder, lat: number, lon: number, max: number, listener: unknown) {
       deliver(listener, byLocation(this, lat, lon, max));
