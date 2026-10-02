@@ -22,10 +22,9 @@ import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
 import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
-import { reportUncaught } from "../jvm/natives/jlang";
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain } from "../android/mainloop";
-import { after } from "../jvm/natives/jlang";
+import { after, callUncaught, reportUncaught } from "../jvm/natives/jlang";
 import { deliverVsync } from "../android/vsync";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
@@ -197,7 +196,7 @@ export function rotateDevice(landscape: boolean): Promise<void> {
     if (orientationForRequest(request) === null && request !== 5 && request !== 14 && applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged();
   });
 }
-function applyConfigChange(): void { void onMain(configurationChanged).catch(reportUncaught); }
+function applyConfigChange(): void { callUncaught(() => onMain(configurationChanged)); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
