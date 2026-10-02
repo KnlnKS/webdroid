@@ -14,7 +14,7 @@ import { perf } from "../perf";
 import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
-import { Camera3D, type Mat, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix } from "./matrix";
+import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix, matrixAt } from "./matrix";
 import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas";
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
@@ -253,20 +253,20 @@ rt.registerJnis("android/graphics/RenderNode", {
   "nGetTransformMatrix(JJ)V": (h: bigint, out: bigint) => {
     const n = nodeAt(h);
     n.updateMatrix();
-    deref<Mat>(out).set(n.transform ?? IDENTITY);
+    matrixAt(out).set(n.transform ?? IDENTITY);
   },
   "nGetInverseTransformMatrix(JJ)V": (h: bigint, out: bigint) => {
     const n = nodeAt(h);
     n.updateMatrix();
-    deref<Mat>(out).set((n.transform && invert(n.transform)) ?? IDENTITY);
+    matrixAt(out).set((n.transform && invert(n.transform)) ?? IDENTITY);
   },
   "nHasIdentityMatrix(J)Z": (h: bigint) => +!nodeAt(h).hasTransform(),
   "nGetUniqueId(J)J": (h: bigint) => nodeAt(h).id,
-  "nSetStaticMatrix(JJ)Z": (h: bigint, m: bigint) => { nodeAt(h).staticMatrix = m ? deref<Mat>(m).slice() : null; return 1; },
-  "nSetAnimationMatrix(JJ)Z": (h: bigint, m: bigint) => { nodeAt(h).animationMatrix = m ? deref<Mat>(m).slice() : null; return 1; },
+  "nSetStaticMatrix(JJ)Z": (h: bigint, m: bigint) => { nodeAt(h).staticMatrix = m ? matrixAt(m).slice() : null; return 1; },
+  "nSetAnimationMatrix(JJ)Z": (h: bigint, m: bigint) => { nodeAt(h).animationMatrix = m ? matrixAt(m).slice() : null; return 1; },
   "nGetAnimationMatrix(JJ)Z": (h: bigint, out: bigint) => {
     const m = nodeAt(h).animationMatrix;
-    if (m) deref<Mat>(out).set(m);
+    if (m) matrixAt(out).set(m);
     return +!!m;
   },
 
@@ -390,7 +390,6 @@ rt.registerJnis("android/graphics/RenderNode", {
   "nSetAmbientShadowColor(JI)Z": set("ambientColor"), "nGetAmbientShadowColor(J)I": get("ambientColor"),
   "nSetSpotShadowColor(JI)Z": set("spotColor"), "nGetSpotShadowColor(J)I": get("spotColor"),
 });
-const IDENTITY = identity();
 
 // ── RecordingCanvas: SkiaRecordingCanvas records into a display list its node takes when done ──
 /** a new recording over a fresh canvas state; the list goes to its node when the recording finishes */

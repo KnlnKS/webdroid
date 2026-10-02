@@ -24,8 +24,9 @@ export const translateM = (dx: number, dy: number): Mat => Float64Array.of(1, 0,
 export const scaleM = (sx: number, sy: number): Mat => Float64Array.of(sx, 0, 0, 0, sy, 0, 0, 0, 1);
 const skewM = (kx: number, ky: number): Mat => Float64Array.of(1, kx, 0, ky, 1, 0, 0, 0, 1);
 const sinCosM = (s: number, c: number): Mat => Float64Array.of(c, -s, 0, s, c, 0, 0, 0, 1);
-/** SkMatrix::setRotate snaps a sine or cosine within SK_ScalarNearlyZero to 0, so quarter turns stay exact */
-const snap = (v: number) => (Math.abs(v) <= 1 / 4096 ? 0 : v);
+/** SkScalarSinSnapToZero / CosSnapToZero: a sine or cosine within SK_ScalarNearlyZero is 0, so
+ *  quarter turns stay exact */
+export const snap = (v: number) => (Math.abs(v) <= 1 / 4096 ? 0 : v);
 export const rotateM = (deg: number): Mat => { const r = deg * Math.PI / 180; return sinCosM(snap(Math.sin(r)), snap(Math.cos(r))); };
 /** the same transform taken about (px, py) rather than the origin */
 export const about = (m: Mat, px: number, py: number): Mat => mul(translateM(px, py), mul(m, translateM(-px, -py)));

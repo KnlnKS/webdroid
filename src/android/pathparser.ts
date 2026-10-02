@@ -4,7 +4,8 @@
 
 import { rt } from "../jvm/runtime";
 import { deref, ownedHandle, release } from "./handles";
-import { type NativePath, snap } from "./path";
+import type { NativePath } from "./path";
+import { snap } from "./matrix";
 
 export class PathData {
   verbs: string[] = [];

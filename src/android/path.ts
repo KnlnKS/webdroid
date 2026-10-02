@@ -4,12 +4,10 @@
 // Compound shapes stay whole in the op list so Path2D can draw them natively; `Pen` expands them
 // into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
 // which is what iteration, measurement, bounds and every non-native Path2D build read.
-// graphics.ts imports this file and this file imports the Matrix math back; the cycle is benign
-// because nothing here touches those bindings before its own module body has run.
 
 import { rt, declaredField } from "../jvm/runtime";
 import { deref, handle, release } from "./handles";
-import { type Mat, mapPoint } from "./matrix";
+import { type Mat, mapPoint, snap } from "./matrix";
 import { after } from "../jvm/natives/jlang";
 import { type PathCommands, pathOp as skiaPathOp } from "./skia";
 import type { Box } from "./graphics";
@@ -59,8 +57,6 @@ function rrRadii(op: PathOp, w: number, h: number): number[] {
   fit(q[0] + q[2], w); fit(q[3] + q[5], h); fit(q[4] + q[6], w); fit(q[7] + q[1], h);
   return f < 1 ? q.map((v) => v * f) : q;
 }
-/** SkScalarSinSnapToZero / CosSnapToZero */
-export const snap = (v: number) => (Math.abs(v) <= NEARLY_ZERO ? 0 : v);
 const nearly = (a: number, b: number) => Math.abs(a - b) <= NEARLY_ZERO;
 
 /**
