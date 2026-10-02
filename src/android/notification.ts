@@ -7,7 +7,7 @@
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
 import { JObj, rt, declaredField, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, reportUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, callUncaught } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, type ParcelData } from "./binder";
@@ -257,9 +257,9 @@ function promptNeeded(pkg: string): boolean {
   return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
     && !permissionGranted(pkg, POST_NOTIFICATIONS) && new Preferences(pkg).ids(CHANNEL_KEY).length > 0;
 }
-async function showNotificationPrompt(pkg: string): Promise<void> {
+function showNotificationPrompt(pkg: string): Promise<void> {
   grantPrompted(pkg, POST_NOTIFICATIONS);
-  await coverTop();
+  return coverTop();
 }
 
 // ── the notification list
@@ -605,7 +605,7 @@ function* showToast(service: JObj, t: ToastRecord): Gen<void> {
     const view = yield scall("android/widget/ToastPresenter", "getTextToastView", "(Landroid/content/Context;Ljava/lang/CharSequence;)Landroid/view/View;", ctx, t.text);
     yield vcall(t.presenter, "show", `(Landroid/view/View;Landroid/os/IBinder;Landroid/os/IBinder;IIIIFF${T}Z)V`, view, t.token, windowToken, t.duration, gravity, 0, y, 0, 0, t.callback, 0);
   }
-  t.timer = setGuestTimeout(() => void onMain(() => rt.drive(hideToast(t))).catch(reportUncaught), TOAST_DELAY[t.duration ? 1 : 0]);
+  t.timer = setGuestTimeout(() => callUncaught(() => onMain(() => rt.drive(hideToast(t)))), TOAST_DELAY[t.duration ? 1 : 0]);
 }
 function* hideToast(t: ToastRecord): Gen<void> {
   const i = toastQueue.indexOf(t);
@@ -621,7 +621,7 @@ let toastService: JObj | null = null;
 function enqueueToast(this: JObj, t: ToastRecord): number {
   toastService = this;
   toastQueue.push(t);
-  if (toastQueue.length === 1) void onMain(() => rt.drive(showToast(this, t))).catch(reportUncaught);
+  if (toastQueue.length === 1) callUncaught(() => onMain(() => rt.drive(showToast(this, t))));
   return 1;
 }
 
@@ -680,7 +680,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     }
     // the prompt shows over the activity in front, after this call returns: covering it pauses that
     // activity, whose main thread may be the caller
-    if (created && !had && foreground() && promptNeeded(pkg)) void showNotificationPrompt(pkg).catch(reportUncaught);
+    if (created && !had && foreground() && promptNeeded(pkg)) callUncaught(() => showNotificationPrompt(pkg));
   }),
   "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
     driven(function* (callingPkg: string, userId: number, pkg: string, channelId: string | null) {

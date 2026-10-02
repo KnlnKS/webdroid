@@ -2,7 +2,7 @@
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
 import { JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { callUncaught, construct, scall, vcall, after, reportUncaught } from "../jvm/natives/jlang";
+import { callUncaught, construct, scall, vcall, after } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -27,7 +27,7 @@ function session(id: number): Session {
   return value;
 }
 function notify(name: string, desc: string, ...args: unknown[]): void {
-  for (const callback of callbacks) void Promise.resolve(vcall(callback, name, desc, ...args)).catch(reportUncaught);
+  for (const callback of callbacks) callUncaught(() => vcall(callback, name, desc, ...args));
 }
 function finish(s: Session, success: boolean): void {
   sessions.delete(s.id);
@@ -90,7 +90,7 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
     const s = unsealed(this);
     if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
     s.sealed = true;
-    void Promise.resolve(rt.drive(commit$(s, sender))).catch(reportUncaught);
+    callUncaught(() => rt.drive(commit$(s, sender)));
   },
   "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(s, false); },
   "getInstallFlags()I": () => 0,

@@ -46,10 +46,6 @@ export function vcallAsync(obj: unknown, name: string, desc: string, ...args: un
 }
 /** A call no Java frame waits on (a listener, a posted task): its exception, thrown now or when
  *  it resumes, goes to the uncaught handler rather than to the native that dispatched it. */
-export function vcallUncaught(obj: unknown, name: string, desc: string, ...args: unknown[]): Promise<void> {
-  return vcallAsync(obj, name, desc, ...args).then(() => {}, reportUncaught);
-}
-/** A call no Java frame waits on, as vcallUncaught, made now on the calling thread */
 export function callUncaught(call: () => unknown): void {
   try { const r = call(); if (r instanceof Promise) r.catch(reportUncaught); } catch (e) { reportUncaught(e); }
 }
