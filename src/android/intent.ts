@@ -28,7 +28,7 @@ export const componentParts = driven(componentParts$);
 /** what the shell routes an Intent by, read through its Java API */
 export interface IntentQuery {
   action: string | null; categories: string[]; dataUri: string | null; typeStr: string | null;
-  pkg: string | null; component: string | null; componentPkg: string | null; flags: number;
+  pkg: string | null; component: string | null; componentPkg: string | null;
 }
 /** `resolvedType` stands for Intent.getType, as a caller's resolveTypeIfNeeded does */
 export function* intentQuery$(intent: JIntent, resolvedType?: string | null): Gen<IntentQuery> {
@@ -42,7 +42,6 @@ export function* intentQuery$(intent: JIntent, resolvedType?: string | null): Ge
     typeStr: resolvedType !== undefined ? resolvedType : yield vcall(intent, "getType", `()${S}`),
     pkg: yield vcall(intent, "getPackage", `()${S}`),
     component: component?.cls ?? null, componentPkg: component?.pkg ?? null,
-    flags: yield vcall(intent, "getFlags", "()I"),
   };
 }
 export const intentQuery = driven(intentQuery$);

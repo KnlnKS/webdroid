@@ -22,7 +22,7 @@ const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
 const GET_META_DATA = 0x80n, MATCH_DEFAULT_ONLY = 0x10000n;
 
 /** a start in another process, and the result target there when it asked for one */
-export type ResultDelivery = { code: number; caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
+export type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
 /** the broker's half of ActivityTaskManager: starts in other processes and their results */
 export const activityTransport: {
   launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
@@ -297,7 +297,7 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
     if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, resultRecord, resultWho, requestCode).catch(reportUncaught);
     else if (activityTransport.launch) {
       await activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
-        code: requestCode, caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
+        caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
         deliver: (resultCode, data) => void deliverResult(resultRecord, resultWho, requestCode, resultCode, data).catch(reportUncaught),
       } : undefined);
     }

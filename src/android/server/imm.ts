@@ -19,7 +19,7 @@ const START = `(I${CLIENT}Landroid/os/IBinder;III${EDITOR}Lcom/android/internal/
 const IME_ID = "webdroid/.BrowserKeyboard";
 const SUCCESS_WITH_IME_SESSION = 0, GET_EXTRACTED_TEXT_MONITOR = 1;
 
-interface Session extends ImeSession { window: JObj; connection: JObj; id: number; header: JObj | null }
+interface Session extends ImeSession { window: JObj; id: number; header: JObj | null }
 let session: Session | null = null;
 let bindSequence = 0;
 const editorField = (info: JObj, name: string) => (info as unknown as Record<string, number>)[declaredField("android/view/inputmethod/EditorInfo", name)];
@@ -28,7 +28,7 @@ const editorField = (info: JObj, name: string) => (info as unknown as Record<str
  *  monitored so the editor reports each change (updateExtractedText) */
 function startInput(window: JObj, info: JObj, connection: JObj, id: number): Session {
   const s: Session = {
-    window, connection, id, header: null, text: "", offset: 0, compStart: -1, compEnd: -1,
+    window, id, header: null, text: "", offset: 0, compStart: -1, compEnd: -1,
     start: Math.max(0, editorField(info, "initialSelStart")), end: Math.max(0, editorField(info, "initialSelEnd")),
     imeOptions: editorField(info, "imeOptions"), actionId: editorField(info, "actionId"),
     // an IME's RemoteInputConnection reports a command sent while its session is current

@@ -28,7 +28,7 @@ function* jobSpec(info: JObj, namespace: string | null): Gen<JobSpec> {
   };
 }
 
-type JobRun = { callback: JJobCallback; service: JObj | null; params: JObj | null; unbind: () => Promise<void>; executing: Set<number> };
+type JobRun = { service: JObj | null; params: JObj | null; unbind: () => Promise<void>; executing: Set<number> };
 type ScheduledJob = { spec: JobSpec; timer: ReturnType<typeof setTimeout> | null; run: JobRun | null; work: JObj[]; nextWork: number };
 const namespaces = new Map<string | null, Map<number, ScheduledJob>>();
 const jobsIn = (namespace: string | null) => {
@@ -62,7 +62,7 @@ function* startJob(job: ScheduledJob): Gen<void> {
     armJob(job, 30000); return;
   }
   const callback: JJobCallback = yield newObj("webdroid/JobCallback");
-  const run: JobRun = { callback, service: null, params: null, unbind: async () => {}, executing: new Set() };
+  const run: JobRun = { service: null, params: null, unbind: async () => {}, executing: new Set() };
   callback.job = job; callback.run = run; job.run = run;
   try {
     const { binder, unbind } = yield bindAsSystem(p.service, "job:" + p.id + ":" + nextBinding++);

@@ -33,7 +33,7 @@ interface Connection { id: JObj | string; autoCreate: boolean; connected: (binde
 /** an IntentBindRecord: the binding of one filterEquals-distinct intent */
 interface Binding { intent: JObj; binder: JObj | null; requested: boolean; received: boolean; hasBound: boolean; doRebind: boolean; connections: Connection[] }
 interface ServiceRecord {
-  key: string; name: JObj; info: JObj; intent: JObj; token: JObj; created: boolean;
+  key: string; info: JObj; intent: JObj; token: JObj; created: boolean;
   startRequested: boolean; lastStartId: number; pendingStarts: [JObj, number][]; bindings: Binding[]; foregroundId: number;
 }
 const services = new Map<string, ServiceRecord>();
@@ -72,7 +72,7 @@ const keyOf = (t: Target) => t.pkg + "/" + getDeclared<string>(t.info, SI, "name
 function* record(t: Target, intent: JObj): Gen<ServiceRecord> {
   const key = keyOf(t), token = services.has(key) ? null : yield newObj("android/os/Binder", "()V");
   let s = services.get(key);
-  if (!s) services.set(key, s = { key, name: t.name, info: t.info, intent, token: token!, created: false, startRequested: false,
+  if (!s) services.set(key, s = { key, info: t.info, intent, token: token!, created: false, startRequested: false,
     lastStartId: 0, pendingStarts: [], bindings: [], foregroundId: 0 });
   return s;
 }

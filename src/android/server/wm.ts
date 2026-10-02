@@ -57,7 +57,6 @@ class WindowState {
   channel: Channel | null = null;
   visibility = 8;
   requestedVisibleTypes = 0;
-  backCallback: JObj | null = null;
   javaSurface: JObj | null = null;
   dim: Layer | null = null;
   requested = { width: -1, height: -1 };
@@ -300,9 +299,8 @@ rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: 
   },
   "remove(Landroid/os/IBinder;)V": removeWindow,
   [`updateRequestedVisibleTypes(${SESSION}I)V`]: (window: JObj, types: number) => { const ws = windows.get(window); if (ws) ws.requestedVisibleTypes = types; },
-  [`setOnBackInvokedCallbackInfo(${SESSION}Landroid/window/OnBackInvokedCallbackInfo;)V`]: (window: JObj, info: JObj | null) => {
-    const ws = windows.get(window); if (ws) ws.backCallback = info;
-  },
+  // back reaches the focused window as a key, which its ViewRootImpl hands its own callbacks
+  [`setOnBackInvokedCallbackInfo(${SESSION}Landroid/window/OnBackInvokedCallbackInfo;)V`]: () => {},
   [`cancelDraw(${SESSION})Z`]: () => 0,
   [`outOfMemory(${SESSION})Z`]: () => 0,
   "performHapticFeedback(IZZ)Z": () => 0,
