@@ -266,15 +266,6 @@ export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: 
 export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThrowable("android/system/ErrnoException", null), "android/system/ErrnoException", { functionName: fn, errno: e });
 /** a path's file stat, null for a directory; ENOENT for neither */
 const existing = (fn: string, path: string) => { const st = vfs.stat(path); if (!st && !vfs.isDir(path)) throw errno(fn, 2); return st; };
-class JStructStat extends JObj {
-  st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n;
-  st_blksize = 4096n; st_blocks = 0n; st_atim: JObj | null = null; st_mtim: JObj | null = null; st_ctim: JObj | null = null;
-}
-rt.register({
-  name: "android/system/StructStat", ctor: JStructStat,
-  fields: ["st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime",
-    "st_ctime", "st_blksize", "st_blocks", "st_atim", "st_mtim", "st_ctim"],
-});
 /** libcore's StructTimespec for a time in milliseconds */
 function timespec(ms: number): JObj {
   const t = rt.make("android/system/StructTimespec") as Record<string, bigint>;
@@ -283,15 +274,13 @@ function timespec(ms: number): JObj {
   return t as unknown as JObj;
 }
 export const FD = "Ljava/io/FileDescriptor;";
-function statOf(path: string | null, size: number, mode: number, mtimeMs: number): JStructStat {
-  const s = new JStructStat();
-  s.st_mode = mode;
-  s.st_uid = s.st_gid = vfs.owner(path);
-  s.st_size = BigInt(size);
-  s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(mtimeMs / 1000));
-  s.st_mtim = s.st_atim = s.st_ctim = timespec(mtimeMs);
-  s.st_blocks = (s.st_size + 511n) / 512n;
-  return s;
+/** a StructStat as libcore's JNI fills one: a file's stat in 4K blocks of 512-byte units, one link */
+function statOf(path: string | null, size: number, mode: number, mtimeMs: number): JObj {
+  const owner = vfs.owner(path), seconds = BigInt(Math.floor(mtimeMs / 1000)), time = timespec(mtimeMs);
+  return setDeclared(rt.make("android/system/StructStat"), "android/system/StructStat", {
+    st_dev: 0n, st_ino: 0n, st_mode: mode, st_nlink: 1n, st_uid: owner, st_gid: owner, st_size: BigInt(size), st_blksize: 4096n,
+    st_blocks: (BigInt(size) + 511n) / 512n, st_atime: seconds, st_mtime: seconds, st_ctime: seconds, st_atim: time, st_mtim: time, st_ctim: time,
+  });
 }
 type StatVfs = { f_frsize: bigint; f_blocks: bigint; f_bfree: bigint; f_bavail: bigint };
 const storageStatVfs = driven(function* storageStatVfs(): Gen<StatVfs> {
