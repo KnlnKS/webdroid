@@ -12,7 +12,7 @@ import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { type JRect, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
+import { viaEdges, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
 import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
@@ -747,7 +747,7 @@ rt.registerJnis("android/graphics/Canvas", {
   },
   // a clip by a shader's coverage needs per-pixel clipping, which a 2D context's clip is not
   "nClipShader(JJI)V": unsupported("Canvas.clipShader"),
-  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: JRect) => +canvasAt(h).clipBounds(r),
+  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => +viaEdges(r, (b) => canvasAt(h).clipBounds(b)),
   "nQuickReject(JFFFF)Z": (h: bigint, l: number, t: number, r: number, b: number) => +canvasAt(h).quickReject(l, t, r, b),
   "nQuickReject(JJ)Z": (h: bigint, p: bigint) => {
     const path = pathAt(p);

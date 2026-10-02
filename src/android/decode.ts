@@ -16,7 +16,7 @@ import { javaFdBytes, javaSeekFd } from "../native/fs";
 import { assetBytes } from "./assetmanager";
 import { NativeBitmap, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { decodeHeif } from "./heif";
-import type { JRect } from "./graphics";
+import { edges, setEdges } from "./graphics";
 import { bitmapCanvas } from "./canvas";
 
 // ── headers
@@ -258,9 +258,10 @@ function scalePatch(chunk: Int8Array, sx: number, sy: number, w: number, h: numb
   if (!nearlyOne(sy)) { scaled(20, sy); scaled(24, sy); scaleDivs(v, 32 + chunk[1] * 4, chunk[2], sy, h - 1); }
 }
 /** NinePatchPeeker::getPadding: the chunk's padding, -1s for an image without one */
-function setPadding(pad: JRect, chunk: Int8Array | null) {
+function setPadding(pad: object, chunk: Int8Array | null) {
   const v = chunk && new DataView(chunk.buffer, chunk.byteOffset);
-  [pad.left, pad.top, pad.right, pad.bottom] = v ? [12, 20, 16, 24].map((at) => v.getInt32(at, true)) : [-1, -1, -1, -1];
+  if (v) setEdges(pad, v.getInt32(12, true), v.getInt32(20, true), v.getInt32(16, true), v.getInt32(24, true));
+  else setEdges(pad, -1, -1, -1, -1);
 }
 /** NinePatchPeeker::createNinePatchInsets */
 const insetsOf = (h: ImageHeader, scale: number) => !h.layout && !h.outline ? null
@@ -317,7 +318,7 @@ const javaResult = (b: NativeBitmap, reused: object | null, premultiplied: boole
 
 // ── BitmapFactory
 /** BitmapFactory.cpp's doDecode */
-const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
   clearOuts(options);
   const h = readHeader(bytes);
   if (!h || h === INCOMPLETE) return null;
@@ -358,16 +359,16 @@ const streamHeader = driven(function* streamHeader(stream: unknown, storage: Int
 const fdBytes = async (fd: object | null) => await javaFdBytes(fdInt(fd as never)) ?? new Uint8Array(0);
 rt.registerJnis("android/graphics/BitmapFactory", {
   "nativeDecodeStream(Ljava/io/InputStream;[BLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
-    driven(function* (stream: unknown, storage: Int8Array, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+    driven(function* (stream: unknown, storage: Int8Array, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
       return doDecode(yield request(options).justBounds ? streamHeader(stream, storage) : readStreamFully(stream), padding, options, inBitmap);
     }),
   // decodes from the descriptor's position and leaves it there, as AutoFDSeek restores it
   "nativeDecodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
-    driven(function* (fd: object | null, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+    driven(function* (fd: object | null, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
       return doDecode(yield fdBytes(fd), padding, options, inBitmap);
     }),
   "nativeDecodeAsset(JLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
-    driven(function* (asset: bigint, padding: JRect | null, options: Options | null, inBitmap: bigint): Gen {
+    driven(function* (asset: bigint, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
       return doDecode(yield assetBytes(asset), padding, options, inBitmap);
     }),
   "nativeDecodeByteArray([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
@@ -464,15 +465,15 @@ rt.registerJnis(DECODER, {
     const { header } = encodedAt(h);
     return construct("android/util/Size", "(II)V", ...oriented(header, ...sampledSize(header, sample)));
   },
-  "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: JRect) => setPadding(pad, encodedAt(h).header.patch),
+  "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: object) => setPadding(pad, encodedAt(h).header.patch),
   "nGetMimeType(J)Ljava/lang/String;": (h: bigint) => encodedAt(h).header.mime,
   "nGetColorSpace(J)Landroid/graphics/ColorSpace;": () => srgbSpace(),
   "nClose(J)V": (h: bigint) => release(h),
   // ImageDecoder.cpp's nDecodeBitmap: the whole image scaled to the desired size, then cropped
   "nDecodeBitmap(JLandroid/graphics/ImageDecoder;ZIILandroid/graphics/Rect;ZIZZZJZ)Landroid/graphics/Bitmap;":
-    driven(function* (h: bigint, jdecoder: object, postProcess: number, w: number, ht: number, crop: JRect | null, mutable: number, allocator: number,
+    driven(function* (h: bigint, jdecoder: object, postProcess: number, w: number, ht: number, cropRect: object | null, mutable: number, allocator: number,
       unpremul: number, conserveMemory: number, alphaMask: number, _cs: bigint, extended: number): Gen {
-      const { bytes, header } = encodedAt(h);
+      const { bytes, header } = encodedAt(h), crop = cropRect && edges(cropRect);
       let config = ARGB_8888;
       if (alphaMask && header.gray) config = ALPHA_8;
       // 565 saves nothing once uploaded as a hardware bitmap, and a post-process may add alpha

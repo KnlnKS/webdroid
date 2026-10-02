@@ -1,6 +1,6 @@
 import { expect, test, afterAll, beforeAll, describe } from "bun:test";
 import "../src/natives";
-import { matrixColor } from "../src/android/graphics";
+import { matrixColor, edges } from "../src/android/graphics";
 import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android/paint";
 import { typefaceOf } from "../src/android/fonts";
 import { declaredField } from "../src/jvm/runtime";
@@ -190,8 +190,8 @@ describe("matrix", () => {
     const destination = await newObj("android/graphics/RectF", "(FFFF)V", 0, 0, 0, 0);
     await vcall(matrix, "setTranslate", "(FF)V", 5, 7);
     expect(await vcall(matrix, "mapRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;)Z", destination, source)).toBe(1);
-    expect([destination.left, destination.top, destination.right, destination.bottom]).toEqual([6, 9, 8, 11]);
-    expect([source.left, source.top, source.right, source.bottom]).toEqual([1, 2, 3, 4]);
+    expect(edges(destination)).toEqual({ left: 6, top: 9, right: 8, bottom: 11 });
+    expect(edges(source)).toEqual({ left: 1, top: 2, right: 3, bottom: 4 });
     await vcall(matrix, "setRotate", "(F)V", 45);
     expect(await vcall(matrix, "mapRect", "(Landroid/graphics/RectF;Landroid/graphics/RectF;)Z", destination, source)).toBe(0);
   });

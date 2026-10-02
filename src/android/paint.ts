@@ -9,7 +9,7 @@ import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
 import type { FaceMetrics } from "./sfnt";
-import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
+import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges } from "./graphics";
 import { colorLongAt } from "./bitmap";
 import { NativePath, skCommands, setSkCommands } from "./path";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
@@ -204,11 +204,11 @@ export const underlineThickness = (p: NativePaint) => f32(p.textSize * (metricsO
 export const strikeThruPosition = (p: NativePaint) => f32(p.textSize * STD_STRIKE_THRU_TOP);
 export const strikeThruThickness = (p: NativePaint) => f32(p.textSize * STD_THICKNESS);
 
-type Box = { left: number; top: number; right: number; bottom: number };
 /** Paint::getTextBounds: the laid-out glyphs' bounds, rounded out */
-function textBounds(p: NativePaint, bidi: number, s: string, r: Box) {
+function textBounds(p: NativePaint, bidi: number, s: string, r: object) {
   return after(layoutBounds(s, isRtl(bidi, s), p), (b) => {
-    [r.left, r.top, r.right, r.bottom] = b ? [Math.floor(b[0]), Math.floor(b[1]), Math.ceil(b[2]), Math.ceil(b[3])] : [0, 0, 0, 0];
+    if (b) setEdges(r, Math.floor(b[0]), Math.floor(b[1]), Math.ceil(b[2]), Math.ceil(b[3]));
+    else setEdges(r, 0, 0, 0, 0);
   });
 }
 
@@ -356,9 +356,9 @@ rt.registerJnis(PAINT, {
   "nGetStrikeThruThickness(J)F": (h: bigint) => strikeThruThickness(paintAt(h)),
   "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: object | null) => fillFontMetrics(paintAt(h), fm, false),
   "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: object | null) => fillFontMetrics(paintAt(h), fm, true),
-  "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, bidi: number, r: Box) =>
+  "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, bidi: number, r: object) =>
     textBounds(paintAt(h), bidi, charsToString(c, i, n), r),
-  "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, bidi: number, r: Box) =>
+  "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, bidi: number, r: object) =>
     textBounds(paintAt(h), bidi, s.slice(a, b), r),
   // MinikinPaint equality: size, scale, skew, spacing, font flags, features, locales and typeface
   "nEqualsForTextMeasurement(JJ)Z": (a: bigint, b: bigint) => {

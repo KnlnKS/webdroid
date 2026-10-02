@@ -5,7 +5,7 @@
 
 import { rt } from "../jvm/runtime";
 import { deref, ownedHandle, release, weakHandle } from "./handles";
-import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp } from "./graphics";
+import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp, edges } from "./graphics";
 import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import { CAPS, JOINS } from "./paint";
@@ -220,8 +220,10 @@ rt.registerJnis("android/graphics/drawable/VectorDrawable", {
   "nSetAntiAlias(JZ)V": () => {},
   // the cache is what the software canvas draws from whatever this says
   "nSetAllowCaching(JZ)V": () => {},
-  "nDraw(JJJLandroid/graphics/Rect;ZZ)I": (h: bigint, canvas: bigint, filter: bigint, r: { left: number; top: number; right: number; bottom: number }, mirror: number, reuse: number) =>
-    tree(h).draw(drawingCanvas(canvas), filter ? deref<NativeColorFilter>(filter) : null, r.left, r.top, r.right, r.bottom, !!mirror, !!reuse),
+  "nDraw(JJJLandroid/graphics/Rect;ZZ)I": (h: bigint, canvas: bigint, filter: bigint, rect: object, mirror: number, reuse: number) => {
+    const r = edges(rect);
+    return tree(h).draw(drawingCanvas(canvas), filter ? deref<NativeColorFilter>(filter) : null, r.left, r.top, r.right, r.bottom, !!mirror, !!reuse);
+  },
 
   "nCreateFullPath()J": () => created(new FullPath()),
   "nCreateFullPath(J)J": (h: bigint) => {

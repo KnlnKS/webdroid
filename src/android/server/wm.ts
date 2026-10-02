@@ -10,6 +10,7 @@ import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComp
 import { type Channel, channelOf, sendFocus, publish } from "../inputchannel";
 import { javaConfiguration } from "../resources";
 import { deviceConfiguration } from "../resnative";
+import { edges } from "../graphics";
 
 const VISIBLE = 0;
 const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
@@ -156,7 +157,7 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
   await computeFrames(ws, state, R("frames"));
   await mergedConfiguration(R("mergedConfiguration"));
   await vcall(R("insetsState"), "set", "(Landroid/view/InsetsState;)V", state);
-  const frame = (R("frames") as unknown as Record<string, Record<string, number>>)[declaredField("android/window/ClientWindowFrames", "frame")];
+  const frame = edges((R("frames") as unknown as Record<string, JObj>)[declaredField("android/window/ClientWindowFrames", "frame")]);
   let res = 0;
   const firstTime = ws.visibility !== VISIBLE && visibility === VISIBLE;
   ws.visibility = visibility;
@@ -164,13 +165,13 @@ async function relayout(window: JObj, attrs: JObj | null, width: number, height:
     if (!ws.javaSurface) { ws.javaSurface = await javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
     await vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
     // the surface extends past the frame by its insets (room for a shadow)
-    const insets = lp<Record<string, number>>(ws.attrs, "surfaceInsets");
+    const insets = edges(lp<JObj>(ws.attrs, "surfaceInsets"));
     ws.layer.x = frame.left - insets.left - (ws.parent?.layer.x ?? 0);
     ws.layer.y = frame.top - insets.top - (ws.parent?.layer.y ?? 0);
   } else {
     await vcall(R("surfaceControl"), "release", "()V");
   }
-  ws.frame = { left: frame.left, top: frame.top, right: frame.right, bottom: frame.bottom };
+  ws.frame = frame;
   ws.layer.hidden = visibility !== VISIBLE;
   updateDim(ws);
   scheduleComposite();
@@ -330,8 +331,8 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
     "removeKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V"),
   "exitKeyguardSecurely(Landroid/view/IOnKeyguardExitResult;)V": (callback: unknown) => vcall(callback, "onKeyguardExitResult", "(Z)V", 1),
-  "getInitialDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
-  "getBaseDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: Record<string, number>) => { p.x = device.width; p.y = device.height; },
+  "getInitialDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: object) => vcall(p, "set", "(II)V", device.width, device.height),
+  "getBaseDisplaySize(ILandroid/graphics/Point;)V": (_d: number, p: object) => vcall(p, "set", "(II)V", device.width, device.height),
   "getInitialDisplayDensity(I)I": () => device.densityDpi,
   "getBaseDisplayDensity(I)I": () => device.densityDpi,
   // the compositor draws no blur behind or across windows, so cross-window blur is never enabled

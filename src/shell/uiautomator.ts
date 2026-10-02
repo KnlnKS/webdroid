@@ -4,6 +4,7 @@
 import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { windowZOf } from "../android/server/wm";
 import { vcall, scall, newObj } from "../jvm/natives/jlang";
+import { edges } from "../android/graphics";
 
 export interface UiNode {
   text: string; desc: string; cls: string; resId: string; bounds: [number, number, number, number];
@@ -12,23 +13,24 @@ export interface UiNode {
 const HOST_VIEW_ID = -1;
 const str = async (cs: unknown): Promise<string> => cs == null ? "" : String(typeof cs === "string" ? cs : await vcall(cs, "toString", "()Ljava/lang/String;"));
 
-async function describe(node: JObj, rect: Record<string, number>): Promise<UiNode | null> {
+async function describe(node: JObj, rect: JObj): Promise<UiNode | null> {
   if (!await vcall(node, "isVisibleToUser", "()Z")) return null;
   await vcall(node, "getBoundsInScreen", "(Landroid/graphics/Rect;)V", rect);
+  const b = edges(rect);
   const flag = (name: string): Promise<boolean> => Promise.resolve(vcall(node, name, "()Z")).then(Boolean);
   return {
     text: await str(await vcall(node, "getText", "()Ljava/lang/CharSequence;")),
     desc: await str(await vcall(node, "getContentDescription", "()Ljava/lang/CharSequence;")),
     cls: await str(await vcall(node, "getClassName", "()Ljava/lang/CharSequence;")),
     resId: (await vcall(node, "getViewIdResourceName", "()Ljava/lang/String;")) ?? "",
-    bounds: [rect.left, rect.top, rect.right, rect.bottom],
+    bounds: [b.left, b.top, b.right, b.bottom],
     clickable: await flag("isClickable"), enabled: await flag("isEnabled"), editable: await flag("isEditable"),
     scrollable: await flag("isScrollable"),
   };
 }
 
 /** a provider's virtual node and its descendants */
-async function walkVirtual(provider: JObj, id: number, rect: Record<string, number>, out: UiNode[]): Promise<void> {
+async function walkVirtual(provider: JObj, id: number, rect: JObj, out: UiNode[]): Promise<void> {
   const node = await vcall(provider, "createAccessibilityNodeInfo", "(I)Landroid/view/accessibility/AccessibilityNodeInfo;", id);
   if (!node) return;
   const ui = await describe(node, rect);
@@ -41,7 +43,7 @@ async function walkVirtual(provider: JObj, id: number, rect: Record<string, numb
   }
 }
 
-async function walkView(view: JObj, rect: Record<string, number>, out: UiNode[]): Promise<void> {
+async function walkView(view: JObj, rect: JObj, out: UiNode[]): Promise<void> {
   if (!await vcall(view, "isShown", "()Z")) return;
   const provider: JObj | null = await vcall(view, "getAccessibilityNodeProvider", "()Landroid/view/accessibility/AccessibilityNodeProvider;");
   if (provider) { await walkVirtual(provider, HOST_VIEW_ID, rect, out); return; }

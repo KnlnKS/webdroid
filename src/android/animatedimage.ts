@@ -6,7 +6,7 @@
 
 import { rt } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeColorFilter, type JRect, tintedBmp } from "./graphics";
+import { type NativeColorFilter, edges, tintedBmp } from "./graphics";
 import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
 import type { EncodedImage } from "./decode";
@@ -80,8 +80,8 @@ class AnimatedImage {
 const anim = (h: bigint) => deref<AnimatedImage>(h);
 rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   "nCreate(JLandroid/graphics/ImageDecoder;IIJZLandroid/graphics/Rect;)J":
-    (decoder: bigint, _jdecoder: unknown, w: number, h: number, _cs: bigint, _extended: number, crop: JRect | null) => {
-      const { bytes, header } = deref<EncodedImage>(decoder), a = new AnimatedImage(crop ? crop.right - crop.left : w, crop ? crop.bottom - crop.top : h);
+    (decoder: bigint, _jdecoder: unknown, w: number, h: number, _cs: bigint, _extended: number, cropRect: object | null) => {
+      const crop = cropRect && edges(cropRect), { bytes, header } = deref<EncodedImage>(decoder), a = new AnimatedImage(crop ? crop.right - crop.left : w, crop ? crop.bottom - crop.top : h);
       a.bounds = [0, 0, a.w, a.h];
       // the crop is in the scaled image's coordinates: frames are decoded whole, then cut
       const scale = crop && [header.width / w, header.height / h];
@@ -114,7 +114,8 @@ rt.registerJnis("android/graphics/drawable/AnimatedImageDrawable", {
   // hardware rendering's end callback; in software the drawable posts its own from FINISHED
   "nSetOnAnimationEndListener(JLjava/lang/ref/WeakReference;)V": () => {},
   "nSetMirrored(JZ)V": (h: bigint, mirrored: number) => { anim(h).mirrored = !!mirrored; },
-  "nSetBounds(JLandroid/graphics/Rect;)V": (h: bigint, r: JRect) => {
+  "nSetBounds(JLandroid/graphics/Rect;)V": (h: bigint, rect: object) => {
+    const r = edges(rect);
     anim(h).bounds = [r.left, r.top, r.right, r.bottom];
   },
 });

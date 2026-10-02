@@ -16,7 +16,7 @@
 import { startMainLooper } from "./mainloop";
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
-import { type JRectF, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
+import { edges, setEdges, viaEdges, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
 import { paintAt, preloadPaint, setFontMetrics } from "./paint";
@@ -88,8 +88,6 @@ rt.register({
     "static applyFreeFunction(JJ)V": freeNative,
   },
 });
-
-interface Rect { left: number; top: number; right: number; bottom: number }
 
 // Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
 const f = Math.fround, round = (x: number) => Math.floor(x + 0.5);
@@ -276,7 +274,8 @@ delegate("android/graphics/fonts/Font", {
     if (fm) setFontMetrics(fm, false, f(-m.top * size), ascent, descent, f(m.bottom * size), leading);
     return f(descent - ascent + leading);
   },
-  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: JRectF | null) => glyphBounds(fontOf(h), glyph, paintAt(p), rect),
+  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: object | null) =>
+    rect ? viaEdges(rect, (b) => glyphBounds(fontOf(h), glyph, paintAt(p), b)) : glyphBounds(fontOf(h), glyph, paintAt(p), null),
   "nGetAvailableFontSet()[J": () => BigInt64Array.from(availableFonts(), wrapFont),
 });
 delegate("android/graphics/fonts/FontFamily$Builder", {
@@ -365,8 +364,8 @@ delegate("android/graphics/Path", {
     d.set(path(h));
     d.transform(matrixAt(mat));
   },
-  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => path(h).bounds(r),
-  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => (path(h).isRect(r) ? 1 : 0),
+  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: object) => viaEdges(r, (b) => path(h).bounds(b)),
+  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: object) => +viaEdges(r, (b) => path(h).isRect(b)),
   "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(path(h)) ? 1 : 0),
   "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(path(dst), path(a), path(b), op), (done) => +done),
   "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (path(a).isInterpolatable(path(b)) ? 1 : 0),
@@ -413,13 +412,14 @@ delegate("android/graphics/Region", {
   "nativeSetRegion(JJ)V": (h: bigint, src: bigint) => { region(h).set(region(src)); },
   "nativeSetRect(JIIII)Z": (h: bigint, l: number, t: number, r: number, b: number) => +region(h).setRect(l, t, r, b),
   "nativeSetPath(JJJ)Z": (h: bigint, p: bigint, clip: bigint) => +region(h).setPath(path(p), region(clip)),
-  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => +region(h).bounds(r),
+  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => +viaEdges(r, (b) => region(h).bounds(b)),
   "nativeGetBoundaryPath(JJ)Z": (h: bigint, p: bigint) => +region(h).boundaryPath(path(p)),
   "nativeOp(JIIIII)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => {
     scratch.setRect(l, t, r, b);
     return +region(h).op(region(h), scratch, op);
   },
-  "nativeOp(JLandroid/graphics/Rect;JI)Z": (h: bigint, r: Rect, other: bigint, op: number) => {
+  "nativeOp(JLandroid/graphics/Rect;JI)Z": (h: bigint, rect: object, other: bigint, op: number) => {
+    const r = edges(rect);
     scratch.setRect(r.left, r.top, r.right, r.bottom);
     return +region(h).op(scratch, region(other), op);
   },
@@ -459,10 +459,11 @@ delegate("android/graphics/Region", {
 delegate("android/graphics/RegionIterator", {
   "nativeConstructor(J)J": (h: bigint) => ownedHandle({ rects: region(h).rects(), at: 0 }),
   "nativeDestructor(J)V": release,
-  "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
-    const it = deref<{ rects: number[]; at: number }>(h);
-    if (it.at >= it.rects.length) return 0;
-    [r.left, r.top, r.right, r.bottom] = it.rects.slice(it.at, it.at += 4);
+  "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => {
+    const it = deref<{ rects: number[]; at: number }>(h), { rects } = it;
+    if (it.at >= rects.length) return 0;
+    setEdges(r, rects[it.at], rects[it.at + 1], rects[it.at + 2], rects[it.at + 3]);
+    it.at += 4;
     return 1;
   },
 });

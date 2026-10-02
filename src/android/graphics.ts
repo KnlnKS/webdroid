@@ -1,12 +1,9 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { rt, declaredField } from "../jvm/runtime";
 import type { NativeBitmap } from "./bitmap";
 import type { Ctx2D } from "./recording";
-import { parcelCreator } from "./parcelable";
 import type { Affine } from "./matrix";
-import type { JParcel } from "./parcel";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -18,36 +15,32 @@ export function cssColor(argb: number): string {
   return s;
 }
 
-export class JRect extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
-/** CREATOR for Rect, RectF, Point and PointF, whose platform <clinit> does not run under a spec:
- *  it reads the coordinates as ints or floats, in field order, as their readFromParcel does */
-function geometryCreator(name: string, fields: string[], float: boolean) {
-  const type = float ? "Float" : "Int", desc = float ? "F" : "I";
-  const read = driven(function* readGeometry(o: Record<string, unknown>, p: JParcel): Gen {
-    for (const f of fields) o[f] = yield vcall(p, `read${type}`, `()${desc}`);
-    return o;
-  });
-  return { get CREATOR() { return parcelCreator(name, (p) => read(rt.make(name) as JObj & Record<string, unknown>, p)); } };
+/** a box with Rect's edges; Java Rects and RectFs keep theirs in AOSP's fields (edges, setEdges) */
+export type Box = { left: number; top: number; right: number; bottom: number };
+const edgeProps = new Map<Function, string[]>();
+function edgesOf(r: object): string[] {
+  let props = edgeProps.get(r.constructor);
+  if (!props) {
+    const cls = (r.constructor as unknown as { $i: { name: string } }).$i.name;
+    edgeProps.set(r.constructor, props = ["left", "top", "right", "bottom"].map((e) => declaredField(cls, e)));
+  }
+  return props;
 }
-const RECT_FIELDS = ["left", "top", "right", "bottom"], POINT_FIELDS = ["x", "y"], PARCELABLE = ["android/os/Parcelable"];
-// The geometry values keep only their layout, which our stack reads; every method is AOSP's.
-rt.register({ name: "android/graphics/Rect", ctor: JRect, ifaces: PARCELABLE, fields: RECT_FIELDS, statics: geometryCreator("android/graphics/Rect", RECT_FIELDS, false) });
-/** a RectF: its own class, since fallthrough would otherwise give it Rect's same-descriptor bodies */
-export class JRectF extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
-rt.register({ name: "android/graphics/RectF", ctor: JRectF, ifaces: PARCELABLE, fields: RECT_FIELDS, statics: geometryCreator("android/graphics/RectF", RECT_FIELDS, true) });
-class JPoint extends JObj { x = 0; y = 0; }
-rt.register({ name: "android/graphics/Point", ctor: JPoint, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/Point", POINT_FIELDS, false) });
-rt.register({ name: "android/graphics/PointF", ctor: class extends JObj { x = 0; y = 0; }, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/PointF", POINT_FIELDS, true) });
-
-// android.graphics.Insets — immutable 4-sided inset value (WindowInsets.getInsets() etc).
-class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
-const INSETS_NONE = new JInsets();
-/** Mirrors Insets.of(): the all-zero case returns the cached NONE singleton, like AOSP. */
-export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
-  if (l === 0 && t === 0 && r === 0 && b === 0) return INSETS_NONE;
-  const i = new JInsets(); i.left = l; i.top = t; i.right = r; i.bottom = b; return i;
+/** a Java Rect's or RectF's edges */
+export function edges(r: object): Box {
+  const [l, t, rt, b] = edgesOf(r), o = r as Record<string, number>;
+  return { left: o[l], top: o[t], right: o[rt], bottom: o[b] };
 }
-rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
+export function setEdges(r: object, left: number, top: number, right: number, bottom: number): void {
+  const [l, t, rt, b] = edgesOf(r), o = r as Record<string, number>;
+  o[l] = left; o[t] = top; o[rt] = right; o[b] = bottom;
+}
+/** runs `f` on a copy of Java Rect or RectF `r`'s edges, then stores the copy back */
+export function viaEdges<T>(r: object, f: (b: Box) => T): T {
+  const b = edges(r), out = f(b);
+  setEdges(r, b.left, b.top, b.right, b.bottom);
+  return out;
+}
 
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;

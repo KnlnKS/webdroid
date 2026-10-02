@@ -3,6 +3,7 @@ import { loadFramework, loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
 import { vcall, newObj, scall } from "../../../src/jvm/natives/jlang";
 import { canvasOver } from "../../../src/android/canvas";
+import { edges } from "../../../src/android/graphics";
 import { mountPlatformData } from "../../../src/shell/apex";
 import { initDeviceLocales } from "../../../src/android/resnative";
 import { applyDeviceConfiguration } from "../../../src/android/resources";
@@ -33,7 +34,8 @@ async function probe() {
   const heights: number[] = [];
   for (let i = 0, n = await vcall(track, "getNumberOfLayers", "()I"); i < n; i++) {
     const b = await vcall(await vcall(track, "getDrawable", `(I)${D}`, i), "getBounds", "()Landroid/graphics/Rect;");
-    heights.push(b.bottom - b.top);
+    const { top, bottom } = edges(b);
+    heights.push(bottom - top);
   }
   const pixel = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data];
   const before = pixel(50, 27), after = pixel(250, 27), above = pixel(50, 15);

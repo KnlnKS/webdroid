@@ -18,6 +18,7 @@ import { perf } from "../perf";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";
 import { type NativeTypeface, fontNatives } from "./fonts";
 import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING } from "./shaping";
+import { setEdges } from "./graphics";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
 // Advances are a pure function of (typeface, shaping state, piece). Pieces repeat (they are
@@ -301,9 +302,9 @@ rt.registerJnis("android/graphics/text/MeasuredText", {
   "nGetWidth(JII)F": (h: bigint, start: number, end: number) => widthOf(measured(h), start, end),
   "nGetCharWidthAt(JI)F": (h: bigint, i: number) => measured(h).widths[i],
   // glyph bounds are not known: the advance box over the run extents, rounded out
-  "nGetBounds(J[CIILandroid/graphics/Rect;)V": (h: bigint, _c: Uint16Array, start: number, end: number, r: { left: number; top: number; right: number; bottom: number }) => {
+  "nGetBounds(J[CIILandroid/graphics/Rect;)V": (h: bigint, _c: Uint16Array, start: number, end: number, r: object) => {
     const m = measured(h), [ascent, descent] = extent(m, start, end);
-    r.left = 0; r.top = Math.floor(ascent); r.right = Math.ceil(widthOf(m, start, end)); r.bottom = Math.ceil(descent);
+    setEdges(r, 0, Math.floor(ascent), Math.ceil(widthOf(m, start, end)), Math.ceil(descent));
   },
   "nGetExtent(J[CII)J": (h: bigint, _c: Uint16Array, start: number, end: number) => {
     const [ascent, descent] = extent(measured(h), start, end);

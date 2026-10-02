@@ -4,7 +4,7 @@
 import { rt } from "../jvm/runtime";
 import { deref, release, ownedHandle } from "./handles";
 import type { NativeBitmap } from "./bitmap";
-import type { JRect } from "./graphics";
+import { edges } from "./graphics";
 import { NativeRegion } from "./region";
 import type { Ctx2D } from "./recording";
 
@@ -107,8 +107,8 @@ rt.registerJnis("android/graphics/NinePatch", {
   "isNinePatchChunk([B)Z": (chunk: Int8Array | null) => +isNinePatchChunk(chunk),
   "validateNinePatchChunk([B)J": (chunk: Int8Array | null) => ownedHandle(validNinePatchChunk(chunk)),
   "nativeFinalize(J)V": release,
-  "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, dst: JRect) => {
-    const bmp = deref<NativeBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
+  "nativeGetTransparentRegion(JJLandroid/graphics/Rect;)J": (b: bigint, chunk: bigint, rect: object) => {
+    const dst = edges(rect), bmp = deref<NativeBitmap>(b), rects = transparentPatches(deref<NinePatchChunk>(chunk), bmp.w, bmp.h, dst.left, dst.top, dst.right, dst.bottom);
     if (!rects.length) return 0n;
     const r = new NativeRegion();
     r.setRects(rects);

@@ -7,7 +7,7 @@
 import { rt, declaredField } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
 import type { Ctx2D } from "./recording";
-import type { JRectF } from "./graphics";
+import { edges, setEdges } from "./graphics";
 
 export type Mat = Float64Array;
 export const identity = (): Mat => Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1);
@@ -192,16 +192,16 @@ rt.registerJnis("android/graphics/Matrix", {
       dst[di + i] = x; dst[di + i + 1] = y;
     }
   },
-  "nMapRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z": (h: bigint, dst: JRectF, src: JRectF) => {
-    const m = matrixAt(h);
+  "nMapRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z": (h: bigint, dstRect: object, srcRect: object) => {
+    const m = matrixAt(h), src = edges(srcRect);
     const [x0, y0] = mapPoint(m, src.left, src.top), [x1, y1] = mapPoint(m, src.right, src.top);
     const [x2, y2] = mapPoint(m, src.right, src.bottom), [x3, y3] = mapPoint(m, src.left, src.bottom);
-    dst.left = Math.min(x0, x1, x2, x3); dst.right = Math.max(x0, x1, x2, x3);
-    dst.top = Math.min(y0, y1, y2, y3); dst.bottom = Math.max(y0, y1, y2, y3);
+    setEdges(dstRect, Math.min(x0, x1, x2, x3), Math.min(y0, y1, y2, y3), Math.max(x0, x1, x2, x3), Math.max(y0, y1, y2, y3));
     return +rectStaysRect(m);
   },
   // SkMatrix::setRectToRect: an empty source resets and fails, an empty destination scales to 0
-  "nSetRectToRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z": (h: bigint, src: JRectF, dst: JRectF, stf: number) => {
+  "nSetRectToRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z": (h: bigint, srcRect: object, dstRect: object, stf: number) => {
+    const src = edges(srcRect), dst = edges(dstRect);
     const sw = src.right - src.left, sh = src.bottom - src.top;
     const dw = dst.right - dst.left, dh = dst.bottom - dst.top;
     if (!(sw > 0 && sh > 0)) { put(h, IDENTITY); return 0; }
