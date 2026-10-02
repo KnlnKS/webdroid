@@ -22,7 +22,7 @@ const drawn = new WeakMap<object, Map<number, Rect>>();
 export function resetDrawn(target: object): void { drawn.get(target)?.clear(); }
 export function drawnOn(target: object): Map<number, Rect> | undefined { return drawn.get(target); }
 
-const intersect = (a: Rect, b: Rect): Rect => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
+export const intersect = (a: Rect, b: Rect): Rect => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
 /** the bounds of l..b under `m` */
 export function deviceRect(m: DOMMatrix, l: number, t: number, r: number, b: number): Rect {
   const xs = [m.a * l + m.c * t, m.a * r + m.c * t, m.a * l + m.c * b, m.a * r + m.c * b];
