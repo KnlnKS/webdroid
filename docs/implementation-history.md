@@ -1639,6 +1639,31 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Measured noise: doodlejump's `05 back` times out about one run in five at any commit under
     load (timers and frames keep it busy, so it settles only by the pixel rule); a single-run
     bisect blamed an unrelated commit.
+- 2026-10-06, review of the Stage F branch. A strict review found six bugs and the TS left behind
+  repeating its plumbing per module; all were fixed:
+  - A pending SQLite snapshot outlived its last connection and wrote old bytes over a database the
+    app had restored; save and open now share one staleness rule. Connections are raw sqlite3
+    handles on the Emscripten file (open+close of a 40 MB database 7.7 → 1.4 ms) and the androidx
+    bundled driver shares the framework natives' core.
+  - Imported parcels were never recycled, so an imported writable descriptor never closed and its
+    owner's write-back never ran. `parcelled`/`unparcelled` in binder.ts are the one crossing and
+    recycle; Parcel helpers take the NativeParcel only.
+  - `viaEdges` wrote glyph bounds back before HarfBuzz's async load settled; bounds are returned as
+    boxes. A closing AF_UNIX listener left unaccepted clients blocked; fs/unix own AF_UNIX for
+    every front end.
+  - A finalized AudioTrack kept its timer, and internal seeks posted OnSeekComplete; media natives
+    share one peer, event and source layer and media.ts is split by class.
+  - Hosted providers answer through one string-URI transport; URI grants are synchronous again.
+  - Mihon onboarding race: removing a needless suspension in `getRunningAppProcesses` (part of
+    making `newObj` and friends suspend only when they must) makes its theme taps lose about half
+    the time, where the base commit wins 20/20. Mihon's splash waits for a library state that
+    arrives after a 250 ms search debounce plus a database query on cold code, while the
+    onboarding transition drops HomeScreen's collectors about 250–300 ms after it composes: two
+    app wall-clock timers, and a faster main thread starts the transition earlier. A CFS-weighted,
+    4-core scheduler honouring setThreadPriority and the top-app boost reached only 20/36 and cost
+    7% on Komikku, so it was not kept. The lever is a faster library path (§4.1/§4.3). That change,
+    the runtime thread-ownership check that replaces the async-natives lint, and the lint's
+    deletion wait on `knlnks/q-async`.
 
 ## Java, storage and framework semantics
 

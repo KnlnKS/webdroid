@@ -602,7 +602,15 @@ lat` (worst gated tap 125 ms).
 **§7 metric:** hand-written TS in `src/android` + `src/jvm/natives` is 41,612 lines (2.47 MB),
 from 44,438 at b475a694; specs of platform classes 80 (from 291).
 
+**Review fixes (2026-10-06)** are in; see the history's review entry.
+
 **Open:**
+0. `knlnks/q-async` (worktree `../webdroid-q-async`, on top of this branch) holds the runtime
+   thread-ownership check (Java entered from a turn no thread owns is refused; it replaces the
+   async-natives lint and its baseline) and helpers that suspend only when they must. It waits on
+   §4.1/§4.3: it makes Mihon onboarding's theme taps lose an app timing race about half the time
+   until the library path runs from compiled code (history, 2026-10-06). Re-gate it with
+   mihon-onboarding alone ×8 before merging.
 1. StatsEvent (GC stall under bytecode, see history) and print (needs a hosted IPrintManager and a
    PDF-producing WebView adapter) are the desccheck backlog.
 2. Build's fields-only spec needs per-ABI zygote state before its <clinit> can run from bytecode.
