@@ -1,7 +1,6 @@
 export interface FileSource {
   readonly size: number;
   read(offset: number, length: number): Uint8Array | Promise<Uint8Array>;
-  stats?(): RangeFileStats;
 }
 
 /** a source that also takes writes; they are ordered with its later reads */
@@ -49,10 +48,6 @@ export class SliceFile implements FileSource {
     const start = Math.max(0, Math.min(this.size, offset));
     return this.source.read(this.offset + start, Math.min(Math.max(0, length), this.size - start));
   }
-
-  stats(): RangeFileStats {
-    return this.source.stats?.() ?? { requests: 0, fetched: 0, hits: 0, resident: 0 };
-  }
 }
 
 export async function readFully(source: FileSource, offset = 0, length = source.size - offset): Promise<Uint8Array> {
@@ -75,21 +70,12 @@ export async function readFully(source: FileSource, offset = 0, length = source.
   return pos === out.length ? out : out.slice(0, pos);
 }
 
-interface RangeFileStats {
-  requests: number;
-  fetched: number;
-  hits: number;
-  resident: number;
-}
 type FileFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export class RangeFile implements FileSource {
   private readonly chunks = new Map<number, Uint8Array>();
   private readonly inflight = new Map<number, Promise<Uint8Array>>();
   private lastEnd = -1;
-  private requests = 0;
-  private fetched = 0;
-  private hits = 0;
 
   constructor(
     readonly url: string,
@@ -135,22 +121,15 @@ export class RangeFile implements FileSource {
     });
   }
 
-  stats(): RangeFileStats {
-    let resident = 0;
-    for (const chunk of this.chunks.values()) resident += chunk.length;
-    return { requests: this.requests, fetched: this.fetched, hits: this.hits, resident };
-  }
-
   private chunk(index: number): Promise<Uint8Array> {
     const cached = this.chunks.get(index);
     if (cached) {
-      this.hits++;
       this.chunks.delete(index);
       this.chunks.set(index, cached);
       return Promise.resolve(cached);
     }
     const pending = this.inflight.get(index);
-    if (pending) { this.hits++; return pending; }
+    if (pending) return pending;
     const start = index * this.chunkSize;
     const end = Math.min(this.size, start + this.chunkSize) - 1;
     const request = this.range(start, end).then((bytes) => {
@@ -167,7 +146,6 @@ export class RangeFile implements FileSource {
   }
 
   private async range(start: number, end: number): Promise<Uint8Array> {
-    this.requests++;
     const response = await this.fetcher.call(globalThis, this.url, { headers: { Range: `bytes=${start}-${end}` } });
     if (response.status !== 206) {
       await response.body?.cancel();
@@ -181,7 +159,6 @@ export class RangeFile implements FileSource {
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length !== end - start + 1) throw new Error(`short range ${start}-${end} from ${this.url}: ${bytes.length}`);
-    this.fetched += bytes.length;
     return bytes;
   }
 }
