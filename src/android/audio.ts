@@ -21,9 +21,9 @@ const volumeOf = (stream: number) => {
   return v;
 };
 const rescale = (index: number, from: number, to: number) => Math.floor((index * VOLUMES[to][1] + (VOLUMES[from][1] >> 1)) / VOLUMES[from][1]);
-const streamVolume = (stream: number): number => volumeOf(stream)[2];
-const streamMaxVolume = (stream: number): number => volumeOf(stream)[1];
-function setStreamVolume(stream: number, index: number): void {
+export const streamVolume = (stream: number): number => volumeOf(stream)[2];
+export const streamMaxVolume = (stream: number): number => volumeOf(stream)[1];
+export function setStreamVolume(stream: number, index: number): void {
   const [min, max] = volumeOf(stream), alias = ALIAS[stream];
   const set = rescale(Math.min(max, Math.max(min, index)), stream, alias);
   ALIAS.forEach((a, s) => { if (a === alias) VOLUMES[s][2] = Math.max(VOLUMES[s][0], s === alias ? set : rescale(set, alias, s)); });

@@ -1,110 +1,153 @@
-import { JObj, rt } from "../jvm/runtime";
-import { mangleMethod, jmethod } from "../jvm/abi";
-import { idHash, newObj, vcall } from "../jvm/natives/jlang";
-import type { JBundle } from "./os";
-import { myLooper, postTo } from "./mainloop";
+// ISessionManager, ISession and ISessionController, as MediaSessionService and MediaSessionRecord
+// keep sessions: a record holds what its session last set, relays a controller's transport calls
+// to the session's ISessionCallback, and tells registered ISessionControllerCallbacks of changes.
+import { JObj, rt, driven, noops, type Gen } from "../jvm/runtime";
+import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { lambda } from "../jvm/natives/jlambda";
+import { hostStub, newStub } from "./binder";
+import { reportUncaught } from "./os";
+import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio";
 
-class JMediaSession extends JObj {
-  token = new JSessionToken(this);
-  controller = new JMediaController();
-  callback: unknown = null;
-  handler: JObj | null = null;
-  epoch = 0;
-  active = 0;
-  released = false;
-  flags = 0;
-  pkg = "";
-  tag = "";
-  receiver: unknown = null;
-  activity: unknown = null;
-  playback: unknown = null;
-  audioAttributes: unknown = null;
-  metadata: unknown = null;
-  queue: unknown = null;
-  queueTitle: unknown = null;
-  extras: JBundle | null = null;
-  ratingType = 0;
-}
-class JSessionToken extends JObj { constructor(readonly session: JMediaSession) { super(); } }
-class JMediaController extends JObj { session!: JMediaSession; controls = new JTransportControls(); }
-class JTransportControls extends JObj { session!: JMediaSession; }
-async function initialize(session: JMediaSession, context: JObj | null, tag: string) {
-  if (!context) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context cannot be null");
-  if (!tag) throw rt.mkThrowable("java/lang/IllegalArgumentException", "tag cannot be null or empty");
-  rt.link("android/media/session/MediaSession$Token"); rt.link("android/media/session/MediaController");
-  const getPackageName = jmethod(context, mangleMethod("getPackageName", "()Ljava/lang/String;"));
-  session.pkg = getPackageName ? await getPackageName.call(context) as string : "";
-  session.tag = tag;
-  session.controller.session = session;
-  session.controller.controls.session = session;
-}
-function dispatch(session: JMediaSession, method: string, desc: string, ...args: unknown[]) {
-  if (session.released || !session.callback) return;
-  const { callback, epoch } = session;
-  postTo(session.handler!, () => session.released || session.epoch !== epoch ? undefined : vcall(callback, method, desc, ...args));
-}
-const initSession = function (this: JMediaSession, context: JObj | null, tag: string) { return initialize(this, context, tag); };
-rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
-  "<init>(Landroid/content/Context;Ljava/lang/String;)V": initSession,
-  "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V": initSession,
-  "setCallback(Landroid/media/session/MediaSession$Callback;)V": function (this: JMediaSession, callback: unknown) { return vcall(this, "setCallback", "(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V", callback, null); },
-  // a replaced callback's pending calls lapse, as AOSP drops its old handler's messages
-  "setCallback(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V": async function (this: JMediaSession, callback: unknown, handler: JObj | null) {
-    if (!handler && callback && !myLooper()) throw rt.mkThrowable("java/lang/RuntimeException", "Cannot create a media callback handler without a Looper");
-    this.callback = callback; this.epoch++;
-    this.handler = handler ?? (callback ? await newObj("android/os/Handler", "()V") : null);
-  },
-  "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaSession) { return this.token; },
-  "getController()Landroid/media/session/MediaController;": function (this: JMediaSession) { return this.controller; },
-  "setActive(Z)V": function (this: JMediaSession, active: number) { this.active = active; },
-  "isActive()Z": function (this: JMediaSession) { return this.active; },
-  "setFlags(I)V": function (this: JMediaSession, flags: number) { this.flags = flags; },
-  "setMediaButtonReceiver(Landroid/app/PendingIntent;)V": function (this: JMediaSession, receiver: unknown) { this.receiver = receiver; },
-  "setMediaButtonBroadcastReceiver(Landroid/content/ComponentName;)V": function (this: JMediaSession, receiver: unknown) { this.receiver = receiver; },
-  "setSessionActivity(Landroid/app/PendingIntent;)V": function (this: JMediaSession, activity: unknown) { this.activity = activity; },
-  "setPlaybackState(Landroid/media/session/PlaybackState;)V": function (this: JMediaSession, playback: unknown) { this.playback = playback; },
-  "setPlaybackToLocal(Landroid/media/AudioAttributes;)V": function (this: JMediaSession, attributes: unknown) { this.audioAttributes = attributes; },
-  "setMetadata(Landroid/media/MediaMetadata;)V": function (this: JMediaSession, metadata: unknown) { this.metadata = metadata; },
-  "setQueue(Ljava/util/List;)V": function (this: JMediaSession, queue: unknown) { this.queue = queue; },
-  "setQueueTitle(Ljava/lang/CharSequence;)V": function (this: JMediaSession, title: unknown) { this.queueTitle = title; },
-  "setExtras(Landroid/os/Bundle;)V": function (this: JMediaSession, extras: JBundle | null) { this.extras = extras; },
-  "setRatingType(I)V": function (this: JMediaSession, type: number) { this.ratingType = type; },
-  "release()V": function (this: JMediaSession) { this.released = true; this.active = 0; this.callback = null; },
+const MS = "android/media/session/", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
+const PS = MS + "PlaybackState", PI = MS + "MediaController$PlaybackInfo", AA = "Landroid/media/AudioAttributes;";
+const PLAYBACK_TYPE_LOCAL = 1, PLAYBACK_TYPE_REMOTE = 2, VOLUME_CONTROL_ABSOLUTE = 2;
+type Record = {
+  pkg: string; tag: string; info: JObj | null; cb: JObj; pid: number; uid: number;
+  controller: JObj; callbacks: Set<JObj>; destroyed: boolean;
+  flags: bigint; launch: JObj | null; metadata: JObj | null; duration: bigint; playback: JObj | null;
+  queue: JObj | null; queueTitle: unknown; extras: JObj | null; ratingType: number;
+  attributes: JObj | null; remote: { control: number; max: number; current: number; id: string | null } | null;
+};
+class JRecordBinder extends JObj { r!: Record; }
+
+/** a oneway call: the caller neither waits for the callee nor hears of its failure */
+const oneway = (target: JObj, name: string, desc: string, ...args: unknown[]) =>
+  void Promise.resolve().then(() => vcall(target, name, desc, ...args)).catch(reportUncaught);
+const push = (r: Record, name: string, desc: string, ...args: unknown[]) => {
+  for (const cb of r.callbacks) oneway(cb, name, desc, ...args);
+};
+const queueSlice = (queue: JObj | null) => queue && newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", queue);
+
+const playbackInfo = driven(function* playbackInfo$(r: Record): Gen {
+  const attributes = r.attributes ?? (yield vcall(yield vcall(yield newObj("android/media/AudioAttributes$Builder"),
+    "setUsage", "(I)Landroid/media/AudioAttributes$Builder;", 1), "build", `()${AA}`));
+  if (r.remote) return newObj(PI, `(IIII${AA}${S})V`, PLAYBACK_TYPE_REMOTE, r.remote.control, r.remote.max, r.remote.current, attributes, r.remote.id);
+  const stream: number = yield scall("android/media/AudioAttributes", "toLegacyStreamType", `(${AA})I`, attributes);
+  return newObj(PI, `(IIII${AA}${S})V`, PLAYBACK_TYPE_LOCAL, VOLUME_CONTROL_ABSOLUTE, streamMaxVolume(stream), streamVolume(stream), attributes, null);
+});
+const volumeChanged = driven(function* volumeChanged$(r: Record): Gen {
+  push(r, "onVolumeInfoChanged", `(L${PI};)V`, yield playbackInfo(r));
+});
+/** the stream a locally played session's volume adjusts */
+const localStream = driven(function* localStream$(r: Record): Gen<number> {
+  return scall("android/media/AudioAttributes", "toLegacyStreamType", `(${AA})I`, yield vcall(yield playbackInfo(r), "getAudioAttributes", `()${AA}`));
+});
+/** MediaSessionRecord.getStateWithUpdatedPosition: a playing state's position advanced to now */
+const currentState = driven(function* currentState$(r: Record): Gen {
+  const state = r.playback;
+  if (r.destroyed || !state) return null;
+  const code: number = yield vcall(state, "getState", "()I");
+  const updated: bigint = yield vcall(state, "getLastPositionUpdateTime", "()J");
+  if ((code !== 3 && code !== 4 && code !== 5) || updated <= 0n) return state;
+  const now: bigint = yield scall("android/os/SystemClock", "elapsedRealtime", "()J");
+  const speed: number = yield vcall(state, "getPlaybackSpeed", "()F");
+  let position = BigInt(Math.trunc(speed * Number(now - updated))) + (yield vcall(state, "getPosition", "()J"));
+  if (r.duration >= 0n && position > r.duration) position = r.duration; else if (position < 0n) position = 0n;
+  const builder = yield newObj(PS + "$Builder", `(L${PS};)V`, state);
+  yield vcall(builder, "setState", `(IJFJ)L${PS}$Builder;`, code, position, speed, now);
+  return vcall(builder, "build", `()L${PS};`);
+});
+
+const R = (f: (r: Record, ...a: any[]) => unknown) => function (this: JRecordBinder, ...a: unknown[]) { return f(this.r, ...a); };
+rt.register({ name: "webdroid/MediaSessionRecord", ctor: JRecordBinder, sup: MS + "ISession$Stub", methods: {
+  [`getController()L${MS}ISessionController;`]: R((r) => r.controller),
+  "setFlags(I)V": R((r, flags: number) => { r.flags = BigInt(flags); }),
+  "setLaunchPendingIntent(Landroid/app/PendingIntent;)V": R((r, intent: JObj | null) => { r.launch = intent; }),
+  ...noops("setActive(Z)V", "setMediaButtonReceiver(Landroid/app/PendingIntent;)V", "setMediaButtonBroadcastReceiver(Landroid/content/ComponentName;)V"),
+  "destroySession()V": R((r) => {
+    if (r.destroyed) return;
+    r.destroyed = true;
+    push(r, "onSessionDestroyed", "()V");
+    r.callbacks.clear();
+  }),
+  [`sendEvent(${S}${B})V`]: R((r, event: string, extras: JObj | null) => push(r, "onEvent", `(${S}${B})V`, event, extras)),
+  [`setMetadata(Landroid/media/MediaMetadata;J${S})V`]: R((r, metadata: JObj | null, duration: bigint) => {
+    r.metadata = metadata; r.duration = duration;
+    push(r, "onMetadataChanged", "(Landroid/media/MediaMetadata;)V", metadata);
+  }),
+  [`setPlaybackState(L${PS};)V`]: R((r, state: JObj | null) => { r.playback = state; push(r, "onPlaybackStateChanged", `(L${PS};)V`, state); }),
+  "resetQueue()V": R((r) => { r.queue = null; push(r, "onQueueChanged", "(Landroid/content/pm/ParceledListSlice;)V", null); }),
+  "getBinderForSetQueue()Landroid/os/IBinder;": R((r) => newObj(MS + "ParcelableListBinder", "(Ljava/lang/Class;Ljava/util/function/Consumer;)V",
+    rt.classFor(MS + "MediaSession$QueueItem"), lambda("java/util/function/Consumer", "accept(Ljava/lang/Object;)V", async (list: JObj) => {
+      r.queue = list;
+      push(r, "onQueueChanged", "(Landroid/content/pm/ParceledListSlice;)V", await queueSlice(list));
+    }))),
+  "setQueueTitle(Ljava/lang/CharSequence;)V": R((r, title: unknown) => { r.queueTitle = title; push(r, "onQueueTitleChanged", "(Ljava/lang/CharSequence;)V", title); }),
+  [`setExtras(${B})V`]: R((r, extras: JObj | null) => { r.extras = extras; push(r, "onExtrasChanged", `(${B})V`, extras); }),
+  "setRatingType(I)V": R((r, type: number) => { r.ratingType = type; }),
+  [`setPlaybackToLocal(${AA})V`]: R((r, attributes: JObj | null) => { r.attributes = attributes; r.remote = null; return volumeChanged(r); }),
+  [`setPlaybackToRemote(II${S})V`]: R((r, control: number, max: number, id: string | null) => {
+    r.remote = { control, max, current: r.remote?.current ?? 0, id };
+    return volumeChanged(r);
+  }),
+  "setCurrentVolume(I)V": R((r, volume: number) => { if (r.remote) { r.remote.current = volume; return volumeChanged(r); } }),
 } });
-rt.register({ name: "android/media/session/MediaSession$Token", ctor: JSessionToken, ifaces: ["android/os/Parcelable"], methods: {
-  "equals(Ljava/lang/Object;)Z": function (this: JSessionToken, other: unknown) { return other instanceof JSessionToken && other.session === this.session ? 1 : 0; },
-  "hashCode()I": function (this: JSessionToken) { return idHash(this.session); },
-  "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+
+/** a controller call relayed to the session's callback, the caller's identity before its arguments */
+const relay = (r: Record, callback: string, rest: string, pkg: string, ...a: unknown[]) => {
+  if (!r.destroyed) oneway(r.cb, callback, `(${S}II${rest})V`, pkg, r.pid, r.uid, ...a);
+};
+const TRANSPORT: [string, string, string][] = [
+  ["play", "onPlay", ""], ["pause", "onPause", ""], ["stop", "onStop", ""], ["next", "onNext", ""], ["previous", "onPrevious", ""],
+  ["fastForward", "onFastForward", ""], ["rewind", "onRewind", ""], ["prepare", "onPrepare", ""], ["seekTo", "onSeekTo", "J"],
+  ["skipToQueueItem", "onSkipToTrack", "J"], ["setPlaybackSpeed", "onSetPlaybackSpeed", "F"], ["rate", "onRate", "Landroid/media/Rating;"],
+  ["sendCommand", "onCommand", `${S}${B}Landroid/os/ResultReceiver;`], ["sendCustomAction", "onCustomAction", `${S}${B}`],
+  ["playFromMediaId", "onPlayFromMediaId", `${S}${B}`], ["playFromSearch", "onPlayFromSearch", `${S}${B}`],
+  ["playFromUri", "onPlayFromUri", `Landroid/net/Uri;${B}`], ["prepareFromMediaId", "onPrepareFromMediaId", `${S}${B}`],
+  ["prepareFromSearch", "onPrepareFromSearch", `${S}${B}`], ["prepareFromUri", "onPrepareFromUri", `Landroid/net/Uri;${B}`],
+];
+rt.register({ name: "webdroid/MediaSessionController", ctor: JRecordBinder, sup: MS + "ISessionController$Stub", methods: {
+  ...Object.fromEntries(TRANSPORT.map(([name, callback, rest]) => [`${name}(${S}${rest})V`, R((r, ...a: [string]) => relay(r, callback, rest, ...a))])),
+  [`sendMediaButton(${S}Landroid/view/KeyEvent;)Z`]: driven(function* sendMediaButton$(this: JRecordBinder, pkg: string, event: JObj): Gen {
+    const intent = yield newObj("android/content/Intent", `(${S})V`, "android.intent.action.MEDIA_BUTTON");
+    yield vcall(intent, "putExtra", `(${S}Landroid/os/Parcelable;)Landroid/content/Intent;`, "android.intent.extra.KEY_EVENT", event);
+    relay(this.r, "onMediaButtonFromController", "Landroid/content/Intent;", pkg, intent);
+    return 1;
+  }),
+  [`registerCallback(${S}L${MS}ISessionControllerCallback;)V`]: R((r, _pkg: string, cb: JObj) => { if (!r.destroyed) r.callbacks.add(cb); }),
+  [`unregisterCallback(L${MS}ISessionControllerCallback;)V`]: R((r, cb: JObj) => { r.callbacks.delete(cb); }),
+  [`getPackageName()${S}`]: R((r) => r.pkg),
+  [`getTag()${S}`]: R((r) => r.tag),
+  [`getSessionInfo()${B}`]: R((r) => r.info),
+  "getLaunchPendingIntent()Landroid/app/PendingIntent;": R((r) => r.launch),
+  "getFlags()J": R((r) => r.flags),
+  [`getVolumeAttributes()L${PI};`]: R((r) => playbackInfo(r)),
+  [`adjustVolume(${S}${S}II)V`]: R((r, pkg: string, _op: string, direction: number) => r.remote ? relay(r, "onAdjustVolume", "I", pkg, direction)
+    : after(localStream(r), (stream) => setStreamVolume(stream, streamVolume(stream) + Math.sign(direction)))),
+  [`setVolumeTo(${S}${S}II)V`]: R((r, pkg: string, _op: string, value: number) => r.remote ? relay(r, "onSetVolumeTo", "I", pkg, value)
+    : after(localStream(r), (stream) => setStreamVolume(stream, value))),
+  "getMetadata()Landroid/media/MediaMetadata;": R((r) => r.metadata),
+  [`getPlaybackState()L${PS};`]: R((r) => currentState(r)),
+  "getQueue()Landroid/content/pm/ParceledListSlice;": R((r) => queueSlice(r.queue)),
+  "getQueueTitle()Ljava/lang/CharSequence;": R((r) => r.queueTitle),
+  [`getExtras()${B}`]: R((r) => r.extras),
+  "getRatingType()I": R((r) => r.ratingType),
 } });
-rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
-  "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, context: JObj | null, token: JSessionToken | null) {
-    if (!context || !token) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context and token must not be null");
-    this.session = token.session; this.controls.session = token.session;
-  },
-  "getTransportControls()Landroid/media/session/MediaController$TransportControls;": function (this: JMediaController) { return this.controls; },
-  "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaController) { return this.session.token; },
-  "getPackageName()Ljava/lang/String;": function (this: JMediaController) { return this.session.pkg; },
-  "getTag()Ljava/lang/String;": function (this: JMediaController) { return this.session.tag; },
-  "getFlags()J": function (this: JMediaController) { return BigInt(this.session.flags | 3); },
-  "getPlaybackState()Landroid/media/session/PlaybackState;": function (this: JMediaController) { return this.session.playback; },
-  "getMetadata()Landroid/media/MediaMetadata;": function (this: JMediaController) { return this.session.metadata; },
-  "getQueue()Ljava/util/List;": function (this: JMediaController) { return this.session.queue; },
-  "getQueueTitle()Ljava/lang/CharSequence;": function (this: JMediaController) { return this.session.queueTitle; },
-  "getExtras()Landroid/os/Bundle;": function (this: JMediaController) { return this.session.extras; },
-  "getSessionActivity()Landroid/app/PendingIntent;": function (this: JMediaController) { return this.session.activity; },
-  "sendCommand(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V": function (this: JMediaController, command: string, args: unknown, receiver: unknown) {
-    if (!command) throw rt.mkThrowable("java/lang/IllegalArgumentException", "command cannot be null or empty");
-    dispatch(this.session, "onCommand", "(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V", command, args, receiver);
-  },
+
+/** MediaSessionService.enforceMediaPermissions: no app holds MEDIA_CONTENT_CONTROL or an enabled notification listener */
+const noMediaControl = () => { throw rt.mkThrowable("java/lang/SecurityException", "Missing permission to control media."); };
+rt.register({ name: "webdroid/MediaSessionService", ctor: class extends JObj {}, sup: MS + "ISessionManager$Stub", methods: {
+  [`createSession(${S}L${MS}ISessionCallback;${S}${B}I)L${MS}ISession;`]: driven(function* createSession$(pkg: string, cb: JObj, tag: string, info: JObj | null): Gen {
+    const binder = (yield newStub("webdroid/MediaSessionRecord")) as JRecordBinder, controller = (yield newStub("webdroid/MediaSessionController")) as JRecordBinder;
+    binder.r = controller.r = {
+      pkg, tag, info, cb, pid: yield scall("android/os/Process", "myPid", "()I"), uid: yield scall("android/os/Process", "myUid", "()I"),
+      controller, callbacks: new Set(), destroyed: false, flags: 0n, launch: null, metadata: null, duration: -1n, playback: null,
+      queue: null, queueTitle: null, extras: null, ratingType: 0, attributes: null, remote: null,
+    };
+    return binder;
+  }),
+  "getSessions(Landroid/content/ComponentName;I)Ljava/util/List;": noMediaControl,
+  [`addSessionsListener(L${MS}IActiveSessionsListener;Landroid/content/ComponentName;I)V`]: noMediaControl,
+  ...noops(`removeSessionsListener(L${MS}IActiveSessionsListener;)V`),
 } });
-rt.register({ name: "android/media/session/MediaController$TransportControls", ctor: JTransportControls, methods: {
-  "sendCustomAction(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JTransportControls, action: string, args: JBundle | null) {
-    if (!action) throw rt.mkThrowable("java/lang/IllegalArgumentException", "action cannot be null or empty");
-    dispatch(this.session, "onCustomAction", "(Ljava/lang/String;Landroid/os/Bundle;)V", action, args);
-  },
-  "play()V": function (this: JTransportControls) { dispatch(this.session, "onPlay", "()V"); },
-  "pause()V": function (this: JTransportControls) { dispatch(this.session, "onPause", "()V"); },
-  "stop()V": function (this: JTransportControls) { dispatch(this.session, "onStop", "()V"); },
-  "seekTo(J)V": function (this: JTransportControls, position: bigint) { dispatch(this.session, "onSeekTo", "(J)V", position); },
-} });
+hostStub("media_session", "webdroid/MediaSessionService");
