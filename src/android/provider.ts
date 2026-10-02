@@ -7,6 +7,8 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { isDocumentsProvider, field, serviceContext } from "./pm";
+import { startActivityFor } from "./server/atm";
+import { thisApp } from "./server/am";
 import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
 
 const S = "Ljava/lang/String;";
@@ -81,7 +83,6 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   const activity = field<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
   await vcall(chosen, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(
     field<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), field<string>(activity, "android/content/pm/PackageItemInfo", "name")));
-  const [{ startActivityFor }, { thisApp }] = await Promise.all([import("./server/atm"), import("./server/am")]);
   await startActivityFor(thisApp(), chosen);
   return newIntent();
 });
@@ -220,7 +221,7 @@ const mediaRequest = (op: string) => driven(function* (resolver: unknown, uris: 
   yield vcall(intent, "putParcelableArrayListExtra", `(${S}Ljava/util/ArrayList;)Landroid/content/Intent;`, "uris", yield newArrayList(items));
   yield putExtra(intent, "op", op, S); yield putExtra(intent, "value", value, "I");
   return scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
-    yield scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"), 0, intent, 0x4000000); // FLAG_IMMUTABLE
+    yield serviceContext(), 0, intent, 0x4000000); // FLAG_IMMUTABLE
 });
 rt.register({
   name: "android/provider/MediaStore", ctor: class extends JObj {},
@@ -234,9 +235,10 @@ rt.register({
     "static createWriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest("write"),
     "static createTrashRequest(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;": mediaRequest("trash"),
     "static createFavoriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;": mediaRequest("favorite"),
-    "static canManageMedia(Landroid/content/Context;)Z": (ctx: { $host: { pkg: string } } | null) => {
+    "static canManageMedia(Landroid/content/Context;)Z": async (ctx: JObj | null) => {
       if (!ctx) rt.npe();
-      return packages.get(ctx!.$host.pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;
+      const pkg: string = await vcall(ctx, "getOpPackageName", "()Ljava/lang/String;");
+      return packages.get(pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;
     },
   },
 });
