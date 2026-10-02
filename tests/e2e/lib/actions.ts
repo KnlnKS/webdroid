@@ -50,16 +50,18 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
     deadlineMs,
     a.type,
   );
+  // queries need the main loop too: a wedged loop must fail the step, not hold the run
+  const query = <T>(p: T | Promise<T>, what: string) => withDeadline(Promise.resolve(p), deadlineMs, what);
   switch (a.type) {
     case "boot": await run(wd.boot(a.apk)); return;
     case "tapText": {
-      const hit = await wd.locateText(a.text) as { x: number; y: number } | null;
+      const hit = await query(wd.locateText(a.text), "locateText") as { x: number; y: number } | null;
       if (hit) await run(wd.tap(hit.x, hit.y));
       else if (a.fallback) await run(wd.tap(a.fallback.x * s.width, a.fallback.y * s.height));
       return !!hit;
     }
     case "tap":
-      if (a.unlessResource && (await wd.uiTree()).some((node: { resId: string; bounds: [number, number, number, number] }) =>
+      if (a.unlessResource && (await query(wd.uiTree(), "uiTree")).some((node: { resId: string; bounds: [number, number, number, number] }) =>
         node.resId === a.unlessResource && node.bounds[2] > 0 && node.bounds[3] > 0 &&
         node.bounds[0] < s.width && node.bounds[1] < s.height)) return;
       if (a.whileText) {
@@ -68,7 +70,7 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
         const end = performance.now() + Math.max(1500, maxTaps * interval + 800);
         let taps = 0, absentAt = 0;
         while (performance.now() < end) {
-          if (!await wd.locateText(a.whileText)) {
+          if (!await query(wd.locateText(a.whileText), "locateText")) {
             absentAt ||= performance.now();
             if (performance.now() - absentAt >= 400) break;
             await sleep(50);
@@ -95,7 +97,7 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
     case "swipe": {
       const count = a.maxSwipes ?? 1;
       for (let i = 0; i < count; i++) {
-        if (a.untilText && await Promise.resolve(wd.locateText(a.untilText))) return;
+        if (a.untilText && await query(wd.locateText(a.untilText), "locateText")) return;
         await run(wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms));
         if (a.untilText) await sleep(500);
       }
