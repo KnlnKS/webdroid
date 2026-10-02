@@ -1,14 +1,10 @@
-// The handle table framework Java holds a `long` into — layoutlib's DelegateManager.
-//
-// It lives on its own rather than inside delegates.ts because it has two sides. A delegate
-// takes a handle and gives back the object; but AOSP bytecode also asks OUR objects for their
-// native pointer (`Paint.getNativeInstance()`, and every class that hands one to a builder),
-// and graphics.ts cannot import delegates.ts — delegates.ts imports it.
+// The handle table framework Java holds a `long` into — layoutlib's DelegateManager. Every
+// module implementing natives hands its objects out and resolves them here.
 //
 // Handle 0 is null, so a field that was never initialised dereferences to nothing rather than
-// to slot 0. A handle is stable per object: asking twice gives the same long, which matters
-// because getNativeInstance() is called per text run and a fresh slot per call would grow this
-// table without bound.
+// to slot 0. A handle is stable per object: asking twice gives the same long, so an object handed
+// out again and again (a font's identity pointer, a shared native instance) does not grow this
+// table.
 
 import { rt } from "../jvm/runtime";
 
@@ -47,9 +43,9 @@ const collected = new FinalizationRegistry<{ n: number; ref: WeakRef<object> }>(
   objs[n] = refs[n] = undefined;
   free.push(n);
 });
-/** A long for an object no Java finalizer releases, such as a TS-spec Paint or Bitmap asked for
- *  its native instance by every draw: the slot does not keep the object alive, and frees itself
- *  once the object is collected. */
+/** A long for an object no Java finalizer releases, such as a font's identity pointer or a vector
+ *  drawable's node: the slot does not keep the object alive, and frees itself once the object is
+ *  collected. */
 export function weakHandle(o: object): bigint {
   let h = byObj.get(o);
   if (h === undefined) {
