@@ -264,7 +264,7 @@ function enforceNoForegroundService(pkg: string, userId: number, channel: string
 
 /** PermissionPolicyService's notification prompt for an app targeting 6.0 to 12L, which cannot ask
  *  for POST_NOTIFICATIONS itself: once it has a channel, the system asks when a launcher task is in
- *  front. The dialog's answer follows the grant policy runtime permissions follow (context.ts). */
+ *  front. The dialog's answer follows the grant policy runtime permissions follow. */
 function promptNeeded(pkg: string): boolean {
   const record = packages.get(pkg), target = targetSdk(pkg);
   return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
@@ -691,8 +691,9 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
       if (!channel) fail("java/lang/NullPointerException", "channel in list is null");
       created = await createChannel(prefs, await copyOf(CHANNEL, channel)) || created;
     }
-    // the prompt shows over a launcher task the user can see; a task still starting gets it at its next launch
-    if (created && !had && foreground() && promptNeeded(pkg)) await showNotificationPrompt(pkg);
+    // the prompt shows over the activity in front, after this call returns: covering it pauses that
+    // activity, whose main thread may be the caller
+    if (created && !had && foreground() && promptNeeded(pkg)) void showNotificationPrompt(pkg).catch(reportUncaught);
   },
   "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
     async (callingPkg: string, userId: number, pkg: string, channelId: string | null) => {
