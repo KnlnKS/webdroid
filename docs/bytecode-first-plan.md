@@ -630,17 +630,17 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
 **Review fixes (2026-10-06)** are in; see the history's review entry.
 
 **Open:**
-0. Branch `knlnks/q-async` (no worktree; on top of Stage F) holds the runtime
-   thread-ownership check (Java entered from a turn no thread owns is refused; it replaces the
-   async-natives lint and its baseline) and helpers that suspend only when they must. It waits on
-   §4.1/§4.3: it makes Mihon onboarding's theme taps lose an app timing race about half the time
-   until the library path runs from compiled code (history, 2026-10-06). Re-gate it with
-   mihon-onboarding alone ×8 before merging.
+0. Done 2026-10-02: `knlnks/q-async` is merged (rebased; 0d51d55a..7d98b3d5). Java entered from a
+   turn no thread owns is refused at runtime (`[webdroid unowned]`), replacing the async-natives lint
+   and its baseline; `tests/generators.test.ts` keeps the undelegated-generator and
+   memoised-suspension checks. Its Mihon race no longer reproduces: mihon-onboarding alone passed
+   8/8 on the branch and 8/8 on the tip, and `lat` passed cold and warm. The zygote's font map load
+   was an unowned entry the check caught; it is a driven generator now.
 1. StatsEvent (GC stall under bytecode, see history) and print (needs a hosted IPrintManager and a
    PDF-producing WebView adapter) are the desccheck backlog.
 2. Build's fields-only spec needs per-ABI zygote state before its <clinit> can run from bytecode.
-3. The async-natives baseline (ATM, WM, IMM, surfaces, intentipc) and the `.then`/timer callbacks
-   the lint cannot see; MediaDataSource.readAt runs from a host read callback.
+3. `.then`/timer callbacks the runtime check only catches when they run; MediaDataSource.readAt
+   runs from a host read callback.
 4. Class-init re-entry is judged by JThread identity while main-loop jobs share mainThread.
 5. Stage F's sql.js patch rebuilds each checkout's `vendor/sql.js/dist` on its first bun command,
    so give a worktree its own dist rather than a symlink to a shared one.
