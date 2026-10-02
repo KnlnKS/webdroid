@@ -103,8 +103,9 @@ export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCE
 export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
 /** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
 export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
-export const enforceCallingOrSelfPermission = async (permission: string, message: string | null): Promise<void> =>
-  vcall(await serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
+export const enforceCallingOrSelfPermission = driven(function* (permission: string, message: string | null): Gen<void> {
+  yield vcall(yield serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
+});
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */

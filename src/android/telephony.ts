@@ -3,7 +3,7 @@
 // (no modem, no SIM, no subscriptions). TelephonyRegistry is system_server's and every device has
 // it; with no active modem validatePhoneId fails, so a listener is never notified and only meets
 // TelephonyRegistry.checkListenerPermission (decoded from the reference AVD's services.jar).
-import { JObj, rt, noops } from "../jvm/runtime";
+import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
@@ -24,44 +24,44 @@ function phoneStateRequired(events: number[], pkg: string): boolean {
 }
 const LPQ = "android/telephony/LocationAccessPolicy$LocationPermissionQuery", QB = `L${LPQ}$Builder;`;
 /** LocationAccessPolicy's verdict on the caller, with TelephonyRegistry's query (every minimum SDK Q) */
-async function locationResult(context: unknown, events: number[], pkg: string, featureId: string | null): Promise<string> {
+function* locationResult(context: unknown, events: number[], pkg: string, featureId: string | null): Gen<string> {
   const { pid, uid } = callingIdentity();
-  let builder = await newObj(LPQ + "$Builder");
+  let builder = yield newObj(LPQ + "$Builder");
   for (const [setter, desc, value] of [["setCallingPackage", "Ljava/lang/String;", pkg], ["setCallingFeatureId", "Ljava/lang/String;", featureId],
     ["setMethod", "Ljava/lang/String;", `listen events: [${events.join(", ")}]`], ["setCallingPid", "I", pid], ["setCallingUid", "I", uid],
     ["setMinSdkVersionForFine", "I", 29], ["setMinSdkVersionForCoarse", "I", 29], ["setMinSdkVersionForEnforcement", "I", 29]] as const) {
-    builder = await vcall(builder, setter, `(${desc})${QB}`, value);
+    builder = yield vcall(builder, setter, `(${desc})${QB}`, value);
   }
-  const query = await vcall(builder, "build", `()L${LPQ};`);
-  const result = await scall("android/telephony/LocationAccessPolicy", "checkLocationPermission",
+  const query = yield vcall(builder, "build", `()L${LPQ};`);
+  const result = yield scall("android/telephony/LocationAccessPolicy", "checkLocationPermission",
     `(Landroid/content/Context;L${LPQ};)Landroid/telephony/LocationAccessPolicy$LocationPermissionResult;`, context, query);
-  return vcall(result, "name", "()Ljava/lang/String;");
+  return yield vcall(result, "name", "()Ljava/lang/String;");
 }
 /** TelephonyRegistry.checkListenerPermission: it throws for a missing permission, and a soft denial
  *  only leaves the listener unregistered, which with no modem is the same as registering it */
-async function checkListenerPermission(events: number[], subId: number, pkg: string, featureId: string | null): Promise<void> {
-  const context = await serviceContext(), any = (set: number[]) => events.some((e) => set.includes(e));
+function* checkListenerPermission(events: number[], subId: number, pkg: string, featureId: string | null): Gen<void> {
+  const context = yield serviceContext(), any = (set: number[]) => events.some((e) => set.includes(e));
   const enforce = (permission: string) => enforceCallingOrSelfPermission(permission, "listen");
   if (any(LOCATION)) {
-    const result = await locationResult(context, events, pkg, featureId);
+    const result = yield* locationResult(context, events, pkg, featureId);
     if (result === "DENIED_SOFT") return;
     if (result === "DENIED_HARD") throw rt.mkThrowable("java/lang/SecurityException", `Unable to listen for events [${events.join(", ")}] due to insufficient location permission`);
   }
-  if (phoneStateRequired(events, pkg) && !await scall(TP, "checkCallingOrSelfReadPhoneState",
-    "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z", context, subId, pkg, featureId, "listen")) return;
+  if (phoneStateRequired(events, pkg) && !(yield scall(TP, "checkCallingOrSelfReadPhoneState",
+    "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z", context, subId, pkg, featureId, "listen"))) return;
   if (any(PRECISE)) {
-    try { await enforce("android.permission.READ_PRECISE_PHONE_STATE"); }
-    catch { await scall(TP, "enforceCallingOrSelfCarrierPrivilege", "(Landroid/content/Context;ILjava/lang/String;)V", context, subId, "listen"); }
+    try { yield enforce("android.permission.READ_PRECISE_PHONE_STATE"); }
+    catch { yield scall(TP, "enforceCallingOrSelfCarrierPrivilege", "(Landroid/content/Context;ILjava/lang/String;)V", context, subId, "listen"); }
   }
-  if (any(EMERGENCY)) await enforce("android.permission.READ_ACTIVE_EMERGENCY_SESSION");
-  if (any(PRIVILEGED)) await enforce("android.permission.READ_PRIVILEGED_PHONE_STATE");
+  if (any(EMERGENCY)) yield enforce("android.permission.READ_ACTIVE_EMERGENCY_SESSION");
+  if (any(PRIVILEGED)) yield enforce("android.permission.READ_PRIVILEGED_PHONE_STATE");
 }
 
 rt.register({ name: "webdroid/TelephonyRegistry", ctor: class extends JObj {}, sup: "com/android/internal/telephony/ITelephonyRegistry$Stub", methods: {
   "listenWithEventList(ZZILjava/lang/String;Ljava/lang/String;Lcom/android/internal/telephony/IPhoneStateListener;[IZ)V":
-    async (_fine: number, _coarse: number, subId: number, pkg: string, featureId: string | null, _callback: JObj, events: Int32Array) => {
-      if (events.length) await checkListenerPermission([...events], subId, pkg, featureId);
-    },
+    driven(function* (_fine: number, _coarse: number, subId: number, pkg: string, featureId: string | null, _callback: JObj, events: Int32Array) {
+      if (events.length) yield* checkListenerPermission([...events], subId, pkg, featureId);
+    }),
   // subscription info never changes without a phone process, so a listener is never called back
   "addOnSubscriptionsChangedListener(Ljava/lang/String;Ljava/lang/String;Lcom/android/internal/telephony/IOnSubscriptionsChangedListener;)V": () => {},
   "addOnOpportunisticSubscriptionsChangedListener(Ljava/lang/String;Ljava/lang/String;Lcom/android/internal/telephony/IOnSubscriptionsChangedListener;)V": () => {},
