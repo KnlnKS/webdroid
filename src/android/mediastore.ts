@@ -93,7 +93,10 @@ async function index(): Promise<Database> {
   return db;
 }
 
-function tableOf(uri: JUri): { volume: string; kind: string; id: number | null } | null {
+type Table = { volume: string; kind: string; id: number | null };
+/** each media collection's MEDIA_TYPE */
+const KIND_TYPE: Record<string, number> = { "images/media": 1, "audio/media": 2, "video/media": 3 };
+function tableOf(uri: JUri): Table | null {
   const match = /^content:\/\/media\/(external|external_primary|internal)\/(file|images\/media|video\/media|audio\/media|downloads)(?:\/(\d+))?(?:\?.*)?$/.exec(uri.uri);
   return match ? { volume: match[1], kind: match[2], id: match[3] ? Number(match[3]) : null } : null;
 }
@@ -104,7 +107,7 @@ export async function mediaPath(uri: JUri): Promise<string | null> {
   await index();
   return [...indexed].find(([, e]) => e.id === table.id)?.[0] ?? null;
 }
-export async function mediaMime(uri: JUri): Promise<string | null> {
+async function mediaMime(uri: JUri): Promise<string | null> {
   const path = await mediaPath(uri);
   return path ? mimeOf(path) : null;
 }
@@ -152,7 +155,7 @@ export async function mediaInsert(uri: JUri, values: Map<string, unknown>): Prom
   if (!table || table.id !== null || table.volume === "internal") return null;
   const name = textOf(values, "_display_name") ?? String(Date.now());
   const mime = textOf(values, "mime_type") ?? mimeOf(name);
-  if (table.kind !== "file" && table.kind !== "downloads" && mediaType(mime) !== { "images/media": 1, "audio/media": 2, "video/media": 3 }[table.kind])
+  if (KIND_TYPE[table.kind] && mediaType(mime) !== KIND_TYPE[table.kind])
     throw illegal(`MIME type ${mime} cannot be inserted into ${uri.uri}`);
   const path = placement(uri, table.kind, textOf(values, "relative_path") ?? collectionDirs[table.kind][0], name, mime);
   vfs.write(path, new Uint8Array(0));
@@ -165,13 +168,13 @@ export async function mediaInsert(uri: JUri, values: Map<string, unknown>): Prom
  *  RELATIVE_PATH moves the file, keeping its _id. Rows count only when a column here changed them. */
 export async function mediaUpdate(uri: JUri, values: Map<string, unknown>, selection: string | null, args: string[] | null): Promise<number> {
   const table = tableOf(uri);
-  const cursor = await mediaQuery(uri, ["_data"], selection, args, null, { pending: 1, trashed: 1 });
-  if (!table || !cursor) return 0;
+  if (!table) return 0;
+  const paths = await selectedPaths(table, selection, args, { pending: 1, trashed: 1 });
   const database = await index();
   const flagged = FLAGS.filter((column) => values.has(column));
   const name = textOf(values, "_display_name"), relative = textOf(values, "relative_path");
   let count = 0;
-  for (let [path] of cursor.rows as string[][]) {
+  for (let path of paths) {
     if (name !== null || relative !== null) {
       const parent = path.slice(0, path.lastIndexOf("/"));
       const to = placement(uri, table.kind, relative ?? parent.slice("/sdcard/".length), name ?? path.slice(parent.length + 1), mimeOf(path), path);
@@ -200,9 +203,9 @@ function matchPredicate(column: string, match: number, fallback: number): string
 }
 /** A media row is its file: deleting the row deletes the file, and the index follows the VFS. */
 export async function mediaDelete(uri: JUri, selection: string | null, args: string[] | null): Promise<number> {
-  const cursor = await mediaQuery(uri, ["_data"], selection, args, null);
+  const table = tableOf(uri);
   let count = 0;
-  for (const [path] of cursor?.rows ?? []) if (vfs.delete(path as string)) count++;
+  for (const path of table ? await selectedPaths(table, selection, args) : []) if (vfs.delete(path)) count++;
   return count;
 }
 export async function scannedMediaUri(path: string): Promise<JUri | null> {
@@ -211,18 +214,15 @@ export async function scannedMediaUri(path: string): Promise<JUri | null> {
   const entry = indexed.get(path);
   return entry ? mkUri(`content://media/external/file/${entry.id}`) : null;
 }
-/** Trashed and pending items are left out unless the query asks for them, as MediaProvider does. */
-export async function mediaQuery(uri: JUri, projection: string[] | null, selection: string | null,
-  args: string[] | null, sort: string | null, match: MediaMatch = {}) {
-  const table = tableOf(uri);
-  if (!table) return null;
+/** the table's rows a query selects, as `requested` columns. Trashed and pending items are left out
+ *  unless the query asks for them, as MediaProvider does. */
+async function select(table: Table, requested: string[], selection: string | null, args: string[] | null,
+  sort: string | null, match: MediaMatch = {}): Promise<unknown[][]> {
   const database = await index();
-  const requested = projection?.length ? projection : columns;
   const predicates: string[] = [];
   if (table.volume === "internal") predicates.push("0");
   if (table.id) predicates.push(`_id = ${table.id}`);
-  const type = table.kind === "images/media" ? 1 : table.kind === "audio/media" ? 2 : table.kind === "video/media" ? 3 : 0;
-  if (type) predicates.push(`media_type = ${type}`);
+  if (KIND_TYPE[table.kind]) predicates.push(`media_type = ${KIND_TYPE[table.kind]}`);
   for (const p of [matchPredicate("is_trashed", match.trashed ?? 0, 2), matchPredicate("is_pending", match.pending ?? 0, 2),
     matchPredicate("is_favorite", match.favorite ?? 0, 1)]) if (p) predicates.push(p);
   if (selection?.trim()) predicates.push(`(${selection})`);
@@ -234,7 +234,13 @@ export async function mediaQuery(uri: JUri, projection: string[] | null, selecti
     if (args?.length) stmt.bind(args);
     while (stmt.step()) rows.push(stmt.get());
   } finally { stmt.free(); }
-  return mkCursor(requested, rows);
+  return rows;
+}
+const selectedPaths = async (table: Table, selection: string | null, args: string[] | null, match?: MediaMatch) =>
+  (await select(table, ["_data"], selection, args, null, match)).map(([path]) => path as string);
+async function mediaQuery(uri: JUri, projection: string[] | null, selection: string | null, args: string[] | null, sort: string | null, match: MediaMatch) {
+  const table = tableOf(uri), requested = projection?.length ? projection : columns;
+  return table ? mkCursor(requested, await select(table, requested, selection, args, sort, match)) : null;
 }
 
 // ── MediaProvider, the media authority's IContentProvider: a query's selection, sort and limit come
