@@ -1,86 +1,89 @@
-// android.renderscript, as far as apps use it on API 33: ScriptIntrinsicBlur over bitmap
-// allocations (image-blur libraries, androidx.mediarouter's art backdrop).
-import { JObj, rt, noops } from "../jvm/runtime";
+// RenderScript's natives (librs_jni over the CPU reference driver), as far as apps use the
+// deprecated API: elements, 2D types, allocations over bitmaps, and ScriptIntrinsicBlur. Any
+// other intrinsic or script kernel is an RSRuntimeException, as a driver without it reports.
+import { rt } from "../jvm/runtime";
 import { bitmapOf } from "./bitmap";
 import { clampedBlur, type BlurCache } from "./rendereffect";
-import { defineException, mkEnumSet } from "../jvm/natives/jlang";
+import { handle, deref, release } from "./handles";
 
-class JBaseObj extends JObj {}
-class JAllocation extends JBaseObj {
-  constructor(public w = 0, public h = 0, public pixels: OffscreenCanvas | null = null) { super(); }
-  raster(): OffscreenCanvas { return this.pixels ??= new OffscreenCanvas(this.w, this.h); }
+type Element = { kind: "element" };
+type Type = { kind: "type"; element: bigint; x: number; y: number };
+type Allocation = { kind: "allocation"; type: bigint; w: number; h: number; raster: OffscreenCanvas; bitmap: object | null };
+type Blur = { kind: "blur"; radius: number; input: Allocation | null } & BlurCache;
+/** RenderScript's context waits in nContextPeekMessage for a message no script sends, until teardown */
+type Context = { kind: "context"; teardown: (() => void) | null };
+const id = (o: object) => handle(o);
+const obj = <T>(h: bigint): T => {
+  const o = deref<T>(h);
+  if (!o) throw rt.mkThrowable("android/renderscript/RSIllegalArgumentException", "Invalid object id");
+  return o;
+};
+function allocation(type: bigint, bitmap: object | null): bigint {
+  const t = obj<Type>(type), raster = new OffscreenCanvas(Math.max(1, t.x), Math.max(1, t.y || 1));
+  const a: Allocation = { kind: "allocation", type, w: t.x, h: t.y || 1, raster, bitmap };
+  if (bitmap) copyFrom(a, bitmap);
+  return id(a);
 }
-class JType extends JBaseObj { constructor(public w = 0, public h = 0) { super(); } }
-class JBlur extends JBaseObj implements BlurCache {
-  radius = 5; input: JAllocation | null = null;
-  padded: OffscreenCanvas | null = null; blurred: OffscreenCanvas | null = null;
+function copyFrom(a: Allocation, bitmap: object) {
+  const g = a.raster.getContext("2d")!;
+  g.clearRect(0, 0, a.w, a.h); g.drawImage(bitmapOf(bitmap).image, 0, 0);
 }
-
-function fromBitmap(_rs: unknown, bitmap: object): JAllocation {
-  const bmp = bitmapOf(bitmap), a = new JAllocation(bmp.w, bmp.h);
-  a.raster().getContext("2d")!.drawImage(bmp.image, 0, 0);
-  return a;
+function copyTo(a: Allocation, bitmap: object) {
+  const b = bitmapOf(bitmap);
+  b.ctx.clearRect(0, 0, b.w, b.h); b.ctx.drawImage(a.raster, 0, 0);
 }
-rt.register({
-  name: "android/renderscript/BaseObj", ctor: JBaseObj,
-  methods: noops("destroy()V"),
-});
-rt.register({
-  name: "android/renderscript/RenderScript", ctor: class extends JObj {},
-  methods: {
-    "static create(Landroid/content/Context;)Landroid/renderscript/RenderScript;": () => rt.make("android/renderscript/RenderScript"),
-    ...noops("static releaseAllContexts()V", "setMessageHandler(Landroid/renderscript/RenderScript$RSMessageHandler;)V",
-      "setErrorHandler(Landroid/renderscript/RenderScript$RSErrorHandler;)V", "destroy()V", "finish()V"),
+const RS = "android/renderscript/RenderScript";
+rt.claimNativeLib("rs_jni");
+rt.registerJnis(RS, {
+  "_nInit()V": () => {},
+  "rsnSystemGetPointerSize()I": () => 8,
+  "nDeviceCreate()J": () => id({ kind: "device" }),
+  "nDeviceDestroy(J)V": (dev: bigint) => release(dev),
+  "nDeviceSetConfig(JII)V": () => {},
+  "rsnContextCreate(JIII)J": () => id({ kind: "context", teardown: null } satisfies Context),
+  "rsnContextDestroy(J)V": (con: bigint) => release(con),
+  "rsnContextSetCacheDir(JLjava/lang/String;)V": () => {},
+  "rsnContextSetPriority(JI)V": () => {},
+  // scripts run to completion when launched, so nothing is ever pending
+  "rsnContextFinish(J)V": () => {},
+  "nContextInitToClient(J)V": () => {},
+  "nContextDeinitToClient(J)V": (con: bigint) => { const c = obj<Context>(con); c.teardown?.(); c.teardown = null; },
+  // RS_MESSAGE_TO_CLIENT_NONE once the context is torn down
+  "nContextPeekMessage(J[I)I": (con: bigint) => new Promise<number>((resolve) => { obj<Context>(con).teardown = () => resolve(0); }),
+  "rsnObjDestroy(JJ)V": (_con: bigint, o: bigint) => release(o),
+  "rsnElementCreate(JJIZI)J": () => id({ kind: "element" } satisfies Element),
+  "rsnTypeCreate(JJIIIZZI)J": (_con: bigint, element: bigint, x: number, y: number, z: number, mips: number, faces: number, yuv: number) => {
+    if (z > 1 || mips || faces || yuv) throw rt.mkThrowable("android/renderscript/RSRuntimeException", "Only 2D types are supported");
+    return id({ kind: "type", element, x, y } satisfies Type);
   },
-});
-rt.register({ name: "android/renderscript/RenderScript$RSMessageHandler", ctor: class extends JObj {}, methods: noops("<init>()V") });
-rt.register({ name: "android/renderscript/RenderScript$RSErrorHandler", ctor: class extends JObj {}, methods: noops("<init>()V") });
-class JElement extends JBaseObj {}
-const u84 = new JElement();
-rt.register({
-  name: "android/renderscript/Element", ctor: JElement, sup: "android/renderscript/BaseObj",
-  methods: { "static U8_4(Landroid/renderscript/RenderScript;)Landroid/renderscript/Element;": () => u84 },
-});
-rt.register({
-  name: "android/renderscript/Type", ctor: JType, sup: "android/renderscript/BaseObj",
-  methods: { "getX()I": function (this: JType) { return this.w; }, "getY()I": function (this: JType) { return this.h; } },
-});
-rt.register({
-  name: "android/renderscript/Allocation", ctor: JAllocation, sup: "android/renderscript/BaseObj",
-  statics: { USAGE_SCRIPT: 1, USAGE_SHARED: 128 },
-  methods: {
-    "static createFromBitmap(Landroid/renderscript/RenderScript;Landroid/graphics/Bitmap;)Landroid/renderscript/Allocation;": fromBitmap,
-    "static createFromBitmap(Landroid/renderscript/RenderScript;Landroid/graphics/Bitmap;Landroid/renderscript/Allocation$MipmapControl;I)Landroid/renderscript/Allocation;": fromBitmap,
-    "static createTyped(Landroid/renderscript/RenderScript;Landroid/renderscript/Type;)Landroid/renderscript/Allocation;": (_rs: unknown, t: JType) => new JAllocation(t.w, t.h),
-    "getType()Landroid/renderscript/Type;": function (this: JAllocation) { return new JType(this.w, this.h); },
-    "copyFrom(Landroid/graphics/Bitmap;)V": function (this: JAllocation, bitmap: object) {
-      const ctx = this.raster().getContext("2d")!;
-      ctx.clearRect(0, 0, this.w, this.h); ctx.drawImage(bitmapOf(bitmap).image, 0, 0);
-    },
-    "copyTo(Landroid/graphics/Bitmap;)V": function (this: JAllocation, bitmap: object) {
-      const bmp = bitmapOf(bitmap), ctx = bmp.ctx;
-      ctx.clearRect(0, 0, bmp.w, bmp.h); ctx.drawImage(this.raster(), 0, 0);
-    },
+  "rsnTypeGetNativeData(JJ[J)V": (_con: bigint, type: bigint, out: BigInt64Array) => {
+    const t = obj<Type>(type);
+    out.set([BigInt(t.x), BigInt(t.y), 0n, 0n, 0n, t.element]);
   },
-});
-mkEnumSet("android/renderscript/Allocation$MipmapControl", ["MIPMAP_NONE", "MIPMAP_FULL", "MIPMAP_ON_SYNC_TO_TEXTURE"]);
-defineException("android/renderscript/RSRuntimeException", "java/lang/RuntimeException");
-defineException("android/renderscript/RSIllegalArgumentException", "android/renderscript/RSRuntimeException");
-rt.register({
-  name: "android/renderscript/ScriptIntrinsicBlur", ctor: JBlur, sup: "android/renderscript/BaseObj",
-  methods: {
-    "static create(Landroid/renderscript/RenderScript;Landroid/renderscript/Element;)Landroid/renderscript/ScriptIntrinsicBlur;": () => new JBlur(),
-    "setRadius(F)V": function (this: JBlur, r: number) {
-      if (!(r > 0 && r <= 25)) throw rt.mkThrowable("android/renderscript/RSIllegalArgumentException", "Radius out of range (0 < r <= 25).");
-      this.radius = r;
-    },
-    "setInput(Landroid/renderscript/Allocation;)V": function (this: JBlur, a: JAllocation) { this.input = a; },
-    "forEach(Landroid/renderscript/Allocation;)V": function (this: JBlur, out: JAllocation) {
-      if (!this.input) return;
-      // the Gaussian RenderScript's blur applies, sigma = 0.4 r + 0.6, edges clamped
-      const sigma = 0.4 * this.radius + 0.6, pad = Math.ceil(3 * sigma);
-      const blurred = clampedBlur(this.input.raster(), sigma, this), o = out.raster().getContext("2d")!;
-      o.clearRect(0, 0, out.w, out.h); o.drawImage(blurred, -pad, -pad);
-    },
+  "rsnAllocationCreateTyped(JJIIJ)J": (_con: bigint, type: bigint) => allocation(type, null),
+  "rsnAllocationCreateFromBitmap(JJILandroid/graphics/Bitmap;I)J": (_con: bigint, type: bigint, _mips: number, bitmap: object) => allocation(type, bitmap),
+  // the allocation shares the bitmap's pixels: a script's output reaches the bitmap too
+  "rsnAllocationCreateBitmapBackedAllocation(JJILandroid/graphics/Bitmap;I)J": (_con: bigint, type: bigint, _mips: number, bitmap: object) => allocation(type, bitmap),
+  "rsnAllocationGetType(JJ)J": (_con: bigint, a: bigint) => obj<Allocation>(a).type,
+  "rsnAllocationCopyFromBitmap(JJLandroid/graphics/Bitmap;)V": (_con: bigint, a: bigint, bitmap: object) => copyFrom(obj(a), bitmap),
+  "rsnAllocationCopyToBitmap(JJLandroid/graphics/Bitmap;)V": (_con: bigint, a: bigint, bitmap: object) => copyTo(obj(a), bitmap),
+  "rsnAllocationSyncAll(JJI)V": (_con: bigint, h: bigint) => { const a = obj<Allocation>(h); if (a.bitmap) copyFrom(a, a.bitmap); },
+  // RS_SCRIPT_INTRINSIC_ID_BLUR (5)
+  "rsnScriptIntrinsicCreate(JIJ)J": (_con: bigint, intrinsic: number) => {
+    if (intrinsic !== 5) throw rt.mkThrowable("android/renderscript/RSRuntimeException", `Intrinsic ${intrinsic} is not supported`);
+    return id({ kind: "blur", radius: 5, input: null, padded: null, blurred: null } satisfies Blur);
+  },
+  // slot 0 is the radius
+  "rsnScriptSetVarF(JJIF)V": (_con: bigint, s: bigint, slot: number, value: number) => { if (slot === 0) obj<Blur>(s).radius = value; },
+  // slot 1 is the input
+  "rsnScriptSetVarObj(JJIJ)V": (_con: bigint, s: bigint, slot: number, a: bigint) => { if (slot === 1) obj<Blur>(s).input = a ? obj<Allocation>(a) : null; },
+  "rsnScriptForEach(JJI[JJ[B[I)V": (_con: bigint, s: bigint, _slot: number, _ins: unknown, aout: bigint) => {
+    const blur = obj<Blur>(s), out = obj<Allocation>(aout);
+    if (!blur.input) return;
+    // the Gaussian the intrinsic applies, sigma = 0.4 r + 0.6, edges clamped
+    const sigma = 0.4 * blur.radius + 0.6, pad = Math.ceil(3 * sigma);
+    const g = out.raster.getContext("2d")!;
+    g.clearRect(0, 0, out.w, out.h); g.drawImage(clampedBlur(blur.input.raster, sigma, blur), -pad, -pad);
+    if (out.bitmap) copyTo(out, out.bitmap);
   },
 });
