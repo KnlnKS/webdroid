@@ -142,7 +142,6 @@ export function backtrace(cpu: Cpu, max = 24): string[] {
   return out;
 }
 
-function setErr(msg: string): void { dlerrorMsg = msg; }
 function handleOf(h: Handle): number {
   const i = handles.findIndex((x) => ("mod" in x && "mod" in h && x.mod === h.mod) || ("lib" in x && "lib" in h && x.lib === h.lib));
   if (i >= 0) return HANDLE_BASE + i;
@@ -157,37 +156,36 @@ export function dlInit(): void {
   if (!isA64()) hostLib("libdl.so", libdl);
 }
 
-/** libdl's bodies, which bionic's libdl.so reaches as ld-android.so's __loader_* (their extra
- *  caller-address argument is unread) */
-export const hostLibDl = (): Record<string, HostFn> => libdl;
 const findExidx: HostFn = (_cpu, a) => {
   const pc = a.p(), pcount = a.p(), m = moduleOf(pc);
   mem.st32(pcount, m?.exidx.count ?? 0);
   return m?.exidx.addr ?? 0;
 };
-const libdl: Record<string, HostFn> = {
+/** libdl's bodies, which bionic's libdl.so reaches as ld-android.so's __loader_* (their extra
+ *  caller-address argument is unread) */
+export const libdl: Record<string, HostFn> = {
   dlopen: async (cpu, a) => {
     const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
     if (!name) return 1; // the main program
     if (hostLibNames().includes(name)) return handleOf({ lib: name });
     const have = byName.get(name);
     if (have) { have.refs++; return handleOf({ mod: have }); }
-    if (!libSource(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
+    if (!libSource(name, cpu.nativeRuntime ?? rt)) { dlerrorMsg = `dlopen failed: library "${name}" not found`; return 0; }
     try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu) }); }
-    catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
+    catch (e) { dlerrorMsg = String((e as Error).message ?? e); return 0; }
   },
   dlsym: (_cpu, a) => {
     const h = a.i(), sym = a.str();
     if (h === 0 || h === -1 || h === -2 || h === 1) {
       const v = resolveGlobalOrNull(sym);
-      if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
+      if (v === undefined) { dlerrorMsg = `undefined symbol: ${sym}`; return 0; }
       return v;
     }
     const hd = handles[h - HANDLE_BASE];
-    if (!hd) { setErr("invalid handle"); return 0; }
+    if (!hd) { dlerrorMsg = "invalid handle"; return 0; }
     if ("mod" in hd) {
       const v = hd.mod.exports.get(sym);
-      if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
+      if (v === undefined) { dlerrorMsg = `undefined symbol: ${sym}`; return 0; }
       return v;
     }
     return probeHost(sym, hd.lib);
@@ -230,8 +228,10 @@ const libdl: Record<string, HostFn> = {
   dl_unwind_find_exidx: findExidx,
 };
 
+/** where an image lives: its device path, else the app's library directory for its ABI */
+export const modulePath = (m: Module): string => m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`;
 const nameStrs = new Map<Module, number>();
-function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`))); return p; }
+function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(modulePath(m)))); return p; }
 
 export function resolveGlobalOrNull(sym: string, needed: readonly string[] = []): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }

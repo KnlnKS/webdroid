@@ -7,7 +7,7 @@
 
 import { mem } from "./mem";
 import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host";
-import { interposed, linkerHooks, loadModule, runInit, hostLibDl, modules } from "./dl";
+import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl";
 import { setThreadHooks, type Cpu } from "./cpu";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
 import { auxv, fail } from "./libc";
@@ -221,7 +221,6 @@ function writeTlsLayout(): void {
 
 /** ld-android.so: the linker's exports libdl.so and libc.so call into */
 function loaderExports(): Record<string, HostFn> {
-  const dl = hostLibDl();
   return {
     __loader_shared_globals: () => globals,
     __loader_dlopen: dl.dlopen, __loader_android_dlopen_ext: dl.dlopen,
