@@ -636,6 +636,9 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
    memoised-suspension checks. Its Mihon race no longer reproduces: mihon-onboarding alone passed
    8/8 on the branch and 8/8 on the tip, and `lat` passed cold and warm. The zygote's font map load
    was an unowned entry the check caught; it is a driven generator now.
+   After the merge the live flows run one at a time render Harmonic 14/14, Lichess 15/15, Reddit
+   6/6, Resy 15/15, ChatGPT 24/24, YouTube 16/16 and TikTok 13/13 (one earlier TikTok run wedged
+   from step 06 under live content and passed on rerun), with no `[webdroid unowned]` entry.
 1. StatsEvent (GC stall under bytecode, see history) and print (needs a hosted IPrintManager and a
    PDF-producing WebView adapter) are the desccheck backlog.
 2. Build's fields-only spec needs per-ABI zygote state before its <clinit> can run from bytecode.
