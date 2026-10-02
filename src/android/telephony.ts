@@ -5,8 +5,7 @@
 // TelephonyRegistry.checkListenerPermission (decoded from the reference AVD's services.jar).
 import { JObj, rt, noops } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
-import { absentService, callingIdentity, hostStub } from "./binder";
-import { enforceCallingOrSelfPermission, serviceContext } from "./pm";
+import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
 
 absentService("phone", "isub", "iphonesubinfo", "carrier_config", "isms", "simphonebook", "telephony_ims");

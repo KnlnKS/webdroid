@@ -1,5 +1,5 @@
 import { type JIntent, newIntent } from "../android/intent";
-import { serviceContext } from "../android/pm";
+import { serviceContext } from "../android/binder";
 import { parcelFileDescriptorData } from "../android/os";
 import { mkUri } from "../android/net";
 import { vcall } from "../jvm/natives/jlang";

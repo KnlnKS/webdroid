@@ -11,7 +11,7 @@ import { mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
-import { hostStub, hostedService, callingIdentity, exportParcel, importParcel, type ParcelData } from "./binder";
+import { hostStub, hostedService, callingIdentity, serviceContext, exportParcel, importParcel, type ParcelData } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
@@ -20,7 +20,7 @@ import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
 import { appHost } from "./apphost";
 import { coverTop, foreground } from "./server/atm";
-import { permissionGranted, grantPrompted, serviceContext } from "./pm";
+import { permissionGranted, grantPrompted } from "./permissions";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const LIST = "android/content/pm/ParceledListSlice";

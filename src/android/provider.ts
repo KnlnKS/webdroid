@@ -6,7 +6,8 @@
 
 import { rt, JObj, driven, getDeclared, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { isDocumentsProvider, serviceContext } from "./pm";
+import { isDocumentsProvider } from "./pm";
+import { serviceContext } from "./binder";
 import { startActivityFor } from "./server/atm";
 import { thisApp } from "./server/am";
 import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";

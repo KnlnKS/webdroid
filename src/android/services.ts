@@ -3,7 +3,7 @@
 // ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
-import { JObj, rt, noops, stubs, declaredField, setDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -12,9 +12,10 @@ import { appHost } from "./apphost";
 import { newIntent, putExtra, registerSystemActivity } from "./intent";
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
-import { GL_ES_VERSION, protectionLevel, enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./pm";
+import { GL_ES_VERSION } from "./pm";
+import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions";
 import { deviceConfiguration } from "./resnative";
-import { absentService, callingIdentity, hostStub } from "./binder";
+import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
 import { stickyBroadcasts } from "./broadcast";
@@ -50,8 +51,8 @@ const activityManager: NativeSpec["methods"] = {
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
   "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
-  "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
-  "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => uidPermissionState(name, uid),
+  "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
+  "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
   "isUserAMonkey()Z": () => 0,
   // the render thread's tid, for scheduling: everything here shares the page's one thread
   "setRenderThread(I)V": () => {},
@@ -399,11 +400,10 @@ hostStub("appops", "webdroid/AppOpsService");
 const SOURCE = "android/content/AttributionSourceState";
 rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionChecker$Stub", methods: {
   "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
-    (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) => {
+    async (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) => {
       for (let current: JObj | undefined = source, first = true; current; first = false) {
-        const fields = current as unknown as Record<string, unknown>;
-        if (!(first && fromDatasource) && uidPermissionState(permission, fields[declaredField(SOURCE, "uid")] as number) !== 0) return 2; // PERMISSION_HARD_DENIED
-        current = (fields[declaredField(SOURCE, "next")] as JObj[] | null)?.[0];
+        if (!(first && fromDatasource) && await checkUidPermission(permission, getDeclared(current, SOURCE, "uid")) !== 0) return 2; // PERMISSION_HARD_DENIED
+        current = getDeclared<JObj[] | null>(current, SOURCE, "next")?.[0];
       }
       return 0;
     },

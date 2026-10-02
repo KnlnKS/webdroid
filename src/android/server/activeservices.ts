@@ -9,7 +9,7 @@ import { hostedService } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "../os";
 import { appHost } from "../apphost";
 import { packages } from "../packages";
-import { checkPermission } from "../pm";
+import { checkPermission } from "../permissions";
 import { serviceTransport } from "../runningservices";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo } from "./am";

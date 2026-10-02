@@ -7,7 +7,7 @@ import { newObj, vcall } from "../../jvm/natives/jlang";
 import { hostedService } from "../binder";
 import { PROCESS_UID, reportUncaught } from "../os";
 import { appHost } from "../apphost";
-import { checkPermission } from "../pm";
+import { checkPermission } from "../permissions";
 import { broadcastTransport, filterMatches, stickyBroadcasts, type BroadcastResult } from "../broadcast";
 import type { JBundle } from "../os";
 import { scheduleOnApp, compatInfo, thisApp } from "./am";

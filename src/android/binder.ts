@@ -1,5 +1,5 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, construct, vcall, vcallUncaught } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, construct, scall, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught, mkPfd, parcelFileDescriptorData, writeParcelFileDescriptor } from "./os";
 import { JParcel } from "./parcel";
 import { jarray, mangleMethod, i8, u8 } from "../jvm/abi";
@@ -99,6 +99,10 @@ const SELF_TOKEN = -1n;
 const strictModePolicies = new WeakMap<JThread, number>();
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+/** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
+export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+export const enforceCallingOrSelfPermission = async (permission: string, message: string | null): Promise<void> =>
+  vcall(await serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */

@@ -22,7 +22,8 @@ import { deliverBroadcast as deliverQueued, type Sender } from "../android/serve
 import { hostedServices } from "../android/server/activeservices";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
-import { checkPermission, queryReceivers, exported, componentPermission, componentProcess, resolveProvider, PermissionStore, usePermissionStore } from "../android/pm";
+import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider } from "../android/pm";
+import { checkPermission, PermissionStore, usePermissionStore } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";

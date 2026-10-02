@@ -11,7 +11,7 @@ import { reportUncaught } from "./os";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { hostStub } from "./binder";
-import { permissionGranted } from "./pm";
+import { permissionGranted } from "./permissions";
 import { packages } from "./packages";
 import { appHost } from "./apphost";
 import type { LocationEvent, LocationFix } from "../shell/geolocation";

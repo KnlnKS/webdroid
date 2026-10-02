@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { packageUid } from "../src/android/packages";
-import { grantPermissions } from "../src/android/pm";
+import { grantPermissions } from "../src/android/permissions";
 import { bootApp, packageRecord } from "./java";
 
 const pkg = "org.webdroid.test.notify";

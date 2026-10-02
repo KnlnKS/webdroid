@@ -8,8 +8,7 @@ import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
 import { mimeOf } from "../mime";
 import { storageEstimate } from "./os";
-import { callingIdentity, hostStub } from "./binder";
-import { serviceContext } from "./pm";
+import { callingIdentity, hostStub, serviceContext } from "./binder";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {

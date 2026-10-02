@@ -1,0 +1,170 @@
+// The permission controller: which permissions a package or uid holds, as PermissionManagerService
+// checks them, the runtime grants an app's request (GrantPermissionsActivity) records, and
+// IPermissionManager over them.
+import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
+import { jarray, sameBytes } from "../jvm/abi";
+import { vcall, construct } from "../jvm/natives/jlang";
+import { newArrayList } from "../jvm/natives/jcoll";
+import { type XmlNode, attrStr, attr } from "./axml";
+import { appHost } from "./apphost";
+import { registerSystemActivity, newIntent, putExtra } from "./intent";
+import { PackageRecord, packages, signaturePermissions, usesSdk } from "./packages";
+import { hostStub } from "./binder";
+import { permissionInfo$ } from "./pm";
+
+/**
+ * A runtime permission is DENIED until the app asks for it, which is the state a freshly
+ * installed app is in — reporting a blanket grant sends an app straight past the fallback it
+ * was written to take. Install-time permissions stay granted, as the platform grants them.
+ * AOSP's dangerous groups, by their permission names.
+ */
+const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CALL_LOG", "WRITE_CALL_LOG",
+  "PROCESS_OUTGOING_CALLS", "CAMERA", "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS",
+  "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "RECORD_AUDIO",
+  "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "ANSWER_PHONE_CALLS", "ADD_VOICEMAIL",
+  "USE_SIP", "ACCEPT_HANDOVER", "BODY_SENSORS", "ACTIVITY_RECOGNITION", "SEND_SMS", "RECEIVE_SMS",
+  "READ_SMS", "RECEIVE_WAP_PUSH", "RECEIVE_MMS", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
+  "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "POST_NOTIFICATIONS",
+  "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
+  .map((n) => "android.permission." + n));
+export class PermissionStore {
+  private packages = new Map<string, Set<string>>();
+  get(pkg: string): Set<string> {
+    let grants = this.packages.get(pkg);
+    if (!grants) {
+      grants = new Set(); this.packages.set(pkg, grants);
+      try {
+        const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:permissions:" + pkg) ?? "[]");
+        if (Array.isArray(saved)) for (const value of saved) if (typeof value === "string") grants.add(value);
+      } catch { /* corrupt permission state remains denied */ }
+    }
+    return grants;
+  }
+  grant(pkg: string, names: string[]) {
+    const grants = this.get(pkg); for (const name of names) grants.add(name);
+    globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));
+  }
+}
+let permissionStore = new PermissionStore();
+export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
+/** signature|appop|pre23 permissions, the special access a user grants in Settings (which this
+ *  device has no screen for): held at install by a requesting app targeting below 23 or a system one */
+const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
+// granted by the app's own request, or to a system package by the default grant policy
+export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
+export const permissionGranted = (pkg: string, name: string): boolean => {
+  const record = packages.get(pkg);
+  if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
+  return !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!record?.grants.has(name);
+};
+/** whether a package holds a platform permission no third-party app is granted at install: it is a
+ *  system package that requests it (privileged or preinstalled), or the special access above */
+export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
+  const record = packages.get(pkg);
+  if (SPECIAL_ACCESS.has(name)) return permissionGranted(pkg, name);
+  return !!record && (record.grants.has(name) || record.system && record.permissions.has(name));
+};
+export function grantPermissions(names: string[]): Int32Array {
+  const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
+  // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
+  const asked = record && usesSdk(record.root).target < 33 ? names.filter((name) => name !== "android.permission.POST_NOTIFICATIONS") : names;
+  permissionStore.grant(pkg, asked);
+  return Int32Array.from(names, (name) => permissionGranted(pkg, name) ? 0 : -1);
+}
+/** a permission the system's own prompt asked for, answered by the same policy */
+export const grantPrompted = (pkg: string, name: string): void => permissionStore.grant(pkg, [name]);
+// GrantPermissionsActivity, which Activity.requestPermissions starts: asking grants, and the
+// answer is the names with their results
+const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
+registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", async (intent) => {
+  const names: string[] = await vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES") ?? jarray([], "Ljava/lang/String;");
+  const result = await newIntent();
+  await putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
+  await putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
+  return result;
+});
+const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
+  for (const owner of packages.values()) {
+    const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
+    if (node) return [owner, node];
+  }
+  return null;
+};
+/** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package */
+export function checkPermission(permission: string, pkg: string): number | Promise<number> {
+  const record = packages.get(pkg);
+  if (record?.grants.has(permission)) return 0;
+  if (!record?.permissions.has(permission)) return -1;
+  if (signaturePermissions.has(permission)) return signerHolds(record, permission);
+  return permissionGranted(pkg, permission) ? 0 : -1;
+}
+/** a signature permission: held when the package is signed as the one declaring it */
+async function signerHolds(record: PackageRecord, permission: string): Promise<number> {
+  const certificates = await record.certificates();
+  for (const owner of packages.values()) {
+    if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
+    const signers = await owner.certificates();
+    if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
+  }
+  return -1;
+}
+/** a declared permission's protectionLevel, or null when no package declares it */
+export const protectionLevel = (name: string): number | null => {
+  const declared = declaredPermission(name);
+  return declared ? attr(declared[1], "protectionLevel")?.data ?? 0 : null;
+};
+
+/** PermissionManagerService.checkUidPermission: root and system hold every permission; an app's uid
+ *  holds one a package with that uid holds */
+export function checkUidPermission(name: string, uid: number): number | Promise<number> {
+  if (uid === 0 || uid === 1000) return 0;
+  const pending: Promise<number>[] = [];
+  for (const record of packages.values()) if (record.uid === uid) {
+    const result = checkPermission(name, record.pkg);
+    if (result === 0) return 0;
+    if (result instanceof Promise) pending.push(result);
+  }
+  return pending.length ? Promise.all(pending).then((results) => results.includes(0) ? 0 : -1) : -1;
+}
+
+/** SystemConfig's split permissions (a permission requested below a target SDK implies the newer
+ *  one), as the reference AVD lists them through IPermissionManager.getSplitPermissions */
+const S = "Ljava/lang/String;";
+const permissionName = (name: string) => name.includes(".") ? name : "android.permission." + name;
+const SPLIT_PERMISSIONS: [string, number, string][] = [
+  ["ACCESS_FINE_LOCATION", 10001, "ACCESS_COARSE_LOCATION"], ["WRITE_EXTERNAL_STORAGE", 10001, "READ_EXTERNAL_STORAGE"],
+  ["READ_CONTACTS", 16, "READ_CALL_LOG"], ["WRITE_CONTACTS", 16, "WRITE_CALL_LOG"],
+  ["ACCESS_FINE_LOCATION", 29, "ACCESS_BACKGROUND_LOCATION"], ["ACCESS_COARSE_LOCATION", 29, "ACCESS_BACKGROUND_LOCATION"],
+  ["READ_EXTERNAL_STORAGE", 29, "ACCESS_MEDIA_LOCATION"], ["WRITE_EXTERNAL_STORAGE", 29, "ACCESS_MEDIA_LOCATION"],
+  ...["BLUETOOTH", "BLUETOOTH_ADMIN"].flatMap((name) => ["SCAN", "CONNECT", "ADVERTISE"].map((added): [string, number, string] => [name, 31, "BLUETOOTH_" + added])),
+  ["BODY_SENSORS", 33, "BODY_SENSORS_BACKGROUND"],
+  ...["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"].flatMap((name) => ["AUDIO", "VIDEO", "IMAGES"].map((added): [string, number, string] => [name, 33, "READ_MEDIA_" + added])),
+  ["READ_MEDIA_IMAGES", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"], ["READ_MEDIA_VIDEO", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"],
+  ["ACCESS_MEDIA_LOCATION", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"], ["com.google.android.gms.permission.ACTIVITY_RECOGNITION", 29, "ACTIVITY_RECOGNITION"],
+];
+rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionManager$Stub", methods: {
+  [`checkPermission(${S}${S}${S}I)I`]: (pkg: string, permission: string) => checkPermission(permission, pkg),
+  [`checkUidPermission(I${S}I)I`]: (uid: number, permission: string) => checkUidPermission(permission, uid),
+  [`getPermissionInfo(${S}${S}I)Landroid/content/pm/PermissionInfo;`]: driven(function* getPermissionInfo$(name: string, _caller: string, flags: number): Gen {
+    const declared = declaredPermission(name);
+    return declared ? yield* permissionInfo$(declared[0], declared[1], flags) : null;
+  }),
+  // no device policy is installed to revoke anything
+  [`isPermissionRevokedByPolicy(${S}${S}II)Z`]: () => 0,
+  // PermissionManagerServiceImpl answers FLAG_PERMISSION_USER_SET for a permission not held; a
+  // request is never denied here, so no permission carries it
+  [`shouldShowRequestPermissionRationale(${S}${S}II)Z`]: () => 0,
+  "getSplitPermissions()Ljava/util/List;": driven(function* getSplitPermissions$(): Gen {
+    const splits: JObj[] = [];
+    for (const [name, target, added] of SPLIT_PERMISSIONS) splits.push(yield construct("android/content/pm/permission/SplitPermissionInfoParcelable",
+      `(${S}Ljava/util/List;I)V`, permissionName(name), newArrayList([permissionName(added)]), target));
+    return newArrayList(splits);
+  }),
+  ...noops("addOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V",
+    "removeOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V"),
+} });
+hostStub("permissionmgr", "webdroid/PermissionManagerService");
+// PermissionManager holds a LegacyPermissionManager from construction; none of its identifier
+// checks is answered yet, so each reports itself missing when reached
+rt.register({ name: "webdroid/LegacyPermissionManagerService", ctor: class extends JObj {}, sup: "android/permission/ILegacyPermissionManager$Stub" });
+hostStub("legacy_permission", "webdroid/LegacyPermissionManagerService");

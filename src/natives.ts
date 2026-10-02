@@ -60,6 +60,7 @@ import "./android/text";
 import "./android/resnative";
 import "./android/motionevent";
 import "./android/pm";
+import "./android/permissions";
 import "./android/shortcuts";
 import "./android/alarm";
 import "./android/packageinstaller";
