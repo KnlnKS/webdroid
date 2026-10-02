@@ -16,8 +16,8 @@ import { scall, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { perf } from "../perf";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";
-import { type NativeTypeface, resolveDefault, fontNatives } from "./fonts";
-import { type ShapeStyle, type Piece, measurePiece, featuresOf, pieceEnd, JOINING } from "./shaping";
+import { type NativeTypeface, fontNatives } from "./fonts";
+import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING } from "./shaping";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
 // Advances are a pure function of (typeface, shaping state, piece). Pieces repeat (they are
@@ -41,10 +41,8 @@ function pieceOf(s: TextStyle, piece: string): Piece {
 /** what measuring text under a paint depends on, taken when a run is added: the paint changes after */
 export interface TextStyle extends ShapeStyle { key: string; letterSpacing: number; wordSpacing: number }
 export function styleOf(p: NativePaint): TextStyle {
-  // Skia hints a paint without LINEAR_TEXT unless it is skewed; SUBPIXEL_TEXT does not change advances
-  const size = p.textSize, scaleX = p.textScaleX, hinted = !p.linearText && p.textSkewX === 0, features = featuresOf(p), lang = p.language;
-  return { tf: resolveDefault(p.tf), size, scaleX, hinted, features, lang, key: `${size} ${scaleX} ${+hinted} ${lang} ${features}`,
-    letterSpacing: p.letterSpacingEm * size * scaleX, wordSpacing: p.wordSpacing };
+  const s = shapeStyle(p);
+  return { ...s, key: `${s.size} ${s.scaleX} ${+s.hinted} ${s.lang} ${s.features}`, letterSpacing: p.letterSpacingEm * s.size * s.scaleX, wordSpacing: p.wordSpacing };
 }
 
 /** control characters other than tab shape to nothing; a tab has HarfBuzz's space fallback, and

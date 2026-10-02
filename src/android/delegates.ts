@@ -16,10 +16,10 @@
 import { startMainLooper } from "./mainloop";
 import { rt, JObj, stubs, noops, declaredField } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, FINALIZER } from "./handles";
-import { type JRectF, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, composeShader } from "./graphics";
+import { type JRectF, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
 import { RuntimeShaderBuilder } from "./runtime-shader";
-import { paintAt, scratch2d, preloadPaint, setFontMetrics } from "./paint";
+import { paintAt, preloadPaint, setFontMetrics } from "./paint";
 import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
@@ -33,10 +33,11 @@ import { NativeRegion, nativeRegionOf } from "./region";
 import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
-  type Axis, NativeFont, NativeFamily, NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont, sfntTables, T_CMAP,
-  fontRevision, postScriptName, isPostScriptType1, resolveDefault, setDefaultTypeface, loadSystemFontMap, withFonts,
+  type Axis, NativeFont, NativeFamily, NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont,
+  resolveDefault, setDefaultTypeface, loadSystemFontMap, withFonts,
   createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies, fontOf, wrapFont,
 } from "./fonts";
+import { sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } from "./sfnt";
 
 const delegate = rt.registerJnis.bind(rt);
 

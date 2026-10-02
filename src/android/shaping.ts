@@ -12,7 +12,8 @@ import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { after } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, cssFace, withFonts } from "./fonts";
+import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, withFonts } from "./fonts";
+import { cssFace } from "./cssfonts";
 import { type NativePaint, paintAt } from "./paint";
 import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
 import type { Ctx2D } from "./recording";
@@ -52,9 +53,12 @@ function hbFont(hb: HarfBuzz, f: NativeFont, weight = -1, italic = -1): Font {
   return hb.font(hb.face(f.bytes, f.ttcIndex), axes);
 }
 
-/** whether Skia hints the glyphs, so their advances are whole pixels: an outline font, without
- *  linear metrics and not skewed (a fake italic is a skew) */
-const hints = (p: NativePaint, font: NativeFont, faked = 0) => !p.linearText && p.textSkewX === 0 && !(faked & FAKE_ITALIC) && font.scalable;
+/** whether Skia hints a paint's glyphs: without LINEAR_TEXT, and not skewed (SUBPIXEL_TEXT does
+ *  not change advances) */
+export const paintHinted = (p: NativePaint) => !p.linearText && p.textSkewX === 0;
+/** whether a hinted paint's glyphs in `font` are hinted, so their advances are whole pixels: an
+ *  outline font not faking italic (a skew) */
+const hints = (paintHinted: boolean, font: NativeFont, fakery = 0) => paintHinted && !(fakery & FAKE_ITALIC) && font.scalable;
 
 // ── itemization: FontCollection::itemize
 const isEmojiFamily = (f: NativeFamily) => /(^|[ ,-])Zsye\b/.test(f.langTags);
@@ -141,80 +145,76 @@ export function shapeTextRun(text: string, start: number, count: number, ctxStar
   return shaped((hb) => layout(hb, text, start, start + count, ctxStart, ctxStart + ctxCount, rtl, p));
 }
 function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart: number, ctxEnd: number, rtl: boolean, p: NativePaint): Layout {
-  const t = resolveDefault(p.tf), families = t.collection.families, size = p.textSize, scaleX = p.textScaleX;
+  const style = shapeStyle(p), families = style.tf.collection.families, extent = { ascent: 0, descent: 0 };
   const ids: number[] = [], xs: number[] = [], ys: number[] = [], fonts: FakedFont[] = [];
-  const features = featuresOf(p);
   const pieces: number[] = [];
   for (let i = start; i < end;) { const e = Math.min(pieceEnd(text, i, end), end); pieces.push(i, e); i = e; }
   hb.setText(text, ctxStart, ctxEnd);
-  let x = 0, ascent = 0, descent = 0;
-  const seen = new Set<NativeFont>();
+  let x = 0;
   for (let k = 0; k < pieces.length; k += 2) {
     const piece = rtl ? pieces.length - 2 - k : k;
-    const runs = itemize(hb, families, text, pieces[piece], pieces[piece + 1], p.language);
+    const runs = itemize(hb, families, text, pieces[piece], pieces[piece + 1], style.lang);
     const nRuns = (runs.length - 1) / 2;
     for (let r = 0; r < nRuns; r++) {
       const at = (rtl ? nRuns - 1 - r : r) * 2, a = runs[at] as number, b = runs[at + 2] as number;
-      const faked = (runs[at + 1] as NativeFamily).match(t.weight, t.italic), font = hbFont(hb, faked.font, faked.weight, faked.italic);
-      const s = size / font.units, sx = s * scaleX;
-      const hinted = hints(p, faked.font, faked.fakery);
-      const ls = p.letterSpacingEm && !JOINING.test(text.slice(a, b)) ? f32(f32(p.letterSpacingEm * size) * scaleX) : 0;
-      const n = hb.shape(font, a - ctxStart, b - a, rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR, p.language, features);
+      const run = shapeRun(hb, runs[at + 1] as NativeFamily, style, a - ctxStart, b - a, rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR, extent);
+      const { font, n, s, sx } = run;
+      const ls = p.letterSpacingEm && !JOINING.test(text.slice(a, b)) ? f32(f32(p.letterSpacingEm * style.size) * style.scaleX) : 0;
       const w = hb.words(), info = hb.infos(), pos = hb.positions();
       const texts = font.face.color ? colorText.get(font) ?? colorText.set(font, new Map()).get(font)! : null;
       for (let i = 0; i < n; i++) {
         const glyph = w[info + i * 5], cluster = w[info + i * 5 + 2], o = pos + i * 5;
         if (ls && (i === 0 || w[info + (i - 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
-        ids.push(glyph); fonts.push(faked);
+        ids.push(glyph); fonts.push(run.faked);
         xs.push(x + grid(w[o + 2] * sx)); ys.push(-grid(w[o + 3] * s));
-        x = f32(x + advanceOf(hb, font, glyph, w[o], sx, hinted));
+        x = f32(x + advanceOf(hb, run, glyph, w[o]));
         if (ls && (i === n - 1 || w[info + (i + 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
         if (texts && !texts.has(glyph)) texts.set(glyph, clusterText(text, ctxStart, w, info, i, n, b));
       }
-      if (n && !seen.has(faked.font)) {
-        seen.add(faked.font);
-        const m = faked.font.faceMetrics;
-        if (m) { ascent = Math.min(ascent, f32(-m.ascent * size)); descent = Math.max(descent, f32(m.descent * size)); }
-      }
     }
   }
-  return new Layout(Uint32Array.from(ids), Float32Array.from(xs), Float32Array.from(ys), fonts, f32(x), ascent, descent);
+  return new Layout(Uint32Array.from(ids), Float32Array.from(xs), Float32Array.from(ys), fonts, f32(x), extent.ascent, extent.descent);
 }
 // minikin runs HarfBuzz at 256 units per pixel over Skia's advances: Skia's advance (whole pixels
 // while hinting) is truncated to that grid, and HarfBuzz rounds its own adjustments (kerning, mark
 // offsets) onto it.
 const grid = (px: number) => Math.floor(px * 256 + 0.5) / 256;
+/** what text is shaped under: a paint's typeface, size, scale, hinting, features and language */
+export interface ShapeStyle { tf: NativeTypeface; size: number; scaleX: number; hinted: boolean; features: string | null; lang: string }
+export const shapeStyle = (p: NativePaint): ShapeStyle =>
+  ({ tf: resolveDefault(p.tf), size: p.textSize, scaleX: p.textScaleX, hinted: paintHinted(p), features: featuresOf(p), lang: p.language });
+/** a font run as HarfBuzz shaped it: its font as the family matches the style, pixels per unit
+ *  (`sx` horizontally), whether its advances are hinted, and the glyph count */
+interface ShapedRun { faked: FakedFont; font: Font; s: number; sx: number; hinted: boolean; n: number }
+/** the run [offset, offset + count) of the text set by setText, shaped in its family's match for
+ *  the style, `extent` widened to its font's when it drew glyphs */
+function shapeRun(hb: HarfBuzz, family: NativeFamily, style: ShapeStyle, offset: number, count: number, direction: number, extent: { ascent: number; descent: number }): ShapedRun {
+  const faked = family.match(style.tf.weight, style.tf.italic), font = hbFont(hb, faked.font, faked.weight, faked.italic), s = style.size / font.units;
+  const n = hb.shape(font, offset, count, direction, style.lang, style.features), m = n && faked.font.faceMetrics;
+  if (m) { extent.ascent = Math.min(extent.ascent, f32(-m.ascent * style.size)); extent.descent = Math.max(extent.descent, f32(m.descent * style.size)); }
+  return { faked, font, s, sx: s * style.scaleX, hinted: hints(style.hinted, faked.font, faked.fakery), n };
+}
 /** a shaped glyph's advance in pixels: Skia's advance and HarfBuzz's kerning, as minikin has them;
  *  one HarfBuzz zeroed (a mark, a default ignorable) stays zero */
-function advanceOf(hb: HarfBuzz, font: Font, glyph: number, advance: number, sx: number, hinted: boolean): number {
+function advanceOf(hb: HarfBuzz, run: ShapedRun, glyph: number, advance: number): number {
   if (advance === 0) return 0;
-  const nominal = hb.advance(font, glyph) * sx, skia = hinted ? Math.round(nominal) : Math.trunc(nominal * 256) / 256;
-  return f32(skia + grid(advance * sx - nominal));
+  const nominal = hb.advance(run.font, glyph) * run.sx, skia = run.hinted ? Math.round(nominal) : Math.trunc(nominal * 256) / 256;
+  return f32(skia + grid(advance * run.sx - nominal));
 }
-/** what a measurement is shaped under: the paint's state when a run is measured */
-export interface ShapeStyle { tf: NativeTypeface; size: number; scaleX: number; hinted: boolean; features: string | null; lang: string }
 /** one LayoutSplitter piece as minikin measures it: each glyph's advance on its cluster's first
  *  code unit (Layout::doLayoutRun, before letter spacing), and the extent of the fonts it used */
 export interface Piece { advances: Float32Array; ascent: number; descent: number }
 /** a piece laid out in the direction HarfBuzz guesses from its script */
-export function measurePiece(piece: string, s: ShapeStyle): Piece {
-  const hb = loadedHarfBuzz(), out = new Float32Array(piece.length);
-  let ascent = 0, descent = 0;
+export function measurePiece(piece: string, style: ShapeStyle): Piece {
+  const hb = loadedHarfBuzz(), advances = new Float32Array(piece.length), extent = { ascent: 0, descent: 0 };
   hb.setText(piece, 0, piece.length);
-  const runs = itemize(hb, s.tf.collection.families, piece, 0, piece.length, s.lang);
+  const runs = itemize(hb, style.tf.collection.families, piece, 0, piece.length, style.lang);
   for (let r = 0; r + 2 < runs.length; r += 2) {
-    const a = runs[r] as number, faked = (runs[r + 1] as NativeFamily).match(s.tf.weight, s.tf.italic);
-    const font = hbFont(hb, faked.font, faked.weight, faked.italic), sx = s.size / font.units * s.scaleX;
-    const hinted = s.hinted && !(faked.fakery & FAKE_ITALIC) && faked.font.scalable;
-    const n = hb.shape(font, a, (runs[r + 2] as number) - a, HB_DIRECTION_INVALID, s.lang, s.features);
+    const run = shapeRun(hb, runs[r + 1] as NativeFamily, style, runs[r] as number, (runs[r + 2] as number) - (runs[r] as number), HB_DIRECTION_INVALID, extent);
     const w = hb.words(), info = hb.infos(), pos = hb.positions();
-    for (let i = 0; i < n; i++) {
-      out[w[info + i * 5 + 2]] += advanceOf(hb, font, w[info + i * 5], w[pos + i * 5], sx, hinted);
-    }
-    const m = n && faked.font.faceMetrics;
-    if (m) { ascent = Math.min(ascent, f32(-m.ascent * s.size)); descent = Math.max(descent, f32(m.descent * s.size)); }
+    for (let i = 0; i < run.n; i++) advances[w[info + i * 5 + 2]] += advanceOf(hb, run, w[info + i * 5], w[pos + i * 5]);
   }
-  return { advances: out, ascent, descent };
+  return { advances, ...extent };
 }
 /** the text of glyph i's cluster: from its cluster to the next cluster in logical order */
 function clusterText(text: string, ctxStart: number, w: Int32Array, info: number, i: number, n: number, runEnd: number): string {
@@ -246,7 +246,7 @@ export function glyphBounds(font: NativeFont, glyph: number, p: NativePaint, rec
       [rect.left, rect.top, rect.right, rect.bottom] = box ? [Math.floor(box[0]), Math.floor(box[1]), Math.ceil(box[2]), Math.ceil(box[3])] : [0, 0, 0, 0];
     }
     const advance = hb.advance(f, glyph) * (p.textSize / f.units) * p.textScaleX;
-    return f32(hints(p, font) ? Math.round(advance) : advance);
+    return f32(hints(paintHinted(p), font) ? Math.round(advance) : advance);
   });
 }
 /** Layout::getBounds: the union of the laid-out glyphs' bounds at their positions, null for none */

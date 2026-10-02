@@ -1,4 +1,5 @@
-import { NativeFont, NativeFamily, NativeTypeface, FontCollection, FakedFont, wrapFont, cssFace, withFonts } from "../../../src/android/fonts";
+import { NativeFont, NativeFamily, NativeTypeface, FontCollection, FakedFont, wrapFont, withFonts } from "../../../src/android/fonts";
+import { cssFace } from "../../../src/android/cssfonts";
 import { drawGlyphs, shapeTextRun } from "../../../src/android/shaping";
 import { NativePaint } from "../../../src/android/paint";
 import type { Ctx2D } from "../../../src/android/recording";

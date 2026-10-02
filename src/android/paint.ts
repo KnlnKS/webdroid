@@ -7,7 +7,8 @@ import { charsToString, mangleMethod } from "../jvm/abi";
 import { after, construct, newObj, vcall } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
-import { type FaceMetrics, type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
+import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
+import type { FaceMetrics } from "./sfnt";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
 import { colorLongAt } from "./bitmap";
 import { NativePath, skCommands, setSkCommands } from "./path";
@@ -163,11 +164,6 @@ export const paintTypeface = (p: object) => vcall(p, "getTypeface", `()${TF}`) a
 export const setPaintTypeface = (p: object, tf: object | null): unknown => vcall(p, "setTypeface", `(${TF})${TF}`, tf);
 
 // ── text metrics
-let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
-/** a 2D context that makes gradients and patterns for any canvas */
-export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
-  return scratch ??= (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas")).getContext("2d") as OffscreenCanvasRenderingContext2D;
-}
 /** Paint's metrics are its primary font's (hhea ascent/descent, head bounds), fractional */
 const metricsOf = (p: NativePaint): FaceMetrics => p.primary().font.faceMetrics!;
 /** getMetricsInternal's elegant-height metrics, in 2048ths of the size: top, ascent, descent, bottom */

@@ -619,8 +619,9 @@ registers the HLE libc (`libcInit`).
 
 **What exists (E2).** `fonts.ts` holds minikin's Font/FontFamily/FontCollection and hwui's Typeface
 over lazily loaded platform fonts (`FontPending`, `withFonts`, `fontNatives`: text natives rerun
-once a font loads) and the CSS faces Canvas2D draws with; `shaping.ts` is minikin's layout
-(itemization, pieces, HarfBuzz at the 24.8 grid) for measurement, TextRunShaper and drawing;
+once a font loads); `sfnt.ts` reads font files' tables; `cssfonts.ts` registers the CSS faces
+Canvas2D draws with; `shaping.ts` is minikin's layout (itemization, pieces, `shapeRun` at the 24.8
+grid) for measurement, TextRunShaper and drawing;
 `minikin.ts` keeps line breaking and Paint's measurement natives; `skia.ts` is the tab's CanvasKit
 (path ops, stroking, bitmap text). `gen-framework` pulls the fonts; `scripts/font-index.ts` builds
 `/font-index.json`, which the dev server and `build-prod` serve.

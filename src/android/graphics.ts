@@ -193,6 +193,11 @@ export class NativeGradient extends NativeShader {
   constructor(local: Affine | null, readonly grad: CanvasGradient) { super(local); }
   override pattern(): CanvasGradient { return this.grad; }
 }
+let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
+/** a 2D context that makes gradients for any canvas */
+export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+  return scratch ??= (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas")).getContext("2d") as OffscreenCanvasRenderingContext2D;
+}
 /** a gradient's native instance: its ColorLongs at `positions` (evenly spaced when null), which
  *  SkGradientShader pins to [0, 1] and to no less than the position before */
 export function gradient(local: Affine | null, g: CanvasGradient, colors: BigInt64Array, positions: Float32Array | null): NativeGradient {
