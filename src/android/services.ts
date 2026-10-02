@@ -138,11 +138,11 @@ rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj
 hostStub("statusbar", "webdroid/StatusBarManagerService");
 // IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
 // or enabled, so a client's state is all off; the focus highlight is framework-res's
-async function systemResource(type: string, name: string, read: string, desc: string, ...args: unknown[]): Promise<number> {
-  const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-  const id: number = await vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
-  return vcall(res, read, desc, id, ...args);
-}
+const systemResource = driven(function* (type: string, name: string, read: string, desc: string, ...args: unknown[]): Gen<number> {
+  const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id: number = yield vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
+  return yield vcall(res, read, desc, id, ...args);
+});
 rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends JObj {}, sup: "android/view/accessibility/IAccessibilityManager$Stub", methods: {
   "addClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)J": () => 0n,
   "removeClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)Z": () => 1,
@@ -178,61 +178,64 @@ const networkState = {
   link: null as Promise<JObj> | null,
 };
 export const theNetwork = (): Promise<JObj> => networkState.network ??= newObj("android/net/Network", "(I)V", NET_ID);
-const capabilities = () => networkState.caps ??= (async () => {
-  let b = await newObj(`${NC}$Builder`);
-  b = await vcall(b, "addTransportType", `(I)${NCB}`, TRANSPORT_WIFI);
-  for (const c of CAPABILITIES) b = await vcall(b, "addCapability", `(I)${NCB}`, c);
-  b = await vcall(b, "setLinkUpstreamBandwidthKbps", `(I)${NCB}`, 12000);
-  b = await vcall(b, "setLinkDownstreamBandwidthKbps", `(I)${NCB}`, 30000);
-  b = await vcall(b, "setSignalStrength", `(I)${NCB}`, -50);
-  return vcall(b, "build", `()L${NC};`);
-})();
-const linkProperties = () => networkState.link ??= (async () => {
-  const lp = await newObj("android/net/LinkProperties");
-  await vcall(lp, "setInterfaceName", "(Ljava/lang/String;)V", "wlan0");
-  const dns = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", DNS_SERVER);
-  await vcall(lp, "addDnsServer", "(Ljava/net/InetAddress;)Z", dns);
+const capabilities = () => networkState.caps ??= Promise.resolve(rt.drive(function* (): Gen<JObj> {
+  let b = yield newObj(`${NC}$Builder`);
+  b = yield vcall(b, "addTransportType", `(I)${NCB}`, TRANSPORT_WIFI);
+  for (const c of CAPABILITIES) b = yield vcall(b, "addCapability", `(I)${NCB}`, c);
+  b = yield vcall(b, "setLinkUpstreamBandwidthKbps", `(I)${NCB}`, 12000);
+  b = yield vcall(b, "setLinkDownstreamBandwidthKbps", `(I)${NCB}`, 30000);
+  b = yield vcall(b, "setSignalStrength", `(I)${NCB}`, -50);
+  return yield vcall(b, "build", `()L${NC};`);
+}()));
+const linkProperties = () => networkState.link ??= Promise.resolve(rt.drive(function* (): Gen<JObj> {
+  const lp = yield newObj("android/net/LinkProperties");
+  yield vcall(lp, "setInterfaceName", "(Ljava/lang/String;)V", "wlan0");
+  const dns = yield scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", DNS_SERVER);
+  yield vcall(lp, "addDnsServer", "(Ljava/net/InetAddress;)Z", dns);
   return lp;
-})();
-const isOurs = async (n: unknown) => n != null && await vcall(n, "equals", "(Ljava/lang/Object;)Z", await theNetwork()) === 1;
-async function networkInfo(): Promise<JObj> {
-  const info = await newObj("android/net/NetworkInfo", "(IILjava/lang/String;Ljava/lang/String;)V", TYPE_WIFI, 0, "WIFI", "");
-  const connected = (await linkInit("android/net/NetworkInfo$DetailedState")).ctor[mangleStaticField(netUp() ? "CONNECTED" : "DISCONNECTED")];
-  await vcall(info, "setDetailedState", "(Landroid/net/NetworkInfo$DetailedState;Ljava/lang/String;Ljava/lang/String;)V", connected, null, "");
-  await vcall(info, "setIsAvailable", "(Z)V", 1);
+}()));
+/** `n` is the one network: then `answer`, else null */
+const ifOurs = (answer: () => unknown) => driven(function* (n: unknown): Gen {
+  return n != null && (yield vcall(n, "equals", "(Ljava/lang/Object;)Z", yield theNetwork())) === 1 ? yield answer() : null;
+});
+const networkInfo = driven(function* (): Gen<JObj> {
+  const info = yield newObj("android/net/NetworkInfo", "(IILjava/lang/String;Ljava/lang/String;)V", TYPE_WIFI, 0, "WIFI", "");
+  const connected = (yield linkInit("android/net/NetworkInfo$DetailedState")).ctor[mangleStaticField(netUp() ? "CONNECTED" : "DISCONNECTED")];
+  yield vcall(info, "setDetailedState", "(Landroid/net/NetworkInfo$DetailedState;Ljava/lang/String;Ljava/lang/String;)V", connected, null, "");
+  yield vcall(info, "setIsAvailable", "(Z)V", 1);
   return info;
-}
+});
 /** ConnectivityManager's CALLBACK_* message codes */
 const callbackCode = async (name: string): Promise<number> => (await linkInit("android/net/ConnectivityManager")).ctor[mangleStaticField(name)];
 type Registration = { request: JObj; messenger: JObj };
 const registrations = new Map<JObj, Registration>();
 let nextRequestId = 1;
 /** ConnectivityService.callCallbackForRequest: the request, the network and what the code carries */
-async function sendCallback(r: Registration, name: string): Promise<void> {
-  const data = await newObj("android/os/Bundle"), put = (cls: string, value: unknown) =>
+function* sendCallback(r: Registration, name: string): Gen<void> {
+  const data = yield newObj("android/os/Bundle"), put = (cls: string, value: unknown) =>
     vcall(data, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", cls, value);
-  await put("NetworkRequest", r.request);
-  await put("Network", await theNetwork());
+  yield put("NetworkRequest", r.request);
+  yield put("Network", yield theNetwork());
   if (name === "CALLBACK_AVAILABLE") {
-    await put("NetworkCapabilities", await capabilities());
-    await put("LinkProperties", await linkProperties());
+    yield put("NetworkCapabilities", yield capabilities());
+    yield put("LinkProperties", yield linkProperties());
   }
-  const msg = await scall("android/os/Message", "obtain", "()Landroid/os/Message;");
-  msg[declaredField("android/os/Message", "what")] = await callbackCode(name);
-  await vcall(msg, "setData", "(Landroid/os/Bundle;)V", data);
-  await vcall(r.messenger, "send", "(Landroid/os/Message;)V", msg);
+  const msg = yield scall("android/os/Message", "obtain", "()Landroid/os/Message;");
+  msg[declaredField("android/os/Message", "what")] = yield callbackCode(name);
+  yield vcall(msg, "setData", "(Landroid/os/Bundle;)V", data);
+  yield vcall(r.messenger, "send", "(Landroid/os/Message;)V", msg);
 }
 /** a request's NetworkRequest, registered for callbacks; one the network satisfies hears of it */
-async function register(caps: unknown, legacyType: number, messenger: JObj, type: number): Promise<JObj> {
-  const types = (await linkInit("android/net/NetworkRequest$Type")).ctor[mangleMethod("values", "()[Landroid/net/NetworkRequest$Type;")]() as JObj[];
-  const request: JObj = await newObj("android/net/NetworkRequest", "(Landroid/net/NetworkCapabilities;IILandroid/net/NetworkRequest$Type;)V",
-    caps ?? await newObj(NC), legacyType, nextRequestId++, types[type]);
+const register = driven(function* (caps: unknown, legacyType: number, messenger: JObj, type: number): Gen<JObj> {
+  const types = (yield linkInit("android/net/NetworkRequest$Type")).ctor[mangleMethod("values", "()[Landroid/net/NetworkRequest$Type;")]() as JObj[];
+  const request: JObj = yield newObj("android/net/NetworkRequest", "(Landroid/net/NetworkCapabilities;IILandroid/net/NetworkRequest$Type;)V",
+    caps ?? (yield newObj(NC)), legacyType, nextRequestId++, types[type]);
   const r = { request, messenger };
   registrations.set(request, r);
-  if (netUp() && await vcall(caps ?? await capabilities(), "satisfiedByNetworkCapabilities", `(L${NC};)Z`, await capabilities()))
-    await sendCallback(r, "CALLBACK_AVAILABLE");
+  if (netUp() && (yield vcall(caps ?? (yield capabilities()), "satisfiedByNetworkCapabilities", `(L${NC};)Z`, yield capabilities())))
+    yield* sendCallback(r, "CALLBACK_AVAILABLE");
   return request;
-}
+});
 rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {}, sup: "android/net/IConnectivityManager$Stub", methods: {
   "getActiveNetwork()Landroid/net/Network;": () => netUp() ? theNetwork() : null,
   "getActiveNetworkForUid(IZ)Landroid/net/Network;": () => netUp() ? theNetwork() : null,
@@ -241,10 +244,9 @@ rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {},
   "getActiveNetworkInfoForUid(IZ)Landroid/net/NetworkInfo;": networkInfo,
   // the one network's own type answers; this device has no other
   "getNetworkInfo(I)Landroid/net/NetworkInfo;": (type: number) => type === TYPE_WIFI ? networkInfo() : null,
-  "getNetworkInfoForUid(Landroid/net/Network;IZ)Landroid/net/NetworkInfo;": async (n: unknown) => await isOurs(n) ? networkInfo() : null,
-  "getNetworkCapabilities(Landroid/net/Network;Ljava/lang/String;Ljava/lang/String;)Landroid/net/NetworkCapabilities;": async (n: unknown) =>
-    await isOurs(n) ? capabilities() : null,
-  "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": async (n: unknown) => await isOurs(n) ? linkProperties() : null,
+  "getNetworkInfoForUid(Landroid/net/Network;IZ)Landroid/net/NetworkInfo;": ifOurs(networkInfo),
+  "getNetworkCapabilities(Landroid/net/Network;Ljava/lang/String;Ljava/lang/String;)Landroid/net/NetworkCapabilities;": ifOurs(capabilities),
+  "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": ifOurs(linkProperties),
   "isActiveNetworkMetered()Z": () => 0,
   "isDefaultNetworkActive()Z": () => +netUp(),
   // RESTRICT_BACKGROUND_STATUS_DISABLED: data saver is off
@@ -253,7 +255,7 @@ rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {},
   "requestNetwork(ILandroid/net/NetworkCapabilities;ILandroid/os/Messenger;ILandroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;)Landroid/net/NetworkRequest;":
     (_uid: number, caps: unknown, type: number, messenger: JObj, _timeout: number, _binder: unknown, legacyType: number) => register(caps, legacyType, messenger, type),
   "listenForNetwork(Landroid/net/NetworkCapabilities;Landroid/os/Messenger;Landroid/os/IBinder;ILjava/lang/String;Ljava/lang/String;)Landroid/net/NetworkRequest;":
-    async (caps: unknown, messenger: JObj) => register(caps, -1, messenger, 1),
+    (caps: unknown, messenger: JObj) => register(caps, -1, messenger, 1),
   "releaseNetworkRequest(Landroid/net/NetworkRequest;)V": (request: JObj) => { registrations.delete(request); },
   // the network is already validated; revalidation is only a hint
   ...noops("reportNetworkConnectivity(Landroid/net/Network;Z)V",
@@ -261,9 +263,9 @@ rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {},
     "unregisterNetworkActivityListener(Landroid/net/INetworkActivityListener;)V"),
 } });
 if (typeof addEventListener !== "undefined") for (const event of ["online", "offline"])
-  addEventListener(event, () => void (async () => {
-    for (const r of registrations.values()) await sendCallback(r, event === "online" ? "CALLBACK_AVAILABLE" : "CALLBACK_LOST");
-  })().catch(reportUncaught));
+  addEventListener(event, () => void Promise.resolve().then(() => rt.drive(function* () {
+    for (const r of registrations.values()) yield* sendCallback(r, event === "online" ? "CALLBACK_AVAILABLE" : "CALLBACK_LOST");
+  }())).catch(reportUncaught));
 
 hostStub("connectivity", "webdroid/ConnectivityService");
 
@@ -284,8 +286,9 @@ rt.registerJnis("android/net/NetworkUtils", {
 rt.register({ name: "webdroid/PowerManagerService", ctor: class extends JObj {}, sup: "android/os/IPowerManager$Stub", methods: {
   ...stubs(1, "isInteractive()Z", "isWakeLockLevelSupported(I)Z"),
   ...stubs(0, "isPowerSaveMode()Z", "isDeviceIdleMode()Z", "isLightDeviceIdleMode()Z", "isLowPowerStandbyEnabled()Z", "isLowPowerStandbySupported()Z"),
-  "getPowerSaveState(I)Landroid/os/PowerSaveState;": async () =>
-    vcall(await newObj("android/os/PowerSaveState$Builder"), "build", "()Landroid/os/PowerSaveState;"),
+  "getPowerSaveState(I)Landroid/os/PowerSaveState;": driven(function* () {
+    return yield vcall(yield newObj("android/os/PowerSaveState$Builder"), "build", "()Landroid/os/PowerSaveState;");
+  }),
   ...noops("acquireWakeLock(Landroid/os/IBinder;ILjava/lang/String;Ljava/lang/String;Landroid/os/WorkSource;Ljava/lang/String;ILandroid/os/IWakeLockCallback;)V",
     "acquireWakeLockAsync(Landroid/os/IBinder;ILjava/lang/String;Ljava/lang/String;Landroid/os/WorkSource;Ljava/lang/String;)V",
     "releaseWakeLock(Landroid/os/IBinder;I)V", "releaseWakeLockAsync(Landroid/os/IBinder;I)V",
@@ -330,23 +333,26 @@ rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}
 const AOM = "android/app/AppOpsManager", MODE_ALLOWED = 0, MODE_IGNORED = 1, MODE_ERRORED = 2;
 const owns = (uid: number, pkg: string | null) => pkg !== null && packages.get(pkg)?.uid === uid;
 const defaultMode = (code: number): Promise<number> => scall(AOM, "opToDefaultMode", "(I)I", code);
-async function opMode(code: number, pkg: string): Promise<number> {
-  const op: number = await scall(AOM, "opToSwitch", "(I)I", code);
-  const permission: string | null = await scall(AOM, "opToPermission", "(I)Ljava/lang/String;", op);
+function* opMode(code: number, pkg: string): Gen<number> {
+  const op: number = yield scall(AOM, "opToSwitch", "(I)I", code);
+  const permission: string | null = yield scall(AOM, "opToPermission", "(I)Ljava/lang/String;", op);
   if (permission !== null && isRuntimePermission(permission)) return permissionGranted(pkg, permission) ? MODE_ALLOWED : MODE_IGNORED;
-  return defaultMode(op);
+  return yield defaultMode(op);
 }
-const checkOp = (code: number, uid: number, pkg: string | null) => owns(uid, pkg) ? opMode(code, pkg!) : defaultMode(code);
-const noteOp = async (code: number, uid: number, pkg: string | null, tag: string | null) => newObj("android/app/SyncNotedAppOp",
-  "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? await opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
+const checkOp = driven(function* (code: number, uid: number, pkg: string | null): Gen<number> {
+  return owns(uid, pkg) ? yield* opMode(code, pkg!) : yield defaultMode(code);
+});
+const noteOp = driven(function* (code: number, uid: number, pkg: string | null, tag: string | null): Gen<JObj> {
+  return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
+});
 const sourceField = (state: JObj, name: string) => (state as unknown as Record<string, unknown>)[declaredField("android/content/AttributionSourceState", name)];
 const noteFor = (code: number, state: JObj) =>
   noteOp(code, sourceField(state, "uid") as number, sourceField(state, "packageName") as string | null, sourceField(state, "attributionTag") as string | null);
 /** a proxied op is noted for the proxy (an app is never a trusted proxy) and then the app it serves */
-async function noteProxyOp(code: number, state: JObj) {
-  const proxy: JObj = await noteFor(code, state), next = sourceField(state, "next") as JObj[] | null;
-  return next?.length && await vcall(proxy, "getOpMode", "()I") === MODE_ALLOWED ? noteFor(code, next[0]) : proxy;
-}
+const noteProxyOp = driven(function* (code: number, state: JObj): Gen<JObj> {
+  const proxy: JObj = yield noteFor(code, state), next = sourceField(state, "next") as JObj[] | null;
+  return next?.length && (yield vcall(proxy, "getOpMode", "()I")) === MODE_ALLOWED ? yield noteFor(code, next[0]) : proxy;
+});
 rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IAppOpsService$Stub", methods: {
   "checkOperation(IILjava/lang/String;)I": checkOp,
   "checkOperationForDevice(IILjava/lang/String;I)I": checkOp,
@@ -365,14 +371,14 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
     (_token: unknown, code: number, state: JObj) => noteProxyOp(code, state),
   "isOperationActive(IILjava/lang/String;)Z": () => 0,
   // an app's own notes are collected for ops a dangerous or appop permission guards
-  "shouldCollectNotes(I)Z": async (code: number) => {
-    if (await scall(AOM, "shouldForceCollectNoteForOp", "(I)Z", code)) return 1;
-    const permission: string | null = await scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
+  "shouldCollectNotes(I)Z": driven(function* (code: number) {
+    if (yield scall(AOM, "shouldForceCollectNoteForOp", "(I)Z", code)) return 1;
+    const permission: string | null = yield scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
     if (permission === null) return 0;
     // PermissionInfo's PROTECTION_DANGEROUS, or PROTECTION_FLAG_APPOP; an undeclared permission is neither
     const level = protectionLevel(permission) ?? 0;
     return +((level & 15) === 1 || (level & 0x40) !== 0);
-  },
+  }),
   ...noops("finishOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;)V",
     "finishOperationForDevice(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;I)V",
     "finishProxyOperationWithState(Landroid/os/IBinder;ILandroid/content/AttributionSourceState;Z)V",
@@ -462,26 +468,26 @@ stickyBroadcasts.set("android.intent.action.BATTERY_CHANGED", driven(function* (
 /** BatteryStatsService.takeUidSnapshot: no uid's usage is recorded here, so a snapshot holds no
  *  values; another uid's needs BATTERY_STATS */
 const HPARCELER = "Landroid/os/health/HealthStatsParceler;";
-async function uidSnapshot(uid: number): Promise<JObj> {
-  if (uid !== callingIdentity().uid) await enforceCallingOrSelfPermission("android.permission.BATTERY_STATS", null);
-  return newObj("android/os/health/HealthStatsParceler", "(Landroid/os/health/HealthStatsWriter;)V", await newObj("android/os/health/HealthStatsWriter",
-    "(Landroid/os/health/HealthKeys$Constants;)V", await staticField("android/os/health/UidHealthStats", "CONSTANTS")));
+function* uidSnapshot(uid: number): Gen<JObj> {
+  if (uid !== callingIdentity().uid) yield enforceCallingOrSelfPermission("android.permission.BATTERY_STATS", null);
+  return yield newObj("android/os/health/HealthStatsParceler", "(Landroid/os/health/HealthStatsWriter;)V", yield newObj("android/os/health/HealthStatsWriter",
+    "(Landroid/os/health/HealthKeys$Constants;)V", yield staticField("android/os/health/UidHealthStats", "CONSTANTS")));
 }
-const uidSnapshots = async (uids: Int32Array) => {
+function* uidSnapshots(uids: Int32Array): Gen<JObj[]> {
   const snapshots: JObj[] = [];
-  for (const uid of uids) snapshots.push(await uidSnapshot(uid));
+  for (const uid of uids) snapshots.push(yield* uidSnapshot(uid));
   return jarray(snapshots, HPARCELER);
-};
+}
 rt.register({ name: "webdroid/BatteryStatsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IBatteryStats$Stub", methods: {
   "isCharging()Z": () => +pluggedIn(),
   "computeChargeTimeRemaining()J": () => -1n,
-  [`takeUidSnapshot(I)${HPARCELER}`]: uidSnapshot,
-  [`takeUidSnapshots([I)[${HPARCELER}`]: uidSnapshots,
-  "takeUidSnapshotsAsync([ILandroid/os/ResultReceiver;)V": async (uids: Int32Array, receiver: JObj) => {
-    const result = await newObj("android/os/Bundle", "(I)V", 1);
-    await vcall(result, "putParcelableArray", "(Ljava/lang/String;[Landroid/os/Parcelable;)V", "uid_snapshots", await uidSnapshots(uids));
-    await vcall(receiver, "send", "(ILandroid/os/Bundle;)V", 0, result);
-  },
+  [`takeUidSnapshot(I)${HPARCELER}`]: driven(uidSnapshot),
+  [`takeUidSnapshots([I)[${HPARCELER}`]: driven(uidSnapshots),
+  "takeUidSnapshotsAsync([ILandroid/os/ResultReceiver;)V": driven(function* (uids: Int32Array, receiver: JObj) {
+    const result = yield newObj("android/os/Bundle", "(I)V", 1);
+    yield vcall(result, "putParcelableArray", "(Ljava/lang/String;[Landroid/os/Parcelable;)V", "uid_snapshots", yield* uidSnapshots(uids));
+    yield vcall(receiver, "send", "(ILandroid/os/Bundle;)V", 0, result);
+  }),
 } });
 // IPowerStatsService: present on every device; nothing here reads a power monitor
 rt.register({ name: "webdroid/PowerStatsService", ctor: class extends JObj {}, sup: "android/os/IPowerStatsService$Stub" });

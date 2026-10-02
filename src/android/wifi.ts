@@ -5,7 +5,7 @@
 // kept (decoded from the AVD's service-wifi.jar): ACCESS_WIFI_STATE to read, CHANGE_WIFI_STATE to
 // change, location access to see the network's identity or scan results. There is no radio to scan
 // or toggle: a scan fails and setWifiEnabled is refused.
-import { JObj, declaredField, rt } from "../jvm/runtime";
+import { JObj, declaredField, rt, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { linkInit, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { mangleStaticField } from "../jvm/abi";
@@ -23,23 +23,23 @@ const enforce = (permission: string) => enforceCallingOrSelfPermission(permissio
 const enforceAccess = () => enforce("android.permission.ACCESS_WIFI_STATE");
 /** WifiPermissionsUtil.enforceCanAccessScanResults for an app: location on, and fine location (coarse
  *  below Q) */
-async function canAccessScanResults(pkg: string): Promise<boolean> {
-  const { uid } = callingIdentity(), held = async (name: string) => await checkUidPermission("android.permission." + name, uid) === 0;
-  return locationTransport.enabled() && (await held("ACCESS_FINE_LOCATION") || (packages.get(pkg)?.sdk.target ?? 0) < 29 && await held("ACCESS_COARSE_LOCATION"));
+function* canAccessScanResults(pkg: string): Gen<boolean> {
+  const { uid } = callingIdentity(), check = (name: string) => checkUidPermission("android.permission." + name, uid);
+  return locationTransport.enabled() && ((yield check("ACCESS_FINE_LOCATION")) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield check("ACCESS_COARSE_LOCATION")) === 0);
 }
-async function connectionInfo(): Promise<JObj> {
-  const info = await newObj("android/net/wifi/WifiInfo");
+function* connectionInfo(): Gen<JObj> {
+  const info = yield newObj("android/net/wifi/WifiInfo");
   if (!netUp()) return info;
-  const state = (await linkInit("android/net/wifi/SupplicantState")).ctor[mangleStaticField("COMPLETED")];
+  const state = (yield linkInit("android/net/wifi/SupplicantState")).ctor[mangleStaticField("COMPLETED")];
   const set = (name: string, desc: string, value: unknown) => vcall(info, name, `(${desc})V`, value);
-  await set("setSupplicantState", "Landroid/net/wifi/SupplicantState;", state);
-  await set("setSSID", "Landroid/net/wifi/WifiSsid;", await scall("android/net/wifi/WifiSsid", "fromUtf8Text", "(Ljava/lang/CharSequence;)Landroid/net/wifi/WifiSsid;", "AndroidWifi"));
-  await set("setBSSID", S, "00:13:10:85:fe:01");
-  await set("setMacAddress", S, "02:15:de:00:00:00");
+  yield set("setSupplicantState", "Landroid/net/wifi/SupplicantState;", state);
+  yield set("setSSID", "Landroid/net/wifi/WifiSsid;", yield scall("android/net/wifi/WifiSsid", "fromUtf8Text", "(Ljava/lang/CharSequence;)Landroid/net/wifi/WifiSsid;", "AndroidWifi"));
+  yield set("setBSSID", S, "00:13:10:85:fe:01");
+  yield set("setMacAddress", S, "02:15:de:00:00:00");
   for (const [name, value] of [["setNetworkId", 0], ["setRssi", -50], ["setLinkSpeed", 1], ["setTxLinkSpeedMbps", 1], ["setRxLinkSpeedMbps", 2],
     ["setMaxSupportedTxLinkSpeedMbps", 11], ["setMaxSupportedRxLinkSpeedMbps", 11], ["setFrequency", 2447], ["setWifiStandard", WIFI_STANDARD_LEGACY],
-    ["setCurrentSecurityType", SECURITY_TYPE_OPEN], ["setScore", 60]] as const) await set(name, "I", value);
-  for (const name of ["setUsable", "setIsPrimary", "setTrusted"]) await set(name, "Z", 1);
+    ["setCurrentSecurityType", SECURITY_TYPE_OPEN], ["setScore", 60]] as const) yield set(name, "I", value);
+  for (const name of ["setUsable", "setIsPrimary", "setTrusted"]) yield set(name, "Z", 1);
   return info;
 }
 /** an IPv4 address as DhcpInfo holds it: the first octet lowest */
@@ -48,23 +48,23 @@ const inet4 = (address: string) => address.split(".").reduceRight((n, octet) => 
 const locks = new Set<unknown>(), multicast = new Map<unknown, string>();
 rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "android/net/wifi/IWifiManager$Stub", methods: {
   "getWifiEnabledState()I": async () => { await enforceAccess(); return WIFI_STATE_ENABLED; },
-  [`getConnectionInfo(${S}${S})Landroid/net/wifi/WifiInfo;`]: async (pkg: string) => {
-    await enforceAccess();
-    const info = await connectionInfo(), redactions: bigint = await vcall(info, "getApplicableRedactions", "()J");
-    return vcall(info, "makeCopy", "(J)Landroid/net/wifi/WifiInfo;", await canAccessScanResults(pkg) ? redactions & ~REDACT_FOR_ACCESS_FINE_LOCATION : redactions);
-  },
+  [`getConnectionInfo(${S}${S})Landroid/net/wifi/WifiInfo;`]: driven(function* (pkg: string) {
+    yield enforceAccess();
+    const info = yield* connectionInfo(), redactions: bigint = yield vcall(info, "getApplicableRedactions", "()J");
+    return yield vcall(info, "makeCopy", "(J)Landroid/net/wifi/WifiInfo;", (yield* canAccessScanResults(pkg)) ? redactions & ~REDACT_FOR_ACCESS_FINE_LOCATION : redactions);
+  }),
   "getCurrentNetwork()Landroid/net/Network;": () => netUp() ? theNetwork() : null,
-  [`getDhcpInfo(${S})Landroid/net/DhcpInfo;`]: async () => {
-    await enforceAccess();
-    const info = await newObj("android/net/DhcpInfo");
+  [`getDhcpInfo(${S})Landroid/net/DhcpInfo;`]: driven(function* () {
+    yield enforceAccess();
+    const info = yield newObj("android/net/DhcpInfo");
     if (netUp()) (info as unknown as Record<string, number>)[declaredField("android/net/DhcpInfo", "dns1")] = inet4(DNS_SERVER);
     return info;
-  },
+  }),
   // this device never scans: no results, and a scan request fails
-  [`getScanResults(${S}${S})L${SLICE};`]: async () => { await enforceAccess(); return emptySlice(); },
+  [`getScanResults(${S}${S})L${SLICE};`]: driven(function* () { yield enforceAccess(); return yield emptySlice(); }),
   [`startScan(${S}${S})Z`]: async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; },
   // an app sees no saved networks from Q, and the page's network is not one it can change
-  [`getConfiguredNetworks(${S}${S}Z)L${SLICE};`]: async () => { await enforceAccess(); return emptySlice(); },
+  [`getConfiguredNetworks(${S}${S}Z)L${SLICE};`]: driven(function* () { yield enforceAccess(); return yield emptySlice(); }),
   [`setWifiEnabled(${S}Z)Z`]: async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; },
   ...Object.fromEntries(["reconnect", "reassociate", "disconnect"].map((name) =>
     [`${name}(${S})Z`, async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; }])),
