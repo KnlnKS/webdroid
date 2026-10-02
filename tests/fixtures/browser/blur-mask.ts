@@ -6,7 +6,6 @@ import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
 import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap";
 import { bootWithFonts } from "./boot";
-import { loadSkiaText } from "../../../src/android/skia-text";
 
 async function probe() {
   await bootWithFonts();
@@ -121,20 +120,7 @@ async function effects() {
     await set(p, "setTextSize", "(F)V", 13.3);
     return vcall(p, "measureText", "(Ljava/lang/String;)F", "Hello World iiilll WWW");
   };
-  await loadSkiaText();
-  const stroke = newPaint(), P = "android/graphics/Path", stroked: string[] = [];
-  await set(stroke, "setStyle", "(Landroid/graphics/Paint$Style;)V", ((await linkInit("android/graphics/Paint$Style")).ctor as Record<string, unknown>).s$STROKE);
-  await set(stroke, "setStrokeWidth", "(F)V", 4);
-  const line = await newObj(P, "()V"), box = await newObj(P, "()V");
-  await vcall(line, "moveTo", "(FF)V", 0, 0); await vcall(line, "lineTo", "(FF)V", 100, 0); await vcall(line, "lineTo", "(FF)V", 100, 50);
-  await vcall(box, "addRect", "(FFFFLandroid/graphics/Path$Direction;)V", 0, 0, 60, 40, ((await linkInit("android/graphics/Path$Direction")).ctor as Record<string, unknown>).s$CW);
-  for (const src of [line, box]) {
-    const dst = await newObj(P, "()V"), it = (await vcall(stroke, "getFillPath", "(Landroid/graphics/Path;Landroid/graphics/Path;)Z", src, dst), await vcall(dst, "getPathIterator", "()Landroid/graphics/PathIterator;"));
-    const pts = new Float32Array(8), verbs: string[] = [];
-    for (let v; (v = await vcall(it, "next", "([FI)I", pts, 0)) !== 6;) verbs.push("MLQKCZ"[v] + [...pts.subarray(v ? 2 : 0, [2, 4, 6, 6, 8, 2][v])].join(","));
-    stroked.push(verbs.join(" "));
-  }
-  return { stroked, cornerCut: c.alpha(10, 10), cornerCenter: c.alpha(30, 30), shadow: s.alpha(34, 34), noShadow: s.alpha(8, 8),
+  return { cornerCut: c.alpha(10, 10), cornerCenter: c.alpha(30, 30), shadow: s.alpha(34, 34), noShadow: s.alpha(8, 8),
     emboss: [shade(14, 14), shade(46, 46), shade(30, 30)], tablePartial: partial,
     scaled: [await ink(1), await ink(2)], measured: [await measure(1), await measure(0x81), await measure(0x41)] };
 }

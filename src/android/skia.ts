@@ -1,11 +1,16 @@
+// The tab's CanvasKit, Skia compiled to wasm: SkPathOps and SkStroke for android.graphics.Path, and
+// text drawn into bitmaps through FreeType's rasterizer. A process realm uses its page's: the tab's
+// realms share one thread, so one wasm heap and one set of fonts serve them all.
 import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
-import type { CanvasKit, Font, Paint, Surface, Typeface } from "canvaskit-wasm";
+import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
 import { shapeLigatures } from "./text-shaping";
 import { pageShared } from "../shell/pageshared";
+import { after } from "../jvm/natives/jlang";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
+let kitLoading: Promise<CanvasKit> | null = null;
 let face: Typeface | null = null;
 let emojiFace: Typeface | null = null;
 let loading: Promise<void> | null = null;
@@ -15,6 +20,49 @@ let bitmap: OffscreenCanvasRenderingContext2D | null = null;
 let emojiClips = new Map<number, [number, number]>();
 /** the system face this draws text in */
 export const SKIA_TEXT_FACE = "/system/fonts/Roboto-Regular.ttf";
+/** SkPathFillType by value: CanvasKit's binding names the two plain types, SkPath takes all four */
+let fillTypes: FillType[] = [];
+
+function canvasKit(): CanvasKit | Promise<CanvasKit> {
+  return kit ?? (kitLoading ??= CanvasKitInit({
+    locateFile: (file) => typeof location !== "undefined" && location.protocol.startsWith("http") ? `/${file}?v=${canvasKitVersion}`
+      : `${process.cwd()}/node_modules/canvaskit-wasm/bin/${file}`,
+  }).then((k) => {
+    const plain = k.FillType.Winding, values = (k.FillType as unknown as { values: FillType[] }).values;
+    for (const v of [2, 3]) values[v] = Object.create(Object.getPrototypeOf(plain), { value: { value: v } });
+    fillTypes = [0, 1, 2, 3].map((v) => values[v]);
+    return kit = k;
+  }));
+}
+
+/** CanvasKit path commands, verb then points: 0 move, 1 line, 2 quad, 3 conic (with its weight), 4 cubic, 5 close */
+export type PathCommands = number[] | Float32Array;
+/** SkPathOps' Op over two paths of the given SkPathFillTypes: the result's commands and fill type,
+ *  or null where Skia finds none */
+export function pathOp(a: PathCommands, aFill: number, b: PathCommands, bFill: number, op: number): { cmds: Float32Array; fill: number } | null | Promise<{ cmds: Float32Array; fill: number } | null> {
+  if (page.pathOp !== pathOp) return page.pathOp(a, aFill, b, bFill, op);
+  return after(canvasKit(), (k) => {
+    const pa = k.Path.MakeFromCmds(a), pb = k.Path.MakeFromCmds(b);
+    try {
+      if (!pa || !pb) return null;
+      pa.setFillType(fillTypes[aFill]); pb.setFillType(fillTypes[bFill]);
+      return pa.op(pb, [k.PathOp.Difference, k.PathOp.Intersect, k.PathOp.Union, k.PathOp.XOR, k.PathOp.ReverseDifference][op])
+        ? { cmds: pa.toCmds(), fill: pa.getFillType().value } : null;
+    } finally { pa?.delete(); pb?.delete(); }
+  });
+}
+/** SkStroke: a path's outline at the stroke's width, cap and join (Paint's ordinals), as commands */
+export function strokeCommands(cmds: PathCommands, width: number, miter: number, cap: number, join: number): Float32Array | null | Promise<Float32Array | null> {
+  if (page.strokeCommands !== strokeCommands) return page.strokeCommands(cmds, width, miter, cap, join);
+  return after(canvasKit(), (k) => {
+    const path = k.Path.MakeFromCmds(cmds);
+    if (!path) return null;
+    try {
+      return path.stroke({ width, miter_limit: miter, precision: 1, cap: [k.StrokeCap.Butt, k.StrokeCap.Round, k.StrokeCap.Square][cap],
+        join: [k.StrokeJoin.Miter, k.StrokeJoin.Round, k.StrokeJoin.Bevel][join] }) ? path.toCmds() : null;
+    } finally { path.delete(); }
+  });
+}
 
 function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, x: number, y: number,
   matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {
@@ -62,42 +110,28 @@ function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
   return clips;
 }
 
-// A process realm draws with its page's CanvasKit: the tab's realms share one thread, so one wasm
-// heap and one set of fonts serve them all rather than one per process.
-type SkiaText = { loadSkiaText: typeof loadSkiaText; drawSkiaText: typeof drawSkiaText; strokeCommands: typeof strokeCommands };
-declare global { interface Window { __wdSkiaText?: SkiaText } }
-const page = pageShared("__wdSkiaText", () => ({ loadSkiaText, drawSkiaText, strokeCommands }));
+type Skia = { loadSkia: typeof loadSkia; drawSkiaText: typeof drawSkiaText; strokeCommands: typeof strokeCommands; pathOp: typeof pathOp };
+declare global { interface Window { __wdSkia?: Skia } }
+const page = pageShared("__wdSkia", () => ({ loadSkia, drawSkiaText, strokeCommands, pathOp }));
 
-export function loadSkiaText(): Promise<void> {
-  if (page.loadSkiaText !== loadSkiaText) return page.loadSkiaText();
+/** CanvasKit and the faces it draws bitmap text in, loaded once per tab; text falls back to Canvas2D
+ *  without them */
+export function loadSkia(): Promise<void> {
+  if (page.loadSkia !== loadSkia) return page.loadSkia();
   return loading ??= Promise.all([
-    CanvasKitInit({ locateFile: () => `/canvaskit.wasm?v=${canvasKitVersion}` }),
+    canvasKit(),
     fetch(`/vendor/aosp${SKIA_TEXT_FACE}`).then(response => response.arrayBuffer()),
     fetch("/vendor/aosp/system/fonts/NotoColorEmoji.ttf").then(response => response.arrayBuffer()),
   ]).then(([canvasKit, data, emojiData]) => {
     const typeface = canvasKit.Typeface.MakeFreeTypeFaceFromData(data);
     if (!typeface) throw new Error("Roboto unavailable to Skia");
-    kit = canvasKit; face = typeface;
+    face = typeface;
     emojiFace = canvasKit.Typeface.MakeFreeTypeFaceFromData(emojiData);
     emojiClips = colorGlyphClips(emojiData);
   }).catch(error => {
-    kit = null;
     face = emojiFace = null;
-    console.warn("[skia-text] CanvasKit unavailable; using Canvas2D text", error);
+    console.warn("[skia] CanvasKit text unavailable; using Canvas2D text", error);
   });
-}
-
-/** SkStroke through CanvasKit: a path as CanvasKit commands stroked to the outline Skia fills
- *  (cap and join by Paint's ordinals), or null when CanvasKit is not loaded */
-export function strokeCommands(cmds: number[], width: number, miter: number, cap: number, join: number): Float32Array | null {
-  if (page.strokeCommands !== strokeCommands) return page.strokeCommands(cmds, width, miter, cap, join);
-  if (!kit) return null;
-  const path = kit.Path.MakeFromCmds(cmds);
-  if (!path) return null;
-  try {
-    return path.stroke({ width, miter_limit: miter, precision: 1, cap: [kit.StrokeCap.Butt, kit.StrokeCap.Round, kit.StrokeCap.Square][cap],
-      join: [kit.StrokeJoin.Miter, kit.StrokeJoin.Round, kit.StrokeJoin.Bevel][join] }) ? path.toCmds() : null;
-  } finally { path.delete(); }
 }
 
 export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size: number, color: number,

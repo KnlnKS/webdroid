@@ -10,11 +10,11 @@ import { device } from "../shell/config";
 import { type FaceMetrics, type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
 import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor } from "./graphics";
 import { colorLongAt } from "./bitmap";
-import { NativePath, walkPath } from "./path";
+import { NativePath, skCommands, setSkCommands } from "./path";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
 import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect";
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping";
-import { strokeCommands } from "./skia-text";
+import { strokeCommands } from "./skia";
 import type { Ctx2D } from "./recording";
 
 const PAINT = "android/graphics/Paint";
@@ -228,31 +228,17 @@ export function beginPaintShadow(ctx: Ctx2D, p: NativePaint): boolean {
   return true;
 }
 
-/** skpathutils::FillPathWithPaint: the path effect, then the stroke; false for a hairline */
-function fillPath(p: NativePaint, src: NativePath, dst: NativePath): boolean {
+/** skpathutils::FillPathWithPaint: the path effect, then SkStroke (stroke-and-fill adds the source
+ *  to the outline, as SkStroke's fill does); false for a hairline */
+function fillPath(p: NativePaint, src: NativePath, dst: NativePath): boolean | Promise<boolean> {
   const rec = strokeRec(p), tmp = new NativePath();
   const path = p.pathEffect?.filter(tmp, src, rec) ? tmp : src;
   if (rec.fill || rec.width === 0) { dst.set(path); return rec.fill; }
-  // SkStroke is CanvasKit's; stroke-and-fill adds the source to the outline, as SkStroke's fill does
-  const cmds: number[] = [];
-  walkPath(path, {
-    moveTo: (x, y) => cmds.push(0, x, y), lineTo: (x, y) => cmds.push(1, x, y), quadraticCurveTo: (a, b, x, y) => cmds.push(2, a, b, x, y),
-    conicTo: (a, b, x, y, w) => cmds.push(3, a, b, x, y, w), bezierCurveTo: (a, b, c, d, x, y) => cmds.push(4, a, b, c, d, x, y), closePath: () => cmds.push(5),
+  return after(strokeCommands(skCommands(path), rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN)), (out) => {
+    if (out) setSkCommands(dst, out); else dst.reset();
+    if (rec.strokeAndFill) dst.append(path);
+    return true;
   });
-  const out = strokeCommands(cmds, rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN));
-  if (!out) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "stroking a path needs the page's CanvasKit");
-  dst.reset();
-  for (let i = 0; i < out.length;) {
-    const verb = out[i++];
-    if (verb === 0) dst.moveTo(out[i++], out[i++]);
-    else if (verb === 1) dst.lineTo(out[i++], out[i++]);
-    else if (verb === 2) { dst.quadTo(out[i], out[i + 1], out[i + 2], out[i + 3]); i += 4; }
-    else if (verb === 3) { dst.conicTo(out[i], out[i + 1], out[i + 2], out[i + 3], out[i + 4]); i += 5; }
-    else if (verb === 4) { dst.cubicTo(out[i], out[i + 1], out[i + 2], out[i + 3], out[i + 4], out[i + 5]); i += 6; }
-    else dst.close();
-  }
-  if (rec.strokeAndFill) dst.append(path);
-  return true;
 }
 
 // ── minikin locale lists: an id per distinct list of tags
@@ -391,5 +377,5 @@ rt.registerJnis(PAINT, {
     textPath(paintAt(h), bidi, charsToString(c, index, count), x, y, path),
   "nGetTextPath(JILjava/lang/String;IIFFJ)V": (h: bigint, bidi: number, s: string, start: number, end: number, x: number, y: number, path: bigint) =>
     textPath(paintAt(h), bidi, s.slice(start, end), x, y, path),
-  "nGetFillPath(JJJ)Z": (h: bigint, src: bigint, dst: bigint) => +fillPath(paintAt(h), pathAt(src), pathAt(dst)),
+  "nGetFillPath(JJJ)Z": (h: bigint, src: bigint, dst: bigint) => after(fillPath(paintAt(h), pathAt(src), pathAt(dst)), (b) => +b),
 });

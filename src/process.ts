@@ -1,7 +1,7 @@
 import "./natives";
 import { processBroker, connectProcess, processPresentation } from "./shell/processes";
 import { bootApk, startZygote, setScreenCanvas, testFrame, SCREEN_W, SCREEN_H, pressBack, dispatchPointer } from "./shell/device";
-import { loadSkiaText } from "./android/skia-text";
+import { loadSkia } from "./android/skia";
 import { setProcessIdentity } from "./android/os";
 import { recordVsync } from "./android/vsync";
 import { attachIme, drainInput } from "./shell/input";
@@ -100,7 +100,7 @@ try {
   }
   const endpoint = connectProcess();
   if (!boot) throw new Error("Process package unavailable");
-  await loadSkiaText();
+  await loadSkia();
   await bootApk(boot, () => {}, "", data.process);
   broker.ready(pid, endpoint);
 } catch (error) {

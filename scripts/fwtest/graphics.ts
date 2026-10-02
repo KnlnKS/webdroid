@@ -216,10 +216,11 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
   same("compose", await fill(e, rect), "0 M25,0 L35,0 M40,0 L50,0 M54.95655,0.8400003 Q59.547035,2.7134168,59.959316,8.765032 M60,13.872475 L60,23.872475 M60,28.872475 L60,30 Q60,35.554768,56.914455,38.02399 M52.388577,39.837273 Q51.275654,40,50,40 L42.25506,40 M37.25506,40 L27.255062,40 M22.255062,40 L12.255066,40 M7.1355715,39.758892 Q1.6163669,38.74435,0.36614323,33.46083 M0,28.382599 L0,18.382599 M0,13.382599 L0,10 Q0,5.9921975,1.6062481,3.590643 M5.5320435,0.65650177 Q7.437771,0,10,0 L20,0");
   await effect(e, "SumPathEffect", `(${PE}${PE})V`, await dash([10, 5], 0), await corner(10));
   same("sum", await fill(e, rect), "0 M15,0 L25,0 M30,0 L40,0 M45,0 L55,0 M60,0 L60,0 L60,10 M60,15 L60,25 M60,30 L60,40 M55,40 L45,40 M40,40 L30,40 M25,40 L15,40 M10,40 L0,40 M0,35 L0,25 M0,20 L0,10 M0,5 L0,0 L10,0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
-  // stroking to a fill is CanvasKit's SkStroke, which a headless run has not loaded
+  // stroking to a fill: SkStroke, through CanvasKit
   const s = await paint();
   await vcall(s, "setStyle", "(Landroid/graphics/Paint$Style;)V", Style.s$STROKE); await vcall(s, "setStrokeWidth", "(F)V", 4);
-  same("stroke to fill, headless", (await thrown(() => fill(s, line))).split(":")[0], "java.lang.UnsupportedOperationException");
+  same("stroke to fill", `${await fill(s, line)} | ${await fill(s, rect)}`,
+    "1 M0,-2 L102,-2 L102,50 L98,50 L98,0 L100,0 L100,2 L0,2 L0,-2 Z | 1 M-2,-2 L62,-2 L62,42 L-2,42 Z M2,2 L2,38 L58,38 L58,2 Z");
 
   // text outlines, as minikin lays the run out and aligns it
   const tp = await paint(), tpath = await newObj(PATH, "()V"), box = await newObj("android/graphics/RectF", "()V");
@@ -394,16 +395,21 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   await vcall(await path(["addArc", "(FFFFFF)V", 0, 0, 100, 100, 0, 45]), "computeBounds", "(Landroid/graphics/RectF;Z)V", rf, 1);
   near("arc bounds", rectOf(rf), [85.35534, 50, 100, 85.35534]);
 
-  // Path.op: the same outline (our polygon may start elsewhere), reported even-odd
+  // Path.op: SkPathOps' contours, curves and fill type (an inverse operand included). The device's
+  // Skia keeps the disc's quarter as its conic (K5,5,10,5); CanvasKit 0.38 returns it as two quads.
   const ops = await statics("android/graphics/Path$Op");
   const o1 = await path(["addRect", `(FFFF${DIR})V`, 0, 0, 10, 10, CW]), o2 = await path(["addRect", `(FFFF${DIR})V`, 5, 5, 15, 15, CW]);
-  const corners = async (p: unknown) => (await dump(p)).split(" ").filter((v) => v[0] === "L").map((v) => v.slice(1).split(",").slice(2).join(",")).sort().join(" ");
-  const union = await newObj("android/graphics/Path", "()V");
-  same("union", [await vcall(union, "op", `(${P}${P}Landroid/graphics/Path$Op;)Z`, o1, o2, ops.s$UNION), await vcall(union, "getFillType", `()${FT}`) === fts.s$EVEN_ODD], [1, true]);
-  same("union outline", await corners(union), ["0,0", "0,10", "10,0", "10,5", "15,15", "15,5", "5,10", "5,15"].join(" "));
-  const rev = await newObj("android/graphics/Path", "()V");
-  await vcall(rev, "op", `(${P}${P}Landroid/graphics/Path$Op;)Z`, o1, o2, ops.s$REVERSE_DIFFERENCE);
-  same("reverse difference outline", await corners(rev), ["10,10", "10,5", "15,15", "15,5", "5,10", "5,15"].join(" "));
+  const disc = await path(["addCircle", `(FFF${DIR})V`, 10, 10, 5, CW]), inverse = await path(["addRect", `(FFFF${DIR})V`, 0, 0, 10, 10, CW]);
+  await vcall(inverse, "setFillType", `(${FT})V`, fts.s$INVERSE_WINDING);
+  const op = async (a: unknown, b: unknown, o: string) => {
+    const r = await newObj("android/graphics/Path", "()V");
+    await vcall(r, "op", `(${P}${P}Landroid/graphics/Path$Op;)Z`, a, b, ops[`s$${o}`]);
+    const fill = await vcall(await vcall(r, "getFillType", `()${FT}`), "name", "()Ljava/lang/String;");
+    return `${fill} ${(await dump(r)).replace(/([LQKC])-?[\d.]+,-?[\d.]+,/g, "$1")}`;
+  };
+  same("op", [await op(o1, o2, "UNION"), await op(o1, o2, "REVERSE_DIFFERENCE"), await op(o1, disc, "DIFFERENCE"), await op(inverse, o2, "UNION")].join(" | "),
+    ["EVEN_ODD M10,0 L0,0 L0,10 L5,10 L5,15 L15,15 L15,5 L10,5 L10,0 Z", "EVEN_ODD M5,10 L5,15 L15,15 L15,5 L10,5 L10,10 L5,10 Z",
+      "EVEN_ODD M10,0 L0,0 L0,10 L5,10 Q5,7.928932189941406,6.464466094970703,6.464466094970703 Q7.928932189941406,5,10,5 L10,0 Z", "INVERSE_EVEN_ODD M10,0 L0,0 L0,10 L5,10 L5,5 L10,5 L10,0 Z"].join(" | "));
 });
 
 // Expected values are the reference AVD's (API 35) for the same calls.

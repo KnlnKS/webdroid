@@ -10,6 +10,8 @@
 import { rt, declaredField } from "../jvm/runtime";
 import { deref, handle, release } from "./handles";
 import { type Mat, mapPoint } from "./matrix";
+import { after } from "../jvm/natives/jlang";
+import { type PathCommands, pathOp as skiaPathOp } from "./skia";
 
 type PathOp = [string, ...number[]];
 type Verb = number[];
@@ -478,201 +480,42 @@ let mNativePath = "";
 export const nativePathOf = (p: object): NativePath =>
   deref<NativePath>((p as Record<string, bigint>)[mNativePath ||= declaredField("android/graphics/Path", "mNativePath")]);
 
-// ── Path.op (set operations on paths)
-// Path2D has no set operations and cannot be read back, so the operands are flattened to
-// polygons here and recombined by classifying each boundary segment against the other operand:
-// a segment survives exactly when it separates kept region from dropped region. The result is
-// polygonal because the boundary of a boolean is in general NOT expressible in the operands'
-// own primitives (a rounded rect minus an inset rounded rect has no rrect form).
-type Pt = [number, number];
-/** each closed-off contour as a polygon, curves sampled finely enough for screen sizes */
-function flattenPath(ops: PathOp[]): Pt[][] {
-  const out: Pt[][] = [];
-  let cur: Pt[] = [];
-  // Steps grow with the square root of the control polygon's length, which keeps the chord's
-  // sagitta under about a quarter pixel for anything screen-sized without exploding the count.
-  const steps = (span: number) => Math.max(2, Math.min(128, Math.ceil(Math.sqrt(Math.max(1, span)) * 2)));
-  for (const v of pathVerbs(ops)) {
-    switch (v[0]) {
-      case MOVE: out.push(cur = [[v[1], v[2]]]); break;
-      case LINE: cur.push([v[3], v[4]]); break;
-      case QUAD: {
-        const [, x0, y0, a, b, c, d] = v, n = steps(Math.hypot(a - x0, b - y0) + Math.hypot(c - a, d - b));
-        for (let i = 1; i <= n; i++) { const t = i / n, u = 1 - t; cur.push([u * u * x0 + 2 * u * t * a + t * t * c, u * u * y0 + 2 * u * t * b + t * t * d]); }
-        break;
-      }
-      case CUBIC: {
-        const [, x0, y0, a, b, c, d, e, f] = v, n = steps(Math.hypot(a - x0, b - y0) + Math.hypot(c - a, d - b) + Math.hypot(e - c, f - d));
-        for (let i = 1; i <= n; i++) {
-          const t = i / n, u = 1 - t;
-          cur.push([u * u * u * x0 + 3 * u * u * t * a + 3 * u * t * t * c + t * t * t * e,
-            u * u * u * y0 + 3 * u * u * t * b + 3 * u * t * t * d + t * t * t * f]);
-        }
-        break;
-      }
-    }
-  }
-  for (const c of out) if (c.length > 1 && c[0][0] === c.at(-1)![0] && c[0][1] === c.at(-1)![1]) c.pop();
-  return out.filter((c) => c.length > 2);
+// ── Path.op: SkPathOps, through the tab's CanvasKit
+/** the path as CanvasKit's commands */
+export function skCommands(path: NativePath): number[] {
+  const cmds: number[] = [];
+  walkPath(path, {
+    moveTo: (x, y) => cmds.push(0, x, y), lineTo: (x, y) => cmds.push(1, x, y), quadraticCurveTo: (a, b, x, y) => cmds.push(2, a, b, x, y),
+    conicTo: (a, b, x, y, w) => cmds.push(3, a, b, x, y, w), bezierCurveTo: (a, b, c, d, x, y) => cmds.push(4, a, b, c, d, x, y), closePath: () => cmds.push(5),
+  });
+  return cmds;
 }
-
-function contourWinding(c: Pt[], x: number, y: number): number {
-  let w = 0;
-  for (let i = 0, n = c.length; i < n; i++) {
-    const [x0, y0] = c[i], [x1, y1] = c[(i + 1) % n];
-    const side = (x1 - x0) * (y - y0) - (x - x0) * (y1 - y0);
-    if (y0 <= y) { if (y1 > y && side > 0) w++; }
-    else if (y1 <= y && side < 0) w--;
+/** `dst` set to CanvasKit's commands */
+export function setSkCommands(dst: NativePath, cmds: PathCommands): void {
+  dst.reset();
+  for (let i = 0; i < cmds.length;) {
+    const verb = cmds[i++];
+    if (verb === 0) dst.moveTo(cmds[i++], cmds[i++]);
+    else if (verb === 1) dst.lineTo(cmds[i++], cmds[i++]);
+    else if (verb === 2) { dst.quadTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3]); i += 4; }
+    else if (verb === 3) { dst.conicTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]); i += 5; }
+    else if (verb === 4) { dst.cubicTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4], cmds[i + 5]); i += 6; }
+    else dst.close();
   }
-  return w;
 }
-const inside = (cs: Pt[][], p: Pt) => {
-  let w = 0;
-  for (const c of cs) w += contourWinding(c, p[0], p[1]);
-  return w !== 0;
-};
-const signedArea = (c: Pt[]) => {
-  let s = 0;
-  for (let i = 0, n = c.length; i < n; i++) { const [x0, y0] = c[i], [x1, y1] = c[(i + 1) % n]; s += x0 * y1 - x1 * y0; }
-  return s;
-};
-
-/**
- * Even-odd paths say "inside" with crossing parity and carry no orientation, but the classifier
- * and the polygonal result both read insideness as a winding number. Re-orient by nesting depth
- * so the two agree; winding paths already mean their orientation and are left alone.
- */
-function orientEvenOdd(cs: Pt[][]): Pt[][] {
-  return cs.map((c) => {
-    let depth = 0;
-    for (const o of cs) if (o !== c && contourWinding(o, c[0][0], c[0][1]) !== 0) depth++;
-    const want = depth % 2 === 0 ? 1 : -1;
-    return Math.sign(signedArea(c)) === -want ? c.slice().reverse() : c;
+/** SkPathOp, which Path$Op's ordinals follow */
+const DIFFERENCE = 0;
+/** Path.op: Skia's result and its fill type into `dst`; false where Skia finds none */
+export function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): boolean | Promise<boolean> {
+  return after(skiaPathOp(skCommands(a), a.fillType(), skCommands(b), b.fillType(), op), (r) => {
+    if (!r) return false;
+    setSkCommands(dst, r.cmds);
+    dst.setFillType(r.fill);
+    return true;
   });
 }
 
-type Seg = { a: Pt; b: Pt; from: 0 | 1 };
-/**
- * Split every segment of `segs` where `other` crosses it OR overlaps it end-on. The overlap split
- * is what makes shared edges tractable: it leaves the coincident stretch as one segment on each
- * side with the same endpoints, which the classifier can then recognise as a shared boundary
- * instead of asking "is my midpoint inside the other path?" about a point sitting exactly on it.
- */
-function splitSegs(segs: Seg[], other: Seg[]): Seg[] {
-  const out: Seg[] = [];
-  for (const s of segs) {
-    const dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1], len2 = dx * dx + dy * dy;
-    if (!len2) continue;
-    const ts: number[] = [];
-    for (const o of other) {
-      const ex = o.b[0] - o.a[0], ey = o.b[1] - o.a[1];
-      const den = dx * ey - dy * ex;
-      const px = o.a[0] - s.a[0], py = o.a[1] - s.a[1];
-      if (Math.abs(den) < 1e-9 * Math.sqrt(len2 * (ex * ex + ey * ey))) {
-        if (Math.abs(px * dy - py * dx) > 1e-6 * Math.sqrt(len2)) continue;
-        ts.push((px * dx + py * dy) / len2, ((o.b[0] - s.a[0]) * dx + (o.b[1] - s.a[1]) * dy) / len2);
-        continue;
-      }
-      const t = (px * ey - py * ex) / den, u = (px * dy - py * dx) / den;
-      if (u > -1e-9 && u < 1 + 1e-9) ts.push(t);
-    }
-    let prev = 0;
-    const at = (t: number): Pt => (t === 0 ? s.a : t === 1 ? s.b : [s.a[0] + dx * t, s.a[1] + dy * t]);
-    for (const t of [...ts.filter((t) => t > 1e-9 && t < 1 - 1e-9).sort((p, q) => p - q), 1]) {
-      if (t - prev < 1e-9) continue;
-      out.push({ a: at(prev), b: at(t), from: s.from });
-      prev = t;
-    }
-  }
-  return out;
-}
-
-const segKey = (p: Pt) => `${Math.round(p[0] * 64)}|${Math.round(p[1] * 64)}`;
-
-/** Walk kept segments head-to-tail back into closed contours. */
-function chainSegs(segs: Seg[]): Pt[][] {
-  const key = segKey;
-  const byStart = new Map<string, Seg[]>();
-  for (const s of segs) {
-    const k = key(s.a), l = byStart.get(k);
-    if (l) l.push(s); else byStart.set(k, [s]);
-  }
-  const used = new Set<Seg>(), out: Pt[][] = [];
-  for (const s0 of segs) {
-    if (used.has(s0)) continue;
-    const c: Pt[] = [s0.a];
-    let s: Seg | undefined = s0;
-    while (s && !used.has(s)) {
-      used.add(s);
-      c.push(s.b);
-      s = byStart.get(key(s.b))?.find((n) => !used.has(n));
-    }
-    if (c.length > 3) out.push(c);
-  }
-  return out;
-}
-
-/** SkPathOp, which Path$Op's ordinals follow */
-const DIFFERENCE = 0, INTERSECT = 1, UNION = 2, XOR = 3, REVERSE_DIFFERENCE = 4;
-/** Path.op. Operands' inverse fill types are not modelled: each is taken as its plain fill. */
-export function pathOp(dst: NativePath, pa: NativePath, pb: NativePath, mode: number): boolean {
-  if (mode === REVERSE_DIFFERENCE) { [pa, pb] = [pb, pa]; mode = DIFFERENCE; }
-  const flat = (p: NativePath) => {
-    const cs = flattenPath(p.ops);
-    return p.fillRule === "evenodd" ? orientEvenOdd(cs) : cs;
-  };
-  const A = flat(pa), B = flat(pb);
-  const toSegs = (cs: Pt[][], from: 0 | 1): Seg[] => {
-    const out: Seg[] = [];
-    for (const c of cs) for (let i = 0; i < c.length; i++) out.push({ a: c[i], b: c[(i + 1) % c.length], from });
-    return out;
-  };
-  const sa = toSegs(A, 0), sb = toSegs(B, 1);
-  const all = [...splitSegs(sa, sb), ...splitSegs(sb, sa)];
-  // Segments the two operands share, keyed without direction so the two copies collide.
-  const shared = new Map<string, Seg[]>();
-  for (const s of all) {
-    const k = segKey(s.a) < segKey(s.b) ? segKey(s.a) + "/" + segKey(s.b) : segKey(s.b) + "/" + segKey(s.a);
-    const l = shared.get(k);
-    if (l) l.push(s); else shared.set(k, [s]);
-    (s as Seg & { key: string }).key = k;
-  }
-  const kept: Seg[] = [];
-  for (const s of all) {
-    const twins = shared.get((s as Seg & { key: string }).key)!;
-    const twin = twins.find((o) => o.from !== s.from);
-    if (twin) {
-      // Both operands run along here, so neither's interior can be sampled beside it. The two
-      // interiors are on the same side when the edges run the same way; the result then has a
-      // boundary here only for union and intersect, and the opposite case only for difference.
-      if (s.from === 1) continue;
-      const same = (s.b[0] - s.a[0]) * (twin.b[0] - twin.a[0]) + (s.b[1] - s.a[1]) * (twin.b[1] - twin.a[1]) > 0;
-      if (mode === UNION || mode === INTERSECT ? same : mode === DIFFERENCE && !same) kept.push(s);
-      continue;
-    }
-    const mid: Pt = [(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2];
-    const inOther = inside(s.from ? A : B, mid);
-    // A segment bounds the result iff the region on its far side is classified differently from
-    // the region on its near side; which side is which flips when the other operand covers it.
-    if (mode === UNION ? !inOther
-      : mode === INTERSECT ? inOther
-        : mode === XOR ? true
-          : s.from === 0 ? !inOther : inOther) {
-      const flip = mode === XOR ? inOther : mode === DIFFERENCE && s.from === 1;
-      kept.push(flip ? { a: s.b, b: s.a, from: s.from } : s);
-    }
-  }
-  dst.reset();
-  for (const c of chainSegs(kept)) {
-    dst.moveTo(c[0][0], c[0][1]);
-    for (let i = 1; i < c.length; i++) dst.lineTo(c[i][0], c[i][1]);
-    dst.close();
-  }
-  // a boundary with no overlaps fills the same under either rule; Skia reports even-odd
-  dst.fillRule = "evenodd";
-  return true;
-}
-
+/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it */
 export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] {
   if (path.fillRule === "evenodd") {
     const inverse = new Path2D();
@@ -680,13 +523,14 @@ export function inversePath(path: NativePath, l: number, t: number, r: number, b
     inverse.addPath(path.path());
     return [inverse, "evenodd"];
   }
-  const outer = new NativePath();
+  const outer = new NativePath(), result = new NativePath();
   outer.addRect(l, t, r, b, CW);
-  const result = new NativePath();
-  pathOp(result, outer, path, DIFFERENCE);
+  // the page's CanvasKit is loaded before anything draws
+  if (pathOp(result, outer, path, DIFFERENCE) instanceof Promise) throw new Error("CanvasKit is not loaded");
   return [result.path(), result.fillRule];
 }
 
+type Pt = [number, number];
 // Skia tests the control polygon, including implicit closure, rather than sampling curves.
 export function pathIsConvex(path: NativePath): boolean {
   const points: Pt[] = [];

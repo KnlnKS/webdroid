@@ -367,7 +367,7 @@ delegate("android/graphics/Path", {
   "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => path(h).bounds(r),
   "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => (path(h).isRect(r) ? 1 : 0),
   "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(path(h)) ? 1 : 0),
-  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => (pathOp(path(dst), path(a), path(b), op) ? 1 : 0),
+  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(path(dst), path(a), path(b), op), (done) => +done),
   "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (path(a).isInterpolatable(path(b)) ? 1 : 0),
   "nInterpolate(JJFJ)Z": (a: bigint, b: bigint, t: number, out: bigint) => (path(a).interpolate(path(b), t, path(out)) ? 1 : 0),
   "nApproximate(JF)[F": (h: bigint, error: number) => approximate(path(h), error),

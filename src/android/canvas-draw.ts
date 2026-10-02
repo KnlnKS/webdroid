@@ -4,7 +4,7 @@
 
 import { isRecording, recordOrRun, type Ctx2D } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster";
-import { drawSkiaText, SKIA_TEXT_FACE } from "./skia-text";
+import { drawSkiaText, SKIA_TEXT_FACE } from "./skia";
 import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { deref } from "./handles";

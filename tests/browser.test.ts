@@ -79,8 +79,6 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   // as on the reference device, SUBPIXEL_TEXT leaves the hinted advances alone and LINEAR_TEXT measures 130
   expect(fx.measured[1]).toBe(fx.measured[0]);
   expect(fx.measured[2]).toBe(130);
-  // stroked to a fill through CanvasKit's SkStroke, as Paint.getFillPath does on the device
-  expect(fx.stroked).toEqual(["M0,-2 L102,-2 L102,50 L98,50 L98,0 L100,0 L100,2 L0,2 L0,-2 Z", "M-2,-2 L62,-2 L62,42 L-2,42 Z M2,2 L2,38 L58,38 L58,2 Z"]);
 }, PAGE_TIMEOUT);
 
 // Values recorded on the reference AVD (the text box there is drawn without anti-aliasing, a pixel narrower).

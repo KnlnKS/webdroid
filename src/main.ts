@@ -12,7 +12,7 @@ import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
-import { loadSkiaText } from "./android/skia-text";
+import { loadSkia } from "./android/skia";
 import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
@@ -96,7 +96,7 @@ async function boot(file: string, local?: File) {
   let rollbackAssets: (() => void) | undefined;
   try {
     void startZygote();
-    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkiaText(), displayRate]);
+    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkia(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
