@@ -53,6 +53,8 @@ const SAME32: Record<number, string> = {
 };
 
 const millis = (ts: number): number => (ts ? readTs(ts) : -1);
+/** struct sched_attr's first and current sizes */
+const SCHED_ATTR_SIZE_VER0 = 48, SCHED_ATTR_SIZE = 56;
 
 const A64: Record<number, HostFn> = {
   47: (cpu, a) => {                                                              // fallocate: mode 0 grows the file
@@ -80,6 +82,20 @@ const A64: Record<number, HostFn> = {
     if (n < PTR || pid < 0) return fail(cpu, E.INVAL);
     mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1);
     return PTR;
+  },
+  274: (cpu, a) => {                                                             // sched_setattr: as sched_setscheduler
+    const pid = a.i(), attr = a.p(), flags = a.u(), size = attr ? mem.ld32(attr) || SCHED_ATTR_SIZE_VER0 : 0;
+    if (pid < 0 || !attr || flags) return fail(cpu, E.INVAL);
+    if (size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) { mem.st32(attr, SCHED_ATTR_SIZE); return fail(cpu, E.TOOBIG); }
+    const policy = mem.ld32(attr + 4);
+    return policy === 0 || policy === 3 || policy === 5 ? 0 : fail(cpu, policy <= 2 || policy === 6 ? E.PERM : E.INVAL);
+  },
+  275: (cpu, a) => {                                                             // sched_getattr: SCHED_OTHER at nice 0
+    const pid = a.i(), attr = a.p(), size = a.u(), flags = a.u();
+    if (pid < 0 || flags || size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) return fail(cpu, E.INVAL);
+    // the kernel's struct, its size the smaller of the caller's and its own, the rest zero
+    mem.memset(attr, 0, size); mem.st32(attr, Math.min(size, SCHED_ATTR_SIZE));
+    return 0;
   },
   130: (cpu, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; }, // tkill
   137: (cpu, a) => {                                                             // rt_sigtimedwait
