@@ -222,7 +222,6 @@ export function stdioInit(): void {
 
   const M: Record<string, HostFn> = {
     open: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
-    __open_2: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
     creat: (cpu, a) => fdOpen(cpu, a.str(), 1 | O_CREAT | O_TRUNC),
     mkstemp: (cpu, a) => fdTemp(cpu, a.p(), 0, false),
     mkostemp: (cpu, a) => fdTemp(cpu, a.p(), a.i(), false),
@@ -231,7 +230,6 @@ export function stdioInit(): void {
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
     lseek64: (cpu, a) => BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())),
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
-    lstat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
     chmod: () => 0, chown: () => 0,
@@ -428,8 +426,8 @@ export function stdioInit(): void {
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };
-  for (const [alias, name] of [["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
-  Object.assign(M, { __openat_2: FS_SYSCALLS.openat, stat64: M.stat, lstat64: M.lstat, fstat64: FS_SYSCALLS.fstat, fstatat64: FS_SYSCALLS.fstatat });
+  for (const [alias, name] of [["__open_2", "open"], ["lstat", "stat"], ["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
+  Object.assign(M, { __openat_2: FS_SYSCALLS.openat, stat64: M.stat, lstat64: M.stat, fstat64: FS_SYSCALLS.fstat, fstatat64: FS_SYSCALLS.fstatat });
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * FILE.size;
   hostLib("libc.so", M);

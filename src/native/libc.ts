@@ -366,7 +366,7 @@ export function libcInit(): void {
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    mmap64: (cpu, a) => LIBC_SYSCALLS.mmap(cpu, a),
+    mmap64: LIBC_SYSCALLS.mmap,
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     syscall: (cpu, a) => rawSyscall(cpu, a.i(), a),
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
