@@ -3,7 +3,7 @@
 // ActivityTaskSupervisor gives them. Starting pauses the resumed activity, launches and resumes the
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
-import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
+import { rt, JObj, noops, stubs, declaredField, setDeclared } from "../../jvm/runtime";
 import { newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
@@ -29,8 +29,9 @@ interface ActivityRecord {
   paused: (() => void) | null;
   /** the pause under way: a finish racing a start's pause must not schedule its destroy first */
   pausing: Promise<void> | null;
-  /** the broker's record of an activity another process started here, or 0 */
-  remoteId: number;
+  /** the broker's record of an activity another process started here, or 0, and the activity
+   *  there that asked for its result */
+  remoteId: number; remoteCaller: { pkg: string; cls: string } | null;
   /** the global configuration it last had, and the orientation it asks for */
   config: JObj; orientation: number;
 }
@@ -39,7 +40,8 @@ const byToken = (token: JObj | null) => stack.find((r) => r.token === token) ?? 
 export const PROCESS_STATE_SERVICE = 10, PROCESS_STATE_RECEIVER = 11;
 /** the process state the activity manager reports with a call: top while an activity here is
  *  resumed, else the state of the component it runs */
-export const processState = (component: number): number => stack.some((r) => r.state === "resumed") ? PROCESS_STATE_TOP : component;
+export const foreground = (): boolean => stack.some((r) => r.state === "resumed");
+export const processState = (component: number): number => foreground() ? PROCESS_STATE_TOP : component;
 const pms = () => hostedService("package") as Promise<JObj>;
 const resolveInfoField = () => declaredField("android/content/pm/ResolveInfo", "activityInfo");
 let controller: JObj | null = null;
@@ -191,7 +193,8 @@ async function newIntent(r: ActivityRecord, intent: JObj): Promise<void> {
 }
 
 /** ActivityStarter: a resolved activity on top of this process's task, or the instance already there that takes the intent */
-export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number, remoteId = 0): Promise<void> {
+export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number,
+  remoteId = 0, remoteCaller: { pkg: string; cls: string } | null = null): Promise<void> {
   transitions++;
   try {
     if (await reuseActivity(intent, info)) return;
@@ -203,7 +206,7 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
     if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
     const { global, override } = await configurations();
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent: await translucentTheme(info), paused: null, pausing: null, remoteId, config: global, orientation };
+      translucent: await translucentTheme(info), paused: null, pausing: null, remoteId, remoteCaller, config: global, orientation };
     stack.push(r);
     reportPresentation();
     const windowInfo = await newObj("android/window/ActivityWindowInfo", "()V");
@@ -301,15 +304,20 @@ async function deliverResult(to: ActivityRecord | null, resultWho: string | null
   if (!to || to.finishing) return;
   if (resultCode === RESULT_OK && data) await grantResultUris(appHost!.pkg, data);
   if (requestCode >= 0) to.results.push(await newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, resultCode, data));
-  if (stack.at(-1) === to && to.state === "resumed") { await pause(to); await resume(to); }
+  if (stack.at(-1) === to) await coverTop();
+}
+/** the pause and resume a system window over the top activity leaves behind (a permission prompt) */
+export async function coverTop(): Promise<void> {
+  const top = stack.at(-1);
+  if (top?.state === "resumed") { await pause(top); await resume(top); }
 }
 /** the broker's launch of one of this process's activities for another process */
-export async function startActivityInProcess(component: string, intent: JObj, remoteId: number): Promise<void> {
+export async function startActivityInProcess(component: string, intent: JObj, remoteId: number, caller: { pkg: string; cls: string } | null): Promise<void> {
   const name = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", appHost!.pkg, component.replaceAll("/", "."));
   const info = await vcall(await pms(), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
   if (!info) throw new Error("Activity not installed: " + component);
   await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
-  await startActivity(thisApp(), intent, info, null, null, -1, remoteId);
+  await startActivity(thisApp(), intent, info, null, null, -1, remoteId, caller);
 }
 /** the broker showing or hiding this process: its top activity pauses, what is paused stops, and
  *  the top resumes (the launcher activity starts again in an emptied app process, as its icon
@@ -424,15 +432,12 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
   // back on a root activity: AOSP moves a launcher-started task back; one task, so it finishes
   "onBackPressed(Landroid/os/IBinder;Landroid/app/IRequestFinishCallback;)V": (_token: JObj, callback: JObj) =>
     vcall(callback, "requestFinish", "()V"),
-  "getCallingActivity(Landroid/os/IBinder;)Landroid/content/ComponentName;": (token: JObj) => {
-    const to = byToken(token)?.resultTo;
-    return to ? vcall(to.info, "getComponentName", "()Landroid/content/ComponentName;") : null;
+  "getCallingActivity(Landroid/os/IBinder;)Landroid/content/ComponentName;": (token: JObj) => callingActivity(token),
+  "getCallingPackage(Landroid/os/IBinder;)Ljava/lang/String;": async (token: JObj) => {
+    const c = await callingActivity(token);
+    return c && vcall(c, "getPackageName", "()Ljava/lang/String;");
   },
-  "getCallingPackage(Landroid/os/IBinder;)Ljava/lang/String;": (token: JObj) => {
-    const to = byToken(token)?.resultTo;
-    return to ? vcall(to.info, "getComponentName", "()Landroid/content/ComponentName;").then((c: JObj) => vcall(c, "getPackageName", "()Ljava/lang/String;")) : null;
-  },
-  "getTaskForActivity(Landroid/os/IBinder;Z)I": (token: JObj) => byToken(token) ? 1 : -1,
+  "getTaskForActivity(Landroid/os/IBinder;Z)I": (token: JObj) => byToken(token) ? TASK_ID : -1,
   "isTopOfTask(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "getDisplayId(Landroid/os/IBinder;)I": () => 0,
   "getRequestedOrientation(Landroid/os/IBinder;)I": (token: JObj) => byToken(token)?.orientation ?? -1,
@@ -457,8 +462,31 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     "clearOverrideActivityTransition(Landroid/os/IBinder;Z)V"),
 } });
 
+/** the activity that started this one for a result, here or in another process */
+async function callingActivity(token: JObj): Promise<JObj | null> {
+  const r = byToken(token);
+  if (r?.resultTo) return component(r.resultTo);
+  return r?.remoteCaller ? newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", r.remoteCaller.pkg, r.remoteCaller.cls) : null;
+}
+// IAppTask: this process's one task
+const TASK_ID = 1;
+const component = (r: ActivityRecord | undefined) => r ? vcall(r.info, "getComponentName", "()Landroid/content/ComponentName;") : null;
+rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "android/app/IAppTask$Stub", methods: {
+  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": async () => {
+    const info = await newObj("android/app/ActivityManager$RecentTaskInfo", "()V");
+    return setDeclared(info, "android/app/ActivityManager$RecentTaskInfo", {
+      id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0),
+      baseIntent: stack[0]?.intent ?? null, baseActivity: await component(stack[0]), topActivity: await component(stack.at(-1)) });
+  },
+  "finishAndRemoveTask()V": () => void (async () => { for (const r of [...stack].reverse()) await finish(r, RESULT_CANCELED, null); })().catch(reportUncaught),
+  // one task is shown at a time, and there are no recents to exclude it from
+  ...noops("moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V", "setExcludeFromRecents(Z)V"),
+} });
+let appTask: Promise<JObj> | null = null;
+
 /** the methods IActivityTaskManager adds for ActivityThread's activities */
 export const activityTaskMethods = {
+  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => newArrayList(stack.length ? [await (appTask ??= newObj("webdroid/AppTask"))] : []),
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
   // nothing captures the screen, so a screen-capture observer is never called
   ...noops("registerScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V",

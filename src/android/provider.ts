@@ -16,7 +16,6 @@ import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
 import { isMediaUri, mediaDelete, mediaFlag } from "./mediastore";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
-import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, pickDocuments, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
@@ -220,8 +219,8 @@ const mediaRequest = (op: string) => driven(function* (resolver: unknown, uris: 
   yield vcall(intent, "setIdentifier", `(${S})Landroid/content/Intent;`, String(++mediaRequests));
   yield vcall(intent, "putParcelableArrayListExtra", `(${S}Ljava/util/ArrayList;)Landroid/content/Intent;`, "uris", yield newArrayList(items));
   yield putExtra(intent, "op", op, S); yield putExtra(intent, "value", value, "I");
-  return vcall(rt.link("android/app/PendingIntent").ctor, "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
-    appHost?.application, 0, intent, 0x4000000); // FLAG_IMMUTABLE
+  return scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+    yield scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"), 0, intent, 0x4000000); // FLAG_IMMUTABLE
 });
 rt.register({
   name: "android/provider/MediaStore", ctor: class extends JObj {},

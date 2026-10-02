@@ -8,10 +8,9 @@ import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
-import { appHost, jclsNameOf } from "./apphost";
-import { mkComponentName, newIntent, putExtra, registerSystemActivity } from "./intent";
+import { appHost } from "./apphost";
+import { newIntent, putExtra, registerSystemActivity } from "./intent";
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
-import type { JActivity } from "./app";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { GL_ES_VERSION, protectionLevel, enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./pm";
 import { deviceConfiguration } from "./resnative";
@@ -20,7 +19,7 @@ import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
 import { stickyBroadcasts } from "./broadcast";
 import { activityManagerMethods } from "./server/am";
-import { activityTaskMethods } from "./server/atm";
+import { activityTaskMethods, foreground } from "./server/atm";
 import { activeServiceMethods } from "./server/activeservices";
 import { broadcastQueueMethods } from "./server/broadcastqueue";
 
@@ -29,7 +28,7 @@ const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 function fillProc(info: JObj): JObj {
   const pkg = appHost?.pkg ?? "";
   return setDeclared(info, PROCESS_INFO, { processName: PROCESS_NAME || pkg, pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
-    importance: appHost?.currentActivity() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED });
+    importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED });
 }
 
 // IActivityManager: this process's view of the activity manager
@@ -63,36 +62,10 @@ const activityManager: NativeSpec["methods"] = {
 rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityManager$Stub",
   methods: { ...activityManager, ...activityManagerMethods, ...activeServiceMethods, ...broadcastQueueMethods } });
 
-// IAppTask: one of the caller's tasks, the activities the shell stacks under a task id
-class JAppTask extends JObj { taskId = 0; }
-rt.register({ name: "webdroid/AppTask", ctor: JAppTask, sup: "android/app/IAppTask$Stub", methods: {
-  "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": driven(function* (this: JAppTask): Gen {
-    const activities = (appHost?.activities() ?? []).filter((a) => a.taskId === this.taskId);
-    const component = (a: JActivity | undefined) => a ? mkComponentName(appHost?.pkg ?? "", jclsNameOf(a)) : null, id = this.taskId;
-    return setDeclared(yield newObj("android/app/ActivityManager$RecentTaskInfo", "()V"), "android/app/ActivityManager$RecentTaskInfo", {
-      id, persistentId: id, taskId: id, numActivities: activities.length, isRunning: +(activities.length > 0),
-      baseIntent: activities[0]?.intent ?? null, baseActivity: yield component(activities[0]), topActivity: yield component(activities.at(-1)) });
-  }),
-  "finishAndRemoveTask()V": function (this: JAppTask) { appHost?.finishTask(this.taskId); },
-  // one task is shown at a time, and there are no recents to exclude it from
-  "moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V": () => {},
-  "setExcludeFromRecents(Z)V": () => {},
-} });
-const appTasks = new Map<number, Promise<JAppTask>>();
-
 // IActivityTaskManager
 rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityTaskManager$Stub", methods: {
   ...activityTaskMethods,
   ...intentSenderTaskMethods,
-  "getAppTasks(Ljava/lang/String;)Ljava/util/List;": async () => {
-    const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
-    for (const id of appTasks.keys()) if (!ids.includes(id)) appTasks.delete(id);
-    return newArrayList(await Promise.all(ids.map((taskId) => {
-      let task = appTasks.get(taskId);
-      if (!task) appTasks.set(taskId, task = newObj("webdroid/AppTask").then((t: JAppTask) => Object.assign(t, { taskId })));
-      return task;
-    })));
-  },
   "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": async () => {
     const info: JObj = await newObj("android/content/pm/ConfigurationInfo"), config = deviceConfiguration(), fields = info as unknown as Record<string, number>;
     const values = { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard, reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION };

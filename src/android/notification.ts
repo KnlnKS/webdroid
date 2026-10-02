@@ -19,6 +19,7 @@ import { JParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
 import { appHost } from "./apphost";
+import { coverTop, foreground } from "./server/atm";
 import { permissionGranted, grantPrompted, serviceContext } from "./pm";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
@@ -271,8 +272,7 @@ function promptNeeded(pkg: string): boolean {
 }
 async function showNotificationPrompt(pkg: string): Promise<void> {
   grantPrompted(pkg, POST_NOTIFICATIONS);
-  const activity = appHost?.currentActivity();
-  if (activity) await appHost!.roundTrip(activity);
+  await coverTop();
 }
 /** an activity launched from the launcher (PermissionPolicyService's ActivityInterceptorCallback):
  *  decided by the channels the app has as it launches, shown once its activity is in front */
@@ -698,7 +698,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
       created = await createChannel(prefs, await copyOf(CHANNEL, channel)) || created;
     }
     // the prompt shows over a launcher task the user can see; a task still starting gets it at its next launch
-    if (created && !had && appHost?.currentActivity()?.resumed && promptNeeded(pkg)) await showNotificationPrompt(pkg);
+    if (created && !had && foreground() && promptNeeded(pkg)) await showNotificationPrompt(pkg);
   },
   "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
     async (callingPkg: string, userId: number, pkg: string, channelId: string | null) => {

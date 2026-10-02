@@ -500,7 +500,7 @@ export function connectProcess(): ProcessEndpoint {
         await taskVisibility(request.phase);
         if (request.phase !== "pause") setVisible(request.phase !== "stop");
       } else if (request.kind === "launch") {
-        await startActivityInProcess(request.component, await decodeIntent(request.intent), request.id);
+        await startActivityInProcess(request.component, await decodeIntent(request.intent), request.id, request.caller);
         setVisible(true);
       } else {
         const deliver = requests.get(request.request);
