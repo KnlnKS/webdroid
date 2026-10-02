@@ -28,6 +28,8 @@ await (await import("../tests/java")).mountApexData();
 rt.linkNatives();
 // the device's languages, which a booted page has before any app code runs
 await (await import("../src/android/resnative")).initDeviceLocales();
+// and its main looper, which Handlers (animators, frame listeners) made on the main thread need
+await (await import("../src/android/mainloop")).startMainLooper();
 
 console.log(`withheld ${BYTECODE.length} prefixes; ${rt.dexIndex.size} framework classes\n`);
 

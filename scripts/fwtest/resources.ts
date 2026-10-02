@@ -71,7 +71,7 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
     const ta = await vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", attrs);
     const tv = await newObj("android/util/TypedValue", "()V");
     same("resolveAttribute", await vcall(theme, "resolveAttribute", "(ILandroid/util/TypedValue;Z)Z", attrs[0], tv, 1), 1);
-    same("colorBackground", await vcall(ta, "getColor", "(II)I", 0, 7), (tv as { data: number }).data);
+    same("colorBackground", await vcall(ta, "getColor", "(II)I", 0, 7), (tv as Record<string, number>)[declaredField("android/util/TypedValue", "data")]);
     same("indices", await vcall(ta, "getIndexCount", "()I"), 2);
     await vcall(ta, "recycle", "()V");
   });
