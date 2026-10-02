@@ -4,7 +4,7 @@
 
 import { rt, driven, type Gen, type JObj } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { type Resources, type JTheme, nativeTheme } from "./res";
+import { type Resources } from "./res";
 import { JDisplayMetrics } from "./util";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration } from "./resnative";
 import { device } from "../shell/config";
@@ -19,26 +19,14 @@ export const loadResources = driven(function* loadResources(path: string, config
   const assets = yield vcall(builder, "build", "()Landroid/content/res/AssetManager;");
   const jres: JObj = yield newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
     assets, new JDisplayMetrics(), config);
-  apkPaths.set(jres, path);
-  built.push({ jres: new WeakRef(jres), override: null });
+  built.push(new WeakRef(jres));
   return jres;
 });
-const apkPaths = new WeakMap<object, string>();
-/** every Resources built here, with the override configuration it was created under */
-const built: { jres: WeakRef<JObj>; override: unknown }[] = [];
-/** Context.createConfigurationContext's Resources: the same apk under the configuration
- *  `override` is applied to, with an AssetManager of its own as ResourcesManager gives each */
-export const configuredResources = driven(function* configuredResources(jres: JObj, override: unknown): Gen<JObj> {
-  const C = "android/content/res/Configuration";
-  const config = yield newObj(C, `(L${C};)V`, yield vcall(jres, "getConfiguration", `()L${C};`));
-  yield vcall(config, "updateFrom", `(L${C};)I`, override);
-  const scoped: JObj = yield loadResources(apkPaths.get(jres)!, config);
-  built[built.length - 1].override = override;
-  return scoped;
-});
+/** every Resources built here */
+const built: WeakRef<JObj>[] = [];
 /** The configuration Java sees after a device change: AOSP's resources take it as
  *  ResourcesManager.applyConfigurationToResources hands it out, the system's first, then every
- *  Resources with its own override applied over it. */
+ *  Resources built here. */
 export const applyDeviceConfiguration = driven(function* applyDeviceConfiguration(): Gen<unknown> {
   const C = "android/content/res/Configuration";
   const config = yield javaConfiguration(deviceConfiguration());
@@ -47,10 +35,9 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
   yield scall("android/content/res/Resources", "updateSystemConfiguration",
     `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, new JDisplayMetrics(), null);
   for (const entry of built.slice()) {
-    const jres = entry.jres.deref();
+    const jres = entry.deref();
     if (!jres) { built.splice(built.indexOf(entry), 1); continue; }
     const own = yield newObj(C, `(L${C};)V`, config);
-    if (entry.override) yield vcall(own, "updateFrom", `(L${C};)I`, entry.override);
     yield vcall(jres, "updateConfiguration", `(L${C};Landroid/util/DisplayMetrics;)V`, own, null);
   }
   return config;
@@ -61,18 +48,6 @@ export const javaResources = driven(function* javaResources(res: Resources, path
   registerApk(path, res);
   return res.jobj = yield loadResources(path, yield javaConfiguration(deviceConfiguration()));
 });
-
-/** A theme over `jres`: `base`'s styles, then `styleId` forced over them, as setTheme and
- *  ContextThemeWrapper layer a style. Our own stack keeps the native half; the Java half is
- *  its `jobj`. */
-export const newTheme = driven(function* newTheme(jres: unknown, base: JTheme | null, styleId: number): Gen<JTheme> {
-  const t = yield vcall(jres, "newTheme", "()Landroid/content/res/Resources$Theme;");
-  if (base?.jobj) yield vcall(t, "setTo", "(Landroid/content/res/Resources$Theme;)V", base.jobj);
-  if (styleId) yield vcall(t, "applyStyle", "(IZ)V", styleId, 1);
-  return nativeTheme(t)!;
-});
-/** the Java object a context hands out for its theme */
-export const javaTheme = (t: JTheme | null): unknown => t?.jobj ?? null;
 
 /** a Configuration of AOSP's carrying our device configuration's values */
 export const javaConfiguration = driven(function* javaConfiguration(c: JConfiguration): Gen<unknown> {

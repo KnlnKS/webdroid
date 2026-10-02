@@ -35,7 +35,6 @@ type Action =
   | { type: "settle" };
 
 export type StateCondition =
-  | { kind: "activity"; component: string }
   | { kind: "text" | "text-absent"; text: string; resId?: string; visible?: boolean }
   | { kind: "resource"; resId: string }
   | { kind: "resource-absent"; resId: string }

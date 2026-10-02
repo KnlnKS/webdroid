@@ -6,6 +6,7 @@ const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
 const { newObj, vcall } = await import(W + "/src/jvm/natives/jlang");
 const { setAppHost } = await import(W + "/src/android/apphost");
+const { testAppHost } = await import(W + "/tests/java");
 const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
 const { Resources } = await import(W + "/src/android/res");
 const { TV } = await import(W + "/src/android/axml");
@@ -67,7 +68,7 @@ const manifest = { name: "manifest", attrs: [attr("package", PKG)], children: [
 const record = new PackageRecord(manifest, new Resources(null, {}), `/${PKG}.apk`, packageUid(PKG), async () => [new Uint8Array([1])]);
 packages.set(PKG, record);
 setProcessIdentity(4322, record.uid); setProcessName(PKG);
-setAppHost({ pkg: PKG, application: null, res: record.res, splits: [], currentActivity: () => null, activities: () => [] } as never);
+setAppHost(testAppHost(record));
 const am = await hostedService("activity") as JObj, app = await newObj("webdroid/test/AppThread");
 await vcall(am, "attachApplication", `(${APP}J)V`, app, 0n);
 const out: Record<string, unknown> = {};

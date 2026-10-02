@@ -1,7 +1,13 @@
 import { rt, type JObj } from "../src/jvm/runtime";
 import { scall } from "../src/jvm/natives/jlang";
+import type { AppHost } from "../src/android/apphost";
+import type { Resources } from "../src/android/res";
 
 export { scall } from "../src/jvm/natives/jlang";
+
+/** the AppHost a booted page sets for `pkg`, over its resources */
+export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppHost =>
+  ({ pkg, res, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
 /** framework.jar on the platform class path and the main looper running, as a booted page has them */
 export async function loadFrameworkJar(): Promise<void> {
@@ -108,7 +114,7 @@ export function bootApp(record: import("../src/android/packages").PackageRecord,
     for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
     setProcessIdentity(pid, record.uid);
     setProcessName(record.pkg);
-    setAppHost({ pkg: record.pkg, application: null, res: record.res, splits: [], currentActivity: () => null, activities: () => [] } as never);
+    setAppHost(testAppHost(record));
     hostWindowManager();
     await onMain(() => startActivityThread(false));
     // bindApplication is a message to the main looper; the Application exists once it ran

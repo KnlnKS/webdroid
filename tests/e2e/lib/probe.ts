@@ -208,10 +208,6 @@ function installProbe(cfg: ProbeConfig): void {
       return condition.kind === "all" ? matches.every(Boolean) : matches.some(Boolean);
     }
     if (condition.kind === "perf") return (g.wd.perf[condition.counter] ?? 0) >= condition.atLeast;
-    if (condition.kind === "activity") {
-      const activity = g.wd.app()?.stack.at(-1);
-      return activity?.component === condition.component || activity?.constructor?.$i?.name === condition.component;
-    }
     if (condition.kind === "resource" || condition.kind === "resource-absent") {
       const found = nodes.some((node) => node.resId === condition.resId && inScreen(node, screen));
       return condition.kind === "resource" ? found : !found;

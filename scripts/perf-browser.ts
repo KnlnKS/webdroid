@@ -115,7 +115,7 @@ try {
   for (const frame of page.frames()) {
     if (await frame.evaluate((pkg) => {
       const owner = window.frameElement;
-      return globalThis.wd?.app()?.host.pkg === pkg && !document.hidden && (!owner || owner.getClientRects().length > 0);
+      return globalThis.wd?.app()?.pkg === pkg && !document.hidden && (!owner || owner.getClientRects().length > 0);
     }, flow.pkg).catch(() => false)) {
       foreground = frame;
       break;
@@ -292,7 +292,7 @@ try {
       rafIntervals: Array.from(raf.subarray(0, Math.min(nr, capacity))),
       presentIntervals: Array.from(presents.subarray(0, Math.min(np, capacity))),
       inputToNextPresentProxy: Array.from(inputPresent.subarray(0, ni)),
-      app: wd.app()?.host.pkg, 
+      app: wd.app()?.pkg, 
     };
   }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"], offsets: inputOffsets, alignPresentation: values["align-presentation"], startState, stateReader });
   const result = await measurement;

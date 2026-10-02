@@ -34,7 +34,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
     try {
       const read = () => frame.evaluate(() => {
         const wd = globalThis.wd;
-        return wd ? { status: "ok" as const, pkg: wd.app()?.host.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
+        return wd ? { status: "ok" as const, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
           missingAt: Object.fromEntries(wd.rt.missingAt ?? []),
           placeholders: [...wd.rt.placeholders],
           placeholderAt: Object.fromEntries(wd.rt.placeholderAt),

@@ -14,7 +14,7 @@ import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
-import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, currentApp, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -36,6 +36,7 @@ import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
 import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
+import { appHost } from "./android/apphost";
 
 const params = new URLSearchParams(location.search);
 const hotThreshold = Number(params.get("jvmHotness") ?? DEFAULT_HOT_THRESHOLD);
@@ -108,11 +109,11 @@ async function boot(file: string, local?: File) {
     const t0 = performance.now();
     connectProcess();
     runtimeStarted = true;
-    const app = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
+    const label = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
     void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
       .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
     perf.bootMs = performance.now() - t0;
-    shell.setState({ kind: "running", file, label: app.label });
+    shell.setState({ kind: "running", file, label });
   } catch (e) {
     rollbackAssets?.();
     console.error(e);
@@ -149,7 +150,7 @@ const wd = {
     if (typeof fn !== "function") throw new Error(`no static ${cls}.${name}${desc}`);
     return (fn as (...a: unknown[]) => unknown)(...args);
   },
-  boot, app: () => currentApp(), back,
+  boot, app: () => appHost, back,
   background: (ms = 1000) => processBroker().background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded

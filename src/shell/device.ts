@@ -6,7 +6,6 @@ import { rt } from "../jvm/runtime";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
-import { scall } from "../jvm/natives/jlang";
 import { setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
@@ -18,8 +17,8 @@ import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
 import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type JLocaleList } from "../android/resnative";
-import { setAppHost, type AppHost } from "../android/apphost";
-import { loadResources, newTheme, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
+import { setAppHost } from "../android/apphost";
+import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
 import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
@@ -90,10 +89,6 @@ function launcherOrientation(app: XmlNode | undefined, launcher: XmlNode, pkg: s
 /** UiModeManager's persisted application night mode: MODE_NIGHT_NO, MODE_NIGHT_YES, else the device's */
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
-/** the app this process booted */
-export interface BootedApp { host: AppHost; label: string }
-let booted: BootedApp | null = null;
-export function currentApp(): BootedApp | null { return booted; }
 let zygote: Promise<void> | null = null;
 /** What a device's zygote holds before it forks an app: the framework package, the boot class
  *  path indexed and the natives linked. It needs no app, so a page starts it while the app
@@ -111,7 +106,8 @@ export function startZygote(): Promise<void> {
   })();
 }
 
-export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
+/** boots the app, resolving to its label */
+export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<string> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   onStatus("Reading package…");
@@ -156,35 +152,27 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // before ContextImpl ever creates them
   for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
   writePrefsFiles(pkg);
-  const themeAttr = appNode?.attrs.find((a) => a.name === "theme");
   const labelAttr = appNode?.attrs.find((a) => a.name === "label");
-  const iconAttr = appNode?.attrs.find((a) => a.name === "icon");
 
   onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
   registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
   for (const sp of install.splits) registerSplit(apkPath(sp.name));
-  const themeResId = themeAttr?.data ?? 0;
   const { target } = usesSdk(manifest);
   const jres = await loadResources(apkPath(), await javaConfiguration(deviceConfiguration()));
   // ActivityThread.handleBindApplication: the system Resources take the device configuration and
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
   await applyDeviceConfiguration();
   const res = nativeRes(jres);
-  // ContextImpl.getTheme: the manifest's theme, or the platform default for the target SDK
-  const theme = await newTheme(jres, null, await scall("android/content/res/Resources", "selectDefaultTheme", "(II)I", themeResId, target));
-
   const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
-  const host: AppHost = {
-    res, theme, pkg, assetKey, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
+  setAppHost({
+    res, pkg, assetKey, zip,
     splits: install.splits.map((sp) => sp.name),
-    application: null, jresources: jres,
     setApplicationNightMode: (mode) => { setApplicationNightMode(pkg, mode); },
     setApplicationLocales: (locales) => { setApplicationLocales(pkg, locales); },
-  };
-  setAppHost(host);
+  });
   const savedLocales = getPrefs(pkg, "__system_locales").map.get("tags");
   if (typeof savedLocales === "string" && savedLocales) applyApplicationLocales(await localesFromTags(savedLocales));
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
@@ -197,10 +185,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   hostWindowManager();
   setDisplayTarget(frame, present);
   displayHooks.requestOrientation = applyOrientationRequest;
-  const app: BootedApp = booted = { host, label };
   onStatus("Starting app…");
   await onMain(() => startActivityThread(!processName));
-  return app;
+  return label;
 }
 
 /** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window
