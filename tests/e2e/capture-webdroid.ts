@@ -30,8 +30,6 @@ export type StepRun = {
   newPlaceholders?: string[];
   /** Native libraries this step was the first to need as machine code ("libx.so (abi)"). */
   nativeRequired?: string[];
-  /** framework attributes this step was the first to use and find unread */
-  unreadAttrs?: string[];
   /** Wall-clock ms this step took to settle, and the perf counters it burned getting there. */
   ms?: number;
   perf?: Record<string, number>;
@@ -186,7 +184,6 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
                 newPlaceholders: r.newPlaceholders.length ? r.newPlaceholders : undefined,
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
-                unreadAttrs: r.unreadAttrs.length ? r.unreadAttrs : undefined,
                 newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
                 processes: await readProcesses(drv.page), frameHash: r.frameHash ?? undefined,
                 presentation: r.presentation, evidence, phases: { ...r.phases, hostWriteMs } });

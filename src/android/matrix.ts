@@ -5,8 +5,7 @@
 // part: [a, b, c, d, e, f] = [M0, M3, M1, M4, M2, M5].
 
 import { rt, declaredField } from "../jvm/runtime";
-import { handle, deref, replace, FINALIZER } from "./handles";
-import { newObj, after } from "../jvm/natives/jlang";
+import { handle, deref, FINALIZER } from "./handles";
 import type { Ctx2D } from "./recording";
 import type { JRectF } from "./graphics";
 
@@ -53,8 +52,6 @@ let nativeInstance = "";
 const instanceOf = (m: object) => (m as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Matrix", "native_instance")];
 /** the 3x3 behind a Java Matrix */
 export const matrixOf = (m: object): Mat => deref<Mat>(instanceOf(m));
-/** a new Java Matrix over `mat` itself: writes on either side are seen by the other */
-export const javaMatrix = (mat: Mat): unknown => after(newObj("android/graphics/Matrix", "()V"), (m: object) => { replace(instanceOf(m), mat); return m; });
 // A stack of 4x4 transforms (SkM44, row-major, float) viewed by SkCamera3D, whose location is
 // in inches (72 points each) and whose observer sits on the view axis at the location's depth.
 export class Camera3D {

@@ -2,7 +2,7 @@
 // Region, Camera, RenderNode, the interpolators, NinePatch, PathParser and SurfaceTexture.
 import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
 import { deref } from "../../src/android/handles";
-import { presentSurface, surfaceTextureOf } from "../../src/android/glview";
+import { presentSurface, surfaceTextureOf } from "../../src/android/glsurface";
 import { loadSystemFonts } from "../../tests/java";
 import { exercise, same, near, thrown, statics, listener, fontMetrics, vectorProbeLines } from "./harness";
 

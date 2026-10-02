@@ -10,12 +10,10 @@ import { hostStub } from "./binder";
 import { device } from "../shell/config";
 import { KEY_CHARACTER_MAPS, DEVICE_KEYS } from "./keychars";
 import { parseKeyMap, javaKeyCharacterMap } from "./keyevent";
-import { NativeMotionEvent, Coords, nextId, SUPPORTS_ORIENTATION, AXIS_X, AXIS_Y, AXIS_PRESSURE } from "./motionevent";
 
 export const VIRTUAL_KEYBOARD = -1, TOUCHSCREEN = 12;
 /** TOUCHSCREEN | STYLUS: the source of the touchscreen's events */
 export const TOUCH_SOURCE = 0x5002;
-const TOOL_TYPE_FINGER = 1;
 const RAW_RANGE = 32768;
 
 const B = "android/view/InputDevice$Builder";
@@ -66,14 +64,3 @@ rt.register({ name: "webdroid/InputManagerService", ctor: class extends JObj {},
 } });
 hostStub("input", "webdroid/InputManagerService");
 
-/** A finger on the touchscreen as InputReader cooks it: at (x, y) on the display, for a window
- *  whose origin is at (left, top) */
-export function touchEvent(action: number, x: number, y: number, downMs: number, atMs: number, left = 0, top = 0): NativeMotionEvent {
-  const e = new NativeMotionEvent(), c = new Coords();
-  c.set(AXIS_X, x); c.set(AXIS_Y, y); c.set(AXIS_PRESSURE, 1);
-  Object.assign(e, { id: nextId(), deviceId: TOUCHSCREEN, source: TOUCH_SOURCE, action, flags: SUPPORTS_ORIENTATION,
-    xPrecision: RAW_RANGE / device.width, yPrecision: RAW_RANGE / device.height, downTime: BigInt(Math.round(downMs * 1e6)),
-    ids: [0], tools: [TOOL_TYPE_FINGER], times: [BigInt(Math.round(atMs * 1e6))], coords: [c] });
-  e.xform = Float32Array.of(1, 0, -left, 0, 1, -top);
-  return e;
-}

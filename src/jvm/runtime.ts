@@ -83,9 +83,7 @@ export const isPlaceholderMethod = (value: unknown): boolean =>
 type Accessor = (this: any, v?: unknown) => unknown;
 const accessors = (t: Record<string, string>, make: (f: string) => Accessor) => Object.fromEntries(Object.entries(t).map(([s, f]) => [s, make(f)]));
 export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f]; });
-export const flagGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f] ? 1 : 0; });
 export const fieldSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = v; });
-export const flagSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = !!v; });
 
 /** a shared table less the entries a class does not declare */
 export function without(methods: NativeSpec["methods"], ...keys: string[][]): NonNullable<NativeSpec["methods"]> {

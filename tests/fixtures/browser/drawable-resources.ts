@@ -2,12 +2,12 @@ import "../../../src/natives";
 import { loadFramework, loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
 import { vcall, newObj, scall } from "../../../src/jvm/natives/jlang";
-import { ST } from "../../../src/android/drawable";
 import { canvasOver } from "../../../src/android/canvas";
 import { mountPlatformData } from "../../../src/shell/apex";
 import { initDeviceLocales } from "../../../src/android/resnative";
 import { applyDeviceConfiguration } from "../../../src/android/resources";
 
+const STATE_ENABLED = 0x0101009e; // android.R.attr.state_enabled
 const D = "Landroid/graphics/drawable/Drawable;", THEME = "Landroid/content/res/Resources$Theme;", S = "Ljava/lang/String;";
 
 /** framework drawables through the system Resources under Theme.Material, drawn as the view stack draws them */
@@ -24,7 +24,7 @@ async function probe() {
   await vcall(theme, "applyStyle", "(IZ)V", await id("Theme.Material", "style"), 1);
   const drawable = async (name: string) => vcall(res, "getDrawable", `(I${THEME})${D}`, await id(name, "drawable"), theme);
   const track = await drawable("seekbar_track_material");
-  await vcall(track, "setState", "([I)Z", Int32Array.of(ST.enabled));
+  await vcall(track, "setState", "([I)Z", Int32Array.of(STATE_ENABLED));
   await vcall(track, "setBounds", "(IIII)V", 0, 0, 300, 54);
   const progress = await vcall(track, "findDrawableByLayerId", `(I)${D}`, 0x0102000d);
   await vcall(progress, "setLevel", "(I)Z", 5000);
@@ -40,7 +40,7 @@ async function probe() {
   const thumb = await drawable("seekbar_thumb_material_anim");
   await vcall(thumb, "setBounds", "(IIII)V", 0, 0, 54, 54);
   ctx.clearRect(0, 0, 300, 54); ctx.globalAlpha = 0.5;
-  await vcall(thumb, "setState", "([I)Z", Int32Array.of(ST.enabled));
+  await vcall(thumb, "setState", "([I)Z", Int32Array.of(STATE_ENABLED));
   await vcall(thumb, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const center = pixel(27, 27), outside = pixel(2, 2);
   ctx.globalAlpha = 1; ctx.clearRect(0, 0, 300, 54);
@@ -58,10 +58,6 @@ async function probe() {
   await vcall(rotate, "setLevel", "(I)Z", 10000);
   await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   const absolute = [pixel(0, 30), pixel(30, 30)], restored = ctx.getTransform().isIdentity;
-  ctx.clearRect(0, 0, 300, 54);
-  const inset = await newObj("android/graphics/drawable/InsetDrawable", `(${D}I)V`, fill, 4);
-  const dialog = Object.assign(rt.make("webdroid/DialogRoot"), { cardBg: inset, right: 300, bottom: 54 });
-  await vcall(dialog, "onDraw", "(Landroid/graphics/Canvas;)V", canvasOver(ctx, 300, 54));
   // VectorDrawableProbe's cases on the device: framework vectors drawn into ARGB bitmaps
   const light = await vcall(res, "newTheme", `()${THEME}`);
   await vcall(light, "applyStyle", "(IZ)V", await id("Theme.Material.Light", "style"), 1);
@@ -84,6 +80,6 @@ async function probe() {
   vectors.back = await pixels(arrow, 24, 24);
   await vcall(arrow, "setLayoutDirection", "(I)Z", 1);
   vectors["back-rtl"] = await pixels(arrow, 24, 24);
-  return { heights, before, after, above, center, outside, rotated, absolute, restored, dialogCenter: pixel(150, 27), vectors };
+  return { heights, before, after, above, center, outside, rotated, absolute, restored, vectors };
 }
 export default probe;

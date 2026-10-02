@@ -3,7 +3,6 @@
 // from AOSP bytecode; TS reaches an event's native state through motionOf.
 
 import { rt, JObj, declaredField } from "../jvm/runtime";
-import { after, scall } from "../jvm/natives/jlang";
 import { ownedHandle, deref } from "./handles";
 import { matrixOf } from "./matrix";
 import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type JParcel } from "./parcel";
@@ -213,25 +212,6 @@ const ptrOf = (ev: object) => (ev as Record<string, bigint>)[ptrField ||= declar
 const eventAt = (h: bigint) => deref<NativeMotionEvent>(h);
 /** the native event behind a Java MotionEvent */
 export const motionOf = (ev: object): NativeMotionEvent => eventAt(ptrOf(ev));
-export const actionOf = (ev: object): number => motionOf(ev).action;
-export const eventX = (ev: object, i = 0): number => motionOf(ev).axis(AXIS_X, i);
-export const eventY = (ev: object, i = 0): number => motionOf(ev).axis(AXIS_Y, i);
-/** the event's time in uptime milliseconds, with the nanoseconds getEventTime truncates */
-export const eventTimeMs = (ev: object): number => Number(motionOf(ev).eventTime) / 1e6;
-/** MotionEvent.obtain(ev): a copy the caller may keep */
-export const copyEvent = (ev: object): JObj | Promise<JObj> => scall(ME, "obtain", `(L${ME};)L${ME};`, ev);
-/** MotionEvent.obtain(downTime, eventTime, action, x, y, metaState) */
-export const obtainMotion = (downMs: number, atMs: number, action: number, x: number, y: number, metaState = 0): JObj | Promise<JObj> =>
-  scall(ME, "obtain", `(JJIFFI)L${ME};`, BigInt(Math.floor(downMs)), BigInt(Math.floor(atMs)), action, x, y, metaState);
-/** android_view_MotionEvent_obtainAsCopy: a pooled Java MotionEvent holding a copy of `n` */
-export function obtainAsCopy(n: NativeMotionEvent): JObj | Promise<JObj> {
-  return after(scall(ME, "obtain", `()L${ME};`) as JObj | Promise<JObj>, (ev: JObj) => {
-    const h = ptrOf(ev);
-    if (h) eventAt(h).copyFrom(n, true);
-    else { const dst = new NativeMotionEvent(); dst.copyFrom(n, true); (ev as unknown as Record<string, bigint>)[ptrField] = ownedHandle(dst); }
-    return ev;
-  });
-}
 
 // ── JNI
 const iae = (msg: string) => rt.mkThrowable("java/lang/IllegalArgumentException", msg);

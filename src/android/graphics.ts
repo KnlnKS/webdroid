@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall, after } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import type { NativeBitmap } from "./bitmap";
 import type { Ctx2D } from "./recording";
 import { parcelCreator } from "./parcelable";
@@ -49,18 +49,6 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
 }
 rt.register({ name: "android/graphics/Insets", ctor: JInsets, fields: ["left", "top", "right", "bottom"], statics: { NONE: INSETS_NONE } });
 
-/** The shadow a shape casts, without the shape: it is filled far to the side and its shadow
- *  offset back, since a canvas shadow takes its opacity from the fill's. `dy` is in user space. */
-export function castShadow(ctx: Ctx2D, trace: () => void, color: string, blur: number, dy: number) {
-  const m = ctx.getTransform(), far = 1 << 16;
-  ctx.save();
-  ctx.translate(-far, 0);
-  ctx.shadowColor = color; ctx.shadowBlur = blur;
-  ctx.shadowOffsetX = m.a * far; ctx.shadowOffsetY = m.b * far + m.d * dy;
-  ctx.fillStyle = "#000";
-  ctx.beginPath(); trace(); ctx.fill();
-  ctx.restore();
-}
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
  * modes Canvas2D cannot express are absent and fall back to plain source-over.
@@ -83,11 +71,6 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
   "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
   "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
   "HUE", "SATURATION", "COLOR", "LUMINOSITY"];
-/** PorterDuff.Mode's, BlendMode's or Region.Op's constant `name`, once the (bytecode) enum has initialized */
-export function modeConstant(cls: "android/graphics/PorterDuff$Mode" | "android/graphics/BlendMode" | "android/graphics/Region$Op", name: string): unknown {
-  const info = rt.link(cls);
-  return after(rt.initClass(info), () => (info.ctor as unknown as Record<string, unknown>)["s$" + name]);
-}
 /**
  * A ColorFilter's native instance, as hwui builds its SkColorFilter: AOSP's row-major 4x5 colour
  * `matrix` with its offsets in 0..255 (SkColorFilters::Matrix and Lighting), or, when that is null,

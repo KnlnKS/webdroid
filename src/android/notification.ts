@@ -274,12 +274,6 @@ async function showNotificationPrompt(pkg: string): Promise<void> {
   grantPrompted(pkg, POST_NOTIFICATIONS);
   await coverTop();
 }
-/** an activity launched from the launcher (PermissionPolicyService's ActivityInterceptorCallback):
- *  decided by the channels the app has as it launches, shown once its activity is in front */
-export function notificationPromptOnLaunch(pkg: string): () => Promise<void> {
-  const needed = promptNeeded(pkg);
-  return async () => { if (needed && promptNeeded(pkg)) await showNotificationPrompt(pkg); };
-}
 
 // ── the notification list
 const keyOf = (userId: number, pkg: string, id: number, tag: string | null, uid: number) => `${userId}|${pkg}|${id}|${tag}|${uid}`;

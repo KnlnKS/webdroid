@@ -11,7 +11,6 @@ import { zipTree } from "./jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
 import { setBackgroundRealm } from "./jvm/yield";
-import { overlays } from "./android/popup";
 import { jitStats } from "./native/core";
 import { openInstallApks, type Install } from "./shell/install";
 import type { FileSource } from "./shell/lazyfile";
@@ -62,7 +61,7 @@ processPresentation.changed = (visible) => {
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
 // the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
-(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements,
+(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements,
   get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? testFrame() : Promise.resolve(),
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => {

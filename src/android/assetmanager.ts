@@ -11,9 +11,9 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
 import {
-  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES, attrSet, javaField,
+  Resources, JTheme, JAttrSet, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
 } from "./res";
-import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml";
+import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent } from "./axml";
 import { sizeClass, type Arsc } from "./arsc";
 import { packages } from "./packages";
 import { mkPfd } from "./os";
@@ -123,16 +123,6 @@ class ParseState extends JAttrSet {
     this.node = null;
   }
   get ev(): XmlEvent { return this.blk.doc.events[this.pos]; }
-}
-/** the root element of the document an XmlBlock$Parser reads */
-export function parserRoot(parser: unknown): XmlNode | null {
-  const st = attrSet(parser);
-  return st instanceof ParseState ? st.blk.doc.root : null;
-}
-/** another parser over the document an XmlBlock$Parser reads, from its start */
-export function reopenParser(parser: unknown): Promise<unknown> {
-  const st = attrSet(parser) as ParseState;
-  return vcall(javaField(parser, "android/content/res/XmlBlock$Parser", "mBlock"), "newParser", "(I)Landroid/content/res/XmlResourceParser;", st.sourceResId);
 }
 const block = (h: bigint) => deref<Block>(h);
 const state = (h: bigint) => deref<ParseState>(h);

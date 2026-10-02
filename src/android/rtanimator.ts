@@ -9,9 +9,8 @@ import { rt } from "../jvm/runtime";
 import { scall } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { type NativePaint } from "./paint";
-import { NativeRenderNode, requestRedraw } from "./rendernode";
+import { NativeRenderNode } from "./rendernode";
 import { interpolatePaths, PathData } from "./pathparser";
-import { accelDecel } from "./interpolator";
 import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable";
 
 // ── Interpolator.cpp
@@ -19,7 +18,7 @@ export type Interpolator = (t: number) => number;
 const f32 = Math.fround;
 const bounce = (t: number) => t * t * 8;
 const INTERPOLATORS = {
-  "createAccelerateDecelerateInterpolator()J": (): Interpolator => (t) => f32(accelDecel(t)),
+  "createAccelerateDecelerateInterpolator()J": (): Interpolator => (t) => f32(Math.cos((t + 1) * Math.PI) / 2 + 0.5),
   "createAccelerateInterpolator(F)J": (factor: number): Interpolator => (t) => f32(factor === 1 ? t * t : Math.pow(t, factor * 2)),
   "createAnticipateInterpolator(F)J": (tension: number): Interpolator => (t) => f32(t * t * ((tension + 1) * t - tension)),
   "createAnticipateOvershootInterpolator(F)J": (tension: number): Interpolator => (t) => {
@@ -88,7 +87,7 @@ abstract class RenderAnimator {
   protected abstract onFinished(): void;
   setStart(v: number): void { this.from = v; this.delta = this.final - v; this.hasStart = true; }
 
-  request(r: number, staging: number): void { this.stagingState = staging; this.requests.push(r); active.add(this); requestRedraw(); }
+  request(r: number, staging: number): void { this.stagingState = staging; this.requests.push(r); active.add(this); }
   private resolve(r: number): void {
     const running = this.state === RUNNING || this.state === REVERSING;
     switch (r) {

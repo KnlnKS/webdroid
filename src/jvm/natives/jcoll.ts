@@ -41,15 +41,7 @@ const iterateAll = driven(function* iterateAll(c: unknown): Gen<unknown[]> {
   return out;
 });
 
-/** Java equality: identity, else `a.equals(b)` */
-export function jeq(a: unknown, b: unknown): number | Promise<number> {
-  if (a === b) return 1;
-  if (a === null || b === null || a === undefined || b === undefined || typeof a === "string") return 0;
-  return vcall(a, "equals", "(Ljava/lang/Object;)Z", b);
-}
 
-/** a java.util.Iterator over `items` */
-export const mkIter = (items: unknown[]): unknown => vcall(newArrayList(items), "iterator", "()Ljava/util/Iterator;");
 /** a java.util.Enumeration over `items` */
 export const mkEnumeration = (items: unknown[]): unknown =>
   scall("java/util/Collections", "enumeration", "(Ljava/util/Collection;)Ljava/util/Enumeration;", newArrayList(items));

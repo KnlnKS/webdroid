@@ -4,7 +4,7 @@ import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
 import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
-import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glview";
+import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";
 import { mem } from "../../../src/native/mem";
 import { Cpu, setA64 } from "../../../src/native/cpu";
 import { jitStats, JIT_HEAT } from "../../../src/native/core";
@@ -31,7 +31,7 @@ function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
 function readback() {
   setA64(false); gles1Init(); gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 4, height: 4, present: null, frames: 0 });
+  context.makeCurrent({ width: 4, height: 4, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "readback");
   const base = mem.reserve(0x3000, 0x1000);
   const execute = (at: number) => {
@@ -73,7 +73,7 @@ function readback() {
 function uploadExtents() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 4, height: 4, present: null, frames: 0 });
+  context.makeCurrent({ width: 4, height: 4, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "texture-upload"), p = mem.reserve(0x1000, 0x1000);
   const lengths: number[] = [];
   for (const name of ["texSubImage2D", "texSubImage3D"] as const) {
@@ -103,7 +103,7 @@ function uploadExtents() {
 /** Java GLES20 client arrays: read at the draw, one reused buffer per attribute and for indices, bindings kept */
 function clientArrays() {
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, program = g.createProgram()!;
   for (const [type, src] of [[g.VERTEX_SHADER, "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}"], [g.FRAGMENT_SHADER, "void main(){gl_FragColor=vec4(1,0,0,1);}"]] as const) {
     const shader = g.createShader(type)!; g.shaderSource(shader, src); g.compileShader(shader); g.attachShader(program, shader);
@@ -135,7 +135,7 @@ function clientArrays() {
 function bufferBindings() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "buffer-bindings"), p = mem.malloc(16);
   const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
   gl("glGenVertexArrays", 1, p); gl("glGenBuffers", 2, p + 4);
@@ -155,7 +155,7 @@ function bufferBindings() {
 function nativeClientArrays() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "client-arrays"), p = mem.malloc(256);
   const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
   const program = g.createProgram()!;
@@ -198,7 +198,7 @@ function nativeClientArrays() {
 function externalTexture() {
   gles3Init();
   const context = new EglContext();
-  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, cpu = new Cpu(mainThread, "external-texture"), p = mem.malloc(16);
   const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
   const EXTERNAL = 0x8d65;
@@ -275,7 +275,7 @@ async function probe() {
 }
 async function nativeWindow() {
   ndkInit();
-  const surface: GlSurface = { view: null, width: 2, height: 1, present: null, frames: 0 };
+  const surface: GlSurface = { width: 2, height: 1, present: null, frames: 0 };
   const handle = nativeWindowFor(surface), out = mem.malloc(64);
   const cpu = new Cpu(mainThread, "window-buffer");
   const invoke = (name: string, values: number[]) => {
@@ -314,7 +314,7 @@ async function nativeWindow() {
  *  takes GLConsumer's flipped matrix, another context cannot update it, a detach deletes the texture
  *  and an attach binds the current image to a new one */
 async function surfaceTexture() {
-  const a = new EglContext(), b = new EglContext(), pbuffer = (): GlSurface => ({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const a = new EglContext(), b = new EglContext(), pbuffer = (): GlSurface => ({ width: 1, height: 1, present: null, frames: 0 });
   const texel = (name: number) => {
     const g = gl!, fbo = g.createFramebuffer(), px = new Uint8Array(4);
     g.bindFramebuffer(g.FRAMEBUFFER, fbo);

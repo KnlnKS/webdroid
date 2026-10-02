@@ -2,11 +2,11 @@
 // resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
 
 import { Arsc } from "./arsc";
-import { TV, parseAXML, attr, type XmlNode, type XmlAttr } from "./axml";
+import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { JObj, rt, declaredField } from "../jvm/runtime";
 import { deref } from "./handles";
-import { JDisplayMetrics, complexToPx } from "./util";
-import { mangleMethod, intBitsToFloat } from "../jvm/abi";
+import { JDisplayMetrics } from "./util";
+import { intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
 
 let fwPkg: Arsc | null = null;
@@ -18,47 +18,15 @@ export const AID = (name: string): number => {
     v = fwPkg?.findId("attr", name) ?? 0;
     // a lookup before the framework package loads is not an answer, so it is not remembered
     if (fwPkg) aidMemo.set(name, v);
-    if (v) askedAttrs.add(v);
   }
   return v;
 };
 
-// Naming an attribute here is the only way to read one, so every id AID has ever returned is the
-// set we understand. A framework attribute on a tag outside it renders wrong in silence -- no
-// missing class, no missing method, nothing in the log -- which is the hardest kind of gap to
-// find in an app nobody has run before.
-const askedAttrs = new Set<number>();
-const unread = new Map<number, string>();
-export function noteAttrsRead(...ids: number[]): void { for (const id of ids) askedAttrs.add(id); }
-export function noteUnreadAttrs(node: XmlNode, cls: string): void {
-  for (const a of node.attrs) {
-    if (a.resId >>> 24 !== 0x01 || askedAttrs.has(a.resId) || unread.has(a.resId)) continue;
-    unread.set(a.resId, cls);
-  }
-}
-/** filtered at read time: a widget that had not been constructed yet has since named its own */
-export function unreadAttrs(res: Resources): string[] {
-  const out: string[] = [];
-  for (const [id, cls] of unread) if (!askedAttrs.has(id)) out.push(`${cls} android:${res.idName(id)}`);
-  return out.sort();
-}
-
-// The package arrives over the network, but the attr-id tables the widgets read are built while
-// their modules evaluate. They are handed out empty and filled in place, before any app boots.
-const deferred: (() => void)[] = [];
-export function onFramework(fn: () => void): void { deferred.push(fn); }
-export function attrTable<K extends string>(...names: K[]): Record<K, number> {
-  const t = {} as Record<K, number>;
-  onFramework(() => { for (const n of names) t[n] = AID(n); });
-  return t;
-}
 export function setFramework(a: Arsc): void {
   fwPkg = a;
   aidMemo.clear();
-  for (const fill of deferred) fill();
 }
 
-const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Theme;");
 
 // resolved value: binary Res_value types + an internal STR (0xfd)
 /** r: the resource whose entry a resolved value came from — what getResourceId still reports */
@@ -73,21 +41,6 @@ export function normRV(v: RV): RV {
 /** a raw AXML attribute → RV, its string literal as T_STR */
 export function xmlAttrRV(a: XmlAttr): RV {
   return a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : normRV({ t: a.type, d: a.data });
-}
-// An id of 0 is AID missing the name, and an attribute with no resource-map entry (style=, a
-// tools: one) also carries 0 -- so a miss would bind to whichever of those came first.
-/** the node's attribute with this resource id, as an RV */
-export function nodeAttrRV(node: XmlNode, resId: number): RV | null {
-  if (!resId) return null;
-  for (const a of node.attrs) if (a.resId === resId) return xmlAttrRV(a);
-  return null;
-}
-/** the node's attribute with this name, references resolved, as animation XML is read */
-export function namedAttrRV(res: Resources, node: XmlNode, name: string): RV | null {
-  const a = attr(node, name);
-  if (!a) return null;
-  const v = normRV({ t: a.type, d: a.data, s: a.str ?? undefined });
-  return v.t === TV.REFERENCE ? res.resolveRefs(v) : v;
 }
 
 /** an app XML colour literal (#rgb … #aarrggbb) — the one raw string form still parsed */
@@ -162,17 +115,6 @@ export const setResourceLocale = (lang: string, dir: number): void => setDeviceQ
 export const setResourceOrientation = (orientation: number, wdp: number, hdp: number, swdp: number): void =>
   setDeviceQualifiers({ orientation: orientation as Arsc["device"]["orientation"], wdp, hdp, swdp });
 
-/**
- * A theme attribute by name, in either package. A support library re-declares framework attr
- * names in the app's own package -- AppCompat's windowActionBar is not android:windowActionBar --
- * and only one decor implementation reads them here, so both ids can carry the answer. The app's
- * is the more specific statement of intent, so it is asked first.
- */
-export function themeByName(res: Resources, theme: JTheme | null, name: string): RV | null {
-  if (!theme) return null;
-  const own = res.arsc?.findId("attr", name) ?? 0;
-  return (own ? theme.lookup(own) : null) ?? (AID(name) ? theme.lookup(AID(name)) : null);
-}
 
 /** the native half of an ApkAssets: one archive and its resource table */
 export interface Apk {
@@ -624,29 +566,11 @@ export function obtainStyled(
   const ta = new StyledValues();
   ta.res = res; ta.theme = theme;
   ta.attrIds = attrIds;
-  const n = attrIds.length;
-  ta.vals = new Array(n);
-  // asking is what counts, not finding: app classes reach their own framework attributes through
-  // this same cascade, so an attribute nobody asks for is one nobody implements.
-  for (let i = 0; i < n; i++) askedAttrs.add(attrIds[i]);
+  ta.vals = new Array(attrIds.length);
   resolveAttributes(res, theme, set?.node ?? null, 0, defStyleAttr, defStyleRes, attrIds, null, null, null, ta.vals);
   return ta;
 }
 
-/**
- * Finish a raw style/theme value the way an attribute lookup does: dereference a theme
- * attribute, mask @null, then resolve references. `styleLookup` deliberately returns the raw
- * value, so anything reading a style directly has to come through here — an app-side
- * TextAppearance compiles its android:textSize to a `@dimen/...` reference, and reading that
- * raw silently yields no size at all.
- */
-export function resolveStyleValue(res: Resources, theme: JTheme | null | undefined, v: RV | null): RV | null {
-  if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
-  // aapt flattens @null as a reference to 0; AOSP's ApplyStyle turns it back into TYPE_NULL
-  // only at the end, after it has masked any style/theme value beneath it
-  if (v && v.t === TV.REFERENCE && !v.d) v = null;
-  return v && v.t !== TV.NULL ? res.resolveRefs(v) : null;
-}
 
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
@@ -656,12 +580,6 @@ function frameworkValue<T>(type: string, name: string, read: (res: Resources, v:
 }
 /** a com.android.internal string, as the platform's own UI labels things */
 export function frameworkString(name: string): string | null { return frameworkValue("string", name, rvString, null); }
-/** a com.android.internal dimension in pixels, 0 when the framework lacks it */
-export function frameworkDimen(name: string): number { return frameworkValue("dimen", name, (res, v) => Math.round(rvDimen(res, v)), 0); }
-export function bagStrings(res: Resources, id: number): string[] {
-  const bag = res.bag(id);
-  return bag ? [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "") : [];
-}
 export function rvString(res: Resources, v: RV | null): string | null {
   if (!v || v.t === TV.NULL) return null;
   if (v.s !== undefined && (v.t === T_STR || v.t === TV.STRING)) return v.s;
@@ -728,22 +646,6 @@ function colorFromSelector(res: Resources, resId: number, dflt: number): number 
   }
   return dflt;
 }
-/**
- * The theme the Context itself reports, memoized as its ownTheme so the synchronous themeOf()
- * agrees from then on. appcompat's ContextThemeWrapper is app dex holding its own
- * Resources.Theme, invisible to a base-chain walk — and it is the wrapper Material puts every
- * widget's ThemeOverlay in.
- */
-export async function askTheme(ctx: unknown): Promise<JTheme | null> {
-  const f = ctx && (ctx as Record<string, unknown>)[M_getTheme];
-  if (typeof f === "function") {
-    const r = (f as () => unknown).call(ctx);
-    const t = r instanceof Promise ? await r : r;
-    const native = nativeTheme(t);
-    if (native) { (ctx as { ownTheme?: JTheme }).ownTheme = native; return native; }
-  }
-  return themeOf(ctx);
-}
 /** a Java instance field of `cls`, on a bytecode object or a spec's */
 export function javaField<T>(o: unknown, cls: string, name: string): T {
   return (o as Record<string, T>)[declaredField(cls, name)];
@@ -775,36 +677,5 @@ export function attrSet(set: unknown): JAttrSet | null {
   if (set instanceof JAttrSet) return set;
   if (!rt.iof(set, "android/content/res/XmlBlock$Parser")) return null;
   return deref<JAttrSet>(javaField(set, "android/content/res/XmlBlock$Parser", "mParseState"));
-}
-export function themeOf(ctx: unknown): JTheme | null {
-  for (let c = ctx as { ownTheme?: JTheme; base?: unknown } | null | undefined; c; c = c.base as typeof c) {
-    if (c.ownTheme) return c.ownTheme;
-  }
-  return (ctx as { $host?: { theme?: JTheme } } | null)?.$host?.theme ?? null;
-}
-export function rvDimen(res: Resources, v: RV | null, dflt = 0): number {
-  if (!v) return dflt;
-  if (v.t === TV.DIMENSION) return complexToPx(v.d, res.dm);
-  if (v.t === TV.FLOAT) return v.d;
-  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
-  return dflt;
-}
-export function rvInt(res: Resources, v: RV | null, dflt = 0): number {
-  if (!v) return dflt;
-  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
-  if (v.t === TV.FLOAT) return Math.round(v.d);
-  if (v.t === TV.DIMENSION) return Math.round(complexToPx(v.d, res.dm));
-  if (v.t === T_STR && v.s && /^-?\d+$/.test(v.s)) return parseInt(v.s);
-  return dflt;
-}
-export function rvFloat(res: Resources, v: RV | null, dflt = 0): number {
-  if (!v) return dflt;
-  if (v.t === TV.FLOAT) return v.d;
-  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
-  if (v.t === T_STR && v.s) {
-    const n = parseFloat(v.s);
-    return Number.isNaN(n) ? dflt : n;
-  }
-  return dflt;
 }
 

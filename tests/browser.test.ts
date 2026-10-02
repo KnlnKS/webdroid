@@ -105,7 +105,7 @@ test.concurrent("AOSP's Canvas reports the reference device's clips, saves, laye
 test.concurrent("framework drawables resolve dimensions, tint, enabled states and group transforms; vectors match the device", async () => {
   const result = await probe("drawableResources");
   expect(result).toMatchObject({ heights: [6, 6, 6], above: [0, 0, 0, 0], outside: [0, 0, 0, 0], restored: true,
-    rotated: [[255, 0, 0, 255], [0, 0, 0, 0]], absolute: [[255, 0, 0, 255], [0, 0, 0, 0]], dialogCenter: [255, 0, 0, 255] });
+    rotated: [[255, 0, 0, 255], [0, 0, 0, 0]], absolute: [[255, 0, 0, 255], [0, 0, 0, 0]] });
   expect(result.before[3]).toBe(255);
   expect(result.after[3]).toBeGreaterThan(0);
   expect(result.after[3]).toBeLessThan(255);

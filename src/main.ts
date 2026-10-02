@@ -4,30 +4,25 @@ import "./natives";
 import { PROCESS_PID } from "./android/os";
 import { recordVsync, vsyncScheduled } from "./android/vsync";
 import { pendingTransitions } from "./android/server/atm";
-import { stageD } from "./jvm/provenance";
 import { dumpWindows } from "./shell/uiautomator";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
-import { locateDrawnText } from "./android/canvas";
 import { fetchSystemFonts, mountSystemFonts, registerSystemFonts } from "./android/fonts";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
-import { unreadAttrs } from "./android/res";
-import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, currentApp, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
 import { perf, perfReset } from "./perf";
 import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "./jvm/profile";
 import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
-import { uiState } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
-import { overlays } from "./android/popup";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
@@ -127,15 +122,6 @@ async function boot(file: string, local?: File) {
   }
 }
 
-const topDecor = (): any => currentApp()?.stack.at(-1)?.window.decor ?? null;
-const clsName = (v: any): string => v.constructor?.$i?.name ?? v.constructor.name;
-/** depth-first over a view tree, with each view's absolute position (parents' scroll removed) */
-function* walkTree(v: any, depth = 0, ox = 0, oy = 0, visibleOnly = false): Generator<{ v: any; depth: number; x: number; y: number }> {
-  if (visibleOnly && v.visibility !== 0) return;
-  const x = ox + v.left + (v.translationX ?? 0), y = oy + v.top + (v.translationY ?? 0);
-  yield { v, depth, x, y };
-  for (const c of v.children ?? []) yield* walkTree(c, depth + 1, x - (v.scrollX ?? 0), y - (v.scrollY ?? 0), visibleOnly);
-}
 const tap = async (x: number, y: number): Promise<void> => {
   // the process on screen takes the tap, as it takes the browser's own pointer events
   const remote = (processBroker().foregroundWindow() as { wd?: { tap(x: number, y: number): Promise<void> } } | null)?.wd;
@@ -153,9 +139,8 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, vfs, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
+  rt, vfs, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
   nativeRequirements,
-  layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj, vcall, code: codeStats,
   /** a static on a bytecode class: statics live on the constructor, mangled the same way */
@@ -169,85 +154,21 @@ const wd = {
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
-  // framework attributes a layout used that nothing here reads: a look that is wrong with a
-  // clean missing list is usually one of these
-  unreadAttrs: () => { const a = currentApp(); return a ? unreadAttrs(a.host.res) : []; },
-  tree: () => {
-    const out: string[] = [];
-    const line = ({ v, depth }: { v: any; depth: number }) =>
-      out.push("  ".repeat(depth) + clsName(v).split("/").pop() + ` [${v.left},${v.top},${v.right},${v.bottom}] m=${v.measuredW}x${v.measuredH} vis=${v.visibility}` +
-        (v.idNum > 0 ? " id=0x" + v.idNum.toString(16) : "") + (v.text !== undefined ? " text=" + JSON.stringify(String(v.text).slice(0, 30)) : "") +
-        (v.background ? " bg=" + v.background.constructor.name : ""));
-    const decor = topDecor();
-    if (decor) for (const n of walkTree(decor)) line(n);
-    for (const o of overlays) { out.push("OVERLAY:"); for (const n of walkTree(o.view, 1)) line(n); }
-    return out.join("\n");
-  },
   // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
   // absolute device px with the status bar included, which is the space a tap is expressed in.
-  uiTree: () => {
-    if (stageD()) return onMain(dumpWindows);
-    const app = currentApp();
-    const decor = topDecor();
-    if (!app || !decor) return [];
-    const res = app.host.res;
-    const out: unknown[] = [];
-    const emit = (root: any, ox: number, oy: number) => {
-      for (const { v, x, y } of walkTree(root, 0, ox, oy, true)) {
-        const id = v.idNum > 0 ? res.idName(v.idNum) : "";
-        out.push({
-          text: String(v.text ?? v.drawnText?.join(" ") ?? ""),
-          desc: String(v.contentDesc ?? ""),
-          cls: clsName(v).replace(/\//g, "."),
-          resId: id && !id.startsWith("0x") ? `${v.idNum >>> 24 === 1 ? "android" : app.host.pkg}:id/${id}` : "",
-          bounds: [x, y, x + (v.right - v.left), y + (v.bottom - v.top)],
-          clickable: !!v.clickable,
-          enabled: v.enabled !== false,
-          editable: !!v.editable,
-          scrollable: !!v.scrollable || Number(v.maxScrollY ?? 0) > 0 ||
-            /(?:ScrollView|ListView|RecyclerView)$/.test(clsName(v)),
-        });
-      }
-    };
-    emit(decor, 0, 0);
-    for (const o of overlays) emit(o.view, 0, 0);
-    return out;
-  },
+  uiTree: () => onMain(dumpWindows),
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
-  // the space wd.tap takes). Overlays first, topmost first. Synchronous on purpose: the e2e
-  // harness needs a value it can await from outside the page without holding an in-page promise.
-  locateText: (s: string): { x: number; y: number } | null | Promise<{ x: number; y: number } | null> => {
+  // the space wd.tap takes), topmost window first.
+  locateText: (s: string): Promise<{ x: number; y: number } | null> => {
     const normalized = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     const want = normalized(s);
     const matches = (candidate: string) => candidate === want || candidate.startsWith(want);
-    if (stageD()) return onMain(dumpWindows).then((nodes) => {
+    return onMain(dumpWindows).then((nodes) => {
       // topmost window first, as a tap reaches it; an exact match before a prefix, as the device driver ranks them
       const shown = nodes.reverse().filter((n) => n.bounds[2] > n.bounds[0]), texts = (n: typeof shown[number]) => [normalized(n.text), normalized(n.desc)];
       const hit = shown.find((n) => texts(n).includes(want)) ?? shown.find((n) => texts(n).some(matches));
       return hit ? { x: (hit.bounds[0] + hit.bounds[2]) / 2, y: (hit.bounds[1] + hit.bounds[3]) / 2 } : null;
     });
-    const decor = topDecor();
-    // An overlay's own left/top already carry its position — the layout pass lays it out AT
-    // o.x/o.y — so seeding the walk with them again doubles the offset.
-    const roots: any[] = [...overlays].reverse().map((o) => o.view);
-    if (decor) roots.push(decor);
-    for (const rootView of roots) {
-      for (const { v, x, y } of walkTree(rootView, 0, 0, 0, true)) {
-        const txt = normalized(v.text), raw = normalized(v.rawText);
-        // the emulator driver resolves a tapText against text OR content-desc, so an icon-only
-        // control (an overflow button, a nav arrow) has to be findable here the same way
-        const cd = normalized(v.contentDesc);
-        if ((matches(txt) || matches(raw) || matches(cd)) && v.right > v.left)
-          return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
-      }
-    }
-    for (const rootView of roots) {
-      for (const { v } of walkTree(rootView, 0, 0, 0, true)) {
-        const hit = locateDrawnText(v, want, SCREEN_W, SCREEN_H);
-        if (hit) return hit;
-      }
-    }
-    return null;
   },
   tap,
   tapText: async (s: string) => {
@@ -260,13 +181,13 @@ const wd = {
     // one move per display frame, as a finger on a panel of this rate reports them
     const steps = Math.max(2, Math.round(ms * device.refreshRate / 1000));
     const t0 = guestNow();
-    void dispatchPointer(0, x1, y1, t0);
+    void dispatchPointer(0, x1, y1);
     for (let i = 1; i <= steps; i++) {
       const at = t0 + ms * i / steps, t = i / steps;
       await guestSleep(Math.max(0, at - guestNow()));
-      void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, at);
+      void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
     }
-    await dispatchPointer(1, x2, y2, t0 + ms);
+    await dispatchPointer(1, x2, y2);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
@@ -346,6 +267,5 @@ const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : ne
 const fontsReady = fetchSystemFonts().then(async (bytes) => {
   mountSystemFonts(bytes);
   await registerSystemFonts(bytes);
-  uiState.needsDraw = true;
 });
 void fontsReady.catch((e) => console.error("[fonts]", e));

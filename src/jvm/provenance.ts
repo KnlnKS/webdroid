@@ -35,8 +35,6 @@ const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/co
 export const BYTECODE: string[] = [...STAGE_D, ...(fromUrl ?? "").split(",").map((s) => s.trim())
   .filter((p) => p && p !== "stage-d")];
 
-/** whether AOSP's ActivityThread runs this process, over the TS system services (Stage D) */
-export const stageD = (): boolean => isBytecode("android/app/ActivityThread");
 
 export function isBytecode(name: string): boolean {
   for (const p of BYTECODE) if (name.startsWith(p) || p.endsWith("$") && name === p.slice(0, -1)) return true;

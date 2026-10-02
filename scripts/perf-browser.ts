@@ -315,7 +315,7 @@ try {
   const heapAfter = await session.send("Runtime.getHeapUsage");
   const metrics = Object.fromEntries(afterMetrics.metrics.map(({ name, value }) => [name, value - (before.metrics.find((m) => m.name === name)?.value ?? 0)]));
   const alive = await foreground.evaluate(() => globalThis.wd.alive());
-  const tree = await foreground.evaluate(() => globalThis.wd.tree());
+  const tree = await foreground.evaluate(() => globalThis.wd.uiTree());
   const processes = await readProcesses(page);
   const jvmProfile = values["jvm-profile"] ? await foreground.evaluate(() => globalThis.wd.jvmProfile()) : undefined;
   await mkdir(dirname(values.out), { recursive: true });

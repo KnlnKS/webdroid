@@ -1,11 +1,11 @@
-// EGL 1.5 over the shell's surfaces: one display, one config (glview.ts eglConfigAttrib), contexts
-// that own the WebGL2 context (glview.ts EglContext), window surfaces from libandroid's
+// EGL 1.5 over the shell's surfaces: one display, one config (glsurface.ts eglConfigAttrib), contexts
+// that own the WebGL2 context (glsurface.ts EglContext), window surfaces from libandroid's
 // ANativeWindow handles and pbuffers of their own. Closed: an extension entry point we do not
 // implement is NULL from eglGetProcAddress.
 
 import { mem } from "./mem";
 import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host";
-import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glview";
+import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glsurface";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
 import { gles3Procs } from "./gles3";
@@ -61,13 +61,13 @@ export function eglInit(): void {
     eglCreateWindowSurface: (cpu, a) => { a.i(); a.i(); const s = windowOf(a.p()); if (!s) { return eglFailure(EGL_BAD_NATIVE_WINDOW, 0, cpu.jthread); } return handle(surfaces, s); },
     eglCreatePbufferSurface: (_c, a) => {
       a.i(); a.i(); const at = attrs(a.p());
-      return handle(surfaces, { view: null, width: at.get(0x3057) || 1, height: at.get(0x3056) || 1, present: null, frames: 0 });
+      return handle(surfaces, { width: at.get(0x3057) || 1, height: at.get(0x3056) || 1, present: null, frames: 0 });
     },
     eglCreatePixmapSurface: (cpu) => eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread),
     eglDestroySurface: (cpu, a) => {
       a.i(); const h = a.i(), s = surfaces[h];
       if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
-      if (!s.view && !s.post) s.present?.close();
+      if (!s.post) s.present?.close();
       surfaces[h] = null;
       return 1;
     },

@@ -14,7 +14,7 @@ import { JBundle, reportUncaught } from "./os";
 import { mkUri, uriParts, type JUri } from "./net";
 import { csText } from "../jvm/natives/jchars";
 import { scannedMediaUri } from "./mediastore";
-import { presentSurface, windowSurface, type GlSurface } from "./glview";
+import { presentSurface, windowSurface, type GlSurface } from "./glsurface";
 import { hostStub } from "./binder";
 
 rt.markers("android/media/ImageReader$OnImageAvailableListener");

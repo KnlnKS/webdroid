@@ -1,7 +1,6 @@
 import { hostStub } from "./binder";
-import type { JContext } from "./context";
 import { rt, type NativeSpec, JObj, driven, type Gen } from "../jvm/runtime";
-import { appHost, type AppHost } from "./apphost";
+import { appHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docPfd, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
@@ -21,11 +20,10 @@ import { observeContent, stopObserving, notifyContent } from "./server/content";
 import { systemProvider } from "./systemproviders";
 
 export const providerTransport: { acquire: (provider: Component) => Promise<unknown> } = { acquire: async () => null };
-const providers = new WeakMap<AppHost, Map<string, Promise<unknown>>>();
+/** this process's providers by authority */
+const local = new Map<string, Promise<unknown>>();
 /** ActivityThread.installProvider: the provider's instance in this process, attached to its ProviderInfo */
-export function attachProvider(ctx: JContext, component: Component): Promise<unknown> {
-  let local = providers.get(ctx.$host);
-  if (!local) providers.set(ctx.$host, local = new Map());
+export function attachProvider(ctx: JObj, component: Component): Promise<unknown> {
   const authorities = authoritiesOf(component.node);
   const existing = local.get(authorities[0]);
   if (existing) return existing;
@@ -46,7 +44,7 @@ async function contentProvider(uri: JUri): Promise<unknown> {
   const system = authority ? systemProvider(authority) : null;
   if (system) return Object.assign(rt.make("webdroid/SystemContentProvider") as JSystemProvider, { authority, binder: await system });
   if (!authority || !appHost?.application) return null;
-  const existing = providers.get(appHost)?.get(authority);
+  const existing = local.get(authority);
   if (existing) return existing;
   const component = resolveProvider(authority);
   if (!component) return null;

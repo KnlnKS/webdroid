@@ -181,8 +181,8 @@ the app is idle. Each step declares one completion policy:
 
 Quiescence ends on the first of:
 
-* **idle** — no main-looper job running or queued, no pending layout/draw/insets, no frame
-  callbacks or animators, no parked yields, nothing in flight over fetch/decode/the relay, no
+* **idle** — no main-looper job running or queued, no frame callbacks or pending transitions,
+  no parked yields, nothing in flight over fetch/decode/the relay, no
   timer due before the policy horizon plus the stability window (timed parks are waits, not work,
   and do not count), and nothing presented in the last 150 ms. This may end a step long before
   its horizon: nothing is scheduled that could change the screen.

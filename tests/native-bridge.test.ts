@@ -9,7 +9,7 @@ import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/nati
 import { stdioInit } from "../src/native/stdio";
 import { eglInit } from "../src/native/egl";
 import { gl } from "../src/android/gl";
-import { EglContext } from "../src/android/glview";
+import { EglContext } from "../src/android/glsurface";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current";
 import { gles3Init } from "../src/native/gles3";
 

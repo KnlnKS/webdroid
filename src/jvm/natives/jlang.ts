@@ -1420,7 +1420,6 @@ function enumerateThreads(threads: unknown[]): number {
 const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
 export type JSimpleEnum = JObj;
 export const enumName = (e: unknown): string => (e as Record<string, string>)[ENUM_NAME];
-export const enumOrdinal = (e: unknown): number => (e as Record<string, number>)[ENUM_ORDINAL];
 // §4.7: compareTo within one enum class, and valueOf over the constants getSharedConstants shares
 // (AOSP asks getClass and getDeclaringClass of both, and an LRU cache under a lock, per call)
 const sharedEnums = new WeakMap<object, Record<string, unknown>[]>();

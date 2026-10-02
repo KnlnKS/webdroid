@@ -1,6 +1,6 @@
 import { curThread } from "../jvm/natives/jlang";
 import { gl, setGL, selectGL } from "../android/gl";
-import type { EglContext } from "../android/glview";
+import type { EglContext } from "../android/glsurface";
 
 export const glSurfaces = {
   get current(): EglContext | null { return contexts.get(curThread) ?? null; },

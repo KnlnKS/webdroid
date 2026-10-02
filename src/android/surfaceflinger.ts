@@ -11,7 +11,7 @@ import { canvasOf } from "./canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import { frameDrawn } from "./vsync";
-import type { GlSurface } from "./glview";
+import type { GlSurface } from "./glsurface";
 import { drawnOn, deviceRect, placeFunctors, type Rect } from "./webfunctor";
 
 // SurfaceControl.Builder's creation flags
@@ -336,7 +336,7 @@ export function glSurfaceOf(s: Surface): GlSurface | null {
   const q = s.queue;
   if (!q) return null;
   return q.gl ??= {
-    view: null, present: null, frames: 0,
+    present: null, frames: 0,
     get width() { return q.width; }, get height() { return q.height; },
     post: (frame) => void queueBuffer(s, frame).catch(reportUncaught),
   };

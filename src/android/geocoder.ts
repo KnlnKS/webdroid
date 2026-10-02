@@ -11,9 +11,9 @@ import { JParcel, readDouble, readInt, readString, writeDouble, writeInt, writeS
 import { parcelCreator } from "./parcelable";
 import { type JBundle, PROCESS_PID, PROCESS_UID } from "./os";
 import { resolveService } from "./pm";
+import { appHost } from "./apphost";
 import { bindAsSystem } from "./runningservices";
 import type { JIntent, JComponentName } from "./intent";
-import type { JContext } from "./context";
 
 const FIELDS = ["FeatureName", "AdminArea", "SubAdminArea", "Locality", "SubLocality", "Thoroughfare", "SubThoroughfare",
   "Premises", "PostalCode", "CountryCode", "CountryName"] as const;
@@ -103,9 +103,9 @@ rt.register({
 });
 
 class JGeocoderParams extends JObj { locale: JLocale | null = null; pkg: string | null = null; uid = PROCESS_UID; }
-function initParams(this: JGeocoderParams, context: JContext | null, l: JLocale | null) {
+function initParams(this: JGeocoderParams, context: JObj | null, l: JLocale | null) {
   if (!context || !l) return rt.npe();
-  this.locale = l; this.pkg = context.$host?.pkg ?? null;
+  this.locale = l; this.pkg = appHost?.pkg ?? null;
 }
 const readParams = driven(function* readParams(p: JParcel): Gen<JGeocoderParams> {
   const params: JGeocoderParams = rt.make("android/location/GeocoderParams"), locale = readLocale(p);
@@ -219,7 +219,7 @@ function deliver(listener: unknown, lookup: Promise<unknown>): void {
   lookup.then((list) => vcallUncaught(listener, "onGeocode", "(Ljava/util/List;)V", list),
     (e) => vcallUncaught(listener, "onError", "(Ljava/lang/String;)V", (e as { msg?: string }).msg ?? null));
 }
-function initGeocoder(this: JGeocoder, context: JContext | null, l: JLocale | null) {
+function initGeocoder(this: JGeocoder, context: JObj | null, l: JLocale | null) {
   initParams.call(this.params = rt.make("android/location/GeocoderParams"), context, l);
 }
 // onError is a default method that ignores the failure
@@ -227,7 +227,7 @@ rt.register({ name: "android/location/Geocoder$GeocodeListener", ctor: class ext
 rt.register({
   name: "android/location/Geocoder", ctor: JGeocoder,
   methods: {
-    "<init>(Landroid/content/Context;)V": function (this: JGeocoder, context: JContext | null) {
+    "<init>(Landroid/content/Context;)V": function (this: JGeocoder, context: JObj | null) {
       return after(defaultLocale(), (locale) => initGeocoder.call(this, context, locale));
     },
     "<init>(Landroid/content/Context;Ljava/util/Locale;)V": initGeocoder,

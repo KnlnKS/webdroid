@@ -23,7 +23,7 @@ import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
-import { createFunctor, releaseFunctor, drawFunctor, drawnOn, resetDrawn, placeFunctors, type Rect } from "./webfunctor";
+import { createFunctor, releaseFunctor, drawFunctor, type Rect } from "./webfunctor";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 /** a static of a bytecode class, by name and descriptor */
@@ -158,11 +158,6 @@ function weakIfaces(of: () => WebInterfaces | null | undefined): WebInterfaces {
     for (const m in methods) proxy[m] = async (...args) => of()?.[name]?.[m]?.(...args);
   }
   return out;
-}
-/** after a TS view stack draw pass onto `target`: the functors it drew are what shows */
-export function webLayerSweep(target: object): void {
-  placeFunctors(new Map(drawnOn(target)));
-  resetDrawn(target);
 }
 /** debug: the canvas capture cannot see frame pixels, so this is how a harness proves a page loaded */
 export function webViewInfo(): { url: string | null; title: string; loaded: boolean; progress: number; rect: Rect | null }[] {

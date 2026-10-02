@@ -65,25 +65,6 @@ export function setManifest(root: XmlNode): void {
   });
   packages.set(pkg, currentPackage);
 }
-/** an attribute of the booted package's <activity> for a dotted or slashed class name */
-function activityAttr(cls: string, name: string): number | undefined {
-  const node = currentPackage?.components.activity.get(cls.replace(/\//g, "."));
-  return node && attr(node, name)?.data;
-}
-/** The activity's own `android:theme`, or 0 when it just inherits the application's. */
-export const manifestActivityTheme = (cls: string): number => activityAttr(cls, "theme") ?? 0;
-export const manifestActivityOrientation = (cls: string): number => activityAttr(cls, "screenOrientation") ?? -1;
-/** ActivityInfo.launchMode: LAUNCH_MULTIPLE (0) unless the manifest names another */
-export const manifestLaunchMode = (cls: string): number => activityAttr(cls, "launchMode") ?? 0;
-/** ActivityInfo.taskAffinity: the activity's own, else the application's, else the package name */
-export function manifestTaskAffinity(cls: string): string {
-  const record = currentPackage, node = record?.components.activity.get(cls.replace(/\//g, "."));
-  return (node && attrStr(node, "taskAffinity")) ?? (record?.application && attrStr(record.application, "taskAffinity")) ?? record?.pkg ?? "";
-}
-/** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
- *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
-export const CONFIG_UI_MODE = 0x0200;
-export const activityHandlesConfig = (cls: string, bits: number): boolean => ((activityAttr(cls, "configChanges") ?? 0) & bits) === bits;
 
 
 // ── the parsed manifest, read as ParsingPackageUtils reads it. The Java side is built in generators

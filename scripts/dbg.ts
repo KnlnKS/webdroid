@@ -35,7 +35,7 @@ for (const [i, step] of flow.steps.entries()) {
     break;
   }
 }
-if (process.env.TREE) console.log(await drv.page.evaluate(() => (globalThis as any).wd.tree()));
+if (process.env.TREE) console.log(JSON.stringify(await drv.page.evaluate(() => (globalThis as any).wd.uiTree()), null, 1));
 if (process.env.LOGS) console.log((await drv.page.evaluate(() => ((globalThis as any).wd.logs ?? []).slice(-80))).join("\n"));
 const missing = await drv.page.evaluate(() => [...(globalThis as any).wd.rt.missing]);
 if (process.env.NOMISS) process.exit(0);

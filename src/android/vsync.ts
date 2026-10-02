@@ -4,7 +4,7 @@
 // thread wakes its fd there.
 import { rt, type JObj } from "../jvm/runtime";
 import { mangleField } from "../jvm/abi";
-import { vcall, newObj, scall, callOn, after, mainThread } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
 import { type NativeLooper, mainLooper } from "./mainloop";
 import { perf } from "../perf";
@@ -109,11 +109,3 @@ rt.registerJnis("android/view/DisplayEventReceiver", {
     return data;
   },
 });
-
-export const CALLBACK_ANIMATION = 1, CALLBACK_TRAVERSAL = 3;
-let choreographer: unknown = null;
-/** the main thread's Choreographer (getInstance is per thread) */
-export function mainChoreographer(): unknown {
-  return choreographer ??= after(callOn(mainThread, () => scall("android/view/Choreographer", "getInstance", "()Landroid/view/Choreographer;")),
-    (c: unknown) => choreographer = c);
-}

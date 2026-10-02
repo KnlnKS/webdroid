@@ -57,7 +57,6 @@ export type StepResult = {
   newMissing: string[];
   newPlaceholders: string[];
   nativeRequired: string[];
-  unreadAttrs: string[];
   newErrors: string[];
   web: { url: string | null; title: string; loaded: boolean }[];
   uiTree: UiNode[];
@@ -185,18 +184,12 @@ function installProbe(cfg: ProbeConfig): void {
 
   const busy = (dueBefore: number, stableMs: number): string[] => {
     const now = performance.now();
-    const wd = g.wd, u = wd.uiState, d = wd.mainDbg;
+    const wd = g.wd, d = wd.mainDbg;
     const r: string[] = [];
     if (d.depth > 0) r.push("job:" + d.phase);
     if (d.queued > 0) r.push("queued");
-    if (wd.app()?.stack.length) {
-      if (u.needsDraw) r.push("draw");
-      if (u.needsLayout) r.push("layout");
-      if (u.needsInsets) r.push("insets");
-    }
     if (wd.vsyncScheduled?.()) r.push("vsync");
     if (wd.pendingTransitions?.()) r.push("transition");
-    if (u.animHooks.size) r.push("animators");
     if (wd.yields.pending()) r.push("yields");
     if (inflight) r.push("inflight");
     if (awaitingSockets()) r.push("sockets");
@@ -330,7 +323,7 @@ function installProbe(cfg: ProbeConfig): void {
   const capture = () => captured ? encode(captured) : screenPng();
 
   const act = (a: Act, screen: Screen, deadlineMs: number, controlled = false) => performAction({ a, screen, deadlineMs, controlled });
-  const seen = { missing: new Set<string>(), placeholders: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
+  const seen = { missing: new Set<string>(), placeholders: new Set<string>(), native: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
     const out = all.filter((x) => !seen[key].has(x));
     seen[key] = new Set(all);
@@ -374,7 +367,6 @@ function installProbe(cfg: ProbeConfig): void {
       newMissing: fresh("missing", [...wd.rt.missing]),
       newPlaceholders: fresh("placeholders", [...wd.rt.placeholders]),
       nativeRequired: fresh("native", wd.nativeRequirements()),
-      unreadAttrs: fresh("attrs", wd.unreadAttrs()),
       newErrors: fresh("errors", (wd.logs as string[]).filter((l) => l.startsWith("error:"))),
       web: (wd.web() as StepResult["web"]).map(({ url, title, loaded }) => ({ url, title, loaded })),
       uiTree,

@@ -8,12 +8,11 @@ import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { linkInit } from "../jvm/natives/jlang";
-import { NativePath, inversePath, nativePathOf } from "./path";
+import { NativePath, inversePath } from "./path";
 import { NativeBitmap } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { windowRoot } from "./rendernode";
 import { type JRect, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
 import { type Affine, type Mat, setAffine, applyMatrix } from "./matrix";
 
@@ -579,20 +578,6 @@ function canvasPeer(nc: NativeCanvas, recording: boolean): JavaCanvas {
 export function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): JavaCanvas {
   return canvasPeer(NativeCanvas.over(ctx, w, h), accelerated);
 }
-const windows = new Map<Ctx2D, JavaCanvas>();
-/** the RecordingCanvas a hardware-accelerated window draws its views through, one per target and
- *  reset for each frame */
-export function windowCanvas(ctx: Ctx2D, w: number, h: number): JavaCanvas {
-  let peer = windows.get(ctx);
-  if (!peer) windows.set(ctx, peer = canvasPeer(new NativeCanvas(), true));
-  const nc = canvasOf(peer), f = recordingField(), p = peer as Record<string, unknown>;
-  nc.setTarget(ctx, w, h, null);
-  nc.semanticOwner = nc.semanticBase = null;
-  p[f.width] = w; p[f.height] = h;
-  // what RenderNodeAnimator and AnimatedVectorDrawable run on and check is attached
-  p[f.node] = windowRoot();
-  return peer;
-}
 /** View's constructor tells Canvas the target SDK: what restore underflow, setBitmap and clip ops
  *  may do depends on it */
 export async function setCanvasTargetSdk(target: number): Promise<void> {
@@ -604,21 +589,6 @@ export async function setCanvasTargetSdk(target: number): Promise<void> {
   await linkInit("android/graphics/RecordingCanvas");
 }
 
-let outlineFields: { mode: string; rect: string; radius: string; path: string } | null = null;
-/** intersect the canvas's clip with a Java Outline's shape (what View.setClipToOutline asks); an
- *  empty outline does not clip */
-export function clipToOutline(nc: NativeCanvas, outline: object): void {
-  const f = outlineFields ??= {
-    mode: declaredField("android/graphics/Outline", "mMode"), rect: declaredField("android/graphics/Outline", "mRect"),
-    radius: declaredField("android/graphics/Outline", "mRadius"), path: declaredField("android/graphics/Outline", "mPath"),
-  };
-  const o = outline as Record<string, unknown>, mode = o[f.mode];
-  if (!mode) return;
-  // MODE_PATH, else MODE_ROUND_RECT
-  if (mode === 2) { nc.clipPath(nativePathOf(o[f.path] as object), false); return; }
-  const r = o[f.rect] as JRect;
-  nc.clipRoundRect(r.left, r.top, r.right, r.bottom, o[f.radius] as number);
-}
 export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: number, radius: number) {
   ctx.beginPath();
   if (radius > 0) ctx.roundRect(l, t, r - l, b - t, radius);

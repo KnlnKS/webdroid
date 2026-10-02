@@ -2,7 +2,6 @@ import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { mainThread, vcallOn, vcall, newObj } from "../jvm/natives/jlang";
 import { boxFloat, boxObject } from "../jvm/natives/jbox";
 import { newStringSet, toJsArray } from "../jvm/natives/jcoll";
-import { removeFrom } from "./view";
 import { onMain } from "./mainloop";
 import { vfs } from "../shell/vfs";
 
@@ -191,9 +190,7 @@ rt.register({
       "registerOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
         function (this: JSharedPrefs, l: unknown) { this.listeners.push(l); },
       "unregisterOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
-        function (this: JSharedPrefs, l: unknown) {
-          removeFrom(this.listeners, l);
-        },
+        function (this: JSharedPrefs, l: unknown) { const i = this.listeners.indexOf(l); if (i >= 0) this.listeners.splice(i, 1); },
     };
     for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Boolean", "Z"], ["StringSet", "Ljava/util/Set;"]] as const) {
       m[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JSharedPrefs, k: string, dv: unknown) {

@@ -8,7 +8,7 @@ import { paintAt } from "./paint";
 import { type Mat, isIdentity, applyMatrix } from "./matrix";
 import type { NativeBitmap } from "./bitmap";
 import type { Ctx2D } from "./recording";
-import { type NativeSurfaceTexture, surfaceTextureOf, presentSurface, bufferWidth, bufferHeight } from "./glview";
+import { type NativeSurfaceTexture, surfaceTextureOf, presentSurface, bufferWidth, bufferHeight } from "./glsurface";
 
 export class TextureLayer {
   texture: NativeSurfaceTexture | null = null;

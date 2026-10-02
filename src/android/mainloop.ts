@@ -158,8 +158,6 @@ export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
 /** Handler.postDelayed(r, delay ms) on the main handler unless another is named */
 export const postRunnable = (r: unknown, delay = 0, handler = mainHandler()): unknown =>
   vcall(handler, "postDelayed", "(Ljava/lang/Runnable;J)Z", r, BigInt(Math.max(0, Math.ceil(delay))));
-export const removeRunnable = (r: unknown, handler = mainHandler()): unknown =>
-  vcall(handler, "removeCallbacks", "(Ljava/lang/Runnable;)V", r);
 /** post `fn` to a Handler as a Runnable */
 export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable {
   const r = fnRunnable(fn);

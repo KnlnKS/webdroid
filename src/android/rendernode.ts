@@ -22,11 +22,6 @@ import { type RuntimeShaderBuilder } from "./runtime-shader";
 import type { TextureLayer } from "./texturelayer";
 import { drawFunctor, trackingClips, pushClip, popClip } from "./webfunctor";
 
-let invalidateHook: (() => void) | null = null;
-export function setInvalidateHook(f: () => void) { invalidateHook = f; }
-/** a frame is owed: the window redraws on the next vsync */
-export const requestRedraw = (): void => invalidateHook?.();
-
 const f32 = Math.fround, ALPHA_EPSILON = f32(0.001), NON_ZERO_EPSILON = f32(0.001);
 /** MathUtils::isZero */
 const isZero = (v: number) => Math.abs(v) <= NON_ZERO_EPSILON;
@@ -124,7 +119,7 @@ export class NativeRenderNode {
   }
   setDisplayList(ops: DisplayList | null) {
     this.ops = ops;
-    if (ops) { perf.rnRecord += displayListLength(ops); invalidateHook?.(); }
+    if (ops) perf.rnRecord += displayListLength(ops);
   }
 }
 const nodeAt = (h: bigint) => deref<NativeRenderNode>(h);

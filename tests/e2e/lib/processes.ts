@@ -15,7 +15,6 @@ export type ProcessDiagnostics = {
   perf: Record<string, number> | null;
   queue: { queued: number; depth: number; phase: string } | null;
   compositor: unknown;
-  unreadAttrs: string[] | null;
   coverage: { enabled: boolean; methods: string[] } | null;
 } | { status: "unavailable" } | { status: "failure"; message: string };
 
@@ -44,7 +43,6 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
           perf: wd.perf ? { ...wd.perf } : null,
           queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth, phase: wd.mainDbg.phase } : null,
           compositor: Reflect.get(wd, "compositorStatus") ?? null,
-          unreadAttrs: wd.unreadAttrs?.() ?? null,
           coverage: wd.jvmCoverage?.snapshot?.() ?? null } : { status: "unavailable" as const };
       });
       const diagnostics = await Promise.race([(async () => {
