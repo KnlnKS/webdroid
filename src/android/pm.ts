@@ -589,7 +589,7 @@ const recordsForUid = (uid: number) => [...packages.values()].filter((p) => p.ui
 
 const slice = (items: unknown[]) => make(PKG + "ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
 function* componentArgs$(component: JObj | null): Gen<[string, string]> {
-  if (!component) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (!component) rt.npe();
   return [yield vcall(component, "getPackageName", "()Ljava/lang/String;"), yield vcall(component, "getClassName", "()Ljava/lang/String;")];
 }
 const flag = (flags: bigint) => Number(BigInt.asIntN(32, flags));

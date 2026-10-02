@@ -75,7 +75,7 @@ const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
 /** what a binder call hands the service: a copy of the caller's object */
 function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield unparcelled(cls, yield parcelled(o)); }
 function* sliceItems(slice: JObj | null): Gen<JObj[]> {
-  return slice ? yield toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")) : fail("java/lang/NullPointerException", null);
+  return slice ? yield toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")) : rt.npe();
 }
 
 // ── callers
@@ -164,7 +164,7 @@ const str = (cs: unknown) => cs == null ? null : csText(cs);
 /** PreferencesHelper.createNotificationChannel for the app itself (no Do Not Disturb access) */
 function* createChannel(prefs: Preferences, channel: JObj): Gen<boolean> {
   const id: string | null = yield vcall(channel, "getId", "()Ljava/lang/String;");
-  if (id === null) fail("java/lang/NullPointerException", null);
+  if (id === null) rt.npe();
   if (!(yield str(yield vcall(channel, "getName", "()Ljava/lang/CharSequence;")))) fail("java/lang/IllegalArgumentException", null);
   const importance: number = yield vcall(channel, "getImportance", "()I");
   if (importance < IMPORTANCE_NONE || importance > 5) fail("java/lang/IllegalArgumentException", "Invalid importance level");
@@ -208,7 +208,7 @@ function* createChannel(prefs: Preferences, channel: JObj): Gen<boolean> {
 }
 function* createGroup(prefs: Preferences, group: JObj): Gen<void> {
   const id: string | null = yield vcall(group, "getId", "()Ljava/lang/String;");
-  if (id === null) fail("java/lang/NullPointerException", null);
+  if (id === null) rt.npe();
   if (!(yield str(yield vcall(group, "getName", "()Ljava/lang/CharSequence;")))) fail("java/lang/IllegalArgumentException", "group.getName() can't be empty");
   if (prefs.ids(GROUP_KEY).length >= 6000) fail("java/lang/IllegalStateException", "Limit exceed; cannot create more groups");
   yield vcall(group, "setBlocked", "(Z)V", 0);
@@ -617,7 +617,7 @@ function* hideToast(t: ToastRecord): Gen<void> {
 }
 let toastService: JObj | null = null;
 const serviceAccessGranted = driven(function* (component: JObj | null) {
-  if (!component) fail("java/lang/NullPointerException", null);
+  if (!component) rt.npe();
   checkCallerIsSystemOrSameApp(yield vcall(component, "getPackageName", "()Ljava/lang/String;"));
   return 0;
 });
@@ -671,7 +671,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
   "createNotificationChannelGroups(Ljava/lang/String;Landroid/content/pm/ParceledListSlice;)V": driven(function* (pkg: string, slice: JObj | null) {
     checkCallerIsSystemOrSameApp(pkg);
     const prefs = yield* preferences(pkg);
-    for (const group of yield* sliceItems(slice)) yield* createGroup(prefs, group ? (yield* copyOf(GROUP, group)) : fail("java/lang/NullPointerException", null));
+    for (const group of yield* sliceItems(slice)) yield* createGroup(prefs, group ? (yield* copyOf(GROUP, group)) : rt.npe());
   }),
   "createNotificationChannels(Ljava/lang/String;Landroid/content/pm/ParceledListSlice;)V": driven(function* (pkg: string, slice: JObj | null) {
     checkCallerIsSystemOrSameApp(pkg);

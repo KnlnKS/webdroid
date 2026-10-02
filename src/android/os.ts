@@ -110,16 +110,11 @@ rt.registerJni("java/lang/Runtime", "nativeExit(I)V", () => killProcess(PROCESS_
 const SIGNAL_KILL = 9;
 const threadPriorities = new Map<number, number>();
 const totalMemory = () => BigInt(device.cpu.memKb) * 1024n;
+const idForName = (name: string | null) => androidGroupId(name ?? rt.npe());
 rt.registerJnis("android/os/Process", {
   "getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
-  "getGidForName(Ljava/lang/String;)I": (name: string | null) => {
-    if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    return androidGroupId(name);
-  },
-  "getUidForName(Ljava/lang/String;)I": (name: string | null) => {
-    if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    return androidGroupId(name);
-  },
+  "getGidForName(Ljava/lang/String;)I": idForName,
+  "getUidForName(Ljava/lang/String;)I": idForName,
   // setpriority(PRIO_PROCESS, tid): recorded, since the JS engine schedules every thread itself
   "setThreadPriority(II)V": (tid: number, priority: number) => { threadPriorities.set(tid, priority); },
   "setThreadPriority(I)V": (priority: number) => { threadPriorities.set(threadTid(curThread), priority); },
