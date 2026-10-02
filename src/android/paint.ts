@@ -197,10 +197,7 @@ const f32 = Math.fround, STD_THICKNESS = f32(1 / 18);
 const STD_UNDERLINE_TOP = f32(f32(1 / 9) - STD_THICKNESS / 2), STD_STRIKE_THRU_TOP = f32(f32(-6 / 21) - STD_THICKNESS / 2);
 /** the distance from the baseline to the top of an underline, and its thickness (SkFontMetrics
  *  from the face's post table) */
-export function underlinePosition(p: NativePaint): number {
-  const m = metricsOf(p);
-  return f32(p.textSize * (m.underline ?? STD_UNDERLINE_TOP));
-}
+export const underlinePosition = (p: NativePaint) => f32(p.textSize * (metricsOf(p).underline ?? STD_UNDERLINE_TOP));
 export const underlineThickness = (p: NativePaint) => f32(p.textSize * (metricsOf(p).underlineThickness ?? STD_THICKNESS));
 export const strikeThruPosition = (p: NativePaint) => f32(p.textSize * STD_STRIKE_THRU_TOP);
 export const strikeThruThickness = (p: NativePaint) => f32(p.textSize * STD_THICKNESS);
