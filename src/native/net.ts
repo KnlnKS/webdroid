@@ -769,14 +769,8 @@ function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Endpoint | nu
   if (mem.ld16u(sockaddr) !== AF_INET) { fail(cpu, E.AFNOSUPPORT); return null; }
   return { port: (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3], address: Array.from(mem.u8.subarray(sockaddr + 4, sockaddr + 8)) };
 }
-function sockaddrIn(endpoint: Endpoint): Uint8Array {
-  const sockaddr = new Uint8Array(16);
-  sockaddr[0] = AF_INET;
-  sockaddr[2] = endpoint.port >>> 8;
-  sockaddr[3] = endpoint.port & 255;
-  if (endpoint.address.length === 4) sockaddr.set(endpoint.address, 4);
-  return sockaddr;
-}
+const sockaddrIn = ({ port, address }: Endpoint) =>
+  Uint8Array.of(AF_INET, 0, port >>> 8, port & 255, ...(address.length === 4 ? address : [0, 0, 0, 0]), 0, 0, 0, 0, 0, 0, 0, 0);
 /** an address result: as much of `sockaddr` as `capacity` holds, and its whole length */
 function putSockaddr(sockaddr: Uint8Array, address: number, length: number, capacity: number): void {
   if (capacity > 0) mem.write(address, sockaddr.subarray(0, Math.min(capacity, sockaddr.length)));
@@ -1082,9 +1076,7 @@ function nativeAccept(cpu: Cpu, fd: number, address: number, length: number, fla
     return fd;
   };
   if (isUnixSocket(fd)) {
-    // an AF_UNIX peer is unnamed
-    const unix = (r: number) => r < 0 ? fail(cpu, -r) : land(r, sockaddrUn(""));
-    const r = unixAccept(fd, flags);
+    const r = unixAccept(fd, flags), unix = (r: number) => r < 0 ? fail(cpu, -r) : land(r, sockaddrUn(""));   // an unnamed peer
     return r instanceof Promise ? r.then(unix) : unix(r);
   }
   const inet = (r: { fd: number; peer: Endpoint } | number): number => {
