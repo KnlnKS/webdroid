@@ -6,7 +6,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
-import { vcall, callOn, newObj, linkInit, JThread } from "../jvm/natives/jlang";
+import { vcall, callOn, newObj, staticField, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";
@@ -25,11 +25,6 @@ import { canvasOf, type JavaCanvas } from "./canvas";
 import { createFunctor, releaseFunctor, drawFunctor, type Rect } from "./webfunctor";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
-/** a static of a bytecode class, by name and descriptor */
-async function staticOf(cls: string, field: string): Promise<unknown> {
-  const info = await linkInit(cls);
-  return (info.ctor as unknown as Record<string, unknown>)[info.staticFieldTable.get(field)!];
-}
 
 // ── WebViewFactory: the provider package is this one, versioned as the Chromium the UA names
 const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
@@ -95,8 +90,8 @@ prop("RenderPriority", "Landroid/webkit/WebSettings$RenderPriority;", null);
 rt.register({ name: "webdroid/WebSettings", ctor: WebSettingsAdapter, sup: "android/webkit/WebSettings", methods: settingsMethods });
 async function newSettings(): Promise<WebSettingsAdapter> {
   const s = inst<WebSettingsAdapter>("webdroid/WebSettings");
-  s.v.layoutAlgorithm = await staticOf("android/webkit/WebSettings$LayoutAlgorithm", "NARROW_COLUMNS:Landroid/webkit/WebSettings$LayoutAlgorithm;");
-  s.v.pluginState = await staticOf("android/webkit/WebSettings$PluginState", "OFF:Landroid/webkit/WebSettings$PluginState;");
+  s.v.layoutAlgorithm = await staticField("android/webkit/WebSettings$LayoutAlgorithm", "NARROW_COLUMNS");
+  s.v.pluginState = await staticField("android/webkit/WebSettings$PluginState", "OFF");
   return s;
 }
 
@@ -503,7 +498,7 @@ export class WebViewChromium extends JObj {
     const { message, source, line } = (data ?? {}) as { message?: unknown; source?: unknown; line?: unknown };
     const msg = String(message), src = typeof source === "string" ? unmap(source) : "", n = typeof line === "number" ? line : 0;
     void onMain(async () => {
-      const level = await staticOf("android/webkit/ConsoleMessage$MessageLevel", "ERROR:Landroid/webkit/ConsoleMessage$MessageLevel;");
+      const level = await staticField("android/webkit/ConsoleMessage$MessageLevel", "ERROR");
       const m = await newObj("android/webkit/ConsoleMessage", "(Ljava/lang/String;Ljava/lang/String;ILandroid/webkit/ConsoleMessage$MessageLevel;)V", msg, src, n, level);
       if (!this.chrome || !await vcall(this.chrome, "onConsoleMessage", "(Landroid/webkit/ConsoleMessage;)Z", m))
         console.log("[I/chromium]", `[INFO:CONSOLE(${n})] "${msg}", source: ${src} (${n})`);

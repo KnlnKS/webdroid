@@ -8,10 +8,9 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { vcall, scall, construct, linkInit, reportUncaught } from "../jvm/natives/jlang";
+import { vcall, scall, construct, staticField, reportUncaught } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
-import { mangleStaticField } from "../jvm/abi";
 import { once } from "../jvm/suspend";
 import { callingIdentity, asSystem } from "./binder";
 import { uriParts } from "./net";
@@ -72,11 +71,8 @@ const movedSets = new Map(MOVES.map(([from, to]) => [from + ">" + to, once(drive
   yield scall(CLASS[from], `getMovedTo${to[0].toUpperCase()}${to.slice(1)}Settings`, "(Ljava/util/Set;)V", out);
   return yield* javaStrings(out);
 }))]));
-const staticOf = driven(function* staticOf$(cls: string, field: string): Gen<unknown> {
-  return ((yield linkInit(cls)) as { ctor: Record<string, unknown> }).ctor[mangleStaticField(field)];
-});
 const systemSets = Object.fromEntries(["PUBLIC_SETTINGS", "PRIVATE_SETTINGS"].map((field) => [field, once(driven(function* systemSet$(): Gen<Set<string>> {
-  return yield* javaStrings(yield staticOf(CLASS.system, field));
+  return yield* javaStrings(yield staticField(CLASS.system, field));
 }))]));
 
 // ── the caller, as Binder.getCallingUid and the package manager see it
@@ -123,7 +119,7 @@ function* enforceReadable(c: Caller, table: Table, name: string): Gen<void> {
  *  location switch, and DatabaseHelper names the device after its model until someone renames it */
 const DERIVED: Partial<Record<Table, Record<string, (stored: string | null) => unknown>>> = {
   secure: { location_mode: () => locationTransport.enabled() ? "3" : "0" },
-  global: { device_name: (stored) => stored ?? staticOf("android/os/Build", "MODEL") },
+  global: { device_name: (stored) => stored ?? staticField("android/os/Build", "MODEL") },
 };
 const valueOf = (table: Table, name: string): unknown => {
   const derive = DERIVED[table]?.[name], stored = store.get(table, name);

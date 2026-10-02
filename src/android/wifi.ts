@@ -7,8 +7,7 @@
 // or toggle: a scan fails and setWifiEnabled is refused.
 import { JObj, declaredField, rt, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { linkInit, newObj, scall, vcall } from "../jvm/natives/jlang";
-import { mangleStaticField } from "../jvm/abi";
+import { staticField, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { checkUidPermission } from "./permissions";
 import { packages } from "./packages";
@@ -30,7 +29,7 @@ function* canAccessScanResults(pkg: string): Gen<boolean> {
 function* connectionInfo(): Gen<JObj> {
   const info = yield newObj("android/net/wifi/WifiInfo");
   if (!netUp()) return info;
-  const state = (yield linkInit("android/net/wifi/SupplicantState")).ctor[mangleStaticField("COMPLETED")];
+  const state = yield staticField("android/net/wifi/SupplicantState", "COMPLETED");
   const set = (name: string, desc: string, value: unknown) => vcall(info, name, `(${desc})V`, value);
   yield set("setSupplicantState", "Landroid/net/wifi/SupplicantState;", state);
   yield set("setSSID", "Landroid/net/wifi/WifiSsid;", yield scall("android/net/wifi/WifiSsid", "fromUtf8Text", "(Ljava/lang/CharSequence;)Landroid/net/wifi/WifiSsid;", "AndroidWifi"));

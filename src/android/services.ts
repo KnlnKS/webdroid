@@ -4,7 +4,7 @@
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
 import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { jarray, mangleMethod, mangleStaticField } from "../jvm/abi";
+import { jarray, mangleMethod } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField, reportUncaught } from "../jvm/natives/jlang";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -226,13 +226,13 @@ const ifOurs = (answer: () => unknown) => driven(function* (n: unknown): Gen {
 });
 const networkInfo = driven(function* (): Gen<JObj> {
   const info = yield newObj("android/net/NetworkInfo", "(IILjava/lang/String;Ljava/lang/String;)V", TYPE_WIFI, 0, "WIFI", "");
-  const connected = (yield linkInit("android/net/NetworkInfo$DetailedState")).ctor[mangleStaticField(netUp() ? "CONNECTED" : "DISCONNECTED")];
+  const connected = yield staticField("android/net/NetworkInfo$DetailedState", netUp() ? "CONNECTED" : "DISCONNECTED");
   yield vcall(info, "setDetailedState", "(Landroid/net/NetworkInfo$DetailedState;Ljava/lang/String;Ljava/lang/String;)V", connected, null, "");
   yield vcall(info, "setIsAvailable", "(Z)V", 1);
   return info;
 });
 /** ConnectivityManager's CALLBACK_* message codes */
-const callbackCode = async (name: string): Promise<number> => (await linkInit("android/net/ConnectivityManager")).ctor[mangleStaticField(name)];
+const callbackCode = (name: string): Promise<number> => staticField("android/net/ConnectivityManager", name);
 type Registration = { request: JObj; messenger: JObj };
 const registrations = new Map<JObj, Registration>();
 let nextRequestId = 1;

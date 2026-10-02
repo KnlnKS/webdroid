@@ -3,7 +3,7 @@
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
 import { rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, scall, linkInit, after } from "../../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, staticField, after } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService } from "../binder";
@@ -35,8 +35,7 @@ export function scheduleOnApp(name: string, desc: string, ...args: unknown[]): P
   lane = call.catch(() => {});
   return call;
 }
-export const compatInfo = async (): Promise<JObj> =>
-  ((await linkInit("android/content/res/CompatibilityInfo")).ctor as Record<string, JObj>)[mangleStaticField("DEFAULT_COMPATIBILITY_INFO")];
+export const compatInfo = (): Promise<JObj> => staticField("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
 async function bind(app: JObj): Promise<void> {
   const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;

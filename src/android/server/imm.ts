@@ -4,8 +4,7 @@
 // page's edits reach the editor through its IRemoteInputConnection; showSoftInput and hideSoftInput
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
 import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
-import { scall, linkInit, newObj, vcall } from "../../jvm/natives/jlang";
-import { mangleStaticField } from "../../jvm/abi";
+import { scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
 import { onMain } from "../mainloop";
@@ -23,7 +22,6 @@ const SUCCESS_WITH_IME_SESSION = 0, GET_EXTRACTED_TEXT_MONITOR = 1;
 interface Session extends ImeSession { window: JObj; connection: JObj; id: number; header: JObj | null }
 let session: Session | null = null;
 let bindSequence = 0;
-const constant = async (cls: string, name: string): Promise<JObj> => ((await linkInit(cls)).ctor as Record<string, JObj>)[mangleStaticField(name)];
 const editorField = (info: JObj, name: string) => (info as unknown as Record<string, number>)[declaredField("android/view/inputmethod/EditorInfo", name)];
 
 /** InputMethodService.onStartInput: serve the editor, and read its text as an IME does, keeping it
@@ -79,7 +77,7 @@ async function softInput(window: JObj, visible: boolean, receiver: JObj | null):
 
 const SOFT_INPUT_MASK_STATE = 0xf, SOFT_INPUT_STATE_VISIBLE = 4, SOFT_INPUT_STATE_ALWAYS_VISIBLE = 5, SOFT_INPUT_IS_FORWARD_NAVIGATION = 0x100;
 async function startInputOrWindowGainedFocus(window: JObj, info: JObj | null, connection: JObj | null, softInputMode: number): Promise<JObj> {
-  if (!info || !connection) { finishInput(); return constant(BIND, "NULL_EDITOR_INFO"); }
+  if (!info || !connection) { finishInput(); return staticField(BIND, "NULL_EDITOR_INFO"); }
   startInput(window, info, connection, 0);
   // DefaultImeVisibilityApplier: an always-visible window shows the keyboard for its editor, a
   // visible one only when navigated forward to
