@@ -16,7 +16,7 @@ import { mkPfd, pfdBackingBytes } from "./os";
 import { newObj } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newStub } from "./binder";
-import { registerSystemProvider } from "./systemproviders";
+import { registerSystemProvider, JSystemContentProvider } from "./systemproviders";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
@@ -272,7 +272,7 @@ async function docQuery(u: JUriLike, projection: string[] | null): Promise<JObj>
 // ContentProvider.openAssetFile's: the whole file, of unknown length
 const docAssetFd = async (u: JUriLike, mode: string) =>
   newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", await docPfd(documentId(u, true), mode), 0n, -1n);
-rt.register({ name: "webdroid/ExternalStorageProvider", ctor: class extends JObj {}, sup: "android/content/ContentProviderNative", methods: {
+rt.register({ name: "webdroid/ExternalStorageProvider", ctor: class extends JSystemContentProvider {}, sup: "webdroid/SystemContentProvider", methods: {
   "getProviderName()Ljava/lang/String;": () => "com.android.externalstorage.ExternalStorageProvider",
   [`query(${AS}${URI}[Ljava/lang/String;${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, u: JUriLike, projection: string[] | null) => docQuery(u, projection),
   [`getType(${AS}${URI})Ljava/lang/String;`]: async (_source: unknown, u: JUriLike) => (await docRow(documentId(u, true)))?.mime ?? null,

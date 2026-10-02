@@ -22,7 +22,7 @@ import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
 import { holdsPlatformPermission } from "./pm";
 import { SettingsStore, type SettingsTable } from "../shell/settings";
-import { registerSystemProvider } from "./systemproviders";
+import { registerSystemProvider, JSystemContentProvider } from "./systemproviders";
 
 export const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
@@ -377,7 +377,7 @@ const selected = <T>(op: (uri: JUri, where: string | null, args: string[] | null
   return yield op(nonNullUri(uri), where, args);
 });
 const nonNullUri = (uri: JUri | null): JUri => uri ?? fail("java/lang/NullPointerException", "uri");
-rt.register({ name: "webdroid/SettingsProvider", ctor: class extends JObj {}, sup: "android/content/ContentProviderNative", methods: {
+rt.register({ name: "webdroid/SettingsProvider", ctor: class extends JSystemContentProvider {}, sup: "webdroid/SystemContentProvider", methods: {
   "getProviderName()Ljava/lang/String;": () => "com.android.providers.settings.SettingsProvider",
   [`call(${AS}${S}${S}${S}${B})${B}`]: (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras),
   [`query(${AS}${URI}[${S}${B}Landroid/os/ICancellationSignal;)Landroid/database/Cursor;`]:
