@@ -201,7 +201,7 @@ export function gradient(local: Affine | null, g: CanvasGradient, colors: BigInt
  */
 export const argbOfColorLong = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n)) | 0;
 
-
+/** the target's whole area in the context's local coordinates, null under a singular transform */
 export function canvasLocalBounds(ctx: Ctx2D): [number, number, number, number] | null {
   const inverse = ctx.getTransform().inverse();
   const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]

@@ -19,6 +19,7 @@ import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
 import { nativeParcel, createByteArray, readInt, writeByteArray, writeInt } from "./parcel";
 import { extractBitmapAlpha } from "./maskfilter";
+import { argbOfColorLong } from "./graphics";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -306,7 +307,7 @@ function toSrgb(space: NativeColorSpace, rgb: number[]): number[] {
 }
 /** a ColorLong (android.graphics.Color's packing) as an ARGB int in sRGB */
 function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
-  if (!(color & 0x3fn)) return Number(BigInt.asUintN(32, color >> 32n)) | 0;
+  if (!(color & 0x3fn)) return argbOfColorLong(color);
   const half = (s: bigint) => fromHalf(Number((color >> s) & 0xffffn));
   const [r, g, b] = toSrgb(space ?? { transfer: SRGB_TF, xyz: Float32Array.from(SRGB_D50) }, [half(48n), half(32n), half(16n)]);
   const a = Number((color >> 6n) & 0x3ffn) / 1023;
