@@ -29,7 +29,7 @@ import { asZygote } from "./os";
 import { lambda } from "../jvm/natives/jlambda";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
-import { Recorder, recordOrRun, replay, replayWithSemantics, type DisplayList } from "./recording";
+import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
 import { device } from "../shell/config";
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
@@ -643,7 +643,7 @@ delegate("android/graphics/Picture", {
     const ops = p.ops;
     if (!ops) return;
     // into a recording canvas the replay is deferred to where that recording is drawn
-    replayWithSemantics(cv, () => recordOrRun(cv.ctx, (ctx) => {
+    replayFor(cv, () => recordOrRun(cv.ctx, (ctx) => {
       ctx.save();
       try { replay(ctx, ops); } finally { ctx.restore(); }
     }));

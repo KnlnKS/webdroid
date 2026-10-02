@@ -6,7 +6,7 @@
 // projection and stretch are properties kept, not drawn; animators run from the frame loop
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
-import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
+import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, type Ctx2D, type DisplayList } from "./recording";
 import { rt, JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
@@ -189,11 +189,9 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
       if (surface.width !== w) surface.width = w;
       if (surface.height !== h) surface.height = h;
       const input = surface.getContext("2d")!; input.reset();
-      const recording = replayingCanvas(), canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
+      const canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
       canvas.setTarget(input, w, h, null);
-      canvas.semanticOwner = recording?.semanticOwner ?? null;
-      canvas.semanticBase = recording ? recording.semanticTransform() : null;
-      replayWithSemantics(canvas, () => replay(input, ops));
+      replayFor(canvas, () => replay(input, ops));
       ctx.globalAlpha *= n.alpha;
       effect.draw(ctx, surface);
     } else if (layer) {
@@ -426,7 +424,6 @@ function beginRecording(nc: NativeCanvas, w: number, h: number) {
   const rec = nc.recorder!;
   rec.take();
   nc.setTarget(rec.ctx, w, h, null);
-  nc.semanticOwner = nc.semanticBase = null;
 }
 /** AnimatedRippleDrawable: the ripple's circle through its RuntimeShader, with the uniforms the
  *  animated properties drive set as drawn (the turbulence as RippleShader.setNoisePhase sets it) */
@@ -478,7 +475,7 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
   },
   "nDrawRenderNode(JJ)V": (h: bigint, node: bigint) => {
     const nc = canvasAt(h), n = nodeAt(node);
-    replayWithSemantics(nc, () => recordOrRun(nc.ctx, (ctx) => drawNodeInto(ctx, n)));
+    replayFor(nc, () => recordOrRun(nc.ctx, (ctx) => drawNodeInto(ctx, n)));
   },
   // A reorder barrier draws its children by Z; without shadows to cast, they draw in order here.
   "nEnableZ(JZ)V": () => {},

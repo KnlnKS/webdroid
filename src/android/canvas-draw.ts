@@ -244,7 +244,6 @@ function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p:
       p.style === 1 ? "hairline" : "fill", p.subpixelText || p.linearText));
 }
 function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint) {
-  nc.recordText(s, x, y, p.textSize, p.textAlignN);
   if (tryDrawBitmapText(nc, s, x, y, p)) return;
   const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
   const blend = p.compositeOp(), prev = blend ? ctx.globalCompositeOperation : null;

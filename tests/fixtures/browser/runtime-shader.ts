@@ -2,7 +2,7 @@ import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { newObj, vcall, scall } from "../../../src/jvm/natives/jlang";
 import { newPaint } from "../../../src/android/paint";
-import { locateDrawnText, canvasOver, canvasOf } from "../../../src/android/canvas";
+import { canvasOver } from "../../../src/android/canvas";
 import { bootWithFonts } from "./boot";
 
 async function probe() {
@@ -24,15 +24,10 @@ async function probe() {
   const recording = await vcall(node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", 16, 16);
   await vcall(recording, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 0, 0, 16, 16, paint);
   await vcall(recording, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 8, 0, 16, 16, paint);
-  const textPaint = newPaint();
-  await vcall(textPaint, "setTextSize", "(F)V", 2);
-  await vcall(recording, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Label", 0, 14, textPaint);
   await vcall(node, "endRecording", "()V");
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0xff0000ff);
   const ctx = new OffscreenCanvas(64, 64).getContext("2d")!;
   const canvas = canvasOver(ctx, 64, 64, true);
-  const owner = { drawnText: null, drawnTextPoints: null, drawnTextCount: 0 };
-  canvasOf(canvas).semanticOwner = owner;
   ctx.translate(10, 12); ctx.scale(2, 2);
   let rasterizations = 0;
   const drawArrays = WebGL2RenderingContext.prototype.drawArrays;
@@ -49,7 +44,6 @@ async function probe() {
   let invalid = false;
   try { await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "color", 1); }
   catch (error) { invalid = !!rt.iof(error, "java/lang/IllegalArgumentException"); }
-  const text = locateDrawnText(owner, "label", 64, 64);
   // the framework's ripple: SkSL with a child shader, integer literals in float context, saturate()
   const ripple = await newObj("android/graphics/drawable/RippleShader", "()V");
   for (const [name, desc, ...args] of [["setOrigin", "(FF)V", 50, 50], ["setTouch", "(FF)V", 50, 50], ["setRadius", "(F)V", 40],
@@ -79,7 +73,7 @@ async function probe() {
   const a = regionCtx.getImageData(0, 0, 100, 100).data, b = wholeCtx.getImageData(0, 0, 100, 100).data;
   let rippleDiff = 0, rippleInk = 0;
   for (let i = 0; i < a.length; i++) { rippleDiff = Math.max(rippleDiff, Math.abs(a[i] - b[i])); if (i % 4 === 3 && a[i]) rippleInk++; }
-  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)], rippleCenter,
+  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, rippleCenter,
     rippleDiff, rippleInked: rippleInk > 1000 };
 }
 export default probe;

@@ -4,82 +4,14 @@ import { matrixColor } from "../src/android/graphics";
 import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android/paint";
 import { typefaceOf } from "../src/android/fonts";
 import { declaredField } from "../src/jvm/runtime";
-import { canvasOver, canvasOf, locateDrawnText } from "../src/android/canvas";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
 import { parsePackageArchive } from "../src/android/packagearchive";
-import { recordingContext, replay, replayWithSemantics } from "../src/android/recording";
-import { appResources, loadSystemFonts, loadFrameworkJar, scall } from "./java";
+import { appResources, loadSystemFonts, scall } from "./java";
 
 beforeAll(loadSystemFonts);
-
-describe("canvas-text", () => {
-  rt.linkNatives();
-  beforeAll(loadFrameworkJar);
-
-  const canvas = () => canvasOver({
-    fillText() {}, fillRect() {},
-    getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 10, f: 20 }; },
-  } as unknown as OffscreenCanvasRenderingContext2D, 100, 100);
-  const semanticOwner = () => ({ drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 });
-
-  test("Canvas records custom-drawn text for semantic lookup", async () => {
-    const cv = canvas(), paint = newPaint(), { textSize } = paintOf(paint);
-    const owner = semanticOwner();
-    canvasOf(cv).semanticOwner = owner;
-
-    await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "first", 0, 0, paint);
-    await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "second", 0, 20, paint);
-
-    expect(owner.drawnText).toEqual(["first", "second"]);
-    expect(owner.drawnTextPoints![0]).toBe(10 + textSize);
-    expect(owner.drawnTextPoints![1]).toBeCloseTo(20 - textSize * 0.3);
-    expect(owner.drawnTextPoints![2]).toBe(10 + textSize);
-    expect(owner.drawnTextPoints![3]).toBeCloseTo(40 - textSize * 0.3);
-  });
-
-  test("Canvas maps layered semantic text through its parent transform", async () => {
-    const cv = canvas(), paint = newPaint(), { textSize } = paintOf(paint);
-    const owner = semanticOwner();
-    canvasOf(cv).semanticBase = { a: 1, b: 0, c: 0, d: 1, e: 100, f: 200 } as DOMMatrix;
-    canvasOf(cv).semanticOwner = owner;
-
-    await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "layered", 0, 0, paint);
-
-    expect(owner.drawnTextPoints![0]).toBe(110 + textSize);
-    expect(owner.drawnTextPoints![1]).toBeCloseTo(220 - textSize * 0.3);
-  });
-
-  test("text recorded inside a saveLayer keeps the replaying canvas's semantic owner", async () => {
-    // a raster whose context accepts every call, so the layer opens and composites
-    const stub = (canvas: object) => new Proxy({ canvas, getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) } as Record<string | symbol, unknown>,
-      { get: (t, k) => k in t ? t[k] : () => {} }) as unknown as OffscreenCanvasRenderingContext2D;
-    const g = globalThis as { OffscreenCanvas?: unknown };
-    const saved = g.OffscreenCanvas;
-    g.OffscreenCanvas = class { width = 100; height = 100; getContext() { return stub(this); } };
-    try {
-      const ops: unknown[] = [];
-      const cv = canvasOver(recordingContext(stub({ width: 1, height: 1 }), ops), 100, 100, true), paint = newPaint();
-      await vcall(cv, "saveLayer", "(FFFFLandroid/graphics/Paint;)I", 0, 0, 50, 50, null);
-      await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "inside", 0, 0, paint);
-      await vcall(cv, "restore", "()V");
-      const target = stub({ width: 100, height: 100 }), outer = canvasOf(canvasOver(target, 100, 100)), owner = semanticOwner();
-      outer.semanticOwner = owner;
-      replayWithSemantics(outer, () => replay(target, ops));
-      expect(owner.drawnText).toEqual(["inside"]);
-    } finally { g.OffscreenCanvas = saved; }
-  });
-
-  test.each([
-    ["uses the matching run point", ["leading", "later target", "tail"], "target"],
-    ["preserves contiguous phrases", ["Big", "Buck", "Bunny"], "Buck Bunny"],
-  ])("drawn text lookup %s", (_name, drawnText, query) => {
-    const owner = { drawnText, drawnTextPoints: new Float32Array([10, 11, 20, 21, 30, 31]), drawnTextCount: 3 };
-    expect(locateDrawnText(owner, query, 100, 100)).toEqual({ x: 20, y: 21 });
-  });
-});
 
 describe("egl14-query-context", () => {
   rt.linkNatives();

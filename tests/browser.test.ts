@@ -151,7 +151,7 @@ test.concurrent("render effects blur by hwui's sigma, offset a chained input and
 
 test.concurrent("runtime shaders preserve recorded uniforms, premultiplied alpha and canvas coordinates", async () => {
   expect(await probe("runtimeShader")).toEqual({
-    recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, text: [14, 39], rippleCenter: [255, 0, 0, 128],
+    recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, rippleCenter: [255, 0, 0, 128],
     rippleDiff: 0, rippleInked: true,
   });
 }, PAGE_TIMEOUT);
