@@ -1,7 +1,7 @@
 import { hostStub } from "./binder";
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost } from "./apphost";
-import { type JUri, mkUri } from "./net";
+import { type JUri, mkUri, uriText } from "./net";
 import { PROCESS_UID } from "./os";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -29,19 +29,20 @@ const uriGrants = {
 const transientUriGrants = new Map<string, Map<string, number>>();
 const grantedUri = (target: string, granted: string, flags: number) =>
   target === granted || ((flags & PREFIX_GRANT) !== 0 && target.startsWith(granted + "/"));
-function transientFlags(pkg: string, uri: JUri): number {
+function transientFlags(pkg: string, uri: string): number {
   let flags = 0;
   for (const [granted, mode] of transientUriGrants.get(pkg) ?? []) {
-    if (grantedUri(uri.uri, granted, mode)) flags |= mode;
+    if (grantedUri(uri, granted, mode)) flags |= mode;
   }
   return flags;
 }
-export function grantUriPermission(pkg: string, uri: JUri, modes: number): void {
-  if (!pkg || !uri) rt.npe();
+export async function grantUriPermission(pkg: string, u: JUri, modes: number): Promise<void> {
+  if (!pkg || !u) rt.npe();
   if (!(modes & 3)) return;
+  const uri = await uriText(u);
   let grants = transientUriGrants.get(pkg);
   if (!grants) transientUriGrants.set(pkg, grants = new Map());
-  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & (3 | PREFIX_GRANT | PERSISTABLE_GRANT)));
+  grants.set(uri, (grants.get(uri) ?? 0) | (modes & (3 | PREFIX_GRANT | PERSISTABLE_GRANT)));
 }
 /** ActivityManager's grant of a result's URIs to the activity receiving it: its data and every
  *  ClipData item, under the result's grant flags */
@@ -52,23 +53,25 @@ export const grantResultUris = driven(function* (pkg: string, data: JObj): Gen<v
   const uris: (JUri | null)[] = [yield vcall(data, "getData", "()Landroid/net/Uri;")];
   for (let i = 0, n = clip ? yield vcall(clip, "getItemCount", "()I") : 0; i < n; i++)
     uris.push(yield vcall(yield vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;"));
-  for (const uri of uris) if (uri) grantUriPermission(pkg, uri, flags);
+  for (const uri of uris) if (uri) yield grantUriPermission(pkg, uri, flags);
 });
-export function revokeUriPermission(uri: JUri, modes: number): void {
-  if (!uri) rt.npe();
+export async function revokeUriPermission(u: JUri, modes: number): Promise<void> {
+  if (!u) rt.npe();
+  const uri = await uriText(u);
   for (const grants of transientUriGrants.values()) {
-    const remaining = (grants.get(uri.uri) ?? 0) & ~(modes & 3);
-    if (remaining & 3) grants.set(uri.uri, remaining);
-    else grants.delete(uri.uri);
+    const remaining = (grants.get(uri) ?? 0) & ~(modes & 3);
+    if (remaining & 3) grants.set(uri, remaining);
+    else grants.delete(uri);
   }
 }
-export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
-  if (!u) rt.npe();
+export async function checkUriPermission(juri: JUri, _pid: number, uid: number, modes: number): Promise<number> {
+  if (!juri) rt.npe();
   if (uid === 0) return 0;
   const requested = modes & 3;
   if (!requested) return -1;
+  const u = await uriText(juri);
   if (uid === PROCESS_UID && uriGrants.all().some((grant) =>
-    grantedUri(u.uri, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
+    grantedUri(u, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
   for (const pkg of transientUriGrants.keys()) {
     if (packages.get(pkg)?.uid !== uid) continue;
     if ((transientFlags(pkg, u) & requested) === requested) return 0;
@@ -77,29 +80,30 @@ export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: nu
 }
 /** UriGrantsManagerService.takePersistableUriPermission for this app: a grant it was offered as
  *  persistable, or one it already persisted */
-function takePersistable(u: JUri, modes: number): void {
-  if (!u) rt.npe();
+async function takePersistable(juri: JUri, modes: number): Promise<void> {
+  if (!juri) rt.npe();
   const requested = modes & 3;
   if (!requested) return;
-  const all = uriGrants.all();
-  const old = all.find((grant) => grant.uri === u.uri);
+  const u = await uriText(juri), all = uriGrants.all();
+  const old = all.find((grant) => grant.uri === u);
   const offered = transientFlags(appHost?.pkg ?? "", u);
   if ((offered & (requested | PERSISTABLE_GRANT)) !== (requested | PERSISTABLE_GRANT) &&
     (!old || (old.flags & requested) !== requested))
-    throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u.uri);
+    throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u);
   const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
-  uriGrants.set([...all.filter((grant) => grant.uri !== u.uri), { uri: u.uri, flags, time: Date.now() }]);
+  uriGrants.set([...all.filter((grant) => grant.uri !== u), { uri: u, flags, time: Date.now() }]);
 }
-function releasePersistable(u: JUri, modes: number): void {
-  if (!u) rt.npe();
+async function releasePersistable(juri: JUri, modes: number): Promise<void> {
+  if (!juri) rt.npe();
+  const u = await uriText(juri);
   uriGrants.set(uriGrants.all().flatMap((grant) => {
-    if (grant.uri !== u.uri) return [grant];
+    if (grant.uri !== u) return [grant];
     const flags = grant.flags & ~(modes & 3);
     return flags & 3 ? [{ ...grant, flags }] : [];
   }));
 }
-const persistedPermissions = async (): Promise<JObj> => newArrayList(await Promise.all(uriGrants.all().map((grant) =>
-  newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", mkUri(grant.uri), grant.flags, BigInt(grant.time)))));
+const persistedPermissions = async (): Promise<JObj> => newArrayList(await Promise.all(uriGrants.all().map(async (grant) =>
+  newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", await mkUri(grant.uri), grant.flags, BigInt(grant.time)))));
 
 // IUriGrantsManager, under AOSP's ContentResolver: this app's persisted grants. Grants it made to
 // others are not recorded, so it has no outgoing ones.

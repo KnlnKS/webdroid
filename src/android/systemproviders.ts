@@ -5,7 +5,7 @@ import { construct, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import { unparcel, type JBundle } from "./os";
 import { newStub } from "./binder";
-import type { JUri } from "./net";
+import { uriText, type JUri } from "./net";
 
 export const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;",
   CV = "Landroid/content/ContentValues;", SIGNAL = "Landroid/os/ICancellationSignal;";
@@ -44,7 +44,7 @@ rt.register({ name: "webdroid/SystemContentProvider", ctor: JSystemContentProvid
     if (filter !== "*/*") {
       const type: string | null = yield vcall(this, "getType", `(${AS}${URI})${S}`, source, uri);
       if (type === null || !(yield scall("android/content/ClipDescription", "compareMimeTypes", `(${S}${S})Z`, type, filter)))
-        throw rt.mkThrowable("java/io/FileNotFoundException", `Can't open ${uri.uri} as type ${filter}`);
+        throw rt.mkThrowable("java/io/FileNotFoundException", `Can't open ${yield uriText(uri)} as type ${filter}`);
     }
     return yield vcall(this, "openAssetFile", OPEN_ASSET, source, uri, "r", signal);
   }),

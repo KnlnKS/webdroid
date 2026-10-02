@@ -122,7 +122,7 @@ describe("sqlite", () => {
 describe("mediastore", () => {
   test("an update renames or moves the file under the same id, and unhandled columns change nothing", async () => {
     freshSQLiteStore();
-    const uri = (await mediaInsert(mkUri("content://media/external/images/media"), new Map<string, unknown>([["_display_name", "a"], ["mime_type", "image/jpeg"]])))!;
+    const uri = (await mediaInsert("content://media/external/images/media", new Map<string, unknown>([["_display_name", "a"], ["mime_type", "image/jpeg"]])))!;
     expect(await mediaPath(uri)).toBe("/sdcard/Pictures/a.jpg");
     expect(await mediaUpdate(uri, new Map([["title", "x"]]), null, null)).toBe(0);
     expect(await mediaUpdate(uri, new Map([["_display_name", "b"], ["relative_path", "DCIM/Camera/"]]), null, null)).toBe(1);
@@ -137,13 +137,13 @@ describe("mediastore", () => {
     const values = await newObj("android/content/ContentValues", "()V");
     await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "_display_name", "resolved");
     await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "mime_type", "image/png");
-    const uri = await vcall(cr, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri("content://media/external/images/media"), values);
+    const uri = await vcall(cr, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", await mkUri("content://media/external/images/media"), values);
     const out = await vcall(cr, "openOutputStream", "(Landroid/net/Uri;)Ljava/io/OutputStream;", uri);
     await vcall(out, "write", "([B)V", new Int8Array([1, 2, 3]));
     await vcall(out, "close", "()V");
     expect(await vcall(cr, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", uri)).toBe("image/png");
     const cursor = await vcall(cr, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
-      mkUri("content://media/external/images/media"), strArray(["_data", "_size"]), "_display_name = ?", strArray(["resolved.png"]), "_id");
+      await mkUri("content://media/external/images/media"), strArray(["_data", "_size"]), "_display_name = ?", strArray(["resolved.png"]), "_id");
     expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
     expect([await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0), await vcall(cursor, "getInt", "(I)I", 1)]).toEqual(["/sdcard/Pictures/resolved.png", 3]);
   });

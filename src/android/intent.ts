@@ -74,7 +74,7 @@ export function systemActivity(intent: Pick<IntentQuery, "action" | "dataUri" | 
 /** a picker's result: the chosen uri, with the grants it carries */
 export async function mkResultIntent(uri: string | null, flags = 3 | 0x40): Promise<JIntent> {
   const intent = await newIntent();
-  if (uri !== null) await vcall(intent, "setData", `(Landroid/net/Uri;)${I}`, mkUri(uri));
+  if (uri !== null) await vcall(intent, "setData", `(Landroid/net/Uri;)${I}`, await mkUri(uri));
   await vcall(intent, "setFlags", `(I)${I}`, flags);
   return intent;
 }

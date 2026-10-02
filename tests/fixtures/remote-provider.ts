@@ -79,7 +79,7 @@ const remote = Reflect.get(holder, declaredField("android/app/ContentProviderHol
 out.asked = asked;
 out.proxy = (remote.constructor as { $i?: { name: string } }).$i?.name;
 const source = await newObj("android/content/AttributionSource", "(IILjava/lang/String;Ljava/lang/String;)V", client.uid, HERE, CLIENT, null);
-const uri = mkUri(`content://${AUTHORITY}/rows`);
+const uri = await mkUri(`content://${AUTHORITY}/rows`);
 
 // the rows cross in a CursorWindow beside an IBulkCursor binder
 const cursor = await vcall(remote, "query", `(${AS}${URI}[${S}Landroid/os/Bundle;${SIGNAL})Landroid/database/Cursor;`, source, uri, null, null, null);

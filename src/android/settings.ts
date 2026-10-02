@@ -14,7 +14,7 @@ import { unbox } from "../jvm/natives/jbox";
 import { mangleStaticField } from "../jvm/abi";
 import { once } from "../jvm/suspend";
 import { callingIdentity, asSystem } from "./binder";
-import { mkUri, uriParts, uriDecode, type JUri } from "./net";
+import { mkUri, uriParts, uriText, type JUri } from "./net";
 import { matrixCursor, contentValues } from "./sqlite";
 import { packages, type PackageRecord } from "./packages";
 import { reportUncaught, type JBundle } from "./os";
@@ -284,8 +284,8 @@ function* reset(c: Caller, args: JBundle | null): Gen<never> {
 }
 
 /** Arguments: content://settings/<table>[/<name>], or the table with name=? and one argument */
-function* argumentsOf(uri: JUri, where: string | null, whereArgs: string[] | null, supportAll: boolean): Gen<{ table: string; name: string | null }> {
-  const segments = uriParts(uri).path.split("/").filter(Boolean).map((s) => uriDecode(s) ?? "");
+function* argumentsOf(uri: string, where: string | null, whereArgs: string[] | null, supportAll: boolean): Gen<{ table: string; name: string | null }> {
+  const segments = uriParts(uri)[1];
   let name: string | null | undefined;
   if (segments.length === 2 && where === null && whereArgs === null) name = segments[1];
   else if (segments.length === 1) {
@@ -296,23 +296,23 @@ function* argumentsOf(uri: JUri, where: string | null, whereArgs: string[] | nul
     } else if (supportAll && where === null && whereArgs === null) name = null;
   }
   if (name === undefined) fail(ILLEGAL, "Supported SQL:\n  uri content://some_table/some_property with null where and where args\n  uri content://some_table with query name=? and single name as arg\n" +
-    `  uri content://some_table with query name=some_name and null args\n  but got - uri:${uri.uri}, where:${where} whereArgs:${whereArgs ? "[" + whereArgs.join(", ") + "]" : null}`);
+    `  uri content://some_table with query name=some_name and null args\n  but got - uri:${uri}, where:${where} whereArgs:${whereArgs ? "[" + whereArgs.join(", ") + "]" : null}`);
   return { table: yield* tableFor(uri, name ?? null), name: name ?? null };
 }
 /** computeTableForSetting: a key that moved tables is answered from its new one */
-function* tableFor(uri: JUri, name: string | null): Gen<string> {
+function* tableFor(uri: string, name: string | null): Gen<string> {
   const table = validTable(uri);
   if (name === null || !TABLES.includes(table as Table)) return table;
   for (const [from, to] of MOVES) if (from === table && ((yield movedSets.get(from + ">" + to)!()) as Set<string>).has(name)) return to;
   return table;
 }
-function validTable(uri: JUri): string {
-  const segment = uriDecode(uriParts(uri).path.split("/").filter(Boolean)[0] ?? null);
-  if (segment === null) return fail(ILLEGAL, "Invalid URI:" + uri.uri);
+function validTable(uri: string): string {
+  const segment = uriParts(uri)[1][0];
+  if (segment === undefined) return fail(ILLEGAL, "Invalid URI:" + uri);
   if (!TABLES.includes(segment as Table) && !LEGACY_TABLES.has(segment)) fail(ILLEGAL, "Bad root path: " + segment);
   return segment;
 }
-const query = driven(function* query$(uri: JUri, projection: string[] | null, where: string | null, whereArgs: string[] | null): Gen {
+const query = driven(function* query$(uri: string, projection: string[] | null, where: string | null, whereArgs: string[] | null): Gen {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, true);
   const columns = projectionOf(projection);
   if (LEGACY_TABLES.has(table)) return yield matrixCursor(columns, []);
@@ -326,20 +326,20 @@ const named = (values: JObj | null): [string | null, string | null] => {
   const map = values ? contentValues(values) : new Map<string, unknown>(), value = map.get("value");
   return [map.get("name") as string | null ?? null, value == null ? null : String(value)];
 };
-const insert = driven(function* insert$(uri: JUri, values: JObj | null): Gen<JUri | null> {
+const insert = driven(function* insert$(uri: string, values: JObj | null): Gen<JUri | null> {
   const table = validTable(uri);
   if (LEGACY_TABLES.has(table)) return null;
   const [name, value] = named(values);
   if (!validKey(name) || !(yield* writeSetting(caller(), table as Table, name, value, SYSTEM_INSERT))) return null;
-  return mkUri(`content://settings/${table}/${encodeURIComponent(name)}`);
+  return (yield mkUri(`content://settings/${table}/${encodeURIComponent(name)}`)) as JUri;
 });
-const update = driven(function* update$(uri: JUri, values: JObj | null, where: string | null, whereArgs: string[] | null): Gen<number> {
+const update = driven(function* update$(uri: string, values: JObj | null, where: string | null, whereArgs: string[] | null): Gen<number> {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, false);
   const [key, value] = named(values);
   if (LEGACY_TABLES.has(table) || !validKey(key)) return 0;
   return (yield* writeSetting(caller(), table as Table, name ?? key, value, SYSTEM_UPDATE)) ? 1 : 0;
 });
-const remove = driven(function* remove$(uri: JUri, where: string | null, whereArgs: string[] | null): Gen<number> {
+const remove = driven(function* remove$(uri: string, where: string | null, whereArgs: string[] | null): Gen<number> {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, false);
   if (LEGACY_TABLES.has(table) || !validKey(name)) return 0;
   const c = caller();
@@ -348,31 +348,31 @@ const remove = driven(function* remove$(uri: JUri, where: string | null, whereAr
   return store.put(table as Table, name, null) ? 1 : 0;
 });
 /** openFile serves only the default sounds' cache files, which this device has none of */
-function openFile(uri: JUri): never {
-  const cache = /^content:\/\/settings\/system\/(ringtone|notification_sound|alarm_alert)_cache$/.exec(uri.uri)?.[1];
+function openFile(uri: string): never {
+  const cache = /^content:\/\/settings\/system\/(ringtone|notification_sound|alarm_alert)_cache$/.exec(uri)?.[1];
   return fail("java/io/FileNotFoundException", cache ? `/data/system_de/0/ringtones/${cache}_cache: open failed: ENOENT (No such file or directory)`
     : "Direct file access no longer supported; ringtone playback is available through android.media.Ringtone");
 }
-function mimeType(uri: JUri): string {
-  const segments = uriParts(uri).path.split("/").filter(Boolean);
-  return (segments.length > 1 ? "vnd.android.cursor.item/" : "vnd.android.cursor.dir/") + (uriDecode(segments[0] ?? null) ?? "");
+function mimeType(uri: string): string {
+  const segments = uriParts(uri)[1];
+  return (segments.length > 1 ? "vnd.android.cursor.item/" : "vnd.android.cursor.dir/") + (segments[0] ?? "");
 }
 
 /** ContentProvider.query/update/delete(Bundle): the selection the Bundle carries */
-const selected = <T>(op: (uri: JUri, where: string | null, args: string[] | null) => T) => driven(function* selected$(uri: JUri | null, extras: JBundle | null): Gen<T> {
-  return yield op(nonNullUri(uri), ...selectionOf(yield queryArgs(extras)));
+const selected = <T>(op: (uri: string, where: string | null, args: string[] | null) => T) => driven(function* selected$(uri: JUri | null, extras: JBundle | null): Gen<T> {
+  return yield op(yield nonNullUri(uri), ...selectionOf(yield queryArgs(extras)));
 });
-const nonNullUri = (uri: JUri | null): JUri => uri ?? fail("java/lang/NullPointerException", "uri");
+const nonNullUri = (uri: JUri | null): string | Promise<string> => uri ? uriText(uri) : fail("java/lang/NullPointerException", "uri");
 // FLAG_SYSTEM | FLAG_PERSISTENT; the provider is singleUser (FLAG_SINGLE_USER)
 registerSystemProvider(SETTINGS_AUTHORITY, { pkg: "com.android.providers.settings", cls: "com.android.providers.settings.SettingsProvider",
   process: "system", appFlags: 0x9, flags: 0x40000000, initOrder: 100, methods: {
     [`call(${AS}${S}${S}${S}${B})${B}`]: (_source: unknown, _authority: string, method: string, arg: string | null, extras: JBundle | null) => call(method, arg, extras),
     [`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`]: (_source: unknown, uri: JUri | null, projection: string[] | null, args: JBundle | null) =>
       selected((u, where, whereArgs) => query(u, projection, where, whereArgs))(uri, args),
-    [`insert(${AS}${URI}${CV}${B})${URI}`]: (_source: unknown, uri: JUri | null, values: JObj | null) => insert(nonNullUri(uri), values),
+    [`insert(${AS}${URI}${CV}${B})${URI}`]: async (_source: unknown, uri: JUri | null, values: JObj | null) => insert(await nonNullUri(uri), values),
     [`update(${AS}${URI}${CV}${B})I`]: (_source: unknown, uri: JUri | null, values: JObj | null, extras: JBundle | null) =>
       selected((u, where, args) => update(u, values, where, args))(uri, extras),
     [`delete(${AS}${URI}${B})I`]: (_source: unknown, uri: JUri | null, extras: JBundle | null) => selected(remove)(uri, extras),
-    [`getType(${AS}${URI})${S}`]: (_source: unknown, uri: JUri | null) => mimeType(nonNullUri(uri)),
-    [`openFile(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: (_source: unknown, uri: JUri | null) => openFile(nonNullUri(uri)),
+    [`getType(${AS}${URI})${S}`]: async (_source: unknown, uri: JUri | null) => mimeType(await nonNullUri(uri)),
+    [`openFile(${AS}${URI}${S}${SIGNAL})Landroid/os/ParcelFileDescriptor;`]: async (_source: unknown, uri: JUri | null) => openFile(await nonNullUri(uri)),
   } });

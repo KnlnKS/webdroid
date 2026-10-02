@@ -9,15 +9,15 @@ import { vcall } from "../../jvm/natives/jlang";
 import { jarray } from "../../jvm/abi";
 import { hostStub } from "../binder";
 import { reportUncaught } from "../os";
-import { mkUri, uriParts, uriDecode, type JUri } from "../net";
+import { mkUri, uriParts, uriText, type JUri } from "../net";
 
 const NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS = 2;
 type Observer = { key: unknown; segments: string[]; descendants: boolean; deliver: (uri: string, self: boolean, flags: number) => unknown };
 const observers: Observer[] = [];
 /** countUriSegments/getUriSegment: the authority, then the path's segments */
 function segmentsOf(uri: string): string[] {
-  const parts = uriParts(mkUri(uri));
-  return [uriDecode(parts.authority) ?? "", ...parts.path.split("/").filter(Boolean).map((s) => uriDecode(s) ?? "")];
+  const [authority, segments] = uriParts(uri);
+  return [authority, ...segments];
 }
 function observeContent(uri: string, descendants: boolean, key: unknown, deliver: Observer["deliver"]): void {
   observers.push({ key, segments: segmentsOf(uri), descendants, deliver });
@@ -47,8 +47,8 @@ const binderOf = (observer: JObj) => vcall(observer, "asBinder", "()Landroid/os/
 rt.register({ name: "webdroid/ContentService", ctor: class extends JObj {}, sup: "android/content/IContentService$Stub", methods: {
   [`registerContentObserver(Landroid/net/Uri;Z${IObserver}II)V`]: driven(function* (uri: JUri | null, descendants: number, observer: JObj | null, userId: number): Gen<void> {
     if (!uri || !observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid uri and observer");
-    observeContent(uri.uri, !!descendants, yield binderOf(observer), (changed, self, flags) =>
-      vcall(observer, "onChangeEtc", "(Z[Landroid/net/Uri;II)V", +self, jarray([mkUri(changed)], "Landroid/net/Uri;"), flags, userId));
+    observeContent(yield uriText(uri), !!descendants, yield binderOf(observer), async (changed, self, flags) =>
+      vcall(observer, "onChangeEtc", "(Z[Landroid/net/Uri;II)V", +self, jarray([await mkUri(changed)], "Landroid/net/Uri;"), flags, userId));
   }),
   [`unregisterContentObserver(${IObserver})V`]: driven(function* (observer: JObj | null): Gen<void> {
     if (!observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid observer");
@@ -57,7 +57,7 @@ rt.register({ name: "webdroid/ContentService", ctor: class extends JObj {}, sup:
   [`notifyChange([Landroid/net/Uri;${IObserver}ZIIILjava/lang/String;)V`]: driven(function* (uris: JUri[] | null, observer: JObj | null, selfNotify: number, flags: number): Gen<void> {
     if (!uris) throw rt.mkThrowable("java/lang/NullPointerException", "uris");
     const origin = observer ? yield binderOf(observer) : null;
-    for (const uri of uris) yield notifyContent(uri.uri, origin, !!selfNotify, flags);
+    for (const uri of uris) yield notifyContent(yield uriText(uri), origin, !!selfNotify, flags);
   }),
   "getSyncAdapterTypes()[Landroid/content/SyncAdapterType;": () => jarray([], "Landroid/content/SyncAdapterType;"),
   "getSyncAdapterTypesAsUser(I)[Landroid/content/SyncAdapterType;": () => jarray([], "Landroid/content/SyncAdapterType;"),

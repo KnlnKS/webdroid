@@ -1,7 +1,8 @@
 import { type JIntent, newIntent } from "../android/intent";
 import { serviceContext } from "../android/binder";
 import { parcelFileDescriptorData } from "../android/os";
-import { mkUri } from "../android/net";
+import { uriText } from "../android/net";
+import type { JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
@@ -20,9 +21,8 @@ async function sharedFiles(intent: JIntent): Promise<File[]> {
   const resolver = entries.length ? await vcall(await serviceContext(), "getContentResolver", "()Landroid/content/ContentResolver;") : null;
   const files: File[] = [];
   for (const entry of entries) {
-    const uri = (entry as { uri?: string })?.uri;
-    if (!uri) continue;
-    const parsed = mkUri(uri);
+    if (!entry) continue;
+    const parsed = entry as JObj, uri = await uriText(parsed);
     const mime = await vcall(resolver, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", parsed) as string | null;
     const descriptor = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", parsed, "r");
     try {

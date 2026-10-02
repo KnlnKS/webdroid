@@ -16,7 +16,7 @@ import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
-import { systemProviders, systemProviderInfo$, DOCUMENTS_PROVIDER } from "./systemproviders";
+import { systemProviders, systemProviderInfo$ } from "./systemproviders";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
@@ -314,12 +314,6 @@ function* all$<T, R>(items: T[], each: (item: T) => Gen<R>): Gen<R[]> {
 }
 
 // ── the platform's own providers and activities
-/** a provider answering DocumentsContract.PROVIDER_INTERFACE: the system's ExternalStorageProvider,
- *  which SAF clients (UniFile, DocumentFile) ask about before trusting a tree URI, or an app's */
-export const isDocumentsProvider = (authority: string): boolean =>
-  systemProviders.get(authority)?.action === DOCUMENTS_PROVIDER ||
-  [...packages.values()].some((owner) => [...owner.components.provider.values()].some((n) =>
-    handlesAction(n, DOCUMENTS_PROVIDER) && authoritiesOf(n).includes(authority)));
 const handlesAction = (node: XmlNode, action: string) => node.children.some((f) => f.name === "intent-filter" &&
   f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
 

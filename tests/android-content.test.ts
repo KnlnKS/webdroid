@@ -5,7 +5,7 @@ import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { unbox } from "../src/jvm/natives/jbox";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
-import { mkUri } from "../src/android/net";
+import { mkUri, uriText } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
 import { mangleMethod } from "../src/jvm/abi";
 import { defaultDisplay } from "../src/android/display";
@@ -25,26 +25,27 @@ import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentip
 import { PendingIntents } from "../src/shell/pendingintents";
 import { javaReadFd } from "../src/native/fs";
 import { Arsc } from "../src/android/arsc";
-import { scall, loadLibcore, bootApp, packageRecord } from "./java";
+import { scall, loadLibcore, loadFrameworkJar, bootApp, packageRecord } from "./java";
 
 describe("android-uri-permission", () => {
-  test("tree URI grants cover descendants with the granted access mode", () => {
+  test("tree URI grants cover descendants with the granted access mode", async () => {
+    await loadFrameworkJar();
     const pkg = "org.webdroid.test.uri";
     const uid = 77123;
-    const tree = mkUri("content://com.android.externalstorage.documents/tree/test%3A");
+    const tree = await mkUri("content://com.android.externalstorage.documents/tree/test%3A");
     packages.set(pkg, { uid } as PackageRecord);
     try {
-      grantUriPermission(pkg, tree, 1 | 0x80);
-      const child = mkUri(tree.uri + "/document/test%3Afile.txt");
-      const sibling = mkUri("content://com.android.externalstorage.documents/tree/test%3Aother/document/test%3Aother");
-      expect(checkUriPermission(child, 1, uid, 1)).toBe(0);
-      expect(checkUriPermission(child, 1, uid, 2)).toBe(-1);
-      expect(checkUriPermission(sibling, 1, uid, 1)).toBe(-1);
-      revokeUriPermission(tree, 1);
-      expect(checkUriPermission(child, 1, uid, 1)).toBe(-1);
+      await grantUriPermission(pkg, tree, 1 | 0x80);
+      const child = await mkUri(await uriText(tree) + "/document/test%3Afile.txt");
+      const sibling = await mkUri("content://com.android.externalstorage.documents/tree/test%3Aother/document/test%3Aother");
+      expect(await checkUriPermission(child, 1, uid, 1)).toBe(0);
+      expect(await checkUriPermission(child, 1, uid, 2)).toBe(-1);
+      expect(await checkUriPermission(sibling, 1, uid, 1)).toBe(-1);
+      await revokeUriPermission(tree, 1);
+      expect(await checkUriPermission(child, 1, uid, 1)).toBe(-1);
     } finally {
       packages.delete(pkg);
-      revokeUriPermission(tree, 3);
+      await revokeUriPermission(tree, 3);
     }
   });
 });
@@ -298,7 +299,7 @@ describe("package-intent-filters", () => {
     try {
       const { resolveActivity } = await import("../src/android/pm");
       const resolve = async (url: string) => {
-        const intent = await newObj("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", "android.intent.action.VIEW", mkUri(url));
+        const intent = await newObj("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", "android.intent.action.VIEW", await mkUri(url));
         await vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
         const match = await resolveActivity(intent);
         return match && match !== "system" ? match.name : null;
@@ -407,7 +408,7 @@ describe("resolver-file", () => {
   test("resolver file opens decode paths and reject missing files without creating them", async () => {
     await loadLibcore();
     const resolver = rt.make("android/content/ContentResolver");
-    const path = "/resolver file?x=1", uri = mkUri("file:///resolver%20file%3Fx%3D1?ignored=2#fragment");
+    const path = "/resolver file?x=1", uri = await mkUri("file:///resolver%20file%3Fx%3D1?ignored=2#fragment");
     vfs.write(path, Uint8Array.of(7, 8));
     try {
       const stream = await vcall(resolver, "openInputStream", "(Landroid/net/Uri;)Ljava/io/InputStream;", uri);
@@ -419,7 +420,7 @@ describe("resolver-file", () => {
       expect([...data]).toEqual([7, 8]);
       await vcall(pfd, "close", "()V");
       vfs.delete(path);
-      for (const missing of [uri, mkUri("unsupported://file")]) {
+      for (const missing of [uri, await mkUri("unsupported://file")]) {
         const error = await vcallAsync(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", missing, "r").catch(error => error);
         expect(rt.iof(error, "java/io/FileNotFoundException")).toBe(1);
       }
@@ -594,7 +595,7 @@ describe("search-recent-suggestions", () => {
     let uri = "";
     const resolver = {
       [mangleMethod("insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;")]:
-        (target: { uri: string }, values: unknown) => { uri = target.uri; inserted = values; return null; },
+        async (target: JObj, values: unknown) => { uri = await uriText(target); inserted = values; return null; },
       [mangleMethod("delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I")]: () => 0,
     };
     const context = {

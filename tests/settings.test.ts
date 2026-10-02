@@ -6,7 +6,7 @@ import { packages, type PackageRecord } from "../src/android/packages";
 import { setProcessIdentity } from "../src/android/os";
 import { locationTransport } from "../src/android/locationmanager";
 import { hostedService } from "../src/android/binder";
-import { mkUri, type JUri } from "../src/android/net";
+import { mkUri, uriText, type JUri } from "../src/android/net";
 import { settingsStore } from "../src/android/settings";
 import { systemProvider } from "../src/android/systemproviders";
 import { bootApp, packageRecord } from "./java";
@@ -21,7 +21,7 @@ const SECURE = "android/provider/Settings$Secure", SYSTEM = "android/provider/Se
 let app: JObj, cr: JObj;
 const changes: string[] = [];
 rt.register({ name: "webdroid/test/SettingsObserver", ctor: class extends JObj {}, sup: "android/database/ContentObserver", methods: {
-  "onChange(ZLandroid/net/Uri;)V": function (this: JObj, _self: number, uri: JUri) { changes.push(`${Reflect.get(this, "tag")} ${uri.uri}`); },
+  "onChange(ZLandroid/net/Uri;)V": async function (this: JObj, _self: number, uri: JUri) { changes.push(`${Reflect.get(this, "tag")} ${await uriText(uri)}`); },
 } });
 async function observer(tag: string): Promise<JObj> {
   const o = await newObj("webdroid/test/SettingsObserver", "(Landroid/os/Handler;)V", null);
@@ -96,8 +96,8 @@ describe("settings-provider", () => {
       await vcall(values, "put", `(${S}${S})V`, "name", "screen_off_timeout");
       await vcall(values, "put", `(${S}${S})V`, "value", "60000");
       const uri: JUri = await vcall(provider, "insert", "(Landroid/content/AttributionSource;Landroid/net/Uri;Landroid/content/ContentValues;Landroid/os/Bundle;)Landroid/net/Uri;",
-        null, mkUri("content://settings/system"), values, null);
-      expect(uri.uri).toBe("content://settings/system/screen_off_timeout");
+        null, await mkUri("content://settings/system"), values, null);
+      expect(await uriText(uri)).toBe("content://settings/system/screen_off_timeout");
       expect(settingsStore().get("system", "screen_off_timeout")).toBe("60000");
     } finally {
       setProcessIdentity(4321, packages.get("org.webdroid.test.settings")!.uid);
@@ -106,12 +106,13 @@ describe("settings-provider", () => {
   });
 
   test("whole-table queries leave out what the caller may not read", async () => {
-    const cursor = await vcall(cr, "query", `(Landroid/net/Uri;[${S}${S}[${S}${S})Landroid/database/Cursor;`, mkUri("content://settings/secure"), null, null, null, null);
+    const cursor = await vcall(cr, "query", `(Landroid/net/Uri;[${S}${S}[${S}${S})Landroid/database/Cursor;`, await mkUri("content://settings/secure"), null, null, null, null);
     const names: string[] = [];
     while (await vcall(cursor, "moveToNext", "()Z")) names.push(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 1));
     expect(names).toContain("android_id");
     expect(names).toContain("long_press_timeout");
-    expect(await thrown(() => vcall(cr, "query", `(Landroid/net/Uri;[${S}${S}[${S}${S})Landroid/database/Cursor;`, mkUri("content://settings/config"), null, null, null, null)))
+    const config = await mkUri("content://settings/config");
+    expect(await thrown(() => vcall(cr, "query", `(Landroid/net/Uri;[${S}${S}[${S}${S})Landroid/database/Cursor;`, config, null, null, null, null)))
       .toBe("java/lang/IllegalArgumentException: Bad root path: config");
   });
 
@@ -134,7 +135,7 @@ describe("settings-provider", () => {
 
   test("a change reaches observers of its uri, its ancestors that watch descendants, and through IContentService", async () => {
     const uri = await scall(SECURE, "getUriFor", `(${S})Landroid/net/Uri;`, "ui_night_mode");
-    const table = mkUri("content://settings/secure");
+    const table = await mkUri("content://settings/secure");
     const register = (u: unknown, descendants: number, o: JObj) => vcall(cr, "registerContentObserver", "(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V", u, descendants, o);
     const item = await observer("item"), deep = await observer("deep"), shallow = await observer("shallow"), remote = await observer("remote");
     await register(uri, 0, item); await register(table, 1, deep); await register(table, 0, shallow);
