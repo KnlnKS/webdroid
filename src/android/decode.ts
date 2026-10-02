@@ -236,11 +236,13 @@ function grayToAlpha(b: NativeBitmap) {
 }
 
 // ── nine-patch geometry under density scaling (NinePatchPeeker::scale)
+/** `v` scaled and rounded in float, as BitmapFactory scales sizes and NinePatchPeeker the chunk */
+const scaled = (v: number, scale: number) => Math.trunc(Math.fround(Math.fround(v * scale) + 0.5));
 const nearlyOne = (s: number) => Math.abs(s - 1) <= 1 / 4096;
 function scaleDivs(v: DataView, at: number, n: number, scale: number, max: number) {
   const get = (i: number) => v.getInt32(at + i * 4, true), set = (i: number, d: number) => v.setInt32(at + i * 4, d, true);
   for (let i = 0; i < n; i++) {
-    let d = Math.trunc(Math.fround(Math.fround(get(i) * scale) + 0.5));
+    let d = scaled(get(i), scale);
     if (i > 0 && d === get(i - 1)) d++;
     set(i, d);
   }
@@ -253,9 +255,9 @@ function scaleDivs(v: DataView, at: number, n: number, scale: number, max: numbe
   }
 }
 function scalePatch(chunk: Int8Array, sx: number, sy: number, w: number, h: number) {
-  const v = new DataView(chunk.buffer), scaled = (at: number, s: number) => v.setInt32(at, Math.trunc(Math.fround(Math.fround(v.getInt32(at, true) * s) + 0.5)), true);
-  if (!nearlyOne(sx)) { scaled(12, sx); scaled(16, sx); scaleDivs(v, 32, chunk[1], sx, w - 1); }
-  if (!nearlyOne(sy)) { scaled(20, sy); scaled(24, sy); scaleDivs(v, 32 + chunk[1] * 4, chunk[2], sy, h - 1); }
+  const v = new DataView(chunk.buffer), scale = (at: number, s: number) => v.setInt32(at, scaled(v.getInt32(at, true), s), true);
+  if (!nearlyOne(sx)) { scale(12, sx); scale(16, sx); scaleDivs(v, 32, chunk[1], sx, w - 1); }
+  if (!nearlyOne(sy)) { scale(20, sy); scale(24, sy); scaleDivs(v, 32 + chunk[1] * 4, chunk[2], sy, h - 1); }
 }
 /** NinePatchPeeker::getPadding: the chunk's padding, -1s for an image without one */
 function setPadding(pad: object, chunk: Int8Array | null) {
@@ -329,7 +331,7 @@ const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | 
     yield setOuts(options, w, ht, h.mime, hardware ? HARDWARE : config);
     if (justBounds) return null;
   }
-  const sw = scale === 1 ? w : Math.trunc(Math.fround(Math.fround(w * scale) + 0.5)), sh = scale === 1 ? ht : Math.trunc(Math.fround(Math.fround(ht * scale) + 0.5));
+  const sw = scale === 1 ? w : scaled(w, scale), sh = scale === 1 ? ht : scaled(ht, scale);
   let reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null;
   if (reuse?.immutable) reuse = null;
   if (reuse && sw * sh * bytesPerPixel(config) > reuse.allocation) return null;
