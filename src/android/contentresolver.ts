@@ -1,5 +1,5 @@
 import { hostStub } from "./binder";
-import { services, attributionSource, type JContext } from "./context";
+import type { JContext } from "./context";
 import { rt, type NativeSpec, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
@@ -68,7 +68,7 @@ export const providerOperations = {
  *  its IContentProvider, with this app's attribution and the selection as query arguments */
 class JSystemProvider extends JObj { authority = ""; binder: JObj | null = null; }
 const AS = "Landroid/content/AttributionSource;", B = "Landroid/os/Bundle;";
-const callerSource = () => attributionSource(PROCESS_UID, PROCESS_PID, appHost?.pkg ?? null);
+const callerSource = () => newObj("android/content/AttributionSource", "(IILjava/lang/String;Ljava/lang/String;)V", PROCESS_UID, PROCESS_PID, appHost?.pkg ?? null, null);
 function* selectionArgs(selection: string | null, args: string[] | null, sort: string | null = null): Gen<JBundle | null> {
   if (selection === null && args === null && sort === null) return null;
   const b: JBundle = yield construct("android/os/Bundle", "()V");
@@ -140,14 +140,9 @@ rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClie
   ])),
 } });
 
+let resolver: unknown = null;
 export function contentResolver(): unknown {
-  let s = services.get("$content");
-  if (!s) {
-    const info = rt.link("android/content/ContentResolver");
-    s = new info.ctor();
-    services.set("$content", s);
-  }
-  return s;
+  return resolver ??= new (rt.link("android/content/ContentResolver").ctor)();
 }
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;

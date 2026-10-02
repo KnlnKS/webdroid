@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jlang";
 import { packageUid } from "../src/android/packages";
-import { grantPermissions } from "../src/android/context";
+import { grantPermissions } from "../src/android/pm";
 import { bootApp, packageRecord } from "./java";
 
 const pkg = "org.webdroid.test.services";

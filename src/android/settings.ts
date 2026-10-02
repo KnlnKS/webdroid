@@ -20,7 +20,7 @@ import { packages, type PackageRecord } from "./packages";
 import { reportUncaught, type JBundle } from "./os";
 import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
-import { holdsPlatformPermission } from "./context";
+import { holdsPlatformPermission } from "./pm";
 import { SettingsStore, type SettingsTable } from "../shell/settings";
 import { registerSystemProvider } from "./systemproviders";
 

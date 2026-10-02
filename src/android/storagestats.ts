@@ -9,7 +9,7 @@ import { packages } from "./packages";
 import { mimeOf } from "./mediastore";
 import { storageEstimate } from "./os";
 import { callingIdentity, hostStub } from "./binder";
-import { serviceContext } from "./context";
+import { serviceContext } from "./pm";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {

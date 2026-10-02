@@ -1224,3 +1224,4 @@ rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
     if (prop) info.ctor[prop] = value;
   }
 });
+rt.register({ name: "android/os/ext/SdkExtensions", ctor: class extends JObj {}, methods: { "static getExtensionVersion(I)I": () => 0 } });

@@ -19,7 +19,7 @@ import { JParcel } from "./parcel";
 import { preferenceStore } from "./sharedprefs";
 import { packages, usesSdk } from "./packages";
 import { appHost } from "./apphost";
-import { permissionGranted, grantPrompted, serviceContext } from "./context";
+import { permissionGranted, grantPrompted, serviceContext } from "./pm";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const LIST = "android/content/pm/ParceledListSlice";

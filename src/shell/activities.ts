@@ -2,13 +2,14 @@
 // relaunches for configuration changes, finishing, and the task's place behind the home screen.
 
 import { rt, type Gen, driven } from "../jvm/runtime";
+import { mangleMethod } from "../jvm/abi";
 import { vcall, scall, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode, manifestTaskAffinity } from "../android/pm";
 import { type JIntent, deliverActivityResult, activityTransport, mkComponentName, componentParts } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
-import { JActivity, fireActivityLifecycle } from "../android/app";
+import { JActivity } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { newContextImpl } from "../android/context";
 import { reportUncaught, JBundle } from "../android/os";
@@ -28,6 +29,22 @@ export interface BootedApp {
   /** moveTaskToBack put the task behind the home screen */
   background: boolean;
 }
+type LifecyclePhase = "Created" | "Started" | "Resumed" | "Paused" | "Stopped" | "Destroyed";
+/** each stage to the application's and the activity's ActivityLifecycleCallbacks, Pre, then the stage, then Post */
+const fireActivityLifecycle = driven(function* fireActivityLifecycle(activity: JActivity, phase: LifecyclePhase, bundle: unknown = null): Gen<void> {
+  const signature = phase === "Created" ? "(Landroid/app/Activity;Landroid/os/Bundle;)V" : "(Landroid/app/Activity;)V";
+  const args = phase === "Created" ? [activity, bundle] : [activity];
+  for (const variant of [`onActivityPre${phase}`, `onActivity${phase}`, `onActivityPost${phase}`]) {
+    for (const callback of [...activity.$host?.application?.lifecycleCbs ?? [], ...activity.lifecycleCbs ?? []]) {
+      const fn: unknown = Reflect.get(callback, mangleMethod(variant, signature));
+      if (typeof fn !== "function") continue;
+      try {
+        const result: unknown = Reflect.apply(fn, callback, args);
+        if (result instanceof Promise) yield result;
+      } catch (error) { reportUncaught(error); }
+    }
+  }
+});
 export let booted: BootedApp | null = null;
 export function setBootedApp(app: BootedApp): void { booted = app; }
 /** <activity-alias> component name → the Activity class that actually runs */

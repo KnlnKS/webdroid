@@ -9,7 +9,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, hostStub } from "./binder";
 import { packages } from "./packages";
-import { serviceContext } from "./context";
+import { serviceContext } from "./pm";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";

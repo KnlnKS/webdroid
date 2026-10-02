@@ -18,14 +18,12 @@ import { appHost } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
 import { DOCS_AUTHORITY } from "./documents";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
+import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, registerSystemActivity, newIntent, putExtra, type IntentQuery } from "./intent";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
-import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
+import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, usesSdk, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
-import { hostStub, hostedService } from "./binder";
-import { permissionGranted } from "./context";
+import { hostStub } from "./binder";
 import { installerService } from "./packageinstaller";
-import { javaResources, loadResources } from "./resources";
 
 const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
@@ -59,7 +57,6 @@ let currentPackage: PackageRecord | null = null;
 export function setManifest(root: XmlNode): void {
   const pkg = attrStr(root, "package") ?? "";
   if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
-  loadedInfos.clear();
   if (!appHost) return;
   const host = appHost;
   currentPackage = packages.get(pkg) ?? new PackageRecord(root, host.res, apkPath(), packageUid(pkg), async () => {
@@ -225,20 +222,6 @@ function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   return copy((yield applicationInfoOf(record, flags)) as JObj);
 }
 
-const loadedInfos = new Map<string, JObj | Promise<JObj>>();
-/** a LoadedApk's ApplicationInfo, which every Context of that package in this process shares: what
- *  the activity manager binds the process with, or ActivityThread.getPackageInfo asks for
- *  (GET_SHARED_LIBRARY_FILES, so no meta-data) */
-export function loadedApplicationInfo(pkg: string): JObj | Promise<JObj> {
-  const known = loadedInfos.get(pkg);
-  if (known) return known;
-  const record = packages.get(pkg);
-  if (!record) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
-  const info = rt.drive(applicationInfo$(record, GET_SHARED_LIBRARY_FILES));
-  loadedInfos.set(pkg, info);
-  if (info instanceof Promise) info.then((made) => loadedInfos.set(pkg, made), () => loadedInfos.delete(pkg));
-  return info;
-}
 
 
 // ── components
@@ -463,6 +446,90 @@ export function launcherActivity(pkg: string): Component | null {
 }
 
 // ── permissions, as PermissionManagerService checks them
+/**
+ * A runtime permission is DENIED until the app asks for it, which is the state a freshly
+ * installed app is in — reporting a blanket grant sends an app straight past the fallback it
+ * was written to take. Install-time permissions stay granted, as the platform grants them.
+ * AOSP's dangerous groups, by their permission names.
+ */
+const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CALL_LOG", "WRITE_CALL_LOG",
+  "PROCESS_OUTGOING_CALLS", "CAMERA", "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS",
+  "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "RECORD_AUDIO",
+  "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "ANSWER_PHONE_CALLS", "ADD_VOICEMAIL",
+  "USE_SIP", "ACCEPT_HANDOVER", "BODY_SENSORS", "ACTIVITY_RECOGNITION", "SEND_SMS", "RECEIVE_SMS",
+  "READ_SMS", "RECEIVE_WAP_PUSH", "RECEIVE_MMS", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
+  "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "POST_NOTIFICATIONS",
+  "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
+  .map((n) => "android.permission." + n));
+export class PermissionStore {
+  private packages = new Map<string, Set<string>>();
+  get(pkg: string): Set<string> {
+    let grants = this.packages.get(pkg);
+    if (!grants) {
+      grants = new Set(); this.packages.set(pkg, grants);
+      try {
+        const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:permissions:" + pkg) ?? "[]");
+        if (Array.isArray(saved)) for (const value of saved) if (typeof value === "string") grants.add(value);
+      } catch { /* corrupt permission state remains denied */ }
+    }
+    return grants;
+  }
+  grant(pkg: string, names: string[]) {
+    const grants = this.get(pkg); for (const name of names) grants.add(name);
+    globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));
+  }
+}
+let permissionStore = new PermissionStore();
+export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
+/** signature|appop|pre23 permissions, the special access a user grants in Settings (which this
+ *  device has no screen for): held at install by a requesting app targeting below 23 or a system one */
+const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
+// granted by the app's own request, or to a system package by the default grant policy
+export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
+export const permissionGranted = (pkg: string, name: string): boolean => {
+  const record = packages.get(pkg);
+  if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
+  return !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!record?.grants.has(name);
+};
+/** whether a package holds a platform permission no third-party app is granted at install: it is a
+ *  system package that requests it (privileged or preinstalled), or the special access above */
+export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
+  const record = packages.get(pkg);
+  if (SPECIAL_ACCESS.has(name)) return permissionGranted(pkg, name);
+  return !!record && (record.grants.has(name) || record.system && record.permissions.has(name));
+};
+/** PermissionManagerService.checkUidPermission: root and system hold every permission; an app's
+ *  uid holds one its package requested and, if it is a runtime permission, was granted */
+export function uidPermissionState(name: string, uid: number): number {
+  if (uid === 0 || uid === 1000) return 0;
+  for (const record of packages.values()) {
+    if (record.uid === uid && record.permissions.has(name) && permissionGranted(record.pkg, name)) return 0;
+  }
+  return -1;
+}
+/** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
+export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+export const enforceCallingOrSelfPermission = async (permission: string, message: string | null): Promise<void> =>
+  vcall(await serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
+export function grantPermissions(names: string[]): Int32Array {
+  const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
+  // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
+  const asked = record && usesSdk(record.root).target < 33 ? names.filter((name) => name !== "android.permission.POST_NOTIFICATIONS") : names;
+  permissionStore.grant(pkg, asked);
+  return Int32Array.from(names, (name) => permissionGranted(pkg, name) ? 0 : -1);
+}
+/** a permission the system's own prompt asked for, answered by the same policy */
+export const grantPrompted = (pkg: string, name: string): void => permissionStore.grant(pkg, [name]);
+// GrantPermissionsActivity, which Activity.requestPermissions starts: asking grants, and the
+// answer is the names with their results
+const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
+registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", async (intent) => {
+  const names: string[] = await vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES") ?? jarray([], "Ljava/lang/String;");
+  const result = await newIntent();
+  await putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
+  await putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
+  return result;
+});
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   for (const owner of packages.values()) {
     const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
@@ -907,24 +974,3 @@ rt.register({ name: "webdroid/CrossProfileAppsService", ctor: class extends JObj
 } });
 hostStub("crossprofileapps", "webdroid/CrossProfileAppsService");
 
-/** a hosted service as its AIDL interface (Stub.asInterface), made once */
-function hostedInterface(name: string, stub: string, iface: string): () => JObj | Promise<JObj> {
-  let made: JObj | Promise<JObj> | null = null;
-  return () => made ??= after(rt.drive(function* asInterface$(): Gen<JObj> {
-    return yield scall(stub, "asInterface", `(Landroid/os/IBinder;)L${iface};`, yield hostedService(name));
-  }()), (service) => made = service);
-}
-/** what ActivityThread.getPackageManager and getPermissionManager answer */
-export const packageManagerService = hostedInterface("package", "android/content/pm/IPackageManager$Stub", "android/content/pm/IPackageManager");
-export const permissionManagerService = hostedInterface("permissionmgr", "android/permission/IPermissionManager$Stub", "android/permission/IPermissionManager");
-/** ActivityThread.getTopLevelResources: the application's own Resources, or a package's by its APK path */
-export function packageResources(path: string, config: unknown): unknown {
-  const record = [...packages.values()].find((r) => r.path === path);
-  if (appHost && !config && (path === apkPath() || record === currentPackage)) return appHost.jresources;
-  if (!record) return null;
-  return config ? loadResources(path, config) : javaResources(record.res, path);
-}
-/** ContextImpl.getPackageManager's ApplicationPackageManager, over the hosted service */
-export const newPackageManager = driven(function* newPackageManager$(context: JObj): Gen<JObj> {
-  return yield make("android/app/ApplicationPackageManager", "(Landroid/app/ContextImpl;Landroid/content/pm/IPackageManager;)V", context, yield packageManagerService());
-});

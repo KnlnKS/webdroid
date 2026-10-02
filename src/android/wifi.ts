@@ -10,7 +10,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { linkInit, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { mangleStaticField } from "../jvm/abi";
 import { callingIdentity, hostStub } from "./binder";
-import { enforceCallingOrSelfPermission, uidPermissionState } from "./context";
+import { enforceCallingOrSelfPermission, uidPermissionState } from "./pm";
 import { packages } from "./packages";
 import { locationTransport } from "./locationmanager";
 import { DNS_SERVER, netUp, theNetwork } from "./services";

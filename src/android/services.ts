@@ -14,12 +14,11 @@ import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
 import type { JActivity } from "./app";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { runningServices } from "./runningservices";
-import { GL_ES_VERSION, protectionLevel } from "./pm";
+import { GL_ES_VERSION, protectionLevel, enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./pm";
 import { deviceConfiguration } from "./resnative";
-import { callingIdentity, hostStub } from "./binder";
+import { absentService, callingIdentity, hostStub } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
-import { enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./context";
 import { stickyBroadcasts } from "./broadcast";
 import { activityManagerMethods } from "./server/am";
 import { activityTaskMethods } from "./server/atm";
@@ -155,6 +154,28 @@ hostStub("media_projection", "webdroid/MediaProjectionManagerService");
 rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj {}, sup: "com/android/internal/statusbar/IStatusBarService$Stub",
   methods: noops("requestTileServiceListeningState(Landroid/content/ComponentName;I)V") });
 hostStub("statusbar", "webdroid/StatusBarManagerService");
+// IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
+// or enabled, so a client's state is all off; the focus highlight is framework-res's
+async function systemResource(type: string, name: string, read: string, desc: string, ...args: unknown[]): Promise<number> {
+  const res = await scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id: number = await vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
+  return vcall(res, read, desc, id, ...args);
+}
+rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends JObj {}, sup: "android/view/accessibility/IAccessibilityManager$Stub", methods: {
+  "addClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)J": () => 0n,
+  "removeClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)Z": () => 1,
+  "getRecommendedTimeoutMillis()J": () => 0n,
+  "getFocusStrokeWidth()I": () => systemResource("dimen", "accessibility_focus_highlight_stroke_width", "getDimensionPixelSize", "(I)I"),
+  "getFocusColor()I": () => systemResource("color", "accessibility_focus_highlight_color", "getColor", "(ILandroid/content/res/Resources$Theme;)I", null),
+  "getEnabledAccessibilityServiceList(II)Ljava/util/List;": () => newArrayList(),
+  "getInstalledAccessibilityServiceList(I)Landroid/content/pm/ParceledListSlice;": () =>
+    newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),
+  ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;I)V", "interrupt(I)V"),
+} });
+hostStub("accessibility", "webdroid/AccessibilityManagerService");
+// No Bluetooth, NFC or autofill: SystemServer starts none of their services without the hardware
+// or FEATURE_AUTOFILL, so AOSP's managers, which every device registers, report no service
+absentService("bluetooth_manager", "nfc", "autofill");
 
 // IConnectivityManager: one Wi-Fi network (netId 100), the one the page reaches the internet
 // through, up while the page is online. Its capabilities and link properties are the reference
