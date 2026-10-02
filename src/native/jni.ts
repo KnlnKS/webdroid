@@ -550,7 +550,7 @@ export function jniInit(): void {
     const name = fn ? names[i] : `JNI#${i}`;
     const wrapped: HostFn = fn
       ? (cpu, a) => { cur = cpu; return fn(cpu, a); }
-      : (cpu) => { if (!jniMissing.has(name)) { jniMissing.add(name); console.warn("[jni missing]", name); } void cpu; return 0; };
+      : () => { if (!jniMissing.has(name)) { jniMissing.add(name); console.warn("[jni missing]", name); } return 0; };
     stp(envTable + i * PTR, defineHost("JNI:" + name, wrapped));
   }
   const vmTable = mem.hostAlloc(8 * PTR);
