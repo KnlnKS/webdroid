@@ -11,6 +11,7 @@ import { reportUncaught } from "./os";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { hostStub } from "./binder";
+import { geocodeMethods } from "./geocoder";
 import { permissionGranted } from "./permissions";
 import { packages } from "./packages";
 import { appHost } from "./apphost";
@@ -200,5 +201,6 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
   "getGnssYearOfHardware()I": () => 0,
   // no GNSS time either: SystemClock.currentGnssTimeClock reports it unavailable
   ...stubs(null, "getGnssHardwareModelName()Ljava/lang/String;", "getGnssTimeMillis()Landroid/location/LocationTime;"),
+  ...geocodeMethods,
 } });
 hostStub("location", "webdroid/LocationManagerService");
