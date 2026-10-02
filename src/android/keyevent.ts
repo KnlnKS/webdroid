@@ -6,7 +6,7 @@ import { rt, JObj, declaredField } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { after, newObj, scall } from "../jvm/natives/jlang";
 import { ownedHandle, deref } from "./handles";
-import { readInt, writeInt, type JParcel } from "./parcel";
+import { type NativeParcel, nativeParcel, readInt, writeInt, readCString, writeCString } from "./parcel";
 import { keyCodes } from "./keycodes";
 import { nextId } from "./motionevent";
 import { uptimeMillis } from "../guest-clock";
@@ -214,25 +214,8 @@ const kcmAt = (h: bigint) => deref<NativeKeyCharacterMap>(h);
 export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): Promise<JObj> =>
   newObj(KCM, "(J)V", ownedHandle(new NativeKeyCharacterMap(deviceId, map)));
 
-function writeCString(p: JParcel, s: string) {
-  const bytes = [...new TextEncoder().encode(s), 0];
-  while (bytes.length % 4) bytes.push(0);
-  for (let i = 0; i < bytes.length; i += 4) writeInt(p, bytes[i] | bytes[i + 1] << 8 | bytes[i + 2] << 16 | bytes[i + 3] << 24);
-}
-function readCString(p: JParcel): string {
-  const bytes: number[] = [];
-  for (;;) {
-    const word = readInt(p);
-    for (let i = 0; i < 4; i++) {
-      const b = word >>> (i * 8) & 0xff;
-      if (!b) return new TextDecoder().decode(Uint8Array.from(bytes));
-      bytes.push(b);
-    }
-    if (bytes.length > 4096) return "";
-  }
-}
 /** KeyCharacterMap::writeToParcel */
-function writeMap(p: JParcel, map: KeyMap) {
+function writeMap(p: NativeParcel, map: KeyMap) {
   writeCString(p, map.file); writeInt(p, map.type); writeInt(p, +map.overlay);
   writeInt(p, map.keys.size);
   for (const code of [...map.keys.keys()].sort((a, b) => a - b)) {
@@ -247,8 +230,8 @@ function writeMap(p: JParcel, map: KeyMap) {
     for (const [from, to] of [...codes].sort((a, b) => a[0] - b[0])) { writeInt(p, from); writeInt(p, to); }
   }
 }
-function readMap(p: JParcel): KeyMap | null {
-  const map: KeyMap = { file: readCString(p), type: readInt(p), overlay: readInt(p) !== 0, keys: new Map(), scanCodes: new Map(), usageCodes: new Map() };
+function readMap(p: NativeParcel): KeyMap | null {
+  const map: KeyMap = { file: readCString(p) ?? "", type: readInt(p), overlay: readInt(p) !== 0, keys: new Map(), scanCodes: new Map(), usageCodes: new Map() };
   const count = readInt(p);
   if (count < 0 || count > 8192) return null;
   for (let i = 0; i < count; i++) {
@@ -263,14 +246,14 @@ function readMap(p: JParcel): KeyMap | null {
 
 let fallbackFields: [string, string] | null = null;
 rt.registerJnis(KCM, {
-  "nativeReadFromParcel(Landroid/os/Parcel;)J": (p: JParcel) => {
-    const deviceId = readInt(p);
+  "nativeReadFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) => {
+    const p = nativeParcel(parcel), deviceId = readInt(p);
     let map: KeyMap | null = null;
     if (readInt(p)) { map = readMap(p); if (!map) return 0n; }
     return ownedHandle(new NativeKeyCharacterMap(deviceId, map));
   },
-  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (ptr: bigint, p: JParcel) => {
-    const k = kcmAt(ptr);
+  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (ptr: bigint, parcel: JObj) => {
+    const k = kcmAt(ptr), p = nativeParcel(parcel);
     writeInt(p, k.deviceId);
     writeInt(p, k.map ? 1 : 0);
     if (k.map) writeMap(p, k.map);

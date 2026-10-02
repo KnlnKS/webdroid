@@ -1,15 +1,7 @@
-// android.text: TextUtils' plain-text parcel form, and AndroidCharacter's natives.
-import { type JParcel, writeInt, writeString8 } from "./parcel";
-
+// android.text: AndroidCharacter's natives.
 import { rt, driven, type Gen } from "../jvm/runtime";
 import { after } from "../jvm/natives/jlang";
 import { uchar } from "../jvm/natives/jicu";
-import { csText } from "../jvm/natives/jchars";
-
-export const writeText = driven(function* writeText(text: unknown, parcel: JParcel): Gen<void> {
-  if (text !== null && rt.iof(text, "android/text/Spanned")) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
-  writeInt(parcel, 1); writeString8(parcel, text === null ? null : yield csText(text));
-});
 
 // android_text_AndroidCharacter.cpp: u_charDirection, u_getIntPropertyValue(UCHAR_EAST_ASIAN_WIDTH)
 // and u_charMirror, answered by ICU4J's UCharacter over the same ICU data

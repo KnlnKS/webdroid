@@ -4,16 +4,16 @@ import { AccountStore } from "./accounts";
 import { useAccountStore } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
-import { encodeIntent, decodeIntent, intentCodec, type IntentData } from "../android/intentipc";
+import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
-import { binderTransport, receiveTransaction, SYSTEM_CALLER, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
-import { newParcel } from "../android/parcel";
+import { binderTransport, receiveTransaction, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportBinder, importBinder, exportParcel, parcelled, unparcelled, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
+import { NativeParcel, writeString } from "../android/parcel";
 import { type JIntent, newIntent, type ComponentRef } from "../android/intent";
-import { PROCESS_PID, reportUncaught } from "../android/os";
+import { PROCESS_PID } from "../android/os";
+import { reportUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, serviceTransport } from "../android/server/activeservices";
-import { vcall } from "../jvm/natives/jlang";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
@@ -43,21 +43,19 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
   return false;
 }
 const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
-async function resultData(result: BroadcastResult): Promise<BroadcastData> {
-  const extras = await newParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
-  return { ...result, extras: await exportParcel(extras) };
-}
+const resultData = async (result: BroadcastResult): Promise<BroadcastData> =>
+  ({ ...result, extras: result.extras && await parcelled(result.extras) });
 const broadcastResult = async (data: BroadcastData): Promise<BroadcastResult> =>
-  ({ ...data, extras: await vcall(await importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
+  ({ ...data, extras: data.extras && await unparcelled("android/os/Bundle", data.extras) });
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
-type ServiceRequest = { kind: "bind"; intent: IntentData; key: string; flags?: number } | { kind: "unbind"; key: string }
-  | { kind: "stop"; intent: IntentData } | { kind: "peek"; intent: IntentData }
-  | { kind: "start"; intent: IntentData; foreground: boolean }
-  | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
-type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
-type ActivityRequest = { kind: "launch"; id: number; component: string; intent: IntentData; caller: ComponentRef | null }
+type ServiceRequest = { kind: "bind"; intent: ParcelData; key: string; flags?: number } | { kind: "unbind"; key: string }
+  | { kind: "stop"; intent: ParcelData } | { kind: "peek"; intent: ParcelData }
+  | { kind: "start"; intent: ParcelData; foreground: boolean }
+  | { kind: "pending"; operation: PendingOperation; fill: ParcelData | null; alarmCount: number };
+type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
+type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
-  | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" };
+  | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
 const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
@@ -68,7 +66,7 @@ type ProcessEndpoint = {
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
-  broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
+  broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
@@ -85,7 +83,7 @@ class ProcessBroker {
     await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
   readonly alarms = new Alarms(this.intents, uptimeMillis, reportUncaught);
-  async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, intents?: IntentData[]): Promise<number | null> {
+  async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]): Promise<number | null> {
     const caller = this.entry(pid), owner = packages.get(pkg);
     if (!owner || owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "PendingIntent creator does not match caller");
     return this.intents.create({ pkg, kind, code, flags, intent, intents, uid: caller.uid, process: caller.process });
@@ -159,7 +157,7 @@ class ProcessBroker {
     entry.translucent = translucent;
     if (pid === this.foregroundPid) void this.queueActivity(() => pid === this.foregroundPid ? this.show(pid) : Promise.resolve());
   }
-  launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null): Promise<void> {
+  launchActivity(caller: number, pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null = null): Promise<void> {
     const source = this.entry(caller);
     const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, caller, previous: 0, request };
     return this.queueActivity(async () => {
@@ -176,7 +174,7 @@ class ProcessBroker {
       }
     });
   }
-  finishActivity(pid: number, id: number, code: number, data: IntentData | null): Promise<void> {
+  finishActivity(pid: number, id: number, code: number, data: ParcelData | null): Promise<void> {
     return this.queueActivity(async () => {
       const index = this.activities.findIndex((a) => a.pid === pid && a.id === id);
       if (index < 0) return;
@@ -222,7 +220,7 @@ class ProcessBroker {
     this.activityQueue = this.activityQueue.then(run).catch((error) => console.error("[activity process]", error));
     return this.activityQueue;
   }
-  private async restore(activity: { caller: number; previous: number; request: number }, code: number, data: IntentData | null): Promise<void> {
+  private async restore(activity: { caller: number; previous: number; request: number }, code: number, data: ParcelData | null): Promise<void> {
     const target = this.alive(activity.previous) ? activity.previous : activity.caller;
     if (this.alive(target)) {
       await this.request(this.entry(target), (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
@@ -230,7 +228,7 @@ class ProcessBroker {
     }
     if (this.alive(activity.caller)) await this.result(activity, code, data);
   }
-  private result(activity: { caller: number; request: number }, code: number, data: IntentData | null): Promise<void> {
+  private result(activity: { caller: number; request: number }, code: number, data: ParcelData | null): Promise<void> {
     return this.request(this.entry(activity.caller), (endpoint) => endpoint.activity({ kind: "result", request: activity.request, code, data }));
   }
   private async show(pid: number): Promise<void> {
@@ -317,8 +315,8 @@ class ProcessBroker {
     const caller = this.entry(callerPid);
     if (request.handle.pid === 0) {
       if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
-      const reply = await newParcel(), handled = +(request.code === 0x5f4e5446);
-      if (handled) await vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.content.IIntentSender");
+      const reply = new NativeParcel(), handled = +(request.code === INTERFACE_TRANSACTION);
+      if (handled) writeString(reply, "android.content.IIntentSender");
       return { handled, data: await exportParcel(reply) };
     }
     const target = this.entry(request.handle.pid);
@@ -361,7 +359,7 @@ class ProcessBroker {
     }
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.contentProvider(authority));
   }
-  async broadcast(pid: number | null, data: IntentData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
+  async broadcast(pid: number | null, data: ParcelData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
     const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data), sender = caller && { uid: caller.uid, pkg: caller.pkg };
     const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
     for (const receiver of await queryReceivers(intent)) {

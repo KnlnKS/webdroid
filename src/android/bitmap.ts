@@ -11,13 +11,13 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { rt, declaredField, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
 import { construct, scall, vcall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
-import { type JParcel, createByteArray, readInt, writeByteArray, writeInt } from "./parcel";
+import { nativeParcel, createByteArray, readInt, writeByteArray, writeInt } from "./parcel";
 import { extractBitmapAlpha } from "./maskfilter";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
@@ -439,15 +439,15 @@ rt.registerJnis(BITMAP, {
   }),
   "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
-  "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, p: JParcel) => {
-    const b = bmp(h);
+  "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, parcel: JObj) => {
+    const b = bmp(h), p = nativeParcel(parcel);
     for (const v of [b.immutable ? 0 : 1, b.config, b.alphaType, b.w, b.h, b.rowBytes, density]) writeInt(p, v);
     const memory = memoryOf(b);
     writeByteArray(p, new Int8Array(memory.buffer, memory.byteOffset, memory.length));
     return 1;
   },
-  "nativeCreateFromParcel(Landroid/os/Parcel;)Landroid/graphics/Bitmap;": (p: JParcel) => {
-    const [mutable, config, alphaType, w, h, rowBytes, density] = Array.from({ length: 7 }, () => readInt(p));
+  "nativeCreateFromParcel(Landroid/os/Parcel;)Landroid/graphics/Bitmap;": (parcel: JObj) => {
+    const p = nativeParcel(parcel), [mutable, config, alphaType, w, h, rowBytes, density] = Array.from({ length: 7 }, () => readInt(p));
     const b = new NativeBitmap(w, h, config, alphaType, rowBytes);
     const memory = createByteArray(p);
     if (memory) setMemory(b, u8(memory));

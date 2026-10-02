@@ -5,6 +5,7 @@ import { newObj, vcall, vcallAsync, vcallOn, JThread, curThread, callOn, scall }
 import { rt, JObj } from "../src/jvm/runtime";
 import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";
+import { nativeParcel } from "../src/android/parcel";
 import { DexFile } from "../src/jvm/dex";
 
 rt.linkNatives();
@@ -44,10 +45,10 @@ describe("object-stream-external", () => {
     await vcall(parcel, "writeSerializable", "(Ljava/io/Serializable;)V", await makeValue());
     await vcall(parcel, "writeValue", "(Ljava/lang/Object;)V", await makeValue());
     const binder = await newObj("android/os/Binder");
-    const wire = await exportParcel(parcel);
+    const wire = await exportParcel(nativeParcel(parcel));
     expect(wire.objects).toEqual([]);
     await vcall(parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V", binder);
-    const transported = await importParcel(structuredClone(await exportParcel(parcel)));
+    const transported = await importParcel(structuredClone(await exportParcel(nativeParcel(parcel))));
     checkValue(await vcall(transported, "readSerializable", "()Ljava/io/Serializable;"));
     checkValue(await vcall(transported, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
     expect(await vcall(transported, "readStrongBinder", "()Landroid/os/IBinder;")).toBe(binder);

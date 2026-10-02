@@ -2,8 +2,8 @@ import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
 import { type JIntent, newIntent, putExtra } from "./intent";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
-import { exportBinder, importBinder } from "./binder";
-import { encodeIntent, decodeIntent, intentCodec, type IntentData } from "./intentipc";
+import { exportBinder, importBinder, type ParcelData } from "./binder";
+import { encodeIntent, decodeIntent, intentCodec } from "./intentipc";
 import { PendingIntents, type PendingOperation } from "../shell/pendingintents";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { startActivityFor } from "./server/atm";
@@ -11,7 +11,7 @@ import { startService } from "./server/activeservices";
 import { thisApp } from "./server/am";
 
 /** PendingIntentRecord.sendInner, in the creator's process with its identity */
-export const executePendingIntent = driven(function* (operation: PendingOperation, fill: IntentData | null, alarmCount: number): Gen<void> {
+export const executePendingIntent = driven(function* (operation: PendingOperation, fill: ParcelData | null, alarmCount: number): Gen<void> {
   const intent = yield decodeIntent(operation.intent);
   if (!(operation.flags & 0x4000000)) {
     const supplied = fill ? yield decodeIntent(fill) : yield newIntent();
@@ -26,10 +26,10 @@ export const executePendingIntent = driven(function* (operation: PendingOperatio
 });
 export const localPendingIntents = new PendingIntents(intentCodec, executePendingIntent);
 export const pendingTransport = {
-  create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, intents?: IntentData[]) =>
+  create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]) =>
     localPendingIntents.create({ pkg, kind, code, flags, intent, intents, uid: PROCESS_UID, process: PROCESS_NAME || pkg }),
   cancel: (id: number) => localPendingIntents.cancel(id),
-  send: (id: number, fill: IntentData | null) => localPendingIntents.send(id, fill),
+  send: (id: number, fill: ParcelData | null) => localPendingIntents.send(id, fill),
   operation: (id: number): PendingOperation | null => localPendingIntents.take(id),
   kind: (id: number): PendingOperation["kind"] | null => localPendingIntents.get(id)?.kind ?? null,
   flags: (id: number): number => localPendingIntents.get(id)?.flags ?? 0,
@@ -69,7 +69,7 @@ export const intentSenderMethods = {
       const kind = KIND_OF[type];
       if (!kind) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad PendingIntent type: " + type);
       if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
-      const encoded: IntentData[] = [];
+      const encoded: ParcelData[] = [];
       for (const intent of intents) encoded.push(yield encodeIntent(intent));
       const id: number | null = yield pendingTransport.create(pkg, kind, code, flags, encoded.at(-1)!, kind === "activity" && encoded.length > 1 ? encoded : undefined);
       return id === null ? null : intentSender(id);

@@ -2,6 +2,7 @@ import { expect, test, describe } from "bun:test";
 import { unzipSync } from "fflate";
 import "../src/natives";
 import { mkPfd, pfdBackingBytes } from "../src/android/os";
+import { parcelled, unparcelled } from "../src/android/binder";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newFile, fdInt, setFdInt, mkFd, readStreamFully } from "../src/jvm/natives/jio";
@@ -12,7 +13,7 @@ import { E } from "../src/native/abi";
 import { Cpu, setA64 } from "../src/native/cpu";
 import { defineHost } from "../src/native/host";
 import { mem, guestAt } from "../src/native/mem";
-import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, renamePath } from "../src/native/fs";
+import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath } from "../src/native/fs";
 import { kernelInit } from "../src/native/syscall";
 import { BytesFile } from "../src/shell/lazyfile";
 import { mkEnumeration } from "../src/jvm/natives/jcoll";
@@ -360,6 +361,22 @@ describe("parcel-file", () => {
     await vcall(duplicate, "close", "()V");
     expect(javaSeekFd(copyFd, 0, 0)).toBe(0);
     javaCloseFd(copyFd);
+  });
+  test("an imported writable descriptor writes back once its reader closes", async () => {
+    await loadLibcore();
+    const path = "/data/local/tmp/pfd-write-back-test";
+    vfs.write(path, Uint8Array.of(1, 2, 3), false);
+    try {
+      const PFD = "android/os/ParcelFileDescriptor";
+      const pfd = await scall(PFD, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", await newFile(path), 0x30000000);
+      const reader = await unparcelled(PFD, await parcelled(pfd));
+      const fd = await vcall(reader, "getFd", "()I");
+      javaTruncateFd(fd, 0); javaPwriteFd(fd, Uint8Array.of(9), 0);
+      await vcall(reader, "close", "()V");
+      for (let i = 0; i < 50 && vfs.read(path)?.length !== 1; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(vfs.read(path)).toEqual(Uint8Array.of(9));
+      await vcall(pfd, "close", "()V");
+    } finally { vfs.delete(path); }
   });
   test("read-only file opens load lazy bytes and AutoCloseInputStream owns the descriptor", async () => {
     await loadLibcore();

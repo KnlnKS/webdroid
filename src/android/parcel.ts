@@ -8,7 +8,6 @@ import { scall } from "../jvm/natives/jlang";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { javaCloseFd, javaDupFd } from "../native/fs";
 import { ownedHandle, deref, release } from "./handles";
-export { parcelCreator } from "./parcelable";
 
 export class NativeParcel {
   buf = new Uint8Array(256);
@@ -25,11 +24,9 @@ const FLAT_OBJECT = 24;
 /** a descriptor this parcel owns, as writeDupFileDescriptor leaves one */
 export class OwnedFd { constructor(readonly fd: number) {} }
 
-/** a Java Parcel, or the native parcel behind one */
-export type JParcel = JObj | NativeParcel;
 let ptrField = "";
-export const nativeParcel = (p: JParcel): NativeParcel =>
-  p instanceof NativeParcel ? p : deref<NativeParcel>((p as unknown as Record<string, bigint>)[ptrField ||= declaredField("android/os/Parcel", "mNativePtr")]);
+/** the native parcel behind a Java Parcel */
+export const nativeParcel = (p: JObj): NativeParcel => deref<NativeParcel>((p as unknown as Record<string, bigint>)[ptrField ||= declaredField("android/os/Parcel", "mNativePtr")]);
 /** Parcel.obtain() */
 export const newParcel = (): Promise<JObj> => scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
 
@@ -41,14 +38,14 @@ function reserve(p: NativeParcel, n: number) {
 }
 const advance = (p: NativeParcel, n: number) => { const at = p.pos; p.pos += n; if (p.pos > p.size) p.size = p.pos; return at; };
 const pad4 = (n: number) => (n + 3) & ~3;
-export function writeInt(jp: JParcel, v: number) { const p = nativeParcel(jp); reserve(p, 4); p.view.setInt32(advance(p, 4), v | 0, true); }
-export function writeLong(jp: JParcel, v: bigint) { const p = nativeParcel(jp); reserve(p, 8); p.view.setBigInt64(advance(p, 8), BigInt.asIntN(64, v), true); }
-export function writeFloat(jp: JParcel, v: number) { const p = nativeParcel(jp); reserve(p, 4); p.view.setFloat32(advance(p, 4), v, true); }
-export function writeDouble(jp: JParcel, v: number) { const p = nativeParcel(jp); reserve(p, 8); p.view.setFloat64(advance(p, 8), v, true); }
-export function readInt(jp: JParcel) { const p = nativeParcel(jp); return p.pos + 4 <= p.size ? p.view.getInt32(advance(p, 4), true) : 0; }
-export function readLong(jp: JParcel) { const p = nativeParcel(jp); return p.pos + 8 <= p.size ? p.view.getBigInt64(advance(p, 8), true) : 0n; }
-export function readFloat(jp: JParcel) { const p = nativeParcel(jp); return p.pos + 4 <= p.size ? p.view.getFloat32(advance(p, 4), true) : 0; }
-export function readDouble(jp: JParcel) { const p = nativeParcel(jp); return p.pos + 8 <= p.size ? p.view.getFloat64(advance(p, 8), true) : 0; }
+export function writeInt(p: NativeParcel, v: number) { reserve(p, 4); p.view.setInt32(advance(p, 4), v | 0, true); }
+export function writeLong(p: NativeParcel, v: bigint) { reserve(p, 8); p.view.setBigInt64(advance(p, 8), BigInt.asIntN(64, v), true); }
+export function writeFloat(p: NativeParcel, v: number) { reserve(p, 4); p.view.setFloat32(advance(p, 4), v, true); }
+export function writeDouble(p: NativeParcel, v: number) { reserve(p, 8); p.view.setFloat64(advance(p, 8), v, true); }
+export function readInt(p: NativeParcel) { return p.pos + 4 <= p.size ? p.view.getInt32(advance(p, 4), true) : 0; }
+export function readLong(p: NativeParcel) { return p.pos + 8 <= p.size ? p.view.getBigInt64(advance(p, 8), true) : 0n; }
+export function readFloat(p: NativeParcel) { return p.pos + 4 <= p.size ? p.view.getFloat32(advance(p, 4), true) : 0; }
+export function readDouble(p: NativeParcel) { return p.pos + 8 <= p.size ? p.view.getFloat64(advance(p, 8), true) : 0; }
 /** `n` bytes in place, padded to a cell; null past the end, as readInplace */
 function inplace(p: NativeParcel, n: number): number | null {
   const len = pad4(n);
@@ -62,15 +59,14 @@ function writeInplace(p: NativeParcel, n: number): number {
   p.buf.fill(0, at + n, at + len);
   return at;
 }
-export function writeString(jp: JParcel, s: string | null) {
-  const p = nativeParcel(jp);
+export function writeString(p: NativeParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
   writeInt(p, s.length);
   const at = writeInplace(p, (s.length + 1) * 2);
   for (let i = 0; i < s.length; i++) p.view.setUint16(at + i * 2, s.charCodeAt(i), true);
 }
-export function readString(jp: JParcel): string | null {
-  const p = nativeParcel(jp), len = readInt(p);
+export function readString(p: NativeParcel): string | null {
+  const len = readInt(p);
   if (len < 0) return null;
   const at = inplace(p, (len + 1) * 2);
   if (at === null) return null;
@@ -85,8 +81,7 @@ export function readString(jp: JParcel): string | null {
   for (let i = 0; i < len; i += 8192) s += String.fromCharCode.apply(null, units.subarray(i, i + 8192) as unknown as number[]);
   return s;
 }
-export function writeString8(jp: JParcel, s: string | null) {
-  const p = nativeParcel(jp);
+function writeString8(p: NativeParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
   let bytes: Uint8Array;
   if (!/[\0\ud800-\udfff]/.test(s)) bytes = utf8.enc.encode(s);
@@ -106,8 +101,8 @@ export function writeString8(jp: JParcel, s: string | null) {
   const at = writeInplace(p, bytes.length + 1);
   p.buf.set(bytes, at);
 }
-export function readString8(jp: JParcel): string | null {
-  const p = nativeParcel(jp), len = readInt(p);
+function readString8(p: NativeParcel): string | null {
+  const len = readInt(p);
   if (len < 0) return null;
   const at = inplace(p, len + 1);
   if (at === null) return null;
@@ -123,8 +118,17 @@ export function readString8(jp: JParcel): string | null {
   }
   return s;
 }
-export const writeByteArray = (jp: JParcel, b: Int8Array | null): void => b ? writeBytes(nativeParcel(jp), b, 0, b.length) : writeInt(jp, -1);
-export const createByteArray = (jp: JParcel): Int8Array | null => readBytes(nativeParcel(jp));
+/** libbinder's writeCString: UTF-8 and a NUL, in place */
+export function writeCString(p: NativeParcel, s: string) {
+  const bytes = utf8.enc.encode(s), at = writeInplace(p, bytes.length + 1);
+  p.buf.set(bytes, at); p.buf[at + bytes.length] = 0;
+}
+export function readCString(p: NativeParcel): string | null {
+  const len = p.buf.subarray(p.pos, p.size).indexOf(0), at = len < 0 ? null : inplace(p, len + 1);
+  return at === null ? null : utf8.dec.decode(p.buf.subarray(at, at + len));
+}
+export const writeByteArray = (p: NativeParcel, b: Int8Array | null): void => b ? writeBytes(p, b, 0, b.length) : writeInt(p, -1);
+export const createByteArray = (p: NativeParcel): Int8Array | null => readBytes(p);
 function writeBytes(p: NativeParcel, b: Int8Array, off: number, len: number) {
   writeInt(p, len);
   const at = writeInplace(p, len);
@@ -137,22 +141,26 @@ function readBytes(p: NativeParcel): Int8Array | null {
   return new Int8Array(p.buf.slice(at, at + len).buffer);
 }
 /** a flat object: its slot holds zeros here, the side table its value */
-export function writeObject(jp: JParcel, o: unknown) {
-  const p = nativeParcel(jp);
+function writeObject(p: NativeParcel, o: unknown) {
   p.objects.set(p.pos, o);
   writeInplace(p, FLAT_OBJECT);
 }
-export function readObject(jp: JParcel): unknown {
-  const p = nativeParcel(jp), at = p.pos;
+function readObject(p: NativeParcel): unknown {
+  const at = p.pos;
   if (inplace(p, FLAT_OBJECT) === null) return null;
   return p.objects.get(at) ?? null;
 }
 const isBinder = (o: unknown) => o instanceof JObj && !!(rt.iof(o, "android/os/Binder") || rt.iof(o, "android/os/BinderProxy"));
-const isFd = (o: unknown) => o !== null && !isBinder(o);
+const isFd = (o: unknown) => o instanceof OwnedFd;
+/** a side-table entry's removal, closing the descriptor it owned */
+function dropObject(p: NativeParcel, at: number) {
+  const o = p.objects.get(at);
+  if (o instanceof OwnedFd) javaCloseFd(o.fd);
+  p.objects.delete(at);
+}
 /** closing what a parcel owns: the descriptors written into it */
 export function freeData(p: NativeParcel) {
-  for (const o of p.objects.values()) if (o instanceof OwnedFd) javaCloseFd(o.fd);
-  p.objects.clear();
+  for (const at of p.objects.keys()) dropObject(p, at);
   p.pos = p.size = 0;
   p.workSourceAt = -1;
 }
@@ -160,14 +168,12 @@ const inRange = (p: NativeParcel, test: (o: unknown) => boolean, off = 0, len = 
   for (const [at, o] of p.objects) if (at >= off && at < off + len && test(o)) return true;
   return false;
 };
-/** what a parcel carries across processes: its bytes and its side table */
-export type ParcelBytes = { bytes: Uint8Array; objects: [number, unknown][] };
-export const parcelBytes = (p: NativeParcel): ParcelBytes => ({ bytes: p.buf.slice(0, p.size), objects: [...p.objects] });
-export function setParcelBytes(p: NativeParcel, data: { bytes: Uint8Array; objects: [number, unknown][] }): void {
+/** the parcel's contents replaced by `bytes` and the side table `objects`, read from its start */
+export function setParcelBytes(p: NativeParcel, bytes: Uint8Array, objects: Iterable<[number, unknown]> = []): void {
   freeData(p);
-  p.buf = new Uint8Array(data.bytes); p.view = new DataView(p.buf.buffer);
+  p.buf = new Uint8Array(bytes); p.view = new DataView(p.buf.buffer);
   p.size = p.buf.length;
-  p.objects = new Map(data.objects);
+  p.objects = new Map(objects);
 }
 
 // utils/Errors.h, as signalExceptionForError (android_util_Binder.cpp) throws them
@@ -198,7 +204,7 @@ rt.registerJnis("android/os/Parcel", {
     if (n < 0) throw status(BAD_VALUE);
     const p = parcelAt(ptr), pos = p.pos;
     p.pos = 0; reserve(p, n); p.pos = Math.min(pos, n);
-    if (n < p.size) for (const k of p.objects.keys()) if (k >= n) p.objects.delete(k);
+    if (n < p.size) for (const at of p.objects.keys()) if (at >= n) dropObject(p, at);
     p.size = n;
   },
   "nativeSetDataPosition(JI)V": (ptr: bigint, pos: number) => { parcelAt(ptr).pos = pos; },
@@ -274,8 +280,7 @@ rt.registerJnis("android/os/Parcel", {
   },
   "nativeUnmarshall(J[BII)V": (ptr: bigint, b: Int8Array, off: number, len: number) => {
     if ((off | len) < 0 || off > b.length - len) throw rt.mkThrowable("java/lang/RuntimeException", "Illegal array bounds");
-    const p = parcelAt(ptr);
-    setParcelBytes(p, { bytes: u8(b, off, len), objects: [] });
+    setParcelBytes(parcelAt(ptr), u8(b, off, len));
   },
   "nativeCompareData(JJ)I": (a: bigint, b: bigint) => {
     const x = parcelAt(a), y = parcelAt(b), n = Math.min(x.size, y.size);
@@ -291,6 +296,7 @@ rt.registerJnis("android/os/Parcel", {
   "nativeAppendFrom(JJII)V": (ptr: bigint, from: bigint, off: number, len: number) => {
     const p = parcelAt(ptr), o = parcelAt(from);
     if (off < 0 || len < 0 || off + len > o.size) throw status(BAD_VALUE);
+    if (!p.allowFds && inRange(o, isFd, off, len)) throw status(FDS_NOT_ALLOWED);
     reserve(p, len);
     const to = advance(p, len);
     p.buf.set(o.buf.subarray(off, off + len), to);

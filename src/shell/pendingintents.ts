@@ -1,14 +1,14 @@
-import type { IntentData } from "../android/intentipc";
+import type { ParcelData } from "../android/binder";
 
 export type PendingOperation = {
   pkg: string; process: string; uid: number; kind: "activity" | "broadcast" | "service" | "foreground-service";
-  code: number; flags: number; intent: IntentData; intents?: IntentData[];
+  code: number; flags: number; intent: ParcelData; intents?: ParcelData[];
 };
 /** what the registry asks of the intents it holds: AOSP's Intent.filterEquals, and replaceExtras
  *  for FLAG_UPDATE_CURRENT, run where a JVM can read them */
 export type IntentCodec = {
-  filterEquals: (a: IntentData, b: IntentData) => Promise<boolean>;
-  replaceExtras: (target: IntentData, source: IntentData) => Promise<IntentData>;
+  filterEquals: (a: ParcelData, b: ParcelData) => Promise<boolean>;
+  replaceExtras: (target: ParcelData, source: ParcelData) => Promise<ParcelData>;
 };
 type Record = { key: string; operation: PendingOperation; cancellations: Set<() => void> };
 /** PendingIntentController's records, keyed as PendingIntentRecord.Key: creator, kind, request code,
@@ -16,8 +16,8 @@ type Record = { key: string; operation: PendingOperation; cancellations: Set<() 
 export class PendingIntents {
   private records = new Map<number, Record>();
   private nextId = 1;
-  constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: IntentData | null, alarmCount: number) => void | Promise<void>) {}
-  private async find(key: string, intent: IntentData): Promise<number | undefined> {
+  constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>) {}
+  private async find(key: string, intent: ParcelData): Promise<number | undefined> {
     for (const [id, record] of this.records) if (record.key === key && await this.codec.filterEquals(record.operation.intent, intent)) return id;
     return undefined;
   }
@@ -66,7 +66,7 @@ export class PendingIntents {
     if (operation && operation.flags & 0x40000000) this.cancel(id);
     return operation;
   }
-  async send(id: number, fill: IntentData | null = null, alarmCount = 0): Promise<boolean> {
+  async send(id: number, fill: ParcelData | null = null, alarmCount = 0): Promise<boolean> {
     const operation = this.take(id);
     if (!operation) return false;
     await this.dispatch({ ...operation, intent: structuredClone(operation.intent), intents: operation.intents && structuredClone(operation.intents) }, fill, alarmCount); return true;

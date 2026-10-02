@@ -1,12 +1,9 @@
 // IClipboard, the TS half of AOSP's ClipboardManager. The clip itself is the broker's, shared by
 // every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall, linkInit } from "../jvm/natives/jlang";
-import { mangleStaticField } from "../jvm/abi";
-import { exportParcel, importParcel, type ParcelData } from "./binder";
-import { newParcel } from "./parcel";
+import { vcall, reportUncaught } from "../jvm/natives/jlang";
+import { parcelled, unparcelled, type ParcelData } from "./binder";
 import { onMain } from "./mainloop";
-import { reportUncaught } from "./os";
 
 export const clipboardTransport: {
   set: (data: ParcelData | null) => void;
@@ -25,18 +22,14 @@ export function clipboardChanged(): void {
 /** the clip, read back from its parcel */
 function* current(): Gen<JObj | null> {
   const data = clipboardTransport.get();
-  if (!data) return null;
-  const creator = (yield linkInit("android/content/ClipData")).ctor[mangleStaticField("CREATOR")];
-  return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", yield importParcel(data));
+  return data && (yield unparcelled("android/content/ClipData", data));
 }
 const P = "Ljava/lang/String;Ljava/lang/String;II";
 rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, sup: "android/content/IClipboard$Stub", methods: {
   // ClipboardService stamps the clip as copied now
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
     yield vcall(yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
-    const parcel = yield newParcel();
-    yield vcall(clip, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-    clipboardTransport.set(yield exportParcel(parcel));
+    clipboardTransport.set(yield parcelled(clip));
   }),
   [`getPrimaryClip(${P})Landroid/content/ClipData;`]: driven(current),
   [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: driven(function* () {

@@ -2,10 +2,10 @@
 // android_view_MotionEvent.cpp's natives. MotionEvent, PointerCoords and PointerProperties run
 // from AOSP bytecode; TS reaches an event's native state through motionOf.
 
-import { rt, declaredField } from "../jvm/runtime";
+import { rt, JObj, declaredField } from "../jvm/runtime";
 import { ownedHandle, deref } from "./handles";
 import { matrixOf } from "./matrix";
-import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type JParcel } from "./parcel";
+import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type NativeParcel, nativeParcel } from "./parcel";
 
 const ME = "android/view/MotionEvent", PC = "android/view/MotionEvent$PointerCoords", PP = "android/view/MotionEvent$PointerProperties";
 const HISTORY_CURRENT = -0x80000000;
@@ -333,9 +333,9 @@ function split(dst: NativeMotionEvent, src: NativeMotionEvent, idBits: number): 
   for (let h = 0; h <= src.historySize; h++) for (const i of kept) dst.coords.push(src.rawCoords(i, h).copy());
 }
 
-const writeXform = (p: JParcel, t: Xform) => { for (const i of [0, 1, 2, 3, 4, 5]) writeFloat(p, t[i]); };
-const readXform = (p: JParcel): Xform => Float32Array.from([0, 1, 2, 3, 4, 5], () => readFloat(p));
-function writeEvent(e: NativeMotionEvent, p: JParcel): void {
+const writeXform = (p: NativeParcel, t: Xform) => { for (const i of [0, 1, 2, 3, 4, 5]) writeFloat(p, t[i]); };
+const readXform = (p: NativeParcel): Xform => Float32Array.from([0, 1, 2, 3, 4, 5], () => readFloat(p));
+function writeEvent(e: NativeMotionEvent, p: NativeParcel): void {
   writeInt(p, e.pointerCount); writeInt(p, e.times.length);
   writeInt(p, e.id); writeInt(p, e.deviceId); writeInt(p, e.source); writeInt(p, e.displayId);
   writeInt(p, 32); for (let i = 0; i < 8; i++) writeInt(p, 0); // the HMAC, which this host never signs
@@ -355,7 +355,7 @@ function writeEvent(e: NativeMotionEvent, p: JParcel): void {
     }
   }
 }
-function readEvent(e: NativeMotionEvent, p: JParcel): boolean {
+function readEvent(e: NativeMotionEvent, p: NativeParcel): boolean {
   const pointers = readInt(p), samples = readInt(p);
   if (pointers <= 0 || pointers > MAX_POINTERS || samples <= 0) return false;
   e.id = readInt(p); e.deviceId = readInt(p); e.source = readInt(p); e.displayId = readInt(p);
@@ -439,12 +439,12 @@ rt.registerJnis(ME, {
     if (!out) throw npe("pointerProperties must not be null");
     out[declaredField(PP, "id")] = e.ids[i]; out[declaredField(PP, "toolType")] = e.tools[i];
   },
-  "nativeReadFromParcel(JLandroid/os/Parcel;)J": (ptr: bigint, p: JParcel) => {
+  "nativeReadFromParcel(JLandroid/os/Parcel;)J": (ptr: bigint, p: JObj) => {
     const e = ptr ? at(ptr) : new NativeMotionEvent();
-    if (!readEvent(e, p)) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to read MotionEvent parcel.");
+    if (!readEvent(e, nativeParcel(p))) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to read MotionEvent parcel.");
     return ptr || ownedHandle(e);
   },
-  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (ptr: bigint, p: JParcel) => writeEvent(at(ptr), p),
+  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (ptr: bigint, p: JObj) => writeEvent(at(ptr), nativeParcel(p)),
   "nativeAxisToString(I)Ljava/lang/String;": (axis: number) => AXIS_LABELS[axis] ?? null,
   "nativeAxisFromString(Ljava/lang/String;)I": (label: string) => AXIS_LABELS.indexOf(label),
   "nativeGetPointerId(JI)I": (ptr: bigint, i: number) => { const e = at(ptr); checkPointer(e, i); return e.ids[i]; },
