@@ -3,7 +3,7 @@
 // (no modem, no SIM, no subscriptions). TelephonyRegistry is system_server's and every device has
 // it; with no active modem validatePhoneId fails, so a listener is never notified and only meets
 // TelephonyRegistry.checkListenerPermission (decoded from the reference AVD's services.jar).
-import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
@@ -68,21 +68,3 @@ rt.register({ name: "webdroid/TelephonyRegistry", ctor: class extends JObj {}, s
   "removeOnSubscriptionsChangedListener(Ljava/lang/String;Lcom/android/internal/telephony/IOnSubscriptionsChangedListener;)V": () => {},
 } });
 hostStub("telephony.registry", "webdroid/TelephonyRegistry");
-// libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber
-// regroups anything: the digits a caller typed are the digits it reads back.
-rt.register({
-  name: "android/telephony/PhoneNumberFormattingTextWatcher", ctor: class extends JObj {},
-  ifaces: ["android/text/TextWatcher"],
-  methods: {
-    ...noops("<init>()V", "<init>(Ljava/lang/String;)V", "beforeTextChanged(Ljava/lang/CharSequence;III)V",
-      "onTextChanged(Ljava/lang/CharSequence;III)V", "afterTextChanged(Landroid/text/Editable;)V"),
-  },
-});
-rt.register({
-  name: "android/telephony/PhoneNumberUtils", ctor: class extends JObj {},
-  methods: {
-    "static formatNumber(Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n,
-    "static formatNumber(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n,
-    "static stripSeparators(Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n?.replace(/[^0-9+]/g, "") ?? null,
-  },
-});
