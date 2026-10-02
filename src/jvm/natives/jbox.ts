@@ -73,7 +73,7 @@ export function box(desc: BoxDesc, v: number | bigint | boolean): Obj {
   return o;
 }
 export const boxInt = (v: number) => box("I", v);
-const boxLong = (v: bigint) => box("J", v);
+export const boxLong = (v: bigint) => box("J", v);
 export const boxFloat = (v: number) => box("F", v);
 export const boxDouble = (v: number) => box("D", v);
 export const boxBool = (v: number | boolean) => box("Z", v);
