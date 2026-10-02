@@ -135,7 +135,7 @@ export function loadSkia(): Promise<void> {
 /** SkCanvas::drawGlyphs of one face's laid-out glyphs (minikin's ids, and positions from the run's
  *  origin) through FreeType's rasterizer into a bitmap's context; false where CanvasKit cannot */
 export function drawSkiaText(ctx: Ctx, emoji: boolean, glyphs: Uint16Array, positions: Float32Array, x: number, y: number, size: number, color: number,
-  style: "fill" | "hairline" = "fill", subpixel = false): boolean {
+  style: "fill" | "hairline", subpixel: boolean): boolean {
   if (page.drawSkiaText !== drawSkiaText) return page.drawSkiaText(ctx, emoji, glyphs, positions, x, y, size, color, style, subpixel);
   const typeface = emoji ? emojiFace : face;
   if (!kit || !typeface || !glyphs.length || !Number.isFinite(size) || size <= 0) return false;
